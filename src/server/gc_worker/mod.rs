@@ -9,14 +9,10 @@ pub mod rawkv_compaction_filter;
 
 // TODO: Use separated error type for GcWorker instead.
 #[cfg(any(test, feature = "failpoints"))]
-<<<<<<< HEAD
 pub use compaction_filter::test_utils::{gc_by_compact, TestGcRunner};
 pub use compaction_filter::WriteCompactionFilterFactory;
-=======
-pub use compaction_filter::test_utils::{TestGcRunner, gc_by_compact};
 #[cfg(any(test, feature = "failpoints"))]
 pub use compaction_runner::FIRST_COMPACTION_CANDIDATE_REGION;
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
 pub use compaction_runner::{CompactionCandidate, CompactionRunner, CompactionRunnerHandle};
 pub use config::{AutoCompactionConfig, GcConfig, GcWorkerConfigManager, DEFAULT_GC_BATCH_KEYS};
 use engine_traits::MvccProperties;

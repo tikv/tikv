@@ -59600,7 +59600,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 426,
+          "id": 421,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59801,7 +59801,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 427,
+          "id": 422,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60002,7 +60002,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 428,
+          "id": 423,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60203,7 +60203,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 429,
+          "id": 424,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60407,11 +60407,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 421,
-=======
-      "id": 430,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+      "id": 425,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -60450,11 +60446,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 422,
-=======
-          "id": 431,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 426,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60602,11 +60594,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 423,
-=======
-          "id": 432,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 427,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60739,11 +60727,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 424,
-=======
-          "id": 433,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 428,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60944,11 +60928,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 425,
-=======
-          "id": 434,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 429,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61096,11 +61076,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 426,
-=======
-          "id": 435,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 430,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61301,11 +61277,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 427,
-=======
-          "id": 436,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 431,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61438,11 +61410,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 428,
-=======
-          "id": 437,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 432,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61575,11 +61543,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 429,
-=======
-          "id": 438,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 433,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61712,11 +61676,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 430,
-=======
-          "id": 439,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 434,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61849,11 +61809,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 431,
-=======
-          "id": 440,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 435,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61993,11 +61949,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 432,
-=======
-          "id": 441,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 436,
           "interval": null,
           "legend": {
             "show": false
@@ -62095,11 +62047,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 433,
-=======
-          "id": 442,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 437,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62303,11 +62251,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 434,
-=======
-      "id": 443,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+      "id": 438,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -62346,11 +62290,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 435,
-=======
-          "id": 444,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 439,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62483,11 +62423,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 436,
-=======
-          "id": 445,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 440,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62620,11 +62556,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 437,
-=======
-          "id": 446,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 441,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62757,11 +62689,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 438,
-=======
-          "id": 447,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 442,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62897,11 +62825,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 439,
-=======
-      "id": 448,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+      "id": 443,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -62940,11 +62864,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 440,
-=======
-          "id": 449,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 444,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63077,11 +62997,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 441,
-=======
-          "id": 450,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 445,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63214,11 +63130,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 442,
-=======
-          "id": 451,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 446,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63366,11 +63278,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 443,
-=======
-          "id": 452,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 447,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63503,11 +63411,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 444,
-=======
-          "id": 453,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 448,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63640,11 +63544,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 445,
-=======
-          "id": 454,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 449,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63777,11 +63677,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 446,
-=======
-          "id": 455,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 450,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63917,11 +63813,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 447,
-=======
-      "id": 456,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+      "id": 451,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -63960,11 +63852,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 448,
-=======
-          "id": 457,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 452,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64097,11 +63985,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 449,
-=======
-          "id": 458,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 453,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64234,11 +64118,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 450,
-=======
-          "id": 459,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 454,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64371,11 +64251,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 451,
-=======
-          "id": 460,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 455,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64508,11 +64384,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 452,
-=======
-          "id": 461,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 456,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64645,11 +64517,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 453,
-=======
-          "id": 462,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 457,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64782,7 +64650,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 454,
+          "id": 458,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64918,11 +64786,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 455,
-=======
-      "id": 463,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+      "id": 459,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -64961,11 +64825,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 456,
-=======
-          "id": 464,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 460,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65098,11 +64958,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 457,
-=======
-          "id": 465,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 461,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65235,11 +65091,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 458,
-=======
-          "id": 466,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 462,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65387,11 +65239,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 459,
-=======
-          "id": 467,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 463,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65554,11 +65402,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 460,
-=======
-          "id": 468,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 464,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65691,11 +65535,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 461,
-=======
-          "id": 469,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 465,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65828,11 +65668,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 462,
-=======
-          "id": 470,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 466,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65995,11 +65831,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 463,
-=======
-          "id": 471,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 467,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66147,11 +65979,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 464,
-=======
-          "id": 472,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 468,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66287,11 +66115,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 465,
-=======
-      "id": 473,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+      "id": 469,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -66330,11 +66154,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 466,
-=======
-          "id": 474,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 470,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66467,11 +66287,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 467,
-=======
-          "id": 475,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 471,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66604,11 +66420,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 468,
-=======
-          "id": 476,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 472,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66741,11 +66553,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 469,
-=======
-          "id": 477,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 473,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66878,11 +66686,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 470,
-=======
-          "id": 478,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 474,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67015,11 +66819,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 471,
-=======
-          "id": 479,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 475,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67152,11 +66952,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 472,
-=======
-          "id": 480,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 476,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67289,11 +67085,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 473,
-=======
-          "id": 481,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 477,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67426,11 +67218,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 474,
-=======
-          "id": 482,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 478,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67570,11 +67358,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 475,
-=======
-          "id": 483,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 479,
           "interval": null,
           "legend": {
             "show": false
@@ -67672,11 +67456,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 476,
-=======
-          "id": 484,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 480,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67809,11 +67589,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 477,
-=======
-          "id": 485,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 481,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67961,11 +67737,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 478,
-=======
-          "id": 486,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 482,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68113,11 +67885,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 479,
-=======
-          "id": 487,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 483,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68257,11 +68025,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 480,
-=======
-          "id": 488,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 484,
           "interval": null,
           "legend": {
             "show": false
@@ -68359,11 +68123,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 481,
-=======
-          "id": 489,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 485,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68496,11 +68256,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 482,
-=======
-          "id": 490,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 486,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68636,11 +68392,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 483,
-=======
-      "id": 491,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+      "id": 487,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -68679,11 +68431,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 484,
-=======
-          "id": 492,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 488,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68816,11 +68564,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 485,
-=======
-          "id": 493,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 489,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68983,11 +68727,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 486,
-=======
-          "id": 494,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 490,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69135,11 +68875,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 487,
-=======
-          "id": 495,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 491,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69272,11 +69008,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 488,
-=======
-          "id": 496,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 492,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69416,11 +69148,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 489,
-=======
-          "id": 497,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 493,
           "interval": null,
           "legend": {
             "show": false
@@ -69525,11 +69253,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 490,
-=======
-          "id": 498,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 494,
           "interval": null,
           "legend": {
             "show": false
@@ -69634,11 +69358,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 491,
-=======
-          "id": 499,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 495,
           "interval": null,
           "legend": {
             "show": false
@@ -69736,11 +69456,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 492,
-=======
-          "id": 500,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 496,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69880,11 +69596,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 493,
-=======
-          "id": 501,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 497,
           "interval": null,
           "legend": {
             "show": false
@@ -69989,11 +69701,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 494,
-=======
-          "id": 502,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 498,
           "interval": null,
           "legend": {
             "show": false
@@ -70098,11 +69806,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 495,
-=======
-          "id": 503,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 499,
           "interval": null,
           "legend": {
             "show": false
@@ -70200,11 +69904,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 496,
-=======
-          "id": 504,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 500,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -70337,11 +70037,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 497,
-=======
-          "id": 505,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 501,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -70474,11 +70170,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 498,
-=======
-          "id": 506,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 502,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -70618,11 +70310,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 499,
-=======
-          "id": 507,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 503,
           "interval": null,
           "legend": {
             "show": false
@@ -70720,11 +70408,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 500,
-=======
-          "id": 508,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 504,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -70860,11 +70544,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 501,
-=======
-      "id": 509,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+      "id": 505,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -70903,11 +70583,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 502,
-=======
-          "id": 510,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 506,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71070,11 +70746,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 503,
-=======
-          "id": 511,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 507,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71207,11 +70879,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 504,
-=======
-          "id": 512,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 508,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71351,11 +71019,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 505,
-=======
-          "id": 513,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 509,
           "interval": null,
           "legend": {
             "show": false
@@ -71460,11 +71124,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 506,
-=======
-          "id": 514,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 510,
           "interval": null,
           "legend": {
             "show": false
@@ -71562,11 +71222,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 507,
-=======
-          "id": 515,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 511,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71721,11 +71377,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 508,
-=======
-          "id": 516,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 512,
           "interval": null,
           "legend": {
             "show": false
@@ -71830,11 +71482,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 509,
-=======
-          "id": 517,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 513,
           "interval": null,
           "legend": {
             "show": false
@@ -71939,11 +71587,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 510,
-=======
-          "id": 518,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 514,
           "interval": null,
           "legend": {
             "show": false
@@ -72041,11 +71685,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 511,
-=======
-          "id": 519,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 515,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72215,11 +71855,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 512,
-=======
-          "id": 520,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 516,
           "interval": null,
           "legend": {
             "show": false
@@ -72317,11 +71953,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 513,
-=======
-          "id": 521,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 517,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72522,11 +72154,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 514,
-=======
-          "id": 522,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 518,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72727,11 +72355,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 515,
-=======
-          "id": 523,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 519,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72864,11 +72488,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 516,
-=======
-          "id": 524,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 520,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73031,11 +72651,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 517,
-=======
-          "id": 525,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 521,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73168,11 +72784,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 518,
-=======
-          "id": 526,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 522,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73305,11 +72917,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 519,
-=======
-          "id": 527,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 523,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73510,11 +73118,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 520,
-=======
-          "id": 528,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 524,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73647,11 +73251,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 521,
-=======
-          "id": 529,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 525,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73791,11 +73391,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 522,
-=======
-          "id": 530,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 526,
           "interval": null,
           "legend": {
             "show": false
@@ -73900,11 +73496,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 523,
-=======
-          "id": 531,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 527,
           "interval": null,
           "legend": {
             "show": false
@@ -74009,11 +73601,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 524,
-=======
-          "id": 532,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 528,
           "interval": null,
           "legend": {
             "show": false
@@ -74118,11 +73706,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 525,
-=======
-          "id": 533,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 529,
           "interval": null,
           "legend": {
             "show": false
@@ -74227,11 +73811,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 526,
-=======
-          "id": 534,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 530,
           "interval": null,
           "legend": {
             "show": false
@@ -74336,11 +73916,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 527,
-=======
-          "id": 535,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 531,
           "interval": null,
           "legend": {
             "show": false
@@ -74445,11 +74021,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 528,
-=======
-          "id": 536,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 532,
           "interval": null,
           "legend": {
             "show": false
@@ -74547,11 +74119,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 529,
-=======
-          "id": 537,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 533,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -74699,11 +74267,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 530,
-=======
-          "id": 538,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 534,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -74836,11 +74400,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 531,
-=======
-          "id": 539,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 535,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -74973,11 +74533,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 532,
-=======
-          "id": 540,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 536,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75125,11 +74681,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 533,
-=======
-          "id": 541,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 537,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75265,11 +74817,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 534,
-=======
-      "id": 542,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+      "id": 538,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -75320,11 +74868,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 535,
-=======
-          "id": 543,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 539,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -75420,11 +74964,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 536,
-=======
-          "id": 544,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 540,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -75499,11 +75039,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 537,
-=======
-          "id": 545,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 541,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -75578,11 +75114,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 538,
-=======
-          "id": 546,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 542,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -75657,11 +75189,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 539,
-=======
-          "id": 547,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 543,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -75736,11 +75264,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 540,
-=======
-          "id": 548,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 544,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -75815,11 +75339,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 541,
-=======
-          "id": 549,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 545,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -75894,11 +75414,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 542,
-=======
-          "id": 550,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 546,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -75977,11 +75493,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 543,
-=======
-          "id": 551,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 547,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -76114,11 +75626,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 544,
-=======
-          "id": 552,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 548,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -76251,11 +75759,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 545,
-=======
-          "id": 553,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 549,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -76388,11 +75892,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 546,
-=======
-          "id": 554,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 550,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -76525,11 +76025,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 547,
-=======
-          "id": 555,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 551,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -76662,11 +76158,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 548,
-=======
-          "id": 556,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 552,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -76814,11 +76306,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 549,
-=======
-          "id": 557,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 553,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -76951,11 +76439,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 550,
-=======
-          "id": 558,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 554,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77088,11 +76572,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 551,
-=======
-          "id": 559,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 555,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77258,11 +76738,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 552,
-=======
-          "id": 560,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 556,
           "interval": null,
           "legend": {
             "show": false
@@ -77367,11 +76843,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 553,
-=======
-          "id": 561,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 557,
           "interval": null,
           "legend": {
             "show": false
@@ -77476,11 +76948,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 554,
-=======
-          "id": 562,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 558,
           "interval": null,
           "legend": {
             "show": false
@@ -77585,11 +77053,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 555,
-=======
-          "id": 563,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 559,
           "interval": null,
           "legend": {
             "show": false
@@ -77694,11 +77158,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 556,
-=======
-          "id": 564,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 560,
           "interval": null,
           "legend": {
             "show": false
@@ -77803,11 +77263,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 557,
-=======
-          "id": 565,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 561,
           "interval": null,
           "legend": {
             "show": false
@@ -77912,11 +77368,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 558,
-=======
-          "id": 566,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 562,
           "interval": null,
           "legend": {
             "show": false
@@ -78021,11 +77473,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 559,
-=======
-          "id": 567,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 563,
           "interval": null,
           "legend": {
             "show": false
@@ -78123,11 +77571,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 560,
-=======
-          "id": 568,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 564,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78260,11 +77704,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 561,
-=======
-          "id": 569,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 565,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78397,11 +77837,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 562,
-=======
-          "id": 570,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 566,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78534,11 +77970,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 563,
-=======
-          "id": 571,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 567,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78671,11 +78103,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 564,
-=======
-          "id": 572,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 568,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78808,11 +78236,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 565,
-=======
-          "id": 573,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 569,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78945,11 +78369,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 566,
-=======
-          "id": 574,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 570,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79055,277 +78475,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-<<<<<<< HEAD
           "description": "",
-=======
-          "description": "The memory usage of buffer file (stores logs about to be flushed to external storage) cache.",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 0,
-            "y": 77
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 575,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum((\n    tikv_log_backup_temp_file_memory_usage\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{instance}}",
-              "metric": "",
-              "query": "sum((\n    tikv_log_backup_temp_file_memory_usage\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Buffer File Cache Mem Usage",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "bytes",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The number of temporary buffer files.",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 8,
-            "y": 77
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 576,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum((\n    tikv_log_backup_temp_file_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{instance}}",
-              "metric": "",
-              "query": "sum((\n    tikv_log_backup_temp_file_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Buffer File Count",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "none",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The total size of buffer files that are swapped out to disk.",
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -79352,11 +78502,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 567,
-=======
-          "id": 577,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 571,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79496,11 +78642,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 568,
-=======
-          "id": 578,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 572,
           "interval": null,
           "legend": {
             "show": false
@@ -79605,11 +78747,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 569,
-=======
-          "id": 579,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 573,
           "interval": null,
           "legend": {
             "show": false
@@ -79707,11 +78845,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 570,
-=======
-          "id": 580,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 574,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79844,11 +78978,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 571,
-=======
-          "id": 581,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 575,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79981,11 +79111,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 572,
-=======
-          "id": 582,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 576,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80118,11 +79244,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 573,
-=======
-          "id": 583,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 577,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80201,543 +79323,7 @@
           "yaxes": [
             {
               "decimals": null,
-<<<<<<< HEAD
               "format": "s",
-=======
-              "format": "none",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The leader of the region with minimal checkpoint.",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 16,
-            "y": 98
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 584,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_log_backup_store_last_checkpoint_ts\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  / 262144",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{ instance }}",
-              "metric": "",
-              "query": "((\n    tikv_log_backup_store_last_checkpoint_ts\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  / 262144",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Current Last Region Leader Store ID",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "none",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The region with minimal checkpoint of each store.",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 0,
-            "y": 105
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 585,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_log_backup_store_last_checkpoint_region_id\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{ instance }}",
-              "metric": "",
-              "query": "((\n    tikv_log_backup_store_last_checkpoint_region_id\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Current Last Region ID per Store",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "none",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The minimal checkpoint TS of each store.",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 8,
-            "y": 105
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 586,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_log_backup_store_last_checkpoint_ts\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{ instance }}",
-              "metric": "",
-              "query": "((\n    tikv_log_backup_store_last_checkpoint_ts\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Current Last Checkpoint TS per Store",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "ms",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The active progress subscription from each store",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 16,
-            "y": 105
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 587,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_log_backup_active_subscription_number\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{instance}}",
-              "metric": "",
-              "query": "((\n    tikv_log_backup_active_subscription_number\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Active Progress Subscrption Per Store",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "none",
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
               "label": null,
               "logBase": 1,
               "max": null,
@@ -80791,11 +79377,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 574,
-=======
-          "id": 588,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 578,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80928,11 +79510,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 575,
-=======
-          "id": 589,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 579,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81068,11 +79646,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 576,
-=======
-      "id": 590,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+      "id": 580,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -81111,11 +79685,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 577,
-=======
-          "id": 591,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 581,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81263,11 +79833,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 578,
-=======
-          "id": 592,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 582,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81400,11 +79966,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 579,
-=======
-          "id": 593,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 583,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81537,11 +80099,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 580,
-=======
-          "id": 594,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 584,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81677,11 +80235,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 581,
-=======
-      "id": 595,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+      "id": 585,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -81720,11 +80274,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 582,
-=======
-          "id": 596,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 586,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81857,11 +80407,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 583,
-=======
-          "id": 597,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 587,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81994,11 +80540,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 584,
-=======
-          "id": 598,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 588,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82131,11 +80673,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 585,
-=======
-          "id": 599,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 589,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82268,11 +80806,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 586,
-=======
-          "id": 600,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 590,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82405,11 +80939,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 587,
-=======
-          "id": 601,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 591,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82545,11 +81075,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 588,
-=======
-      "id": 602,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+      "id": 592,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -82588,11 +81114,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 589,
-=======
-          "id": 603,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 593,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82725,11 +81247,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 590,
-=======
-          "id": 604,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 594,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82865,11 +81383,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 591,
-=======
-      "id": 605,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+      "id": 595,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -82908,11 +81422,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 592,
-=======
-          "id": 606,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 596,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83113,11 +81623,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 593,
-=======
-          "id": 607,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 597,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83253,11 +81759,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 594,
-=======
-      "id": 608,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+      "id": 598,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -83296,11 +81798,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 595,
-=======
-          "id": 609,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 599,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83433,11 +81931,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 596,
-=======
-          "id": 610,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 600,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83570,11 +82064,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 597,
-=======
-          "id": 611,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 601,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83707,11 +82197,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 598,
-=======
-          "id": 612,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 602,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83844,11 +82330,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 599,
-=======
-          "id": 613,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 603,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83996,11 +82478,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 600,
-=======
-          "id": 614,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 604,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -84204,11 +82682,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 601,
-=======
-      "id": 615,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+      "id": 605,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -84247,11 +82721,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 602,
-=======
-          "id": 616,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 606,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -84384,11 +82854,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 603,
-=======
-          "id": 617,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 607,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -84521,11 +82987,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 604,
-=======
-          "id": 618,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 608,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -84658,11 +83120,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 605,
-=======
-          "id": 619,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 609,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -84795,11 +83253,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 606,
-=======
-          "id": 620,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 610,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -84996,11 +83450,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 607,
-=======
-          "id": 621,
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
+          "id": 611,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -85058,519 +83508,6 @@
       "transformations": [],
       "transparent": false,
       "type": "row"
-<<<<<<< HEAD
-=======
-    },
-    {
-      "cacheTimeout": null,
-      "collapsed": true,
-      "datasource": null,
-      "description": null,
-      "editable": true,
-      "error": false,
-      "fieldConfig": {
-        "defaults": {
-          "thresholds": {
-            "mode": "absolute",
-            "steps": []
-          }
-        }
-      },
-      "gridPos": {
-        "h": 7,
-        "w": 24,
-        "x": 0,
-        "y": 0
-      },
-      "height": null,
-      "hideTimeOverride": false,
-      "id": 622,
-      "interval": null,
-      "links": [],
-      "maxDataPoints": 100,
-      "maxPerRow": null,
-      "minSpan": null,
-      "panels": [
-        {
-          "cacheTimeout": null,
-          "color": {
-            "mode": "thresholds"
-          },
-          "columns": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "TiKV RocksDB DB Configuration",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "align": "auto",
-                "displayMode": "auto",
-                "filterable": false
-              },
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Field"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Option"
-                  },
-                  {
-                    "id": "custom.align",
-                    "value": null
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Last (not null)"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Value"
-                  }
-                ]
-              }
-            ]
-          },
-          "fontSize": "100%",
-          "gridPos": {
-            "h": 7,
-            "w": 24,
-            "x": 0,
-            "y": 0
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 623,
-          "interval": null,
-          "links": [],
-          "mappings": [],
-          "maxDataPoints": 100,
-          "maxPerRow": null,
-          "minSpan": null,
-          "options": {
-            "showHeader": true
-          },
-          "repeat": null,
-          "repeatDirection": null,
-          "span": 6,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_config_rocksdb_db\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "table",
-              "hide": false,
-              "instant": true,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": null,
-              "metric": "",
-              "query": "((\n    tikv_config_rocksdb_db\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "RocksDB DB Config",
-          "transformations": [
-            {
-              "id": "organize",
-              "options": {
-                "excludeByName": {
-                  "Time": true,
-                  "__name__": true,
-                  "job": true
-                },
-                "indexByName": {},
-                "renameByName": {
-                  "Time": "",
-                  "Value #A": "Value",
-                  "job": "",
-                  "name": "Option"
-                }
-              }
-            }
-          ],
-          "transparent": false,
-          "type": "table"
-        },
-        {
-          "cacheTimeout": null,
-          "color": {
-            "mode": "thresholds"
-          },
-          "columns": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "TiKV RocksDB CF Configuration",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "align": "auto",
-                "displayMode": "auto",
-                "filterable": false
-              },
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Field"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Option"
-                  },
-                  {
-                    "id": "custom.align",
-                    "value": null
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Last (not null)"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Value"
-                  }
-                ]
-              }
-            ]
-          },
-          "fontSize": "100%",
-          "gridPos": {
-            "h": 7,
-            "w": 24,
-            "x": 0,
-            "y": 7
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 624,
-          "interval": null,
-          "links": [],
-          "mappings": [],
-          "maxDataPoints": 100,
-          "maxPerRow": null,
-          "minSpan": null,
-          "options": {
-            "showHeader": true
-          },
-          "repeat": null,
-          "repeatDirection": null,
-          "span": 6,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_config_rocksdb_cf\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))   or (tikv_config_rocksdb unless tikv_config_rocksdb_cf)",
-              "format": "table",
-              "hide": false,
-              "instant": true,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": null,
-              "metric": "",
-              "query": "((\n    tikv_config_rocksdb_cf\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))   or (tikv_config_rocksdb unless tikv_config_rocksdb_cf)",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "RocksDB CF Config",
-          "transformations": [
-            {
-              "id": "organize",
-              "options": {
-                "excludeByName": {
-                  "Time": true,
-                  "__name__": true,
-                  "job": true
-                },
-                "indexByName": {},
-                "renameByName": {
-                  "Time": "",
-                  "Value #A": "Value",
-                  "job": "",
-                  "name": "Option"
-                }
-              }
-            }
-          ],
-          "transparent": false,
-          "type": "table"
-        },
-        {
-          "cacheTimeout": null,
-          "color": {
-            "mode": "thresholds"
-          },
-          "columns": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "TiKV Flow Control Configuration",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "align": "auto",
-                "displayMode": "auto",
-                "filterable": false
-              },
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Field"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Option"
-                  },
-                  {
-                    "id": "custom.align",
-                    "value": null
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Last (not null)"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Value"
-                  }
-                ]
-              }
-            ]
-          },
-          "fontSize": "100%",
-          "gridPos": {
-            "h": 7,
-            "w": 24,
-            "x": 0,
-            "y": 14
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 625,
-          "interval": null,
-          "links": [],
-          "mappings": [],
-          "maxDataPoints": 100,
-          "maxPerRow": null,
-          "minSpan": null,
-          "options": {
-            "showHeader": true
-          },
-          "repeat": null,
-          "repeatDirection": null,
-          "span": 6,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_config_flow_control\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "table",
-              "hide": false,
-              "instant": true,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": null,
-              "metric": "",
-              "query": "((\n    tikv_config_flow_control\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Flow Control Config",
-          "transformations": [
-            {
-              "id": "organize",
-              "options": {
-                "excludeByName": {
-                  "Time": true,
-                  "__name__": true,
-                  "job": true
-                },
-                "indexByName": {},
-                "renameByName": {
-                  "Time": "",
-                  "Value #A": "Value",
-                  "job": "",
-                  "name": "Option"
-                }
-              }
-            }
-          ],
-          "transparent": false,
-          "type": "table"
-        },
-        {
-          "cacheTimeout": null,
-          "color": {
-            "mode": "thresholds"
-          },
-          "columns": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "TiKV Raftstore Configuration",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "align": "auto",
-                "displayMode": "auto",
-                "filterable": false
-              },
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Field"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Option"
-                  },
-                  {
-                    "id": "custom.align",
-                    "value": null
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Last (not null)"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Value"
-                  }
-                ]
-              }
-            ]
-          },
-          "fontSize": "100%",
-          "gridPos": {
-            "h": 7,
-            "w": 24,
-            "x": 0,
-            "y": 21
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 626,
-          "interval": null,
-          "links": [],
-          "mappings": [],
-          "maxDataPoints": 100,
-          "maxPerRow": null,
-          "minSpan": null,
-          "options": {
-            "showHeader": true
-          },
-          "repeat": null,
-          "repeatDirection": null,
-          "span": 6,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_config_raftstore\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "table",
-              "hide": false,
-              "instant": true,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": null,
-              "metric": "",
-              "query": "((\n    tikv_config_raftstore\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Raftstore Config",
-          "transformations": [
-            {
-              "id": "organize",
-              "options": {
-                "excludeByName": {
-                  "Time": true,
-                  "__name__": true,
-                  "job": true
-                },
-                "indexByName": {},
-                "renameByName": {
-                  "Time": "",
-                  "Value #A": "Value",
-                  "job": "",
-                  "name": "Option"
-                }
-              }
-            }
-          ],
-          "transparent": false,
-          "type": "table"
-        }
-      ],
-      "repeat": null,
-      "repeatDirection": null,
-      "span": null,
-      "targets": [],
-      "timeFrom": null,
-      "timeShift": null,
-      "title": "Config",
-      "transformations": [],
-      "transparent": false,
-      "type": "row"
->>>>>>> 76c8a2dc65 (load based compaction (#19130))
     }
   ],
   "refresh": "1m",
