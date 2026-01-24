@@ -143,6 +143,25 @@ impl MvccTxn {
         self.modifies.push(Modify::PessimisticLock(key, lock))
     }
 
+    /// Write shared locks for a key. Serializes the SharedLocks and writes to
+    /// CF_LOCK.
+    pub(crate) fn put_shared_locks(
+        &mut self,
+        key: Key,
+        shared_locks: &txn_types::SharedLocks,
+        is_new: bool,
+    ) {
+        if is_new {
+            // For new shared locks, add lock info for lock observer.
+            self.new_locks
+                .push(shared_locks.clone().into_lock_info(key.to_raw().unwrap()));
+        }
+        let value = shared_locks.to_bytes();
+        let write = Modify::Put(CF_LOCK, key, value);
+        self.write_size += write.size();
+        self.modifies.push(write);
+    }
+
     /// Append a modify that unlocks the key. If the lock is removed due to
     /// committing, a non-zero `commit_ts` needs to be provided; otherwise if
     /// the lock is removed due to rolling back, `commit_ts` must be set to
@@ -229,6 +248,30 @@ impl MvccTxn {
         self.new_locks.clear();
         self.locks_for_1pc.clear();
         self.guards.clear();
+    }
+
+    /// Get pending lock modification for a key from the txn's modifies.
+    /// This is useful when processing multiple sub-locks of the same key
+    /// in a single batch, where subsequent operations need to see the
+    /// pending writes from previous operations.
+    ///
+    /// Returns:
+    /// - `None`: no pending modification for this key
+    /// - `Some(None)`: the lock was deleted (unlock_key was called)
+    /// - `Some(Some(bytes))`: there's a pending Put to CF_LOCK
+    pub fn get_pending_lock_bytes(&self, key: &Key) -> Option<Option<&[u8]>> {
+        for modify in self.modifies.iter().rev() {
+            match modify {
+                Modify::Put(cf, k, v) if *cf == CF_LOCK && k == key => {
+                    return Some(Some(v.as_slice()));
+                }
+                Modify::Delete(cf, k) if *cf == CF_LOCK && k == key => {
+                    return Some(None);
+                }
+                _ => {}
+            }
+        }
+        None
     }
 }
 

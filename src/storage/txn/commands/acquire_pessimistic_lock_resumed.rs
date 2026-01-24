@@ -32,6 +32,7 @@ use crate::storage::{
 pub struct ResumedPessimisticLockItem {
     pub key: Key,
     pub should_not_exist: bool,
+    pub is_shared_lock: bool,
     pub params: PessimisticLockParameters,
     pub lock_wait_token: LockWaitToken,
     pub req_states: Arc<LockWaitContextSharedState>,
@@ -107,6 +108,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
             let ResumedPessimisticLockItem {
                 key,
                 should_not_exist,
+                is_shared_lock,
                 params,
                 lock_wait_token,
                 req_states,
@@ -151,6 +153,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
                 need_old_value,
                 params.lock_only_if_exists,
                 true,
+                is_shared_lock,
             ) {
                 Ok((key_res, old_value)) => {
                     res.push(key_res);
@@ -219,6 +222,7 @@ impl AcquirePessimisticLockResumed {
                 ResumedPessimisticLockItem {
                     key: item.key,
                     should_not_exist: item.should_not_exist,
+                    is_shared_lock: item.is_shared_lock,
                     params: item.parameters,
                     lock_wait_token: item.lock_wait_token,
                     req_states: item.req_states,

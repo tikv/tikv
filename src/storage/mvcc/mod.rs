@@ -890,4 +890,15 @@ pub mod tests {
             expect
         );
     }
+
+    pub fn must_load_shared_lock<E: Engine>(engine: &mut E, key: &[u8]) -> txn_types::SharedLocks {
+        use tikv_util::Either;
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, true);
+        let lock_or_shared = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
+        match lock_or_shared {
+            Either::Right(shared_locks) => shared_locks,
+            Either::Left(_) => panic!("Expected SharedLocks, got Lock"),
+        }
+    }
 }

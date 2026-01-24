@@ -209,9 +209,7 @@ impl TxnEntry {
             } => {
                 let l = match txn_types::parse_lock(value).unwrap() {
                     Either::Left(lock) => lock,
-                    Either::Right(_shared_locks) => unimplemented!(
-                        "SharedLocks returned from txn_types::parse_lock is not supported here"
-                    ),
+                    Either::Right(_shared_locks) => return e,
                 };
                 *value = l.set_last_change(LastChange::Unknown).to_bytes();
             }

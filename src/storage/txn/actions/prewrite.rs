@@ -104,6 +104,15 @@ pub fn prewrite_with_generation<S: Snapshot>(
             mutation.check_lock(lock, pessimistic_action, expected_for_update_ts, generation)?
         }
         None if matches!(pessimistic_action, DoPessimisticCheck) => {
+            if mutation.is_shared_lock {
+                // Shared lock prewrite must have an existing shared pessimistic lock
+                return Err(ErrorInner::PessimisticLockNotFound {
+                    start_ts: reader.start_ts,
+                    key: mutation.key.into_raw()?,
+                    reason: PessimisticLockNotFoundReason::LockMissingAmendFail,
+                }
+                .into());
+            }
             // pipelined DML can't go into this. Otherwise, assertions may need to be
             // skipped for non-first flushes.
             assert_eq!(generation, 0);
@@ -305,6 +314,7 @@ struct PrewriteMutation<'a> {
 
     should_not_exist: bool,
     should_not_write: bool,
+    is_shared_lock: bool,
     assertion: Assertion,
     txn_props: &'a TransactionProperties<'a>,
 }
@@ -325,6 +335,7 @@ impl<'a> PrewriteMutation<'a> {
         }
 
         let should_not_exist = mutation.should_not_exists();
+        let is_shared_lock = mutation.is_shared_lock();
         let mutation_type = mutation.mutation_type();
         let lock_type = LockType::from_mutation(&mutation);
         let assertion = mutation.get_assertion();
@@ -343,6 +354,7 @@ impl<'a> PrewriteMutation<'a> {
 
             should_not_exist,
             should_not_write,
+            is_shared_lock,
             assertion,
             txn_props,
         })

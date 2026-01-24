@@ -53,6 +53,7 @@ impl LockType {
             Mutation::Put(..) | Mutation::Insert(..) => Some(LockType::Put),
             Mutation::Delete(..) => Some(LockType::Delete),
             Mutation::Lock(..) => Some(LockType::Lock),
+            Mutation::SharedLock(..) => Some(LockType::Lock),
             Mutation::CheckNotExists(..) => None,
         }
     }
@@ -371,7 +372,7 @@ fn check_ts_conflict_si(
     };
 
     if lock.ts > ts || lock.lock_type == LockType::Lock || lock.is_pessimistic_lock() {
-        // Ignore lock when lock.ts > ts or lock's type is Lock or Pessimistic
+        // Ignore lock when lock.ts > ts or lock's type is Lock, Shared, or Pessimistic
         return Ok(());
     }
 
@@ -743,18 +744,18 @@ impl SharedLocks {
     /// the bytes into a `Lock` and caches it in-place by replacing
     /// the entry with `Either::Right(Lock)`. Subsequent calls return the cached
     /// `Lock` without reparsing.
-    pub fn get_lock(&mut self, ts: &TimeStamp) -> Option<&Lock> {
+    pub fn get_lock(&mut self, ts: &TimeStamp) -> Result<Option<&Lock>> {
         if let Some(either) = self.txn_info_segments.get_mut(ts) {
             match either {
                 Either::Left(encoded) => {
-                    let lock = Lock::parse(encoded).expect("failed to parse shared lock txn info");
+                    let lock = Lock::parse(encoded)?;
                     *either = Either::Right(lock);
-                    either.as_ref().right()
+                    Ok(either.as_ref().right())
                 }
-                Either::Right(lock) => Some(lock),
+                Either::Right(lock) => Ok(Some(lock)),
             }
         } else {
-            None
+            Ok(None)
         }
     }
 
@@ -790,6 +791,59 @@ impl SharedLocks {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.txn_info_segments.is_empty()
+    }
+
+    /// Remove the shared lock for the given start_ts.
+    /// Returns the removed lock, or None if not found.
+    pub fn remove_lock(&mut self, ts: &TimeStamp) -> Result<Option<Lock>> {
+        match self.txn_info_segments.remove(ts) {
+            None => Ok(None),
+            Some(Either::Right(lock)) => Ok(Some(lock)),
+            Some(Either::Left(encoded)) => {
+                let lock = Lock::parse(&encoded)?;
+                Ok(Some(lock))
+            }
+        }
+    }
+
+    /// Update or insert a shared lock. Uses the lock's start_ts as the key.
+    pub fn update_lock(&mut self, lock: Lock) -> Result<()> {
+        let ts = lock.ts;
+        self.txn_info_segments.insert(ts, Either::Right(lock));
+        Ok(())
+    }
+
+    /// Filters shared locks, keeping only those for which `f` returns true.
+    pub fn filter_shared_locks<F>(&mut self, mut f: F) -> Result<()>
+    where
+        F: FnMut(&Lock) -> bool,
+    {
+        let mut to_remove = Vec::new();
+
+        for (ts, either) in self.txn_info_segments.iter_mut() {
+            let keep = match either {
+                Either::Right(lock) => f(lock),
+                Either::Left(encoded) => {
+                    let lock = Lock::parse(encoded)?;
+                    let keep = f(&lock);
+                    *either = Either::Right(lock);
+                    keep
+                }
+            };
+
+            if !keep {
+                to_remove.push(*ts);
+            }
+        }
+
+        for ts in to_remove {
+            self.txn_info_segments.remove(&ts);
+        }
+        Ok(())
+    }
+
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut b = Vec::with_capacity(self.pre_allocate_size());
         b.push(LockType::Shared.to_u8());
@@ -819,6 +873,23 @@ impl SharedLocks {
                         }
                 })
                 .sum::<usize>()
+    }
+
+    pub fn into_lock_info(self, raw_key: Vec<u8>) -> LockInfo {
+        let mut info = LockInfo::default();
+        info.lock_type = Op::SharedLock;
+        let shared_locks: Vec<_> = self
+            .txn_info_segments
+            .values()
+            .map(|lock| match lock {
+                Either::Left(encoded) => Lock::parse(encoded).unwrap(),
+                Either::Right(lock) => lock.clone(),
+            })
+            .map(|lock| lock.into_lock_info(raw_key.clone()))
+            .collect();
+        info.set_shared_lock_infos(shared_locks.into());
+        info.set_key(raw_key);
+        info
     }
 }
 
@@ -1431,13 +1502,22 @@ mod tests {
         )
         .unwrap_err();
         check_ts_conflict(
-            Cow::Owned(Either::Left(lock)),
+            Cow::Owned(Either::Left(lock.clone())),
             &key,
             160.into(),
             &empty,
             IsolationLevel::Si,
         )
         .unwrap_err();
+
+        check_ts_conflict(
+            Cow::Owned(Either::Right(SharedLocks::new())),
+            &key,
+            160.into(),
+            &empty,
+            IsolationLevel::Si,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1847,23 +1927,29 @@ mod tests {
         shared_locks.put_shared_lock(txn2_prewrite_lock);
 
         assert_eq!(shared_locks.len(), 2);
-        assert_eq!(shared_locks.get_lock(&txn1_ts).unwrap().ts, txn1_ts);
         assert_eq!(
-            shared_locks.get_lock(&txn1_ts).unwrap().lock_type,
+            shared_locks.get_lock(&txn1_ts).unwrap().unwrap().ts,
+            txn1_ts
+        );
+        assert_eq!(
+            shared_locks.get_lock(&txn1_ts).unwrap().unwrap().lock_type,
             LockType::Pessimistic
         );
-        assert_eq!(shared_locks.get_lock(&txn2_ts).unwrap().ts, txn2_ts);
         assert_eq!(
-            shared_locks.get_lock(&txn2_ts).unwrap().lock_type,
+            shared_locks.get_lock(&txn2_ts).unwrap().unwrap().ts,
+            txn2_ts
+        );
+        assert_eq!(
+            shared_locks.get_lock(&txn2_ts).unwrap().unwrap().lock_type,
             LockType::Lock
         );
 
-        let found = shared_locks.get_lock(&txn1_ts).unwrap();
+        let found = shared_locks.get_lock(&txn1_ts).unwrap().unwrap();
         assert_eq!(found.primary, b"txn1".to_vec());
         assert_eq!(found.ts, txn1_ts);
         assert_eq!(found.lock_type, LockType::Pessimistic);
 
         let missing_ts: TimeStamp = 42.into();
-        assert!(shared_locks.get_lock(&missing_ts).is_none());
+        assert!(shared_locks.get_lock(&missing_ts).unwrap().is_none());
     }
 }
