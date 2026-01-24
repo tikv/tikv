@@ -409,6 +409,7 @@ fn main() {
             backup_meta,
             output_prefix,
             row_group_size,
+            sst_concurrency,
             compression,
             filters,
             tables,
@@ -470,10 +471,20 @@ fn main() {
                     }
                     .exit();
                 });
-            let options = ParquetExportOptions {
-                row_group_size,
-                compression: parquet_compression,
-            };
+            let mut options = ParquetExportOptions::default();
+            options.row_group_size = row_group_size;
+            options.compression = parquet_compression;
+            if let Some(concurrency) = sst_concurrency {
+                if concurrency == 0 {
+                    clap::Error {
+                        message: "sst-concurrency must be greater than 0".into(),
+                        kind: ErrorKind::InvalidValue,
+                        info: None,
+                    }
+                    .exit();
+                }
+                options.sst_concurrency = concurrency;
+            }
             let mut filter_rules = filters;
             filter_rules.extend(tables);
             let filter = TableFilter::from_args(&filter_rules, &table_ids).unwrap_or_else(|err| {

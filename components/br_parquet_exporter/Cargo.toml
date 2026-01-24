@@ -29,8 +29,12 @@ tidb_query_datatype = { workspace = true }
 tikv_util = { workspace = true }
 tipb = { workspace = true }
 thiserror = "1.0"
+txn_types = { workspace = true }
+rayon = "1"
+tokio = { version = "1.5", features = ["rt-multi-thread"] }
 
 [dev-dependencies]
+backup = { workspace = true }
 engine_test = { workspace = true }
+tikv = { workspace = true }
 test_util = { workspace = true }
-tokio = { version = "1.5", features = ["rt-multi-thread"] }

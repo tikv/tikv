@@ -1144,6 +1144,7 @@ checksum = "cfa8873f51c92e232f9bac4065cddef41b714152812bfc5f7672ba16d6ef8cd9"
 name = "br_parquet_exporter"
 version = "0.1.0"
 dependencies = [
+ "backup",
  "collections",
  "engine_rocks",
  "engine_test",
@@ -1158,6 +1159,7 @@ dependencies = [
  "parquet",
  "prometheus",
  "protobuf 2.8.0",
+ "rayon",
  "serde",
  "serde_json",
  "sha2",
@@ -1167,9 +1169,11 @@ dependencies = [
  "test_util",
  "thiserror 1.0.40",
  "tidb_query_datatype",
+ "tikv",
  "tikv_util",
  "tipb",
  "tokio",
+ "txn_types",
 ]
 
 [[package]]

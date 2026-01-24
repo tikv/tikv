@@ -175,6 +175,7 @@ Optional flags:
 - `--backupmeta` (default `backupmeta`) path within the input storage
 - `--output-prefix` (default `parquet`) prefix under the output storage
 - `--row-group-size` (default `8192`)
+- `--sst-concurrency` number of SST files to export concurrently (defaults to available CPU count)
 - `--compression` (default `snappy`, supports `snappy|zstd|gzip|brotli|lz4raw|none`)
 - `--filter` table filter rules (same syntax as BR `--filter`, repeatable; supports `!` blocklist and `@file`)
 - `--table-ids` comma-separated list of physical table IDs

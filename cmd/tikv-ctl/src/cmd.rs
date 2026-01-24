@@ -663,6 +663,11 @@ pub enum Cmd {
         )]
         row_group_size: usize,
         #[structopt(
+            long = "sst-concurrency",
+            help = "number of SST files to export concurrently (defaults to available CPU count)"
+        )]
+        sst_concurrency: Option<usize>,
+        #[structopt(
             long = "compression",
             default_value = "snappy",
             help = "Parquet compression codec (snappy|zstd|gzip|brotli|lz4raw|none)"

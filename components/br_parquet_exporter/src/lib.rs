@@ -1,14 +1,18 @@
 // Copyright 2025 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet},
     fs::{self, File},
+    future::Future,
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
+use collections::HashSet as FxHashSet;
 use engine_rocks::RocksSstReader;
-use engine_traits::{CF_DEFAULT, IterOptions, Iterator, RefIterable, SstReader};
+use engine_traits::{CF_DEFAULT, CF_WRITE, IterOptions, Iterator, RefIterable, SstReader};
 use external_storage::{ExternalStorage, UnpinReader};
 use futures::{AsyncRead, AsyncReadExt, executor::block_on, io::AllowStdIo};
 use hex::ToHex;
@@ -17,15 +21,23 @@ use kvproto::brpb::{BackupMeta, File as BackupFile, MetaFile, Schema as BackupSc
 use parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
 pub use parquet::basic::Compression;
 use protobuf::Message;
+use rayon::{prelude::*, ThreadPoolBuilder};
 use sha2::{Digest, Sha256};
 use tempfile::{NamedTempFile, TempDir};
 use thiserror::Error;
 use tidb_query_datatype::{
-    codec::{datum::Datum, table},
+    codec::{
+        datum::{self, Datum, DatumDecoder},
+        mysql::{Duration, Time},
+        table,
+    },
+    def::{FieldTypeAccessor, FieldTypeTp},
     expr::EvalContext,
 };
 use tikv_util::table_filter::TableFilter as NameFilter;
 use tikv_util::time::{Instant, Limiter};
+use tipb::ColumnInfo;
+use txn_types::{Key, WriteRef, WriteType};
 
 mod metrics;
 mod schema;
@@ -83,13 +95,18 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub struct ExportOptions {
     pub row_group_size: usize,
     pub compression: Compression,
+    pub sst_concurrency: usize,
 }
 
 impl Default for ExportOptions {
     fn default() -> Self {
+        let concurrency = std::thread::available_parallelism()
+            .map(|threads| threads.get())
+            .unwrap_or(1);
         Self {
             row_group_size: DEFAULT_ROW_GROUP_SIZE,
             compression: Compression::SNAPPY,
+            sst_concurrency: concurrency,
         }
     }
 }
@@ -196,6 +213,17 @@ pub struct SstParquetExporter<'a> {
     output: &'a dyn ExternalStorage,
     tmp: TempDir,
     options: ExportOptions,
+    runtime: Option<tokio::runtime::Handle>,
+}
+
+struct FileTask {
+    file: BackupFile,
+    tables: Vec<Arc<TableSchema>>,
+}
+
+struct FileTaskReport {
+    files: Vec<ParquetFileInfo>,
+    total_rows: u64,
 }
 
 impl<'a> SstParquetExporter<'a> {
@@ -209,7 +237,19 @@ impl<'a> SstParquetExporter<'a> {
             output,
             tmp: TempDir::new()?,
             options,
+            runtime: tokio::runtime::Handle::try_current().ok(),
         })
+    }
+
+    fn block_on<F>(&self, fut: F) -> F::Output
+    where
+        F: Future,
+    {
+        if let Some(handle) = &self.runtime {
+            handle.block_on(fut)
+        } else {
+            block_on(fut)
+        }
     }
 
     pub fn export_backup_meta(
@@ -335,7 +375,7 @@ impl<'a> SstParquetExporter<'a> {
     }
 
     fn export_from_meta(
-        &mut self,
+        &self,
         meta: BackupMeta,
         output_prefix: &str,
         filter: &TableFilter,
@@ -354,6 +394,9 @@ impl<'a> SstParquetExporter<'a> {
         };
         let mut tables = Vec::new();
         for schema in meta.get_schemas() {
+            if schema.get_table().is_empty() || schema.get_db().is_empty() {
+                continue;
+            }
             tables.push(TableSchema::from_backup_schema(schema)?);
         }
         if tables.is_empty() {
@@ -369,23 +412,68 @@ impl<'a> SstParquetExporter<'a> {
                 ));
             }
         }
-        let file_map = group_files_by_table(meta.get_files());
+        let table_map: HashMap<i64, Arc<TableSchema>> = tables
+            .into_iter()
+            .map(|table| (table.table_id, Arc::new(table)))
+            .collect();
+        let tasks = build_file_tasks(meta.get_files(), &table_map);
         let mut report = ExportReport {
             start_version,
             end_version,
             ..Default::default()
         };
-        for table in tables.iter() {
-            if let Some(files) = file_map.get(&table.table_id) {
-                for file in files {
-                    let local = self.download(file)?;
-                    let info = self.export_table_file(table, file, &local, &prefix)?;
-                    report.total_rows += info.row_count;
-                    report.files.push(info);
-                }
+        if tasks.is_empty() {
+            return Ok(report);
+        }
+        let max_workers = self.options.sst_concurrency.max(1);
+        let worker_count = max_workers.min(tasks.len());
+        if worker_count == 1 {
+            for task in tasks.iter() {
+                let task_report = self.export_file_task(task, &prefix)?;
+                report.total_rows += task_report.total_rows;
+                report.files.extend(task_report.files);
+            }
+        } else {
+            let pool = ThreadPoolBuilder::new()
+                .num_threads(worker_count)
+                .build()
+                .map_err(|err| {
+                    Error::Invalid(format!("failed to build export thread pool: {}", err))
+                })?;
+            let task_reports: Result<Vec<FileTaskReport>> = pool.install(|| {
+                tasks
+                    .par_iter()
+                    .map(|task| self.export_file_task(task, &prefix))
+                    .collect()
+            });
+            for task_report in task_reports? {
+                report.total_rows += task_report.total_rows;
+                report.files.extend(task_report.files);
             }
         }
+        report
+            .files
+            .sort_by(|left, right| left.object_name.cmp(&right.object_name));
         Ok(report)
+    }
+
+    fn export_file_task(&self, task: &FileTask, output_prefix: &str) -> Result<FileTaskReport> {
+        let local = self.download(&task.file)?;
+        let mut files = Vec::new();
+        let mut total_rows = 0;
+        for table in task.tables.iter() {
+            let info = self.export_table_file(table, &task.file, &local, output_prefix)?;
+            total_rows += info.row_count;
+            files.push(info);
+        }
+        if let Err(err) = fs::remove_file(&local) {
+            tikv_util::debug!(
+                "br parquet failed to remove temp sst";
+                "sst" => task.file.get_name(),
+                "error" => %err
+            );
+        }
+        Ok(FileTaskReport { files, total_rows })
     }
 
     fn download(&self, file: &BackupFile) -> Result<PathBuf> {
@@ -397,7 +485,12 @@ impl<'a> SstParquetExporter<'a> {
         let mut reader = self.input.read(&file.name);
         let mut writer = File::create(&tmp_path)?;
         let limiter = Limiter::new(f64::INFINITY);
-        copy_stream(&mut reader, &mut writer, &limiter, file.get_size())?;
+        self.block_on(copy_stream_internal(
+            &mut reader,
+            &mut writer,
+            &limiter,
+            file.get_size(),
+        ))?;
         BR_PARQUET_STAGE_DURATION
             .with_label_values(&["download"])
             .observe(timer.saturating_elapsed_secs());
@@ -414,19 +507,21 @@ impl<'a> SstParquetExporter<'a> {
     }
 
     fn export_table_file(
-        &mut self,
+        &self,
         table: &TableSchema,
         file_meta: &BackupFile,
         local_path: &Path,
         output_prefix: &str,
     ) -> Result<ParquetFileInfo> {
+        let cf = file_meta.get_cf();
         let file_timer = Instant::now();
         tikv_util::info!(
             "br parquet exporting sst";
             "table_id" => table.table_id,
             "db" => %table.db_name,
             "table" => %table.table_name,
-            "sst" => file_meta.get_name()
+            "sst" => file_meta.get_name(),
+            "cf" => cf
         );
         let convert_timer = Instant::now();
         let tmp = NamedTempFile::new_in(self.tmp.path())?;
@@ -446,22 +541,99 @@ impl<'a> SstParquetExporter<'a> {
         let mut iter = reader.iter(IterOptions::default())?;
         iter.seek_to_first()?;
         let mut ctx = EvalContext::default();
+        let column_ids: FxHashSet<i64> = table.column_map.keys().copied().collect();
+        let column_infos: Arc<[ColumnInfo]> =
+            Arc::from(table.column_map.values().cloned().collect::<Vec<_>>());
+        let mut scanned_keys = 0u64;
+        let mut matched_keys = 0u64;
+        let mut skipped_non_record = 0u64;
+        let mut skipped_write = 0u64;
+        let mut mismatch_logged = false;
+        let enforce_table_id = !file_meta.get_table_metas().is_empty();
         while iter.valid()? {
             let raw_key = iter.key();
-            if raw_key.is_empty() || raw_key[0] != DATA_PREFIX {
+            if raw_key.is_empty() {
                 iter.next()?;
                 continue;
             }
-            let origin_key = keys::origin_key(raw_key);
-            let table_id = table::decode_table_id(origin_key)?;
-            if table_id != table.table_id {
+            scanned_keys += 1;
+            let user_key = match decode_user_key(raw_key) {
+                Ok(key) => key,
+                Err(err) => {
+                    tikv_util::warn!(
+                        "br parquet skipping key with decode error";
+                        "error" => %err,
+                        "key" => raw_key.encode_hex::<String>()
+                    );
+                    iter.next()?;
+                    continue;
+                }
+            };
+            let table_id = table::decode_table_id(user_key.as_ref())?;
+            if enforce_table_id && table_id != table.table_id {
+                if !mismatch_logged {
+                    mismatch_logged = true;
+                    tikv_util::debug!(
+                        "br parquet skipping key with mismatched table id";
+                        "expected_table_id" => table.table_id,
+                        "decoded_table_id" => table_id,
+                        "key" => user_key.as_ref().encode_hex::<String>()
+                    );
+                }
                 iter.next()?;
                 continue;
             }
-            let handle = decode_handle(table, origin_key)?;
-            let mut row_slice = iter.value();
-            let fx_row = table::decode_row(&mut row_slice, &mut ctx, &table.column_map)?;
-            let row: HashMap<_, _> = fx_row.into_iter().collect();
+            if table::check_record_key(user_key.as_ref()).is_err() {
+                skipped_non_record += 1;
+                iter.next()?;
+                continue;
+            }
+            let row_value = match cf {
+                CF_DEFAULT => Some(iter.value()),
+                CF_WRITE => {
+                    let write = match WriteRef::parse(iter.value()) {
+                        Ok(write) => write,
+                        Err(err) => {
+                            skipped_write += 1;
+                            tikv_util::debug!(
+                                "br parquet skipping write record with parse error";
+                                "error" => %err,
+                                "key" => user_key.as_ref().encode_hex::<String>()
+                            );
+                            iter.next()?;
+                            continue;
+                        }
+                    };
+                    if write.write_type != WriteType::Put {
+                        skipped_write += 1;
+                        iter.next()?;
+                        continue;
+                    }
+                    match write.short_value {
+                        Some(value) => Some(value),
+                        None => {
+                            skipped_write += 1;
+                            iter.next()?;
+                            continue;
+                        }
+                    }
+                }
+                _ => {
+                    skipped_write += 1;
+                    iter.next()?;
+                    continue;
+                }
+            };
+            matched_keys += 1;
+            let handle = decode_handle(table, user_key.as_ref())?;
+            let mut row = decode_row_for_table(
+                row_value.unwrap_or_default(),
+                &mut ctx,
+                table,
+                &column_ids,
+                &column_infos,
+            )?;
+            fill_handle_columns(&mut row, table, &handle, &mut ctx)?;
             let projected = build_row_projection(table, &handle, &row)?;
             writer.write_row(projected)?;
             iter.next()?;
@@ -505,7 +677,7 @@ impl<'a> SstParquetExporter<'a> {
         let checksum = hasher.finalize().to_vec();
         let reader = AllowStdIo::new(upload);
         let upload_timer = Instant::now();
-        block_on(
+        self.block_on(
             self.output
                 .write(&object_name, UnpinReader(Box::new(reader)), size),
         )?;
@@ -532,6 +704,10 @@ impl<'a> SstParquetExporter<'a> {
             "sst" => file_meta.get_name(),
             "rows" => total_rows,
             "bytes" => size,
+            "scanned_keys" => scanned_keys,
+            "matched_keys" => matched_keys,
+            "skipped_non_record" => skipped_non_record,
+            "skipped_write" => skipped_write,
             "convert_ms" => convert_elapsed.as_millis(),
             "upload_ms" => upload_elapsed.as_millis(),
             "total_ms" => total_elapsed.as_millis()
@@ -626,10 +802,13 @@ fn datum_to_string(datum: &Datum) -> Result<String> {
     }
 }
 
-fn group_files_by_table(files: &[BackupFile]) -> HashMap<i64, Vec<BackupFile>> {
-    let mut map: HashMap<i64, Vec<BackupFile>> = HashMap::new();
+fn build_file_tasks(
+    files: &[BackupFile],
+    table_map: &HashMap<i64, Arc<TableSchema>>,
+) -> Vec<FileTask> {
+    let mut tasks = Vec::new();
     for file in files {
-        if file.get_cf() != CF_DEFAULT {
+        if file.get_cf() != CF_DEFAULT && file.get_cf() != CF_WRITE {
             continue;
         }
         let table_ids = if file.get_table_metas().is_empty() {
@@ -640,11 +819,25 @@ fn group_files_by_table(files: &[BackupFile]) -> HashMap<i64, Vec<BackupFile>> {
                 .map(|m| m.get_physical_id())
                 .collect()
         };
+        let mut tables = Vec::new();
+        let mut seen = HashSet::new();
         for table_id in table_ids {
-            map.entry(table_id).or_default().push(file.clone());
+            if !seen.insert(table_id) {
+                continue;
+            }
+            if let Some(table) = table_map.get(&table_id) {
+                tables.push(Arc::clone(table));
+            }
         }
+        if tables.is_empty() {
+            continue;
+        }
+        tasks.push(FileTask {
+            file: file.clone(),
+            tables,
+        });
     }
-    map
+    tasks
 }
 
 fn decode_table_ids_from_key(file: &BackupFile) -> Vec<i64> {
@@ -653,6 +846,34 @@ fn decode_table_ids_from_key(file: &BackupFile) -> Vec<i64> {
     } else {
         Vec::new()
     }
+}
+
+fn decode_user_key(raw_key: &[u8]) -> Result<Cow<'_, [u8]>> {
+    if raw_key.is_empty() {
+        return Err(Error::Invalid("empty key".into()));
+    }
+    let origin_key = if raw_key[0] == DATA_PREFIX {
+        keys::origin_key(raw_key)
+    } else {
+        raw_key
+    };
+    if origin_key.is_empty() {
+        return Err(Error::Invalid("empty key".into()));
+    }
+    // Fast path for already-raw table keys.
+    if table::check_record_key(origin_key).is_ok() || table::check_index_key(origin_key).is_ok() {
+        return Ok(Cow::Borrowed(origin_key));
+    }
+    // Default CF keys are MVCC-encoded (memcomparable + commit ts).
+    if let Ok(truncated) = Key::truncate_ts_for(origin_key) {
+        if let Ok(raw) = Key::from_encoded_slice(truncated).into_raw() {
+            return Ok(Cow::Owned(raw));
+        }
+    }
+    if let Ok(raw) = Key::from_encoded_slice(origin_key).into_raw() {
+        return Ok(Cow::Owned(raw));
+    }
+    Err(Error::Invalid("failed to decode mvcc user key".into()))
 }
 
 #[derive(Debug)]
@@ -678,6 +899,154 @@ fn decode_handle(table: &TableSchema, key: &[u8]) -> Result<HandleValue> {
         let handle = table::decode_int_handle(key)?;
         Ok(HandleValue::Int(handle))
     }
+}
+
+fn unflatten_for_export(
+    ctx: &mut EvalContext,
+    datum: Datum,
+    field_type: &dyn FieldTypeAccessor,
+) -> Result<Datum> {
+    if matches!(datum, Datum::Null) {
+        return Ok(datum);
+    }
+    let tp = field_type.tp();
+    match tp {
+        FieldTypeTp::Float => Ok(Datum::F64(f64::from(datum.f64() as f32))),
+        FieldTypeTp::Date | FieldTypeTp::DateTime | FieldTypeTp::Timestamp => {
+            let fsp = field_type.decimal() as i8;
+            let t = Time::from_packed_u64(ctx, datum.u64(), tp.try_into()?, fsp)?;
+            Ok(Datum::Time(t))
+        }
+        FieldTypeTp::Duration => {
+            let dur = Duration::from_nanos(datum.i64(), field_type.decimal() as i8)?;
+            Ok(Datum::Dur(dur))
+        }
+        FieldTypeTp::Enum | FieldTypeTp::Set | FieldTypeTp::Bit => Ok(datum),
+        _ => Ok(datum),
+    }
+}
+
+fn decode_row_v1_for_export(
+    data: &[u8],
+    ctx: &mut EvalContext,
+    table: &TableSchema,
+) -> Result<HashMap<i64, Datum>> {
+    let mut slice = data;
+    let mut values = datum::decode(&mut slice)?;
+    if values.first().is_none_or(|d| *d == Datum::Null) {
+        return Ok(HashMap::default());
+    }
+    if values.len() & 1 == 1 {
+        return Err(Error::Invalid(
+            "decoded row values' length should be even".into(),
+        ));
+    }
+    let mut row = HashMap::with_capacity(table.column_map.len());
+    let mut drain = values.drain(..);
+    loop {
+        let id = match drain.next() {
+            None => return Ok(row),
+            Some(id) => id.i64(),
+        };
+        let v = drain.next().unwrap();
+        if let Some(ci) = table.column_map.get(&id) {
+            let v = unflatten_for_export(ctx, v, ci)?;
+            row.insert(id, v);
+        }
+    }
+}
+
+fn decode_col_value_for_export(
+    data: &mut &[u8],
+    ctx: &mut EvalContext,
+    col: &ColumnInfo,
+) -> Result<Datum> {
+    let datum = data.read_datum()?;
+    unflatten_for_export(ctx, datum, col)
+}
+
+fn decode_row_for_table(
+    data: &[u8],
+    ctx: &mut EvalContext,
+    table: &TableSchema,
+    column_ids: &FxHashSet<i64>,
+    column_infos: &Arc<[ColumnInfo]>,
+) -> Result<HashMap<i64, Datum>> {
+    if data.is_empty() || (data.len() == 1 && data[0] == datum::NIL_FLAG) {
+        return Ok(HashMap::default());
+    }
+    if data[0] != tidb_query_datatype::codec::row::v2::CODEC_VERSION {
+        return decode_row_v1_for_export(data, ctx, table);
+    }
+
+    let row = table::cut_row(data.to_vec(), column_ids, Arc::clone(column_infos))?;
+    if row.is_empty() {
+        return Ok(HashMap::default());
+    }
+    let mut decoded = HashMap::with_capacity(table.column_map.len());
+    for (id, info) in &table.column_map {
+        if let Some(cell) = row.get(*id) {
+            let mut cell_slice = cell;
+            let datum = decode_col_value_for_export(&mut cell_slice, ctx, info)?;
+            decoded.insert(*id, datum);
+        }
+    }
+    Ok(decoded)
+}
+
+fn fill_handle_columns(
+    row: &mut HashMap<i64, Datum>,
+    table: &TableSchema,
+    handle: &HandleValue,
+    ctx: &mut EvalContext,
+) -> Result<()> {
+    if table.is_common_handle {
+        let HandleValue::Common(handle_bytes) = handle else {
+            return Ok(());
+        };
+        if table.primary_key_ids.is_empty() {
+            return Ok(());
+        }
+        let mut buf = handle_bytes.as_slice();
+        for pk_id in &table.primary_key_ids {
+            if row.contains_key(pk_id) {
+                continue;
+            }
+            if let Some(info) = table.column_map.get(pk_id) {
+                if buf.is_empty() {
+                    break;
+                }
+                let datum = decode_col_value_for_export(&mut buf, ctx, info)?;
+                row.insert(*pk_id, datum);
+            }
+        }
+        return Ok(());
+    }
+
+    if !table.pk_is_handle {
+        return Ok(());
+    }
+    let pk_id = match table.primary_key_ids.as_slice() {
+        [id] => *id,
+        _ => return Ok(()),
+    };
+    if row.contains_key(&pk_id) {
+        return Ok(());
+    }
+    let HandleValue::Int(handle_val) = handle else {
+        return Ok(());
+    };
+    let datum = if let Some(info) = table.column_map.get(&pk_id) {
+        if info.as_accessor().is_unsigned() {
+            Datum::U64(*handle_val as u64)
+        } else {
+            Datum::I64(*handle_val)
+        }
+    } else {
+        Datum::I64(*handle_val)
+    };
+    row.insert(pk_id, datum);
+    Ok(())
 }
 
 fn sanitize_name(input: &str) -> String {
@@ -714,15 +1083,6 @@ async fn copy_stream_internal(
     Ok(())
 }
 
-fn copy_stream(
-    reader: &mut (dyn AsyncRead + Unpin + Send),
-    writer: &mut File,
-    limiter: &Limiter,
-    expected_len: u64,
-) -> std::io::Result<()> {
-    block_on(copy_stream_internal(reader, writer, limiter, expected_len))
-}
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -734,9 +1094,10 @@ mod tests {
 
     use engine_test::kv::{self, KvTestEngine};
     use engine_traits::{
-        CF_DEFAULT, ExternalSstFileInfo, SstExt, SstWriter, SstWriterBuilder,
+        CF_DEFAULT, CF_WRITE, ExternalSstFileInfo, SstExt, SstWriter, SstWriterBuilder,
     };
     use external_storage::local::LocalStorage;
+    use backup::IcebergCatalog;
     use kvproto::brpb::{BackupMeta, File as BackupFile, MetaFile, Schema};
     use parquet::{
         file::reader::{FileReader, SerializedFileReader},
@@ -745,6 +1106,8 @@ mod tests {
     use lazy_static::lazy_static;
     use tempfile::{NamedTempFile, TempDir};
     use tidb_query_datatype::{codec::Datum, expr::EvalContext};
+    use tikv::config::BackupIcebergConfig;
+    use txn_types::{TimeStamp, Write as TxnWrite, WriteType};
     use tokio::runtime::Runtime;
 
     use super::*;
@@ -770,7 +1133,9 @@ mod tests {
         let mut ctx = EvalContext::default();
         let value = table::encode_row(&mut ctx, vec![Datum::I64(42), Datum::Null], &[1, 2])
             .unwrap();
-        let key = keys::data_key(&table::encode_row_key(1, 1));
+        let raw_key = table::encode_row_key(1, 1);
+        let encoded_key = Key::from_raw(&raw_key).append_ts(TimeStamp::new(1));
+        let key = keys::data_key(encoded_key.as_encoded());
         sst_writer.put(&key, &value).unwrap();
         let sst_info = sst_writer.finish().unwrap();
         fs::copy(sst_info.file_path(), input_dir.path().join("data.sst")).unwrap();
@@ -778,8 +1143,8 @@ mod tests {
         let mut file = BackupFile::default();
         file.set_name("data.sst".into());
         file.set_cf(CF_DEFAULT.to_string());
-        file.set_start_key(table::encode_row_key(1, 1));
-        file.set_end_key(table::encode_row_key(1, 1));
+        file.set_start_key(raw_key.clone());
+        file.set_end_key(raw_key);
         file.set_start_version(1);
         file.set_end_version(2);
 
@@ -826,6 +1191,185 @@ mod tests {
             }
         }
         assert!(null_found);
+
+        let cfg = BackupIcebergConfig {
+            enable: true,
+            warehouse: "warehouse".into(),
+            namespace: "analytics".into(),
+            table: "t".into(),
+            manifest_prefix: "manifest".into(),
+        };
+        let catalog = IcebergCatalog::from_config(cfg).unwrap();
+        let manifest_files: Vec<_> = report
+            .files
+            .iter()
+            .map(|info| info.to_manifest_file(report.start_version, report.end_version))
+            .collect();
+        runtime
+            .block_on(catalog.write_manifest(
+                output.as_ref(),
+                &manifest_files,
+                TimeStamp::new(report.start_version),
+                TimeStamp::new(report.end_version),
+            ))
+            .unwrap();
+
+        let manifest_path = output_dir.path().join(format!(
+            "warehouse/analytics/t/metadata/manifest_{}_0.json",
+            report.end_version
+        ));
+        let raw = fs::read_to_string(manifest_path).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(json["files"][0]["file_name"], report.files[0].object_name);
+        assert_eq!(json["files"][0]["cf"], "parquet");
+        assert_eq!(
+            json["files"][0]["total_kvs"].as_u64().unwrap(),
+            report.files[0].row_count
+        );
+        assert_eq!(json["snapshot_end_ts"].as_u64().unwrap(), report.end_version);
+    }
+
+    #[test]
+    fn exports_short_value_from_write_cf() {
+        let _lock = EXPORT_TEST_LOCK.lock().unwrap();
+        let runtime = Runtime::new().unwrap();
+        let _runtime_guard = runtime.enter();
+        let input_dir = TempDir::new().unwrap();
+        let output_dir = TempDir::new().unwrap();
+        let engine = kv::new_engine(
+            input_dir.path().to_str().unwrap(),
+            &[CF_DEFAULT, CF_WRITE],
+        )
+        .unwrap();
+        let mut sst_writer = <KvTestEngine as SstExt>::SstWriterBuilder::new()
+            .set_db(&engine)
+            .set_cf(CF_WRITE)
+            .build("test")
+            .unwrap();
+        let mut ctx = EvalContext::default();
+        let value = table::encode_row(&mut ctx, vec![Datum::I64(99)], &[1]).unwrap();
+        let raw_key = table::encode_row_key(1, 1);
+        let encoded_key = Key::from_raw(&raw_key).append_ts(TimeStamp::new(2));
+        let key = keys::data_key(encoded_key.as_encoded());
+        let write = TxnWrite::new(WriteType::Put, TimeStamp::new(1), Some(value));
+        sst_writer.put(&key, &write.as_ref().to_bytes()).unwrap();
+        let sst_info = sst_writer.finish().unwrap();
+        fs::copy(sst_info.file_path(), input_dir.path().join("data.sst")).unwrap();
+
+        let mut file = BackupFile::default();
+        file.set_name("data.sst".into());
+        file.set_cf(CF_WRITE.to_string());
+        file.set_start_key(raw_key.clone());
+        file.set_end_key(raw_key);
+        file.set_start_version(1);
+        file.set_end_version(2);
+
+        let mut schema = Schema::default();
+        schema.set_db(r#"{"name":{"O":"test","L":"test"}}"#.as_bytes().to_vec());
+        schema.set_table(
+            r#"{"id":1,"name":{"O":"t","L":"t"},"cols":[{"id":1,"name":{"O":"c","L":"c"},"tp":3,"flag":0}]}"#
+                .as_bytes()
+                .to_vec(),
+        );
+
+        let mut meta = BackupMeta::default();
+        meta.mut_files().push(file);
+        meta.mut_schemas().push(schema);
+        meta.set_start_version(1);
+        meta.set_end_version(2);
+
+        let mut meta_bytes = Vec::new();
+        meta.write_to_writer(&mut meta_bytes).unwrap();
+        fs::write(input_dir.path().join("backupmeta"), meta_bytes).unwrap();
+
+        let input = Arc::new(LocalStorage::new(input_dir.path()).unwrap());
+        let output = Arc::new(LocalStorage::new(output_dir.path()).unwrap());
+        let mut exporter =
+            SstParquetExporter::new(input.as_ref(), output.as_ref(), ExportOptions::default())
+                .unwrap();
+        let report = exporter
+            .export_backup_meta("backupmeta", "parquet")
+            .unwrap();
+        assert_eq!(report.total_rows, 1);
+        assert_eq!(report.files.len(), 1);
+    }
+
+    #[test]
+    fn exports_multiple_ssts_in_parallel() {
+        let _lock = EXPORT_TEST_LOCK.lock().unwrap();
+        let runtime = Runtime::new().unwrap();
+        let _runtime_guard = runtime.enter();
+        let input_dir = TempDir::new().unwrap();
+        let output_dir = TempDir::new().unwrap();
+        let engine =
+            kv::new_engine(input_dir.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
+
+        let mut ctx = EvalContext::default();
+        for (idx, handle) in [(1, 1_i64), (2, 2_i64)] {
+            let sst_name = format!("test{}", idx);
+            let mut sst_writer = <KvTestEngine as SstExt>::SstWriterBuilder::new()
+                .set_db(&engine)
+                .set_cf(CF_DEFAULT)
+                .build(&sst_name)
+                .unwrap();
+            let value = table::encode_row(&mut ctx, vec![Datum::I64(handle)], &[1]).unwrap();
+            let raw_key = table::encode_row_key(1, handle);
+            let encoded_key = Key::from_raw(&raw_key).append_ts(TimeStamp::new(idx as u64));
+            let key = keys::data_key(encoded_key.as_encoded());
+            sst_writer.put(&key, &value).unwrap();
+            let sst_info = sst_writer.finish().unwrap();
+            let name = format!("data{}.sst", idx);
+            fs::copy(sst_info.file_path(), input_dir.path().join(&name)).unwrap();
+        }
+
+        let mut file1 = BackupFile::default();
+        file1.set_name("data1.sst".into());
+        file1.set_cf(CF_DEFAULT.to_string());
+        file1.set_start_key(table::encode_row_key(1, 1));
+        file1.set_end_key(table::encode_row_key(1, 1));
+        file1.set_start_version(1);
+        file1.set_end_version(3);
+
+        let mut file2 = BackupFile::default();
+        file2.set_name("data2.sst".into());
+        file2.set_cf(CF_DEFAULT.to_string());
+        file2.set_start_key(table::encode_row_key(1, 2));
+        file2.set_end_key(table::encode_row_key(1, 2));
+        file2.set_start_version(1);
+        file2.set_end_version(3);
+
+        let mut schema = Schema::default();
+        schema.set_db(r#"{"name":{"O":"test","L":"test"}}"#.as_bytes().to_vec());
+        schema.set_table(
+            r#"{"id":1,"name":{"O":"t","L":"t"},"cols":[{"id":1,"name":{"O":"c","L":"c"},"tp":3,"flag":0}]}"#
+                .as_bytes()
+                .to_vec(),
+        );
+
+        let mut meta = BackupMeta::default();
+        meta.mut_files().push(file1);
+        meta.mut_files().push(file2);
+        meta.mut_schemas().push(schema);
+        meta.set_start_version(1);
+        meta.set_end_version(3);
+
+        let mut meta_bytes = Vec::new();
+        meta.write_to_writer(&mut meta_bytes).unwrap();
+        fs::write(input_dir.path().join("backupmeta"), meta_bytes).unwrap();
+
+        let input = Arc::new(LocalStorage::new(input_dir.path()).unwrap());
+        let output = Arc::new(LocalStorage::new(output_dir.path()).unwrap());
+        let mut options = ExportOptions::default();
+        options.sst_concurrency = 2;
+        let mut exporter =
+            SstParquetExporter::new(input.as_ref(), output.as_ref(), options).unwrap();
+        let report = exporter
+            .export_backup_meta("backupmeta", "parquet")
+            .unwrap();
+        assert_eq!(report.total_rows, 2);
+        assert_eq!(report.files.len(), 2);
+        assert!(report.files[0].object_name.ends_with("data1.parquet"));
+        assert!(report.files[1].object_name.ends_with("data2.parquet"));
     }
 
     #[test]
@@ -844,7 +1388,9 @@ mod tests {
             .unwrap();
         let mut ctx = EvalContext::default();
         let value = table::encode_row(&mut ctx, vec![Datum::I64(7)], &[1]).unwrap();
-        let key = keys::data_key(&table::encode_row_key(1, 1));
+        let raw_key = table::encode_row_key(1, 1);
+        let encoded_key = Key::from_raw(&raw_key).append_ts(TimeStamp::new(1));
+        let key = keys::data_key(encoded_key.as_encoded());
         sst_writer.put(&key, &value).unwrap();
         let sst_info = sst_writer.finish().unwrap();
         fs::copy(sst_info.file_path(), input_dir.path().join("data.sst")).unwrap();
@@ -852,8 +1398,8 @@ mod tests {
         let mut file = BackupFile::default();
         file.set_name("data.sst".into());
         file.set_cf(CF_DEFAULT.to_string());
-        file.set_start_key(table::encode_row_key(1, 1));
-        file.set_end_key(table::encode_row_key(1, 1));
+        file.set_start_key(raw_key.clone());
+        file.set_end_key(raw_key);
         file.set_start_version(1);
         file.set_end_version(2);
 
