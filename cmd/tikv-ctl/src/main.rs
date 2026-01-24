@@ -406,7 +406,6 @@ fn main() {
         Cmd::BrParquetExport {
             input_storage_base64,
             output_storage_base64,
-            backup_meta,
             output_prefix,
             row_group_size,
             sst_concurrency,
@@ -507,7 +506,7 @@ fn main() {
                     });
             let metrics_before = exporter_metrics_snapshot();
             let report = exporter
-                .export_backup_meta_with_filter(&backup_meta, &output_prefix, &filter)
+                .export_backup_meta_with_filter(&output_prefix, &filter)
                 .unwrap_or_else(|err| {
                     clap::Error {
                         message: format!("failed to export backup: {}", err),

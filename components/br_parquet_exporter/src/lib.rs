@@ -69,6 +69,7 @@ pub fn parse_parquet_compression(name: &str) -> std::result::Result<Compression,
 
 const DEFAULT_ROW_GROUP_SIZE: usize = 8192;
 const DEFAULT_OUTPUT_PREFIX: &str = "parquet";
+const DEFAULT_BACKUP_META_PATH: &str = "backupmeta";
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("I/O error {0}")]
@@ -252,21 +253,16 @@ impl<'a> SstParquetExporter<'a> {
         }
     }
 
-    pub fn export_backup_meta(
-        &mut self,
-        meta_path: &str,
-        output_prefix: &str,
-    ) -> Result<ExportReport> {
-        self.export_backup_meta_with_filter(meta_path, output_prefix, &TableFilter::default())
+    pub fn export_backup_meta(&mut self, output_prefix: &str) -> Result<ExportReport> {
+        self.export_backup_meta_with_filter(output_prefix, &TableFilter::default())
     }
 
     pub fn export_backup_meta_with_filter(
         &mut self,
-        meta_path: &str,
         output_prefix: &str,
         filter: &TableFilter,
     ) -> Result<ExportReport> {
-        let meta = self.load_backup_meta(meta_path)?;
+        let meta = self.load_backup_meta(DEFAULT_BACKUP_META_PATH)?;
         let meta = self.expand_backup_meta(meta)?;
         self.export_from_meta(meta, output_prefix, filter)
     }
@@ -1186,9 +1182,7 @@ mod tests {
         let mut exporter =
             SstParquetExporter::new(input.as_ref(), output.as_ref(), ExportOptions::default())
                 .unwrap();
-        let report = exporter
-            .export_backup_meta("backupmeta", "parquet")
-            .unwrap();
+        let report = exporter.export_backup_meta("parquet").unwrap();
         assert_eq!(report.total_rows, 1);
         assert_eq!(report.files.len(), 1);
 
@@ -1303,9 +1297,7 @@ mod tests {
         let mut exporter =
             SstParquetExporter::new(input.as_ref(), output.as_ref(), ExportOptions::default())
                 .unwrap();
-        let report = exporter
-            .export_backup_meta("backupmeta", "parquet")
-            .unwrap();
+        let report = exporter.export_backup_meta("parquet").unwrap();
         assert_eq!(report.total_rows, 1);
         assert_eq!(report.files.len(), 1);
     }
@@ -1379,9 +1371,7 @@ mod tests {
         options.sst_concurrency = 2;
         let mut exporter =
             SstParquetExporter::new(input.as_ref(), output.as_ref(), options).unwrap();
-        let report = exporter
-            .export_backup_meta("backupmeta", "parquet")
-            .unwrap();
+        let report = exporter.export_backup_meta("parquet").unwrap();
         assert_eq!(report.total_rows, 2);
         assert_eq!(report.files.len(), 2);
         assert!(report.files[0].object_name.ends_with("data1.parquet"));
@@ -1473,9 +1463,7 @@ mod tests {
         let mut exporter =
             SstParquetExporter::new(input.as_ref(), output.as_ref(), ExportOptions::default())
                 .unwrap();
-        let report = exporter
-            .export_backup_meta("backupmeta", "parquet")
-            .unwrap();
+        let report = exporter.export_backup_meta("parquet").unwrap();
         assert_eq!(report.total_rows, 1);
         assert_eq!(report.files.len(), 1);
     }
@@ -1520,10 +1508,12 @@ mod tests {
     #[test]
     fn table_filter_import_file() {
         let table = make_table_schema("db1", "tbl1", 7);
-        let mut file = NamedTempFile::new().unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        let mut file = NamedTempFile::new_in(&cwd).unwrap();
         writeln!(file, "db?.tbl?").unwrap();
         writeln!(file, "!db1.tbl1").unwrap();
-        let rule = format!("@{}", file.path().display());
+        let rel_path = file.path().strip_prefix(&cwd).unwrap();
+        let rule = format!("@{}", rel_path.display());
         let filter = TableFilter::from_args(&[rule], &[]).unwrap();
         assert!(!filter.matches(&table));
     }

@@ -81,9 +81,7 @@ fn integration_row_group_size() {
     options.row_group_size = 1;
     let mut exporter =
         SstParquetExporter::new(input.as_ref(), output.as_ref(), options).unwrap();
-    let report = exporter
-        .export_backup_meta("backupmeta", "parquet")
-        .unwrap();
+    let report = exporter.export_backup_meta("parquet").unwrap();
     assert_eq!(report.total_rows, 2);
     assert_eq!(report.files.len(), 1);
 
@@ -163,7 +161,7 @@ fn integration_table_filter() {
         SstParquetExporter::new(input.as_ref(), output.as_ref(), ExportOptions::default())
             .unwrap();
     let report = exporter
-        .export_backup_meta_with_filter("backupmeta", "parquet", &filter)
+        .export_backup_meta_with_filter("parquet", &filter)
         .unwrap();
     assert_eq!(report.total_rows, 1);
     assert_eq!(report.files.len(), 1);

@@ -645,12 +645,6 @@ pub enum Cmd {
         )]
         output_storage_base64: String,
         #[structopt(
-            long = "backupmeta",
-            default_value = "backupmeta",
-            help = "path to the backupmeta file within the input storage"
-        )]
-        backup_meta: String,
-        #[structopt(
             long = "output-prefix",
             default_value = "parquet",
             help = "prefix under the output storage to place Parquet files"

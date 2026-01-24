@@ -172,7 +172,6 @@ Required flags:
 
 Optional flags:
 
-- `--backupmeta` (default `backupmeta`) path within the input storage
 - `--output-prefix` (default `parquet`) prefix under the output storage
 - `--row-group-size` (default `8192`)
 - `--sst-concurrency` number of SST files to export concurrently (defaults to available CPU count)
@@ -195,7 +194,6 @@ bin/br operator base64ify -s "s3://mybucket/parquet" --s3.endpoint="$S3_ENDPOINT
 tikv-ctl br-parquet-export \
   --input-storage-base64 "<BASE64_INPUT>" \
   --output-storage-base64 "<BASE64_OUTPUT>" \
-  --backupmeta "backupmeta" \
   --output-prefix "parquet" \
   --row-group-size 8192 \
   --compression zstd \
