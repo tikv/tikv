@@ -662,6 +662,12 @@ pub enum Cmd {
         )]
         sst_concurrency: Option<usize>,
         #[structopt(
+            long = "use-checkpoint",
+            default_value = "true",
+            help = "use checkpoint mode to resume Parquet export (true|false)"
+        )]
+        use_checkpoint: bool,
+        #[structopt(
             long = "compression",
             default_value = "snappy",
             help = "Parquet compression codec (snappy|zstd|gzip|brotli|lz4|lz4raw|none)"

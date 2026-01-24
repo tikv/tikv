@@ -7,14 +7,19 @@ use std::{
     future::Future,
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use collections::HashSet as FxHashSet;
 use engine_rocks::RocksSstReader;
 use engine_traits::{CF_DEFAULT, CF_WRITE, IterOptions, Iterator, RefIterable, SstReader};
 use external_storage::{ExternalStorage, UnpinReader};
-use futures::{AsyncRead, AsyncReadExt, executor::block_on, io::AllowStdIo};
+use futures::{
+    AsyncRead, AsyncReadExt,
+    executor::block_on,
+    io::{AllowStdIo, Cursor},
+    stream::TryStreamExt,
+};
 use hex::ToHex;
 use keys::{self, DATA_PREFIX};
 use kvproto::brpb::{BackupMeta, File as BackupFile, MetaFile, Schema as BackupSchema};
@@ -22,6 +27,7 @@ use parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
 pub use parquet::basic::Compression;
 use protobuf::Message;
 use rayon::{prelude::*, ThreadPoolBuilder};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tempfile::{NamedTempFile, TempDir};
 use thiserror::Error;
@@ -70,6 +76,10 @@ pub fn parse_parquet_compression(name: &str) -> std::result::Result<Compression,
 const DEFAULT_ROW_GROUP_SIZE: usize = 8192;
 const DEFAULT_OUTPUT_PREFIX: &str = "parquet";
 const DEFAULT_BACKUP_META_PATH: &str = "backupmeta";
+const CHECKPOINT_DIR: &str = "_checkpoint";
+const CHECKPOINT_ENTRY_DIR: &str = "entries";
+const CHECKPOINT_META_FILE: &str = "meta.json";
+const CHECKPOINT_VERSION: u32 = 1;
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("I/O error {0}")]
@@ -97,6 +107,7 @@ pub struct ExportOptions {
     pub row_group_size: usize,
     pub compression: Compression,
     pub sst_concurrency: usize,
+    pub use_checkpoint: bool,
 }
 
 impl Default for ExportOptions {
@@ -108,6 +119,7 @@ impl Default for ExportOptions {
             row_group_size: DEFAULT_ROW_GROUP_SIZE,
             compression: Compression::SNAPPY,
             sst_concurrency: concurrency,
+            use_checkpoint: true,
         }
     }
 }
@@ -116,14 +128,19 @@ impl Default for ExportOptions {
 pub struct TableFilter {
     table_ids: HashSet<i64>,
     rules: Option<NameFilter>,
+    raw_rules: Vec<String>,
+    raw_table_ids: Vec<i64>,
 }
 
 impl TableFilter {
     pub fn from_args(filters: &[String], table_ids: &[i64]) -> Result<Self> {
         let mut ids = HashSet::default();
+        let mut raw_table_ids = Vec::new();
         for id in table_ids {
             ids.insert(*id);
+            raw_table_ids.push(*id);
         }
+        raw_table_ids.sort_unstable();
         let rules = if filters.is_empty() {
             None
         } else {
@@ -138,6 +155,8 @@ impl TableFilter {
         Ok(TableFilter {
             table_ids: ids,
             rules,
+            raw_rules: filters.to_vec(),
+            raw_table_ids,
         })
     }
 
@@ -209,6 +228,109 @@ impl ParquetFileInfo {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CheckpointMeta {
+    version: u32,
+    start_version: u64,
+    end_version: u64,
+    config_hash: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CheckpointEntry {
+    object_name: String,
+    table_id: i64,
+    db_name: String,
+    table_name: String,
+    row_count: u64,
+    size: u64,
+    sha256: String,
+    start_key: String,
+    end_key: String,
+}
+
+impl CheckpointEntry {
+    fn from_parquet(info: &ParquetFileInfo) -> Self {
+        Self {
+            object_name: info.object_name.clone(),
+            table_id: info.table_id,
+            db_name: info.db_name.clone(),
+            table_name: info.table_name.clone(),
+            row_count: info.row_count,
+            size: info.size,
+            sha256: info.sha256.encode_hex(),
+            start_key: info.start_key.encode_hex(),
+            end_key: info.end_key.encode_hex(),
+        }
+    }
+
+    fn into_parquet(self) -> Result<ParquetFileInfo> {
+        Ok(ParquetFileInfo {
+            object_name: self.object_name,
+            table_id: self.table_id,
+            db_name: self.db_name,
+            table_name: self.table_name,
+            row_count: self.row_count,
+            size: self.size,
+            sha256: hex::decode(self.sha256).map_err(|err| {
+                Error::Invalid(format!("invalid checkpoint sha256 value: {}", err))
+            })?,
+            start_key: hex::decode(self.start_key).map_err(|err| {
+                Error::Invalid(format!("invalid checkpoint start_key value: {}", err))
+            })?,
+            end_key: hex::decode(self.end_key).map_err(|err| {
+                Error::Invalid(format!("invalid checkpoint end_key value: {}", err))
+            })?,
+        })
+    }
+}
+
+struct CheckpointState {
+    entry_prefix: String,
+    existing: HashMap<String, ParquetFileInfo>,
+    recorded: Mutex<HashSet<String>>,
+}
+
+impl CheckpointState {
+    fn new(
+        entry_prefix: String,
+        existing: HashMap<String, ParquetFileInfo>,
+    ) -> Self {
+        let recorded = existing.keys().cloned().collect();
+        Self {
+            entry_prefix,
+            existing,
+            recorded: Mutex::new(recorded),
+        }
+    }
+
+    fn lookup(&self, object_name: &str) -> Option<ParquetFileInfo> {
+        self.existing.get(object_name).cloned()
+    }
+
+    fn mark_recorded(&self, object_name: &str) -> bool {
+        let mut recorded = self.recorded.lock().unwrap();
+        recorded.insert(object_name.to_string())
+    }
+
+    fn unmark_recorded(&self, object_name: &str) {
+        let mut recorded = self.recorded.lock().unwrap();
+        recorded.remove(object_name);
+    }
+
+    fn entry_path(&self, object_name: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(object_name.as_bytes());
+        let digest = hasher.finalize();
+        format!("{}/{}.json", self.entry_prefix, hex::encode(digest))
+    }
+}
+
+struct LoadedBackupMeta {
+    meta: BackupMeta,
+    digest: Vec<u8>,
+}
+
 pub struct SstParquetExporter<'a> {
     input: &'a dyn ExternalStorage,
     output: &'a dyn ExternalStorage,
@@ -262,18 +384,19 @@ impl<'a> SstParquetExporter<'a> {
         output_prefix: &str,
         filter: &TableFilter,
     ) -> Result<ExportReport> {
-        let meta = self.load_backup_meta(DEFAULT_BACKUP_META_PATH)?;
-        let meta = self.expand_backup_meta(meta)?;
-        self.export_from_meta(meta, output_prefix, filter)
+        let loaded = self.load_backup_meta(DEFAULT_BACKUP_META_PATH)?;
+        let meta = self.expand_backup_meta(loaded.meta)?;
+        self.export_from_meta(meta, output_prefix, filter, &loaded.digest)
     }
 
-    fn load_backup_meta(&self, meta_path: &str) -> Result<BackupMeta> {
+    fn load_backup_meta(&self, meta_path: &str) -> Result<LoadedBackupMeta> {
         let mut reader = self.input.read(meta_path);
         let mut buf = Vec::new();
         block_on(reader.read_to_end(&mut buf))?;
+        let digest = Sha256::digest(&buf).to_vec();
         let mut meta = BackupMeta::default();
         meta.merge_from_bytes(&buf)?;
-        Ok(meta)
+        Ok(LoadedBackupMeta { meta, digest })
     }
 
     fn expand_backup_meta(&self, mut meta: BackupMeta) -> Result<BackupMeta> {
@@ -370,11 +493,153 @@ impl<'a> SstParquetExporter<'a> {
         Ok(meta)
     }
 
+    fn load_checkpoint(
+        &self,
+        output_prefix: &str,
+        start_version: u64,
+        end_version: u64,
+        filter: &TableFilter,
+        backup_meta_digest: &[u8],
+    ) -> Result<CheckpointState> {
+        let checkpoint_prefix = format!("{}/{}", output_prefix, CHECKPOINT_DIR);
+        let entry_prefix = format!("{}/{}", checkpoint_prefix, CHECKPOINT_ENTRY_DIR);
+        let meta_path = format!("{}/{}", checkpoint_prefix, CHECKPOINT_META_FILE);
+        let config_hash = self.checkpoint_config_hash(
+            start_version,
+            end_version,
+            filter,
+            backup_meta_digest,
+        );
+        let config_hash_hex = hex::encode(&config_hash);
+        let mut existing = HashMap::new();
+        let meta = self.load_checkpoint_meta(&meta_path)?;
+        if let Some(ref meta) = meta {
+            if meta.config_hash != config_hash_hex {
+                return Err(Error::Invalid(format!(
+                    "checkpoint config mismatch for {}, remove the checkpoint directory or use a new output prefix",
+                    checkpoint_prefix
+                )));
+            }
+            existing = self.load_checkpoint_entries(&entry_prefix)?;
+        }
+        if meta.is_none() {
+            let meta = CheckpointMeta {
+                version: CHECKPOINT_VERSION,
+                start_version,
+                end_version,
+                config_hash: config_hash_hex,
+            };
+            self.write_checkpoint_meta(&meta_path, &meta)?;
+        }
+        Ok(CheckpointState::new(entry_prefix, existing))
+    }
+
+    fn checkpoint_config_hash(
+        &self,
+        start_version: u64,
+        end_version: u64,
+        filter: &TableFilter,
+        backup_meta_digest: &[u8],
+    ) -> Vec<u8> {
+        let mut hasher = Sha256::new();
+        hasher.update(b"br-parquet-checkpoint");
+        hasher.update(CHECKPOINT_VERSION.to_le_bytes());
+        hasher.update(start_version.to_le_bytes());
+        hasher.update(end_version.to_le_bytes());
+        hasher.update(backup_meta_digest);
+        hasher.update((self.options.row_group_size as u64).to_le_bytes());
+        hasher.update(format!("{:?}", self.options.compression).as_bytes());
+        for rule in &filter.raw_rules {
+            hasher.update(rule.as_bytes());
+            hasher.update(&[0]);
+        }
+        for id in &filter.raw_table_ids {
+            hasher.update(id.to_le_bytes());
+        }
+        hasher.finalize().to_vec()
+    }
+
+    fn load_checkpoint_meta(&self, meta_path: &str) -> Result<Option<CheckpointMeta>> {
+        let mut reader = self.output.read(meta_path);
+        let mut buf = Vec::new();
+        match self.block_on(reader.read_to_end(&mut buf)) {
+            Ok(_) => {
+                let meta: CheckpointMeta = serde_json::from_slice(&buf).map_err(|err| {
+                    Error::Invalid(format!("invalid checkpoint meta: {}", err))
+                })?;
+                Ok(Some(meta))
+            }
+            Err(err) => {
+                if err.kind() == std::io::ErrorKind::NotFound {
+                    Ok(None)
+                } else {
+                    Err(Error::Io(err))
+                }
+            }
+        }
+    }
+
+    fn write_checkpoint_meta(&self, meta_path: &str, meta: &CheckpointMeta) -> Result<()> {
+        let data = serde_json::to_vec(meta)
+            .map_err(|err| Error::Invalid(format!("failed to encode checkpoint meta: {}", err)))?;
+        let len = data.len() as u64;
+        let reader = UnpinReader(Box::new(Cursor::new(data)));
+        self.block_on(self.output.write(meta_path, reader, len))?;
+        Ok(())
+    }
+
+    fn load_checkpoint_entries(
+        &self,
+        entry_prefix: &str,
+    ) -> Result<HashMap<String, ParquetFileInfo>> {
+        let fut = async {
+            let mut entries = HashMap::new();
+            let mut stream = self.output.iter_prefix(entry_prefix);
+            while let Some(item) = stream.try_next().await? {
+                let mut reader = self.output.read(&item.key);
+                let mut buf = Vec::new();
+                reader.read_to_end(&mut buf).await?;
+                let entry: CheckpointEntry = serde_json::from_slice(&buf).map_err(|err| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, err)
+                })?;
+                let info = entry
+                    .into_parquet()
+                    .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+                entries.insert(info.object_name.clone(), info);
+            }
+            Ok(entries)
+        };
+        self.block_on(fut).map_err(Error::Io)
+    }
+
+    fn persist_checkpoint(
+        &self,
+        checkpoint: &CheckpointState,
+        info: &ParquetFileInfo,
+    ) -> Result<()> {
+        if !checkpoint.mark_recorded(&info.object_name) {
+            return Ok(());
+        }
+        let entry = CheckpointEntry::from_parquet(info);
+        let data = serde_json::to_vec(&entry).map_err(|err| {
+            Error::Invalid(format!("failed to encode checkpoint entry: {}", err))
+        })?;
+        let len = data.len() as u64;
+        let reader = UnpinReader(Box::new(Cursor::new(data)));
+        let path = checkpoint.entry_path(&info.object_name);
+        if let Err(err) = self.block_on(self.output.write(&path, reader, len)) {
+            checkpoint.unmark_recorded(&info.object_name);
+            return Err(Error::Io(err));
+        }
+        Ok(())
+    }
+
     fn export_from_meta(
         &self,
         meta: BackupMeta,
         output_prefix: &str,
         filter: &TableFilter,
+        backup_meta_digest: &[u8],
     ) -> Result<ExportReport> {
         if meta.get_is_raw_kv() {
             return Err(Error::Invalid(
@@ -413,6 +678,17 @@ impl<'a> SstParquetExporter<'a> {
             .map(|table| (table.table_id, Arc::new(table)))
             .collect();
         let tasks = build_file_tasks(meta.get_files(), &table_map);
+        let checkpoint = if self.options.use_checkpoint {
+            Some(self.load_checkpoint(
+                &prefix,
+                start_version,
+                end_version,
+                filter,
+                backup_meta_digest,
+            )?)
+        } else {
+            None
+        };
         let mut report = ExportReport {
             start_version,
             end_version,
@@ -425,7 +701,7 @@ impl<'a> SstParquetExporter<'a> {
         let worker_count = max_workers.min(tasks.len());
         if worker_count == 1 {
             for task in tasks.iter() {
-                let task_report = self.export_file_task(task, &prefix)?;
+                let task_report = self.export_file_task(task, &prefix, checkpoint.as_ref())?;
                 report.total_rows += task_report.total_rows;
                 report.files.extend(task_report.files);
             }
@@ -439,7 +715,7 @@ impl<'a> SstParquetExporter<'a> {
             let task_reports: Result<Vec<FileTaskReport>> = pool.install(|| {
                 tasks
                     .par_iter()
-                    .map(|task| self.export_file_task(task, &prefix))
+                    .map(|task| self.export_file_task(task, &prefix, checkpoint.as_ref()))
                     .collect()
             });
             for task_report in task_reports? {
@@ -453,13 +729,36 @@ impl<'a> SstParquetExporter<'a> {
         Ok(report)
     }
 
-    fn export_file_task(&self, task: &FileTask, output_prefix: &str) -> Result<FileTaskReport> {
-        let local = self.download(&task.file)?;
+    fn export_file_task(
+        &self,
+        task: &FileTask,
+        output_prefix: &str,
+        checkpoint: Option<&CheckpointState>,
+    ) -> Result<FileTaskReport> {
         let mut files = Vec::new();
         let mut total_rows = 0;
+        let mut pending = Vec::new();
         for table in task.tables.iter() {
-            let info = self.export_table_file(table, &task.file, &local, output_prefix)?;
+            let object_name = self.build_object_name(output_prefix, table, &task.file);
+            if let Some(checkpoint) = checkpoint {
+                if let Some(info) = checkpoint.lookup(&object_name) {
+                    total_rows += info.row_count;
+                    files.push(info);
+                    continue;
+                }
+            }
+            pending.push((Arc::clone(table), object_name));
+        }
+        if pending.is_empty() {
+            return Ok(FileTaskReport { files, total_rows });
+        }
+        let local = self.download(&task.file)?;
+        for (table, object_name) in pending {
+            let info = self.export_table_file(&table, &task.file, &local, &object_name)?;
             total_rows += info.row_count;
+            if let Some(checkpoint) = checkpoint {
+                self.persist_checkpoint(checkpoint, &info)?;
+            }
             files.push(info);
         }
         if let Err(err) = fs::remove_file(&local) {
@@ -502,12 +801,32 @@ impl<'a> SstParquetExporter<'a> {
         Ok(tmp_path)
     }
 
+    fn build_object_name(
+        &self,
+        output_prefix: &str,
+        table: &TableSchema,
+        file_meta: &BackupFile,
+    ) -> String {
+        format!(
+            "{}/{}/{}/{}.parquet",
+            output_prefix,
+            sanitize_name(&table.db_name),
+            sanitize_name(&table.table_name),
+            sanitize_name(
+                &Path::new(&file_meta.name)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("part")
+            )
+        )
+    }
+
     fn export_table_file(
         &self,
         table: &TableSchema,
         file_meta: &BackupFile,
         local_path: &Path,
-        output_prefix: &str,
+        object_name: &str,
     ) -> Result<ParquetFileInfo> {
         let cf = file_meta.get_cf();
         let file_timer = Instant::now();
@@ -645,18 +964,6 @@ impl<'a> SstParquetExporter<'a> {
             .inc();
         BR_PARQUET_ROWS.inc_by(total_rows);
 
-        let object_name = format!(
-            "{}/{}/{}/{}.parquet",
-            output_prefix,
-            sanitize_name(&table.db_name),
-            sanitize_name(&table.table_name),
-            sanitize_name(
-                &Path::new(&file_meta.name)
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("part")
-            )
-        );
         let mut upload = tmp.reopen()?;
         let mut hasher = Sha256::new();
         let mut size = 0u64;
@@ -710,7 +1017,7 @@ impl<'a> SstParquetExporter<'a> {
         );
 
         Ok(ParquetFileInfo {
-            object_name,
+            object_name: object_name.to_string(),
             table_id: table.table_id,
             db_name: table.db_name.clone(),
             table_name: table.table_name.clone(),

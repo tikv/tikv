@@ -174,6 +174,69 @@ fn integration_table_filter() {
     assert!(!path.contains("/test/t2/"));
 }
 
+#[test]
+fn integration_checkpoint_resume() {
+    let _lock = EXPORT_TEST_LOCK.lock().unwrap();
+    let runtime = Runtime::new().unwrap();
+    let _guard = runtime.enter();
+    let input_dir = TempDir::new().unwrap();
+    let output_dir = TempDir::new().unwrap();
+    let engine =
+        kv::new_engine(input_dir.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
+
+    let sst_path = input_dir.path().join("checkpoint.sst");
+    let mut sst_writer = <KvTestEngine as SstExt>::SstWriterBuilder::new()
+        .set_db(&engine)
+        .set_cf(CF_DEFAULT)
+        .build(sst_path.to_str().unwrap())
+        .unwrap();
+    let mut ctx = EvalContext::default();
+    let value = table::encode_row(&mut ctx, vec![Datum::I64(7)], &[1]).unwrap();
+    let raw_key = table::encode_row_key(1, 1);
+    let encoded_key = Key::from_raw(&raw_key).append_ts(TimeStamp::new(1));
+    let key = keys::data_key(encoded_key.as_encoded());
+    sst_writer.put(&key, &value).unwrap();
+    let sst_info = sst_writer.finish().unwrap();
+    fs::copy(sst_info.file_path(), input_dir.path().join("data.sst")).unwrap();
+
+    let mut file = BackupFile::default();
+    file.set_name("data.sst".into());
+    file.set_cf(CF_DEFAULT.to_string());
+    file.set_start_key(raw_key.clone());
+    file.set_end_key(raw_key);
+    file.set_start_version(1);
+    file.set_end_version(2);
+
+    let schema = make_schema("test", "t", 1);
+    let mut meta = BackupMeta::default();
+    meta.mut_files().push(file);
+    meta.mut_schemas().push(schema);
+    meta.set_start_version(1);
+    meta.set_end_version(2);
+
+    let mut meta_bytes = Vec::new();
+    meta.write_to_writer(&mut meta_bytes).unwrap();
+    fs::write(input_dir.path().join("backupmeta"), meta_bytes).unwrap();
+
+    let input = Arc::new(LocalStorage::new(input_dir.path()).unwrap());
+    let output = Arc::new(LocalStorage::new(output_dir.path()).unwrap());
+    let mut exporter =
+        SstParquetExporter::new(input.as_ref(), output.as_ref(), ExportOptions::default())
+            .unwrap();
+    let first = exporter.export_backup_meta("parquet").unwrap();
+    assert_eq!(first.total_rows, 1);
+    assert_eq!(first.files.len(), 1);
+
+    fs::remove_file(input_dir.path().join("data.sst")).unwrap();
+    let mut exporter =
+        SstParquetExporter::new(input.as_ref(), output.as_ref(), ExportOptions::default())
+            .unwrap();
+    let second = exporter.export_backup_meta("parquet").unwrap();
+    assert_eq!(second.total_rows, 1);
+    assert_eq!(second.files.len(), 1);
+    assert_eq!(second.files[0].object_name, first.files[0].object_name);
+}
+
 fn make_schema(db: &str, table: &str, id: i64) -> Schema {
     let mut schema = Schema::default();
     let db_lower = db.to_ascii_lowercase();
