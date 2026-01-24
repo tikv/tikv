@@ -3,7 +3,8 @@
 // #[PerformanceCriticalPath]
 use std::ops::Bound;
 
-use txn_types::{Key, Lock, TimeStamp};
+use tikv_util::Either;
+use txn_types::{Key, Lock, SharedLocks, TimeStamp};
 
 use crate::storage::{
     Context, ScanMode, Snapshot, Statistics,
@@ -24,7 +25,7 @@ use crate::storage::{
 pub enum FlashbackToVersionState {
     RollbackLock {
         next_lock_key: Key,
-        key_locks: Vec<(Key, Lock)>,
+        key_locks: Vec<(Key, Either<Lock, SharedLocks>)>,
     },
     Prewrite {
         key_to_lock: Key,
