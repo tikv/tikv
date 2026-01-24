@@ -176,11 +176,13 @@ Optional flags:
 - `--output-prefix` (default `parquet`) prefix under the output storage
 - `--row-group-size` (default `8192`)
 - `--sst-concurrency` number of SST files to export concurrently (defaults to available CPU count)
-- `--compression` (default `snappy`, supports `snappy|zstd|gzip|brotli|lz4raw|none`)
+- `--compression` (default `snappy`, supports `snappy|zstd|gzip|brotli|lz4|lz4raw|none`)
 - `--filter` table filter rules (same syntax as BR `--filter`, repeatable; supports `!` blocklist and `@file`)
 - `--table-ids` comma-separated list of physical table IDs
 - `--write-iceberg-manifest` plus `--iceberg-warehouse`, `--iceberg-namespace`, `--iceberg-table`
 - `--iceberg-manifest-prefix` (default `manifest`)
+- Output paths sanitize database and table names to `[A-Za-z0-9_]`. When sanitization changes the name, a short hash suffix is appended to prevent collisions.
+- Unsigned integer columns are exported as UTF8 strings to preserve the full range; signed integer columns require values within `i64`.
 
 Example:
 

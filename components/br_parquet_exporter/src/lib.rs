@@ -1050,10 +1050,24 @@ fn fill_handle_columns(
 }
 
 fn sanitize_name(input: &str) -> String {
-    input
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect()
+    let mut output = String::with_capacity(input.len());
+    let mut changed = false;
+    for c in input.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' {
+            output.push(c);
+        } else {
+            output.push('_');
+            changed = true;
+        }
+    }
+    if changed {
+        let mut hasher = Sha256::new();
+        hasher.update(input.as_bytes());
+        let digest = hasher.finalize();
+        output.push_str("__");
+        output.push_str(&hex::encode(&digest[..8]));
+    }
+    output
 }
 
 async fn copy_stream_internal(
@@ -1125,10 +1139,11 @@ mod tests {
         let output_dir = TempDir::new().unwrap();
         let engine =
             kv::new_engine(input_dir.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
+        let sst_path = input_dir.path().join("test.sst");
         let mut sst_writer = <KvTestEngine as SstExt>::SstWriterBuilder::new()
             .set_db(&engine)
             .set_cf(CF_DEFAULT)
-            .build("test")
+            .build(sst_path.to_str().unwrap())
             .unwrap();
         let mut ctx = EvalContext::default();
         let value = table::encode_row(&mut ctx, vec![Datum::I64(42), Datum::Null], &[1, 2])
@@ -1241,10 +1256,11 @@ mod tests {
             &[CF_DEFAULT, CF_WRITE],
         )
         .unwrap();
+        let sst_path = input_dir.path().join("test.sst");
         let mut sst_writer = <KvTestEngine as SstExt>::SstWriterBuilder::new()
             .set_db(&engine)
             .set_cf(CF_WRITE)
-            .build("test")
+            .build(sst_path.to_str().unwrap())
             .unwrap();
         let mut ctx = EvalContext::default();
         let value = table::encode_row(&mut ctx, vec![Datum::I64(99)], &[1]).unwrap();
@@ -1306,11 +1322,11 @@ mod tests {
 
         let mut ctx = EvalContext::default();
         for (idx, handle) in [(1, 1_i64), (2, 2_i64)] {
-            let sst_name = format!("test{}", idx);
+            let sst_path = input_dir.path().join(format!("test{}.sst", idx));
             let mut sst_writer = <KvTestEngine as SstExt>::SstWriterBuilder::new()
                 .set_db(&engine)
                 .set_cf(CF_DEFAULT)
-                .build(&sst_name)
+                .build(sst_path.to_str().unwrap())
                 .unwrap();
             let value = table::encode_row(&mut ctx, vec![Datum::I64(handle)], &[1]).unwrap();
             let raw_key = table::encode_row_key(1, handle);
@@ -1381,10 +1397,11 @@ mod tests {
         let output_dir = TempDir::new().unwrap();
         let engine =
             kv::new_engine(input_dir.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
+        let sst_path = input_dir.path().join("test.sst");
         let mut sst_writer = <KvTestEngine as SstExt>::SstWriterBuilder::new()
             .set_db(&engine)
             .set_cf(CF_DEFAULT)
-            .build("test")
+            .build(sst_path.to_str().unwrap())
             .unwrap();
         let mut ctx = EvalContext::default();
         let value = table::encode_row(&mut ctx, vec![Datum::I64(7)], &[1]).unwrap();
@@ -1509,6 +1526,14 @@ mod tests {
         let rule = format!("@{}", file.path().display());
         let filter = TableFilter::from_args(&[rule], &[]).unwrap();
         assert!(!filter.matches(&table));
+    }
+
+    #[test]
+    fn sanitize_name_appends_hash_on_change() {
+        let sanitized = sanitize_name("table-name");
+        assert!(sanitized.starts_with("table_name__"));
+        assert_ne!(sanitized, "table_name");
+        assert!(sanitize_name("table_name").starts_with("table_name"));
     }
 
     #[test]

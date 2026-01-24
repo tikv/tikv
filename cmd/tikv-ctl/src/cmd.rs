@@ -670,7 +670,7 @@ pub enum Cmd {
         #[structopt(
             long = "compression",
             default_value = "snappy",
-            help = "Parquet compression codec (snappy|zstd|gzip|brotli|lz4raw|none)"
+            help = "Parquet compression codec (snappy|zstd|gzip|brotli|lz4|lz4raw|none)"
         )]
         compression: String,
         #[structopt(

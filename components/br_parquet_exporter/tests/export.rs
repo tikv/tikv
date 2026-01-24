@@ -37,10 +37,11 @@ fn integration_row_group_size() {
     let engine =
         kv::new_engine(input_dir.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
 
+    let sst_path = input_dir.path().join("row_group.sst");
     let mut sst_writer = <KvTestEngine as SstExt>::SstWriterBuilder::new()
         .set_db(&engine)
         .set_cf(CF_DEFAULT)
-        .build("row_group")
+        .build(sst_path.to_str().unwrap())
         .unwrap();
     let mut ctx = EvalContext::default();
     let mut raw_keys = Vec::new();
@@ -107,10 +108,11 @@ fn integration_table_filter() {
     let engine =
         kv::new_engine(input_dir.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
 
+    let sst_path = input_dir.path().join("multi_table.sst");
     let mut sst_writer = <KvTestEngine as SstExt>::SstWriterBuilder::new()
         .set_db(&engine)
         .set_cf(CF_DEFAULT)
-        .build("multi_table")
+        .build(sst_path.to_str().unwrap())
         .unwrap();
     let mut ctx = EvalContext::default();
     let raw_key_1 = table::encode_row_key(1, 1);
