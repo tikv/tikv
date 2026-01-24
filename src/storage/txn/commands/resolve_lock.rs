@@ -93,6 +93,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
         let mut released_locks = ReleasedLocks::new();
         let mut known_txn_status = vec![];
         for (current_key, current_lock) in key_locks {
+            // No special casing for shared locks here, `cleanup` and `commit` will handle
+            // them.
             txn.start_ts = current_lock.ts;
             reader.start_ts = current_lock.ts;
             let commit_ts = *txn_status
@@ -175,3 +177,121 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
 // value length. The write batch will be around 32KB if we scan 256 keys each
 // time.
 pub const RESOLVE_LOCK_BATCH_SIZE: usize = 256;
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use concurrency_manager::ConcurrencyManager;
+    use kvproto::kvrpcpb::Context;
+    use tikv_util::deadline::Deadline;
+
+    use super::*;
+    use crate::storage::{
+        TestEngineBuilder,
+        kv::Engine,
+        lock_manager::MockLockManager,
+        mvcc::tests::{must_get_rollback_ts, must_unlocked, write},
+        txn::{
+            commands::{WriteCommand, WriteContext},
+            scheduler::DEFAULT_EXECUTION_DURATION_LIMIT,
+            tests::{must_acquire_shared_pessimistic_lock, must_shared_prewrite_lock},
+            txn_status_cache::TxnStatusCache,
+        },
+    };
+
+    fn run_resolve_lock<E: Engine>(
+        engine: &mut E,
+        txn_status: HashMap<TimeStamp, TimeStamp>,
+        key_locks: Vec<(Key, Lock)>,
+    ) {
+        let ctx = Context::default();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let cm = ConcurrencyManager::new_for_test(TimeStamp::new(100));
+        let command = ResolveLock {
+            ctx: ctx.clone(),
+            txn_status,
+            scan_key: None,
+            key_locks,
+            deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
+        };
+        let lock_mgr = MockLockManager::new();
+        let write_context = WriteContext {
+            lock_mgr: &lock_mgr,
+            concurrency_manager: cm,
+            extra_op: Default::default(),
+            statistics: &mut Default::default(),
+            async_apply_prewrite: false,
+            raw_ext: None,
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+        };
+        let result = command.process_write(snapshot, write_context).unwrap();
+        write(engine, &ctx, result.to_be_write.modifies);
+    }
+
+    /// This test demonstrates a bug where resolving multiple sub-locks from the
+    /// same SharedLocks in a single batch results in incorrect behavior.
+    ///
+    /// The bug occurs because:
+    /// 1. ResolveLockReadPhase flattens SharedLocks into individual (Key, Lock)
+    ///    pairs
+    /// 2. ResolveLock processes each pair in a loop using the SAME snapshot
+    /// 3. Each iteration reads the ORIGINAL SharedLocks (all sub-locks present)
+    /// 4. Each iteration removes ONE sub-lock and writes the remaining
+    /// 5. Since the snapshot doesn't see pending writes, each iteration
+    ///    overwrites the previous one
+    /// 6. The LAST write wins, leaving incorrect locks
+    ///
+    /// Example:
+    /// - SharedLocks on key: [ts=10, ts=20], both need rollback
+    /// - Iteration 1: reads [10,20], removes 10, writes [20]
+    /// - Iteration 2: reads [10,20] (same snapshot!), removes 20, writes [10]
+    /// - Final result: [10] (should be empty!)
+    #[test]
+    fn test_resolve_multiple_shared_locks_same_key() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"shared-resolve-key";
+        let pk1 = b"pk1";
+        let pk2 = b"pk2";
+
+        // Create SharedLocks with two sub-locks: ts=10 and ts=20
+        must_acquire_shared_pessimistic_lock(&mut engine, key, pk1, 10, 15, 3000);
+        must_shared_prewrite_lock(&mut engine, key, pk1, 10, 15);
+        must_acquire_shared_pessimistic_lock(&mut engine, key, pk2, 20, 25, 3000);
+        must_shared_prewrite_lock(&mut engine, key, pk2, 20, 25);
+
+        // Load the SharedLocks to get the Lock structures
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut reader = crate::storage::mvcc::MvccReader::new(snapshot, None, true);
+        let lock_or_shared = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
+        let mut shared_locks = match lock_or_shared {
+            tikv_util::Either::Right(sl) => sl,
+            _ => panic!("expected SharedLocks"),
+        };
+        assert_eq!(shared_locks.len(), 2);
+
+        // Extract individual locks (simulating what ResolveLockReadPhase does)
+        let lock1 = shared_locks.get_lock(&10.into()).unwrap().unwrap().clone();
+        let lock2 = shared_locks.get_lock(&20.into()).unwrap().unwrap().clone();
+
+        // Build txn_status: rollback both transactions
+        let mut txn_status = HashMap::default();
+        txn_status.insert(10.into(), 0.into()); // rollback ts=10
+        txn_status.insert(20.into(), 0.into()); // rollback ts=20
+
+        // Simulate what happens when ResolveLock processes both locks from the
+        // same SharedLocks in a single batch. The key_locks contains the same
+        // key twice with different locks.
+        let key_locks = vec![(Key::from_raw(key), lock1), (Key::from_raw(key), lock2)];
+
+        run_resolve_lock(&mut engine, txn_status, key_locks);
+
+        // Both transactions should have rollback records
+        must_get_rollback_ts(&mut engine, key, 10);
+        must_get_rollback_ts(&mut engine, key, 20);
+
+        // After resolving both locks, the key should be unlocked (no locks
+        // remaining).
+        must_unlocked(&mut engine, key);
+    }
+}

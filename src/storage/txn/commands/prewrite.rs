@@ -1016,7 +1016,9 @@ mod tests {
         txn::{
             Error, ErrorInner,
             actions::{
-                acquire_pessimistic_lock::tests::must_pessimistic_locked,
+                acquire_pessimistic_lock::tests::{
+                    must_acquire_shared_pessimistic_lock, must_pessimistic_locked,
+                },
                 tests::{
                     must_pessimistic_prewrite_put_async_commit, must_prewrite_delete,
                     must_prewrite_put, must_prewrite_put_async_commit,
@@ -2989,5 +2991,55 @@ mod tests {
         must_locked(&mut engine, k1, 10);
         must_locked(&mut engine, k2, 10);
         must_locked(&mut engine, k3, 10);
+    }
+
+    #[test]
+    fn test_shared_lock_prewrite_cannot_amend_pessimistic_lock() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let cm = ConcurrencyManager::new_for_test(1.into());
+        let mut statistics = Statistics::default();
+
+        let key = b"shared-lock-key";
+        let cmd = PrewritePessimistic::with_defaults(
+            vec![(
+                Mutation::make_shared_lock(Key::from_raw(key)),
+                DoPessimisticCheck,
+            )],
+            key.to_vec(),
+            10.into(),
+            10.into(),
+        );
+        // cannot amend pessimistic lock when there is no shared lock.
+        let err = prewrite_command(&mut engine, cm.clone(), &mut statistics, cmd).unwrap_err();
+        assert!(matches!(
+            err,
+            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::PessimisticLockNotFound {
+                ..
+            })))
+        ));
+
+        // Create a shared lock belonging to another transaction
+        must_acquire_shared_pessimistic_lock(&mut engine, key, key, 11u64, 11u64, 2000);
+        must_load_shared_lock(&mut engine, key);
+
+        let cmd = PrewritePessimistic::with_defaults(
+            vec![(
+                Mutation::make_shared_lock(Key::from_raw(key)),
+                DoPessimisticCheck,
+            )],
+            key.to_vec(),
+            10.into(),
+            10.into(),
+        );
+        // cannot amend pessimistic lock when there is shared lock belong to another
+        // transaction.
+        let err = prewrite_command(&mut engine, cm, &mut statistics, cmd).unwrap_err();
+        assert!(matches!(
+            err,
+            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::PessimisticLockNotFound {
+                ..
+            })))
+        ));
+        must_load_shared_lock(&mut engine, key);
     }
 }
