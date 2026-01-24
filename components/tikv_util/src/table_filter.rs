@@ -188,7 +188,18 @@ impl TableRulesParser {
     }
 
     fn import_file(&mut self, file_name: &str) -> Result<()> {
-        let file = File::open(file_name)
+        let path = std::path::Path::new(file_name);
+        if path.is_absolute()
+            || path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(self.matcher.error(
+                "invalid filter file path: absolute paths and parent directory components are not allowed",
+            ));
+        }
+
+        let file = File::open(path)
             .map_err(|err| self.matcher.annotate(err, "cannot open filter file"))?;
         let reader = BufReader::new(file);
         let old_file_name = self.matcher.file_name.clone();
