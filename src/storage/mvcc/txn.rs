@@ -241,6 +241,30 @@ impl MvccTxn {
         self.locks_for_1pc.clear();
         self.guards.clear();
     }
+
+    /// Get pending lock modification for a key from the txn's modifies.
+    /// This is useful when processing multiple sub-locks of the same key
+    /// in a single batch, where subsequent operations need to see the
+    /// pending writes from previous operations.
+    ///
+    /// Returns:
+    /// - `None`: no pending modification for this key
+    /// - `Some(None)`: the lock was deleted (unlock_key was called)
+    /// - `Some(Some(bytes))`: there's a pending Put to CF_LOCK
+    pub fn get_pending_lock_bytes(&self, key: &Key) -> Option<Option<&[u8]>> {
+        for modify in self.modifies.iter().rev() {
+            match modify {
+                Modify::Put(cf, k, v) if *cf == CF_LOCK && k == key => {
+                    return Some(Some(v.as_slice()));
+                }
+                Modify::Delete(cf, k) if *cf == CF_LOCK && k == key => {
+                    return Some(None);
+                }
+                _ => {}
+            }
+        }
+        None
+    }
 }
 
 impl fmt::Debug for MvccTxn {
