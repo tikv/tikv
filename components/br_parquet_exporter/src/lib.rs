@@ -531,6 +531,13 @@ impl<'a> SstParquetExporter<'a> {
             };
             self.write_checkpoint_meta(&meta_path, &meta)?;
         }
+        tikv_util::info!(
+            "br parquet checkpoint loaded";
+            "prefix" => %checkpoint_prefix,
+            "reuse_entries" => existing.len(),
+            "start_version" => start_version,
+            "end_version" => end_version
+        );
         Ok(CheckpointState::new(entry_prefix, existing))
     }
 
