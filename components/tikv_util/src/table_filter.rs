@@ -35,7 +35,9 @@ impl TableFilter {
             parser.parse_line(filter, true)?;
         }
         parser.rules.reverse();
-        Ok(TableFilter { rules: parser.rules })
+        Ok(TableFilter {
+            rules: parser.rules,
+        })
     }
 
     pub fn case_insensitive(self) -> Result<Self> {
@@ -208,8 +210,7 @@ impl TableRulesParser {
         self.matcher.line_num = 1;
 
         for line in reader.lines() {
-            let line = line
-                .map_err(|err| self.matcher.annotate(err, "cannot read filter file"))?;
+            let line = line.map_err(|err| self.matcher.annotate(err, "cannot read filter file"))?;
             self.parse_line(&line, false)?;
             self.matcher.line_num += 1;
         }
@@ -257,14 +258,14 @@ impl MatcherParser {
     }
 
     fn parse_regex_pattern<'a>(&self, line: &'a str) -> Result<(Matcher, &'a str)> {
-        let end = find_regex_end(line)
-            .ok_or_else(|| self.error("syntax error: incomplete regexp"))?;
+        let end =
+            find_regex_end(line).ok_or_else(|| self.error("syntax error: incomplete regexp"))?;
         if end <= 2 {
             return Err(self.error("syntax error: incomplete regexp"));
         }
         let pattern = &line[1..end - 1];
-        let matcher = Matcher::new_regex(pattern)
-            .map_err(|err| self.annotate(err, "invalid pattern"))?;
+        let matcher =
+            Matcher::new_regex(pattern).map_err(|err| self.annotate(err, "invalid pattern"))?;
         Ok((matcher, &line[end..]))
     }
 
@@ -376,10 +377,9 @@ impl MatcherParser {
                             pattern.push(ch);
                             idx += ch.len_utf8();
                         } else {
-                            return Err(self.error(&format!(
-                                "unexpected special character '{}'",
-                                ch
-                            )));
+                            return Err(
+                                self.error(&format!("unexpected special character '{}'", ch))
+                            );
                         }
                     } else {
                         if is_literal {
@@ -397,8 +397,8 @@ impl MatcherParser {
             return Ok((Matcher::String(literal), rest));
         }
         pattern.push('$');
-        let matcher = Matcher::new_regex(&pattern)
-            .map_err(|err| self.annotate(err, "invalid pattern"))?;
+        let matcher =
+            Matcher::new_regex(&pattern).map_err(|err| self.annotate(err, "invalid pattern"))?;
         Ok((matcher, rest))
     }
 }

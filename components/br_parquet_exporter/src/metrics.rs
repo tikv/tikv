@@ -2,7 +2,7 @@
 
 use lazy_static::lazy_static;
 use prometheus::{
-    exponential_buckets, HistogramVec, IntCounter, IntCounterVec, register_histogram_vec,
+    HistogramVec, IntCounter, IntCounterVec, exponential_buckets, register_histogram_vec,
     register_int_counter, register_int_counter_vec,
 };
 
@@ -57,18 +57,10 @@ impl ExporterMetricsSnapshot {
 
 pub fn snapshot() -> ExporterMetricsSnapshot {
     ExporterMetricsSnapshot {
-        downloaded: BR_PARQUET_SSTS
-            .with_label_values(&["downloaded"])
-            .get(),
-        converted: BR_PARQUET_SSTS
-            .with_label_values(&["converted"])
-            .get(),
-        uploaded: BR_PARQUET_SSTS
-            .with_label_values(&["uploaded"])
-            .get(),
-        completed: BR_PARQUET_SSTS
-            .with_label_values(&["completed"])
-            .get(),
+        downloaded: BR_PARQUET_SSTS.with_label_values(&["downloaded"]).get(),
+        converted: BR_PARQUET_SSTS.with_label_values(&["converted"]).get(),
+        uploaded: BR_PARQUET_SSTS.with_label_values(&["uploaded"]).get(),
+        completed: BR_PARQUET_SSTS.with_label_values(&["completed"]).get(),
         rows: BR_PARQUET_ROWS.get(),
         output_bytes: BR_PARQUET_OUTPUT_BYTES.get(),
     }

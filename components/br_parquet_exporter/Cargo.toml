@@ -7,8 +7,8 @@ license = "Apache-2.0"
 
 [dependencies]
 collections = { workspace = true }
-engine_traits = { workspace = true }
 engine_rocks = { workspace = true }
+engine_traits = { workspace = true }
 external_storage = { workspace = true }
 file_system = { workspace = true }
 futures = "0.3"
@@ -19,22 +19,22 @@ lazy_static = "1.4"
 parquet = { version = "51", default-features = false, features = ["snap", "brotli", "flate2", "zstd", "lz4"] }
 prometheus = { version = "0.13", features = ["nightly"] }
 protobuf = { version = "2.8", features = ["bytes"] }
-slog = { workspace = true }
-slog-global = { workspace = true }
+rayon = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
+slog = { workspace = true }
+slog-global = { workspace = true }
 tempfile = "3"
+thiserror = "1.0"
 tidb_query_datatype = { workspace = true }
 tikv_util = { workspace = true }
 tipb = { workspace = true }
-thiserror = "1.0"
-txn_types = { workspace = true }
-rayon = "1"
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
+txn_types = { workspace = true }
 
 [dev-dependencies]
 backup = { workspace = true }
 engine_test = { workspace = true }
-tikv = { workspace = true }
 test_util = { workspace = true }
+tikv = { workspace = true }

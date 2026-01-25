@@ -1,7 +1,6 @@
 // Copyright 2025 TiKV Project Authors. Licensed under Apache-2.0.
 
 use collections::HashMap as FxHashMap;
-
 use kvproto::brpb::Schema as BackupSchema;
 use serde::Deserialize;
 use tidb_query_datatype::def::{FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};

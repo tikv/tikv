@@ -208,7 +208,7 @@ impl ColumnState {
                     return Err(Error::Schema(format!(
                         "column writer mismatch for {:?}",
                         ty
-                    )))
+                    )));
                 }
             };
             result.map_err(Error::from)?;

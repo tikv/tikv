@@ -20,8 +20,8 @@ use tidb_query_datatype::{
     codec::{datum::Datum, table},
     expr::EvalContext,
 };
-use txn_types::{Key, TimeStamp};
 use tokio::runtime::Runtime;
+use txn_types::{Key, TimeStamp};
 
 lazy_static! {
     static ref EXPORT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -34,8 +34,7 @@ fn integration_row_group_size() {
     let _guard = runtime.enter();
     let input_dir = TempDir::new().unwrap();
     let output_dir = TempDir::new().unwrap();
-    let engine =
-        kv::new_engine(input_dir.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
+    let engine = kv::new_engine(input_dir.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
 
     let sst_path = input_dir.path().join("row_group.sst");
     let mut sst_writer = <KvTestEngine as SstExt>::SstWriterBuilder::new()
@@ -79,16 +78,14 @@ fn integration_row_group_size() {
     let output = Arc::new(LocalStorage::new(output_dir.path()).unwrap());
     let mut options = ExportOptions::default();
     options.row_group_size = 1;
-    let mut exporter =
-        SstParquetExporter::new(input.as_ref(), output.as_ref(), options).unwrap();
+    let mut exporter = SstParquetExporter::new(input.as_ref(), output.as_ref(), options).unwrap();
     let report = exporter.export_backup_meta("parquet").unwrap();
     assert_eq!(report.total_rows, 2);
     assert_eq!(report.files.len(), 1);
 
     let parquet_files = collect_parquet_files(output_dir.path());
     assert_eq!(parquet_files.len(), 1);
-    let reader =
-        SerializedFileReader::new(File::open(&parquet_files[0]).unwrap()).unwrap();
+    let reader = SerializedFileReader::new(File::open(&parquet_files[0]).unwrap()).unwrap();
     let metadata = reader.metadata();
     assert_eq!(metadata.num_row_groups(), 2);
     for idx in 0..metadata.num_row_groups() {
@@ -103,8 +100,7 @@ fn integration_table_filter() {
     let _guard = runtime.enter();
     let input_dir = TempDir::new().unwrap();
     let output_dir = TempDir::new().unwrap();
-    let engine =
-        kv::new_engine(input_dir.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
+    let engine = kv::new_engine(input_dir.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
 
     let sst_path = input_dir.path().join("multi_table.sst");
     let mut sst_writer = <KvTestEngine as SstExt>::SstWriterBuilder::new()
@@ -158,8 +154,7 @@ fn integration_table_filter() {
     let output = Arc::new(LocalStorage::new(output_dir.path()).unwrap());
     let filter = TableFilter::from_args(&["test.t1".to_string()], &[]).unwrap();
     let mut exporter =
-        SstParquetExporter::new(input.as_ref(), output.as_ref(), ExportOptions::default())
-            .unwrap();
+        SstParquetExporter::new(input.as_ref(), output.as_ref(), ExportOptions::default()).unwrap();
     let report = exporter
         .export_backup_meta_with_filter("parquet", &filter)
         .unwrap();
@@ -181,8 +176,7 @@ fn integration_checkpoint_resume() {
     let _guard = runtime.enter();
     let input_dir = TempDir::new().unwrap();
     let output_dir = TempDir::new().unwrap();
-    let engine =
-        kv::new_engine(input_dir.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
+    let engine = kv::new_engine(input_dir.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
 
     let sst_path = input_dir.path().join("checkpoint.sst");
     let mut sst_writer = <KvTestEngine as SstExt>::SstWriterBuilder::new()
@@ -221,16 +215,14 @@ fn integration_checkpoint_resume() {
     let input = Arc::new(LocalStorage::new(input_dir.path()).unwrap());
     let output = Arc::new(LocalStorage::new(output_dir.path()).unwrap());
     let mut exporter =
-        SstParquetExporter::new(input.as_ref(), output.as_ref(), ExportOptions::default())
-            .unwrap();
+        SstParquetExporter::new(input.as_ref(), output.as_ref(), ExportOptions::default()).unwrap();
     let first = exporter.export_backup_meta("parquet").unwrap();
     assert_eq!(first.total_rows, 1);
     assert_eq!(first.files.len(), 1);
 
     fs::remove_file(input_dir.path().join("data.sst")).unwrap();
     let mut exporter =
-        SstParquetExporter::new(input.as_ref(), output.as_ref(), ExportOptions::default())
-            .unwrap();
+        SstParquetExporter::new(input.as_ref(), output.as_ref(), ExportOptions::default()).unwrap();
     let second = exporter.export_backup_meta("parquet").unwrap();
     assert_eq!(second.total_rows, 1);
     assert_eq!(second.files.len(), 1);

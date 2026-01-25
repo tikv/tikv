@@ -23,10 +23,10 @@ use futures::{
 use hex::ToHex;
 use keys::{self, DATA_PREFIX};
 use kvproto::brpb::{BackupMeta, File as BackupFile, MetaFile, Schema as BackupSchema};
-use parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
 pub use parquet::basic::Compression;
+use parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
 use protobuf::Message;
-use rayon::{prelude::*, ThreadPoolBuilder};
+use rayon::{ThreadPoolBuilder, prelude::*};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tempfile::{NamedTempFile, TempDir};
@@ -40,8 +40,10 @@ use tidb_query_datatype::{
     def::{FieldTypeAccessor, FieldTypeTp},
     expr::EvalContext,
 };
-use tikv_util::table_filter::TableFilter as NameFilter;
-use tikv_util::time::{Instant, Limiter};
+use tikv_util::{
+    table_filter::TableFilter as NameFilter,
+    time::{Instant, Limiter},
+};
 use tipb::ColumnInfo;
 use txn_types::{Key, WriteRef, WriteType};
 
@@ -49,13 +51,14 @@ mod metrics;
 mod schema;
 mod writer;
 
-pub use crate::metrics::ExporterMetricsSnapshot;
-use crate::metrics::{
-    BR_PARQUET_OUTPUT_BYTES, BR_PARQUET_ROWS, BR_PARQUET_STAGE_DURATION, BR_PARQUET_SSTS,
-};
 use schema::ColumnKind;
 pub use schema::{ColumnParquetType, ColumnSchema, TableSchema};
 use writer::{CellValue, ParquetWriter};
+
+pub use crate::metrics::ExporterMetricsSnapshot;
+use crate::metrics::{
+    BR_PARQUET_OUTPUT_BYTES, BR_PARQUET_ROWS, BR_PARQUET_SSTS, BR_PARQUET_STAGE_DURATION,
+};
 
 pub fn exporter_metrics_snapshot() -> ExporterMetricsSnapshot {
     metrics::snapshot()
@@ -144,8 +147,8 @@ impl TableFilter {
         let rules = if filters.is_empty() {
             None
         } else {
-            let parsed = NameFilter::parse(filters)
-                .map_err(|err| Error::Invalid(err.to_string()))?;
+            let parsed =
+                NameFilter::parse(filters).map_err(|err| Error::Invalid(err.to_string()))?;
             Some(
                 parsed
                     .case_insensitive()
@@ -292,10 +295,7 @@ struct CheckpointState {
 }
 
 impl CheckpointState {
-    fn new(
-        entry_prefix: String,
-        existing: HashMap<String, ParquetFileInfo>,
-    ) -> Self {
+    fn new(entry_prefix: String, existing: HashMap<String, ParquetFileInfo>) -> Self {
         let recorded = existing.keys().cloned().collect();
         Self {
             entry_prefix,
@@ -504,12 +504,8 @@ impl<'a> SstParquetExporter<'a> {
         let checkpoint_prefix = format!("{}/{}", output_prefix, CHECKPOINT_DIR);
         let entry_prefix = format!("{}/{}", checkpoint_prefix, CHECKPOINT_ENTRY_DIR);
         let meta_path = format!("{}/{}", checkpoint_prefix, CHECKPOINT_META_FILE);
-        let config_hash = self.checkpoint_config_hash(
-            start_version,
-            end_version,
-            filter,
-            backup_meta_digest,
-        );
+        let config_hash =
+            self.checkpoint_config_hash(start_version, end_version, filter, backup_meta_digest);
         let config_hash_hex = hex::encode(&config_hash);
         let mut existing = HashMap::new();
         let meta = self.load_checkpoint_meta(&meta_path)?;
@@ -571,9 +567,8 @@ impl<'a> SstParquetExporter<'a> {
         let mut buf = Vec::new();
         match self.block_on(reader.read_to_end(&mut buf)) {
             Ok(_) => {
-                let meta: CheckpointMeta = serde_json::from_slice(&buf).map_err(|err| {
-                    Error::Invalid(format!("invalid checkpoint meta: {}", err))
-                })?;
+                let meta: CheckpointMeta = serde_json::from_slice(&buf)
+                    .map_err(|err| Error::Invalid(format!("invalid checkpoint meta: {}", err)))?;
                 Ok(Some(meta))
             }
             Err(err) => {
@@ -606,9 +601,8 @@ impl<'a> SstParquetExporter<'a> {
                 let mut reader = self.output.read(&item.key);
                 let mut buf = Vec::new();
                 reader.read_to_end(&mut buf).await?;
-                let entry: CheckpointEntry = serde_json::from_slice(&buf).map_err(|err| {
-                    std::io::Error::new(std::io::ErrorKind::InvalidData, err)
-                })?;
+                let entry: CheckpointEntry = serde_json::from_slice(&buf)
+                    .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
                 let info = entry
                     .into_parquet()
                     .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
@@ -628,9 +622,8 @@ impl<'a> SstParquetExporter<'a> {
             return Ok(());
         }
         let entry = CheckpointEntry::from_parquet(info);
-        let data = serde_json::to_vec(&entry).map_err(|err| {
-            Error::Invalid(format!("failed to encode checkpoint entry: {}", err))
-        })?;
+        let data = serde_json::to_vec(&entry)
+            .map_err(|err| Error::Invalid(format!("failed to encode checkpoint entry: {}", err)))?;
         let len = data.len() as u64;
         let reader = UnpinReader(Box::new(Cursor::new(data)));
         let path = checkpoint.entry_path(&info.object_name);
@@ -675,9 +668,7 @@ impl<'a> SstParquetExporter<'a> {
         if filter.is_active() {
             tables.retain(|table| filter.matches(table));
             if tables.is_empty() {
-                return Err(Error::Invalid(
-                    "no tables match the export filters".into(),
-                ));
+                return Err(Error::Invalid("no tables match the export filters".into()));
             }
         }
         let table_map: HashMap<i64, Arc<TableSchema>> = tables
@@ -796,9 +787,7 @@ impl<'a> SstParquetExporter<'a> {
         BR_PARQUET_STAGE_DURATION
             .with_label_values(&["download"])
             .observe(timer.saturating_elapsed_secs());
-        BR_PARQUET_SSTS
-            .with_label_values(&["downloaded"])
-            .inc();
+        BR_PARQUET_SSTS.with_label_values(&["downloaded"]).inc();
         tikv_util::info!(
             "br parquet downloaded sst";
             "sst" => file.get_name(),
@@ -966,9 +955,7 @@ impl<'a> SstParquetExporter<'a> {
         BR_PARQUET_STAGE_DURATION
             .with_label_values(&["convert"])
             .observe(convert_timer.saturating_elapsed_secs());
-        BR_PARQUET_SSTS
-            .with_label_values(&["converted"])
-            .inc();
+        BR_PARQUET_SSTS.with_label_values(&["converted"]).inc();
         BR_PARQUET_ROWS.inc_by(total_rows);
 
         let mut upload = tmp.reopen()?;
@@ -995,17 +982,13 @@ impl<'a> SstParquetExporter<'a> {
         BR_PARQUET_STAGE_DURATION
             .with_label_values(&["upload"])
             .observe(upload_timer.saturating_elapsed_secs());
-        BR_PARQUET_SSTS
-            .with_label_values(&["uploaded"])
-            .inc();
+        BR_PARQUET_SSTS.with_label_values(&["uploaded"]).inc();
         BR_PARQUET_OUTPUT_BYTES.inc_by(size);
         let total_elapsed = file_timer.saturating_elapsed();
         BR_PARQUET_STAGE_DURATION
             .with_label_values(&["total"])
             .observe(file_timer.saturating_elapsed_secs());
-        BR_PARQUET_SSTS
-            .with_label_values(&["completed"])
-            .inc();
+        BR_PARQUET_SSTS.with_label_values(&["completed"]).inc();
         tikv_util::info!(
             "br parquet export finished";
             "table_id" => table.table_id,
@@ -1416,23 +1399,23 @@ mod tests {
         sync::Arc,
     };
 
+    use backup::IcebergCatalog;
     use engine_test::kv::{self, KvTestEngine};
     use engine_traits::{
         CF_DEFAULT, CF_WRITE, ExternalSstFileInfo, SstExt, SstWriter, SstWriterBuilder,
     };
     use external_storage::local::LocalStorage;
-    use backup::IcebergCatalog;
     use kvproto::brpb::{BackupMeta, File as BackupFile, MetaFile, Schema};
+    use lazy_static::lazy_static;
     use parquet::{
         file::reader::{FileReader, SerializedFileReader},
         record::{Field, RowAccessor},
     };
-    use lazy_static::lazy_static;
     use tempfile::{NamedTempFile, TempDir};
     use tidb_query_datatype::{codec::Datum, expr::EvalContext};
     use tikv::config::BackupIcebergConfig;
-    use txn_types::{TimeStamp, Write as TxnWrite, WriteType};
     use tokio::runtime::Runtime;
+    use txn_types::{TimeStamp, Write as TxnWrite, WriteType};
 
     use super::*;
 
@@ -1447,8 +1430,7 @@ mod tests {
         let _runtime_guard = runtime.enter();
         let input_dir = TempDir::new().unwrap();
         let output_dir = TempDir::new().unwrap();
-        let engine =
-            kv::new_engine(input_dir.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
+        let engine = kv::new_engine(input_dir.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
         let sst_path = input_dir.path().join("test.sst");
         let mut sst_writer = <KvTestEngine as SstExt>::SstWriterBuilder::new()
             .set_db(&engine)
@@ -1456,8 +1438,8 @@ mod tests {
             .build(sst_path.to_str().unwrap())
             .unwrap();
         let mut ctx = EvalContext::default();
-        let value = table::encode_row(&mut ctx, vec![Datum::I64(42), Datum::Null], &[1, 2])
-            .unwrap();
+        let value =
+            table::encode_row(&mut ctx, vec![Datum::I64(42), Datum::Null], &[1, 2]).unwrap();
         let raw_key = table::encode_row_key(1, 1);
         let encoded_key = Key::from_raw(&raw_key).append_ts(TimeStamp::new(1));
         let key = keys::data_key(encoded_key.as_encoded());
@@ -1549,7 +1531,10 @@ mod tests {
             json["files"][0]["total_kvs"].as_u64().unwrap(),
             report.files[0].row_count
         );
-        assert_eq!(json["snapshot_end_ts"].as_u64().unwrap(), report.end_version);
+        assert_eq!(
+            json["snapshot_end_ts"].as_u64().unwrap(),
+            report.end_version
+        );
     }
 
     #[test]
@@ -1559,11 +1544,8 @@ mod tests {
         let _runtime_guard = runtime.enter();
         let input_dir = TempDir::new().unwrap();
         let output_dir = TempDir::new().unwrap();
-        let engine = kv::new_engine(
-            input_dir.path().to_str().unwrap(),
-            &[CF_DEFAULT, CF_WRITE],
-        )
-        .unwrap();
+        let engine =
+            kv::new_engine(input_dir.path().to_str().unwrap(), &[CF_DEFAULT, CF_WRITE]).unwrap();
         let sst_path = input_dir.path().join("test.sst");
         let mut sst_writer = <KvTestEngine as SstExt>::SstWriterBuilder::new()
             .set_db(&engine)
@@ -1623,8 +1605,7 @@ mod tests {
         let _runtime_guard = runtime.enter();
         let input_dir = TempDir::new().unwrap();
         let output_dir = TempDir::new().unwrap();
-        let engine =
-            kv::new_engine(input_dir.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
+        let engine = kv::new_engine(input_dir.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
 
         let mut ctx = EvalContext::default();
         for (idx, handle) in [(1, 1_i64), (2, 2_i64)] {
@@ -1699,8 +1680,7 @@ mod tests {
         let _runtime_guard = runtime.enter();
         let input_dir = TempDir::new().unwrap();
         let output_dir = TempDir::new().unwrap();
-        let engine =
-            kv::new_engine(input_dir.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
+        let engine = kv::new_engine(input_dir.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
         let sst_path = input_dir.path().join("test.sst");
         let mut sst_writer = <KvTestEngine as SstExt>::SstWriterBuilder::new()
             .set_db(&engine)
@@ -1814,8 +1794,7 @@ mod tests {
             TableFilter::from_args(&["test.*".to_string(), "!test.x".to_string()], &[]).unwrap();
         assert!(filter.matches(&table));
 
-        let filter =
-            TableFilter::from_args(&["/^te.*/./^t$/".to_string()], &[]).unwrap();
+        let filter = TableFilter::from_args(&["/^te.*/./^t$/".to_string()], &[]).unwrap();
         assert!(filter.matches(&table));
     }
 
