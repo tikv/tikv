@@ -474,7 +474,9 @@ fn main() {
             let mut options = ParquetExportOptions::default();
             options.row_group_size = row_group_size;
             options.compression = parquet_compression;
-            options.use_checkpoint = use_checkpoint;
+            if let Some(use_checkpoint) = use_checkpoint {
+                options.use_checkpoint = use_checkpoint;
+            }
             if let Some(concurrency) = sst_concurrency {
                 if concurrency == 0 {
                     clap::Error {

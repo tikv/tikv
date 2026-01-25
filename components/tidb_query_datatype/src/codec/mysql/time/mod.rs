@@ -2082,11 +2082,15 @@ impl Time {
     ) -> Result<Self> {
         let dur = chrono::Duration::nanoseconds(duration.to_nanos());
 
-        let time = if unlikely(ctx.cfg.is_test) {
-            Utc.ymd(2020, 2, 2).and_hms(0, 0, 0).checked_add_signed(dur)
+        let base = if unlikely(ctx.cfg.is_test) {
+            Utc.with_ymd_and_hms(2020, 2, 2, 0, 0, 0).single()
         } else {
-            Utc::today().and_hms(0, 0, 0).checked_add_signed(dur)
+            Utc::now()
+                .date_naive()
+                .and_hms_opt(0, 0, 0)
+                .map(|dt| dt.and_utc())
         };
+        let time = base.and_then(|dt| dt.checked_add_signed(dur));
 
         let time = time.ok_or::<Error>(box_err!("parse from duration {} overflows", duration))?;
 
@@ -2107,7 +2111,14 @@ impl Time {
         time_type: TimeType,
         fsp: i8,
     ) -> Result<Self> {
-        let timestamp = Utc.timestamp(seconds, nanos);
+        let timestamp = Utc
+            .timestamp_opt(seconds, nanos)
+            .single()
+            .ok_or::<Error>(box_err!(
+                "invalid timestamp: seconds={}, nanos={}",
+                seconds,
+                nanos
+            ))?;
         let timestamp = ctx.cfg.tz.from_utc_datetime(&timestamp.naive_utc());
         let timestamp = timestamp.round_subsecs(fsp as u16);
         Time::try_from_chrono_datetime(ctx, timestamp.naive_local(), time_type, fsp)
@@ -2170,14 +2181,20 @@ impl Time {
         if self.day() > self.last_day_of_month() || self.month() == 0 || self.day() == 0 {
             let date = if self.month() == 0 {
                 (self.year() >= 1).ok_or(Error::incorrect_datetime_value(self))?;
-                NaiveDate::from_ymd(self.year() as i32 - 1, 12, 1)
+                NaiveDate::from_ymd_opt(self.year() as i32 - 1, 12, 1)
             } else {
-                NaiveDate::from_ymd(self.year() as i32, self.month(), 1)
-            } + chrono::Duration::days(i64::from(self.day()) - 1);
-            let datetime = NaiveDateTime::new(
-                date,
-                NaiveTime::from_hms_micro(self.hour(), self.minute(), self.second(), self.micro()),
-            );
+                NaiveDate::from_ymd_opt(self.year() as i32, self.month(), 1)
+            }
+            .ok_or(Error::incorrect_datetime_value(self))?
+                + chrono::Duration::days(i64::from(self.day()) - 1);
+            let time = NaiveTime::from_hms_micro_opt(
+                self.hour(),
+                self.minute(),
+                self.second(),
+                self.micro(),
+            )
+            .ok_or(Error::incorrect_datetime_value(self))?;
+            let datetime = NaiveDateTime::new(date, time);
             return Time::try_from_chrono_datetime(
                 ctx,
                 datetime,
@@ -2341,10 +2358,12 @@ impl Time {
 
     pub fn weekday(self) -> Weekday {
         let date = if self.month() == 0 {
-            NaiveDate::from_ymd(self.year() as i32 - 1, 12, 1)
+            NaiveDate::from_ymd_opt(self.year() as i32 - 1, 12, 1)
         } else {
-            NaiveDate::from_ymd(self.year() as i32, self.month(), 1)
-        } + chrono::Duration::days(i64::from(self.day()) - 1);
+            NaiveDate::from_ymd_opt(self.year() as i32, self.month(), 1)
+        }
+        .expect("valid date")
+            + chrono::Duration::days(i64::from(self.day()) - 1);
         date.weekday()
     }
 

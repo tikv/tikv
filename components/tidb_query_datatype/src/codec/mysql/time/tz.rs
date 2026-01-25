@@ -126,68 +126,6 @@ impl TimeZone for Tz {
             Tz::Name(ref offset) => TzOffset::NonFixed(offset.offset_from_utc_datetime(utc)),
         }
     }
-
-    fn from_local_date(&self, local: &NaiveDate) -> LocalResult<Date<Self>> {
-        match *self {
-            Tz::Local(ref offset) => offset
-                .from_local_date(local)
-                .map(|t| Date::from_utc(t.naive_utc(), TzOffset::Local(*t.offset()))),
-            Tz::Offset(ref offset) => offset
-                .from_local_date(local)
-                .map(|t| Date::from_utc(t.naive_utc(), TzOffset::Fixed(*t.offset()))),
-            Tz::Name(ref offset) => offset
-                .from_local_date(local)
-                .map(|t| Date::from_utc(t.naive_utc(), TzOffset::NonFixed(*t.offset()))),
-        }
-    }
-
-    fn from_local_datetime(&self, local: &NaiveDateTime) -> LocalResult<DateTime<Self>> {
-        match *self {
-            Tz::Local(ref offset) => offset
-                .from_local_datetime(local)
-                .map(|t| DateTime::from_utc(t.naive_utc(), TzOffset::Local(*t.offset()))),
-            Tz::Offset(ref offset) => offset
-                .from_local_datetime(local)
-                .map(|t| DateTime::from_utc(t.naive_utc(), TzOffset::Fixed(*t.offset()))),
-            Tz::Name(ref offset) => offset
-                .from_local_datetime(local)
-                .map(|t| DateTime::from_utc(t.naive_utc(), TzOffset::NonFixed(*t.offset()))),
-        }
-    }
-
-    fn from_utc_date(&self, utc: &NaiveDate) -> Date<Self> {
-        match *self {
-            Tz::Local(ref offset) => {
-                let t = offset.from_utc_date(utc);
-                Date::from_utc(t.naive_utc(), TzOffset::Local(*t.offset()))
-            }
-            Tz::Offset(ref offset) => {
-                let t = offset.from_utc_date(utc);
-                Date::from_utc(t.naive_utc(), TzOffset::Fixed(*t.offset()))
-            }
-            Tz::Name(ref offset) => {
-                let t = offset.from_utc_date(utc);
-                Date::from_utc(t.naive_utc(), TzOffset::NonFixed(*t.offset()))
-            }
-        }
-    }
-
-    fn from_utc_datetime(&self, utc: &NaiveDateTime) -> DateTime<Self> {
-        match *self {
-            Tz::Local(ref offset) => {
-                let t = offset.from_utc_datetime(utc);
-                DateTime::from_utc(t.naive_utc(), TzOffset::Local(*t.offset()))
-            }
-            Tz::Offset(ref offset) => {
-                let t = offset.from_utc_datetime(utc);
-                DateTime::from_utc(t.naive_utc(), TzOffset::Fixed(*t.offset()))
-            }
-            Tz::Name(ref offset) => {
-                let t = offset.from_utc_datetime(utc);
-                DateTime::from_utc(t.naive_utc(), TzOffset::NonFixed(*t.offset()))
-            }
-        }
-    }
 }
 
 /// A time zone offset, corresponding to the [`Tz`].

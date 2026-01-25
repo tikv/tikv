@@ -3,7 +3,7 @@
 use std::{borrow::ToOwned, str, string::ToString, sync::LazyLock};
 
 use clap::{AppSettings, crate_authors};
-use engine_traits::{CF_DEFAULT, SstCompressionType};
+use engine_traits::SstCompressionType;
 use raft_engine::ReadableSize;
 use structopt::StructOpt;
 
@@ -160,7 +160,7 @@ pub enum Cmd {
             use_delimiter = true,
             require_delimiter = true,
             value_delimiter = ",",
-            default_value = CF_DEFAULT,
+            default_value = "default"
         )]
         /// Column family names, combined from default/lock/write
         show_cf: Vec<String>,
@@ -199,7 +199,7 @@ pub enum Cmd {
     Print {
         #[structopt(
             short = "c",
-            default_value = CF_DEFAULT,
+            default_value = "default",
             possible_values = &["default", "lock", "write"],
         )]
         /// The column family name.
@@ -224,7 +224,7 @@ pub enum Cmd {
             use_delimiter = true,
             require_delimiter = true,
             value_delimiter = ",",
-            default_value = CF_DEFAULT,
+            default_value = "default"
         )]
         /// Column family names, combined from default/lock/write
         show_cf: Vec<String>,
@@ -281,7 +281,7 @@ pub enum Cmd {
 
         #[structopt(
             short = "c",
-            default_value = CF_DEFAULT,
+            default_value = "default",
             possible_values = &["default", "lock", "write"],
         )]
         /// The column family name.
@@ -457,7 +457,7 @@ pub enum Cmd {
             use_delimiter = true,
             require_delimiter = true,
             value_delimiter = ",",
-            default_value = CF_DEFAULT,
+            default_value = "default",
             possible_values = &["default", "lock", "write"],
         )]
         /// Column family names, for kv db, combine from default/lock/write; for
@@ -663,10 +663,9 @@ pub enum Cmd {
         sst_concurrency: Option<usize>,
         #[structopt(
             long = "use-checkpoint",
-            default_value = "true",
-            help = "use checkpoint mode to resume Parquet export (true|false)"
+            help = "use checkpoint mode to resume Parquet export (true|false, default: true)"
         )]
-        use_checkpoint: bool,
+        use_checkpoint: Option<bool>,
         #[structopt(
             long = "compression",
             default_value = "snappy",
