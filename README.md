@@ -184,6 +184,7 @@ Optional flags:
 - Output paths sanitize database and table names to `[A-Za-z0-9_]`. When sanitization changes the name, a short hash suffix is appended to prevent collisions.
 - Unsigned integer columns are exported as UTF8 strings to preserve the full range; signed integer columns require values within `i64`.
 - The exporter writes checkpoint entries under `<output-prefix>/_checkpoint` to resume after interruptions.
+- Parquet bloom filters are not emitted; query engines rely on statistics and dictionary encoding for pruning.
 
 Example:
 

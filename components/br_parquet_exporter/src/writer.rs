@@ -7,7 +7,7 @@ use parquet::{
     column::writer::ColumnWriter,
     data_type::ByteArray,
     file::{
-        properties::WriterProperties,
+        properties::{EnabledStatistics, WriterProperties},
         writer::{SerializedFileWriter, SerializedRowGroupWriter},
     },
     schema::types::{Type, TypePtr},
@@ -41,16 +41,22 @@ impl ParquetWriter {
         row_group_size: usize,
     ) -> Result<Self> {
         let schema = build_parquet_schema(table)?;
+        let write_batch_size = row_group_size.min(8192).max(1024);
         let props = Arc::new(
             WriterProperties::builder()
                 .set_compression(compression)
+                .set_dictionary_enabled(true)
+                .set_statistics_enabled(EnabledStatistics::Page)
+                .set_max_row_group_size(row_group_size)
+                .set_write_batch_size(write_batch_size)
                 .build(),
         );
+        let capacity = row_group_size.min(8192);
         let writer = SerializedFileWriter::new(sink, schema, props)?;
         let columns = table
             .columns
             .iter()
-            .map(ColumnState::from_schema)
+            .map(|column| ColumnState::from_schema(column, capacity))
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             writer,
@@ -140,14 +146,14 @@ struct ColumnState {
 }
 
 impl ColumnState {
-    fn from_schema(column: &ColumnSchema) -> Result<Self> {
+    fn from_schema(column: &ColumnSchema, capacity: usize) -> Result<Self> {
         Ok(Self {
             parquet_type: column.parquet_type.clone(),
             nullable: column.nullable,
-            values_int64: Vec::new(),
-            values_double: Vec::new(),
-            values_binary: Vec::new(),
-            def_levels: Vec::new(),
+            values_int64: Vec::with_capacity(capacity),
+            values_double: Vec::with_capacity(capacity),
+            values_binary: Vec::with_capacity(capacity),
+            def_levels: Vec::with_capacity(capacity),
         })
     }
 
