@@ -228,7 +228,7 @@ fn test_backup_writes_iceberg_manifest() {
             .as_str()
             .expect("start_key should be present");
         assert!(
-            start_key.chars().all(|c| c.is_ascii()),
+            start_key.is_ascii(),
             "start_key should be ascii/base64 friendly"
         );
         assert!(

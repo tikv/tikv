@@ -41,7 +41,7 @@ impl ParquetWriter {
         row_group_size: usize,
     ) -> Result<Self> {
         let schema = build_parquet_schema(table)?;
-        let write_batch_size = row_group_size.min(8192).max(1024);
+        let write_batch_size = row_group_size.clamp(1024, 8192);
         let props = Arc::new(
             WriterProperties::builder()
                 .set_compression(compression)

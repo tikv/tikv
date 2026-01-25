@@ -182,23 +182,12 @@ impl TableFilter {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ExportReport {
     pub files: Vec<ParquetFileInfo>,
     pub total_rows: u64,
     pub start_version: u64,
     pub end_version: u64,
-}
-
-impl Default for ExportReport {
-    fn default() -> Self {
-        Self {
-            files: Vec::new(),
-            total_rows: 0,
-            start_version: 0,
-            end_version: 0,
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -554,7 +543,7 @@ impl<'a> SstParquetExporter<'a> {
         hasher.update(format!("{:?}", self.options.compression).as_bytes());
         for rule in &filter.raw_rules {
             hasher.update(rule.as_bytes());
-            hasher.update(&[0]);
+            hasher.update([0]);
         }
         for id in &filter.raw_table_ids {
             hasher.update(id.to_le_bytes());
@@ -809,7 +798,7 @@ impl<'a> SstParquetExporter<'a> {
             sanitize_name(&table.db_name),
             sanitize_name(&table.table_name),
             sanitize_name(
-                &Path::new(&file_meta.name)
+                Path::new(&file_meta.name)
                     .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("part")
@@ -976,7 +965,7 @@ impl<'a> SstParquetExporter<'a> {
         let upload_timer = Instant::now();
         self.block_on(
             self.output
-                .write(&object_name, UnpinReader(Box::new(reader)), size),
+                .write(object_name, UnpinReader(Box::new(reader)), size),
         )?;
         let upload_elapsed = upload_timer.saturating_elapsed();
         BR_PARQUET_STAGE_DURATION
