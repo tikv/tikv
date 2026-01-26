@@ -1982,17 +1982,6 @@ fn test_shared_exclusive_lock_conflict() {
             .is_some()
     );
 
-    // exclusive lock blocked.
-    let exclusive_lock = acquire_lock(30, false);
-    exclusive_lock
-        .recv_timeout(Duration::from_millis(100))
-        .unwrap_err();
-
-    // Re-acquiring the same transaction should be idempotent.
-    acquire_lock(10, true).recv().unwrap().unwrap();
-    let shared_lock = load_shared_lock();
-    assert_eq!(shared_lock.len(), 1);
-
     // A different transaction should be merged into the same shared lock entry.
     acquire_lock(20, true).recv().unwrap().unwrap();
     let mut shared_lock = load_shared_lock();
@@ -2010,7 +1999,38 @@ fn test_shared_exclusive_lock_conflict() {
             .is_some()
     );
 
+    // Exclusive lock gets KeyIsLocked immediately at first time. It sets the shared
+    // lock shrink-only.
+    let exclusive_lock = acquire_lock(30, false);
+    let err = exclusive_lock
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        storage::Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+            box mvcc::ErrorInner::KeyIsLocked { .. },
+        )))))
+    ));
+
+    // Exclusive lock is blocked by shrink-only shared lock when re-acquiring.
+    let exclusive_lock = acquire_lock(30, false);
     exclusive_lock
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap_err();
+
+    // New shared lock is also blocked by shrink-only shared lock.
+    let shared_lock = acquire_lock(40, true);
+    shared_lock
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap_err();
+
+    // Previous lock requests are still blocked.
+    exclusive_lock
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap_err();
+    shared_lock
         .recv_timeout(Duration::from_millis(100))
         .unwrap_err();
 
@@ -2137,6 +2157,24 @@ fn test_resolve_shared_locks() {
     for ts in [10, 20] {
         acquire_lock(ts, true).recv().unwrap().unwrap();
     }
+
+    // Try to acquire exclusive lock first time, which turns shared locks into
+    // shrink-only and receives KeyIsLocked immediately.
+    let exclusive_lock = acquire_lock(30, false);
+    let err = exclusive_lock
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        storage::Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+            box mvcc::ErrorInner::KeyIsLocked { .. },
+        )))))
+    ));
+
+    // Try to acquire exclusive lock again, which will be blocked by shrink-only
+    // shared locks.
     let exclusive_lock = acquire_lock(30, false);
     exclusive_lock.try_recv().unwrap_err();
 
@@ -2308,5 +2346,161 @@ fn test_scan_lock_shared_lock_infos_filtered_by_max_ts() {
     assert_eq!(
         scan_lock_start_ts_set(35),
         vec![(10, Op::Lock), (20, Op::Lock), (30, Op::Lock)]
+    );
+}
+
+// This test verifies that when a resumable pessimistic lock request
+// (allow_lock_with_conflict=true) is woken up and then encounters a shared lock
+// during AcquirePessimisticLockResumed execution, the scheduler returns
+// KeyIsLocked error directly instead of waiting again.
+//
+// The test scenario:
+// 1. T1 acquires an exclusive lock
+// 2. T2 (legacy, non-resumable) tries to acquire exclusive lock, gets blocked
+// 3. T3 (resumable) tries to acquire exclusive lock, gets blocked behind T2
+// 4. Release T1's lock -> T2 wakes up (WriteConflict), delayed wake up
+//    scheduled for T3
+// 5. T4 acquires a shared lock on the same key
+// 6. T3 wakes up via AcquirePessimisticLockResumed, encounters T4's shared lock
+// 7. T3 receives KeyIsLocked error (instead of waiting or panicking)
+#[test]
+fn test_resumable_pessimistic_lock_encounters_shared_lock_returns_error() {
+    let lock_mgr = MockLockManager::new();
+    let storage = TestStorageBuilderApiV1::new(lock_mgr.clone())
+        .wake_up_delay_duration(100)
+        .build()
+        .unwrap();
+
+    let key = b"shared-lock-key".to_vec();
+    let pk = b"shared-lock-pk".to_vec();
+
+    // Set up failpoint to pause before AcquirePessimisticLockResumed executes
+    fail::cfg("lock_waiting_queue_before_delayed_notify_all", "pause").unwrap();
+
+    let (resume_tx, resume_rx) = channel();
+    let (resume_continue_tx, resume_continue_rx) = channel();
+    let resume_tx = Mutex::new(resume_tx);
+    let resume_continue_rx = Mutex::new(resume_continue_rx);
+    fail::cfg_callback(
+        "acquire_pessimistic_lock_resumed_before_process_write",
+        move || {
+            // Notify that the failpoint is reached, and block until it receives a continue
+            // signal.
+            resume_tx.lock().unwrap().send(()).unwrap();
+            resume_continue_rx.lock().unwrap().recv().unwrap();
+        },
+    )
+    .unwrap();
+
+    // Helper to acquire a shared or exclusive pessimistic lock.
+    let acquire_lock = |start_ts: u64, is_shared_lock: bool| {
+        let (done_tx, done_rx) = channel();
+        storage
+            .sched_txn_command(
+                new_acquire_pessimistic_lock_command_with_pk_with_shared(
+                    vec![(Key::from_raw(&key), false, is_shared_lock)],
+                    Some(&pk),
+                    start_ts,
+                    start_ts,
+                    false,
+                    false,
+                ),
+                Box::new(
+                    move |res: storage::Result<
+                        std::result::Result<PessimisticLockResults, StorageError>,
+                    >| done_tx.send(res).unwrap(),
+                ),
+            )
+            .unwrap();
+        done_rx
+    };
+
+    // Helper to acquire an exclusive lock with allow_lock_with_conflict=true.
+    let acquire_resumable_exclusive_lock = |start_ts: u64| {
+        let (done_tx, done_rx) = channel();
+        storage
+            .sched_txn_command(
+                new_acquire_pessimistic_lock_command_with_pk_with_shared(
+                    vec![(Key::from_raw(&key), false, false)],
+                    Some(&pk),
+                    start_ts,
+                    start_ts,
+                    false,
+                    false,
+                )
+                .allow_lock_with_conflict(true),
+                Box::new(
+                    move |res: storage::Result<
+                        std::result::Result<PessimisticLockResults, StorageError>,
+                    >| done_tx.send(res).unwrap(),
+                ),
+            )
+            .unwrap();
+        done_rx
+    };
+
+    // Step 1: T1 acquires an exclusive lock.
+    let _t1 = acquire_lock(10, false).recv().unwrap().unwrap();
+
+    // Step 2: T2 (legacy) tries to acquire an exclusive lock, gets blocked.
+    let (tx_t2, rx_t2) = channel();
+    storage
+        .sched_txn_command(
+            new_acquire_pessimistic_lock_command_with_pk_with_shared(
+                vec![(Key::from_raw(&key), false, false)],
+                Some(&pk),
+                11,
+                11,
+                false,
+                false,
+            ),
+            expect_fail_callback(tx_t2, 0, |e| match e {
+                StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
+                    MvccError(box MvccErrorInner::WriteConflict { .. }),
+                )))) => (),
+                e => panic!("unexpected error chain: {:?}", e),
+            }),
+        )
+        .unwrap();
+    rx_t2.recv_timeout(Duration::from_millis(50)).unwrap_err();
+
+    // Step 3: T3 (resumable) tries to acquire an exclusive lock, gets blocked.
+    let rx_t3 = acquire_resumable_exclusive_lock(12);
+    rx_t3.recv_timeout(Duration::from_millis(50)).unwrap_err();
+
+    // Step 4: Release T1's exclusive lock.
+    // This will wake up T2 (legacy) first, and schedule delayed wake up for T3.
+    delete_pessimistic_lock(&storage, Key::from_raw(&key), 10, 10);
+    rx_t2.recv_timeout(Duration::from_secs(1)).unwrap();
+
+    // Step 5: T4 acquires a shared lock before T3 resumes.
+    // (The key is unlocked at this point since T2 got WriteConflict error)
+    let _t4 = acquire_lock(40, true).recv().unwrap().unwrap();
+
+    // Step 6: Remove the pause to allow delayed wake up, T3 will be woken up
+    // via AcquirePessimisticLockResumed.
+    fail::remove("lock_waiting_queue_before_delayed_notify_all");
+    resume_rx.recv().unwrap();
+
+    // Step 7: Now T3's AcquirePessimisticLockResumed is about to execute.
+    // When it runs, it will encounter T4's shared lock and return KeyIsLocked
+    // error.
+    fail::remove("acquire_pessimistic_lock_resumed_before_process_write");
+    resume_continue_tx.send(()).unwrap();
+
+    // T3 should receive KeyIsLocked error for the shared lock.
+    let res = rx_t3.recv_timeout(Duration::from_secs(5)).unwrap();
+    let res = res.unwrap().unwrap();
+    assert_eq!(res.0.len(), 1);
+    let err = res.0[0].unwrap_err();
+    assert!(
+        matches!(
+            err.inner(),
+            StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+                box MvccErrorInner::KeyIsLocked(lock_info)
+            )))) if lock_info.get_lock_type() == Op::SharedLock
+        ),
+        "expected KeyIsLocked error with SharedLock type, got: {:?}",
+        err
     );
 }

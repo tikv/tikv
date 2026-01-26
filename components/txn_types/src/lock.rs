@@ -1050,6 +1050,16 @@ impl<'a> From<&'a Lock> for TxnLockRef<'a> {
     }
 }
 
+pub trait LockInfoExt {
+    fn is_shared_lock(&self) -> bool;
+}
+
+impl LockInfoExt for LockInfo {
+    fn is_shared_lock(&self) -> bool {
+        self.lock_type == Op::SharedLock
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
