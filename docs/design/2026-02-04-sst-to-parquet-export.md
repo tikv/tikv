@@ -1,8 +1,9 @@
-# Design: BR SST to Parquet Export with Optional Iceberg Manifest
+# Design: BR SST to Parquet Export with Optional Iceberg Tables
 
 ## Summary
 This document describes the TiKV-side pipeline that converts BR backup SSTs into
-Parquet files and optionally emits Iceberg-compatible JSON manifests. The
+Parquet files and optionally emits Iceberg table metadata (plus a legacy
+Iceberg-compatible JSON manifest). The
 conversion runs offline via `tikv-ctl`, reads `backupmeta` from the backup
 storage, and writes Parquet data to a separate output storage prefix. The
 pipeline is restartable via a checkpoint directory in the output prefix.
@@ -11,7 +12,7 @@ pipeline is restartable via a checkpoint directory in the output prefix.
 - Export BR transactional backups (default CF + write CF short values) into Parquet files.
 - Preserve table schema using `backupmeta` and TiDB row decoding.
 - Support bounded parallel export for large backups.
-- Provide optional Iceberg manifest output for lakehouse ingestion.
+- Provide optional Iceberg table metadata for lakehouse ingestion.
 - Expose progress and health via structured logs and Prometheus metrics.
 - Allow safe resume after interruption via checkpoints.
 
@@ -20,6 +21,7 @@ pipeline is restartable via a checkpoint directory in the output prefix.
 - Raw KV backup support.
 - Encrypted backupmeta index support.
 - Schema evolution or transformation during export.
+- Registering tables into external Iceberg catalogs (Hive/REST/Glue/Nessie).
 
 ## CLI Surface
 `tikv-ctl br-parquet-export` accepts base64 `StorageBackend` configs.
@@ -36,6 +38,7 @@ Optional flags:
 - `--filter` table filter rules (same syntax as BR `--filter`, repeatable; supports `!` and `@file`)
 - `--table-ids` comma-separated list of physical table IDs
 - `--use-checkpoint` (default `true`, set `--use-checkpoint=false` to disable resume)
+- `--write-iceberg-table` write Iceberg table metadata (manifest list + manifest + metadata JSON)
 - `--write-iceberg-manifest` plus `--iceberg-warehouse`, `--iceberg-namespace`, `--iceberg-table`
 - `--iceberg-manifest-prefix` (default `manifest`)
 
@@ -60,7 +63,11 @@ Optional flags:
      handle when missing, and write to a Parquet file.
    - Upload the Parquet object to output storage.
    - Record a checkpoint entry for the uploaded object.
-7. (Optional) Emit Iceberg JSON manifest entries for all Parquet files.
+7. (Optional) Emit Iceberg outputs:
+   - `--write-iceberg-table`: write Iceberg table metadata under
+     `{output_prefix}/{db}/{table}/metadata/` so engines can query the output as Iceberg tables
+     by table location.
+   - `--write-iceberg-manifest`: write a legacy JSON manifest for downstream tooling.
 
 ## Parallelism
 - Concurrency is per-SST task. Each SST is downloaded once and reused for all
@@ -98,6 +105,17 @@ Name sanitization:
 - If sanitization changes the name, a short hash suffix is appended to prevent
   collisions (for example, `table-name` and `table_name` remain distinct).
 
+When `--write-iceberg-table` is set, Iceberg metadata is written to:
+`{output_prefix}/{db}/{table}/metadata/`
+
+Files:
+- `version-hint.text`
+- `v1.metadata.json` (Iceberg v2 metadata JSON)
+- `snap-{snapshot_id}.avro` (manifest list)
+- `manifest-{snapshot_id}.avro` (manifest)
+
+`snapshot_id` is derived from the backup `end_version` (a TiKV/TiDB commit timestamp).
+
 ## Schema Mapping
 - Each Parquet schema includes `_tidb_table_id` and `_tidb_handle` columns.
 - Handles use integer or common-handle bytes depending on table schema.
@@ -124,12 +142,19 @@ Filters are applied before file iteration; if no table matches, the command
 fails fast. Matching is case-insensitive for schema/table names, consistent with
 BR behavior.
 
-## Iceberg Manifest
+## Iceberg Outputs
+
+### Iceberg table metadata
+When `--write-iceberg-table` is set, the exporter writes Iceberg v2 table
+metadata under each exported table location. This enables engines (Spark/Trino)
+to query the output as Iceberg tables using file-based catalogs (for example,
+HadoopCatalog) or by directly pointing at the table `LOCATION`.
+
+### Legacy JSON manifest
 When `--write-iceberg-manifest` is set, the exporter writes a JSON manifest with
 per-file metadata (name, range keys, size, checksums, snapshot timestamps). The
-manifest location is derived from:
-`--iceberg-warehouse`, `--iceberg-namespace`, `--iceberg-table`, and
-`--iceberg-manifest-prefix`.
+manifest location is derived from `--iceberg-warehouse`, `--iceberg-namespace`,
+`--iceberg-table`, and `--iceberg-manifest-prefix`.
 
 ## Observability
 - Structured logs on download, convert, upload, and checkpoint load stages.

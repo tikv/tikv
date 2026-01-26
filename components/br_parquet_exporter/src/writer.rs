@@ -125,6 +125,7 @@ fn build_parquet_schema(table: &TableSchema) -> Result<TypePtr> {
         } else {
             Repetition::REQUIRED
         });
+        builder = builder.with_id(Some(column.field_id));
         fields.push(Arc::new(
             builder.build().map_err(|e| Error::Other(Box::new(e)))?,
         ));

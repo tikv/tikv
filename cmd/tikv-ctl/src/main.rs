@@ -414,6 +414,7 @@ fn main() {
             filters,
             tables,
             table_ids,
+            write_iceberg_table,
             write_iceberg_manifest,
             iceberg,
         } => {
@@ -474,6 +475,7 @@ fn main() {
             let mut options = ParquetExportOptions::default();
             options.row_group_size = row_group_size;
             options.compression = parquet_compression;
+            options.write_iceberg_table = write_iceberg_table;
             if let Some(use_checkpoint) = use_checkpoint {
                 options.use_checkpoint = use_checkpoint;
             }

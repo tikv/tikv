@@ -631,8 +631,8 @@ pub enum Cmd {
         /// hex end key
         end: String,
     },
-    /// Export BR SST artifacts into Parquet files and optional Iceberg
-    /// manifests.
+    /// Export BR SST artifacts into Parquet files and optional Iceberg table
+    /// metadata / manifests.
     BrParquetExport {
         #[structopt(
             long = "input-storage-base64",
@@ -692,6 +692,11 @@ pub enum Cmd {
             help = "comma-separated list of physical table IDs to export"
         )]
         table_ids: Vec<i64>,
+        #[structopt(
+            long = "write-iceberg-table",
+            help = "write Iceberg table metadata (metadata/*.json, metadata/*.avro) next to the exported Parquet files"
+        )]
+        write_iceberg_table: bool,
         #[structopt(long = "write-iceberg-manifest")]
         write_iceberg_manifest: bool,
         #[structopt(flatten)]

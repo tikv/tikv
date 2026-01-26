@@ -47,6 +47,7 @@ use tikv_util::{
 use tipb::ColumnInfo;
 use txn_types::{Key, WriteRef, WriteType};
 
+mod iceberg_table;
 mod metrics;
 mod schema;
 mod writer;
@@ -73,6 +74,18 @@ pub fn parse_parquet_compression(name: &str) -> std::result::Result<Compression,
         "lz4" | "lz4raw" => Ok(Compression::LZ4_RAW),
         "none" | "uncompressed" => Ok(Compression::UNCOMPRESSED),
         other => Err(format!("unsupported compression codec {}", other)),
+    }
+}
+
+fn parquet_compression_name(compression: Compression) -> &'static str {
+    match compression {
+        Compression::SNAPPY => "snappy",
+        Compression::ZSTD(_) => "zstd",
+        Compression::GZIP(_) => "gzip",
+        Compression::BROTLI(_) => "brotli",
+        Compression::LZ4_RAW => "lz4",
+        Compression::UNCOMPRESSED => "none",
+        _ => "unknown",
     }
 }
 
@@ -111,6 +124,7 @@ pub struct ExportOptions {
     pub compression: Compression,
     pub sst_concurrency: usize,
     pub use_checkpoint: bool,
+    pub write_iceberg_table: bool,
 }
 
 impl Default for ExportOptions {
@@ -123,6 +137,7 @@ impl Default for ExportOptions {
             compression: Compression::SNAPPY,
             sst_concurrency: concurrency,
             use_checkpoint: true,
+            write_iceberg_table: false,
         }
     }
 }
@@ -647,7 +662,7 @@ impl<'a> SstParquetExporter<'a> {
             if schema.get_table().is_empty() || schema.get_db().is_empty() {
                 continue;
             }
-            tables.push(TableSchema::from_backup_schema(schema)?);
+            tables.push(Arc::new(TableSchema::from_backup_schema(schema)?));
         }
         if tables.is_empty() {
             return Err(Error::Invalid(
@@ -661,8 +676,8 @@ impl<'a> SstParquetExporter<'a> {
             }
         }
         let table_map: HashMap<i64, Arc<TableSchema>> = tables
-            .into_iter()
-            .map(|table| (table.table_id, Arc::new(table)))
+            .iter()
+            .map(|table| (table.table_id, Arc::clone(table)))
             .collect();
         let tasks = build_file_tasks(meta.get_files(), &table_map);
         let checkpoint = if self.options.use_checkpoint {
@@ -713,7 +728,76 @@ impl<'a> SstParquetExporter<'a> {
         report
             .files
             .sort_by(|left, right| left.object_name.cmp(&right.object_name));
+        if self.options.write_iceberg_table {
+            self.write_iceberg_tables(&prefix, &tables, &report)?;
+        }
         Ok(report)
+    }
+
+    fn write_iceberg_tables(
+        &self,
+        output_prefix: &str,
+        tables: &[Arc<TableSchema>],
+        report: &ExportReport,
+    ) -> Result<()> {
+        let mut base_uri = self.output.url()?.to_string();
+        if let Some(stripped) = base_uri.strip_prefix("local://") {
+            base_uri = format!("file://{}", stripped);
+        }
+        if !base_uri.ends_with('/') {
+            base_uri.push('/');
+        }
+        let parquet_compression = parquet_compression_name(self.options.compression);
+
+        let mut file_map: HashMap<i64, Vec<&ParquetFileInfo>> = HashMap::default();
+        for file in &report.files {
+            file_map.entry(file.table_id).or_default().push(file);
+        }
+
+        for table in tables {
+            let Some(files) = file_map.get(&table.table_id) else {
+                continue;
+            };
+            if files.is_empty() {
+                continue;
+            }
+            let table_root = format!(
+                "{}/{}/{}",
+                output_prefix,
+                sanitize_name(&table.db_name),
+                sanitize_name(&table.table_name)
+            );
+            let artifacts = iceberg_table::build_iceberg_table_artifacts(
+                &base_uri,
+                &table_root,
+                table,
+                files,
+                report.start_version,
+                report.end_version,
+                parquet_compression,
+            )?;
+            self.write_bytes(&artifacts.manifest_object, artifacts.manifest_avro)?;
+            self.write_bytes(
+                &artifacts.manifest_list_object,
+                artifacts.manifest_list_avro,
+            )?;
+            self.write_bytes(&artifacts.metadata_object, artifacts.metadata_json)?;
+            self.write_bytes(&artifacts.version_hint_object, artifacts.version_hint)?;
+            tikv_util::info!(
+                "br parquet wrote iceberg table";
+                "db" => %table.db_name,
+                "table" => %table.table_name,
+                "location" => %table_root
+            );
+        }
+        Ok(())
+    }
+
+    fn write_bytes(&self, object: &str, bytes: Vec<u8>) -> Result<()> {
+        let len = bytes.len() as u64;
+        let reader = UnpinReader(Box::new(Cursor::new(bytes)));
+        self.block_on(self.output.write(object, reader, len))?;
+        Ok(())
     }
 
     fn export_file_task(
@@ -1802,10 +1886,12 @@ mod tests {
 
     #[test]
     fn sanitize_name_appends_hash_on_change() {
-        let sanitized = sanitize_name("table-name");
-        assert!(sanitized.starts_with("table_name__"));
-        assert_ne!(sanitized, "table_name");
-        assert!(sanitize_name("table_name").starts_with("table_name"));
+        let dashed = sanitize_name("table-name");
+        let underscored = sanitize_name("table_name");
+        assert!(dashed.starts_with("table_name__"));
+        assert_ne!(dashed, "table_name");
+        assert_eq!(underscored, "table_name");
+        assert_ne!(dashed, underscored);
     }
 
     #[test]

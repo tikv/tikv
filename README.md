@@ -161,7 +161,8 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## BR Parquet export (tikv-ctl)
 
-`tikv-ctl` can convert BR SST backups into Parquet files, and optionally write Iceberg manifests.
+`tikv-ctl` can convert BR SST backups into Parquet files, and optionally emit Iceberg table
+metadata so lakehouse tools can query the output as Iceberg tables.
 Backupmeta v1 (inline schemas/files) and v2 (meta indexes) are supported.
 It expects base64-encoded `StorageBackend` values for the input (BR backup) and output (Parquet) storages.
 
@@ -176,10 +177,11 @@ Optional flags:
 - `--row-group-size` (default `8192`)
 - `--sst-concurrency` number of SST files to export concurrently (defaults to available CPU count)
 - `--use-checkpoint` (default `true`, set `--use-checkpoint=false` to disable)
-- `--compression` (default `snappy`, supports `snappy|zstd|gzip|brotli|lz4|lz4raw|none`)
+- `--compression` (default `snappy`, supports `snappy|zstd|gzip|brotli|lz4|lz4raw|none`; `lz4` is an alias of `lz4raw`)
 - `--filter` table filter rules (same syntax as BR `--filter`, repeatable; supports `!` blocklist and `@file`)
 - `--table-ids` comma-separated list of physical table IDs
-- `--write-iceberg-manifest` plus `--iceberg-warehouse`, `--iceberg-namespace`, `--iceberg-table`
+- `--write-iceberg-table` write Iceberg metadata under `<output-prefix>/<db>/<table>/metadata/`
+- `--write-iceberg-manifest` plus `--iceberg-warehouse`, `--iceberg-namespace`, `--iceberg-table` (legacy JSON manifest, not Iceberg table metadata)
 - `--iceberg-manifest-prefix` (default `manifest`)
 - Output paths sanitize database and table names to `[A-Za-z0-9_]`. When sanitization changes the name, a short hash suffix is appended to prevent collisions.
 - Unsigned integer columns are exported as UTF8 strings to preserve the full range; signed integer columns require values within `i64`.
@@ -193,17 +195,18 @@ Example:
 bin/br operator base64ify -s "s3://mybucket/full" --s3.endpoint="$S3_ENDPOINT" --load-credentials
 bin/br operator base64ify -s "s3://mybucket/parquet" --s3.endpoint="$S3_ENDPOINT" --load-credentials
 
-# Export BR SST backup to Parquet + Iceberg manifest.
+# Export BR SST backup to Parquet + Iceberg table metadata (one Iceberg table per TiDB table).
 tikv-ctl br-parquet-export \
   --input-storage-base64 "<BASE64_INPUT>" \
   --output-storage-base64 "<BASE64_OUTPUT>" \
   --output-prefix "parquet" \
   --row-group-size 8192 \
   --compression zstd \
-  --write-iceberg-manifest \
-  --iceberg-warehouse "s3://warehouse" \
-  --iceberg-namespace "analytics" \
-  --iceberg-table "orders"
+  --write-iceberg-table
+
+# Each exported table is an Iceberg table at:
+#   <output-storage>/<output-prefix>/<db>/<table>
+# (contains `metadata/` plus the Parquet data files).
 
 # Export only selected tables.
 tikv-ctl br-parquet-export \

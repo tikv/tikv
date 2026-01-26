@@ -24,10 +24,14 @@ pub enum ColumnKind {
 }
 
 const PRI_KEY_FLAG: u32 = 1 << 1;
+const ICEBERG_PHYSICAL_FIELD_ID_BASE: i64 = 1000;
+const ICEBERG_SYSTEM_FIELD_ID_TABLE_ID: i32 = 1;
+const ICEBERG_SYSTEM_FIELD_ID_HANDLE: i32 = 2;
 
 #[derive(Clone, Debug)]
 pub struct ColumnSchema {
     pub name: String,
+    pub field_id: i32,
     pub parquet_type: ColumnParquetType,
     pub nullable: bool,
     pub kind: ColumnKind,
@@ -108,6 +112,7 @@ impl TableSchema {
         let mut columns = Vec::new();
         columns.push(ColumnSchema {
             name: "_tidb_table_id".to_string(),
+            field_id: ICEBERG_SYSTEM_FIELD_ID_TABLE_ID,
             parquet_type: ColumnParquetType::Int64,
             nullable: false,
             kind: ColumnKind::TableId,
@@ -115,6 +120,7 @@ impl TableSchema {
         });
         columns.push(ColumnSchema {
             name: "_tidb_handle".to_string(),
+            field_id: ICEBERG_SYSTEM_FIELD_ID_HANDLE,
             parquet_type: ColumnParquetType::Utf8,
             nullable: false,
             kind: ColumnKind::Handle,
@@ -122,10 +128,19 @@ impl TableSchema {
         });
         for col in &table.columns {
             if let Some(ci) = column_map.get(&col.id) {
+                let field_id = (ICEBERG_PHYSICAL_FIELD_ID_BASE + col.id)
+                    .try_into()
+                    .map_err(|_| {
+                        Error::Schema(format!(
+                            "iceberg field id overflows i32 for column {}",
+                            col.name.display_name()
+                        ))
+                    })?;
                 let parquet_ty = infer_parquet_type(ci);
                 let nullable = !ci.as_accessor().flag().contains(FieldTypeFlag::NOT_NULL);
                 columns.push(ColumnSchema {
                     name: col.name.display_name(),
+                    field_id,
                     parquet_type: parquet_ty,
                     nullable,
                     kind: ColumnKind::Physical(col.id),

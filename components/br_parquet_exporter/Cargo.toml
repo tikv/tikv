@@ -6,6 +6,7 @@ publish = false
 license = "Apache-2.0"
 
 [dependencies]
+apache-avro = "0.16"
 collections = { workspace = true }
 engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
@@ -32,6 +33,7 @@ tikv_util = { workspace = true }
 tipb = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
 txn_types = { workspace = true }
+uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 backup = { workspace = true }
