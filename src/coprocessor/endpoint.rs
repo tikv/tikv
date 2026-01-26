@@ -200,10 +200,11 @@ impl<E: Engine> Endpoint<E> {
         let data = req.take_data();
         let ranges: Vec<_> = req.take_ranges().into();
         let mut start_ts = req.get_start_ts();
-        // `range_versions` is a TiCI-only extension for "versioned lookup"
-        // reads (key + per-key read ts). It is consumed by the KV service's
-        // coprocessor entry and intentionally bypasses txn-related checks, so
-        // we gate it by `Context.request_source` to avoid accidental misuse.
+        // `range_versions` is an extension for "versioned lookup" reads
+        // (key + per-key read ts). It intentionally bypasses txn-related
+        // checks (e.g. memory lock checks / max_ts update), so it is expected
+        // to be used only via the dedicated `VersionedKv` RPC (the normal
+        // coprocessor RPC rejects requests carrying it).
         let range_versions = req.take_range_versions();
         let is_versioned_lookup = !range_versions.is_empty();
         let is_cache_enabled = req.get_is_cache_enabled() && !is_versioned_lookup;
@@ -215,12 +216,6 @@ impl<E: Engine> Endpoint<E> {
         let req_ctx: ReqContext;
         let handler_builder: RequestHandlerBuilder<E::IMSnap>;
         let req_tag: ReqTag;
-
-        if is_versioned_lookup && !context.get_request_source().ends_with("tici") {
-            return Err(box_err!(
-                "range_versions is only supported for TiCI requests"
-            ));
-        }
 
         if is_versioned_lookup && req.get_tp() != REQ_TYPE_DAG {
             return Err(box_err!(
@@ -2456,49 +2451,6 @@ mod tests {
     }
 
     #[test]
-    fn test_range_versions_requires_tici_request_source() {
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = ReadPool::from(build_read_pool_for_test(
-            &CoprReadPoolConfig::default_for_test(),
-            engine,
-        ));
-        let cm = ConcurrencyManager::new_for_test(1.into());
-        let copr = Endpoint::<RocksEngine>::new(
-            &Config::default(),
-            read_pool.handle(),
-            cm,
-            ResourceTagFactory::new_for_test(),
-            Arc::new(QuotaLimiter::default()),
-            None,
-        );
-
-        let mut req = coppb::Request::default();
-        req.mut_context().set_isolation_level(IsolationLevel::Si);
-        req.mut_context().set_request_source("tidb".to_owned());
-        req.set_start_ts(100);
-        req.set_tp(REQ_TYPE_DAG);
-
-        let mut end = b"key".to_vec();
-        convert_to_prefix_next(&mut end);
-        let mut key_range = coppb::KeyRange::default();
-        key_range.set_start(b"key".to_vec());
-        key_range.set_end(end);
-        req.mut_ranges().push(key_range);
-
-        req.mut_range_versions().push(10);
-
-        let mut dag = DagRequest::default();
-        let mut scan_exec = Executor::default();
-        scan_exec.set_tp(ExecType::TypeTableScan);
-        dag.mut_executors().push(scan_exec);
-        req.set_data(dag.write_to_bytes().unwrap());
-
-        let resp = block_on(copr.parse_and_handle_unary_request(req, None));
-        assert!(!resp.get_other_error().is_empty());
-        assert!(resp.get_other_error().contains("TiCI"));
-    }
-
-    #[test]
     fn test_range_versions_len_mismatch_rejected() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::from(build_read_pool_for_test(
@@ -2517,7 +2469,6 @@ mod tests {
 
         let mut req = coppb::Request::default();
         req.mut_context().set_isolation_level(IsolationLevel::Si);
-        req.mut_context().set_request_source("tici".to_owned());
         req.set_start_ts(100);
         req.set_tp(REQ_TYPE_DAG);
 
@@ -2562,7 +2513,6 @@ mod tests {
 
         let mut req = coppb::Request::default();
         req.mut_context().set_isolation_level(IsolationLevel::Si);
-        req.mut_context().set_request_source("tici".to_owned());
         req.set_start_ts(100);
         req.set_tp(REQ_TYPE_DAG);
 
@@ -2604,7 +2554,6 @@ mod tests {
 
         let mut req = coppb::Request::default();
         req.mut_context().set_isolation_level(IsolationLevel::Si);
-        req.mut_context().set_request_source("tici".to_owned());
         req.set_start_ts(100);
         req.set_tp(REQ_TYPE_ANALYZE);
 
@@ -2646,7 +2595,6 @@ mod tests {
 
         let mut req = coppb::Request::default();
         req.mut_context().set_isolation_level(IsolationLevel::Si);
-        req.mut_context().set_request_source("tici".to_owned());
         req.set_start_ts(100);
         req.set_tp(REQ_TYPE_DAG);
 
@@ -2692,7 +2640,6 @@ mod tests {
 
         let mut req = coppb::Request::default();
         req.mut_context().set_isolation_level(IsolationLevel::Si);
-        req.mut_context().set_request_source("tici".to_owned());
         req.set_start_ts(100);
         req.set_tp(REQ_TYPE_DAG);
 
@@ -2752,7 +2699,6 @@ mod tests {
 
         let mut req = coppb::Request::default();
         req.mut_context().set_isolation_level(IsolationLevel::Si);
-        req.mut_context().set_request_source("tici".to_owned());
         req.set_start_ts(100);
         req.set_tp(REQ_TYPE_DAG);
 
@@ -2798,7 +2744,6 @@ mod tests {
 
         let mut req = coppb::Request::default();
         req.mut_context().set_isolation_level(IsolationLevel::Si);
-        req.mut_context().set_request_source("tici".to_owned());
         req.set_start_ts(100);
         req.set_tp(REQ_TYPE_DAG);
 
