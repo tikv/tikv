@@ -606,6 +606,34 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             ])
             .inc();
 
+        if !req.get_range_versions().is_empty() {
+            let begin_instant = Instant::now();
+            let mut resp = Response::default();
+            resp.set_other_error(
+                "range_versions is only supported in VersionedKv.VersionedCoprocessor".to_string(),
+            );
+            let task = async move {
+                let elapsed = begin_instant.saturating_elapsed();
+                sink.success(resp).await?;
+                GRPC_MSG_HISTOGRAM_STATIC
+                    .coprocessor
+                    .get(resource_group_priority)
+                    .observe(elapsed.as_secs_f64());
+                record_request_source_metrics(source, elapsed);
+                ServerResult::Ok(())
+            }
+            .map_err(|e| {
+                log_net_error!(e, "kv rpc failed";
+                    "request" => "coprocessor"
+                );
+                GRPC_MSG_FAIL_COUNTER.coprocessor.inc();
+            })
+            .map(|_| ());
+
+            ctx.spawn(task);
+            return;
+        }
+
         let begin_instant = Instant::now();
         let future = future_copr(&self.copr, Some(ctx.peer()), req);
         let task = async move {
@@ -749,6 +777,16 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                 resource_control_ctx.get_resource_group_name(),
             ])
             .inc();
+
+        if !req.get_range_versions().is_empty() {
+            GRPC_MSG_FAIL_COUNTER.coprocessor_stream.inc();
+            let status = RpcStatus::with_message(
+                RpcStatusCode::INVALID_ARGUMENT,
+                "range_versions is only supported in VersionedKv.VersionedCoprocessor".to_string(),
+            );
+            ctx.spawn(sink.fail(status).unwrap_or_else(|_| {}));
+            return;
+        }
 
         let mut stream = self
             .copr
@@ -1449,6 +1487,16 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     .inc();
                     let begin_instant = Instant::now();
                     let source = req.get_context().get_request_source().to_owned();
+                    if !req.get_range_versions().is_empty() {
+                        let mut copr_resp = Response::default();
+                        copr_resp.set_other_error("range_versions is only supported in VersionedKv.VersionedCoprocessor".to_string());
+                        let resp = future::ok(batch_commands_response::Response {
+                            cmd: Some(batch_commands_response::response::Cmd::Coprocessor(copr_resp)),
+                            ..Default::default()
+                        });
+                        response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::coprocessor, source, resource_group_priority);
+                        return Ok(());
+                    }
                     let resp = future_copr(copr, Some(peer.to_string()), req)
                         .map_ok(|resp| {
                             resp.map(oneof!(batch_commands_response::response::Cmd::Coprocessor))
@@ -1589,6 +1637,254 @@ fn handle_measures_for_batch_commands(measures: &mut MeasuredBatchResponse) {
                 .mut_time_detail_v2()
                 .set_kv_grpc_wait_time_ns(wait.as_nanos() as u64);
         }
+    }
+}
+
+impl<E: Engine, L: LockManager, F: KvFormat> VersionedKv for Service<E, L, F> {
+    fn versioned_coprocessor(
+        &mut self,
+        ctx: RpcContext<'_>,
+        mut req: VersionedRequest,
+        sink: UnarySink<VersionedResponse>,
+    ) {
+        let req_cluster_id = req.get_request().get_context().get_cluster_id();
+        if req_cluster_id > 0 && req_cluster_id != self.cluster_id {
+            // Reject the request if the cluster IDs do not match.
+            warn!("unexpected request with different cluster id is received"; "req" => ?&req);
+            let e = RpcStatus::with_message(
+                RpcStatusCode::INVALID_ARGUMENT,
+                "the cluster id of the request does not match the TiKV cluster".to_string(),
+            );
+            ctx.spawn(sink.fail(e).unwrap_or_else(|_| {}));
+            return;
+        }
+
+        let source = req
+            .get_request()
+            .get_context()
+            .get_request_source()
+            .to_owned();
+        let resource_control_ctx = req
+            .get_request()
+            .get_context()
+            .get_resource_control_context();
+        let mut resource_group_priority = ResourcePriority::unknown;
+        if let Some(resource_manager) = &self.resource_manager {
+            resource_manager.consume_penalty(resource_control_ctx);
+            resource_group_priority = ResourcePriority::from(resource_control_ctx.override_priority);
+        }
+
+        GRPC_RESOURCE_GROUP_COUNTER_VEC
+            .with_label_values(&[
+                resource_control_ctx.get_resource_group_name(),
+                resource_control_ctx.get_resource_group_name(),
+            ])
+            .inc();
+
+        if req.get_request().get_range_versions().is_empty() {
+            let begin_instant = Instant::now();
+            let mut inner_resp = Response::default();
+            inner_resp.set_other_error(
+                "range_versions must be non-empty for VersionedKv.VersionedCoprocessor".to_string(),
+            );
+            let mut versioned_resp = VersionedResponse::default();
+            versioned_resp.set_response(inner_resp);
+
+            let task = async move {
+                let elapsed = begin_instant.saturating_elapsed();
+                sink.success(versioned_resp).await?;
+                GRPC_MSG_HISTOGRAM_STATIC
+                    .coprocessor
+                    .get(resource_group_priority)
+                    .observe(elapsed.as_secs_f64());
+                record_request_source_metrics(source, elapsed);
+                ServerResult::Ok(())
+            }
+            .map_err(|e| {
+                log_net_error!(e, "kv rpc failed";
+                    "request" => "versioned_coprocessor"
+                );
+                GRPC_MSG_FAIL_COUNTER.coprocessor.inc();
+            })
+            .map(|_| ());
+
+            ctx.spawn(task);
+            return;
+        }
+
+        let begin_instant = Instant::now();
+        let future = future_copr(&self.copr, Some(ctx.peer()), req.take_request());
+        let task = async move {
+            let resp = future.await?.consume();
+            let mut versioned_resp = VersionedResponse::default();
+            versioned_resp.set_response(resp);
+
+            let elapsed = begin_instant.saturating_elapsed();
+            sink.success(versioned_resp).await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .coprocessor
+                .get(resource_group_priority)
+                .observe(elapsed.as_secs_f64());
+            record_request_source_metrics(source, elapsed);
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            log_net_error!(e, "kv rpc failed";
+                "request" => "versioned_coprocessor"
+            );
+            GRPC_MSG_FAIL_COUNTER.coprocessor.inc();
+        })
+        .map(|_| ());
+
+        ctx.spawn(task);
+    }
+
+    fn versioned_batch_coprocessor(
+        &mut self,
+        ctx: RpcContext<'_>,
+        mut req: VersionedBatchRequest,
+        mut sink: ServerStreamingSink<VersionedBatchResponse>,
+    ) {
+        let req_cluster_id = req.get_request().get_context().get_cluster_id();
+        if req_cluster_id > 0 && req_cluster_id != self.cluster_id {
+            // Reject the request if the cluster IDs do not match.
+            warn!("unexpected request with different cluster id is received"; "req" => ?&req);
+            let e = RpcStatus::with_message(
+                RpcStatusCode::INVALID_ARGUMENT,
+                "the cluster id of the request does not match the TiKV cluster".to_string(),
+            );
+            ctx.spawn(sink.fail(e).unwrap_or_else(|_| {}));
+            return;
+        }
+
+        let mut batch_req = req.take_request();
+        let source = batch_req.get_context().get_request_source().to_owned();
+        let resource_control_ctx = batch_req.get_context().get_resource_control_context();
+        let mut resource_group_priority = ResourcePriority::unknown;
+        if let Some(resource_manager) = &self.resource_manager {
+            resource_manager.consume_penalty(resource_control_ctx);
+            resource_group_priority = ResourcePriority::from(resource_control_ctx.override_priority);
+        }
+        GRPC_RESOURCE_GROUP_COUNTER_VEC
+            .with_label_values(&[
+                resource_control_ctx.get_resource_group_name(),
+                resource_control_ctx.get_resource_group_name(),
+            ])
+            .inc();
+
+        let peer = ctx.peer();
+        let copr = self.copr.clone();
+
+        let base_context = batch_req.take_context();
+        let tp = batch_req.get_tp();
+        let data = batch_req.take_data();
+        let start_ts = batch_req.get_start_ts();
+        let schema_ver = batch_req.get_schema_ver();
+        let connection_id = batch_req.get_connection_id();
+        let connection_alias = batch_req.take_connection_alias();
+        let table_shard_infos = batch_req.take_table_shard_infos();
+        let mut regions: Vec<RegionInfo> = batch_req.take_regions().into();
+        for mut table_regions in batch_req.take_table_regions().into_iter() {
+            regions.extend(table_regions.take_regions().into_iter());
+        }
+
+        let mut stream = Box::pin(futures::stream::iter(regions).then(move |mut region| {
+            let peer = peer.clone();
+            let copr = copr.clone();
+            let data = data.clone();
+            let base_context = base_context.clone();
+            let connection_alias = connection_alias.clone();
+            let table_shard_infos = table_shard_infos.clone();
+            async move {
+                let region_id = region.get_region_id();
+                let region_epoch = region.get_region_epoch().clone();
+
+                let mut context = base_context;
+                context.set_region_id(region_id);
+                context.set_region_epoch(region.take_region_epoch());
+
+                let ranges: Vec<_> = region.take_ranges().into();
+
+                let mut copr_req = Request::default();
+                copr_req.set_context(context);
+                copr_req.set_tp(tp);
+                copr_req.set_data(data);
+                copr_req.set_start_ts(start_ts);
+                copr_req.set_ranges(ranges.into());
+                copr_req.set_schema_ver(schema_ver);
+                if connection_id != 0 {
+                    copr_req.set_connection_id(connection_id);
+                }
+                if !connection_alias.is_empty() {
+                    copr_req.set_connection_alias(connection_alias);
+                }
+                if !table_shard_infos.is_empty() {
+                    copr_req.set_table_shard_infos(table_shard_infos);
+                }
+
+                let mut resp = copr
+                    .parse_and_handle_unary_request(copr_req, Some(peer))
+                    .await
+                    .consume();
+                let mut batch_resp = BatchResponse::default();
+                batch_resp.set_exec_details(resp.take_exec_details());
+
+                if resp.has_region_error() {
+                    let err = resp.take_region_error();
+                    if err.has_epoch_not_match() {
+                        batch_resp.set_retry_regions(
+                            err.get_epoch_not_match().get_current_regions().to_vec().into(),
+                        );
+                    } else {
+                        let mut retry_region = kvproto::metapb::Region::default();
+                        retry_region.set_id(region_id);
+                        retry_region.set_region_epoch(region_epoch);
+                        batch_resp.mut_retry_regions().push(retry_region);
+                    }
+                    if !err.get_message().is_empty() {
+                        batch_resp.set_other_error(err.get_message().to_owned());
+                    } else {
+                        batch_resp.set_other_error(format!("{:?}", err));
+                    }
+                } else if resp.has_locked() {
+                    batch_resp.set_other_error(format!("locked: {:?}", resp.get_locked()));
+                } else if !resp.get_other_error().is_empty() {
+                    batch_resp.set_other_error(resp.take_other_error());
+                }
+
+                batch_resp.set_data(resp.take_data());
+
+                let mut versioned_resp = VersionedBatchResponse::default();
+                versioned_resp.set_response(batch_resp);
+                GrpcResult::<(VersionedBatchResponse, WriteFlags)>::Ok((
+                    versioned_resp,
+                    WriteFlags::default().buffer_hint(true),
+                ))
+            }
+        }));
+
+        let begin_instant = Instant::now();
+        let send_task = async move {
+            match sink.send_all(&mut stream).await.map_err(Error::from) {
+                Ok(_) => {
+                    GRPC_MSG_HISTOGRAM_STATIC
+                        .coprocessor_stream
+                        .get(resource_group_priority)
+                        .observe(begin_instant.saturating_elapsed().as_secs_f64());
+                    record_request_source_metrics(source, begin_instant.saturating_elapsed());
+                    let _ = sink.close().await;
+                }
+                Err(e) => {
+                    info!("kv rpc failed";
+                        "request" => "versioned_batch_coprocessor",
+                        "err" => ?e
+                    );
+                    GRPC_MSG_FAIL_COUNTER.coprocessor_stream.inc();
+                }
+            }
+        };
+
+        ctx.spawn(send_task);
     }
 }
 
