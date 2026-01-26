@@ -2184,9 +2184,20 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         for (result, cb) in original_results.into_iter().zip(original_cbs) {
             if let PessimisticLockKeyResult::Waiting = &result {
                 let lock_info = lock_info_it.next().unwrap();
-                let lock_info_pb = lock_info.lock_info_pb.clone();
-                let entry = self.make_lock_waiting_after_resuming(lock_info, cb);
-                lock_wait_entries.push((entry, lock_info_pb));
+                // When encountering a shared lock after resuming, return KeyIsLocked error
+                // directly instead of waiting again. This keeps the scheduler logic simple
+                // and lets the client retry.
+                if lock_info.lock_info_pb.lock_type == kvrpcpb::Op::SharedLock {
+                    let err = StorageError::from(Error::from(MvccError::from(
+                        MvccErrorInner::KeyIsLocked(lock_info.lock_info_pb),
+                    )));
+                    results.push(PessimisticLockKeyResult::Failed(err.into()));
+                    cbs.push(cb);
+                } else {
+                    let lock_info_pb = lock_info.lock_info_pb.clone();
+                    let entry = self.make_lock_waiting_after_resuming(lock_info, cb);
+                    lock_wait_entries.push((entry, lock_info_pb));
+                }
             } else {
                 results.push(result);
                 cbs.push(cb);
