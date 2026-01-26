@@ -497,13 +497,13 @@ fn build_manifest_avro(
         .map_err(|e| Error::Invalid(format!("parse iceberg manifest schema: {}", e)))?;
     let mut writer = AvroWriter::new(&avro_schema, Vec::new());
     writer
-        .add_user_metadata("schema".to_string(), schema_json.to_vec())
+        .add_user_metadata("schema".to_string(), schema_json)
         .map_err(|e| Error::Invalid(format!("set iceberg manifest schema metadata: {}", e)))?;
     writer
         .add_user_metadata("schema-id".to_string(), ICEBERG_SCHEMA_ID.to_string())
         .map_err(|e| Error::Invalid(format!("set iceberg manifest schema-id metadata: {}", e)))?;
     writer
-        .add_user_metadata("partition-spec".to_string(), partition_spec_json.to_vec())
+        .add_user_metadata("partition-spec".to_string(), partition_spec_json)
         .map_err(|e| {
             Error::Invalid(format!(
                 "set iceberg manifest partition-spec metadata: {}",
@@ -533,7 +533,7 @@ fn build_manifest_avro(
             ))
         })?;
     writer
-        .add_user_metadata("content".to_string(), "data".to_string())
+        .add_user_metadata("content".to_string(), "data")
         .map_err(|e| Error::Invalid(format!("set iceberg manifest content metadata: {}", e)))?;
 
     for file in parquet_files {
@@ -593,7 +593,7 @@ fn build_manifest_list_avro(
         )
         .map_err(|e| Error::Invalid(format!("set manifest-list format-version metadata: {}", e)))?;
     writer
-        .add_user_metadata("parent-snapshot-id".to_string(), "null".to_string())
+        .add_user_metadata("parent-snapshot-id".to_string(), "null")
         .map_err(|e| {
             Error::Invalid(format!(
                 "set manifest-list parent-snapshot-id metadata: {}",
