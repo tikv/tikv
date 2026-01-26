@@ -673,6 +673,11 @@ pub enum Cmd {
         )]
         compression: String,
         #[structopt(
+            long = "bloom-filter",
+            help = "enable Parquet bloom filters for INT/UTF8 columns (default: false)"
+        )]
+        bloom_filter: bool,
+        #[structopt(
             short = "f",
             long = "filter",
             help = "table filter rules (same syntax as BR --filter); can be specified multiple times"

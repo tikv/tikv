@@ -8,7 +8,7 @@ use tipb::ColumnInfo;
 
 use crate::{Error, Result};
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ColumnParquetType {
     Int64,
     Double,

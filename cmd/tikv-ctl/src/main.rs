@@ -411,6 +411,7 @@ fn main() {
             sst_concurrency,
             use_checkpoint,
             compression,
+            bloom_filter,
             filters,
             tables,
             table_ids,
@@ -476,6 +477,7 @@ fn main() {
             options.row_group_size = row_group_size;
             options.compression = parquet_compression;
             options.write_iceberg_table = write_iceberg_table;
+            options.bloom_filter = bloom_filter;
             if let Some(use_checkpoint) = use_checkpoint {
                 options.use_checkpoint = use_checkpoint;
             }

@@ -10,12 +10,12 @@ use parquet::{
         properties::{EnabledStatistics, WriterProperties},
         writer::{SerializedFileWriter, SerializedRowGroupWriter},
     },
-    schema::types::{Type, TypePtr},
+    schema::types::{ColumnPath, Type, TypePtr},
 };
 
 use crate::{
     Error, Result,
-    schema::{ColumnParquetType, ColumnSchema, TableSchema},
+    schema::{ColumnKind, ColumnParquetType, ColumnSchema, TableSchema},
 };
 
 #[derive(Debug)]
@@ -39,18 +39,26 @@ impl ParquetWriter {
         sink: File,
         compression: Compression,
         row_group_size: usize,
+        bloom_filter: bool,
     ) -> Result<Self> {
         let schema = build_parquet_schema(table)?;
         let write_batch_size = row_group_size.clamp(1024, 8192);
-        let props = Arc::new(
-            WriterProperties::builder()
-                .set_compression(compression)
-                .set_dictionary_enabled(true)
-                .set_statistics_enabled(EnabledStatistics::Page)
-                .set_max_row_group_size(row_group_size)
-                .set_write_batch_size(write_batch_size)
-                .build(),
-        );
+        let mut builder = WriterProperties::builder()
+            .set_compression(compression)
+            .set_dictionary_enabled(true)
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .set_max_row_group_size(row_group_size)
+            .set_write_batch_size(write_batch_size);
+        if bloom_filter {
+            let ndv = row_group_size as u64;
+            for column in &table.columns {
+                if should_enable_bloom_filter(column) {
+                    builder = builder
+                        .set_column_bloom_filter_ndv(ColumnPath::from(column.name.as_str()), ndv);
+                }
+            }
+        }
+        let props = Arc::new(builder.build());
         let capacity = row_group_size.min(8192);
         let writer = SerializedFileWriter::new(sink, schema, props)?;
         let columns = table
@@ -98,6 +106,16 @@ impl ParquetWriter {
         row_group.close()?;
         self.rows_in_group = 0;
         Ok(())
+    }
+}
+
+fn should_enable_bloom_filter(column: &ColumnSchema) -> bool {
+    match column.kind {
+        ColumnKind::TableId => false,
+        _ => matches!(
+            column.parquet_type,
+            ColumnParquetType::Int64 | ColumnParquetType::Utf8
+        ),
     }
 }
 
@@ -149,7 +167,7 @@ struct ColumnState {
 impl ColumnState {
     fn from_schema(column: &ColumnSchema, capacity: usize) -> Result<Self> {
         Ok(Self {
-            parquet_type: column.parquet_type.clone(),
+            parquet_type: column.parquet_type,
             nullable: column.nullable,
             values_int64: Vec::with_capacity(capacity),
             values_double: Vec::with_capacity(capacity),

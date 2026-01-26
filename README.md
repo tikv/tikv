@@ -180,13 +180,14 @@ Optional flags:
 - `--compression` (default `snappy`, supports `snappy|zstd|gzip|brotli|lz4|lz4raw|none`; `lz4` is an alias of `lz4raw`)
 - `--filter` table filter rules (same syntax as BR `--filter`, repeatable; supports `!` blocklist and `@file`)
 - `--table-ids` comma-separated list of physical table IDs
+- `--bloom-filter` enable Parquet bloom filters for INT/UTF8 columns
 - `--write-iceberg-table` write Iceberg metadata under `<output-prefix>/<db>/<table>/metadata/`
 - `--write-iceberg-manifest` plus `--iceberg-warehouse`, `--iceberg-namespace`, `--iceberg-table` (legacy JSON manifest, not Iceberg table metadata)
 - `--iceberg-manifest-prefix` (default `manifest`)
 - Output paths sanitize database and table names to `[A-Za-z0-9_]`. When sanitization changes the name, a short hash suffix is appended to prevent collisions.
 - Unsigned integer columns are exported as UTF8 strings to preserve the full range; signed integer columns require values within `i64`.
 - The exporter writes checkpoint entries under `<output-prefix>/_checkpoint` to resume after interruptions.
-- Parquet bloom filters are not emitted; query engines rely on statistics and dictionary encoding for pruning.
+- When `--bloom-filter` is set, Parquet bloom filters are emitted for INT/UTF8 columns (excluding `_tidb_table_id`) to speed up selective equality predicates.
 
 Example:
 

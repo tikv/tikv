@@ -125,6 +125,7 @@ pub struct ExportOptions {
     pub sst_concurrency: usize,
     pub use_checkpoint: bool,
     pub write_iceberg_table: bool,
+    pub bloom_filter: bool,
 }
 
 impl Default for ExportOptions {
@@ -138,6 +139,7 @@ impl Default for ExportOptions {
             sst_concurrency: concurrency,
             use_checkpoint: true,
             write_iceberg_table: false,
+            bloom_filter: false,
         }
     }
 }
@@ -915,6 +917,7 @@ impl<'a> SstParquetExporter<'a> {
             sink,
             self.options.compression,
             self.options.row_group_size,
+            self.options.bloom_filter,
         )?;
         let reader = RocksSstReader::open(
             local_path

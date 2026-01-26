@@ -94,6 +94,72 @@ fn integration_row_group_size() {
 }
 
 #[test]
+fn integration_bloom_filter() {
+    let _lock = EXPORT_TEST_LOCK.lock().unwrap();
+    let runtime = Runtime::new().unwrap();
+    let _guard = runtime.enter();
+    let input_dir = TempDir::new().unwrap();
+    let output_dir = TempDir::new().unwrap();
+    let engine = kv::new_engine(input_dir.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
+
+    let sst_path = input_dir.path().join("bloom.sst");
+    let mut sst_writer = <KvTestEngine as SstExt>::SstWriterBuilder::new()
+        .set_db(&engine)
+        .set_cf(CF_DEFAULT)
+        .build(sst_path.to_str().unwrap())
+        .unwrap();
+    let mut ctx = EvalContext::default();
+    let mut raw_keys = Vec::new();
+    for handle in [1_i64, 2_i64] {
+        let value = table::encode_row(&mut ctx, vec![Datum::I64(handle)], &[1]).unwrap();
+        let raw_key = table::encode_row_key(1, handle);
+        raw_keys.push(raw_key.clone());
+        let encoded_key = Key::from_raw(&raw_key).append_ts(TimeStamp::new(1));
+        let key = keys::data_key(encoded_key.as_encoded());
+        sst_writer.put(&key, &value).unwrap();
+    }
+    let sst_info = sst_writer.finish().unwrap();
+    fs::copy(sst_info.file_path(), input_dir.path().join("data.sst")).unwrap();
+
+    let mut file = BackupFile::default();
+    file.set_name("data.sst".into());
+    file.set_cf(CF_DEFAULT.to_string());
+    file.set_start_key(raw_keys[0].clone());
+    file.set_end_key(raw_keys[1].clone());
+    file.set_start_version(1);
+    file.set_end_version(2);
+
+    let schema = make_schema("test", "t", 1);
+    let mut meta = BackupMeta::default();
+    meta.mut_files().push(file);
+    meta.mut_schemas().push(schema);
+    meta.set_start_version(1);
+    meta.set_end_version(2);
+
+    let mut meta_bytes = Vec::new();
+    meta.write_to_writer(&mut meta_bytes).unwrap();
+    fs::write(input_dir.path().join("backupmeta"), meta_bytes).unwrap();
+
+    let input = Arc::new(LocalStorage::new(input_dir.path()).unwrap());
+    let output = Arc::new(LocalStorage::new(output_dir.path()).unwrap());
+    let mut options = ExportOptions::default();
+    options.bloom_filter = true;
+    let mut exporter = SstParquetExporter::new(input.as_ref(), output.as_ref(), options).unwrap();
+    let report = exporter.export_backup_meta("parquet").unwrap();
+    assert_eq!(report.total_rows, 2);
+    assert_eq!(report.files.len(), 1);
+
+    let parquet_files = collect_parquet_files(output_dir.path());
+    assert_eq!(parquet_files.len(), 1);
+    let reader = SerializedFileReader::new(File::open(&parquet_files[0]).unwrap()).unwrap();
+    let metadata = reader.metadata();
+    let row_group = metadata.row_group(0);
+    assert!(row_group.column(0).bloom_filter_offset().is_none());
+    assert!(row_group.column(1).bloom_filter_offset().is_some());
+    assert!(row_group.column(2).bloom_filter_offset().is_some());
+}
+
+#[test]
 fn integration_table_filter() {
     let _lock = EXPORT_TEST_LOCK.lock().unwrap();
     let runtime = Runtime::new().unwrap();
