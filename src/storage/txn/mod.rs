@@ -41,9 +41,9 @@ pub use self::{
     },
 };
 use crate::storage::{
-    mvcc::Error as MvccError,
+    mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     types::{MvccInfo, PessimisticLockResults, PrewriteResult, SecondaryLocksStatus, TxnStatus},
-    Error as StorageError, Result as StorageResult,
+    Error as StorageError, ErrorInner as StorageErrorInner, Result as StorageResult,
 };
 
 /// Process result of a command.
@@ -93,6 +93,18 @@ impl ProcessResult {
             ProcessResult::PessimisticLockRes { res: Ok(r) } => {
                 Some(ProcessResult::PessimisticLockRes { res: Ok(r.clone()) })
             }
+            _ => None,
+        }
+    }
+
+    pub fn get_key_lock_info(&self) -> Option<&LockInfo> {
+        match self {
+            ProcessResult::PessimisticLockRes {
+                res:
+                    Err(StorageError(box StorageErrorInner::Txn(Error(box ErrorInner::Mvcc(
+                        MvccError(box MvccErrorInner::KeyIsLocked(lock_info)),
+                    ))))),
+            } => Some(lock_info),
             _ => None,
         }
     }
