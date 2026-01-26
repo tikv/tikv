@@ -2157,6 +2157,24 @@ fn test_resolve_shared_locks() {
     for ts in [10, 20] {
         acquire_lock(ts, true).recv().unwrap().unwrap();
     }
+
+    // Try to acquire exclusive lock first time, which turns shared locks into
+    // shrink-only and receives KeyIsLocked immediately.
+    let exclusive_lock = acquire_lock(30, false);
+    let err = exclusive_lock
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        storage::Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+            box mvcc::ErrorInner::KeyIsLocked { .. },
+        )))))
+    ));
+
+    // Try to acquire exclusive lock again, which will be blocked by shrink-only
+    // shared locks.
     let exclusive_lock = acquire_lock(30, false);
     exclusive_lock.try_recv().unwrap_err();
 
