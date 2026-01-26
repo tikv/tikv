@@ -373,7 +373,7 @@ fn check_ts_conflict_si(
     };
 
     if lock.ts > ts || lock.lock_type == LockType::Lock || lock.is_pessimistic_lock() {
-        // Ignore lock when lock.ts > ts or lock's type is Lock or Pessimistic
+        // Ignore lock when lock.ts > ts or lock's type is Lock, Shared, or Pessimistic
         return Ok(());
     }
 
@@ -842,6 +842,35 @@ impl SharedLocks {
         Ok(())
     }
 
+    /// Filters shared locks, keeping only those for which `f` returns true.
+    pub fn filter_shared_locks<F>(&mut self, mut f: F) -> Result<()>
+    where
+        F: FnMut(&Lock) -> bool,
+    {
+        let mut to_remove = Vec::new();
+
+        for (ts, either) in self.txn_info_segments.iter_mut() {
+            let keep = match either {
+                Either::Right(lock) => f(lock),
+                Either::Left(encoded) => {
+                    let lock = Lock::parse(encoded)?;
+                    let keep = f(&lock);
+                    *either = Either::Right(lock);
+                    keep
+                }
+            };
+
+            if !keep {
+                to_remove.push(*ts);
+            }
+        }
+
+        for ts in to_remove {
+            self.txn_info_segments.remove(&ts);
+        }
+        Ok(())
+    }
+
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut b = Vec::with_capacity(self.pre_allocate_size());
         b.push(LockType::Shared.to_u8());
@@ -895,6 +924,7 @@ impl SharedLocks {
             .map(|lock| lock.into_lock_info(raw_key.clone()))
             .collect();
         info.set_shared_lock_infos(shared_locks.into());
+        info.set_key(raw_key);
         info
     }
 }
@@ -1523,13 +1553,22 @@ mod tests {
         )
         .unwrap_err();
         check_ts_conflict(
-            Cow::Owned(Either::Left(lock)),
+            Cow::Owned(Either::Left(lock.clone())),
             &key,
             160.into(),
             &empty,
             IsolationLevel::Si,
         )
         .unwrap_err();
+
+        check_ts_conflict(
+            Cow::Owned(Either::Right(SharedLocks::new())),
+            &key,
+            160.into(),
+            &empty,
+            IsolationLevel::Si,
+        )
+        .unwrap();
     }
 
     #[test]

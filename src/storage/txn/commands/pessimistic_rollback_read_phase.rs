@@ -85,3 +85,80 @@ impl<S: Snapshot> ReadCommand<S> for PessimisticRollbackReadPhase {
         }
     }
 }
+
+#[cfg(test)]
+pub mod tests {
+    use kvproto::kvrpcpb::Context;
+    use tikv_util::deadline::Deadline;
+
+    use super::*;
+    use crate::storage::{
+        TestEngineBuilder,
+        kv::Engine,
+        mvcc::tests::must_load_shared_lock,
+        txn::{scheduler::DEFAULT_EXECUTION_DURATION_LIMIT, tests::*},
+    };
+
+    fn run_read_phase<E: Engine>(
+        engine: &mut E,
+        start_ts: impl Into<TimeStamp>,
+        for_update_ts: impl Into<TimeStamp>,
+        scan_key: Option<Key>,
+    ) -> ProcessResult {
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut statistics = Statistics::default();
+        let cmd = PessimisticRollbackReadPhase {
+            ctx: Context::default(),
+            deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
+            start_ts: start_ts.into(),
+            for_update_ts: for_update_ts.into(),
+            scan_key,
+        };
+
+        cmd.process_read(snapshot, &mut statistics).unwrap()
+    }
+
+    #[test]
+    fn test_read_shared_pessimistic_lock() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"read-shared-pessimistic";
+        let pk1 = b"pk1";
+        let pk2 = b"pk2";
+
+        must_acquire_shared_pessimistic_lock(&mut engine, key, pk1, 10, 30, 3000);
+        must_acquire_shared_pessimistic_lock(&mut engine, key, pk2, 20, 20, 3000);
+        must_shared_prewrite_lock(&mut engine, key, pk2, 20, 30);
+
+        // Verify the shared lock contains the pessimistic entry we are going to roll
+        // back.
+        let mut shared_lock = must_load_shared_lock(&mut engine, key);
+        let shared_entry = shared_lock.get_lock(&10.into()).unwrap().unwrap();
+        assert!(shared_entry.is_pessimistic_lock());
+
+        // read pessimistic lock inside shared lock.
+        let pr = run_read_phase(&mut engine, 10, 30, None);
+        match pr {
+            ProcessResult::NextCommand {
+                cmd: Command::PessimisticRollback(next),
+            } => {
+                assert_eq!(next.keys, &[Key::from_raw(key)]);
+                assert_eq!(next.scan_key, None);
+                assert_eq!(next.start_ts, 10.into());
+                assert_eq!(next.for_update_ts, 30.into());
+            }
+            _ => panic!("expected pessimistic rollback command"),
+        }
+
+        // read pessimistic lock with smaller for_update_ts, should not find any lock.
+        let pr = run_read_phase(&mut engine, 10, 20, None);
+        matches!(pr, ProcessResult::MultiRes { .. });
+
+        // no matching start_ts
+        let pr = run_read_phase(&mut engine, 30, 40, None);
+        matches!(pr, ProcessResult::MultiRes { .. });
+
+        // should bypass prewrite lock
+        let pr = run_read_phase(&mut engine, 20, 40, None);
+        matches!(pr, ProcessResult::MultiRes { .. });
+    }
+}

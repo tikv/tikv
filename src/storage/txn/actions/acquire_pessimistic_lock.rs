@@ -925,8 +925,7 @@ pub mod tests {
         lock
     }
 
-    #[cfg(test)]
-    fn must_acquire_shared_lock<E: Engine>(
+    pub fn must_acquire_shared_pessimistic_lock<E: Engine>(
         engine: &mut E,
         key: &[u8],
         pk: &[u8],
@@ -2784,7 +2783,14 @@ pub mod tests {
         let start_ts = TimeStamp::from(5);
         let for_update_ts = TimeStamp::from(15);
 
-        let result = must_acquire_shared_lock(&mut engine, key, pk, start_ts, for_update_ts, 2000);
+        let result = must_acquire_shared_pessimistic_lock(
+            &mut engine,
+            key,
+            pk,
+            start_ts,
+            for_update_ts,
+            2000,
+        );
         assert!(matches!(result, PessimisticLockKeyResult::Empty));
 
         let mut shared_locks = load_shared_locks(&mut engine, key);
@@ -2810,8 +2816,22 @@ pub mod tests {
         let for_update_one = TimeStamp::from(20);
         let for_update_two = TimeStamp::from(18);
 
-        must_acquire_shared_lock(&mut engine, key, pk_one, start_one, for_update_one, 1500);
-        must_acquire_shared_lock(&mut engine, key, pk_two, start_two, for_update_two, 2500);
+        must_acquire_shared_pessimistic_lock(
+            &mut engine,
+            key,
+            pk_one,
+            start_one,
+            for_update_one,
+            1500,
+        );
+        must_acquire_shared_pessimistic_lock(
+            &mut engine,
+            key,
+            pk_two,
+            start_two,
+            for_update_two,
+            2500,
+        );
 
         let mut shared_locks = load_shared_locks(&mut engine, key);
         assert_eq!(shared_locks.len(), 2);
@@ -2842,8 +2862,15 @@ pub mod tests {
         let for_update_ts = TimeStamp::from(35);
         let new_for_update_ts = TimeStamp::from(45);
 
-        must_acquire_shared_lock(&mut engine, key, pk, start_ts, for_update_ts, 3000);
-        must_acquire_shared_lock(&mut engine, key, pk, start_ts, new_for_update_ts, 3000);
+        must_acquire_shared_pessimistic_lock(&mut engine, key, pk, start_ts, for_update_ts, 3000);
+        must_acquire_shared_pessimistic_lock(
+            &mut engine,
+            key,
+            pk,
+            start_ts,
+            new_for_update_ts,
+            3000,
+        );
 
         let mut shared_locks = load_shared_locks(&mut engine, key);
         assert_eq!(shared_locks.len(), 1);
@@ -2869,7 +2896,14 @@ pub mod tests {
         let new_for_update_ts = TimeStamp::from(45);
 
         // shared lock cannot propagate to exclusive lock
-        must_acquire_shared_lock(&mut engine, shared_key, pk, start_ts, for_update_ts, 3000);
+        must_acquire_shared_pessimistic_lock(
+            &mut engine,
+            shared_key,
+            pk,
+            start_ts,
+            for_update_ts,
+            3000,
+        );
         must_err(&mut engine, shared_key, pk, start_ts, new_for_update_ts);
 
         // exclusive lock cannot downgrade to shared lock
