@@ -2187,7 +2187,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 // When encountering a shared lock after resuming, return KeyIsLocked error
                 // directly instead of waiting again. This keeps the scheduler logic simple
                 // and lets the client retry.
-                if lock_info.lock_info_pb.lock_type == kvrpcpb::Op::SharedLock {
+                if lock_info.lock_info_pb.is_shared_lock() {
                     let err = StorageError::from(Error::from(MvccError::from(
                         MvccErrorInner::KeyIsLocked(lock_info.lock_info_pb),
                     )));

@@ -2919,7 +2919,7 @@ pub mod tests {
         let existing_start_ts = TimeStamp::from(10);
         let existing_for_update_ts = TimeStamp::from(20);
 
-        must_acquire_shared_lock(
+        must_acquire_shared_pessimistic_lock(
             &mut engine,
             key,
             pk,
@@ -2946,7 +2946,7 @@ pub mod tests {
         let existing_start_ts = TimeStamp::from(5);
         let existing_for_update_ts = TimeStamp::from(15);
 
-        must_acquire_shared_lock(
+        must_acquire_shared_pessimistic_lock(
             &mut engine,
             key,
             pk,
