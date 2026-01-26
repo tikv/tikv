@@ -191,6 +191,9 @@ pub enum ErrorInner {
     #[error("{0}")]
     InvalidMaxTsUpdate(#[from] concurrency_manager::InvalidMaxTsUpdate),
 
+    #[error("key is locked by shared locks without shrink-only flag: {0:?}")]
+    NotInShrinkMode(SharedLocks),
+
     #[error("{0:?}")]
     Other(#[from] Box<dyn error::Error + Sync + Send>),
 }
@@ -335,6 +338,9 @@ impl ErrorInner {
                 ErrorInner::GenerationOutOfOrder(*gen, key.clone(), lock_info.clone()),
             ),
             ErrorInner::InvalidMaxTsUpdate(e) => Some(ErrorInner::InvalidMaxTsUpdate(e.clone())),
+            ErrorInner::NotInShrinkMode(shared_locks) => {
+                Some(ErrorInner::NotInShrinkMode(shared_locks.clone()))
+            }
             ErrorInner::Io(_) | ErrorInner::Other(_) => None,
         }
     }
@@ -445,6 +451,7 @@ impl ErrorCodeExt for Error {
             ErrorInner::PrimaryMismatch(_) => error_code::storage::PRIMARY_MISMATCH,
             ErrorInner::GenerationOutOfOrder(..) => error_code::storage::GENERATION_OUT_OF_ORDER,
             ErrorInner::InvalidMaxTsUpdate(_) => error_code::storage::INVALID_MAX_TS_UPDATE,
+            ErrorInner::NotInShrinkMode(_) => error_code::storage::KEY_IS_LOCKED,
             ErrorInner::Other(_) => error_code::storage::UNKNOWN,
         }
     }

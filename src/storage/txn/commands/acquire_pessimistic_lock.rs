@@ -97,6 +97,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         let total_keys = keys.len();
         let mut res = PessimisticLockResults::with_capacity(total_keys);
         let mut encountered_locks = vec![];
+        let mut updated_shared_lock_info = None;
         let need_old_value = context.extra_op == ExtraOp::ReadOldValue;
         let mut old_values = OldValues::default();
         for (k, should_not_exist, is_shared_lock) in keys {
@@ -150,6 +151,19 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                     res.push(PessimisticLockKeyResult::Waiting);
                     break;
                 }
+                Err(MvccError(box MvccErrorInner::NotInShrinkMode(mut shared_locks))) => {
+                    // Clear previous mutations, mark `shared_locks` as shrink-only and write it
+                    // back.
+                    let locked_raw_key = k.to_raw()?;
+                    shared_locks.set_shrink_only();
+                    txn.clear();
+                    txn.put_shared_locks(k, &shared_locks, false);
+                    old_values.clear();
+                    res.0.clear();
+
+                    updated_shared_lock_info = Some(shared_locks.into_lock_info(locked_raw_key));
+                    break;
+                }
                 Err(e) => return Err(Error::from(e)),
             }
         }
@@ -175,6 +189,13 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             } else {
                 res = Err(err)
             }
+        }
+        // Return KeyIsLocked when xlock encounters slock and tries to convert it to
+        // shrink-only.
+        if let Some(lock_info) = updated_shared_lock_info {
+            res = Err(StorageError::from(Error::from(MvccError::from(
+                MvccErrorInner::KeyIsLocked(lock_info),
+            ))));
         }
 
         let rows = if res.is_ok() { total_keys } else { 0 };
@@ -215,9 +236,17 @@ pub(super) fn make_write_data(modifies: Vec<Modify>, old_values: OldValues) -> W
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use concurrency_manager::ConcurrencyManager;
+    use kvproto::kvrpcpb;
+    use txn_types::LockInfoExt;
+
     use super::*;
     use crate::storage::{
-        Statistics, TestEngineBuilder,
+        Engine, Statistics, TestEngineBuilder,
+        lock_manager::MockLockManager,
+        mvcc::tests::must_load_shared_lock,
         txn::{
             actions::{
                 acquire_pessimistic_lock::tests::must_pessimistic_locked,
@@ -225,6 +254,7 @@ mod tests {
             },
             commands::test_util::pessimistic_lock,
             tests::{must_commit, must_rollback},
+            txn_status_cache::TxnStatusCache,
         },
     };
 
@@ -358,5 +388,149 @@ mod tests {
                 must_rollback(&mut engine, key, start_ts, false);
             }
         }
+    }
+
+    #[test]
+    fn test_shared_locks() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut statistics = Statistics::default();
+        let pk = b"shared-lock-pk";
+        let key = b"shared-lock";
+        let ctx = kvrpcpb::Context::default();
+
+        // Acquire slock and write to engine.
+        let res = must_process_acquire_pessimistic_cmd(
+            &mut engine,
+            &mut statistics,
+            ctx.clone(),
+            5,
+            5,
+            pk,
+            key,
+            true,
+        );
+        engine.write(&ctx, res.to_be_write).unwrap();
+
+        // Acquire another slock on the same key, which should succeed since the slock
+        // is not shrink-only.
+        let res = must_process_acquire_pessimistic_cmd(
+            &mut engine,
+            &mut statistics,
+            ctx.clone(),
+            7,
+            7,
+            pk,
+            key,
+            true,
+        );
+        engine.write(&ctx, res.to_be_write).unwrap();
+
+        // Acquire xlock on the same key, which should persist updated slock and return
+        // KeyIsLocked.
+        let res = must_process_acquire_pessimistic_cmd(
+            &mut engine,
+            &mut statistics,
+            ctx.clone(),
+            10,
+            10,
+            pk,
+            key,
+            false,
+        );
+        assert!(res.lock_info.is_empty());
+        assert!(!res.to_be_write.modifies.is_empty());
+        let lock_info = res
+            .pr
+            .get_key_lock_info()
+            .expect("expected shared lock info");
+        assert!(lock_info.is_shared_lock());
+
+        // Write updated slock back to engine.
+        engine.write(&ctx, res.to_be_write).unwrap();
+        let shared_locks = must_load_shared_lock(&mut engine, key);
+        assert!(shared_locks.is_shrink_only());
+
+        // Acquire xlock again on the same key, which should trigger lock waiting.
+        let res = must_process_acquire_pessimistic_cmd(
+            &mut engine,
+            &mut statistics,
+            ctx.clone(),
+            12,
+            12,
+            pk,
+            key,
+            false,
+        );
+        assert!(!res.lock_info.is_empty());
+        assert!(res.to_be_write.modifies.is_empty());
+        match &res.pr {
+            ProcessResult::PessimisticLockRes { res } => {
+                let res = res.as_ref().unwrap();
+                assert_eq!(res.0.len(), 1);
+                assert_eq!(res.0[0], PessimisticLockKeyResult::Waiting);
+            }
+            _ => panic!("unexpected process result"),
+        }
+
+        // Acquire slock on the same key, which should also trigger lock waiting.
+        let res = must_process_acquire_pessimistic_cmd(
+            &mut engine,
+            &mut statistics,
+            ctx.clone(),
+            15,
+            15,
+            pk,
+            key,
+            true,
+        );
+        assert!(!res.lock_info.is_empty());
+        assert!(res.to_be_write.modifies.is_empty());
+        match &res.pr {
+            ProcessResult::PessimisticLockRes { res } => {
+                let res = res.as_ref().unwrap();
+                assert_eq!(res.0.len(), 1);
+                assert_eq!(res.0[0], PessimisticLockKeyResult::Waiting);
+            }
+            _ => panic!("unexpected process result"),
+        }
+    }
+
+    fn must_process_acquire_pessimistic_cmd<E: Engine>(
+        engine: &mut E,
+        statistics: &mut Statistics,
+        ctx: kvrpcpb::Context,
+        start_ts: u64,
+        for_update_ts: u64,
+        pk: &[u8],
+        key: &[u8],
+        shared: bool,
+    ) -> WriteResult {
+        let snap = engine.snapshot(Default::default()).unwrap();
+        let concurrency_manager = ConcurrencyManager::new_for_test(start_ts.into());
+        let cmd = AcquirePessimisticLock::new(
+            vec![(Key::from_raw(key), false, shared)],
+            pk.to_vec(),
+            start_ts.into(),
+            3000,
+            false,
+            for_update_ts.into(),
+            Some(WaitTimeout::Default),
+            false,
+            TimeStamp::zero(),
+            false,
+            false,
+            false,
+            ctx,
+        );
+        let context = WriteContext {
+            lock_mgr: &MockLockManager::new(),
+            concurrency_manager,
+            extra_op: ExtraOp::Noop,
+            statistics,
+            async_apply_prewrite: false,
+            raw_ext: None,
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+        };
+        cmd.cmd.process_write(snap, context).unwrap()
     }
 }
