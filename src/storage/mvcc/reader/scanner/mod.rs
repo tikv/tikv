@@ -496,10 +496,22 @@ where
         }
         match write_ref.write_type {
             WriteType::Put | WriteType::Delete => {
-                assert_ge!(
-                    after_ts,
-                    Key::decode_ts_from(write_cursor.key(&mut statistics.write))?
-                );
+                // After a pessimistic transaction is committed,
+                // a non-pessimistic lock of the same transaction can be also prewritten
+                // successfully. The lock TS of such a lock is smaller than the commit TS of the
+                // latest write record.
+                // See https://github.com/tikv/tikv/issues/11187
+                let latest_write_commit_ts =
+                    Key::decode_ts_from(write_cursor.key(&mut statistics.write))?;
+                if after_ts < latest_write_commit_ts {
+                    warn!("found the user key of which ts > after_ts. There may exist an unexpected stale non-pessimistic lock";
+                        "user_key" => %user_key,
+                        "after_ts" => after_ts,
+                        "latest_write_commit_ts" => latest_write_commit_ts,
+                        "latest_write_start_ts" => write_ref.start_ts,
+                        "write_type" => ?write_ref.write_type,
+                    );
+                }
                 ret = Some(write_ref.to_owned());
                 break;
             }
