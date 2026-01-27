@@ -402,7 +402,11 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
             self.index_version = Self::get_index_version(value)?
         }
         if self.commit_ts_column_cnt > 0 {
-            let commit_ts = commit_ts.ok_or_else(|| other_err!("Missing MVCC commit_ts"))?;
+            let commit_ts = commit_ts.ok_or_else(|| {
+                other_err!(
+                    "Missing MVCC commit_ts from scanner while filling _tidb_commit_ts in IndexScan"
+                )
+            })?;
             self.process_commit_ts_column(commit_ts, columns)?;
         }
         if value.len() > MAX_OLD_ENCODED_VALUE_LEN {

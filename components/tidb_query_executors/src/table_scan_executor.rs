@@ -424,7 +424,11 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
 
         let some_commit_ts_column_index = self.column_id_index.get(&table::EXTRA_COMMIT_TS_COL_ID);
         if let Some(idx) = some_commit_ts_column_index {
-            let commit_ts = commit_ts.ok_or_else(|| other_err!("Missing MVCC commit_ts"))?;
+            let commit_ts = commit_ts.ok_or_else(|| {
+                other_err!(
+                    "Missing MVCC commit_ts from scanner while filling _tidb_commit_ts in TableScan"
+                )
+            })?;
             columns[*idx].mut_decoded().push_int(Some(commit_ts as i64));
             self.is_column_filled[*idx] = true;
         }
