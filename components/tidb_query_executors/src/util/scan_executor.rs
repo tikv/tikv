@@ -34,6 +34,7 @@ pub trait ScanExecutorImpl: Send {
         &mut self,
         key: &[u8],
         value: &[u8],
+        commit_ts: u64,
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()>;
 }
@@ -113,7 +114,8 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
                 // Retrieved one row from point range or non-point range.
 
                 let (key, value) = row.kv();
-                if let Err(e) = self.imp.process_kv_pair(key, value, columns) {
+                let commit_ts = self.scanner.take_last_commit_ts().unwrap_or(0);
+                if let Err(e) = self.imp.process_kv_pair(key, value, commit_ts, columns) {
                     // When there are errors in `process_kv_pair`, columns' length may not be
                     // identical. For example, the filling process may be partially done so that
                     // first several columns have N rows while the rest have N-1 rows. Since we do

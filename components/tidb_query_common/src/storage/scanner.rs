@@ -21,6 +21,7 @@ const CHECK_KEYS: usize = 32;
 pub struct RangesScanner<T, F> {
     storage: T,
     ranges_iter: RangesIterator,
+    last_commit_ts: Option<u64>,
 
     scan_backward_in_range: bool,
     is_key_only: bool,
@@ -90,6 +91,7 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
         RangesScanner {
             storage,
             ranges_iter,
+            last_commit_ts: None,
             scan_backward_in_range,
             is_key_only,
             scanned_rows_per_range: Vec::with_capacity(ranges_len),
@@ -151,6 +153,7 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
                     return Ok(None); // drained
                 }
             };
+            self.last_commit_ts = self.storage.take_last_commit_ts();
             if self.is_scanned_range_aware && update_scanned_range {
                 self.update_scanned_range_from_scanned_row(&some_row);
             }
@@ -173,6 +176,11 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
     /// clears the collected statistics.
     pub fn collect_storage_stats(&mut self, dest: &mut T::Statistics) {
         self.storage.collect_statistics(dest)
+    }
+
+    #[inline]
+    pub fn take_last_commit_ts(&mut self) -> Option<u64> {
+        self.last_commit_ts.take()
     }
 
     /// Appends scanned rows of each range so far to the given container and

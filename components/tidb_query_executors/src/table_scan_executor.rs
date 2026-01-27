@@ -305,6 +305,10 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
             .column_id_index
             .get(&table::EXTRA_PHYSICAL_TABLE_ID_COL_ID)
             .copied();
+        let commit_ts_column_idx = self
+            .column_id_index
+            .get(&table::EXTRA_COMMIT_TS_COL_ID)
+            .copied();
         let mut last_index = 0usize;
         for handle_index in &self.handle_indices {
             // `handle_indices` is expected to be sorted.
@@ -312,7 +316,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
 
             // Fill last `handle_index - 1` columns.
             for i in last_index..*handle_index {
-                if Some(i) == physical_table_id_column_idx {
+                if Some(i) == physical_table_id_column_idx || Some(i) == commit_ts_column_idx {
                     columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
                         scan_rows,
                         EvalType::Int,
@@ -337,7 +341,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         // on 0..columns_len. For the example above, this loop will push:
         // [non-pk, non-pk]
         for i in last_index..columns_len {
-            if Some(i) == physical_table_id_column_idx {
+            if Some(i) == physical_table_id_column_idx || Some(i) == commit_ts_column_idx {
                 columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
                     scan_rows,
                     EvalType::Int,
@@ -355,6 +359,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         &mut self,
         key: &[u8],
         value: &[u8],
+        commit_ts: u64,
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         use tidb_query_datatype::codec::datum;
@@ -414,6 +419,12 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         if let Some(idx) = some_physical_table_id_column_index {
             let table_id = table::decode_table_id(key)?;
             columns[*idx].mut_decoded().push_int(Some(table_id));
+            self.is_column_filled[*idx] = true;
+        }
+
+        let some_commit_ts_column_index = self.column_id_index.get(&table::EXTRA_COMMIT_TS_COL_ID);
+        if let Some(idx) = some_commit_ts_column_index {
+            columns[*idx].mut_decoded().push_int(Some(commit_ts as i64));
             self.is_column_filled[*idx] = true;
         }
 

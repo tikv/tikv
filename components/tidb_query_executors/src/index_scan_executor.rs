@@ -79,21 +79,40 @@ impl<S: Storage, F: KvFormat> BatchIndexScanExecutor<S, F> {
         // buffer or with a SelectLock/pessimistic lock, we need to return the physical
         // table id since several partitions may be included in the range.
         //
-        // Note 6: Also int_handle (-1), EXTRA_PARTITION_ID_COL_ID (-2) and
-        // EXTRA_PHYSICAL_TABLE_ID_COL_ID (-3) must be requested in this order in
-        // columns_info! since current implementation looks for them backwards for -3,
-        // -2, -1.
-        let physical_table_id_column_cnt = columns_info.last().map_or(0, |ci| {
-            (ci.get_column_id() == table::EXTRA_PHYSICAL_TABLE_ID_COL_ID) as usize
-        });
-        let pid_column_cnt = columns_info
-            .get(columns_info.len() - 1 - physical_table_id_column_cnt)
-            .map_or(0, |ci| {
-                (ci.get_column_id() == table::EXTRA_PARTITION_ID_COL_ID) as usize
-            });
-        let is_int_handle = columns_info
-            .get(columns_info.len() - 1 - pid_column_cnt - physical_table_id_column_cnt)
-            .is_some_and(|ci| ci.get_pk_handle());
+        // Note 6: Also int_handle (-1), EXTRA_PARTITION_ID_COL_ID (-2),
+        // EXTRA_PHYSICAL_TABLE_ID_COL_ID (-3) and EXTRA_COMMIT_TS_COL_ID (-5) must be
+        // requested in this order in columns_info! since current implementation looks
+        // for them backwards.
+        let mut special_column_index = columns_info.len();
+        let commit_ts_column_cnt = if special_column_index > 0
+            && columns_info[special_column_index - 1].get_column_id()
+                == table::EXTRA_COMMIT_TS_COL_ID
+        {
+            special_column_index -= 1;
+            1
+        } else {
+            0
+        };
+        let physical_table_id_column_cnt = if special_column_index > 0
+            && columns_info[special_column_index - 1].get_column_id()
+                == table::EXTRA_PHYSICAL_TABLE_ID_COL_ID
+        {
+            special_column_index -= 1;
+            1
+        } else {
+            0
+        };
+        let pid_column_cnt = if special_column_index > 0
+            && columns_info[special_column_index - 1].get_column_id()
+                == table::EXTRA_PARTITION_ID_COL_ID
+        {
+            special_column_index -= 1;
+            1
+        } else {
+            0
+        };
+        let is_int_handle =
+            special_column_index > 0 && columns_info[special_column_index - 1].get_pk_handle();
         let is_common_handle = primary_column_ids_len > 0;
         let (decode_handle_strategy, handle_column_cnt) = match (is_int_handle, is_common_handle) {
             (false, false) => (NoDecode, 0),
@@ -108,7 +127,9 @@ impl<S: Storage, F: KvFormat> BatchIndexScanExecutor<S, F> {
             }
         };
 
-        if handle_column_cnt + pid_column_cnt + physical_table_id_column_cnt > columns_info.len() {
+        if handle_column_cnt + pid_column_cnt + physical_table_id_column_cnt + commit_ts_column_cnt
+            > columns_info.len()
+        {
             return Err(other_err!(
                 "The number of handle columns exceeds the length of `columns_info`"
             ));
@@ -122,13 +143,17 @@ impl<S: Storage, F: KvFormat> BatchIndexScanExecutor<S, F> {
         let columns_id_without_handle: Vec<_> = columns_info[..columns_info.len()
             - handle_column_cnt
             - pid_column_cnt
-            - physical_table_id_column_cnt]
+            - physical_table_id_column_cnt
+            - commit_ts_column_cnt]
             .iter()
             .map(|ci| ci.get_column_id())
             .collect();
 
         let columns_id_for_common_handle = columns_info[columns_id_without_handle.len()
-            ..columns_info.len() - pid_column_cnt - physical_table_id_column_cnt]
+            ..columns_info.len()
+                - pid_column_cnt
+                - physical_table_id_column_cnt
+                - commit_ts_column_cnt]
             .iter()
             .map(|ci| ci.get_column_id())
             .collect();
@@ -141,6 +166,7 @@ impl<S: Storage, F: KvFormat> BatchIndexScanExecutor<S, F> {
             decode_handle_strategy,
             pid_column_cnt,
             physical_table_id_column_cnt,
+            commit_ts_column_cnt,
             index_version: -1,
         };
         let wrapper = ScanExecutor::new(ScanExecutorOptions {
@@ -233,8 +259,12 @@ struct IndexScanExecutorImpl {
     pid_column_cnt: usize,
 
     /// Number of Physical Table ID columns, can only be 0 or 1.
-    /// Must be last, after pid_column
+    /// Must be after pid_column and before commit_ts column.
     physical_table_id_column_cnt: usize,
+
+    /// Number of MVCC commit_ts columns, can only be 0 or 1.
+    /// Must be last, after physical_table_id_column.
+    commit_ts_column_cnt: usize,
 
     index_version: i64,
 }
@@ -273,7 +303,10 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
             }
             DecodeCommonHandle => {
                 for _ in self.columns_id_without_handle.len()
-                    ..columns_len - self.pid_column_cnt - self.physical_table_id_column_cnt
+                    ..columns_len
+                        - self.pid_column_cnt
+                        - self.physical_table_id_column_cnt
+                        - self.commit_ts_column_cnt
                 {
                     columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
                 }
@@ -288,6 +321,13 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
         }
 
         if self.physical_table_id_column_cnt > 0 {
+            columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
+                scan_rows,
+                EvalType::Int,
+            ));
+        }
+
+        if self.commit_ts_column_cnt > 0 {
             columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
                 scan_rows,
                 EvalType::Int,
@@ -353,12 +393,16 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
         &mut self,
         key: &[u8],
         value: &[u8],
+        commit_ts: u64,
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         check_index_key(key)?;
         let key_payload = &key[table::PREFIX_LEN + table::ID_LEN..];
         if self.index_version == -1 {
             self.index_version = Self::get_index_version(value)?
+        }
+        if self.commit_ts_column_cnt > 0 {
+            self.process_commit_ts_column(commit_ts, columns)?;
         }
         if value.len() > MAX_OLD_ENCODED_VALUE_LEN {
             self.process_kv_general(key, key_payload, value, columns)
@@ -496,8 +540,10 @@ impl IndexScanExecutorImpl {
             }
             DecodeCommonHandle => {
                 // Otherwise, if the handle is common handle, we extract it from the key.
-                let end_index =
-                    columns.columns_len() - self.pid_column_cnt - self.physical_table_id_column_cnt;
+                let end_index = columns.columns_len()
+                    - self.pid_column_cnt
+                    - self.physical_table_id_column_cnt
+                    - self.commit_ts_column_cnt;
                 Self::extract_columns_from_datum_format(
                     &mut key_payload,
                     &mut columns[self.columns_id_without_handle.len()..end_index],
@@ -626,7 +672,11 @@ impl IndexScanExecutorImpl {
                 }
                 // When it's a global index, will return partition id instead of table id.
                 DecodePartitionIdOp::Pid(_) => {
-                    self.decode_pid_columns(columns, columns.columns_len() - 1, decode_pid)?;
+                    self.decode_pid_columns(
+                        columns,
+                        columns.columns_len() - self.commit_ts_column_cnt - 1,
+                        decode_pid,
+                    )?;
                 }
             }
         }
@@ -640,7 +690,10 @@ impl IndexScanExecutorImpl {
         if self.pid_column_cnt > 0 {
             self.decode_pid_columns(
                 columns,
-                columns.columns_len() - self.physical_table_id_column_cnt - 1,
+                columns.columns_len()
+                    - self.commit_ts_column_cnt
+                    - self.physical_table_id_column_cnt
+                    - 1,
                 decode_pid,
             )?;
         }
@@ -799,8 +852,10 @@ impl IndexScanExecutorImpl {
                     .push_int(Some(handle));
             }
             DecodeHandleOp::CommonHandle(mut handle) => {
-                let end_index =
-                    columns.columns_len() - self.pid_column_cnt - self.physical_table_id_column_cnt;
+                let end_index = columns.columns_len()
+                    - self.pid_column_cnt
+                    - self.physical_table_id_column_cnt
+                    - self.commit_ts_column_cnt;
                 Self::extract_columns_from_datum_format(
                     &mut handle,
                     &mut columns[self.columns_id_without_handle.len()..end_index],
@@ -815,8 +870,10 @@ impl IndexScanExecutorImpl {
 
         if let DecodeHandleOp::CommonHandle(_) = decode_handle {
             let skip = self.columns_id_without_handle.len();
-            let end_index =
-                columns.columns_len() - self.pid_column_cnt - self.physical_table_id_column_cnt;
+            let end_index = columns.columns_len()
+                - self.pid_column_cnt
+                - self.physical_table_id_column_cnt
+                - self.commit_ts_column_cnt;
             self.restore_original_data(
                 restore_data_bytes,
                 izip!(
@@ -837,8 +894,21 @@ impl IndexScanExecutorImpl {
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         let table_id = table::decode_table_id(key)?;
-        let col_index = columns.columns_len() - 1;
+        let col_index = columns.columns_len() - self.commit_ts_column_cnt - 1;
         columns[col_index].mut_decoded().push_int(Some(table_id));
+        Ok(())
+    }
+
+    #[inline]
+    fn process_commit_ts_column(
+        &mut self,
+        commit_ts: u64,
+        columns: &mut LazyBatchColumnVec,
+    ) -> Result<()> {
+        let col_index = columns.columns_len() - 1;
+        columns[col_index]
+            .mut_decoded()
+            .push_int(Some(commit_ts as i64));
         Ok(())
     }
 

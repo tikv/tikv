@@ -27,6 +27,12 @@ pub trait Store: Send {
     /// Take the statistics. Currently only available for `incremental_get`.
     fn incremental_get_take_statistics(&mut self) -> Statistics;
 
+    /// Take the last MVCC commit_ts from `incremental_get`, if available.
+    #[inline]
+    fn incremental_get_take_last_commit_ts(&mut self) -> Option<TimeStamp> {
+        None
+    }
+
     /// Whether there was data > ts during previous incremental gets.
     fn incremental_get_met_newer_ts_data(&self) -> NewerTsCheckState;
 
@@ -92,6 +98,13 @@ pub trait Scanner: Send {
 
     /// Whether there was data > ts during previous scans.
     fn met_newer_ts_data(&self) -> NewerTsCheckState;
+
+    /// Returns the MVCC commit_ts of the last returned key-value pair, if
+    /// available.
+    #[inline]
+    fn last_commit_ts(&self) -> Option<TimeStamp> {
+        None
+    }
 
     /// Take statistics.
     fn take_statistics(&mut self) -> Statistics;
@@ -333,6 +346,13 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         } else {
             self.point_getter_cache.as_mut().unwrap().take_statistics()
         }
+    }
+
+    #[inline]
+    fn incremental_get_take_last_commit_ts(&mut self) -> Option<TimeStamp> {
+        self.point_getter_cache
+            .as_mut()
+            .and_then(|point_getter| point_getter.take_last_commit_ts())
     }
 
     #[inline]

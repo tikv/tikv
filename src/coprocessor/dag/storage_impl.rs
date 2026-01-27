@@ -3,7 +3,7 @@
 use tidb_query_common::storage::{
     IntervalRange, OwnedKvPair, PointRange, Result as QeResult, Storage,
 };
-use txn_types::Key;
+use txn_types::{Key, TimeStamp};
 
 use crate::{
     coprocessor::Error,
@@ -16,6 +16,7 @@ pub struct TikvStorage<S: Store> {
     scanner: Option<S::Scanner>,
     cf_stats_backlog: Statistics,
     met_newer_ts_data_backlog: NewerTsCheckState,
+    last_commit_ts: Option<TimeStamp>,
 }
 
 impl<S: Store> TikvStorage<S> {
@@ -29,6 +30,7 @@ impl<S: Store> TikvStorage<S> {
             } else {
                 NewerTsCheckState::Unknown
             },
+            last_commit_ts: None,
         }
     }
 }
@@ -70,7 +72,13 @@ impl<S: Store> Storage for TikvStorage<S> {
     fn scan_next(&mut self) -> QeResult<Option<OwnedKvPair>> {
         // Unwrap is fine because we must have called `reset_range` before calling
         // `scan_next`.
-        let kv = self.scanner.as_mut().unwrap().next().map_err(Error::from)?;
+        let scanner = self.scanner.as_mut().unwrap();
+        let kv = scanner.next().map_err(Error::from)?;
+        self.last_commit_ts = if kv.is_some() {
+            scanner.last_commit_ts()
+        } else {
+            None
+        };
         Ok(kv.map(|(k, v)| (k.into_raw().unwrap(), v)))
     }
 
@@ -82,7 +90,12 @@ impl<S: Store> Storage for TikvStorage<S> {
             .store
             .incremental_get(&Key::from_raw(&key))
             .map_err(Error::from)?;
+        self.last_commit_ts = self.store.incremental_get_take_last_commit_ts();
         Ok(value.map(move |v| (key, v)))
+    }
+
+    fn take_last_commit_ts(&mut self) -> Option<u64> {
+        self.last_commit_ts.take().map(TimeStamp::into_inner)
     }
 
     #[inline]

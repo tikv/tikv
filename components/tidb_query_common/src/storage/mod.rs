@@ -35,6 +35,11 @@ pub trait Storage: Send {
     // TODO: Use reference is better.
     fn get(&mut self, is_key_only: bool, range: PointRange) -> Result<Option<OwnedKvPair>>;
 
+    #[inline]
+    fn take_last_commit_ts(&mut self) -> Option<u64> {
+        None
+    }
+
     fn met_uncacheable_data(&self) -> Option<bool>;
 
     fn collect_statistics(&mut self, dest: &mut Self::Statistics);
@@ -58,6 +63,10 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
 
     fn get(&mut self, is_key_only: bool, range: PointRange) -> Result<Option<OwnedKvPair>> {
         (**self).get(is_key_only, range)
+    }
+
+    fn take_last_commit_ts(&mut self) -> Option<u64> {
+        (**self).take_last_commit_ts()
     }
 
     fn met_uncacheable_data(&self) -> Option<bool> {

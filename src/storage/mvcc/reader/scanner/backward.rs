@@ -39,6 +39,7 @@ pub struct BackwardKvScanner<S: Snapshot> {
     is_started: bool,
     statistics: Statistics,
     met_newer_ts_data: NewerTsCheckState,
+    last_commit_ts: Option<TimeStamp>,
 }
 
 impl<S: Snapshot> BackwardKvScanner<S> {
@@ -59,6 +60,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
             statistics: Statistics::default(),
             default_cursor: None,
             is_started: false,
+            last_commit_ts: None,
         }
     }
 
@@ -72,6 +74,11 @@ impl<S: Snapshot> BackwardKvScanner<S> {
     #[inline]
     pub fn met_newer_ts_data(&self) -> NewerTsCheckState {
         self.met_newer_ts_data
+    }
+
+    #[inline]
+    pub fn last_commit_ts(&self) -> Option<TimeStamp> {
+        self.last_commit_ts
     }
 
     /// Get the next key-value pair, in backward order.
@@ -149,6 +156,10 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                 // to the key or its clones without reallocation.
                 (Key::from_encoded_slice(res.0), res.1, res.2)
             };
+
+            // We are processing a new user key. Reset last_commit_ts to avoid leaking the
+            // previous row's commit_ts.
+            self.last_commit_ts = None;
 
             let mut result = Ok(None);
             let mut met_prev_user_key = false;
@@ -229,13 +240,14 @@ impl<S: Snapshot> BackwardKvScanner<S> {
         ts: TimeStamp,
         met_prev_user_key: &mut bool,
     ) -> Result<Option<Value>> {
+        self.last_commit_ts = None;
         assert!(self.write_cursor.valid()?);
 
         // At first, we try to use several `prev()` to get the desired version.
 
         // We need to save last desired version, because when we may move to an unwanted
         // version at any time.
-        let mut last_version = None;
+        let mut last_version: Option<(Write, TimeStamp)> = None;
         let mut last_checked_commit_ts = TimeStamp::zero();
 
         for i in 0..REVERSE_SEEK_BOUND {
@@ -288,7 +300,9 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                 .map_err(Error::from)?;
 
             match write.write_type {
-                WriteType::Put | WriteType::Delete => last_version = Some(write.to_owned()),
+                WriteType::Put | WriteType::Delete => {
+                    last_version = Some((write.to_owned(), last_checked_commit_ts))
+                }
                 WriteType::Lock | WriteType::Rollback => {}
             }
         }
@@ -394,18 +408,28 @@ impl<S: Snapshot> BackwardKvScanner<S> {
     #[inline]
     fn handle_last_version(
         &mut self,
-        some_write: Option<Write>,
+        some_write: Option<(Write, TimeStamp)>,
         user_key: &Key,
     ) -> Result<Option<Value>> {
         match some_write {
-            None => Ok(None),
-            Some(write) => {
+            None => {
+                self.last_commit_ts = None;
+                Ok(None)
+            }
+            Some((write, commit_ts)) => {
                 if !write.as_ref().check_gc_fence_as_latest_version(self.cfg.ts) {
+                    self.last_commit_ts = None;
                     return Ok(None);
                 }
                 match write.write_type {
-                    WriteType::Put => Ok(Some(self.reverse_load_data_by_write(write, user_key)?)),
-                    WriteType::Delete => Ok(None),
+                    WriteType::Put => {
+                        self.last_commit_ts = Some(commit_ts);
+                        Ok(Some(self.reverse_load_data_by_write(write, user_key)?))
+                    }
+                    WriteType::Delete => {
+                        self.last_commit_ts = None;
+                        Ok(None)
+                    }
                     _ => unreachable!(),
                 }
             }
@@ -504,6 +528,36 @@ mod tests {
             must_prewrite_lock, must_prewrite_put, must_rollback,
         },
     };
+
+    #[test]
+    fn test_last_commit_ts() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+
+        must_prewrite_put(&mut engine, b"a", b"va", b"a", 5);
+        must_commit(&mut engine, b"a", 5, 8);
+
+        must_prewrite_put(&mut engine, b"b", b"vb", b"b", 10);
+        must_commit(&mut engine, b"b", 10, 15);
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, 20.into())
+            .desc(true)
+            .range(None, None)
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            scanner.next().unwrap(),
+            Some((Key::from_raw(b"b"), b"vb".to_vec())),
+        );
+        assert_eq!(scanner.last_commit_ts(), Some(15.into()));
+
+        assert_eq!(
+            scanner.next().unwrap(),
+            Some((Key::from_raw(b"a"), b"va".to_vec())),
+        );
+        assert_eq!(scanner.last_commit_ts(), Some(8.into()));
+    }
 
     #[test]
     fn test_basic() {

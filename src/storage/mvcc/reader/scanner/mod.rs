@@ -164,7 +164,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
                 lock_cursor,
                 write_cursor,
                 None,
-                LatestKvPolicy,
+                LatestKvPolicy::new(),
             )))
         }
     }
@@ -247,6 +247,13 @@ impl<S: Snapshot> StoreScanner for Scanner<S> {
         match self {
             Scanner::Forward(scanner) => scanner.met_newer_ts_data(),
             Scanner::Backward(scanner) => scanner.met_newer_ts_data(),
+        }
+    }
+
+    fn last_commit_ts(&self) -> Option<TimeStamp> {
+        match self {
+            Scanner::Forward(scanner) => scanner.last_commit_ts(),
+            Scanner::Backward(scanner) => scanner.last_commit_ts(),
         }
     }
 }

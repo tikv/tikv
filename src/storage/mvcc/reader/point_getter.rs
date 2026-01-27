@@ -125,6 +125,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
             } else {
                 NewerTsCheckState::Unknown
             },
+            last_commit_ts: None,
 
             statistics: Statistics::default(),
 
@@ -146,6 +147,7 @@ pub struct PointGetter<S: Snapshot> {
     bypass_locks: TsSet,
     access_locks: TsSet,
     met_newer_ts_data: NewerTsCheckState,
+    last_commit_ts: Option<TimeStamp>,
 
     statistics: Statistics,
 
@@ -159,6 +161,11 @@ impl<S: Snapshot> PointGetter<S> {
         std::mem::take(&mut self.statistics)
     }
 
+    #[inline]
+    pub fn take_last_commit_ts(&mut self) -> Option<TimeStamp> {
+        self.last_commit_ts.take()
+    }
+
     /// Whether we met newer ts data.
     /// The result is always `Unknown` if `check_has_newer_ts_data` is not set.
     #[inline]
@@ -169,6 +176,7 @@ impl<S: Snapshot> PointGetter<S> {
     /// Get the value of a user key.
     pub fn get(&mut self, user_key: &Key) -> Result<Option<Value>> {
         fail_point!("point_getter_get");
+        self.last_commit_ts = None;
 
         if need_check_locks(self.isolation_level) {
             // Check locks that signal concurrent writes for `Si` or more recent writes for
@@ -282,6 +290,8 @@ impl<S: Snapshot> PointGetter<S> {
             return Ok(None);
         }
 
+        let mut current_commit_ts =
+            Key::decode_ts_from(self.write_cursor.key(&mut self.statistics.write))?;
         let mut write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
         let mut owned_value: Vec<u8>; // To work around lifetime problem
         loop {
@@ -291,6 +301,7 @@ impl<S: Snapshot> PointGetter<S> {
 
             match write.write_type {
                 WriteType::Put => {
+                    self.last_commit_ts = Some(current_commit_ts);
                     self.statistics.write.processed_keys += 1;
                     resource_metering::record_read_keys(1);
 
@@ -329,6 +340,7 @@ impl<S: Snapshot> PointGetter<S> {
                                 None => return Ok(None),
                             }
                             self.statistics.write.get += 1;
+                            current_commit_ts = commit_ts;
                             write = WriteRef::parse(&owned_value)?;
                             assert!(
                                 write.write_type == WriteType::Put
@@ -349,6 +361,8 @@ impl<S: Snapshot> PointGetter<S> {
             if !self.write_cursor.next(&mut self.statistics.write) {
                 return Ok(None);
             }
+            current_commit_ts =
+                Key::decode_ts_from(self.write_cursor.key(&mut self.statistics.write))?;
             // No need to compare user key because it uses prefix seek.
             write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
         }
@@ -459,6 +473,15 @@ mod tests {
             .isolation_level(iso_level)
             .build()
             .unwrap()
+    }
+
+    #[test]
+    fn test_last_commit_ts() {
+        let mut engine = new_sample_engine();
+        let mut getter = new_point_getter(&mut engine, 10.into());
+
+        assert!(getter.get(&Key::from_raw(b"box")).unwrap().is_some());
+        assert_eq!(getter.take_last_commit_ts(), Some(9.into()));
     }
 
     fn must_get_key<S: Snapshot>(point_getter: &mut PointGetter<S>, key: &[u8]) {

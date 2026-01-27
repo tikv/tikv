@@ -53,6 +53,12 @@ pub trait ScanPolicy<S: Snapshot> {
 
     /// Returns the size of the specified output.
     fn output_size(&mut self, output: &Self::Output) -> usize;
+
+    /// Returns the MVCC commit_ts of the last returned output, if available.
+    #[inline]
+    fn last_commit_ts(&self) -> Option<TimeStamp> {
+        None
+    }
 }
 
 pub enum HandleRes<T> {
@@ -163,6 +169,11 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
     #[inline]
     pub fn met_newer_ts_data(&self) -> NewerTsCheckState {
         self.met_newer_ts_data
+    }
+
+    #[inline]
+    pub fn last_commit_ts(&self) -> Option<TimeStamp> {
+        self.scan_policy.last_commit_ts()
     }
 
     /// Get the next key-value pair, in forward order.
@@ -377,7 +388,17 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
 }
 
 /// `ForwardScanner` with this policy outputs the latest key value pairs.
-pub struct LatestKvPolicy;
+pub struct LatestKvPolicy {
+    last_commit_ts: Option<TimeStamp>,
+}
+
+impl LatestKvPolicy {
+    pub fn new() -> Self {
+        Self {
+            last_commit_ts: None,
+        }
+    }
+}
 
 impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
     type Output = (Key, Value);
@@ -435,7 +456,9 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
         cursors: &mut Cursors<S>,
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>> {
+        self.last_commit_ts = None;
         let value: Option<Value> = loop {
+            let commit_ts = Key::decode_ts_from(cursors.write.key(&mut statistics.write))?;
             let write = WriteRef::parse(cursors.write.value(&mut statistics.write))?;
 
             if !write.check_gc_fence_as_latest_version(cfg.ts) {
@@ -444,6 +467,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
 
             match write.write_type {
                 WriteType::Put => {
+                    self.last_commit_ts = Some(commit_ts);
                     if cfg.omit_value {
                         break Some(vec![]);
                     }
@@ -507,6 +531,11 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
 
     fn output_size(&mut self, output: &Self::Output) -> usize {
         output.0.len() + output.1.len()
+    }
+
+    #[inline]
+    fn last_commit_ts(&self) -> Option<TimeStamp> {
+        self.last_commit_ts
     }
 }
 
@@ -1212,6 +1241,35 @@ mod latest_kv_tests {
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 0);
         assert_eq!(statistics.processed_size, 0);
+    }
+
+    #[test]
+    fn test_last_commit_ts() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+
+        must_prewrite_put(&mut engine, b"a", b"va", b"a", 5);
+        must_commit(&mut engine, b"a", 5, 8);
+
+        must_prewrite_put(&mut engine, b"b", b"vb", b"b", 10);
+        must_commit(&mut engine, b"b", 10, 15);
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, 20.into())
+            .range(None, None)
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            scanner.next().unwrap(),
+            Some((Key::from_raw(b"a"), b"va".to_vec())),
+        );
+        assert_eq!(scanner.last_commit_ts(), Some(8.into()));
+
+        assert_eq!(
+            scanner.next().unwrap(),
+            Some((Key::from_raw(b"b"), b"vb".to_vec())),
+        );
+        assert_eq!(scanner.last_commit_ts(), Some(15.into()));
     }
 
     /// Check whether everything works as usual when
