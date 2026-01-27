@@ -1644,10 +1644,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> VersionedKv for Service<E, L, F> {
     fn versioned_coprocessor(
         &mut self,
         ctx: RpcContext<'_>,
-        mut req: VersionedRequest,
-        sink: UnarySink<VersionedResponse>,
+        req: Request,
+        sink: UnarySink<Response>,
     ) {
-        let req_cluster_id = req.get_request().get_context().get_cluster_id();
+        let req_cluster_id = req.get_context().get_cluster_id();
         if req_cluster_id > 0 && req_cluster_id != self.cluster_id {
             // Reject the request if the cluster IDs do not match.
             warn!("unexpected request with different cluster id is received"; "req" => ?&req);
@@ -1659,15 +1659,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> VersionedKv for Service<E, L, F> {
             return;
         }
 
-        let source = req
-            .get_request()
-            .get_context()
-            .get_request_source()
-            .to_owned();
-        let resource_control_ctx = req
-            .get_request()
-            .get_context()
-            .get_resource_control_context();
+        let source = req.get_context().get_request_source().to_owned();
+        let resource_control_ctx = req.get_context().get_resource_control_context();
         let mut resource_group_priority = ResourcePriority::unknown;
         if let Some(resource_manager) = &self.resource_manager {
             resource_manager.consume_penalty(resource_control_ctx);
@@ -1681,18 +1674,16 @@ impl<E: Engine, L: LockManager, F: KvFormat> VersionedKv for Service<E, L, F> {
             ])
             .inc();
 
-        if req.get_request().get_range_versions().is_empty() {
+        if req.get_range_versions().is_empty() {
             let begin_instant = Instant::now();
-            let mut inner_resp = Response::default();
-            inner_resp.set_other_error(
+            let mut resp = Response::default();
+            resp.set_other_error(
                 "range_versions must be non-empty for VersionedKv.VersionedCoprocessor".to_string(),
             );
-            let mut versioned_resp = VersionedResponse::default();
-            versioned_resp.set_response(inner_resp);
 
             let task = async move {
                 let elapsed = begin_instant.saturating_elapsed();
-                sink.success(versioned_resp).await?;
+                sink.success(resp).await?;
                 GRPC_MSG_HISTOGRAM_STATIC
                     .coprocessor
                     .get(resource_group_priority)
@@ -1713,14 +1704,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> VersionedKv for Service<E, L, F> {
         }
 
         let begin_instant = Instant::now();
-        let future = future_copr(&self.copr, Some(ctx.peer()), req.take_request());
+        let future = future_copr(&self.copr, Some(ctx.peer()), req);
         let task = async move {
             let resp = future.await?.consume();
-            let mut versioned_resp = VersionedResponse::default();
-            versioned_resp.set_response(resp);
 
             let elapsed = begin_instant.saturating_elapsed();
-            sink.success(versioned_resp).await?;
+            sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .coprocessor
                 .get(resource_group_priority)
@@ -1737,17 +1726,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> VersionedKv for Service<E, L, F> {
         .map(|_| ());
 
         ctx.spawn(task);
-    }
-
-    fn versioned_batch_coprocessor(
-        &mut self,
-        _ctx: RpcContext<'_>,
-        _req: VersionedBatchRequest,
-        _sink: ServerStreamingSink<VersionedBatchResponse>,
-    ) {
-        // TiKV's `BatchCoprocessor` is currently not implemented. Keep
-        // `VersionedBatchCoprocessor` aligned with it.
-        unimplemented!()
     }
 }
 
