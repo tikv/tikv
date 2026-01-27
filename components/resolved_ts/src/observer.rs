@@ -1,20 +1,26 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
+
 use engine_traits::KvEngine;
 use kvproto::metapb::Region;
 use raft::StateRole;
 use raftstore::coprocessor::*;
-use tikv_util::worker::Scheduler;
+use tikv_util::{memory::MemoryQuota, worker::Scheduler};
 
 use crate::{cmd::lock_only_filter, endpoint::Task, metrics::RTS_CHANNEL_PENDING_CMD_BYTES};
 
 pub struct Observer {
     scheduler: Scheduler<Task>,
+    memory_quota: Arc<MemoryQuota>,
 }
 
 impl Observer {
-    pub fn new(scheduler: Scheduler<Task>) -> Self {
-        Observer { scheduler }
+    pub fn new(scheduler: Scheduler<Task>, memory_quota: Arc<MemoryQuota>) -> Self {
+        Observer {
+            scheduler,
+            memory_quota,
+        }
     }
 
     pub fn register_to<E: KvEngine>(&self, coprocessor_host: &mut CoprocessorHost<E>) {
@@ -37,6 +43,7 @@ impl Clone for Observer {
     fn clone(&self) -> Self {
         Self {
             scheduler: self.scheduler.clone(),
+            memory_quota: self.memory_quota.clone(),
         }
     }
 }
@@ -62,9 +69,11 @@ impl<E: KvEngine> CmdObserver<E> for Observer {
         }
         let size = cmd_batches.iter().map(|b| b.size()).sum::<usize>();
         RTS_CHANNEL_PENDING_CMD_BYTES.add(size as i64);
+        self.memory_quota.alloc_force(size);
         if let Err(e) = self.scheduler.schedule(Task::ChangeLog {
             cmd_batch: cmd_batches,
         }) {
+            self.memory_quota.free(size);
             info!("failed to schedule change log event"; "err" => ?e);
         }
     }
@@ -174,7 +183,7 @@ mod test {
     #[test]
     fn test_observing() {
         let (scheduler, mut rx) = dummy_scheduler();
-        let observer = Observer::new(scheduler);
+        let observer = Observer::new(scheduler, Arc::new(MemoryQuota::new(usize::MAX)));
         let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();
         let mut data = vec![
             put_cf(CF_LOCK, b"k1", b"v"),
