@@ -1483,6 +1483,91 @@ mod tests {
     }
 
     #[test]
+    fn test_commit_ts_column() {
+        const TABLE_ID: i64 = 3;
+        const INDEX_ID: i64 = 42;
+        let mut ctx = EvalContext::default();
+
+        // Index schema: (INT, FLOAT), plus handle id as the last datum in encoded key.
+        let data = vec![
+            [Datum::I64(-5), Datum::F64(0.3), Datum::I64(10)],
+            [Datum::I64(5), Datum::F64(5.1), Datum::I64(5)],
+            [Datum::I64(5), Datum::F64(10.5), Datum::I64(2)],
+        ];
+
+        let store = {
+            let kv: Vec<_> = data
+                .iter()
+                .enumerate()
+                .map(|(i, datums)| {
+                    let index_data = datum::encode_key(&mut ctx, datums).unwrap();
+                    let key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_data);
+                    // Each KV pair carries an associated commit_ts.
+                    let commit_ts = (i as u64 + 1) * 11;
+                    (key, vec![], commit_ts)
+                })
+                .collect();
+            FixtureStorage::from(kv)
+        };
+
+        let columns_info = vec![
+            {
+                let mut ci = ColumnInfo::default();
+                ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                ci
+            },
+            {
+                let mut ci = ColumnInfo::default();
+                ci.as_mut_accessor().set_tp(FieldTypeTp::Double);
+                ci
+            },
+            {
+                let mut ci = ColumnInfo::default();
+                ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                ci.set_column_id(table::EXTRA_COMMIT_TS_COL_ID);
+                ci
+            },
+        ];
+
+        let key_ranges = vec![{
+            let mut range = KeyRange::default();
+            let start_data = datum::encode_key(&mut ctx, &[Datum::Min]).unwrap();
+            let start_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &start_data);
+            range.set_start(start_key);
+            let end_data = datum::encode_key(&mut ctx, &[Datum::Max]).unwrap();
+            let end_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &end_data);
+            range.set_end(end_key);
+            range
+        }];
+
+        // Scan in reverse order so output order is deterministic:
+        // data[2], data[1], data[0] => commit_ts: 33, 22, 11.
+        let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
+            store,
+            Arc::new(EvalConfig::default()),
+            columns_info,
+            key_ranges,
+            0,
+            true,
+            false,
+            false,
+        )
+        .unwrap();
+
+        let result = block_on(executor.next_batch(10));
+        assert!(result.is_drained.as_ref().unwrap().stop());
+        assert_eq!(result.physical_columns.columns_len(), 3);
+        assert_eq!(result.physical_columns.rows_len(), 3);
+
+        // Commit ts column should be a decoded i64 vector.
+        assert!(result.physical_columns[2].is_decoded());
+        assert_eq!(
+            result.physical_columns[2].decoded().to_int_vec(),
+            &[Some(33), Some(22), Some(11)]
+        );
+    }
+
+    #[test]
     fn test_unique_common_handle_index() {
         const TABLE_ID: i64 = 3;
         const INDEX_ID: i64 = 42;
@@ -2169,6 +2254,7 @@ mod tests {
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
+            commit_ts_column_cnt: 0,
             index_version: -1,
         };
         let mut columns = idx_exe.build_column_vec(10);
@@ -2180,6 +2266,7 @@ mod tests {
                     0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1,
                 ],
                 &[0x30],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -2195,6 +2282,7 @@ mod tests {
                     0x0, 0x0, 0x0, 0x0, 0x5, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1,
                 ],
                 &[0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -2219,6 +2307,7 @@ mod tests {
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
+            commit_ts_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -2230,6 +2319,7 @@ mod tests {
                     0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1,
                 ],
                 &[0x30],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -2245,6 +2335,7 @@ mod tests {
                     0x0, 0x0, 0x0, 0x0, 0x6, 0x1, 0x61, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8,
                 ],
                 &[0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -2269,6 +2360,7 @@ mod tests {
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
+            commit_ts_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -2280,6 +2372,7 @@ mod tests {
                     0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1,
                 ],
                 &[0x0, 0x80, 0x0, 0x1, 0x0, 0x0, 0x0, 0x3, 0x1, 0x0, 0x41],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -2298,6 +2391,7 @@ mod tests {
                     0x8, 0x80, 0x0, 0x1, 0x0, 0x0, 0x0, 0x3, 0x1, 0x0, 0x41, 0x0, 0x0, 0x0, 0x0,
                     0x0, 0x0, 0x0, 0x1,
                 ],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -2327,6 +2421,7 @@ mod tests {
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
+            commit_ts_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -2342,6 +2437,7 @@ mod tests {
                     0x0, 0x80, 0x0, 0x3, 0x0, 0x0, 0x0, 0x1, 0x2, 0x3, 0x1, 0x0, 0x2, 0x0, 0x3,
                     0x0, 0x1, 0x61, 0x41,
                 ],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -2370,6 +2466,7 @@ mod tests {
                     0x8, 0x80, 0x0, 0x3, 0x0, 0x0, 0x0, 0x1, 0x2, 0x3, 0x1, 0x0, 0x2, 0x0, 0x3,
                     0x0, 0x1, 0x61, 0x41, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1,
                 ],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -2407,6 +2504,7 @@ mod tests {
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
+            commit_ts_column_cnt: 0,
             index_version: -1,
         };
         let mut columns = idx_exe.build_column_vec(10);
@@ -2418,6 +2516,7 @@ mod tests {
                     0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1,
                 ],
                 &[0x30],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -2433,6 +2532,7 @@ mod tests {
                     0x0, 0x0, 0x0, 0x0, 0x5, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1,
                 ],
                 &[0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -2457,6 +2557,7 @@ mod tests {
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
+            commit_ts_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -2470,6 +2571,7 @@ mod tests {
                 &[
                     0x0, 0x80, 0x0, 0x1, 0x0, 0x0, 0x0, 0x2, 0x2, 0x0, 0x61, 0x20,
                 ],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -2488,6 +2590,7 @@ mod tests {
                     0x8, 0x80, 0x0, 0x1, 0x0, 0x0, 0x0, 0x2, 0x2, 0x0, 0x61, 0x20, 0x0, 0x0, 0x0,
                     0x0, 0x0, 0x0, 0x0, 0x1,
                 ],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -2512,6 +2615,7 @@ mod tests {
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
+            commit_ts_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -2525,6 +2629,7 @@ mod tests {
                 &[
                     0x0, 0x80, 0x0, 0x1, 0x0, 0x0, 0x0, 0x3, 0x2, 0x0, 0x41, 0x20,
                 ],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -2543,6 +2648,7 @@ mod tests {
                     0x8, 0x80, 0x0, 0x1, 0x0, 0x0, 0x0, 0x3, 0x2, 0x0, 0x41, 0x20, 0x0, 0x0, 0x0,
                     0x0, 0x0, 0x0, 0x0, 0x1,
                 ],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -2572,6 +2678,7 @@ mod tests {
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
+            commit_ts_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -2587,6 +2694,7 @@ mod tests {
                     0x0, 0x80, 0x0, 0x3, 0x0, 0x0, 0x0, 0x1, 0x2, 0x3, 0x1, 0x0, 0x3, 0x0, 0x5,
                     0x0, 0x1, 0x61, 0x20, 0x41, 0x20,
                 ],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -2615,6 +2723,7 @@ mod tests {
                     0x8, 0x80, 0x0, 0x3, 0x0, 0x0, 0x0, 0x1, 0x2, 0x3, 0x1, 0x0, 0x3, 0x0, 0x5,
                     0x0, 0x1, 0x61, 0x20, 0x41, 0x20, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1,
                 ],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -2695,6 +2804,7 @@ mod tests {
             decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
+            commit_ts_column_cnt: 0,
             index_version: -1,
         };
         let mut columns = idx_exe.build_column_vec(10);
@@ -2712,6 +2822,7 @@ mod tests {
                     0x0, 0x7d, 0x1, 0x80, 0x0, 0x3, 0x0, 0x0, 0x0, 0x3, 0x4, 0x5, 0x1, 0x0, 0x2,
                     0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -2752,6 +2863,7 @@ mod tests {
                     0x1, 0x0, 0x41, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf9, 0x80, 0x0, 0x3, 0x0, 0x0,
                     0x0, 0x3, 0x4, 0x5, 0x1, 0x0, 0x2, 0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -2811,6 +2923,7 @@ mod tests {
             decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
+            commit_ts_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -2828,6 +2941,7 @@ mod tests {
                     0x0, 0x7d, 0x1, 0x80, 0x0, 0x3, 0x0, 0x0, 0x0, 0x3, 0x4, 0x5, 0x1, 0x0, 0x2,
                     0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -2868,6 +2982,7 @@ mod tests {
                     0x1, 0x0, 0x41, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf9, 0x80, 0x0, 0x3, 0x0, 0x0,
                     0x0, 0x3, 0x4, 0x5, 0x1, 0x0, 0x2, 0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -2927,6 +3042,7 @@ mod tests {
             decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
+            commit_ts_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -2944,6 +3060,7 @@ mod tests {
                     0x0, 0x7d, 0x1, 0x80, 0x0, 0x3, 0x0, 0x0, 0x0, 0x3, 0x4, 0x5, 0x1, 0x0, 0x2,
                     0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -2984,6 +3101,7 @@ mod tests {
                     0x1, 0x0, 0x41, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf9, 0x80, 0x0, 0x3, 0x0, 0x0,
                     0x0, 0x3, 0x4, 0x5, 0x1, 0x0, 0x2, 0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -3043,6 +3161,7 @@ mod tests {
             decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
+            commit_ts_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -3060,6 +3179,7 @@ mod tests {
                     0x0, 0x7d, 0x1, 0x80, 0x0, 0x3, 0x0, 0x0, 0x0, 0x3, 0x4, 0x5, 0x1, 0x0, 0x2,
                     0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -3100,6 +3220,7 @@ mod tests {
                     0x1, 0x0, 0x41, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf9, 0x80, 0x0, 0x3, 0x0, 0x0,
                     0x0, 0x3, 0x4, 0x5, 0x1, 0x0, 0x2, 0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -3159,6 +3280,7 @@ mod tests {
             decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
+            commit_ts_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -3176,6 +3298,7 @@ mod tests {
                     0x0, 0x7d, 0x1, 0x80, 0x0, 0x3, 0x0, 0x0, 0x0, 0x3, 0x4, 0x5, 0x1, 0x0, 0x2,
                     0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -3216,6 +3339,7 @@ mod tests {
                     0x1, 0x0, 0x41, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf9, 0x80, 0x0, 0x3, 0x0, 0x0,
                     0x0, 0x3, 0x4, 0x5, 0x1, 0x0, 0x2, 0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -3288,6 +3412,7 @@ mod tests {
             decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
+            commit_ts_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -3307,6 +3432,7 @@ mod tests {
                     0x0, 0x7d, 0x1, 0x80, 0x0, 0x3, 0x0, 0x0, 0x0, 0x3, 0x4, 0x5, 0x1, 0x0, 0x2,
                     0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -3366,6 +3492,7 @@ mod tests {
                     0x1, 0x0, 0x41, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf9, 0x80, 0x0, 0x3, 0x0, 0x0,
                     0x0, 0x3, 0x4, 0x5, 0x1, 0x0, 0x2, 0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -3440,6 +3567,7 @@ mod tests {
             decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 1,
+            commit_ts_column_cnt: 0,
             index_version: -1,
         };
         let mut columns = idx_exe.build_column_vec(10);
@@ -3453,6 +3581,7 @@ mod tests {
                     0x0, 0x0, 0x0, 0x0, 0x1,
                 ],
                 &[0x0, 0x7d, 0x1],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -3508,6 +3637,7 @@ mod tests {
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 1,
+            commit_ts_column_cnt: 0,
             index_version: -1,
         };
         let mut columns = idx_exe.build_column_vec(10);
@@ -3522,6 +3652,7 @@ mod tests {
                     0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x5c, // partition id
                     0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, // _tidb_rowid
                 ],
+                None,
                 &mut columns,
             )
             .unwrap();
@@ -3563,6 +3694,7 @@ mod tests {
             decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
+            commit_ts_column_cnt: 0,
             index_version: -1,
         };
         let mut columns = idx_exe.build_column_vec(1);
@@ -3577,6 +3709,7 @@ mod tests {
                 &[
                     0x0, 0x7d, 0x1, 0x80, 0x0, 0x1, 0x0, 0x0, 0x0, 0x1, 0x1, 0x0, 0x0,
                 ],
+                None,
                 &mut columns,
             )
             .unwrap();

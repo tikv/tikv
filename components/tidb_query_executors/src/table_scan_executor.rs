@@ -815,6 +815,49 @@ mod tests {
     }
 
     #[test]
+    fn test_commit_ts_column() {
+        const TABLE_ID: i64 = 7;
+
+        let store = FixtureStorage::from(vec![
+            (table::encode_row_key(TABLE_ID, 1), vec![], 100),
+            (table::encode_row_key(TABLE_ID, 2), vec![], 200),
+        ]);
+
+        let columns_info = vec![{
+            let mut ci = ColumnInfo::default();
+            ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+            ci.set_column_id(table::EXTRA_COMMIT_TS_COL_ID);
+            ci
+        }];
+
+        let mut range = KeyRange::default();
+        range.set_start(table::encode_row_key(TABLE_ID, i64::MIN));
+        range.set_end(table::encode_row_key(TABLE_ID, i64::MAX));
+
+        let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
+            store,
+            Arc::new(EvalConfig::default()),
+            columns_info,
+            vec![range],
+            vec![],
+            false,
+            false,
+            vec![],
+        )
+        .unwrap();
+
+        let result = block_on(executor.next_batch(10));
+        assert!(result.is_drained.as_ref().unwrap().stop());
+        assert_eq!(result.physical_columns.columns_len(), 1);
+        assert_eq!(result.physical_columns.rows_len(), 2);
+        assert!(result.physical_columns[0].is_decoded());
+        assert_eq!(
+            result.physical_columns[0].decoded().to_int_vec(),
+            &[Some(100), Some(200)]
+        );
+    }
+
+    #[test]
     fn test_execution_summary() {
         let helper = TableScanTestHelper::new();
 
