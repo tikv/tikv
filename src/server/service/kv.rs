@@ -1622,24 +1622,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> VersionedKv for Service<E, L, F> {
         req: Request,
         sink: UnarySink<Response>,
     ) {
-        let req_cluster_id = req.get_context().get_cluster_id();
-        if req_cluster_id > 0 && req_cluster_id != self.cluster_id {
-            // Reject the request if the cluster IDs do not match.
-            warn!("unexpected request with different cluster id is received"; "req" => ?&req);
-            let e = RpcStatus::with_message(
-                RpcStatusCode::INVALID_ARGUMENT,
-                "the cluster id of the request does not match the TiKV cluster".to_string(),
-            );
-            ctx.spawn(sink.fail(e).unwrap_or_else(|_| {}));
-            return;
-        }
+        reject_if_cluster_id_mismatch!(req, self, ctx, sink);
 
         let source = req.get_context().get_request_source().to_owned();
         let resource_control_ctx = req.get_context().get_resource_control_context();
         let mut resource_group_priority = ResourcePriority::unknown;
         if let Some(resource_manager) = &self.resource_manager {
             resource_manager.consume_penalty(resource_control_ctx);
-            resource_group_priority = ResourcePriority::from(resource_control_ctx.override_priority);
+            resource_group_priority =
+                ResourcePriority::from(resource_control_ctx.override_priority);
         }
 
         GRPC_RESOURCE_GROUP_COUNTER_VEC
