@@ -393,7 +393,7 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
         &mut self,
         key: &[u8],
         value: &[u8],
-        commit_ts: u64,
+        commit_ts: Option<u64>,
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         check_index_key(key)?;
@@ -402,6 +402,7 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
             self.index_version = Self::get_index_version(value)?
         }
         if self.commit_ts_column_cnt > 0 {
+            let commit_ts = commit_ts.ok_or_else(|| other_err!("Missing MVCC commit_ts"))?;
             self.process_commit_ts_column(commit_ts, columns)?;
         }
         if value.len() > MAX_OLD_ENCODED_VALUE_LEN {

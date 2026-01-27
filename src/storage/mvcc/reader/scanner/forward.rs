@@ -410,6 +410,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
         cursors: &mut Cursors<S>,
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>> {
+        self.last_commit_ts = None;
         if cfg.isolation_level == IsolationLevel::Rc {
             return Ok(HandleRes::Skip(current_user_key));
         }

@@ -359,7 +359,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         &mut self,
         key: &[u8],
         value: &[u8],
-        commit_ts: u64,
+        commit_ts: Option<u64>,
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         use tidb_query_datatype::codec::datum;
@@ -424,6 +424,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
 
         let some_commit_ts_column_index = self.column_id_index.get(&table::EXTRA_COMMIT_TS_COL_ID);
         if let Some(idx) = some_commit_ts_column_index {
+            let commit_ts = commit_ts.ok_or_else(|| other_err!("Missing MVCC commit_ts"))?;
             columns[*idx].mut_decoded().push_int(Some(commit_ts as i64));
             self.is_column_filled[*idx] = true;
         }

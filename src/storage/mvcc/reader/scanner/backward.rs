@@ -391,6 +391,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
             match write.write_type {
                 WriteType::Put => {
                     let write = write.to_owned();
+                    self.last_commit_ts = Some(current_ts);
                     return Ok(Some(self.reverse_load_data_by_write(write, user_key)?));
                 }
                 WriteType::Delete => return Ok(None),
