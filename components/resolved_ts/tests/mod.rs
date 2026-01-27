@@ -34,7 +34,6 @@ impl TestSuite {
         // Start resolved ts endpoint.
         cluster.cfg.resolved_ts.enable = true;
         cluster.cfg.resolved_ts.advance_ts_interval = ReadableDuration::millis(10);
-        cluster.run();
 
         TestSuite {
             cluster,
@@ -42,6 +41,10 @@ impl TestSuite {
             tikv_cli: HashMap::default(),
             import_cli: HashMap::default(),
         }
+    }
+
+    pub fn run(&mut self) {
+        self.cluster.run();
     }
 
     pub fn stop(mut self) {
