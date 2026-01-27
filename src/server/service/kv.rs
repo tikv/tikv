@@ -587,8 +587,24 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         ctx.spawn(task);
     }
 
-    fn coprocessor(&mut self, ctx: RpcContext<'_>, mut req: Request, sink: UnarySink<Response>) {
+    fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
         reject_if_cluster_id_mismatch!(req, self, ctx, sink);
+        if !req.get_range_versions().is_empty()
+            || req
+                .get_tasks()
+                .iter()
+                .any(|task| !task.get_range_versions().is_empty())
+        {
+            let e = RpcStatus::with_message(
+                RpcStatusCode::INVALID_ARGUMENT,
+                "range_versions is only supported by VersionedKv.VersionedCoprocessor".to_string(),
+            );
+            ctx.spawn(
+                sink.fail(e)
+                    .unwrap_or_else(|e| error!("kv rpc failed"; "err" => ?e)),
+            );
+            return;
+        }
         forward_unary!(self.proxy, coprocessor, ctx, req, sink);
         let source = req.get_context().get_request_source().to_owned();
         let resource_control_ctx = req.get_context().get_resource_control_context();
@@ -605,14 +621,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                 resource_control_ctx.get_resource_group_name(),
             ])
             .inc();
-
-        // `range_versions` is reserved for `VersionedKv.VersionedCoprocessor`.
-        // Ignore it in the normal coprocessor RPC to avoid accidental bypass
-        // of txn-related checks.
-        req.mut_range_versions().clear();
-        for task in req.mut_tasks().iter_mut() {
-            task.mut_range_versions().clear();
-        }
 
         let begin_instant = Instant::now();
         let future = future_copr(&self.copr, Some(ctx.peer()), req);
