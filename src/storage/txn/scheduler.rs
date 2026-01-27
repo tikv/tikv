@@ -1888,6 +1888,27 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let deadline = task.cmd().deadline();
         let write_result = Self::handle_task(self.clone(), snapshot, task, sched_details).await;
 
+        // Feed MVCC scan stats into the per-request tracker before any callback/early
+        // response can be triggered, so the gRPC layer can include them in
+        // `ExecDetailsV2.scan_detail_v2`.
+        let mvcc_total_versions = sched_details.stat.write.total_op_count() as u64;
+        let mvcc_processed_versions = sched_details.stat.write.processed_keys as u64;
+        let mvcc_processed_versions_size = sched_details.stat.processed_size as u64;
+        GLOBAL_TRACKERS.with_tracker(tracker_token, |tracker| {
+            tracker.metrics.mvcc_total_versions = tracker
+                .metrics
+                .mvcc_total_versions
+                .saturating_add(mvcc_total_versions);
+            tracker.metrics.mvcc_processed_versions = tracker
+                .metrics
+                .mvcc_processed_versions
+                .saturating_add(mvcc_processed_versions);
+            tracker.metrics.mvcc_processed_versions_size = tracker
+                .metrics
+                .mvcc_processed_versions_size
+                .saturating_add(mvcc_processed_versions_size);
+        });
+
         let mut write_result = match deadline
             .check()
             .map_err(StorageError::from)

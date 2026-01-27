@@ -57,6 +57,19 @@ impl Tracker {
         detail_v2.set_read_index_propose_wait_nanos(self.metrics.read_index_propose_wait_nanos);
         detail_v2.set_read_index_confirm_wait_nanos(self.metrics.read_index_confirm_wait_nanos);
         detail_v2.set_read_pool_schedule_wait_nanos(self.metrics.read_pool_schedule_wait_nanos);
+
+        // NOTE: These stats are mainly for write operations. Read operations populate
+        // MVCC scan stats by `Statistics::write_scan_detail` before calling this
+        // function. So only fill them when unset to avoid clobbering existing values.
+        if detail_v2.get_total_versions() == 0 {
+            detail_v2.set_total_versions(self.metrics.mvcc_total_versions);
+        }
+        if detail_v2.get_processed_versions() == 0 {
+            detail_v2.set_processed_versions(self.metrics.mvcc_processed_versions);
+        }
+        if detail_v2.get_processed_versions_size() == 0 {
+            detail_v2.set_processed_versions_size(self.metrics.mvcc_processed_versions_size);
+        }
     }
 
     pub fn write_write_detail(&self, detail: &mut pb::WriteDetail) {
@@ -173,6 +186,11 @@ pub struct RequestMetrics {
     pub scheduler_process_nanos: u64,
     pub scheduler_throttle_nanos: u64,
 
+    // MVCC scan stats for txn commands, to be written into `ScanDetailV2`.
+    pub mvcc_total_versions: u64,
+    pub mvcc_processed_versions: u64,
+    pub mvcc_processed_versions_size: u64,
+
     pub future_process_nanos: u64,
     pub future_suspend_nanos: u64,
 
@@ -202,4 +220,60 @@ pub struct RequestMetrics {
 
     // recorded outside the read_pool thread, accessed inside the read_pool thread for topsql usage
     pub grpc_req_size: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Instant;
+
+    use super::*;
+
+    fn new_req_info() -> RequestInfo {
+        RequestInfo {
+            region_id: 0,
+            start_ts: 0,
+            task_id: 0,
+            resource_group_tag: vec![],
+            begin: Instant::now(),
+            request_type: RequestType::default(),
+            cid: 0,
+            is_external_req: false,
+        }
+    }
+
+    #[test]
+    fn test_write_scan_detail_sets_mvcc_scan_stats_when_unset_and_is_idempotent() {
+        let mut tracker = Tracker::new(new_req_info());
+        tracker.metrics.mvcc_processed_versions = 3;
+        tracker.metrics.mvcc_total_versions = 5;
+        tracker.metrics.mvcc_processed_versions_size = 7;
+
+        let mut detail_v2 = pb::ScanDetailV2::default();
+
+        tracker.write_scan_detail(&mut detail_v2);
+        tracker.write_scan_detail(&mut detail_v2);
+
+        assert_eq!(detail_v2.get_processed_versions(), 3);
+        assert_eq!(detail_v2.get_total_versions(), 5);
+        assert_eq!(detail_v2.get_processed_versions_size(), 7);
+    }
+
+    #[test]
+    fn test_write_scan_detail_does_not_override_existing_mvcc_scan_stats() {
+        let mut tracker = Tracker::new(new_req_info());
+        tracker.metrics.mvcc_processed_versions = 3;
+        tracker.metrics.mvcc_total_versions = 5;
+        tracker.metrics.mvcc_processed_versions_size = 7;
+
+        let mut detail_v2 = pb::ScanDetailV2::default();
+        detail_v2.set_processed_versions(11);
+        detail_v2.set_total_versions(13);
+        detail_v2.set_processed_versions_size(17);
+
+        tracker.write_scan_detail(&mut detail_v2);
+
+        assert_eq!(detail_v2.get_processed_versions(), 11);
+        assert_eq!(detail_v2.get_total_versions(), 13);
+        assert_eq!(detail_v2.get_processed_versions_size(), 17);
+    }
 }
