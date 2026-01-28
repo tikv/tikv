@@ -92,7 +92,7 @@ where
 
 impl<S> GrpcBuilderFactory for BuilderFactory<S>
 where
-    S: Tikv + Send + Clone + 'static,
+    S: Tikv + VersionedKv + Send + Clone + 'static,
 {
     fn create_builder(&self, env: Arc<Environment>) -> Result<ServerBuilder> {
         let addr = SocketAddr::from_str(&self.cfg.value().addr)?;
@@ -128,6 +128,7 @@ where
         let sb = ServerBuilder::new(Arc::clone(&env))
             .channel_args(channel_args)
             .register_service(create_tikv(self.kv_service.clone()))
+            .register_service(create_versioned_kv(self.kv_service.clone()))
             .register_service(create_health(self.health_service.clone()));
         Ok(self.security_mgr.bind(sb, &ip, addr.port()))
     }

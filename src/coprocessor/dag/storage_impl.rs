@@ -105,6 +105,27 @@ impl<S: Store> Storage for TikvStorage<S> {
         }))
     }
 
+    fn get_entry_at_ts(
+        &mut self,
+        _is_key_only: bool,
+        load_commit_ts: bool,
+        range: PointRange,
+        ts: u64,
+    ) -> QeResult<Option<OwnedKvPairEntry>> {
+        let key = range.0;
+        let mut stats = Statistics::default();
+        let entry = self
+            .store
+            .get_entry_at_ts(&Key::from_raw(&key), ts.into(), load_commit_ts, &mut stats)
+            .map_err(Error::from)?;
+        self.cf_stats_backlog.add(&stats);
+        Ok(entry.map(move |e| OwnedKvPairEntry {
+            key,
+            value: e.value,
+            commit_ts: e.commit_ts.map(|ts| ts.into_inner()),
+        }))
+    }
+
     #[inline]
     fn met_uncacheable_data(&self) -> Option<bool> {
         if let Some(scanner) = &self.scanner {

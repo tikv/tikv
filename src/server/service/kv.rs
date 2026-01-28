@@ -589,6 +589,23 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
 
     fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
         reject_if_cluster_id_mismatch!(req, self, ctx, sink);
+        if !req.get_versioned_ranges().is_empty()
+            || req
+                .get_tasks()
+                .iter()
+                .any(|task| !task.get_versioned_ranges().is_empty())
+        {
+            let e = RpcStatus::with_message(
+                RpcStatusCode::INVALID_ARGUMENT,
+                "versioned_ranges is only supported by VersionedKv.VersionedCoprocessor"
+                    .to_string(),
+            );
+            ctx.spawn(
+                sink.fail(e)
+                    .unwrap_or_else(|e| error!("kv rpc failed"; "err" => ?e)),
+            );
+            return;
+        }
         forward_unary!(self.proxy, coprocessor, ctx, req, sink);
         let source = req.get_context().get_request_source().to_owned();
         let resource_control_ctx = req.get_context().get_resource_control_context();
@@ -735,6 +752,23 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         mut sink: ServerStreamingSink<Response>,
     ) {
         reject_if_cluster_id_mismatch!(req, self, ctx, sink);
+        if !req.get_versioned_ranges().is_empty()
+            || req
+                .get_tasks()
+                .iter()
+                .any(|task| !task.get_versioned_ranges().is_empty())
+        {
+            let e = RpcStatus::with_message(
+                RpcStatusCode::INVALID_ARGUMENT,
+                "versioned_ranges is only supported by VersionedKv.VersionedCoprocessor"
+                    .to_string(),
+            );
+            ctx.spawn(
+                sink.fail(e)
+                    .unwrap_or_else(|e| error!("kv rpc failed"; "err" => ?e)),
+            );
+            return;
+        }
         let begin_instant = Instant::now();
         let resource_control_ctx = req.get_context().get_resource_control_context();
         let mut resource_group_priority = ResourcePriority::unknown;
@@ -1063,20 +1097,18 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             let mut batcher = batch_builder.build(queue, request_ids.len());
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
             for (id, req) in request_ids.into_iter().zip(requests) {
-                if let Err(server_err @ Error::ClusterIDMisMatch { .. }) =
-                    handle_batch_commands_request(
-                        cluster_id,
-                        &mut batcher,
-                        &storage,
-                        &copr,
-                        &copr_v2,
-                        &peer,
-                        id,
-                        req,
-                        &tx,
-                        &resource_manager,
-                    )
-                {
+                if let Err(server_err @ Error::ClusterIDMisMatch { .. }) = handle_batch_commands_request(
+                    cluster_id,
+                    &mut batcher,
+                    &storage,
+                    &copr,
+                    &copr_v2,
+                    &peer,
+                    id,
+                    req,
+                    &tx,
+                    &resource_manager,
+                ) {
                     let e = RpcStatus::with_message(
                         RpcStatusCode::INVALID_ARGUMENT,
                         server_err.to_string(),
@@ -1109,9 +1141,25 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             // TODO: per thread load is more reasonable for batching.
             r.set_transport_layer_load(grpc_thread_load.total_load() as u64);
             health_feedback_attacher.attach_if_needed(&mut r);
-            if let Some(err @ Error::ClusterIDMisMatch { .. }) = item.server_err {
-                let e = RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT, err.to_string());
-                GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Err(GrpcError::RpcFailure(e))
+            if let Some(err) = item.server_err.take() {
+                match err {
+                    err @ Error::ClusterIDMisMatch { .. } => {
+                        let e =
+                            RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT, err.to_string());
+                        GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Err(GrpcError::RpcFailure(
+                            e,
+                        ))
+                    }
+                    Error::Grpc(GrpcError::RpcFailure(status)) => {
+                        GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Err(GrpcError::RpcFailure(
+                            status,
+                        ))
+                    }
+                    _ => GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Ok((
+                        r,
+                        WriteFlags::default().buffer_hint(false),
+                    )),
+                }
             } else {
                 GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Ok((
                     r,
@@ -1122,8 +1170,16 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
 
         let send_task = async move {
             if let Err(e) = sink.send_all(&mut response_retriever).await {
-                let e = RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT, e.to_string());
-                sink.fail(e).await?;
+                match e {
+                    GrpcError::RpcFailure(status) => {
+                        sink.fail(status).await?;
+                    }
+                    e => {
+                        let status =
+                            RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT, e.to_string());
+                        sink.fail(status).await?;
+                    }
+                }
             } else {
                 sink.close().await?;
             }
@@ -1332,6 +1388,12 @@ fn response_batch_commands_request<F, T>(
                     warn!("KvService response batch commands fail"; "err" => ?e);
                 }
             }
+            Err(server_err @ Error::Grpc(GrpcError::RpcFailure(_))) => {
+                let task = MeasuredSingleResponse::new(id, T::default(), measure, Some(server_err));
+                if let Err(e) = tx.send_with(task, WakePolicy::Immediately) {
+                    warn!("KvService response batch commands fail"; "err" => ?e);
+                }
+            }
             _ => {}
         };
     };
@@ -1438,6 +1500,32 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                 },
                 Some(batch_commands_request::request::Cmd::Coprocessor(req)) => {
                     handle_cluster_id_mismatch!(cluster_id, req);
+                    if !req.get_versioned_ranges().is_empty()
+                        || req
+                            .get_tasks()
+                            .iter()
+                            .any(|task| !task.get_versioned_ranges().is_empty())
+                    {
+                        let begin_instant = Instant::now();
+                        let status = RpcStatus::with_message(
+                            RpcStatusCode::INVALID_ARGUMENT,
+                            "versioned_ranges is only supported by VersionedKv.VersionedCoprocessor"
+                                .to_string(),
+                        );
+                        let resp = future::err::<batch_commands_response::Response, Error>(Error::Grpc(
+                            GrpcError::RpcFailure(status),
+                        ));
+                        response_batch_commands_request(
+                            id,
+                            resp,
+                            tx.clone(),
+                            begin_instant,
+                            GrpcTypeKind::invalid,
+                            String::default(),
+                            ResourcePriority::unknown,
+                        );
+                        return Ok(());
+                    }
                     let resource_control_ctx = req.get_context().get_resource_control_context();
                     let mut resource_group_priority = ResourcePriority::unknown;
                     if let Some(resource_manager) = resource_manager {
@@ -1589,6 +1677,92 @@ fn handle_measures_for_batch_commands(measures: &mut MeasuredBatchResponse) {
                 .mut_time_detail_v2()
                 .set_kv_grpc_wait_time_ns(wait.as_nanos() as u64);
         }
+    }
+}
+
+impl<E: Engine, L: LockManager, F: KvFormat> VersionedKv for Service<E, L, F> {
+    fn versioned_coprocessor(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: Request,
+        sink: UnarySink<Response>,
+    ) {
+        reject_if_cluster_id_mismatch!(req, self, ctx, sink);
+
+        let source = req.get_context().get_request_source().to_owned();
+        let resource_control_ctx = req.get_context().get_resource_control_context();
+        let mut resource_group_priority = ResourcePriority::unknown;
+        if let Some(resource_manager) = &self.resource_manager {
+            resource_manager.consume_penalty(resource_control_ctx);
+            resource_group_priority =
+                ResourcePriority::from(resource_control_ctx.override_priority);
+        }
+
+        GRPC_RESOURCE_GROUP_COUNTER_VEC
+            .with_label_values(&[
+                resource_control_ctx.get_resource_group_name(),
+                resource_control_ctx.get_resource_group_name(),
+            ])
+            .inc();
+
+        if req.get_versioned_ranges().is_empty()
+            && req
+                .get_tasks()
+                .iter()
+                .all(|task| task.get_versioned_ranges().is_empty())
+        {
+            let begin_instant = Instant::now();
+            let mut resp = Response::default();
+            resp.set_other_error(
+                "versioned_ranges must be non-empty for VersionedKv.VersionedCoprocessor"
+                    .to_string(),
+            );
+
+            let task = async move {
+                let elapsed = begin_instant.saturating_elapsed();
+                sink.success(resp).await?;
+                GRPC_MSG_HISTOGRAM_STATIC
+                    .coprocessor
+                    .get(resource_group_priority)
+                    .observe(elapsed.as_secs_f64());
+                record_request_source_metrics(source, elapsed);
+                ServerResult::Ok(())
+            }
+            .map_err(|e| {
+                log_net_error!(e, "kv rpc failed";
+                    "request" => "versioned_coprocessor"
+                );
+                GRPC_MSG_FAIL_COUNTER.coprocessor.inc();
+            })
+            .map(|_| ());
+
+            ctx.spawn(task);
+            return;
+        }
+
+        let begin_instant = Instant::now();
+        let future = future_copr(&self.copr, Some(ctx.peer()), req);
+        let task = async move {
+            let resp = future.await?.consume();
+
+            let elapsed = begin_instant.saturating_elapsed();
+            sink.success(resp).await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .coprocessor
+                .get(resource_group_priority)
+                .observe(elapsed.as_secs_f64());
+            record_request_source_metrics(source, elapsed);
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            log_net_error!(e, "kv rpc failed";
+                "request" => "versioned_coprocessor"
+            );
+            GRPC_MSG_FAIL_COUNTER.coprocessor.inc();
+        })
+        .map(|_| ());
+
+        ctx.spawn(task);
     }
 }
 
