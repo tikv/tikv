@@ -637,7 +637,7 @@ pub fn run_and_wait_child_process(child: impl Fn()) -> Result<i32, String> {
 
 #[inline]
 pub fn is_zero_duration(d: &Duration) -> bool {
-    d.as_secs() == 0 && d.subsec_nanos() == 0
+    d.is_zero()
 }
 
 pub fn empty_shared_slice<T>() -> Arc<[T]> {
