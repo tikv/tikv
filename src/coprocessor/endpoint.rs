@@ -425,14 +425,11 @@ impl<E: Engine> Endpoint<E> {
         }
         let snapshot_future = kv::in_memory_snapshot(engine, snap_ctx).map_err(Error::from);
         async move {
-            #[cfg(feature = "failpoints")]
-            {
-                // Sleep here to simulate slow snapshot retrieval that causes timeout
-                // The failpoint can be configured with a sleep duration, e.g.:
-                // fail::cfg("coprocessor_async_in_memory_snapshot_timeout",
-                // "sleep(500)").unwrap();
-                fail_point!("coprocessor_async_in_memory_snapshot_timeout");
-            }
+            // Sleep here to simulate slow snapshot retrieval that causes timeout
+            // The failpoint can be configured with a sleep duration, e.g.:
+            // fail::cfg("coprocessor_async_in_memory_snapshot_timeout",
+            // "sleep(500)").unwrap();
+            fail_point!("coprocessor_async_in_memory_snapshot_timeout");
             snapshot_future.await
         }
     }
