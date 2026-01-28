@@ -3051,6 +3051,8 @@ pub struct BackupConfig {
     pub s3_multi_part_size: ReadableSize,
     #[online_config(submodule)]
     pub hadoop: HadoopConfig,
+    #[online_config(submodule)]
+    pub iceberg: BackupIcebergConfig,
 }
 
 impl BackupConfig {
@@ -3099,8 +3101,20 @@ impl Default for BackupConfig {
             // 5MB is the minimum part size that S3 allowed.
             s3_multi_part_size: ReadableSize::mb(5),
             hadoop: Default::default(),
+            iceberg: Default::default(),
         }
     }
+}
+
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct BackupIcebergConfig {
+    pub enable: bool,
+    pub warehouse: String,
+    pub namespace: String,
+    pub table: String,
+    pub manifest_prefix: String,
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]

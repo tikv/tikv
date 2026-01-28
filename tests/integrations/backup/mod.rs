@@ -1,6 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fs::File, time::Duration};
+use std::{
+    fs::{self, File},
+    time::Duration,
+};
 
 use engine_traits::{CF_DEFAULT, CF_WRITE};
 use external_storage::{create_storage, make_local_backend};
@@ -11,9 +14,13 @@ use kvproto::{
     kvrpcpb::*,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request},
 };
+use serde_json::Value;
 use tempfile::Builder;
 use test_backup::*;
-use tikv::coprocessor::checksum_crc64_xor;
+use tikv::{
+    config::{BackupConfig, BackupIcebergConfig},
+    coprocessor::checksum_crc64_xor,
+};
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 
@@ -160,6 +167,75 @@ fn test_backup_and_import() {
     );
     let resps3 = block_on(rx.collect::<Vec<_>>());
     assert_same_files(files1.into_vec(), resps3[0].files.clone().into_vec());
+
+    suite.stop();
+}
+
+#[test]
+fn test_backup_writes_iceberg_manifest() {
+    let mut cfg = BackupConfig {
+        num_threads: 2,
+        batch_size: 4,
+        ..Default::default()
+    };
+    cfg.iceberg = BackupIcebergConfig {
+        enable: true,
+        warehouse: "warehouse".into(),
+        namespace: "analytics.core".into(),
+        table: "orders".into(),
+        manifest_prefix: "manifest".into(),
+    };
+    let mut suite = TestSuite::new_with_backup_config(3, 144 * 1024 * 1024, ApiVersion::V1, cfg);
+    suite.must_kv_put(20, 2);
+
+    let tmp = Builder::new().tempdir().unwrap();
+    let backup_ts = suite.alloc_ts();
+    let storage_path = make_unique_dir(tmp.path());
+    let rx = suite.backup(vec![], vec![], 0.into(), backup_ts, &storage_path);
+    let resps = block_on(rx.collect::<Vec<_>>());
+    assert_eq!(1, resps.len());
+
+    let manifest_root = storage_path.join("warehouse/analytics/core/orders/metadata");
+    assert!(
+        manifest_root.exists(),
+        "manifest path {:?} missing",
+        manifest_root
+    );
+    let mut manifest_files = fs::read_dir(&manifest_root)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert!(
+        !manifest_files.is_empty(),
+        "manifest directory should contain files"
+    );
+    manifest_files.sort();
+    let manifest_file = manifest_files.pop().unwrap();
+    let raw = fs::read_to_string(&manifest_file).unwrap();
+    let manifest: Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(
+        manifest["snapshot_end_ts"].as_u64().unwrap(),
+        backup_ts.into_inner()
+    );
+    assert_eq!(manifest["warehouse"], "warehouse");
+    assert_eq!(manifest["namespace"], "analytics/core");
+    assert_eq!(manifest["table"], "orders");
+    let files = manifest["files"].as_array().expect("files array");
+    assert!(!files.is_empty());
+    assert_eq!(files.len(), resps[0].files.len());
+    for entry in files {
+        let start_key = entry["start_key"]
+            .as_str()
+            .expect("start_key should be present");
+        assert!(
+            start_key.is_ascii(),
+            "start_key should be ascii/base64 friendly"
+        );
+        assert!(
+            entry["sha256"].is_null() || entry["sha256"].is_string(),
+            "sha256 should be null or string"
+        );
+    }
 
     suite.stop();
 }

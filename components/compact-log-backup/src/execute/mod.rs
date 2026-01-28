@@ -74,13 +74,10 @@ impl slog::KV for ExecutionConfig {
         serializer.emit_u64("until_ts", self.until_ts)?;
         let date = |pts| {
             let ts = TimeStamp::new(pts).physical();
-            chrono::DateTime::<Utc>::from_utc(
-                chrono::NaiveDateTime::from_timestamp(
-                    ts as i64 / 1000,
-                    (ts % 1000) as u32 * 1_000_000,
-                ),
-                Utc,
-            )
+            let seconds = ts as i64 / 1000;
+            let nanos = (ts % 1000) as u32 * 1_000_000;
+            chrono::DateTime::<Utc>::from_timestamp(seconds, nanos)
+                .unwrap_or_else(|| chrono::DateTime::<Utc>::from_timestamp(0, 0).unwrap())
         };
         serializer.emit_arguments("from_date", &format_args!("{}", date(self.from_ts)))?;
         serializer.emit_arguments("until_date", &format_args!("{}", date(self.until_ts)))?;

@@ -3,7 +3,7 @@
 use std::{borrow::ToOwned, str, string::ToString, sync::LazyLock};
 
 use clap::{AppSettings, crate_authors};
-use engine_traits::{CF_DEFAULT, SstCompressionType};
+use engine_traits::SstCompressionType;
 use raft_engine::ReadableSize;
 use structopt::StructOpt;
 
@@ -160,7 +160,7 @@ pub enum Cmd {
             use_delimiter = true,
             require_delimiter = true,
             value_delimiter = ",",
-            default_value = CF_DEFAULT,
+            default_value = "default"
         )]
         /// Column family names, combined from default/lock/write
         show_cf: Vec<String>,
@@ -199,7 +199,7 @@ pub enum Cmd {
     Print {
         #[structopt(
             short = "c",
-            default_value = CF_DEFAULT,
+            default_value = "default",
             possible_values = &["default", "lock", "write"],
         )]
         /// The column family name.
@@ -224,7 +224,7 @@ pub enum Cmd {
             use_delimiter = true,
             require_delimiter = true,
             value_delimiter = ",",
-            default_value = CF_DEFAULT,
+            default_value = "default"
         )]
         /// Column family names, combined from default/lock/write
         show_cf: Vec<String>,
@@ -281,7 +281,7 @@ pub enum Cmd {
 
         #[structopt(
             short = "c",
-            default_value = CF_DEFAULT,
+            default_value = "default",
             possible_values = &["default", "lock", "write"],
         )]
         /// The column family name.
@@ -457,7 +457,7 @@ pub enum Cmd {
             use_delimiter = true,
             require_delimiter = true,
             value_delimiter = ",",
-            default_value = CF_DEFAULT,
+            default_value = "default",
             possible_values = &["default", "lock", "write"],
         )]
         /// Column family names, for kv db, combine from default/lock/write; for
@@ -631,6 +631,82 @@ pub enum Cmd {
         /// hex end key
         end: String,
     },
+    /// Export BR SST artifacts into Parquet files and optional Iceberg table
+    /// metadata / manifests.
+    BrParquetExport {
+        #[structopt(
+            long = "input-storage-base64",
+            help = "base64 encoded StorageBackend pointing to the BR backup"
+        )]
+        input_storage_base64: String,
+        #[structopt(
+            long = "output-storage-base64",
+            help = "base64 encoded StorageBackend used for Parquet output"
+        )]
+        output_storage_base64: String,
+        #[structopt(
+            long = "output-prefix",
+            default_value = "parquet",
+            help = "prefix under the output storage to place Parquet files"
+        )]
+        output_prefix: String,
+        #[structopt(
+            long = "row-group-size",
+            default_value = "8192",
+            help = "row group size for the emitted Parquet files"
+        )]
+        row_group_size: usize,
+        #[structopt(
+            long = "sst-concurrency",
+            help = "number of SST files to export concurrently (defaults to available CPU count)"
+        )]
+        sst_concurrency: Option<usize>,
+        #[structopt(
+            long = "use-checkpoint",
+            help = "use checkpoint mode to resume Parquet export (true|false, default: true)"
+        )]
+        use_checkpoint: Option<bool>,
+        #[structopt(
+            long = "compression",
+            default_value = "snappy",
+            help = "Parquet compression codec (snappy|zstd|gzip|brotli|lz4|lz4raw|none)"
+        )]
+        compression: String,
+        #[structopt(
+            long = "bloom-filter",
+            help = "enable Parquet bloom filters for INT/UTF8 columns (default: false)"
+        )]
+        bloom_filter: bool,
+        #[structopt(
+            short = "f",
+            long = "filter",
+            help = "table filter rules (same syntax as BR --filter); can be specified multiple times"
+        )]
+        filters: Vec<String>,
+        #[structopt(
+            long = "tables",
+            use_delimiter = true,
+            value_delimiter = ",",
+            help = "legacy alias of --filter; comma-separated list of table filter rules"
+        )]
+        tables: Vec<String>,
+        #[structopt(
+            long = "table-ids",
+            use_delimiter = true,
+            value_delimiter = ",",
+            help = "comma-separated list of physical table IDs to export"
+        )]
+        table_ids: Vec<i64>,
+        #[structopt(
+            long = "write-iceberg-table",
+            help = "write Iceberg table metadata (metadata/*.json, metadata/*.avro) next to the exported Parquet files"
+        )]
+        write_iceberg_table: bool,
+        #[structopt(long = "write-iceberg-manifest")]
+        write_iceberg_manifest: bool,
+        #[structopt(flatten)]
+        iceberg: IcebergOptions,
+    },
     CompactLogBackup {
         #[structopt(
             short,
@@ -738,6 +814,22 @@ pub enum Cmd {
         /// can be recorded in TiKV logs.
         min_start_ts: Option<u64>,
     },
+}
+
+#[derive(Default, StructOpt)]
+pub struct IcebergOptions {
+    #[structopt(long = "iceberg-warehouse")]
+    pub warehouse: Option<String>,
+    #[structopt(long = "iceberg-namespace")]
+    pub namespace: Option<String>,
+    #[structopt(long = "iceberg-table")]
+    pub table: Option<String>,
+    #[structopt(
+        long = "iceberg-manifest-prefix",
+        default_value = "manifest",
+        help = "manifest file prefix under the warehouse/table/metadata path"
+    )]
+    pub manifest_prefix: String,
 }
 
 #[derive(StructOpt)]
