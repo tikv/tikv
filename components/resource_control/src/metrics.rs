@@ -48,6 +48,30 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+    pub static ref ACTIVE_RESOURCE_GROUP_READ_BYTES: IntCounterVec = register_int_counter_vec!(
+        "tikv_active_resource_group_read_bytes",
+        "Total bytes read by active keyspace",
+        &["keyspace_id"]
+    )
+    .unwrap();
+    pub static ref REQUEST_WAIT_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_resource_control_request_wait_duration_seconds",
+        "Bucketed histogram of request wait duration",
+        &["type"]
+    )
+    .unwrap();
+    pub static ref RESOURCE_GROUP_QPS_LIMITER_QUOTA: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_resource_control_qps_limiter_quota",
+        "The per-resource-group quota of qps quota limiter",
+        &["resource_group"]
+    )
+    .unwrap();
+    pub static ref RESOURCE_GROUP_READ_BYTES_LIMITER_QUOTA: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_resource_control_read_bytes_limiter_quota",
+        "The per-resource-group quota of read bytes quota limiter",
+        &["resource_group"]
+    )
+    .unwrap();
 }
 
 pub fn deregister_metrics(name: &str) {

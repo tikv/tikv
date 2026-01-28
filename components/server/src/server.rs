@@ -84,7 +84,10 @@ use raftstore::{
     },
 };
 use resolved_ts::{LeadershipResolver, Task};
-use resource_control::{ResourceGroupManager, config::ResourceContrlCfgMgr};
+use resource_control::{
+    CpuType, ReadLimiter, ReadSubscriber, ResourceGroupManager, ResourceLimitController,
+    ResourceType, config::ResourceContrlCfgMgr,
+};
 use security::{SecurityConfigManager, SecurityManager};
 use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use snap_recovery::RecoveryService;
@@ -191,6 +194,7 @@ fn run_impl<CER, F>(
     tikv.run_server(server_config);
     tikv.run_status_server(in_memory_engine);
     tikv.core.init_quota_tuning_task(tikv.quota_limiter.clone());
+    tikv.resource_limit_controller.run();
 
     // Build a background worker for handling signals.
     {
@@ -288,6 +292,7 @@ where
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
+    resource_limit_controller: ResourceLimitController,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
     br_snap_recovery_mode: bool, // use for br snapshot recovery
@@ -348,6 +353,7 @@ where
                     // SAFETY: we will call `remove_thread_memory_accessor` at before_stop.
                     unsafe { add_thread_memory_accessor() };
                     thread_allocate_exclusive_arena().unwrap();
+                    tikv_util::sys::thread::add_thread_name_to_map();
                 })
                 .before_stop(|| {
                     remove_thread_memory_accessor();
@@ -444,6 +450,7 @@ where
             config.quota.max_delay_duration,
             config.quota.enable_auto_tune,
         ));
+        let resource_limit_controller = Self::init_resource_controller(&config);
 
         let mut causal_ts_provider = None;
         if let ApiVersion::V2 = F::TAG {
@@ -498,6 +505,7 @@ where
             sst_worker: None,
             quota_limiter,
             resource_manager,
+            resource_limit_controller,
             causal_ts_provider,
             tablet_registry: None,
             br_snap_recovery_mode: is_recovering_marked,
@@ -700,7 +708,10 @@ where
         if let Some(resource_ctl) = &self.resource_manager {
             cfg_controller.register(
                 tikv::config::Module::ResourceControl,
-                Box::new(ResourceContrlCfgMgr::new(resource_ctl.get_config().clone())),
+                Box::new(ResourceContrlCfgMgr::new(
+                    resource_ctl.get_config().clone(),
+                    self.resource_limit_controller.publisher(),
+                )),
             );
         }
 
@@ -897,7 +908,7 @@ where
         self.snap_mgr = Some(snap_mgr.clone());
 
         // Create coprocessor endpoint.
-        let copr = coprocessor::Endpoint::new(
+        let mut copr = coprocessor::Endpoint::new(
             &server_config.value(),
             cop_read_pool_handle,
             self.concurrency_manager.clone(),
@@ -905,6 +916,7 @@ where
             self.quota_limiter.clone(),
             self.resource_manager.clone(),
         );
+        copr.set_resource_limit_controller(self.resource_limit_controller.clone());
         let copr_config_manager = copr.config_manager();
 
         // Create server
@@ -1677,6 +1689,7 @@ where
         if let Some(sst_worker) = self.sst_worker {
             sst_worker.stop_worker();
         }
+        self.resource_limit_controller.stop();
 
         self.core.to_stop.into_iter().for_each(|s| s.stop());
     }
@@ -1755,6 +1768,25 @@ where
                 warn!("Failed to set graceful shutdown state for PD worker"; "error" => ?e);
             }
         }
+    }
+
+    fn init_resource_controller(config: &TikvConfig) -> ResourceLimitController {
+        let mut resource_controller = ResourceLimitController::new(config.resource_control.clone());
+
+        // Read
+        let read_limiter = ReadLimiter::new(config.resource_control.clone());
+        resource_controller.set_read_limiter(read_limiter.clone());
+        let read_subscriber = ReadSubscriber::new(read_limiter, config.resource_control.clone());
+        resource_controller.register_subscriber(
+            ResourceType::Cpu {
+                cpu_type: CpuType::UnifiedReadPool,
+            },
+            Box::new(read_subscriber.clone()),
+        );
+        resource_controller
+            .register_subscriber(ResourceType::Read, Box::new(read_subscriber.clone()));
+
+        resource_controller
     }
 }
 

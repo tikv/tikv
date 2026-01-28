@@ -21,7 +21,11 @@ use futures::{
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri, metapb};
 use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
-use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
+use resource_control::{
+    Metric, REQUEST_WAIT_HISTOGRAM_VEC, ReadLimiter, Resource, ResourceEvent, ResourceGroupManager,
+    ResourceGroupReadLimiter, ResourceLimitController, ResourceLimiter, ResourcePublisher, Scope,
+    Severity, TaskMetadata,
+};
 use resource_metering::{
     FutureExt, ResourceTagFactory, StreamExt, record_logical_read_bytes, record_network_in_bytes,
     record_network_out_bytes,
@@ -98,6 +102,9 @@ pub struct Endpoint<E: Engine> {
 
     quota_limiter: Arc<QuotaLimiter>,
     resource_ctl: Option<Arc<ResourceGroupManager>>,
+    pub resource_publisher: Option<Arc<dyn ResourcePublisher>>,
+    pub resource_limit_controller: Option<ResourceLimitController>,
+    pub read_limiter: Option<ReadLimiter>,
 
     _phantom: PhantomData<E>,
 }
@@ -154,12 +161,21 @@ impl<E: Engine> Endpoint<E> {
             slow_log_threshold: cfg.end_point_slow_log_threshold.0,
             quota_limiter,
             resource_ctl,
+            resource_publisher: None,
+            resource_limit_controller: None,
+            read_limiter: None,
             _phantom: Default::default(),
         }
     }
 
     pub fn config_manager(&self) -> Box<dyn ConfigManager> {
         Box::new(CopConfigManager::new(self.memory_quota.clone()))
+    }
+
+    pub fn set_resource_limit_controller(&mut self, controller: ResourceLimitController) {
+        self.resource_publisher = Some(controller.publisher());
+        self.read_limiter = controller.get_read_limiter();
+        self.resource_limit_controller = Some(controller);
     }
 
     fn check_memory_locks(&self, req_ctx: &ReqContext) -> Result<()> {
@@ -467,6 +483,12 @@ impl<E: Engine> Endpoint<E> {
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::IMSnap>,
+        resource_publisher: Option<Arc<dyn ResourcePublisher>>,
+        group_read_limiter: Option<(
+            ResourceGroupReadLimiter,
+            bool, // dry_run
+            bool, // debug
+        )>,
     ) -> Result<MemoryTraceGuard<coppb::Response>> {
         with_tls_tracker(|tracker1| {
             record_network_in_bytes(tracker1.metrics.grpc_req_size);
@@ -513,6 +535,40 @@ impl<E: Engine> Endpoint<E> {
             handler_builder(snapshot, &tracker.req_ctx)?
         };
 
+        tracker.on_slow_down();
+
+        let mut request_type = RequestType::Unknown;
+        with_tls_tracker(|tracker| {
+            request_type = tracker.req_info.request_type;
+        });
+        if let Some((read_limiter, dry_run, debug)) = &group_read_limiter
+            && matches!(request_type, RequestType::CoprocessorDag)
+        {
+            let wait_time = if *dry_run {
+                read_limiter.take_wait_time()
+            } else {
+                read_limiter.wait().await
+            };
+            if !wait_time.is_zero() {
+                REQUEST_WAIT_HISTOGRAM_VEC
+                    .with_label_values(&["read"])
+                    .observe(wait_time.as_secs_f64());
+                if *debug {
+                    let group_name = tracker
+                        .req_ctx
+                        .context
+                        .get_resource_control_context()
+                        .get_resource_group_name();
+                    let region_id = tracker.req_ctx.context.region_id;
+                    let task_id = tracker.req_ctx.context.task_id;
+                    info!(
+                        "resource control resource_group {}, region {}, task {}, mock {} sleep {:?} for DAG request",
+                        group_name, region_id, task_id, *dry_run, wait_time
+                    );
+                }
+            }
+        }
+
         tracker.on_begin_all_items();
 
         let deadline = tracker.req_ctx.deadline;
@@ -533,6 +589,7 @@ impl<E: Engine> Endpoint<E> {
         tracker.collect_scan_process_time(exec_summary);
         let mut storage_stats = Statistics::default();
         handler.collect_scan_statistics(&mut storage_stats);
+        let processed_size = storage_stats.processed_size;
         tracker.collect_storage_statistics(storage_stats);
         let (exec_details, exec_details_v2) = tracker.get_exec_details();
         tracker.on_finish_all_items();
@@ -557,6 +614,28 @@ impl<E: Engine> Endpoint<E> {
         resp.set_exec_details(exec_details);
         resp.set_exec_details_v2(exec_details_v2);
         resp.set_latest_buckets_version(buckets_version);
+        if let Some(resource_publisher) = &resource_publisher
+            && matches!(request_type, RequestType::CoprocessorDag)
+            && processed_size > 0
+        {
+            resource_publisher.publish(ResourceEvent::CollectMetric(Metric {
+                resource: Resource::Read {
+                    bytes: processed_size as u64,
+                },
+                scope: Scope::ResourceGroup {
+                    name: tracker
+                        .req_ctx
+                        .context
+                        .get_resource_control_context()
+                        .get_resource_group_name()
+                        .to_string(),
+                },
+                severity: Severity::Normal,
+            }));
+            if let Some((read_limiter, ..)) = &group_read_limiter {
+                read_limiter.consume(processed_size)
+            }
+        }
         Ok(resp)
     }
 
@@ -595,17 +674,50 @@ impl<E: Engine> Endpoint<E> {
                     .get_override_priority(),
             )
         });
+        let (resource_enabled, resource_dry_run, resource_debug) = self
+            .resource_limit_controller
+            .as_ref()
+            .map(|controller| {
+                (
+                    controller.get_enabled(),
+                    controller.get_dry_run(),
+                    controller.get_debug(),
+                )
+            })
+            .unwrap_or_default();
+        let (resource_publisher, read_limiter) = if resource_enabled {
+            let group_read_limiter = self
+                .read_limiter
+                .as_ref()
+                .and_then(|read_limiter| {
+                    read_limiter.get_limiter(
+                        req_ctx
+                            .context
+                            .get_resource_control_context()
+                            .get_resource_group_name(),
+                    )
+                })
+                .map(|limiter| (limiter, resource_dry_run, resource_debug));
+            (self.resource_publisher.clone(), group_read_limiter)
+        } else {
+            (None, None)
+        };
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx, r.req_tag, self.slow_log_threshold));
         allocated_bytes += tracker.approximate_mem_size();
 
         let (tx, rx) = oneshot::channel();
-        let future =
-            Self::handle_unary_request_impl(self.semaphore.clone(), tracker, r.handler_builder)
-                .in_resource_metering_tag(resource_tag)
-                .map(move |res| {
-                    let _ = tx.send(res);
-                });
+        let future = Self::handle_unary_request_impl(
+            self.semaphore.clone(),
+            tracker,
+            r.handler_builder,
+            resource_publisher,
+            read_limiter,
+        )
+        .in_resource_metering_tag(resource_tag)
+        .map(move |res| {
+            let _ = tx.send(res);
+        });
         let res = self.read_pool_spawn_with_memory_quota_check(
             allocated_bytes,
             future,

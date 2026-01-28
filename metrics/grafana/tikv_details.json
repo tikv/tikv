@@ -82705,7 +82705,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The memory usage of the resource control module.",
+          "description": "The 99 quantile durtion of coprocessor request wait read limiter duration",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -82768,22 +82768,90 @@
           "renderer": "flot",
           "repeat": null,
           "repeatDirection": null,
-          "seriesOverrides": [],
+          "seriesOverrides": [
+            {
+              "alias": "/^count/",
+              "bars": false,
+              "dashLength": 1,
+              "dashes": true,
+              "fill": 2,
+              "fillBelowTo": null,
+              "lines": true,
+              "spaceLength": 1,
+              "transform": "negative-Y",
+              "yaxis": 2,
+              "zindex": -3
+            },
+            {
+              "alias": "/^avg/",
+              "bars": false,
+              "fill": 7,
+              "fillBelowTo": null,
+              "lines": true,
+              "yaxis": 1,
+              "zindex": 0
+            }
+          ],
           "span": null,
           "stack": false,
           "steppedLine": false,
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum((\n    tikv_resource_control_priority_quota_limit\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance, priority) ",
+              "expr": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_resource_control_request_wait_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, le, $additional_groupby) \n    \n    \n))  ",
+              "format": "time_series",
+              "hide": true,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "99.99%-{{type}} {{$additional_groupby}}",
+              "metric": "",
+              "query": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_resource_control_request_wait_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, le, $additional_groupby) \n    \n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_resource_control_request_wait_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, le, $additional_groupby) \n    \n    \n))  ",
               "format": "time_series",
               "hide": false,
               "instant": false,
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{instance}}-{{priority}}",
+              "legendFormat": "99%-{{type}} {{$additional_groupby}}",
               "metric": "",
-              "query": "sum((\n    tikv_resource_control_priority_quota_limit\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance, priority) ",
+              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_resource_control_request_wait_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, le, $additional_groupby) \n    \n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "(sum(rate(\n    tikv_resource_control_request_wait_duration_seconds_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, $additional_groupby)  / sum(rate(\n    tikv_resource_control_request_wait_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, $additional_groupby) )",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "avg-{{type}} {{$additional_groupby}}",
+              "metric": "",
+              "query": "(sum(rate(\n    tikv_resource_control_request_wait_duration_seconds_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, $additional_groupby)  / sum(rate(\n    tikv_resource_control_request_wait_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, $additional_groupby) )",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_resource_control_request_wait_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, $additional_groupby) ",
+              "format": "time_series",
+              "hide": true,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "count-{{type}} {{$additional_groupby}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_resource_control_request_wait_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, $additional_groupby) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -82792,7 +82860,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Priority Quota Limit",
+          "title": "Cop Request Wait Read Limiter Duration",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -82811,7 +82879,273 @@
           "yaxes": [
             {
               "decimals": null,
-              "format": "\u00b5s",
+              "format": "s",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The per-resource-group quota of qps quota limiter",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 7
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 605,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(avg_over_time(\n    tikv_resource_control_qps_limiter_quota\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [30s]\n)) by (resource_group, $additional_groupby) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{resource_group}} {{$additional_groupby}}",
+              "metric": "",
+              "query": "sum(avg_over_time(\n    tikv_resource_control_qps_limiter_quota\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [30s]\n)) by (resource_group, $additional_groupby) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "QPS Read Limiter Quota",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The per-resource-group quota of read bytes quota limiter",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 7
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 606,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(avg_over_time(\n    tikv_resource_control_read_bytes_limiter_quota\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [30s]\n)) by (resource_group, $additional_groupby) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{resource_group}} {{$additional_groupby}}",
+              "metric": "",
+              "query": "sum(avg_over_time(\n    tikv_resource_control_read_bytes_limiter_quota\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [30s]\n)) by (resource_group, $additional_groupby) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Read Bytes Read Limiter Quota",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "none",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -82868,7 +83202,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 605,
+      "id": 607,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -82907,7 +83241,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 606,
+          "id": 608,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83108,7 +83442,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 607,
+          "id": 609,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83244,7 +83578,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 608,
+      "id": 610,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -83283,7 +83617,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 609,
+          "id": 611,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83416,7 +83750,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 610,
+          "id": 612,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83549,7 +83883,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 611,
+          "id": 613,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83682,7 +84016,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 612,
+          "id": 614,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83815,7 +84149,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 613,
+          "id": 615,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83963,7 +84297,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 614,
+          "id": 616,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -84167,7 +84501,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 615,
+      "id": 617,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -84206,7 +84540,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 616,
+          "id": 618,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -84339,7 +84673,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 617,
+          "id": 619,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -84472,7 +84806,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 618,
+          "id": 620,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -84605,7 +84939,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 619,
+          "id": 621,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -84738,7 +85072,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 620,
+          "id": 622,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -84935,7 +85269,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 621,
+          "id": 623,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -85017,7 +85351,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 622,
+      "id": 624,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -85086,7 +85420,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 623,
+          "id": 625,
           "interval": null,
           "links": [],
           "mappings": [],
@@ -85203,7 +85537,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 624,
+          "id": 626,
           "interval": null,
           "links": [],
           "mappings": [],
@@ -85320,7 +85654,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 625,
+          "id": 627,
           "interval": null,
           "links": [],
           "mappings": [],
@@ -85437,7 +85771,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 626,
+          "id": 628,
           "interval": null,
           "links": [],
           "mappings": [],

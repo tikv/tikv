@@ -404,7 +404,7 @@ pub(crate) fn call_thread_start_hooks() {
     }
 }
 
-pub(crate) fn add_thread_name_to_map() {
+pub fn add_thread_name_to_map() {
     if let Some(name) = std::thread::current().name() {
         let tid = thread_id();
         THREAD_NAME_HASHMAP

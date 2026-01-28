@@ -10509,16 +10509,47 @@ def ResourceControl() -> RowPanel:
                     ),
                 ],
             ),
+            graph_panel_histogram_quantiles(
+                title="Cop Request Wait Read Limiter Duration",
+                description="The 99 quantile durtion of coprocessor request wait read limiter duration",
+                metric="tikv_resource_control_request_wait_duration_seconds",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                by_labels=["type"],
+                hide_p9999=True,
+                hide_count=True,
+                hide_avg=False,
+            ),
+        ]
+    )
+    layout.row(
+        [
             graph_panel(
-                title="Priority Quota Limit",
-                description="The memory usage of the resource control module.",
-                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
+                title="QPS Read Limiter Quota",
+                description="The per-resource-group quota of qps quota limiter",
                 targets=[
                     target(
-                        expr=expr_sum(
-                            "tikv_resource_control_priority_quota_limit",
-                            by_labels=["instance", "priority"],
+                        expr=expr_sum_aggr_over_time(
+                            "tikv_resource_control_qps_limiter_quota",
+                            "avg",
+                            "30s",
+                            by_labels=["resource_group"],
                         ),
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Read Bytes Read Limiter Quota",
+                description="The per-resource-group quota of read bytes quota limiter",
+                targets=[
+                    target(
+                        expr=expr_sum_aggr_over_time(
+                            "tikv_resource_control_read_bytes_limiter_quota",
+                            "avg",
+                            "30s",
+                            by_labels=["resource_group"],
+                        ),
+                        additional_groupby=True,
                     ),
                 ],
             ),
