@@ -1095,7 +1095,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             let mut batcher = batch_builder.build(queue, request_ids.len());
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
             for (id, req) in request_ids.into_iter().zip(requests) {
-                if let Err(server_err) = handle_batch_commands_request(
+                if let Err(server_err @ Error::ClusterIDMisMatch { .. }) = handle_batch_commands_request(
                     cluster_id,
                     &mut batcher,
                     &storage,
@@ -1107,22 +1107,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                     &tx,
                     &resource_manager,
                 ) {
-                    match server_err {
-                        Error::ClusterIDMisMatch { .. } => {
-                            let e = RpcStatus::with_message(
-                                RpcStatusCode::INVALID_ARGUMENT,
-                                server_err.to_string(),
-                            );
-                            return future::err(GrpcError::RpcFailure(e));
-                        }
-                        Error::InvalidArgument(msg) => {
-                            let e =
-                                RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT, msg);
-                            return future::err(GrpcError::RpcFailure(e));
-                        }
-                        _ => {}
-                    }
-                };
+                    let e = RpcStatus::with_message(
+                        RpcStatusCode::INVALID_ARGUMENT,
+                        server_err.to_string(),
+                    );
+                    return future::err(GrpcError::RpcFailure(e));
+                }
                 if let Some(batch) = batcher.as_mut() {
                     batch.maybe_commit(&storage, &tx);
                 }
@@ -1143,28 +1133,31 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         );
 
         let mut response_retriever = response_retriever.map(move |mut item| {
-            if item
-                .server_err
-                .as_ref()
-                .is_some_and(|err| matches!(err, Error::InvalidArgument(_)))
-            {
-                let Some(Error::InvalidArgument(msg)) = item.server_err.take() else {
-                    unreachable!();
-                };
-                let e = RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT, msg);
-                return GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Err(GrpcError::RpcFailure(
-                    e,
-                ));
-            }
             handle_measures_for_batch_commands(&mut item);
             let mut r = item.batch_resp;
             GRPC_RESP_BATCH_COMMANDS_SIZE.observe(r.request_ids.len() as f64);
             // TODO: per thread load is more reasonable for batching.
             r.set_transport_layer_load(grpc_thread_load.total_load() as u64);
             health_feedback_attacher.attach_if_needed(&mut r);
-            if let Some(err @ Error::ClusterIDMisMatch { .. }) = item.server_err {
-                let e = RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT, err.to_string());
-                GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Err(GrpcError::RpcFailure(e))
+            if let Some(err) = item.server_err.take() {
+                match err {
+                    err @ Error::ClusterIDMisMatch { .. } => {
+                        let e =
+                            RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT, err.to_string());
+                        GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Err(GrpcError::RpcFailure(
+                            e,
+                        ))
+                    }
+                    Error::Grpc(GrpcError::RpcFailure(status)) => {
+                        GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Err(GrpcError::RpcFailure(
+                            status,
+                        ))
+                    }
+                    _ => GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Ok((
+                        r,
+                        WriteFlags::default().buffer_hint(false),
+                    )),
+                }
             } else {
                 GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Ok((
                     r,
@@ -1393,7 +1386,7 @@ fn response_batch_commands_request<F, T>(
                     warn!("KvService response batch commands fail"; "err" => ?e);
                 }
             }
-            Err(server_err @ Error::InvalidArgument(_)) => {
+            Err(server_err @ Error::Grpc(GrpcError::RpcFailure(_))) => {
                 let task = MeasuredSingleResponse::new(id, T::default(), measure, Some(server_err));
                 if let Err(e) = tx.send_with(task, WakePolicy::Immediately) {
                     warn!("KvService response batch commands fail"; "err" => ?e);
@@ -1511,12 +1504,15 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                             .iter()
                             .any(|task| !task.get_range_versions().is_empty())
                     {
-                        let msg = "range_versions is only supported by VersionedKv.VersionedCoprocessor"
-                            .to_string();
                         let begin_instant = Instant::now();
-                        let resp = future::err::<batch_commands_response::Response, Error>(
-                            Error::InvalidArgument(msg.clone()),
+                        let status = RpcStatus::with_message(
+                            RpcStatusCode::INVALID_ARGUMENT,
+                            "range_versions is only supported by VersionedKv.VersionedCoprocessor"
+                                .to_string(),
                         );
+                        let resp = future::err::<batch_commands_response::Response, Error>(Error::Grpc(
+                            GrpcError::RpcFailure(status),
+                        ));
                         response_batch_commands_request(
                             id,
                             resp,
@@ -1526,7 +1522,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                             String::default(),
                             ResourcePriority::unknown,
                         );
-                        return Err(Error::InvalidArgument(msg));
+                        return Ok(());
                     }
                     let resource_control_ctx = req.get_context().get_resource_control_context();
                     let mut resource_group_priority = ResourcePriority::unknown;
