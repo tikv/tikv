@@ -589,15 +589,16 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
 
     fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
         reject_if_cluster_id_mismatch!(req, self, ctx, sink);
-        if !req.get_range_versions().is_empty()
+        if !req.get_versioned_ranges().is_empty()
             || req
                 .get_tasks()
                 .iter()
-                .any(|task| !task.get_range_versions().is_empty())
+                .any(|task| !task.get_versioned_ranges().is_empty())
         {
             let e = RpcStatus::with_message(
                 RpcStatusCode::INVALID_ARGUMENT,
-                "range_versions is only supported by VersionedKv.VersionedCoprocessor".to_string(),
+                "versioned_ranges is only supported by VersionedKv.VersionedCoprocessor"
+                    .to_string(),
             );
             ctx.spawn(
                 sink.fail(e)
@@ -751,15 +752,16 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         mut sink: ServerStreamingSink<Response>,
     ) {
         reject_if_cluster_id_mismatch!(req, self, ctx, sink);
-        if !req.get_range_versions().is_empty()
+        if !req.get_versioned_ranges().is_empty()
             || req
                 .get_tasks()
                 .iter()
-                .any(|task| !task.get_range_versions().is_empty())
+                .any(|task| !task.get_versioned_ranges().is_empty())
         {
             let e = RpcStatus::with_message(
                 RpcStatusCode::INVALID_ARGUMENT,
-                "range_versions is only supported by VersionedKv.VersionedCoprocessor".to_string(),
+                "versioned_ranges is only supported by VersionedKv.VersionedCoprocessor"
+                    .to_string(),
             );
             ctx.spawn(
                 sink.fail(e)
@@ -1498,16 +1500,16 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                 },
                 Some(batch_commands_request::request::Cmd::Coprocessor(req)) => {
                     handle_cluster_id_mismatch!(cluster_id, req);
-                    if !req.get_range_versions().is_empty()
+                    if !req.get_versioned_ranges().is_empty()
                         || req
                             .get_tasks()
                             .iter()
-                            .any(|task| !task.get_range_versions().is_empty())
+                            .any(|task| !task.get_versioned_ranges().is_empty())
                     {
                         let begin_instant = Instant::now();
                         let status = RpcStatus::with_message(
                             RpcStatusCode::INVALID_ARGUMENT,
-                            "range_versions is only supported by VersionedKv.VersionedCoprocessor"
+                            "versioned_ranges is only supported by VersionedKv.VersionedCoprocessor"
                                 .to_string(),
                         );
                         let resp = future::err::<batch_commands_response::Response, Error>(Error::Grpc(
@@ -1703,11 +1705,17 @@ impl<E: Engine, L: LockManager, F: KvFormat> VersionedKv for Service<E, L, F> {
             ])
             .inc();
 
-        if req.get_range_versions().is_empty() {
+        if req.get_versioned_ranges().is_empty()
+            && req
+                .get_tasks()
+                .iter()
+                .all(|task| task.get_versioned_ranges().is_empty())
+        {
             let begin_instant = Instant::now();
             let mut resp = Response::default();
             resp.set_other_error(
-                "range_versions must be non-empty for VersionedKv.VersionedCoprocessor".to_string(),
+                "versioned_ranges must be non-empty for VersionedKv.VersionedCoprocessor"
+                    .to_string(),
             );
 
             let task = async move {

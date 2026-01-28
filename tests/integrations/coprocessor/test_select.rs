@@ -97,7 +97,7 @@ fn test_select() {
 }
 
 #[test]
-fn test_versioned_lookup_range_versions_reads_old_version() {
+fn test_versioned_lookup_versioned_ranges_reads_old_version() {
     let product = ProductTable::new();
 
     // Write an initial version.
@@ -127,9 +127,13 @@ fn test_versioned_lookup_range_versions_reads_old_version() {
 
     // Read using per-key ts = old commit ts, should return the old row value.
     let mut req = DagSelect::from(&product)
-        .key_ranges(vec![key_range])
+        .key_ranges(vec![key_range.clone()])
         .build();
-    req.mut_range_versions().push(ts_old.into_inner());
+    req.take_ranges();
+    let mut versioned_range = kvproto::coprocessor::VersionedKeyRange::default();
+    versioned_range.set_range(key_range);
+    versioned_range.set_read_ts(ts_old.into_inner());
+    req.mut_versioned_ranges().push(versioned_range);
 
     let mut resp = handle_select(&endpoint, req);
     let mut spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);

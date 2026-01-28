@@ -198,15 +198,39 @@ impl<E: Engine> Endpoint<E> {
 
         let context = req.take_context();
         let data = req.take_data();
-        let ranges: Vec<_> = req.take_ranges().into();
+        let mut ranges: Vec<_> = req.take_ranges().into();
         let mut start_ts = req.get_start_ts();
-        // `range_versions` is an extension for "versioned lookup" reads
+        // `versioned_ranges` is an extension for "versioned lookup" reads
         // (key + per-key read ts). It intentionally bypasses txn-related
         // checks (e.g. memory lock checks / max_ts update), so it is expected
         // to be used only via the dedicated `VersionedKv` RPC (the normal
         // coprocessor RPC rejects requests carrying it).
-        let range_versions = req.take_range_versions();
-        let is_versioned_lookup = !range_versions.is_empty();
+        //
+        // Invariants:
+        // - When `versioned_ranges` is non-empty, `ranges` must be empty.
+        // - All `versioned_ranges[i].range` must be point ranges.
+        let mut range_versions = Vec::new();
+        let versioned_ranges = req.take_versioned_ranges();
+        let is_versioned_lookup = !versioned_ranges.is_empty();
+        if is_versioned_lookup {
+            if !ranges.is_empty() {
+                return Err(box_err!(
+                    "versioned_ranges requires ranges to be empty"
+                ));
+            }
+            ranges = Vec::with_capacity(versioned_ranges.len());
+            range_versions = Vec::with_capacity(versioned_ranges.len());
+            for mut versioned_range in versioned_ranges.into_iter() {
+                let range = versioned_range.take_range();
+                if !is_point(&range) {
+                    return Err(box_err!(
+                        "versioned_ranges is only supported for point ranges"
+                    ));
+                }
+                ranges.push(range);
+                range_versions.push(versioned_range.get_read_ts());
+            }
+        }
         let is_cache_enabled = req.get_is_cache_enabled() && !is_versioned_lookup;
         let cache_match_version = is_cache_enabled.then_some(req.get_cache_if_match_version());
 
@@ -219,29 +243,12 @@ impl<E: Engine> Endpoint<E> {
 
         if is_versioned_lookup && req.get_tp() != REQ_TYPE_DAG {
             return Err(box_err!(
-                "range_versions is only supported for DAG requests"
+                "versioned_ranges is only supported for DAG requests"
             ));
         }
 
         match req.get_tp() {
             REQ_TYPE_DAG => {
-                if is_versioned_lookup {
-                    if range_versions.len() != ranges.len() {
-                        return Err(box_err!(
-                            "range_versions length {} doesn't match ranges length {}",
-                            range_versions.len(),
-                            ranges.len()
-                        ));
-                    }
-                    for range in &ranges {
-                        if !is_point(range) {
-                            return Err(box_err!(
-                                "range_versions is only supported for point ranges"
-                            ));
-                        }
-                    }
-                }
-
                 let mut dag = DagRequest::default();
                 box_try!(dag.merge_from(&mut input));
                 let mut table_scan = false;
@@ -256,7 +263,9 @@ impl<E: Engine> Endpoint<E> {
                     }
                 }
                 if is_versioned_lookup && !table_scan {
-                    return Err(box_err!("range_versions is only supported for TableScan"));
+                    return Err(box_err!(
+                        "versioned_ranges is only supported for TableScan"
+                    ));
                 }
                 if start_ts == 0 {
                     start_ts = dag.get_start_ts_fallback();
@@ -740,7 +749,7 @@ impl<E: Engine> Endpoint<E> {
                 // coprocessor cache related fields are not passed in the "task" by now.
                 new_req.is_cache_enabled = false;
                 new_req.ranges = task.take_ranges();
-                new_req.range_versions = task.take_range_versions();
+                new_req.versioned_ranges = task.take_versioned_ranges();
                 let new_context = new_req.mut_context();
                 new_context.set_region_id(task.get_region_id());
                 new_context.set_region_epoch(task.take_region_epoch());
@@ -2451,7 +2460,7 @@ mod tests {
     }
 
     #[test]
-    fn test_range_versions_len_mismatch_rejected() {
+    fn test_versioned_ranges_requires_empty_ranges() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
@@ -2477,13 +2486,14 @@ mod tests {
         r1.set_end(b"k2".to_vec());
         req.mut_ranges().push(r1);
 
-        let mut r2 = coppb::KeyRange::default();
-        r2.set_start(b"k2".to_vec());
-        r2.set_end(b"k3".to_vec());
-        req.mut_ranges().push(r2);
-
-        // Mismatch: 2 ranges but only 1 version.
-        req.mut_range_versions().push(10);
+        // `versioned_ranges` must keep `ranges` empty.
+        let mut r = coppb::KeyRange::default();
+        r.set_start(b"k1".to_vec());
+        r.set_end(b"k2".to_vec());
+        let mut vr = coppb::VersionedKeyRange::default();
+        vr.set_range(r);
+        vr.set_read_ts(10);
+        req.mut_versioned_ranges().push(vr);
 
         let mut dag = DagRequest::default();
         dag.mut_executors().push(Executor::default());
@@ -2491,11 +2501,14 @@ mod tests {
 
         let resp = block_on(copr.parse_and_handle_unary_request(req, None));
         assert!(!resp.get_other_error().is_empty());
-        assert!(resp.get_other_error().contains("range_versions length"));
+        assert!(
+            resp.get_other_error()
+                .contains("versioned_ranges requires ranges to be empty")
+        );
     }
 
     #[test]
-    fn test_range_versions_requires_point_ranges() {
+    fn test_versioned_ranges_requires_point_ranges() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
@@ -2519,9 +2532,10 @@ mod tests {
         let mut r = coppb::KeyRange::default();
         r.set_start(b"a".to_vec());
         r.set_end(b"z".to_vec());
-        req.mut_ranges().push(r);
-
-        req.mut_range_versions().push(10);
+        let mut vr = coppb::VersionedKeyRange::default();
+        vr.set_range(r);
+        vr.set_read_ts(10);
+        req.mut_versioned_ranges().push(vr);
 
         let mut dag = DagRequest::default();
         dag.mut_executors().push(Executor::default());
@@ -2536,7 +2550,7 @@ mod tests {
     }
 
     #[test]
-    fn test_range_versions_requires_dag_request() {
+    fn test_versioned_ranges_requires_dag_request() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
@@ -2560,9 +2574,10 @@ mod tests {
         let mut r = coppb::KeyRange::default();
         r.set_start(b"k1".to_vec());
         r.set_end(b"k2".to_vec());
-        req.mut_ranges().push(r);
-
-        req.mut_range_versions().push(10);
+        let mut vr = coppb::VersionedKeyRange::default();
+        vr.set_range(r);
+        vr.set_read_ts(10);
+        req.mut_versioned_ranges().push(vr);
 
         let mut analyze = AnalyzeReq::default();
         analyze.set_tp(AnalyzeType::TypeIndex);
@@ -2577,7 +2592,7 @@ mod tests {
     }
 
     #[test]
-    fn test_range_versions_requires_table_scan() {
+    fn test_versioned_ranges_requires_table_scan() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
@@ -2601,9 +2616,10 @@ mod tests {
         let mut r = coppb::KeyRange::default();
         r.set_start(b"k1".to_vec());
         r.set_end(b"k2".to_vec());
-        req.mut_ranges().push(r);
-
-        req.mut_range_versions().push(10);
+        let mut vr = coppb::VersionedKeyRange::default();
+        vr.set_range(r);
+        vr.set_read_ts(10);
+        req.mut_versioned_ranges().push(vr);
 
         let mut dag = DagRequest::default();
         let mut scan_exec = Executor::default();
@@ -2622,7 +2638,7 @@ mod tests {
     }
 
     #[test]
-    fn test_range_versions_allows_common_handle_table_scan() {
+    fn test_versioned_ranges_allows_common_handle_table_scan() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
@@ -2646,9 +2662,10 @@ mod tests {
         let mut r = coppb::KeyRange::default();
         r.set_start(b"k1".to_vec());
         r.set_end(b"k2".to_vec());
-        req.mut_ranges().push(r);
-
-        req.mut_range_versions().push(10);
+        let mut vr = coppb::VersionedKeyRange::default();
+        vr.set_range(r);
+        vr.set_read_ts(10);
+        req.mut_versioned_ranges().push(vr);
 
         let mut dag = DagRequest::default();
         let mut scan_exec = Executor::default();
@@ -2664,7 +2681,7 @@ mod tests {
     }
 
     #[test]
-    fn test_range_versions_skip_memory_lock_check_and_max_ts_not_updated() {
+    fn test_versioned_ranges_skip_memory_lock_check_and_max_ts_not_updated() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
@@ -2707,9 +2724,10 @@ mod tests {
         let mut key_range = coppb::KeyRange::default();
         key_range.set_start(b"key".to_vec());
         key_range.set_end(end);
-        req.mut_ranges().push(key_range);
-
-        req.mut_range_versions().push(10);
+        let mut vr = coppb::VersionedKeyRange::default();
+        vr.set_range(key_range);
+        vr.set_read_ts(10);
+        req.mut_versioned_ranges().push(vr);
 
         let mut dag = DagRequest::default();
         let mut scan_exec = Executor::default();
@@ -2726,7 +2744,7 @@ mod tests {
     }
 
     #[test]
-    fn test_range_versions_disables_cache_match_version() {
+    fn test_versioned_ranges_disables_cache_match_version() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
@@ -2755,9 +2773,10 @@ mod tests {
         let mut key_range = coppb::KeyRange::default();
         key_range.set_start(b"key".to_vec());
         key_range.set_end(end);
-        req.mut_ranges().push(key_range);
-
-        req.mut_range_versions().push(10);
+        let mut vr = coppb::VersionedKeyRange::default();
+        vr.set_range(key_range);
+        vr.set_read_ts(10);
+        req.mut_versioned_ranges().push(vr);
 
         let mut dag = DagRequest::default();
         let mut scan_exec = Executor::default();
