@@ -201,7 +201,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
                 .batch_get_command(requests, ids, trackers, p.clone(), Instant::now()),
         )?;
         let mut values = vec![];
-        for value in p.take_data().into_iter() {
+        for value in p.take_values().into_iter() {
             values.push(value?);
         }
         Ok(values)
@@ -408,7 +408,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
         let p = GetConsumer::new();
         block_on(self.store.raw_batch_get_command(requests, ids, p.clone()))?;
         let mut values = vec![];
-        for value in p.take_data().into_iter() {
+        for value in p.take_values().into_iter() {
             values.push(value?);
         }
         Ok(values)

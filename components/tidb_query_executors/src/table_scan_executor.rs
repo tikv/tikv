@@ -320,7 +320,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
 
             // Fill last `handle_index - 1` columns.
             for i in last_index..*handle_index {
-                if Some(i) == physical_table_id_column_idx {
+                if Some(i) == physical_table_id_column_idx || Some(i) == commit_ts_column_idx {
                     columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
                         scan_rows,
                         EvalType::Int,
