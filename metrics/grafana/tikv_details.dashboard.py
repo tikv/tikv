@@ -2355,22 +2355,23 @@ def RaftPropose() -> RowPanel:
                     target(
                         expr=expr_histogram_quantile(
                             0.99,
-                            "tikv_raftstore_store_perf_context_time_duration_secs",
-                            by_labels=["type"],
-                            is_optional_quantile=True,
-                        ),
-                        legend_format="store-{{type}}-" + OPTIONAL_QUANTILE_INPUT,
-                        additional_groupby=True,
-                    ),
-                    target(
-                        expr=expr_histogram_quantile(
-                            0.99,
                             "tikv_raftstore_apply_perf_context_time_duration_secs",
                             by_labels=["type"],
                             is_optional_quantile=True,
                         ),
                         legend_format="apply-{{type}}-" + OPTIONAL_QUANTILE_INPUT,
                         additional_groupby=True,
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_raftstore_store_perf_context_time_duration_secs",
+                            by_labels=["type"],
+                            is_optional_quantile=True,
+                        ),
+                        legend_format="store-{{type}}-" + OPTIONAL_QUANTILE_INPUT,
+                        additional_groupby=True,
+                        hide=True,
                     ),
                 ],
             ),

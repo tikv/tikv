@@ -25107,21 +25107,6 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "histogram_quantile($optional_quantile,(\n    sum(rate(\n    tikv_raftstore_store_perf_context_time_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, le, $additional_groupby) \n    \n    \n))  ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "store-{{type}}-$optional_quantile {{$additional_groupby}}",
-              "metric": "",
-              "query": "histogram_quantile($optional_quantile,(\n    sum(rate(\n    tikv_raftstore_store_perf_context_time_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, le, $additional_groupby) \n    \n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            },
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "histogram_quantile($optional_quantile,(\n    sum(rate(\n    tikv_raftstore_apply_perf_context_time_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, le, $additional_groupby) \n    \n    \n))  ",
               "format": "time_series",
               "hide": false,
@@ -25131,6 +25116,21 @@
               "legendFormat": "apply-{{type}}-$optional_quantile {{$additional_groupby}}",
               "metric": "",
               "query": "histogram_quantile($optional_quantile,(\n    sum(rate(\n    tikv_raftstore_apply_perf_context_time_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, le, $additional_groupby) \n    \n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "histogram_quantile($optional_quantile,(\n    sum(rate(\n    tikv_raftstore_store_perf_context_time_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, le, $additional_groupby) \n    \n    \n))  ",
+              "format": "time_series",
+              "hide": true,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "store-{{type}}-$optional_quantile {{$additional_groupby}}",
+              "metric": "",
+              "query": "histogram_quantile($optional_quantile,(\n    sum(rate(\n    tikv_raftstore_store_perf_context_time_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, le, $additional_groupby) \n    \n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
