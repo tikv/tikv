@@ -924,6 +924,13 @@ fn hotspot_query_num_report_threshold() -> u64 {
     HOTSPOT_QUERY_RATE_THRESHOLD * 10
 }
 
+fn hotspot_cpu_usage_report_threshold() -> u64 {
+    const HOTSPOT_CPU_USAGE_THRESHOLD: u64 = 1;
+    fail_point!("mock_hotspot_threshold", |_| { 0 });
+
+    HOTSPOT_CPU_USAGE_THRESHOLD
+}
+
 /// Max limitation of delayed store_heartbeat.
 const STORE_HEARTBEAT_DELAY_LIMIT: u64 = 5 * 60;
 
@@ -952,6 +959,8 @@ where
 
     // region_id -> total_cpu_time_ms (since last region heartbeat)
     region_cpu_records: HashMap<u64, u32>,
+    // region_id -> total_cpu_time_ms (since last store heartbeat)
+    region_cpu_records_store: HashMap<u64, u32>,
 
     concurrency_manager: ConcurrencyManager,
     snap_mgr: SnapManager,
@@ -1057,6 +1066,7 @@ where
             store_heartbeat_interval,
             stats_monitor,
             region_cpu_records: HashMap::default(),
+            region_cpu_records_store: HashMap::default(),
             concurrency_manager,
             snap_mgr,
             remote,
@@ -1275,6 +1285,10 @@ where
         dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     ) {
         let mut report_peers = HashMap::default();
+        let now = UnixSecs::now();
+        let interval_seconds = now
+            .into_inner()
+            .saturating_sub(self.store_stat.last_report_ts.into_inner());
         {
             let mut region_peers = self.region_peers.write().unwrap();
             for (region_id, region_peer) in region_peers.iter_mut() {
@@ -1283,6 +1297,19 @@ where
                 let query_stats = region_peer
                     .query_stats
                     .sub_query_stats(&region_peer.last_store_report_query_stats);
+                let cpu_usage = if interval_seconds > 0 {
+                    let cpu_time_duration = Duration::from_millis(
+                        self.region_cpu_records_store.remove(region_id).unwrap_or(0) as u64,
+                    );
+                    ((cpu_time_duration.as_secs_f64() * 100.0) / interval_seconds as f64) as u64
+                } else {
+                    0
+                };
+                let cpu_usage = if cpu_usage < hotspot_cpu_usage_report_threshold() {
+                    0
+                } else {
+                    cpu_usage
+                };
                 region_peer.last_store_report_read_bytes = region_peer.read_bytes;
                 region_peer.last_store_report_read_keys = region_peer.read_keys;
                 region_peer
@@ -1291,16 +1318,20 @@ where
                 if read_bytes < hotspot_byte_report_threshold()
                     && read_keys < hotspot_key_report_threshold()
                     && query_stats.get_read_query_num() < hotspot_query_num_report_threshold()
+                    && cpu_usage < hotspot_cpu_usage_report_threshold()
                 {
                     continue;
                 }
-                let mut read_stat = pdpb::PeerStat::default();
-                read_stat.set_region_id(*region_id);
-                read_stat.set_read_keys(read_keys);
-                read_stat.set_read_bytes(read_bytes);
-                read_stat.set_query_stats(query_stats.0);
-                report_peers.insert(*region_id, read_stat);
-            }
+            let mut read_stat = pdpb::PeerStat::default();
+            read_stat.set_region_id(*region_id);
+            read_stat.set_read_keys(read_keys);
+            read_stat.set_read_bytes(read_bytes);
+            read_stat.set_query_stats(query_stats.0);
+            let mut cpu_stats = pdpb::CpuStats::default();
+            cpu_stats.set_unified_read(cpu_usage);
+            read_stat.set_cpu_stats(cpu_stats);
+            report_peers.insert(*region_id, read_stat);
+        }
         }
 
         stats = collect_report_read_peer_stats(HOTSPOT_REPORT_CAPACITY, report_peers, stats);
@@ -1346,7 +1377,7 @@ where
             .engine_last_query_num
             .fill_query_stats(&self.store_stat.engine_total_query_num);
         self.store_stat.last_report_ts = if !is_fake_heartbeat {
-            UnixSecs::now()
+            now
         } else {
             // If `is_fake_heartbeat == true`, the given Task::StoreHeartbeat should be a
             // fake heartbeat to PD, we won't update the last_report_ts to avoid
@@ -1976,7 +2007,12 @@ where
     fn handle_region_cpu_records(&mut self, records: Arc<RawRecords>) {
         // Send Region CPU info to AutoSplitController inside the stats_monitor.
         self.stats_monitor.maybe_send_cpu_stats(&records);
-        calculate_region_cpu_records(self.store_id, records, &mut self.region_cpu_records);
+        calculate_region_cpu_records(self.store_id, records.clone(), &mut self.region_cpu_records);
+        calculate_region_cpu_records(
+            self.store_id,
+            records,
+            &mut self.region_cpu_records_store,
+        );
     }
 
     fn handle_report_min_resolved_ts(&self, store_id: u64, min_resolved_ts: u64) {
@@ -2348,6 +2384,7 @@ where
                     query_stats,
                     cop_detail,
                     cpu_usage,
+                    cpu_stats,
                 ) = {
                     let region_id = hb_task.region.get_id();
                     let mut region_peers = self.region_peers.write().unwrap();
@@ -2399,6 +2436,8 @@ where
                             0
                         }
                     };
+                    let mut cpu_stats = pdpb::CpuStats::default();
+                    cpu_stats.set_unified_read(cpu_usage);
                     (
                         read_bytes_delta,
                         read_keys_delta,
@@ -2408,6 +2447,7 @@ where
                         query_stats.0,
                         cop_detail,
                         cpu_usage,
+                        cpu_stats,
                     )
                 };
                 self.handle_heartbeat(
@@ -2427,6 +2467,7 @@ where
                         approximate_keys,
                         last_report_ts,
                         cpu_usage,
+                        cpu_stats,
                     },
                     hb_task.replication_status,
                 )
@@ -2649,7 +2690,7 @@ fn collect_report_read_peer_stats(
     mut report_read_stats: HashMap<u64, pdpb::PeerStat>,
     mut stats: pdpb::StoreStats,
 ) -> pdpb::StoreStats {
-    if report_read_stats.len() < capacity * 3 {
+    if report_read_stats.len() < capacity * 4 {
         for (_, read_stat) in report_read_stats {
             stats.peer_stats.push(read_stat);
         }
@@ -2658,6 +2699,7 @@ fn collect_report_read_peer_stats(
     let mut keys_topn_report = TopN::new(capacity);
     let mut bytes_topn_report = TopN::new(capacity);
     let mut stats_topn_report = TopN::new(capacity);
+    let mut cpu_topn_report = TopN::new(capacity);
     for read_stat in report_read_stats.values() {
         let mut cmp_stat = PeerCmpReadStat::default();
         cmp_stat.region_id = read_stat.region_id;
@@ -2670,6 +2712,9 @@ fn collect_report_read_peer_stats(
         let mut query_cmp_stat = cmp_stat.clone();
         query_cmp_stat.report_stat = get_read_query_num(read_stat.get_query_stats());
         stats_topn_report.push(query_cmp_stat);
+        let mut cpu_cmp_stat = cmp_stat;
+        cpu_cmp_stat.report_stat = read_stat.get_cpu_stats().get_unified_read();
+        cpu_topn_report.push(cpu_cmp_stat);
     }
 
     for x in keys_topn_report {
@@ -2685,6 +2730,12 @@ fn collect_report_read_peer_stats(
     }
 
     for x in stats_topn_report {
+        if let Some(report_stat) = report_read_stats.remove(&x.region_id) {
+            stats.peer_stats.push(report_stat);
+        }
+    }
+
+    for x in cpu_topn_report {
         if let Some(report_stat) = report_read_stats.remove(&x.region_id) {
             stats.peer_stats.push(report_stat);
         }
@@ -2828,6 +2879,11 @@ mod tests {
             stat.set_read_bytes(6 - i);
             stat.read_keys = i;
             stat.read_bytes = 6 - i;
+            if i == 2 {
+                let mut cpu_stats = pdpb::CpuStats::default();
+                cpu_stats.set_unified_read(10);
+                stat.set_cpu_stats(cpu_stats);
+            }
             let mut query_stat = QueryStats::default();
             if i == 3 {
                 query_stat.add_query_num(QueryKind::Get, 6);
@@ -2839,7 +2895,7 @@ mod tests {
         }
         let mut store_stats = pdpb::StoreStats::default();
         store_stats = collect_report_read_peer_stats(1, report_stats, store_stats);
-        assert_eq!(store_stats.peer_stats.len(), 3)
+        assert_eq!(store_stats.peer_stats.len(), 4)
     }
 
     use engine_test::kv::KvTestEngine;

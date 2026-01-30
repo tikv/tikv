@@ -153,6 +153,8 @@ where
                 0
             }
         };
+        let mut cpu_stats = pdpb::CpuStats::default();
+        cpu_stats.set_unified_read(cpu_usage);
 
         let region_stat = RegionStat {
             down_peers: task.down_peers,
@@ -167,6 +169,7 @@ where
             approximate_keys,
             last_report_ts,
             cpu_usage,
+            cpu_stats,
         };
         self.store_stat
             .region_bytes_written
@@ -406,7 +409,16 @@ where
     pub fn handle_update_region_cpu_records(&mut self, records: Arc<RawRecords>) {
         // Send Region CPU info to AutoSplitController inside the stats_monitor.
         self.stats_monitor.maybe_send_cpu_stats(&records);
-        Self::calculate_region_cpu_records(self.store_id, records, &mut self.region_cpu_records);
+        Self::calculate_region_cpu_records(
+            self.store_id,
+            records.clone(),
+            &mut self.region_cpu_records,
+        );
+        Self::calculate_region_cpu_records(
+            self.store_id,
+            records,
+            &mut self.region_cpu_records_store,
+        );
     }
 
     pub fn handle_destroy_peer(&mut self, region_id: u64) {
