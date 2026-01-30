@@ -7,6 +7,7 @@ use std::{
     sync::Arc,
 };
 
+use apache_avro::{types::Value as AvroValue, Reader as AvroReader};
 use br_parquet_exporter::{ExportOptions, SstParquetExporter, TableFilter};
 use engine_test::kv::{self, KvTestEngine};
 use engine_traits::{CF_DEFAULT, ExternalSstFileInfo, SstExt, SstWriter, SstWriterBuilder};
@@ -14,6 +15,7 @@ use external_storage::local::LocalStorage;
 use kvproto::brpb::{BackupMeta, File as BackupFile, Schema, TableMeta};
 use lazy_static::lazy_static;
 use parquet::file::reader::{FileReader, SerializedFileReader};
+use parquet::record::RowAccessor;
 use protobuf::Message;
 use tempfile::TempDir;
 use tidb_query_datatype::{
@@ -370,6 +372,38 @@ fn integration_iceberg_table_output() {
         output_dir.path().join("parquet/test/t").display()
     );
     assert_eq!(json["location"], expected_location);
+
+    let snapshots = json["snapshots"].as_array().unwrap();
+    let snapshot = snapshots
+        .iter()
+        .find(|snap| snap["snapshot-id"] == report.end_version)
+        .unwrap();
+    let manifest_list_uri = snapshot["manifest-list"].as_str().unwrap();
+    let manifest_list_path = file_uri_to_path(manifest_list_uri);
+    let manifest_list_entry = read_first_avro_record(&manifest_list_path);
+    let manifest_uri = avro_get_path(&manifest_list_entry, &["manifest_path"])
+        .and_then(avro_as_string)
+        .unwrap();
+
+    let manifest_path = file_uri_to_path(manifest_uri);
+    let manifest_entry = read_first_avro_record(&manifest_path);
+    let parquet_file_uri = avro_get_path(&manifest_entry, &["data_file", "file_path"])
+        .and_then(avro_as_string)
+        .unwrap();
+    let record_count = avro_get_path(&manifest_entry, &["data_file", "record_count"])
+        .and_then(avro_as_long)
+        .unwrap();
+    assert_eq!(record_count, 1);
+
+    let parquet_path = file_uri_to_path(parquet_file_uri);
+    assert!(parquet_path.exists());
+    assert!(parquet_file_uri.ends_with(&report.files[0].object_name));
+    let reader = SerializedFileReader::new(File::open(parquet_path).unwrap()).expect("parquet");
+    let mut row_iter = reader.get_row_iter(None).unwrap();
+    let row = row_iter.next().unwrap().unwrap();
+    assert_eq!(row.get_long(0).unwrap(), 1);
+    assert_eq!(row.get_string(1).unwrap(), "1");
+    assert_eq!(row.get_long(2).unwrap(), 7);
 }
 
 fn make_schema(db: &str, table: &str, id: i64) -> Schema {
@@ -390,6 +424,46 @@ fn make_schema(db: &str, table: &str, id: i64) -> Schema {
         .to_vec(),
     );
     schema
+}
+
+fn file_uri_to_path(uri: &str) -> PathBuf {
+    if let Some(stripped) = uri.strip_prefix("file://") {
+        PathBuf::from(stripped)
+    } else {
+        PathBuf::from(uri)
+    }
+}
+
+fn read_first_avro_record(path: &Path) -> AvroValue {
+    let mut reader = AvroReader::new(File::open(path).unwrap()).unwrap();
+    reader.next().unwrap().unwrap()
+}
+
+fn avro_get_path<'a>(value: &'a AvroValue, path: &[&str]) -> Option<&'a AvroValue> {
+    let mut cur = value;
+    for segment in path {
+        cur = match cur {
+            AvroValue::Record(fields) => fields
+                .iter()
+                .find_map(|(name, val)| (name == segment).then_some(val))?,
+            _ => return None,
+        };
+    }
+    Some(cur)
+}
+
+fn avro_as_string(value: &AvroValue) -> Option<&str> {
+    match value {
+        AvroValue::String(s) => Some(s.as_str()),
+        _ => None,
+    }
+}
+
+fn avro_as_long(value: &AvroValue) -> Option<i64> {
+    match value {
+        AvroValue::Long(v) => Some(*v),
+        _ => None,
+    }
 }
 
 fn collect_parquet_files(root: &Path) -> Vec<PathBuf> {
