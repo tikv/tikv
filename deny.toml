@@ -92,6 +92,10 @@ ignore = [
     # replace FxHash. Currently, this package is stable and there are no known
     # exploitable vulnerabilities affecting our use case.
     "RUSTSEC-2025-0057",
+    # Ignore RUSTSEC-2026-0002 temporarily. `lru` is pulled in by aws-sdk-s3
+    # (AWS Rust SDK) which currently depends on lru 0.12.x; the RustSec fix is
+    # available in >= 0.16.3 only. Remove this once upstream updates.
+    "RUSTSEC-2026-0002",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,
@@ -118,4 +122,3 @@ exceptions = [
 unknown-git = "deny"
 unknown-registry = "deny"
 allow-org = { github = ["tikv", "pingcap", "rust-lang"] }
-
