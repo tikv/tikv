@@ -5,7 +5,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs::{self, File},
     future::Future,
-    io::{Read, Seek, SeekFrom, Write},
+    io::{Read, Write},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -28,7 +28,6 @@ use parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
 use protobuf::Message;
 use rayon::{ThreadPoolBuilder, prelude::*};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tempfile::{NamedTempFile, TempDir};
 use thiserror::Error;
 use tidb_query_datatype::{
@@ -122,6 +121,10 @@ pub enum Error {
 
 /// Result type used by the BR SST → Parquet exporter.
 pub type Result<T> = std::result::Result<T, Error>;
+
+fn sha256_bytes(input: &[u8]) -> Result<Vec<u8>> {
+    file_system::sha256(input).map_err(|err| Error::Invalid(format!("sha256 failed: {}", err)))
+}
 
 /// Export configuration for BR SST → Parquet conversion.
 #[derive(Clone, Debug)]
@@ -336,11 +339,13 @@ impl CheckpointState {
         recorded.remove(object_name);
     }
 
-    fn entry_path(&self, object_name: &str) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(object_name.as_bytes());
-        let digest = hasher.finalize();
-        format!("{}/{}.json", self.entry_prefix, hex::encode(digest))
+    fn entry_path(&self, object_name: &str) -> Result<String> {
+        let digest = sha256_bytes(object_name.as_bytes())?;
+        Ok(format!(
+            "{}/{}.json",
+            self.entry_prefix,
+            hex::encode(digest)
+        ))
     }
 }
 
@@ -417,7 +422,7 @@ impl<'a> SstParquetExporter<'a> {
         let mut reader = self.input.read(meta_path);
         let mut buf = Vec::new();
         block_on(reader.read_to_end(&mut buf))?;
-        let digest = Sha256::digest(&buf).to_vec();
+        let digest = sha256_bytes(&buf)?;
         let mut meta = BackupMeta::default();
         meta.merge_from_bytes(&buf)?;
         Ok(LoadedBackupMeta { meta, digest })
@@ -502,9 +507,7 @@ impl<'a> SstParquetExporter<'a> {
         let mut buf = Vec::new();
         block_on(reader.read_to_end(&mut buf))?;
         if !file.get_sha256().is_empty() {
-            let mut hasher = Sha256::new();
-            hasher.update(&buf);
-            let digest = hasher.finalize();
+            let digest = sha256_bytes(&buf)?;
             if digest.as_slice() != file.get_sha256() {
                 return Err(Error::Invalid(format!(
                     "backupmeta index checksum mismatch for {}",
@@ -529,7 +532,7 @@ impl<'a> SstParquetExporter<'a> {
         let entry_prefix = format!("{}/{}", checkpoint_prefix, CHECKPOINT_ENTRY_DIR);
         let meta_path = format!("{}/{}", checkpoint_prefix, CHECKPOINT_META_FILE);
         let config_hash =
-            self.checkpoint_config_hash(start_version, end_version, filter, backup_meta_digest);
+            self.checkpoint_config_hash(start_version, end_version, filter, backup_meta_digest)?;
         let config_hash_hex = hex::encode(&config_hash);
         let mut existing = HashMap::new();
         let meta = self.load_checkpoint_meta(&meta_path)?;
@@ -567,23 +570,24 @@ impl<'a> SstParquetExporter<'a> {
         end_version: u64,
         filter: &TableFilter,
         backup_meta_digest: &[u8],
-    ) -> Vec<u8> {
-        let mut hasher = Sha256::new();
-        hasher.update(b"br-parquet-checkpoint");
-        hasher.update(CHECKPOINT_VERSION.to_le_bytes());
-        hasher.update(start_version.to_le_bytes());
-        hasher.update(end_version.to_le_bytes());
-        hasher.update(backup_meta_digest);
-        hasher.update((self.options.row_group_size as u64).to_le_bytes());
-        hasher.update(format!("{:?}", self.options.compression).as_bytes());
+    ) -> Result<Vec<u8>> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"br-parquet-checkpoint");
+        buf.extend_from_slice(&CHECKPOINT_VERSION.to_le_bytes());
+        buf.extend_from_slice(&start_version.to_le_bytes());
+        buf.extend_from_slice(&end_version.to_le_bytes());
+        buf.extend_from_slice(backup_meta_digest);
+        buf.extend_from_slice(&(self.options.row_group_size as u64).to_le_bytes());
+        let compression = format!("{:?}", self.options.compression);
+        buf.extend_from_slice(compression.as_bytes());
         for rule in &filter.raw_rules {
-            hasher.update(rule.as_bytes());
-            hasher.update([0]);
+            buf.extend_from_slice(rule.as_bytes());
+            buf.push(0);
         }
         for id in &filter.raw_table_ids {
-            hasher.update(id.to_le_bytes());
+            buf.extend_from_slice(&id.to_le_bytes());
         }
-        hasher.finalize().to_vec()
+        sha256_bytes(&buf)
     }
 
     fn load_checkpoint_meta(&self, meta_path: &str) -> Result<Option<CheckpointMeta>> {
@@ -650,7 +654,7 @@ impl<'a> SstParquetExporter<'a> {
             .map_err(|err| Error::Invalid(format!("failed to encode checkpoint entry: {}", err)))?;
         let len = data.len() as u64;
         let reader = UnpinReader(Box::new(Cursor::new(data)));
-        let path = checkpoint.entry_path(&info.object_name);
+        let path = checkpoint.entry_path(&info.object_name)?;
         if let Err(err) = self.block_on(self.output.write(&path, reader, len)) {
             checkpoint.unmark_recorded(&info.object_name);
             return Err(Error::Io(err));
@@ -1051,20 +1055,24 @@ impl<'a> SstParquetExporter<'a> {
         BR_PARQUET_SSTS.with_label_values(&["converted"]).inc();
         BR_PARQUET_ROWS.inc_by(total_rows);
 
-        let mut upload = tmp.reopen()?;
-        let mut hasher = Sha256::new();
-        let mut size = 0u64;
+        let size = tmp.as_file().metadata()?.len();
+        let (mut checksum_reader, checksum_hasher) = file_system::Sha256Reader::new(tmp.reopen()?)
+            .map_err(|err| Error::Invalid(format!("failed to create sha256 reader: {}", err)))?;
         let mut buf = [0u8; 64 * 1024];
         loop {
-            let n = upload.read(&mut buf)?;
+            let n = checksum_reader.read(&mut buf)?;
             if n == 0 {
                 break;
             }
-            hasher.update(&buf[..n]);
-            size += n as u64;
         }
-        upload.seek(SeekFrom::Start(0))?;
-        let checksum = hasher.finalize().to_vec();
+        let checksum = checksum_hasher
+            .lock()
+            .unwrap()
+            .finish()
+            .map_err(|err| Error::Invalid(format!("sha256 finish failed: {}", err)))?
+            .to_vec();
+
+        let upload = tmp.reopen()?;
         let reader = AllowStdIo::new(upload);
         let upload_timer = Instant::now();
         self.block_on(
@@ -1447,9 +1455,7 @@ fn sanitize_name(input: &str) -> String {
         }
     }
     if changed {
-        let mut hasher = Sha256::new();
-        hasher.update(input.as_bytes());
-        let digest = hasher.finalize();
+        let digest = sha256_bytes(input.as_bytes()).unwrap_or_else(|_| vec![0; 32]);
         output.push_str("__");
         output.push_str(&hex::encode(&digest[..8]));
     }
@@ -1811,7 +1817,7 @@ mod tests {
         schema_meta.write_to_writer(&mut schema_bytes).unwrap();
         let schema_name = "backupmeta.schema.000000001";
         fs::write(input_dir.path().join(schema_name), &schema_bytes).unwrap();
-        let schema_sha = Sha256::digest(&schema_bytes).to_vec();
+        let schema_sha = file_system::sha256(&schema_bytes).unwrap();
         let mut schema_ref = BackupFile::default();
         schema_ref.set_name(schema_name.into());
         schema_ref.set_sha256(schema_sha);
@@ -1823,7 +1829,7 @@ mod tests {
         file_meta.write_to_writer(&mut file_bytes).unwrap();
         let file_name = "backupmeta.file.000000001";
         fs::write(input_dir.path().join(file_name), &file_bytes).unwrap();
-        let file_sha = Sha256::digest(&file_bytes).to_vec();
+        let file_sha = file_system::sha256(&file_bytes).unwrap();
         let mut file_ref = BackupFile::default();
         file_ref.set_name(file_name.into());
         file_ref.set_sha256(file_sha);
