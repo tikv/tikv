@@ -561,20 +561,21 @@ fn main() {
                     .iter()
                     .map(|info| info.to_manifest_file(report.start_version, report.end_version))
                     .collect();
-                block_on(catalog.write_manifest(
-                    output_storage.as_ref(),
-                    &manifest_files,
-                    TimeStamp::new(report.start_version),
-                    TimeStamp::new(report.end_version),
-                ))
-                .unwrap_or_else(|err| {
-                    clap::Error {
-                        message: format!("failed to write iceberg manifest: {}", err),
-                        kind: ErrorKind::Io,
-                        info: None,
-                    }
-                    .exit();
-                });
+                runtime
+                    .block_on(catalog.write_manifest(
+                        output_storage.as_ref(),
+                        &manifest_files,
+                        TimeStamp::new(report.start_version),
+                        TimeStamp::new(report.end_version),
+                    ))
+                    .unwrap_or_else(|err| {
+                        clap::Error {
+                            message: format!("failed to write iceberg manifest: {}", err),
+                            kind: ErrorKind::Io,
+                            info: None,
+                        }
+                        .exit();
+                    });
                 println!("wrote iceberg manifest entries");
             }
         }

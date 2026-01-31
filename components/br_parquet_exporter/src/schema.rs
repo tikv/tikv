@@ -8,6 +8,7 @@ use tipb::ColumnInfo;
 
 use crate::{Error, Result};
 
+/// Parquet physical type used for a column in BR SST → Parquet export.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ColumnParquetType {
     Int64,
@@ -16,10 +17,14 @@ pub enum ColumnParquetType {
     Binary,
 }
 
+/// Column role in the exported Parquet schema.
 #[derive(Clone, Debug)]
 pub enum ColumnKind {
+    /// Synthetic column holding the TiDB table ID.
     TableId,
+    /// Synthetic column holding the TiDB row handle.
     Handle,
+    /// A physical TiDB column with the given column ID.
     Physical(i64),
 }
 
@@ -28,6 +33,7 @@ const ICEBERG_PHYSICAL_FIELD_ID_BASE: i64 = 1000;
 const ICEBERG_SYSTEM_FIELD_ID_TABLE_ID: i32 = 1;
 const ICEBERG_SYSTEM_FIELD_ID_HANDLE: i32 = 2;
 
+/// A column definition for the exported Parquet table.
 #[derive(Clone, Debug)]
 pub struct ColumnSchema {
     pub name: String,
@@ -38,6 +44,7 @@ pub struct ColumnSchema {
     pub info: Option<ColumnInfo>,
 }
 
+/// Schema for a TiDB table decoded from BR backup schema metadata.
 #[derive(Clone, Debug)]
 pub struct TableSchema {
     pub table_id: i64,
@@ -51,6 +58,8 @@ pub struct TableSchema {
 }
 
 impl TableSchema {
+    /// Builds a [`TableSchema`] from a BR `Schema` entry (JSON-encoded TiDB
+    /// schema info).
     pub fn from_backup_schema(bs: &BackupSchema) -> Result<Self> {
         let db: DbInfo = serde_json::from_slice(bs.get_db())
             .map_err(|e| Error::Schema(format!("decode database info failed: {}", e)))?;

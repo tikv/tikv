@@ -326,10 +326,7 @@ impl MatcherParser {
                     if is_literal {
                         literal.push(next);
                     }
-                    if next.is_ascii() {
-                        pattern.push('\\');
-                    }
-                    pattern.push(next);
+                    pattern.push_str(&regex::escape(&next.to_string()));
                     idx += 1 + next.len_utf8();
                 }
                 '.' => {
@@ -408,22 +405,19 @@ static WILDCARD_RANGE_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 fn find_regex_end(line: &str) -> Option<usize> {
-    let bytes = line.as_bytes();
-    if bytes.first()? != &b'/' {
+    if !line.starts_with('/') {
         return None;
     }
-    let mut idx = 1;
-    while idx < bytes.len() {
-        match bytes[idx] {
-            b'\\' => {
-                idx += 1;
-                if idx >= bytes.len() {
-                    return None;
-                }
-                idx += 1;
-            }
-            b'/' => return Some(idx + 1),
-            _ => idx += 1,
+    let mut escaped = false;
+    for (idx, ch) in line.char_indices().skip(1) {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' => escaped = true,
+            '/' => return Some(idx + ch.len_utf8()),
+            _ => {}
         }
     }
     None

@@ -7,15 +7,17 @@ use std::{
     sync::Arc,
 };
 
-use apache_avro::{types::Value as AvroValue, Reader as AvroReader};
+use apache_avro::{Reader as AvroReader, types::Value as AvroValue};
 use br_parquet_exporter::{ExportOptions, SstParquetExporter, TableFilter};
 use engine_test::kv::{self, KvTestEngine};
 use engine_traits::{CF_DEFAULT, ExternalSstFileInfo, SstExt, SstWriter, SstWriterBuilder};
 use external_storage::local::LocalStorage;
 use kvproto::brpb::{BackupMeta, File as BackupFile, Schema, TableMeta};
 use lazy_static::lazy_static;
-use parquet::file::reader::{FileReader, SerializedFileReader};
-use parquet::record::RowAccessor;
+use parquet::{
+    file::reader::{FileReader, SerializedFileReader},
+    record::RowAccessor,
+};
 use protobuf::Message;
 use tempfile::TempDir;
 use tidb_query_datatype::{

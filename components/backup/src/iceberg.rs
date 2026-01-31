@@ -15,12 +15,18 @@ use txn_types::TimeStamp;
 
 use crate::{Error, Result};
 
+/// A minimal Iceberg manifest writer for BR backup output.
+///
+/// This is used by `tikv-ctl br-parquet-export` to emit JSON manifests that can
+/// be consumed by downstream tools, without changing the existing BR backup
+/// format.
 pub struct IcebergCatalog {
     cfg: BackupIcebergConfig,
     sequence: AtomicU64,
 }
 
 impl IcebergCatalog {
+    /// Creates an [`IcebergCatalog`] only when `cfg.enable` is `true`.
     pub fn from_config(cfg: BackupIcebergConfig) -> Option<Self> {
         if cfg.enable {
             Some(Self {
@@ -32,6 +38,11 @@ impl IcebergCatalog {
         }
     }
 
+    /// Writes an Iceberg-compatible manifest file describing `files`.
+    ///
+    /// The manifest is written under
+    /// `<warehouse>/<namespace>/<table>/metadata/` and includes BR metadata
+    /// such as key ranges and version bounds.
     pub async fn write_manifest(
         &self,
         storage: &dyn ExternalStorage,

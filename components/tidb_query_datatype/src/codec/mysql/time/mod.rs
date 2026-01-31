@@ -2357,14 +2357,18 @@ impl Time {
     }
 
     pub fn weekday(self) -> Weekday {
-        let date = if self.month() == 0 {
+        let base = if self.month() == 0 {
             NaiveDate::from_ymd_opt(self.year() as i32 - 1, 12, 1)
         } else {
             NaiveDate::from_ymd_opt(self.year() as i32, self.month(), 1)
-        }
-        .expect("valid date")
-            + chrono::Duration::days(i64::from(self.day()) - 1);
-        date.weekday()
+        };
+        let Some(date) = base else {
+            // Time can hold invalid dates when allow_invalid_date is enabled, but
+            // weekday() does not return Result. Return a deterministic value instead of
+            // panicking.
+            return Weekday::Mon;
+        };
+        (date + chrono::Duration::days(i64::from(self.day()) - 1)).weekday()
     }
 
     fn write_date_format_segment(self, b: char, output: &mut String) -> Result<()> {

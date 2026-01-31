@@ -3081,6 +3081,8 @@ impl BackupConfig {
             self.s3_multi_part_size = default_cfg.s3_multi_part_size;
         }
 
+        self.iceberg.validate()?;
+
         Ok(())
     }
 }
@@ -3109,12 +3111,31 @@ impl Default for BackupConfig {
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
+/// Iceberg manifest writing configuration for BR backup export.
 pub struct BackupIcebergConfig {
     pub enable: bool,
     pub warehouse: String,
     pub namespace: String,
     pub table: String,
     pub manifest_prefix: String,
+}
+
+impl BackupIcebergConfig {
+    fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if !self.enable {
+            return Ok(());
+        }
+        if self.warehouse.trim().is_empty() {
+            return Err("backup.iceberg.warehouse must be set when iceberg.enable is true".into());
+        }
+        if self.namespace.trim().is_empty() {
+            return Err("backup.iceberg.namespace must be set when iceberg.enable is true".into());
+        }
+        if self.table.trim().is_empty() {
+            return Err("backup.iceberg.table must be set when iceberg.enable is true".into());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]

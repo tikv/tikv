@@ -18,6 +18,7 @@ use crate::{
     schema::{ColumnKind, ColumnParquetType, ColumnSchema, TableSchema},
 };
 
+/// A typed value written to Parquet.
 #[derive(Debug)]
 pub enum CellValue {
     Int64(i64),
@@ -25,6 +26,7 @@ pub enum CellValue {
     Bytes(Vec<u8>),
 }
 
+/// Parquet writer for a single TiDB table export.
 pub struct ParquetWriter {
     writer: SerializedFileWriter<File>,
     columns: Vec<ColumnState>,
@@ -34,6 +36,7 @@ pub struct ParquetWriter {
 }
 
 impl ParquetWriter {
+    /// Creates a new writer for `table` and writes Parquet data into `sink`.
     pub fn try_new(
         table: &TableSchema,
         sink: File,
@@ -75,7 +78,15 @@ impl ParquetWriter {
         })
     }
 
+    /// Writes a projected row to the current row group.
     pub fn write_row(&mut self, values: Vec<Option<CellValue>>) -> Result<()> {
+        if values.len() != self.columns.len() {
+            return Err(Error::Invalid(format!(
+                "mismatched row length: expected {}, got {}",
+                self.columns.len(),
+                values.len()
+            )));
+        }
         for (column, value) in self.columns.iter_mut().zip(values.into_iter()) {
             column.push(value)?;
         }
@@ -87,6 +98,7 @@ impl ParquetWriter {
         Ok(())
     }
 
+    /// Flushes remaining data and closes the underlying Parquet writer.
     pub fn close(mut self) -> Result<()> {
         if self.rows_in_group > 0 {
             self.flush_row_group()?;

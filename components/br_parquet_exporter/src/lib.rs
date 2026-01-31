@@ -61,10 +61,12 @@ use crate::metrics::{
     BR_PARQUET_OUTPUT_BYTES, BR_PARQUET_ROWS, BR_PARQUET_SSTS, BR_PARQUET_STAGE_DURATION,
 };
 
+/// Returns a point-in-time snapshot of BR Parquet exporter metrics.
 pub fn exporter_metrics_snapshot() -> ExporterMetricsSnapshot {
     metrics::snapshot()
 }
 
+/// Parses a Parquet compression codec name.
 pub fn parse_parquet_compression(name: &str) -> std::result::Result<Compression, String> {
     match name.to_ascii_lowercase().as_str() {
         "snappy" => Ok(Compression::SNAPPY),
@@ -96,6 +98,8 @@ const CHECKPOINT_DIR: &str = "_checkpoint";
 const CHECKPOINT_ENTRY_DIR: &str = "entries";
 const CHECKPOINT_META_FILE: &str = "meta.json";
 const CHECKPOINT_VERSION: u32 = 1;
+
+/// Errors returned by the BR SST → Parquet exporter.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("I/O error {0}")]
@@ -116,8 +120,10 @@ pub enum Error {
     Other(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
 
+/// Result type used by the BR SST → Parquet exporter.
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Export configuration for BR SST → Parquet conversion.
 #[derive(Clone, Debug)]
 pub struct ExportOptions {
     pub row_group_size: usize,
@@ -144,6 +150,7 @@ impl Default for ExportOptions {
     }
 }
 
+/// Filter for selecting which TiDB tables to export.
 #[derive(Clone, Debug, Default)]
 pub struct TableFilter {
     table_ids: HashSet<i64>,
@@ -153,6 +160,7 @@ pub struct TableFilter {
 }
 
 impl TableFilter {
+    /// Builds a [`TableFilter`] from CLI arguments (table filters + table IDs).
     pub fn from_args(filters: &[String], table_ids: &[i64]) -> Result<Self> {
         let mut ids = HashSet::default();
         let mut raw_table_ids = Vec::new();
@@ -199,6 +207,7 @@ impl TableFilter {
     }
 }
 
+/// Export result produced by [`SstParquetExporter`].
 #[derive(Clone, Debug, Default)]
 pub struct ExportReport {
     pub files: Vec<ParquetFileInfo>,
@@ -207,6 +216,7 @@ pub struct ExportReport {
     pub end_version: u64,
 }
 
+/// Metadata for a single exported Parquet file.
 #[derive(Clone, Debug)]
 pub struct ParquetFileInfo {
     pub object_name: String,
@@ -221,6 +231,8 @@ pub struct ParquetFileInfo {
 }
 
 impl ParquetFileInfo {
+    /// Converts this file info into a BR `File` descriptor for Iceberg manifest
+    /// generation.
     pub fn to_manifest_file(&self, start_version: u64, end_version: u64) -> BackupFile {
         let mut file = BackupFile::default();
         file.set_name(self.object_name.clone());
@@ -337,6 +349,7 @@ struct LoadedBackupMeta {
     digest: Vec<u8>,
 }
 
+/// Exports BR backup SST files into per-table Parquet files.
 pub struct SstParquetExporter<'a> {
     input: &'a dyn ExternalStorage,
     output: &'a dyn ExternalStorage,
@@ -356,6 +369,8 @@ struct FileTaskReport {
 }
 
 impl<'a> SstParquetExporter<'a> {
+    /// Creates a new exporter from `input` to `output` using the given
+    /// `options`.
     pub fn new(
         input: &'a dyn ExternalStorage,
         output: &'a dyn ExternalStorage,
@@ -381,10 +396,13 @@ impl<'a> SstParquetExporter<'a> {
         }
     }
 
+    /// Loads the default backup meta (`backupmeta`) and exports all matched
+    /// tables.
     pub fn export_backup_meta(&mut self, output_prefix: &str) -> Result<ExportReport> {
         self.export_backup_meta_with_filter(output_prefix, &TableFilter::default())
     }
 
+    /// Exports BR backup SST files using the provided [`TableFilter`].
     pub fn export_backup_meta_with_filter(
         &mut self,
         output_prefix: &str,
@@ -936,7 +954,6 @@ impl<'a> SstParquetExporter<'a> {
         let mut skipped_non_record = 0u64;
         let mut skipped_write = 0u64;
         let mut mismatch_logged = false;
-        let enforce_table_id = !file_meta.get_table_metas().is_empty();
         while iter.valid()? {
             let raw_key = iter.key();
             if raw_key.is_empty() {
@@ -957,7 +974,7 @@ impl<'a> SstParquetExporter<'a> {
                 }
             };
             let table_id = table::decode_table_id(user_key.as_ref())?;
-            if enforce_table_id && table_id != table.table_id {
+            if table_id != table.table_id {
                 if !mismatch_logged {
                     mismatch_logged = true;
                     tikv_util::debug!(

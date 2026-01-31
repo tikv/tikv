@@ -7,22 +7,26 @@ use prometheus::{
 };
 
 lazy_static! {
+    /// Number of SST files handled by the BR Parquet exporter, labeled by stage.
     pub static ref BR_PARQUET_SSTS: IntCounterVec = register_int_counter_vec!(
         "tikv_br_parquet_sst_events_total",
         "Number of SST files handled by the BR Parquet exporter",
         &["event"]
     )
     .unwrap();
+    /// Total number of rows exported to Parquet by the BR Parquet exporter.
     pub static ref BR_PARQUET_ROWS: IntCounter = register_int_counter!(
         "tikv_br_parquet_rows_emitted_total",
         "Rows exported to Parquet files by the BR Parquet exporter"
     )
     .unwrap();
+    /// Total number of Parquet bytes uploaded by the BR Parquet exporter.
     pub static ref BR_PARQUET_OUTPUT_BYTES: IntCounter = register_int_counter!(
         "tikv_br_parquet_output_bytes_total",
         "Total Parquet bytes uploaded by the BR Parquet exporter"
     )
     .unwrap();
+    /// Duration spent in major BR Parquet exporter stages.
     pub static ref BR_PARQUET_STAGE_DURATION: HistogramVec = register_histogram_vec!(
         "tikv_br_parquet_stage_duration_seconds",
         "Duration spent in major BR Parquet exporter stages",
@@ -32,6 +36,7 @@ lazy_static! {
     .unwrap();
 }
 
+/// A snapshot of BR Parquet exporter counters for reporting progress.
 #[derive(Clone, Debug, Default)]
 pub struct ExporterMetricsSnapshot {
     pub downloaded: u64,
@@ -43,6 +48,8 @@ pub struct ExporterMetricsSnapshot {
 }
 
 impl ExporterMetricsSnapshot {
+    /// Computes the delta between this snapshot and `base` using saturating
+    /// subtraction.
     pub fn delta_since(&self, base: &ExporterMetricsSnapshot) -> ExporterMetricsSnapshot {
         ExporterMetricsSnapshot {
             downloaded: self.downloaded.saturating_sub(base.downloaded),
@@ -55,6 +62,7 @@ impl ExporterMetricsSnapshot {
     }
 }
 
+/// Takes a point-in-time snapshot of exporter counters.
 pub fn snapshot() -> ExporterMetricsSnapshot {
     ExporterMetricsSnapshot {
         downloaded: BR_PARQUET_SSTS.with_label_values(&["downloaded"]).get(),
