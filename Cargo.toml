@@ -280,6 +280,7 @@ aws = { path = "components/cloud/aws" }
 azure = { path = "components/cloud/azure" }
 backup = { path = "components/backup", default-features = false }
 backup-stream = { path = "components/backup-stream", default-features = false }
+br_parquet_exporter = { path = "components/br_parquet_exporter" }
 batch-system = { path = "components/batch-system" }
 causal_ts = { path = "components/causal_ts" }
 cdc = { path = "components/cdc", default-features = false }

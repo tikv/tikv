@@ -33,7 +33,9 @@ nortcheck = ["engine_rocks/nortcheck"]
 
 [dependencies]
 api_version = { workspace = true }
+backup = { workspace = true }
 base64 = "0.13.0"
+br_parquet_exporter = { workspace = true }
 clap = { workspace = true }
 collections = { workspace = true }
 compact-log-backup = { workspace = true }
@@ -41,6 +43,7 @@ crypto = { workspace = true }
 encryption_export = { workspace = true }
 engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
+external_storage = { workspace = true }
 file_system = { workspace = true }
 futures = "0.3"
 gag = "1.0"

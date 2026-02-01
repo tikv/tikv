@@ -50,6 +50,7 @@ use txn_types::{Key, TimeStamp, TsSet};
 
 use crate::{
     Error,
+    iceberg::IcebergCatalog,
     metrics::*,
     softlimit::{CpuStatistics, SoftLimit, SoftLimitByCpu},
     utils::KeyValueCodec,
@@ -233,6 +234,7 @@ async fn save_backup_file_worker<EK: KvEngine>(
     tx: UnboundedSender<BackupResponse>,
     storage: Arc<dyn ExternalStorage>,
     codec: KeyValueCodec,
+    iceberg: Option<Arc<IcebergCatalog>>,
 ) {
     while let Ok(msg) = rx.recv().await {
         let files = if msg.files.need_flush_keys() {
@@ -262,6 +264,23 @@ async fn save_backup_file_worker<EK: KvEngine>(
                     if has_err {
                         Err(box_err!("backup convert key range failed"))
                     } else {
+                        if let Some(writer) = iceberg.as_ref() {
+                            if let Err(err) = writer
+                                .write_manifest(
+                                    &*storage,
+                                    &split_files,
+                                    msg.start_version,
+                                    msg.end_version,
+                                )
+                                .await
+                            {
+                                warn!(
+                                    "failed to write iceberg manifest";
+                                    "region_id" => msg.region.get_id(),
+                                    "err" => %err,
+                                );
+                            }
+                        }
                         Ok(split_files)
                     }
                 }
@@ -1179,6 +1198,10 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         };
         let backend = Arc::<dyn ExternalStorage>::from(backend);
         let num_threads = self.config_manager.0.read().unwrap().num_threads;
+        let iceberg = {
+            let cfg = self.config_manager.0.read().unwrap().iceberg.clone();
+            IcebergCatalog::from_config(cfg).map(Arc::new)
+        };
         self.pool.borrow_mut().adjust_with(num_threads);
         let (tx, rx) = async_channel::bounded(1);
         for _ in 0..num_threads {
@@ -1194,6 +1217,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                 resp.clone(),
                 backend.clone(),
                 codec,
+                iceberg.clone(),
             ));
         }
     }

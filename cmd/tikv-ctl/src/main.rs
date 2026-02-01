@@ -17,6 +17,11 @@ use std::{
     time::Duration,
 };
 
+use backup::IcebergCatalog;
+use br_parquet_exporter::{
+    ExportOptions as ParquetExportOptions, SstParquetExporter, TableFilter,
+    exporter_metrics_snapshot, parse_parquet_compression,
+};
 use collections::HashMap;
 use compact_log_backup::{
     TraceResultExt,
@@ -29,12 +34,14 @@ use encryption_export::{
 };
 use engine_rocks::{RocksEngine, get_env, util::new_engine_opt};
 use engine_traits::Peekable;
+use external_storage::{BackendConfig, create_storage};
 use file_system::calc_crc32;
 use futures::{executor::block_on, future::try_join_all};
 use gag::BufferRedirect;
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use kvproto::{
     brpb,
+    brpb::StorageBackend,
     debugpb::{Db as DbType, *},
     encryptionpb::EncryptionMethod,
     kvrpcpb::SplitRegionRequest,
@@ -51,7 +58,7 @@ use security::{SecurityConfig, SecurityManager};
 use structopt::{StructOpt, clap::ErrorKind};
 use tempfile::TempDir;
 use tikv::{
-    config::TikvConfig,
+    config::{BackupIcebergConfig, TikvConfig},
     server::{KvEngineFactoryBuilder, debug::BottommostLevelCompaction},
     storage::config::EngineType,
 };
@@ -62,7 +69,7 @@ use tikv_util::{
     sys::thread::StdThreadBuildWrapper,
     unescape, warn,
 };
-use txn_types::Key;
+use txn_types::{Key, TimeStamp};
 
 use crate::{cmd::*, executor::*, util::*};
 
@@ -395,6 +402,182 @@ fn main() {
                 start_key,
                 end_key,
             );
+        }
+        Cmd::BrParquetExport {
+            input_storage_base64,
+            output_storage_base64,
+            output_prefix,
+            row_group_size,
+            sst_concurrency,
+            use_checkpoint,
+            compression,
+            bloom_filter,
+            filters,
+            tables,
+            table_ids,
+            write_iceberg_table,
+            write_iceberg_manifest,
+            iceberg,
+        } => {
+            let runtime = tokio::runtime::Runtime::new().unwrap_or_else(|err| {
+                clap::Error {
+                    message: format!("failed to init async runtime: {}", err),
+                    kind: ErrorKind::Io,
+                    info: None,
+                }
+                .exit();
+            });
+            let _runtime_guard = runtime.enter();
+            let input_backend =
+                parse_storage_backend(&input_storage_base64).unwrap_or_else(|err| {
+                    clap::Error {
+                        message: format!("invalid input storage: {}", err),
+                        kind: ErrorKind::InvalidValue,
+                        info: None,
+                    }
+                    .exit();
+                });
+            let output_backend =
+                parse_storage_backend(&output_storage_base64).unwrap_or_else(|err| {
+                    clap::Error {
+                        message: format!("invalid output storage: {}", err),
+                        kind: ErrorKind::InvalidValue,
+                        info: None,
+                    }
+                    .exit();
+                });
+            let input_storage = create_storage(&input_backend, BackendConfig::default())
+                .unwrap_or_else(|err| {
+                    clap::Error {
+                        message: format!("failed to open input storage: {}", err),
+                        kind: ErrorKind::Io,
+                        info: None,
+                    }
+                    .exit();
+                });
+            let output_storage = create_storage(&output_backend, BackendConfig::default())
+                .unwrap_or_else(|err| {
+                    clap::Error {
+                        message: format!("failed to open output storage: {}", err),
+                        kind: ErrorKind::Io,
+                        info: None,
+                    }
+                    .exit();
+                });
+            let parquet_compression =
+                parse_parquet_compression(&compression).unwrap_or_else(|err| {
+                    clap::Error {
+                        message: err,
+                        kind: ErrorKind::InvalidValue,
+                        info: None,
+                    }
+                    .exit();
+                });
+            let mut options = ParquetExportOptions::default();
+            options.row_group_size = row_group_size;
+            options.compression = parquet_compression;
+            options.write_iceberg_table = write_iceberg_table;
+            options.bloom_filter = bloom_filter;
+            if let Some(use_checkpoint) = use_checkpoint {
+                options.use_checkpoint = use_checkpoint;
+            }
+            if let Some(concurrency) = sst_concurrency {
+                if concurrency == 0 {
+                    clap::Error {
+                        message: "sst-concurrency must be greater than 0".into(),
+                        kind: ErrorKind::InvalidValue,
+                        info: None,
+                    }
+                    .exit();
+                }
+                options.sst_concurrency = concurrency;
+            }
+            let mut filter_rules = filters;
+            filter_rules.extend(tables);
+            let filter = TableFilter::from_args(&filter_rules, &table_ids).unwrap_or_else(|err| {
+                clap::Error {
+                    message: err.to_string(),
+                    kind: ErrorKind::InvalidValue,
+                    info: None,
+                }
+                .exit();
+            });
+            let mut exporter =
+                SstParquetExporter::new(input_storage.as_ref(), output_storage.as_ref(), options)
+                    .unwrap_or_else(|err| {
+                        clap::Error {
+                            message: format!("failed to initialize exporter: {}", err),
+                            kind: ErrorKind::ValueValidation,
+                            info: None,
+                        }
+                        .exit();
+                    });
+            let metrics_before = exporter_metrics_snapshot();
+            let report = exporter
+                .export_backup_meta_with_filter(&output_prefix, &filter)
+                .unwrap_or_else(|err| {
+                    clap::Error {
+                        message: format!("failed to export backup: {}", err),
+                        kind: ErrorKind::ValueValidation,
+                        info: None,
+                    }
+                    .exit();
+                });
+            println!(
+                "exported {} parquet files ({} rows)",
+                report.files.len(),
+                report.total_rows
+            );
+            let metrics_after = exporter_metrics_snapshot();
+            let delta = metrics_after.delta_since(&metrics_before);
+            println!(
+                "progress: downloaded={} converted={} uploaded={} completed={} rows={} bytes={}",
+                delta.downloaded,
+                delta.converted,
+                delta.uploaded,
+                delta.completed,
+                delta.rows,
+                delta.output_bytes
+            );
+            if write_iceberg_manifest {
+                let iceberg_cfg = build_iceberg_config(&iceberg).unwrap_or_else(|err| {
+                    clap::Error {
+                        message: err,
+                        kind: ErrorKind::InvalidValue,
+                        info: None,
+                    }
+                    .exit();
+                });
+                let catalog = IcebergCatalog::from_config(iceberg_cfg).unwrap_or_else(|| {
+                    clap::Error {
+                        message: "iceberg manifest writing disabled".into(),
+                        kind: ErrorKind::InvalidValue,
+                        info: None,
+                    }
+                    .exit();
+                });
+                let manifest_files: Vec<_> = report
+                    .files
+                    .iter()
+                    .map(|info| info.to_manifest_file(report.start_version, report.end_version))
+                    .collect();
+                runtime
+                    .block_on(catalog.write_manifest(
+                        output_storage.as_ref(),
+                        &manifest_files,
+                        TimeStamp::new(report.start_version),
+                        TimeStamp::new(report.end_version),
+                    ))
+                    .unwrap_or_else(|err| {
+                        clap::Error {
+                            message: format!("failed to write iceberg manifest: {}", err),
+                            kind: ErrorKind::Io,
+                            info: None,
+                        }
+                        .exit();
+                    });
+                println!("wrote iceberg manifest entries");
+            }
         }
         Cmd::CompactLogBackup {
             from_ts,
@@ -803,6 +986,37 @@ fn main() {
             }
         }
     }
+}
+
+fn parse_storage_backend(encoded: &str) -> Result<StorageBackend, String> {
+    let bytes = base64::decode(encoded).map_err(|e| format!("invalid base64: {}", e))?;
+    let mut backend = StorageBackend::default();
+    backend
+        .merge_from_bytes(&bytes)
+        .map_err(|e| format!("invalid StorageBackend: {}", e))?;
+    Ok(backend)
+}
+
+fn build_iceberg_config(opts: &IcebergOptions) -> Result<BackupIcebergConfig, String> {
+    let warehouse = opts
+        .warehouse
+        .as_ref()
+        .ok_or_else(|| "--iceberg-warehouse is required".to_string())?;
+    let namespace = opts
+        .namespace
+        .as_ref()
+        .ok_or_else(|| "--iceberg-namespace is required".to_string())?;
+    let table = opts
+        .table
+        .as_ref()
+        .ok_or_else(|| "--iceberg-table is required".to_string())?;
+    Ok(BackupIcebergConfig {
+        enable: true,
+        warehouse: warehouse.clone(),
+        namespace: namespace.clone(),
+        table: table.clone(),
+        manifest_prefix: opts.manifest_prefix.clone(),
+    })
 }
 
 fn new_security_mgr(opt: &Opt) -> Arc<SecurityManager> {
