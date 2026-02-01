@@ -222,6 +222,19 @@
 ## Time to wait before closing the connection without receiving KeepAlive ping Ack.
 # grpc-keepalive-timeout = "3s"
 
+## gRPC connection maximum idle time. Connections will be closed after being idle for this duration.
+## Default value: 2 hours, set to 0 to disable.
+# grpc-max-connection-idle = "2h"
+
+## gRPC connection maximum age. Connections will be closed after existing for this duration.
+## Default value: 0, set to 0 to disable.
+# grpc-max-connection-age = "0s"
+
+## gRPC connection maximum age grace period. When a connection reaches its maximum age,
+## it will wait for existing requests to complete during this grace period before closing.
+## Default value: 0, set to 0 for no grace period.
+# grpc-max-connection-age-grace = "0s"
+
 ## Set maximum message length in bytes that gRPC can send. `-1` means unlimited.
 # max-grpc-send-msg-len = 10485760
 
