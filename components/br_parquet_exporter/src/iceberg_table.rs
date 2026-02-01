@@ -17,6 +17,7 @@ const ICEBERG_PARTITION_SPEC_ID: i32 = 0;
 const ICEBERG_SORT_ORDER_ID: i64 = 0;
 const ICEBERG_LAST_PARTITION_ID_UNPARTITIONED: i32 = 999;
 const ICEBERG_SEQUENCE_NUMBER: i64 = 1;
+const ICEBERG_MANIFEST_MAX_DATA_FILES: usize = 10_000;
 
 const MANIFEST_STATUS_ADDED: i32 = 1;
 const MANIFEST_CONTENT_DATA: i32 = 0;
@@ -69,7 +70,43 @@ const MANIFEST_ENTRY_SCHEMA_V2: &str = r#"
             "type": { "type": "record", "name": "r102", "fields": [] }
           },
           { "name": "record_count", "type": "long", "field-id": 103 },
-          { "name": "file_size_in_bytes", "type": "long", "field-id": 104 }
+          { "name": "file_size_in_bytes", "type": "long", "field-id": 104 },
+          {
+            "name": "value_counts",
+            "type": [
+              "null",
+              { "type": "map", "values": "long", "key-id": 119, "value-id": 120 }
+            ],
+            "default": null,
+            "field-id": 109
+          },
+          {
+            "name": "null_value_counts",
+            "type": [
+              "null",
+              { "type": "map", "values": "long", "key-id": 121, "value-id": 122 }
+            ],
+            "default": null,
+            "field-id": 110
+          },
+          {
+            "name": "lower_bounds",
+            "type": [
+              "null",
+              { "type": "map", "values": "bytes", "key-id": 126, "value-id": 127 }
+            ],
+            "default": null,
+            "field-id": 125
+          },
+          {
+            "name": "upper_bounds",
+            "type": [
+              "null",
+              { "type": "map", "values": "bytes", "key-id": 129, "value-id": 130 }
+            ],
+            "default": null,
+            "field-id": 128
+          }
         ]
       }
     }
@@ -81,11 +118,11 @@ const MANIFEST_ENTRY_SCHEMA_V2: &str = r#"
 pub(crate) struct IcebergTableArtifacts {
     pub(crate) version_hint_object: String,
     pub(crate) metadata_object: String,
-    pub(crate) manifest_object: String,
+    pub(crate) manifest_objects: Vec<String>,
     pub(crate) manifest_list_object: String,
     pub(crate) version_hint: Vec<u8>,
     pub(crate) metadata_json: Vec<u8>,
-    pub(crate) manifest_avro: Vec<u8>,
+    pub(crate) manifest_avros: Vec<Vec<u8>>,
     pub(crate) manifest_list_avro: Vec<u8>,
 }
 
@@ -105,10 +142,8 @@ pub(crate) fn build_iceberg_table_artifacts(
 
     let version_hint_object = format!("{}/version-hint.text", metadata_prefix);
     let metadata_object = format!("{}/v1.metadata.json", metadata_prefix);
-    let manifest_object = format!("{}/manifest-{}.avro", metadata_prefix, snapshot_id);
     let manifest_list_object = format!("{}/snap-{}.avro", metadata_prefix, snapshot_id);
 
-    let manifest_path = format!("{}{}", base_uri, manifest_object);
     let manifest_list_path = format!("{}{}", base_uri, manifest_list_object);
 
     let schema = build_schema(table);
@@ -140,16 +175,46 @@ pub(crate) fn build_iceberg_table_artifacts(
     );
     properties.insert("tidb.table.id".to_string(), table.table_id.to_string());
 
-    let manifest_avro = build_manifest_avro(
-        &schema_json,
-        &partition_spec_json,
-        base_uri,
-        parquet_files,
-        snapshot_id,
-    )?;
-    let manifest_length = i64::try_from(manifest_avro.len()).unwrap_or(i64::MAX);
-    let manifest_list_avro =
-        build_manifest_list_avro(&manifest_path, manifest_length, snapshot_id)?;
+    let chunk_count = parquet_files
+        .len()
+        .div_ceil(ICEBERG_MANIFEST_MAX_DATA_FILES.max(1));
+    let mut manifest_objects = Vec::with_capacity(chunk_count);
+    let mut manifest_avros = Vec::with_capacity(chunk_count);
+    let mut manifest_list_entries = Vec::with_capacity(chunk_count);
+    for (idx, chunk) in parquet_files
+        .chunks(ICEBERG_MANIFEST_MAX_DATA_FILES.max(1))
+        .enumerate()
+    {
+        let manifest_object = if chunk_count == 1 {
+            format!("{}/manifest-{}.avro", metadata_prefix, snapshot_id)
+        } else {
+            format!(
+                "{}/manifest-{}-{:05}.avro",
+                metadata_prefix, snapshot_id, idx
+            )
+        };
+        let manifest_path = format!("{}{}", base_uri, manifest_object);
+        let manifest_avro = build_manifest_avro(
+            &schema_json,
+            &partition_spec_json,
+            base_uri,
+            chunk,
+            snapshot_id,
+        )?;
+        let manifest_length = i64::try_from(manifest_avro.len()).unwrap_or(i64::MAX);
+        manifest_objects.push(manifest_object);
+        manifest_avros.push(manifest_avro);
+        manifest_list_entries.push(ManifestListEntryV2 {
+            manifest_path,
+            manifest_length,
+            partition_spec_id: ICEBERG_PARTITION_SPEC_ID,
+            content: MANIFEST_CONTENT_DATA,
+            sequence_number: ICEBERG_SEQUENCE_NUMBER,
+            min_sequence_number: ICEBERG_SEQUENCE_NUMBER,
+            added_snapshot_id: snapshot_id,
+        });
+    }
+    let manifest_list_avro = build_manifest_list_avro(&manifest_list_entries, snapshot_id)?;
     let metadata_json = build_table_metadata_json(
         &table_location,
         schema,
@@ -165,11 +230,11 @@ pub(crate) fn build_iceberg_table_artifacts(
     Ok(IcebergTableArtifacts {
         version_hint_object,
         metadata_object,
-        manifest_object,
         manifest_list_object,
+        manifest_objects,
         version_hint: b"1".to_vec(),
         metadata_json,
-        manifest_avro,
+        manifest_avros,
         manifest_list_avro,
     })
 }
@@ -455,6 +520,18 @@ fn build_table_metadata_json(
 #[derive(Serialize)]
 struct EmptyPartition {}
 
+#[derive(Clone, Debug)]
+struct AvroBytes(Vec<u8>);
+
+impl Serialize for AvroBytes {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_bytes(&self.0)
+    }
+}
+
 #[derive(Serialize)]
 struct DataFileV2 {
     #[serde(default)]
@@ -464,6 +541,33 @@ struct DataFileV2 {
     partition: EmptyPartition,
     record_count: i64,
     file_size_in_bytes: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    value_counts: Option<HashMap<String, i64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    null_value_counts: Option<HashMap<String, i64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lower_bounds: Option<HashMap<String, AvroBytes>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    upper_bounds: Option<HashMap<String, AvroBytes>>,
+}
+
+fn iceberg_i64_metrics_map(metrics: &HashMap<i32, u64>) -> HashMap<String, i64> {
+    metrics
+        .iter()
+        .map(|(field_id, value)| {
+            (
+                field_id.to_string(),
+                i64::try_from(*value).unwrap_or(i64::MAX),
+            )
+        })
+        .collect()
+}
+
+fn iceberg_bytes_metrics_map(metrics: &HashMap<i32, Vec<u8>>) -> HashMap<String, AvroBytes> {
+    metrics
+        .iter()
+        .map(|(field_id, value)| (field_id.to_string(), AvroBytes(value.clone())))
+        .collect()
 }
 
 #[derive(Serialize)]
@@ -537,6 +641,22 @@ fn build_manifest_avro(
         .map_err(|e| Error::Invalid(format!("set iceberg manifest content metadata: {}", e)))?;
 
     for file in parquet_files {
+        let value_counts = file
+            .iceberg_metrics
+            .as_ref()
+            .map(|metrics| iceberg_i64_metrics_map(&metrics.value_counts));
+        let null_value_counts = file
+            .iceberg_metrics
+            .as_ref()
+            .map(|metrics| iceberg_i64_metrics_map(&metrics.null_value_counts));
+        let lower_bounds = file
+            .iceberg_metrics
+            .as_ref()
+            .map(|metrics| iceberg_bytes_metrics_map(&metrics.lower_bounds));
+        let upper_bounds = file
+            .iceberg_metrics
+            .as_ref()
+            .map(|metrics| iceberg_bytes_metrics_map(&metrics.upper_bounds));
         let entry = ManifestEntryV2 {
             status: MANIFEST_STATUS_ADDED,
             snapshot_id: Some(snapshot_id),
@@ -549,6 +669,10 @@ fn build_manifest_avro(
                 partition: EmptyPartition {},
                 record_count: i64::try_from(file.row_count).unwrap_or(i64::MAX),
                 file_size_in_bytes: i64::try_from(file.size).unwrap_or(i64::MAX),
+                value_counts,
+                null_value_counts,
+                lower_bounds,
+                upper_bounds,
             },
         };
         let mut value =
@@ -567,11 +691,7 @@ fn build_manifest_avro(
     Ok(bytes)
 }
 
-fn build_manifest_list_avro(
-    manifest_path: &str,
-    manifest_length: i64,
-    snapshot_id: i64,
-) -> Result<Vec<u8>> {
+fn build_manifest_list_avro(entries: &[ManifestListEntryV2], snapshot_id: i64) -> Result<Vec<u8>> {
     let avro_schema = AvroSchema::parse_str(MANIFEST_LIST_SCHEMA_V2)
         .map_err(|e| Error::Invalid(format!("parse iceberg manifest-list schema: {}", e)))?;
     let mut writer = AvroWriter::new(&avro_schema, Vec::new());
@@ -601,23 +721,16 @@ fn build_manifest_list_avro(
             ))
         })?;
 
-    let entry = ManifestListEntryV2 {
-        manifest_path: manifest_path.to_string(),
-        manifest_length,
-        partition_spec_id: ICEBERG_PARTITION_SPEC_ID,
-        content: MANIFEST_CONTENT_DATA,
-        sequence_number: ICEBERG_SEQUENCE_NUMBER,
-        min_sequence_number: ICEBERG_SEQUENCE_NUMBER,
-        added_snapshot_id: snapshot_id,
-    };
-    let mut value = to_value(entry)
-        .map_err(|e| Error::Invalid(format!("encode manifest-list entry: {}", e)))?;
-    value = value
-        .resolve(&avro_schema)
-        .map_err(|e| Error::Invalid(format!("resolve manifest-list entry: {}", e)))?;
-    writer
-        .append(value)
-        .map_err(|e| Error::Invalid(format!("append manifest-list entry: {}", e)))?;
+    for entry in entries {
+        let mut value = to_value(entry)
+            .map_err(|e| Error::Invalid(format!("encode manifest-list entry: {}", e)))?;
+        value = value
+            .resolve(&avro_schema)
+            .map_err(|e| Error::Invalid(format!("resolve manifest-list entry: {}", e)))?;
+        writer
+            .append(value)
+            .map_err(|e| Error::Invalid(format!("append manifest-list entry: {}", e)))?;
+    }
     let bytes = writer
         .into_inner()
         .map_err(|e| Error::Invalid(format!("finalize iceberg manifest-list: {}", e)))?;

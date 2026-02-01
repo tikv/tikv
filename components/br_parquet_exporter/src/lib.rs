@@ -219,6 +219,19 @@ pub struct ExportReport {
     pub end_version: u64,
 }
 
+/// Iceberg metrics for a single exported Parquet file.
+///
+/// These metrics are written into Iceberg manifests to improve file pruning
+/// during query planning (for example, Spark can skip files whose bounds do not
+/// match a predicate).
+#[derive(Clone, Debug, Default)]
+pub struct IcebergFileMetrics {
+    pub value_counts: HashMap<i32, u64>,
+    pub null_value_counts: HashMap<i32, u64>,
+    pub lower_bounds: HashMap<i32, Vec<u8>>,
+    pub upper_bounds: HashMap<i32, Vec<u8>>,
+}
+
 /// Metadata for a single exported Parquet file.
 #[derive(Clone, Debug)]
 pub struct ParquetFileInfo {
@@ -231,6 +244,7 @@ pub struct ParquetFileInfo {
     pub sha256: Vec<u8>,
     pub start_key: Vec<u8>,
     pub end_key: Vec<u8>,
+    pub iceberg_metrics: Option<IcebergFileMetrics>,
 }
 
 impl ParquetFileInfo {
@@ -305,6 +319,7 @@ impl CheckpointEntry {
             end_key: hex::decode(self.end_key).map_err(|err| {
                 Error::Invalid(format!("invalid checkpoint end_key value: {}", err))
             })?,
+            iceberg_metrics: None,
         })
     }
 }
@@ -800,13 +815,24 @@ impl<'a> SstParquetExporter<'a> {
                 report.end_version,
                 parquet_compression,
             )?;
-            self.write_bytes(&artifacts.manifest_object, artifacts.manifest_avro)?;
-            self.write_bytes(
-                &artifacts.manifest_list_object,
-                artifacts.manifest_list_avro,
-            )?;
-            self.write_bytes(&artifacts.metadata_object, artifacts.metadata_json)?;
-            self.write_bytes(&artifacts.version_hint_object, artifacts.version_hint)?;
+            let iceberg_table::IcebergTableArtifacts {
+                version_hint_object,
+                metadata_object,
+                manifest_objects,
+                manifest_list_object,
+                version_hint,
+                metadata_json,
+                manifest_avros,
+                manifest_list_avro,
+            } = artifacts;
+            for (manifest_object, manifest_avro) in
+                manifest_objects.into_iter().zip(manifest_avros.into_iter())
+            {
+                self.write_bytes(&manifest_object, manifest_avro)?;
+            }
+            self.write_bytes(&manifest_list_object, manifest_list_avro)?;
+            self.write_bytes(&metadata_object, metadata_json)?;
+            self.write_bytes(&version_hint_object, version_hint)?;
             tikv_util::info!(
                 "br parquet wrote iceberg table";
                 "db" => %table.db_name,
@@ -1047,6 +1073,7 @@ impl<'a> SstParquetExporter<'a> {
             iter.next()?;
         }
         let total_rows = writer.total_rows;
+        let iceberg_metrics = writer.iceberg_metrics();
         writer.close()?;
         let convert_elapsed = convert_timer.saturating_elapsed();
         BR_PARQUET_STAGE_DURATION
@@ -1117,6 +1144,7 @@ impl<'a> SstParquetExporter<'a> {
             sha256: checksum,
             start_key: file_meta.get_start_key().to_vec(),
             end_key: file_meta.get_end_key().to_vec(),
+            iceberg_metrics: Some(iceberg_metrics),
         })
     }
 }
@@ -1551,7 +1579,7 @@ mod tests {
         file.set_cf(CF_DEFAULT.to_string());
         file.set_start_key(raw_key.clone());
         file.set_end_key(raw_key);
-        file.set_start_version(1);
+        file.set_start_version(0);
         file.set_end_version(2);
 
         let mut schema = Schema::default();
@@ -1565,7 +1593,7 @@ mod tests {
         let mut meta = BackupMeta::default();
         meta.mut_files().push(file);
         meta.mut_schemas().push(schema);
-        meta.set_start_version(1);
+        meta.set_start_version(0);
         meta.set_end_version(2);
 
         let mut meta_bytes = Vec::new();
@@ -1637,6 +1665,41 @@ mod tests {
     }
 
     #[test]
+    fn accepts_incremental_backup_meta() {
+        let _lock = EXPORT_TEST_LOCK.lock().unwrap();
+        let runtime = Runtime::new().unwrap();
+        let _runtime_guard = runtime.enter();
+        let input_dir = TempDir::new().unwrap();
+        let output_dir = TempDir::new().unwrap();
+
+        let mut schema = Schema::default();
+        schema.set_db(r#"{"name":{"O":"test","L":"test"}}"#.as_bytes().to_vec());
+        schema.set_table(
+            r#"{"id":1,"name":{"O":"t","L":"t"},"cols":[{"id":1,"name":{"O":"c","L":"c"},"tp":3,"flag":0}]}"#
+                .as_bytes()
+                .to_vec(),
+        );
+
+        let mut meta = BackupMeta::default();
+        meta.mut_schemas().push(schema);
+        meta.set_start_version(1);
+        meta.set_end_version(2);
+
+        let mut meta_bytes = Vec::new();
+        meta.write_to_writer(&mut meta_bytes).unwrap();
+        fs::write(input_dir.path().join("backupmeta"), meta_bytes).unwrap();
+
+        let input = Arc::new(LocalStorage::new(input_dir.path()).unwrap());
+        let output = Arc::new(LocalStorage::new(output_dir.path()).unwrap());
+        let mut exporter =
+            SstParquetExporter::new(input.as_ref(), output.as_ref(), ExportOptions::default())
+                .unwrap();
+        let report = exporter.export_backup_meta("parquet").unwrap();
+        assert_eq!(report.start_version, 1);
+        assert_eq!(report.end_version, 2);
+    }
+
+    #[test]
     fn exports_short_value_from_write_cf() {
         let _lock = EXPORT_TEST_LOCK.lock().unwrap();
         let runtime = Runtime::new().unwrap();
@@ -1666,7 +1729,7 @@ mod tests {
         file.set_cf(CF_WRITE.to_string());
         file.set_start_key(raw_key.clone());
         file.set_end_key(raw_key);
-        file.set_start_version(1);
+        file.set_start_version(0);
         file.set_end_version(2);
 
         let mut schema = Schema::default();
@@ -1680,7 +1743,7 @@ mod tests {
         let mut meta = BackupMeta::default();
         meta.mut_files().push(file);
         meta.mut_schemas().push(schema);
-        meta.set_start_version(1);
+        meta.set_start_version(0);
         meta.set_end_version(2);
 
         let mut meta_bytes = Vec::new();
@@ -1729,7 +1792,7 @@ mod tests {
         file1.set_cf(CF_DEFAULT.to_string());
         file1.set_start_key(table::encode_row_key(1, 1));
         file1.set_end_key(table::encode_row_key(1, 1));
-        file1.set_start_version(1);
+        file1.set_start_version(0);
         file1.set_end_version(3);
 
         let mut file2 = BackupFile::default();
@@ -1737,7 +1800,7 @@ mod tests {
         file2.set_cf(CF_DEFAULT.to_string());
         file2.set_start_key(table::encode_row_key(1, 2));
         file2.set_end_key(table::encode_row_key(1, 2));
-        file2.set_start_version(1);
+        file2.set_start_version(0);
         file2.set_end_version(3);
 
         let mut schema = Schema::default();
@@ -1752,7 +1815,7 @@ mod tests {
         meta.mut_files().push(file1);
         meta.mut_files().push(file2);
         meta.mut_schemas().push(schema);
-        meta.set_start_version(1);
+        meta.set_start_version(0);
         meta.set_end_version(3);
 
         let mut meta_bytes = Vec::new();
@@ -1800,7 +1863,7 @@ mod tests {
         file.set_cf(CF_DEFAULT.to_string());
         file.set_start_key(raw_key.clone());
         file.set_end_key(raw_key);
-        file.set_start_version(1);
+        file.set_start_version(0);
         file.set_end_version(2);
 
         let mut schema = Schema::default();
@@ -1844,7 +1907,7 @@ mod tests {
         meta.set_version(1);
         *meta.mut_schema_index() = schema_index;
         *meta.mut_file_index() = file_index;
-        meta.set_start_version(1);
+        meta.set_start_version(0);
         meta.set_end_version(2);
 
         let mut meta_bytes = Vec::new();

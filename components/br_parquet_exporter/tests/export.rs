@@ -1,9 +1,12 @@
 // Copyright 2025 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    collections::HashMap,
+    env,
     ffi::OsStr,
     fs::{self, File},
     path::{Path, PathBuf},
+    process::Command,
     sync::Arc,
 };
 
@@ -64,14 +67,14 @@ fn integration_row_group_size() {
     file.set_cf(CF_DEFAULT.to_string());
     file.set_start_key(raw_keys[0].clone());
     file.set_end_key(raw_keys[1].clone());
-    file.set_start_version(1);
+    file.set_start_version(0);
     file.set_end_version(3);
 
     let schema = make_schema("test", "t", 1);
     let mut meta = BackupMeta::default();
     meta.mut_files().push(file);
     meta.mut_schemas().push(schema);
-    meta.set_start_version(1);
+    meta.set_start_version(0);
     meta.set_end_version(3);
 
     let mut meta_bytes = Vec::new();
@@ -130,14 +133,14 @@ fn integration_bloom_filter() {
     file.set_cf(CF_DEFAULT.to_string());
     file.set_start_key(raw_keys[0].clone());
     file.set_end_key(raw_keys[1].clone());
-    file.set_start_version(1);
+    file.set_start_version(0);
     file.set_end_version(2);
 
     let schema = make_schema("test", "t", 1);
     let mut meta = BackupMeta::default();
     meta.mut_files().push(file);
     meta.mut_schemas().push(schema);
-    meta.set_start_version(1);
+    meta.set_start_version(0);
     meta.set_end_version(2);
 
     let mut meta_bytes = Vec::new();
@@ -198,7 +201,7 @@ fn integration_table_filter() {
     file.set_cf(CF_DEFAULT.to_string());
     file.set_start_key(raw_key_1.clone());
     file.set_end_key(raw_key_2.clone());
-    file.set_start_version(1);
+    file.set_start_version(0);
     file.set_end_version(2);
     let mut table_meta_1 = TableMeta::default();
     table_meta_1.set_physical_id(1);
@@ -213,7 +216,7 @@ fn integration_table_filter() {
     meta.mut_files().push(file);
     meta.mut_schemas().push(schema_1);
     meta.mut_schemas().push(schema_2);
-    meta.set_start_version(1);
+    meta.set_start_version(0);
     meta.set_end_version(2);
 
     let mut meta_bytes = Vec::new();
@@ -268,14 +271,14 @@ fn integration_checkpoint_resume() {
     file.set_cf(CF_DEFAULT.to_string());
     file.set_start_key(raw_key.clone());
     file.set_end_key(raw_key);
-    file.set_start_version(1);
+    file.set_start_version(0);
     file.set_end_version(2);
 
     let schema = make_schema("test", "t", 1);
     let mut meta = BackupMeta::default();
     meta.mut_files().push(file);
     meta.mut_schemas().push(schema);
-    meta.set_start_version(1);
+    meta.set_start_version(0);
     meta.set_end_version(2);
 
     let mut meta_bytes = Vec::new();
@@ -328,14 +331,14 @@ fn integration_iceberg_table_output() {
     file.set_cf(CF_DEFAULT.to_string());
     file.set_start_key(raw_key.clone());
     file.set_end_key(raw_key);
-    file.set_start_version(1);
+    file.set_start_version(0);
     file.set_end_version(3);
 
     let schema = make_schema("test", "t", 1);
     let mut meta = BackupMeta::default();
     meta.mut_files().push(file);
     meta.mut_schemas().push(schema);
-    meta.set_start_version(1);
+    meta.set_start_version(0);
     meta.set_end_version(3);
 
     let mut meta_bytes = Vec::new();
@@ -397,6 +400,58 @@ fn integration_iceberg_table_output() {
         .unwrap();
     assert_eq!(record_count, 1);
 
+    let value_counts = avro_get_path(&manifest_entry, &["data_file", "value_counts"])
+        .and_then(avro_optional_map)
+        .unwrap();
+    assert_eq!(value_counts.get("1").and_then(avro_as_long).unwrap(), 1);
+    assert_eq!(value_counts.get("2").and_then(avro_as_long).unwrap(), 1);
+    assert_eq!(value_counts.get("1001").and_then(avro_as_long).unwrap(), 1);
+
+    let null_value_counts = avro_get_path(&manifest_entry, &["data_file", "null_value_counts"])
+        .and_then(avro_optional_map)
+        .unwrap();
+    assert_eq!(
+        null_value_counts.get("1").and_then(avro_as_long).unwrap(),
+        0
+    );
+    assert_eq!(
+        null_value_counts.get("2").and_then(avro_as_long).unwrap(),
+        0
+    );
+    assert_eq!(
+        null_value_counts
+            .get("1001")
+            .and_then(avro_as_long)
+            .unwrap(),
+        0
+    );
+
+    let lower_bounds = avro_get_path(&manifest_entry, &["data_file", "lower_bounds"])
+        .and_then(avro_optional_map)
+        .unwrap();
+    assert_eq!(
+        lower_bounds.get("1").and_then(avro_as_bytes).unwrap(),
+        1i64.to_be_bytes().as_slice()
+    );
+    assert_eq!(lower_bounds.get("2").and_then(avro_as_bytes).unwrap(), b"1");
+    assert_eq!(
+        lower_bounds.get("1001").and_then(avro_as_bytes).unwrap(),
+        7i64.to_be_bytes().as_slice()
+    );
+
+    let upper_bounds = avro_get_path(&manifest_entry, &["data_file", "upper_bounds"])
+        .and_then(avro_optional_map)
+        .unwrap();
+    assert_eq!(
+        upper_bounds.get("1").and_then(avro_as_bytes).unwrap(),
+        1i64.to_be_bytes().as_slice()
+    );
+    assert_eq!(upper_bounds.get("2").and_then(avro_as_bytes).unwrap(), b"1");
+    assert_eq!(
+        upper_bounds.get("1001").and_then(avro_as_bytes).unwrap(),
+        7i64.to_be_bytes().as_slice()
+    );
+
     let parquet_path = file_uri_to_path(parquet_file_uri);
     assert!(parquet_path.exists());
     assert!(parquet_file_uri.ends_with(&report.files[0].object_name));
@@ -406,6 +461,142 @@ fn integration_iceberg_table_output() {
     assert_eq!(row.get_long(0).unwrap(), 1);
     assert_eq!(row.get_string(1).unwrap(), "1");
     assert_eq!(row.get_long(2).unwrap(), 7);
+}
+
+#[test]
+#[ignore]
+fn integration_spark_sql_readback() {
+    // Spark + Iceberg readback (manual / CI opt-in):
+    //
+    // - Provide `spark-sql` via `SPARK_SQL=/path/to/spark-sql` or
+    //   `SPARK_HOME=/path/to/spark`.
+    // - Provide Iceberg Spark runtime via:
+    //   - `ICEBERG_SPARK_RUNTIME_JAR=/path/to/
+    //     iceberg-spark-runtime-<spark>_<scala>-<ver>.jar` (preferred), or
+    //   - `ICEBERG_SPARK_PACKAGES=org.apache.iceberg:
+    //     iceberg-spark-runtime-<spark>_<scala>:<ver>`
+    //
+    // Example:
+    //   SPARK_SQL=$(command -v spark-sql) \\
+    //   ICEBERG_SPARK_RUNTIME_JAR=/path/to/iceberg-spark-runtime.jar \\
+    //   cargo test -p br_parquet_exporter --test export -- --ignored
+    // integration_spark_sql_readback --nocapture
+    let _lock = EXPORT_TEST_LOCK.lock().unwrap();
+    let runtime = Runtime::new().unwrap();
+    let _guard = runtime.enter();
+    let input_dir = TempDir::new().unwrap();
+    let output_dir = TempDir::new().unwrap();
+    let engine = kv::new_engine(input_dir.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
+
+    let sst_path = input_dir.path().join("spark_readback.sst");
+    let mut sst_writer = <KvTestEngine as SstExt>::SstWriterBuilder::new()
+        .set_db(&engine)
+        .set_cf(CF_DEFAULT)
+        .build(sst_path.to_str().unwrap())
+        .unwrap();
+    let mut ctx = EvalContext::default();
+    let raw_key = table::encode_row_key(1, 1);
+    let value = table::encode_row(&mut ctx, vec![Datum::I64(7)], &[1]).unwrap();
+    let encoded_key = Key::from_raw(&raw_key).append_ts(TimeStamp::new(1));
+    let key = keys::data_key(encoded_key.as_encoded());
+    sst_writer.put(&key, &value).unwrap();
+    let sst_info = sst_writer.finish().unwrap();
+    fs::copy(sst_info.file_path(), input_dir.path().join("data.sst")).unwrap();
+
+    let mut file = BackupFile::default();
+    file.set_name("data.sst".into());
+    file.set_cf(CF_DEFAULT.to_string());
+    file.set_start_key(raw_key.clone());
+    file.set_end_key(raw_key);
+    file.set_start_version(0);
+    file.set_end_version(2);
+
+    let schema = make_schema("test", "t", 1);
+    let mut meta = BackupMeta::default();
+    meta.mut_files().push(file);
+    meta.mut_schemas().push(schema);
+    meta.set_start_version(0);
+    meta.set_end_version(2);
+
+    let mut meta_bytes = Vec::new();
+    meta.write_to_writer(&mut meta_bytes).unwrap();
+    fs::write(input_dir.path().join("backupmeta"), meta_bytes).unwrap();
+
+    let input = Arc::new(LocalStorage::new(input_dir.path()).unwrap());
+    let output = Arc::new(LocalStorage::new(output_dir.path()).unwrap());
+    let mut options = ExportOptions::default();
+    options.write_iceberg_table = true;
+    let mut exporter = SstParquetExporter::new(input.as_ref(), output.as_ref(), options).unwrap();
+    let report = exporter.export_backup_meta("parquet").unwrap();
+    assert_eq!(report.total_rows, 1);
+    assert_eq!(report.files.len(), 1);
+
+    let spark_sql = env::var("SPARK_SQL").ok().or_else(|| {
+        env::var("SPARK_HOME")
+            .ok()
+            .map(|home| format!("{}/bin/spark-sql", home))
+    });
+    let Some(spark_sql) = spark_sql else {
+        eprintln!("skipping spark-sql readback: set SPARK_SQL or SPARK_HOME");
+        return;
+    };
+
+    let iceberg_pkg = env::var("ICEBERG_SPARK_PACKAGES").ok();
+    let iceberg_jar = env::var("ICEBERG_SPARK_RUNTIME_JAR").ok();
+    if iceberg_pkg.is_none() && iceberg_jar.is_none() {
+        eprintln!(
+            "skipping spark-sql readback: set ICEBERG_SPARK_RUNTIME_JAR (preferred) or ICEBERG_SPARK_PACKAGES"
+        );
+        return;
+    }
+
+    let warehouse = output_dir.path().join("parquet");
+    let warehouse_uri = format!("file://{}", warehouse.display());
+    let query =
+        "SELECT concat('ROW=', _tidb_handle, ':', cast(c as string)) AS out FROM local.test.t";
+
+    let mut cmd = Command::new(&spark_sql);
+    if let Some(jar) = iceberg_jar {
+        cmd.arg("--jars").arg(jar);
+    } else if let Some(packages) = iceberg_pkg {
+        cmd.arg("--packages").arg(packages);
+    }
+    cmd.current_dir(output_dir.path());
+    let output = cmd
+        .arg("--conf")
+        .arg("spark.ui.enabled=false")
+        .arg("--conf")
+        .arg("spark.sql.shuffle.partitions=1")
+        .arg("--conf")
+        .arg("spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
+        .arg("--conf")
+        .arg("spark.sql.catalog.local=org.apache.iceberg.spark.SparkCatalog")
+        .arg("--conf")
+        .arg("spark.sql.catalog.local.type=hadoop")
+        .arg("--conf")
+        .arg(format!("spark.sql.catalog.local.warehouse={}", warehouse_uri))
+        .arg("-e")
+        .arg(query)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "spark-sql failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("ROW=1:7"),
+        "spark-sql output missing expected row\n{}",
+        combined
+    );
 }
 
 fn make_schema(db: &str, table: &str, id: i64) -> Schema {
@@ -464,6 +655,27 @@ fn avro_as_string(value: &AvroValue) -> Option<&str> {
 fn avro_as_long(value: &AvroValue) -> Option<i64> {
     match value {
         AvroValue::Long(v) => Some(*v),
+        _ => None,
+    }
+}
+
+fn avro_as_bytes(value: &AvroValue) -> Option<&[u8]> {
+    match value {
+        AvroValue::Bytes(v) => Some(v.as_slice()),
+        _ => None,
+    }
+}
+
+fn avro_unwrap_union(value: &AvroValue) -> &AvroValue {
+    match value {
+        AvroValue::Union(_, inner) => inner.as_ref(),
+        _ => value,
+    }
+}
+
+fn avro_optional_map(value: &AvroValue) -> Option<&HashMap<String, AvroValue>> {
+    match avro_unwrap_union(value) {
+        AvroValue::Map(map) => Some(map),
         _ => None,
     }
 }

@@ -14,7 +14,7 @@ use parquet::{
 };
 
 use crate::{
-    Error, Result,
+    Error, IcebergFileMetrics, Result,
     schema::{ColumnKind, ColumnParquetType, ColumnSchema, TableSchema},
 };
 
@@ -76,6 +76,26 @@ impl ParquetWriter {
             rows_in_group: 0,
             total_rows: 0,
         })
+    }
+
+    /// Returns Iceberg metrics for all rows written so far.
+    pub fn iceberg_metrics(&self) -> IcebergFileMetrics {
+        let mut metrics = IcebergFileMetrics::default();
+        for column in &self.columns {
+            let field_id = column.field_id;
+            let null_count = column.metrics.null_count;
+            let total_rows = self.total_rows;
+            metrics.value_counts.insert(field_id, total_rows);
+            metrics.null_value_counts.insert(field_id, null_count);
+
+            if let Some(lower) = column.metrics.lower_bound_bytes() {
+                metrics.lower_bounds.insert(field_id, lower);
+            }
+            if let Some(upper) = column.metrics.upper_bound_bytes() {
+                metrics.upper_bounds.insert(field_id, upper);
+            }
+        }
+        metrics
     }
 
     /// Writes a projected row to the current row group.
@@ -168,8 +188,10 @@ fn build_parquet_schema(table: &TableSchema) -> Result<TypePtr> {
 }
 
 struct ColumnState {
+    field_id: i32,
     parquet_type: ColumnParquetType,
     nullable: bool,
+    metrics: ColumnMetricsState,
     values_int64: Vec<i64>,
     values_double: Vec<f64>,
     values_binary: Vec<ByteArray>,
@@ -179,8 +201,10 @@ struct ColumnState {
 impl ColumnState {
     fn from_schema(column: &ColumnSchema, capacity: usize) -> Result<Self> {
         Ok(Self {
+            field_id: column.field_id,
             parquet_type: column.parquet_type,
             nullable: column.nullable,
+            metrics: ColumnMetricsState::default(),
             values_int64: Vec::with_capacity(capacity),
             values_double: Vec::with_capacity(capacity),
             values_binary: Vec::with_capacity(capacity),
@@ -191,19 +215,23 @@ impl ColumnState {
     fn push(&mut self, value: Option<CellValue>) -> Result<()> {
         match (&self.parquet_type, value) {
             (ColumnParquetType::Int64, Some(CellValue::Int64(v))) => {
+                self.metrics.update_int64(v);
                 self.values_int64.push(v);
                 self.push_level(true);
             }
             (ColumnParquetType::Double, Some(CellValue::Double(v))) => {
+                self.metrics.update_double(v);
                 self.values_double.push(v);
                 self.push_level(true);
             }
             (ColumnParquetType::Utf8 | ColumnParquetType::Binary, Some(CellValue::Bytes(v))) => {
+                self.metrics.update_bytes(&v);
                 self.values_binary.push(ByteArray::from(v));
                 self.push_level(true);
             }
             (_, None) => {
                 if self.nullable {
+                    self.metrics.null_count = self.metrics.null_count.saturating_add(1);
                     self.def_levels.push(0);
                 } else {
                     return Err(Error::Schema("encountered NULL in NOT NULL column".into()));
@@ -268,5 +296,78 @@ impl ColumnState {
         } else {
             None
         }
+    }
+}
+
+fn encode_i64_be(value: i64) -> Vec<u8> {
+    value.to_be_bytes().to_vec()
+}
+
+fn encode_f64_be(value: f64) -> Vec<u8> {
+    value.to_be_bytes().to_vec()
+}
+
+#[derive(Debug, Default)]
+struct ColumnMetricsState {
+    null_count: u64,
+    min_int64: Option<i64>,
+    max_int64: Option<i64>,
+    min_double: Option<f64>,
+    max_double: Option<f64>,
+    min_bytes: Option<Vec<u8>>,
+    max_bytes: Option<Vec<u8>>,
+}
+
+impl ColumnMetricsState {
+    fn update_int64(&mut self, value: i64) {
+        self.min_int64 = Some(self.min_int64.map_or(value, |cur| cur.min(value)));
+        self.max_int64 = Some(self.max_int64.map_or(value, |cur| cur.max(value)));
+    }
+
+    fn update_double(&mut self, value: f64) {
+        if value.is_nan() {
+            return;
+        }
+        self.min_double = Some(self.min_double.map_or(value, |cur| cur.min(value)));
+        self.max_double = Some(self.max_double.map_or(value, |cur| cur.max(value)));
+    }
+
+    fn update_bytes(&mut self, value: &[u8]) {
+        match self.min_bytes.as_mut() {
+            None => self.min_bytes = Some(value.to_vec()),
+            Some(cur) => {
+                if value < cur.as_slice() {
+                    *cur = value.to_vec();
+                }
+            }
+        }
+        match self.max_bytes.as_mut() {
+            None => self.max_bytes = Some(value.to_vec()),
+            Some(cur) => {
+                if value > cur.as_slice() {
+                    *cur = value.to_vec();
+                }
+            }
+        }
+    }
+
+    fn lower_bound_bytes(&self) -> Option<Vec<u8>> {
+        if let Some(v) = self.min_int64 {
+            return Some(encode_i64_be(v));
+        }
+        if let Some(v) = self.min_double {
+            return Some(encode_f64_be(v));
+        }
+        self.min_bytes.clone()
+    }
+
+    fn upper_bound_bytes(&self) -> Option<Vec<u8>> {
+        if let Some(v) = self.max_int64 {
+            return Some(encode_i64_be(v));
+        }
+        if let Some(v) = self.max_double {
+            return Some(encode_f64_be(v));
+        }
+        self.max_bytes.clone()
     }
 }
