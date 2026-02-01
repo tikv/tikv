@@ -1269,8 +1269,11 @@ fn build_file_tasks(
         if file.get_cf() != CF_DEFAULT && file.get_cf() != CF_WRITE {
             continue;
         }
-        let table_ids = if file.get_table_metas().is_empty() {
-            decode_table_ids_from_key(file)
+        let table_ids: Vec<i64> = if file.get_table_metas().is_empty() {
+            match decode_single_table_id_from_key_range(file) {
+                Some(table_id) => vec![table_id],
+                None => table_map.keys().copied().collect(),
+            }
         } else {
             file.get_table_metas()
                 .iter()
@@ -1298,11 +1301,13 @@ fn build_file_tasks(
     tasks
 }
 
-fn decode_table_ids_from_key(file: &BackupFile) -> Vec<i64> {
-    if let Ok(table_id) = table::decode_table_id(file.get_start_key()) {
-        vec![table_id]
+fn decode_single_table_id_from_key_range(file: &BackupFile) -> Option<i64> {
+    let start_table_id = table::decode_table_id(file.get_start_key()).ok()?;
+    let end_table_id = table::decode_table_id(file.get_end_key()).ok()?;
+    if start_table_id == end_table_id {
+        Some(start_table_id)
     } else {
-        Vec::new()
+        None
     }
 }
 
@@ -1978,6 +1983,53 @@ mod tests {
             .to_vec(),
         );
         TableSchema::from_backup_schema(&schema).unwrap()
+    }
+
+    #[test]
+    fn build_file_tasks_handles_missing_table_metas_for_multi_table_ssts() {
+        let table1 = Arc::new(make_table_schema("db1", "t1", 1));
+        let table2 = Arc::new(make_table_schema("db1", "t2", 2));
+
+        let table_map: std::collections::HashMap<i64, Arc<TableSchema>> = [
+            (table1.table_id, Arc::clone(&table1)),
+            (table2.table_id, Arc::clone(&table2)),
+        ]
+        .into_iter()
+        .collect();
+
+        let mut single_table_file = BackupFile::default();
+        single_table_file.set_name("single.sst".into());
+        single_table_file.set_cf(CF_DEFAULT.to_string());
+        single_table_file.set_start_key(table::encode_row_key(1, 1));
+        single_table_file.set_end_key(table::encode_row_key(1, 10));
+
+        let tasks = build_file_tasks(&[single_table_file], &table_map);
+        assert_eq!(tasks.len(), 1);
+        let mut ids: Vec<i64> = tasks[0].tables.iter().map(|t| t.table_id).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![1]);
+
+        let mut multi_table_file = BackupFile::default();
+        multi_table_file.set_name("multi.sst".into());
+        multi_table_file.set_cf(CF_DEFAULT.to_string());
+        multi_table_file.set_start_key(table::encode_row_key(1, 1));
+        multi_table_file.set_end_key(table::encode_row_key(2, 1));
+
+        let tasks = build_file_tasks(&[multi_table_file.clone()], &table_map);
+        assert_eq!(tasks.len(), 1);
+        let mut ids: Vec<i64> = tasks[0].tables.iter().map(|t| t.table_id).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![1, 2]);
+
+        let filtered_map: std::collections::HashMap<i64, Arc<TableSchema>> =
+            [(table2.table_id, Arc::clone(&table2))]
+                .into_iter()
+                .collect();
+        let tasks = build_file_tasks(&[multi_table_file], &filtered_map);
+        assert_eq!(tasks.len(), 1);
+        let mut ids: Vec<i64> = tasks[0].tables.iter().map(|t| t.table_id).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![2]);
     }
 
     #[test]
