@@ -3135,11 +3135,12 @@ impl BackupIcebergConfig {
             return Err("backup.iceberg.table must be set when iceberg.enable is true".into());
         }
         if self.manifest_prefix.trim().is_empty() {
-            return Err("backup.iceberg.manifest-prefix must be set when iceberg.enable is true".into());
+            return Err(
+                "backup.iceberg.manifest-prefix must be set when iceberg.enable is true".into(),
+            );
         }
         Ok(())
     }
-}
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
