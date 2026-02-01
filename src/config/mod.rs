@@ -4906,6 +4906,76 @@ fn serde_to_online_config(name: String) -> String {
     }
 }
 
+fn load_raw_size_config_from_file(path: &Path) -> HashMap<String, String> {
+    if path.as_os_str().is_empty() {
+        return HashMap::new();
+    }
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(_) => return HashMap::new(),
+    };
+    let toml_value: toml::Value = match toml::from_str(content.as_str()) {
+        Ok(value) => value,
+        Err(_) => return HashMap::new(),
+    };
+    let mut raw = HashMap::new();
+    collect_raw_size_config("", &toml_value, &mut raw);
+    raw
+}
+
+fn collect_raw_size_config(prefix: &str, value: &toml::Value, raw: &mut HashMap<String, String>) {
+    match value {
+        toml::Value::Table(table) => {
+            for (key, child) in table {
+                let path = if prefix.is_empty() {
+                    key.to_owned()
+                } else {
+                    format!("{}.{}", prefix, key)
+                };
+                collect_raw_size_config(&path, child, raw);
+            }
+        }
+        toml::Value::String(s) => {
+            if is_size_config_key(prefix) {
+                raw.insert(prefix.to_owned(), s.to_owned());
+            }
+        }
+        _ => {}
+    }
+}
+
+fn typed_config_value<'a>(name: &str, typed: &'a ConfigChange) -> Option<&'a ConfigValue> {
+    let name = serde_to_online_config(name.to_owned());
+    let fields: Vec<&str> = name.split('.').collect();
+    let mut cur = typed;
+    for (idx, field) in fields.iter().enumerate() {
+        match cur.get(*field) {
+            Some(ConfigValue::Module(m)) => {
+                if idx == fields.len() - 1 {
+                    return None;
+                }
+                cur = m;
+            }
+            Some(v) => {
+                return if idx == fields.len() - 1 {
+                    Some(v)
+                } else {
+                    None
+                };
+            }
+            None => return None,
+        }
+    }
+    None
+}
+
+fn is_size_config_key(name: &str) -> bool {
+    matches!(
+        typed_config_value(name, &TIKVCONFIG_TYPED),
+        Some(ConfigValue::Size(_))
+    )
+}
+
 fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> {
     fn helper(
         mut fields: Vec<String>,
@@ -5106,12 +5176,14 @@ pub struct ConfigController {
 struct ConfigInner {
     current: TikvConfig,
     config_mgrs: HashMap<Module, Box<dyn ConfigManager>>,
+    raw_size_config: HashMap<String, String>,
 }
 
 impl ConfigController {
     pub fn new(current: TikvConfig) -> Self {
         ConfigController {
             inner: Arc::new(RwLock::new(ConfigInner {
+                raw_size_config: load_raw_size_config_from_file(Path::new(&current.cfg_path)),
                 current,
                 config_mgrs: HashMap::new(),
             })),
@@ -5178,6 +5250,18 @@ impl ConfigController {
         debug!("all config change had been dispatched"; "change" => ?to_update);
         // we already verified the correctness at the beginning of this function.
         inner.current.update(to_update).unwrap();
+        if let Some(change_ref) = change.as_ref() {
+            for (name, value) in change_ref {
+                if is_size_config_key(name) {
+                    inner
+                        .raw_size_config
+                        .insert(name.to_owned(), value.to_owned());
+                }
+            }
+        } else {
+            inner.raw_size_config =
+                load_raw_size_config_from_file(Path::new(&inner.current.cfg_path));
+        }
 
         if !persist {
             return Ok(());
@@ -5216,6 +5300,10 @@ impl ConfigController {
 
     pub fn get_current(&self) -> TikvConfig {
         self.inner.read().unwrap().current.clone()
+    }
+
+    pub fn get_raw_size_config(&self) -> HashMap<String, String> {
+        self.inner.read().unwrap().raw_size_config.clone()
     }
 
     pub fn get_engine_type(&self) -> &'static str {
@@ -5944,6 +6032,31 @@ mod tests {
             change.insert(name, value);
             to_config_change(change).unwrap_err();
         }
+    }
+
+    #[test]
+    fn test_load_raw_size_config_from_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_path = dir.path().join("config.toml");
+        let content = r#"
+[raftstore]
+raft-entry-max-size = "24MB"
+store-io-pool-size = 1
+
+[coprocessor]
+region-split-size = "512MiB"
+"#;
+        fs::write(&cfg_path, content).unwrap();
+        let raw = load_raw_size_config_from_file(&cfg_path);
+        assert_eq!(
+            raw.get("raftstore.raft-entry-max-size"),
+            Some(&"24MB".to_owned())
+        );
+        assert_eq!(
+            raw.get("coprocessor.region-split-size"),
+            Some(&"512MiB".to_owned())
+        );
+        assert!(raw.get("raftstore.store-io-pool-size").is_none());
     }
 
     #[test]
