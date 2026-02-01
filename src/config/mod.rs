@@ -3113,10 +3113,15 @@ impl Default for BackupConfig {
 #[serde(rename_all = "kebab-case")]
 /// Iceberg manifest writing configuration for BR backup export.
 pub struct BackupIcebergConfig {
+    /// Enables writing Iceberg-compatible JSON manifests for BR exports.
     pub enable: bool,
+    /// Warehouse root path/prefix (for example, `warehouse`).
     pub warehouse: String,
+    /// Iceberg namespace (dot-separated, for example, `analytics.core`).
     pub namespace: String,
+    /// Iceberg table name.
     pub table: String,
+    /// Prefix used when naming generated manifest files.
     pub manifest_prefix: String,
 }
 

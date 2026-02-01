@@ -39,11 +39,17 @@ lazy_static! {
 /// A snapshot of BR Parquet exporter counters for reporting progress.
 #[derive(Clone, Debug, Default)]
 pub struct ExporterMetricsSnapshot {
+    /// Number of SST files downloaded.
     pub downloaded: u64,
+    /// Number of SST files converted.
     pub converted: u64,
+    /// Number of Parquet files uploaded.
     pub uploaded: u64,
+    /// Number of SST files fully processed.
     pub completed: u64,
+    /// Total number of exported rows.
     pub rows: u64,
+    /// Total number of output bytes uploaded.
     pub output_bytes: u64,
 }
 

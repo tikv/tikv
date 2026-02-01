@@ -11,10 +11,12 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 #[error("{message}")]
+/// Error returned by [`TableFilter`] parsing and matching.
 pub struct TableFilterError {
     message: String,
 }
 
+/// Result type returned by [`TableFilter`] operations.
 pub type Result<T> = std::result::Result<T, TableFilterError>;
 
 impl TableFilterError {
@@ -24,11 +26,15 @@ impl TableFilterError {
 }
 
 #[derive(Clone, Debug)]
+/// A `.gitignore`-like matcher for schema/table names.
+///
+/// Rules are evaluated in reverse order, so later entries take precedence.
 pub struct TableFilter {
     rules: Vec<TableRule>,
 }
 
 impl TableFilter {
+    /// Parses a set of filter lines.
     pub fn parse(filters: &[String]) -> Result<Self> {
         let mut parser = TableRulesParser::new();
         for filter in filters {
@@ -40,6 +46,7 @@ impl TableFilter {
         })
     }
 
+    /// Returns a case-insensitive variant of this filter.
     pub fn case_insensitive(self) -> Result<Self> {
         let mut lowered = Vec::with_capacity(self.rules.len());
         for rule in self.rules {
@@ -52,6 +59,7 @@ impl TableFilter {
         Ok(TableFilter { rules: lowered })
     }
 
+    /// Returns whether `schema.table` matches a positive rule.
     pub fn matches_table(&self, schema: &str, table: &str) -> bool {
         for rule in &self.rules {
             if rule.schema.matches(schema) && rule.table.matches(table) {
@@ -61,6 +69,7 @@ impl TableFilter {
         false
     }
 
+    /// Returns whether `schema` matches a positive rule.
     pub fn matches_schema(&self, schema: &str) -> bool {
         for rule in &self.rules {
             if rule.schema.matches(schema) && (rule.positive || rule.table.matches_all()) {
@@ -70,6 +79,7 @@ impl TableFilter {
         false
     }
 
+    /// Returns `true` when no rules are configured.
     pub fn is_empty(&self) -> bool {
         self.rules.is_empty()
     }

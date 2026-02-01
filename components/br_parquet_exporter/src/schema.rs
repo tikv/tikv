@@ -11,9 +11,13 @@ use crate::{Error, Result};
 /// Parquet physical type used for a column in BR SST → Parquet export.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ColumnParquetType {
+    /// Parquet `INT64`.
     Int64,
+    /// Parquet `DOUBLE`.
     Double,
+    /// Parquet `BYTE_ARRAY` with UTF-8 converted type.
     Utf8,
+    /// Parquet `BYTE_ARRAY` without a converted type.
     Binary,
 }
 
@@ -36,24 +40,38 @@ const ICEBERG_SYSTEM_FIELD_ID_HANDLE: i32 = 2;
 /// A column definition for the exported Parquet table.
 #[derive(Clone, Debug)]
 pub struct ColumnSchema {
+    /// Column name used in the exported Parquet schema.
     pub name: String,
+    /// Iceberg field id assigned to this column.
     pub field_id: i32,
+    /// Parquet physical/logical type used for encoding values.
     pub parquet_type: ColumnParquetType,
+    /// Whether the column is nullable in the exported schema.
     pub nullable: bool,
+    /// Column role (system column or physical TiDB column).
     pub kind: ColumnKind,
+    /// TiDB column metadata when this is a physical column.
     pub info: Option<ColumnInfo>,
 }
 
 /// Schema for a TiDB table decoded from BR backup schema metadata.
 #[derive(Clone, Debug)]
 pub struct TableSchema {
+    /// TiDB table id.
     pub table_id: i64,
+    /// TiDB database name.
     pub db_name: String,
+    /// TiDB table name.
     pub table_name: String,
+    /// Whether the table uses a common handle (composite primary key).
     pub is_common_handle: bool,
+    /// Whether the primary key is stored as the row handle.
     pub pk_is_handle: bool,
+    /// TiDB column ids that form the primary key (handle key).
     pub primary_key_ids: Vec<i64>,
+    /// Columns exported to Parquet (including synthetic system columns).
     pub columns: Vec<ColumnSchema>,
+    /// Map from TiDB column id to type metadata for decoding values.
     pub column_map: FxHashMap<i64, ColumnInfo>,
 }
 

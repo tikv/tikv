@@ -21,8 +21,11 @@ use crate::{
 /// A typed value written to Parquet.
 #[derive(Debug)]
 pub enum CellValue {
+    /// Signed 64-bit integer value.
     Int64(i64),
+    /// 64-bit floating-point value.
     Double(f64),
+    /// Raw bytes (used for UTF-8 and binary columns).
     Bytes(Vec<u8>),
 }
 
@@ -32,6 +35,7 @@ pub struct ParquetWriter {
     columns: Vec<ColumnState>,
     row_group_size: usize,
     rows_in_group: usize,
+    /// Total number of rows written to this Parquet file so far.
     pub total_rows: u64,
 }
 
