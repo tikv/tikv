@@ -117,7 +117,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
     /// Defaults to `false`.
     #[inline]
     #[must_use]
-    pub(crate) fn is_versioned_lookup(mut self, enabled: bool) -> Self {
+    pub(crate) fn set_versioned_lookup(mut self, enabled: bool) -> Self {
         self.is_versioned_lookup = enabled;
         self
     }
@@ -1484,7 +1484,7 @@ mod tests {
 
         let mut bypass = PointGetterBuilder::new(snapshot, 5.into())
             .isolation_level(IsolationLevel::Si)
-            .is_versioned_lookup(true)
+            .set_versioned_lookup(true)
             .build()
             .unwrap();
         must_get_entry(&mut bypass, b"bar", false, b"barval", None);
@@ -1509,7 +1509,7 @@ mod tests {
 
         let mut bypass = PointGetterBuilder::new(snapshot, 35.into())
             .isolation_level(IsolationLevel::RcCheckTs)
-            .is_versioned_lookup(true)
+            .set_versioned_lookup(true)
             .build()
             .unwrap();
         must_get_value(&mut bypass, key, b"v20");
