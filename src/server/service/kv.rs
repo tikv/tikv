@@ -72,6 +72,11 @@ use crate::{
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
+const ERR_VERSIONED_RANGES_ONLY_SUPPORTED_BY_VERSIONED_COPROCESSOR: &str =
+    "versioned_ranges is only supported by VersionedKv.VersionedCoprocessor";
+const ERR_VERSIONED_RANGES_MUST_BE_NON_EMPTY_FOR_VERSIONED_COPROCESSOR: &str =
+    "versioned_ranges must be non-empty for VersionedKv.VersionedCoprocessor";
+
 pub trait RaftGrpcMessageFilter: Send + Sync {
     fn should_reject_raft_message(&self, _: &RaftMessage) -> bool;
     fn should_reject_snapshot(&self) -> bool;
@@ -589,20 +594,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
 
     fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
         reject_if_cluster_id_mismatch!(req, self, ctx, sink);
-        if !req.get_versioned_ranges().is_empty()
-            || req
-                .get_tasks()
-                .iter()
-                .any(|task| !task.get_versioned_ranges().is_empty())
-        {
+        if has_versioned_ranges(&req) {
             let e = RpcStatus::with_message(
                 RpcStatusCode::INVALID_ARGUMENT,
-                "versioned_ranges is only supported by VersionedKv.VersionedCoprocessor"
-                    .to_string(),
+                ERR_VERSIONED_RANGES_ONLY_SUPPORTED_BY_VERSIONED_COPROCESSOR.into(),
             );
             ctx.spawn(
                 sink.fail(e)
-                    .unwrap_or_else(|e| error!("kv rpc failed"; "err" => ?e)),
+                    .unwrap_or_else(|_| ()),
             );
             return;
         }
@@ -752,20 +751,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         mut sink: ServerStreamingSink<Response>,
     ) {
         reject_if_cluster_id_mismatch!(req, self, ctx, sink);
-        if !req.get_versioned_ranges().is_empty()
-            || req
-                .get_tasks()
-                .iter()
-                .any(|task| !task.get_versioned_ranges().is_empty())
-        {
+        if has_versioned_ranges(&req) {
             let e = RpcStatus::with_message(
                 RpcStatusCode::INVALID_ARGUMENT,
-                "versioned_ranges is only supported by VersionedKv.VersionedCoprocessor"
-                    .to_string(),
+                ERR_VERSIONED_RANGES_ONLY_SUPPORTED_BY_VERSIONED_COPROCESSOR.into(),
             );
             ctx.spawn(
                 sink.fail(e)
-                    .unwrap_or_else(|e| error!("kv rpc failed"; "err" => ?e)),
+                    .unwrap_or_else(|_| ()),
             );
             return;
         }
@@ -1472,17 +1465,11 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                 },
                 Some(batch_commands_request::request::Cmd::Coprocessor(req)) => {
                     handle_cluster_id_mismatch!(cluster_id, req);
-                    if !req.get_versioned_ranges().is_empty()
-                        || req
-                            .get_tasks()
-                            .iter()
-                            .any(|task| !task.get_versioned_ranges().is_empty())
-                    {
+                    if has_versioned_ranges(&req) {
                         let begin_instant = Instant::now();
                         let mut resp = Response::default();
                         resp.set_other_error(
-                            "versioned_ranges is only supported by VersionedKv.VersionedCoprocessor"
-                                .to_string(),
+                            ERR_VERSIONED_RANGES_ONLY_SUPPORTED_BY_VERSIONED_COPROCESSOR.into(),
                         );
                         let resp = future::ok(resp)
                             .map_ok(oneof!(batch_commands_response::response::Cmd::Coprocessor));
@@ -1659,6 +1646,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> VersionedKv for Service<E, L, F> {
         sink: UnarySink<Response>,
     ) {
         reject_if_cluster_id_mismatch!(req, self, ctx, sink);
+        if !has_versioned_ranges(&req) {
+            let e = RpcStatus::with_message(
+                RpcStatusCode::INVALID_ARGUMENT,
+                ERR_VERSIONED_RANGES_MUST_BE_NON_EMPTY_FOR_VERSIONED_COPROCESSOR.into(),
+            );
+            ctx.spawn(sink.fail(e).unwrap_or_else(|_| ()));
+            return;
+        }
 
         let source = req.get_context().get_request_source().to_owned();
         let resource_control_ctx = req.get_context().get_resource_control_context();
@@ -1675,41 +1670,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> VersionedKv for Service<E, L, F> {
                 resource_control_ctx.get_resource_group_name(),
             ])
             .inc();
-
-        if req.get_versioned_ranges().is_empty()
-            && req
-                .get_tasks()
-                .iter()
-                .all(|task| task.get_versioned_ranges().is_empty())
-        {
-            let begin_instant = Instant::now();
-            let mut resp = Response::default();
-            resp.set_other_error(
-                "versioned_ranges must be non-empty for VersionedKv.VersionedCoprocessor"
-                    .to_string(),
-            );
-
-            let task = async move {
-                let elapsed = begin_instant.saturating_elapsed();
-                sink.success(resp).await?;
-                GRPC_MSG_HISTOGRAM_STATIC
-                    .coprocessor
-                    .get(resource_group_priority)
-                    .observe(elapsed.as_secs_f64());
-                record_request_source_metrics(source, elapsed);
-                ServerResult::Ok(())
-            }
-            .map_err(|e| {
-                log_net_error!(e, "kv rpc failed";
-                    "request" => "versioned_coprocessor"
-                );
-                GRPC_MSG_FAIL_COUNTER.coprocessor.inc();
-            })
-            .map(|_| ());
-
-            ctx.spawn(task);
-            return;
-        }
 
         let begin_instant = Instant::now();
         let future = future_copr(&self.copr, Some(ctx.peer()), req);
@@ -2498,6 +2458,15 @@ fn future_copr<E: Engine>(
 ) -> impl Future<Output = ServerResult<MemoryTraceGuard<Response>>> {
     let ret = copr.parse_and_handle_unary_request(req, peer);
     async move { Ok(ret.await) }
+}
+
+#[inline]
+fn has_versioned_ranges(req: &Request) -> bool {
+    !req.get_versioned_ranges().is_empty()
+        || req
+            .get_tasks()
+            .iter()
+            .any(|task| !task.get_versioned_ranges().is_empty())
 }
 
 fn future_raw_coprocessor<E: Engine, L: LockManager, F: KvFormat>(
