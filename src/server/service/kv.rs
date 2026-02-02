@@ -1097,18 +1097,20 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             let mut batcher = batch_builder.build(queue, request_ids.len());
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
             for (id, req) in request_ids.into_iter().zip(requests) {
-                if let Err(server_err @ Error::ClusterIDMisMatch { .. }) = handle_batch_commands_request(
-                    cluster_id,
-                    &mut batcher,
-                    &storage,
-                    &copr,
-                    &copr_v2,
-                    &peer,
-                    id,
-                    req,
-                    &tx,
-                    &resource_manager,
-                ) {
+                if let Err(server_err @ Error::ClusterIDMisMatch { .. }) =
+                    handle_batch_commands_request(
+                        cluster_id,
+                        &mut batcher,
+                        &storage,
+                        &copr,
+                        &copr_v2,
+                        &peer,
+                        id,
+                        req,
+                        &tx,
+                        &resource_manager,
+                    )
+                {
                     let e = RpcStatus::with_message(
                         RpcStatusCode::INVALID_ARGUMENT,
                         server_err.to_string(),

@@ -675,7 +675,7 @@ impl<S: Storage> TableTask<S> {
     where
         F: KvFormat,
     {
-        Ok(BatchTableScanExecutor::new(
+        BatchTableScanExecutor::new(
             self.storage,
             cfg,
             columns_info,
@@ -689,7 +689,7 @@ impl<S: Storage> TableTask<S> {
             false,
             primary_prefix_column_ids,
             None,
-        )?)
+        )
     }
 }
 
