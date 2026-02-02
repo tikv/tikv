@@ -72,9 +72,9 @@ use crate::{
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
-const ERR_VERSIONED_RANGES_ONLY_SUPPORTED_BY_VERSIONED_COPROCESSOR: &str =
+const ERR_VERSIONED_RANGES_ONLY_VERSIONED_COPR: &str =
     "versioned_ranges is only supported by VersionedKv.VersionedCoprocessor";
-const ERR_VERSIONED_RANGES_MUST_BE_NON_EMPTY_FOR_VERSIONED_COPROCESSOR: &str =
+const ERR_VERSIONED_RANGES_REQUIRED_VERSIONED_COPR: &str =
     "versioned_ranges must be non-empty for VersionedKv.VersionedCoprocessor";
 
 pub trait RaftGrpcMessageFilter: Send + Sync {
@@ -597,11 +597,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         if has_versioned_ranges(&req) {
             let e = RpcStatus::with_message(
                 RpcStatusCode::INVALID_ARGUMENT,
-                ERR_VERSIONED_RANGES_ONLY_SUPPORTED_BY_VERSIONED_COPROCESSOR.into(),
+                ERR_VERSIONED_RANGES_ONLY_VERSIONED_COPR.into(),
             );
             ctx.spawn(
                 sink.fail(e)
-                    .unwrap_or_else(|_| ()),
+                    .unwrap_or_else(|e| error!("kv rpc failed"; "err" => ?e)),
             );
             return;
         }
@@ -754,11 +754,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         if has_versioned_ranges(&req) {
             let e = RpcStatus::with_message(
                 RpcStatusCode::INVALID_ARGUMENT,
-                ERR_VERSIONED_RANGES_ONLY_SUPPORTED_BY_VERSIONED_COPROCESSOR.into(),
+                ERR_VERSIONED_RANGES_ONLY_VERSIONED_COPR.into(),
             );
             ctx.spawn(
                 sink.fail(e)
-                    .unwrap_or_else(|_| ()),
+                    .unwrap_or_else(|e| error!("kv rpc failed"; "err" => ?e)),
             );
             return;
         }
@@ -1468,9 +1468,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     if has_versioned_ranges(&req) {
                         let begin_instant = Instant::now();
                         let mut resp = Response::default();
-                        resp.set_other_error(
-                            ERR_VERSIONED_RANGES_ONLY_SUPPORTED_BY_VERSIONED_COPROCESSOR.into(),
-                        );
+                        resp.set_other_error(ERR_VERSIONED_RANGES_ONLY_VERSIONED_COPR.into());
                         let resp = future::ok(resp)
                             .map_ok(oneof!(batch_commands_response::response::Cmd::Coprocessor));
                         response_batch_commands_request(
@@ -1649,9 +1647,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> VersionedKv for Service<E, L, F> {
         if !has_versioned_ranges(&req) {
             let e = RpcStatus::with_message(
                 RpcStatusCode::INVALID_ARGUMENT,
-                ERR_VERSIONED_RANGES_MUST_BE_NON_EMPTY_FOR_VERSIONED_COPROCESSOR.into(),
+                ERR_VERSIONED_RANGES_REQUIRED_VERSIONED_COPR.into(),
             );
-            ctx.spawn(sink.fail(e).unwrap_or_else(|_| ()));
+            ctx.spawn(sink.fail(e).unwrap_or_else(|e| error!("kv rpc failed"; "err" => ?e)));
             return;
         }
 
