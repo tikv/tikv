@@ -21,6 +21,10 @@ pub trait Store: Send {
     /// and must bypass all txn-related checks (lock checking and `RcCheckTs`
     /// newer-ts conflicts).
     ///
+    /// Currently this is only used by the versioned lookup coprocessor path
+    /// (the `VersionedKv` RPC carrying `versioned_ranges`), which is intended
+    /// for TiCI.
+    ///
     /// WARNING: This method intentionally violates transactional semantics. It
     /// may read through locks and ignore `RcCheckTs` write conflicts. Do not
     /// use it for normal reads.
