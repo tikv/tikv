@@ -3,7 +3,7 @@
 use std::{marker::PhantomData, time::Duration};
 
 use api_version::KvFormat;
-use tikv_util::time::Instant;
+use tikv_util::{error, time::Instant};
 use yatp::task::future::reschedule;
 
 use super::{OwnedKvPairEntry, Storage, range::*, ranges_iter::*};
@@ -164,12 +164,21 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
                 self.update_scanned_range_from_scanned_row(&some_row);
             }
             if let Some(row) = some_row {
+                // commit ts should be present if required
+                let commit_ts = row.commit_ts;
+                if self.load_commit_ts && commit_ts.is_none() {
+                    error!("commit_ts is required but missing"; "key" => log_wrappers::Value::key(&row.key));
+                    return Err(StorageError(anyhow::anyhow!(
+                        "commit_ts is required but missing"
+                    )));
+                }
+
                 // Retrieved one row from point range or interval range.
                 if let Some(r) = self.scanned_rows_per_range.last_mut() {
                     *r += 1;
                 }
                 self.rescheduler.check_reschedule(force_check).await;
-                let kv = F::make_kv_pair((row.key, row.value, row.commit_ts.map(|n| n.into())))
+                let kv = F::make_kv_pair((row.key, row.value, commit_ts.map(|n| n.into())))
                     .map_err(|e| StorageError(anyhow::Error::from(e)))?;
                 return Ok(Some(kv));
             } else {
@@ -321,7 +330,8 @@ mod tests {
 
     #[test]
     fn test_next() {
-        let storage = create_storage();
+        let mut storage = create_storage();
+        storage.set_mock_commit_ts(Some(1234));
 
         // Currently we accept unordered ranges.
         let ranges: Vec<Range> = vec![
@@ -332,12 +342,13 @@ mod tests {
         ];
         let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
             storage: storage.clone(),
-            ranges,
+            ranges: ranges.clone(),
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: false,
             load_commit_ts: false,
         });
+        assert!(!scanner.load_commit_ts);
         assert_eq!(
             block_on(scanner.next()).unwrap().unwrap(),
             (b"foo".to_vec(), b"1".to_vec(), None)
@@ -359,6 +370,39 @@ mod tests {
             (b"bar_2".to_vec(), b"4".to_vec(), None)
         );
         assert_eq!(block_on(scanner.next()).unwrap(), None);
+
+        // load_commit_ts should return commit ts
+        let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
+            storage: storage.clone(),
+            ranges: ranges.clone(),
+            scan_backward_in_range: false,
+            is_key_only: false,
+            is_scanned_range_aware: false,
+            load_commit_ts: true,
+        });
+        assert!(scanner.load_commit_ts);
+        assert_eq!(
+            block_on(scanner.next()).unwrap().unwrap(),
+            (b"foo".to_vec(), b"1".to_vec(), Some(1234.into()))
+        );
+
+        // If commit_ts is none, means some bugs happens, should return an error instead
+        storage.set_mock_commit_ts(None);
+        let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
+            storage: storage.clone(),
+            ranges,
+            scan_backward_in_range: false,
+            is_key_only: false,
+            is_scanned_range_aware: false,
+            load_commit_ts: true,
+        });
+        assert!(scanner.load_commit_ts);
+        assert!(
+            block_on(scanner.next())
+                .unwrap_err()
+                .to_string()
+                .contains("commit_ts is required but missing")
+        );
 
         // Backward in range
         let ranges: Vec<Range> = vec![
