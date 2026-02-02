@@ -196,10 +196,12 @@ impl<E: Engine> Endpoint<E> {
             "unsupported tp (failpoint)"
         )));
 
-        let context = req.take_context();
-        let data = req.take_data();
-        let mut ranges: Vec<_> = req.take_ranges().into();
-        let mut start_ts = req.get_start_ts();
+        let (context, data, mut ranges, mut start_ts) = (
+            req.take_context(),
+            req.take_data(),
+            req.take_ranges().to_vec(),
+            req.get_start_ts(),
+        );
         // `versioned_ranges` is an extension for "versioned lookup" reads
         // (key + per-key read ts). It intentionally bypasses txn-related
         // checks (e.g. memory lock checks / max_ts update), so it is expected
@@ -232,7 +234,11 @@ impl<E: Engine> Endpoint<E> {
             }
         }
         let is_cache_enabled = req.get_is_cache_enabled() && !is_versioned_lookup;
-        let cache_match_version = is_cache_enabled.then_some(req.get_cache_if_match_version());
+        let cache_match_version = if is_cache_enabled {
+            Some(req.get_cache_if_match_version())
+        } else {
+            None
+        };
 
         let mut input = CodedInputStream::from_bytes(&data);
         input.set_recursion_limit(self.recursion_limit);
@@ -256,16 +262,10 @@ impl<E: Engine> Endpoint<E> {
                 if let Some(scan) = dag.get_executors().iter().next() {
                     table_scan = scan.get_tp() == ExecType::TypeTableScan;
                     if table_scan {
-                        let tbl_scan = scan.get_tbl_scan();
-                        is_desc_scan = tbl_scan.get_desc();
+                        is_desc_scan = scan.get_tbl_scan().get_desc();
                     } else {
                         is_desc_scan = scan.get_idx_scan().get_desc();
                     }
-                }
-                if is_versioned_lookup && !table_scan {
-                    return Err(box_err!(
-                        "versioned_ranges is only supported for TableScan"
-                    ));
                 }
                 if start_ts == 0 {
                     start_ts = dag.get_start_ts_fallback();
@@ -299,10 +299,7 @@ impl<E: Engine> Endpoint<E> {
                 let batch_row_limit = self.get_batch_row_limit(is_streaming);
                 let quota_limiter = self.quota_limiter.clone();
                 let concurrency_manager = self.concurrency_manager.clone();
-                let paging_size = match req.get_paging_size() {
-                    0 => None,
-                    i => Some(i),
-                };
+                let paging_size = req.get_paging_size();
                 let range_versions = if is_versioned_lookup {
                     Some(range_versions)
                 } else {
@@ -319,6 +316,10 @@ impl<E: Engine> Endpoint<E> {
                         req_ctx.access_locks.clone(),
                         is_cache_enabled,
                     );
+                    let paging_size = match paging_size {
+                        0 => None,
+                        i => Some(i),
+                    };
                     let extra_store_accessor =
                         ExtraSnapStoreAccessor::<E>::new(req_ctx.clone(), concurrency_manager);
                     dag::DagHandlerBuilder::<_, _, F>::new(
@@ -2588,52 +2589,6 @@ mod tests {
         assert!(
             resp.get_other_error()
                 .contains("only supported for DAG requests")
-        );
-    }
-
-    #[test]
-    fn test_versioned_ranges_requires_table_scan() {
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = ReadPool::from(build_read_pool_for_test(
-            &CoprReadPoolConfig::default_for_test(),
-            engine,
-        ));
-        let cm = ConcurrencyManager::new_for_test(1.into());
-        let copr = Endpoint::<RocksEngine>::new(
-            &Config::default(),
-            read_pool.handle(),
-            cm,
-            ResourceTagFactory::new_for_test(),
-            Arc::new(QuotaLimiter::default()),
-            None,
-        );
-
-        let mut req = coppb::Request::default();
-        req.mut_context().set_isolation_level(IsolationLevel::Si);
-        req.set_start_ts(100);
-        req.set_tp(REQ_TYPE_DAG);
-
-        let mut r = coppb::KeyRange::default();
-        r.set_start(b"k1".to_vec());
-        r.set_end(b"k2".to_vec());
-        let mut vr = coppb::VersionedKeyRange::default();
-        vr.set_range(r);
-        vr.set_read_ts(10);
-        req.mut_versioned_ranges().push(vr);
-
-        let mut dag = DagRequest::default();
-        let mut scan_exec = Executor::default();
-        scan_exec.set_tp(ExecType::TypeIndexScan);
-        dag.mut_executors().push(scan_exec);
-        req.set_data(dag.write_to_bytes().unwrap());
-
-        let resp = block_on(copr.parse_and_handle_unary_request(req, None));
-        assert!(!resp.get_other_error().is_empty());
-        assert!(
-            resp.get_other_error()
-                .contains("only supported for TableScan"),
-            "unexpected other_error: {}",
-            resp.get_other_error()
         );
     }
 

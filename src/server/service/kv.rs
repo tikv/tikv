@@ -1143,25 +1143,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             // TODO: per thread load is more reasonable for batching.
             r.set_transport_layer_load(grpc_thread_load.total_load() as u64);
             health_feedback_attacher.attach_if_needed(&mut r);
-            if let Some(err) = item.server_err.take() {
-                match err {
-                    err @ Error::ClusterIDMisMatch { .. } => {
-                        let e =
-                            RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT, err.to_string());
-                        GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Err(GrpcError::RpcFailure(
-                            e,
-                        ))
-                    }
-                    Error::Grpc(GrpcError::RpcFailure(status)) => {
-                        GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Err(GrpcError::RpcFailure(
-                            status,
-                        ))
-                    }
-                    _ => GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Ok((
-                        r,
-                        WriteFlags::default().buffer_hint(false),
-                    )),
-                }
+            if let Some(err @ Error::ClusterIDMisMatch { .. }) = item.server_err {
+                let e = RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT, err.to_string());
+                GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Err(GrpcError::RpcFailure(e))
             } else {
                 GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Ok((
                     r,
@@ -1172,16 +1156,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
 
         let send_task = async move {
             if let Err(e) = sink.send_all(&mut response_retriever).await {
-                match e {
-                    GrpcError::RpcFailure(status) => {
-                        sink.fail(status).await?;
-                    }
-                    e => {
-                        let status =
-                            RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT, e.to_string());
-                        sink.fail(status).await?;
-                    }
-                }
+                let e = RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT, e.to_string());
+                sink.fail(e).await?;
             } else {
                 sink.close().await?;
             }
@@ -1390,12 +1366,6 @@ fn response_batch_commands_request<F, T>(
                     warn!("KvService response batch commands fail"; "err" => ?e);
                 }
             }
-            Err(server_err @ Error::Grpc(GrpcError::RpcFailure(_))) => {
-                let task = MeasuredSingleResponse::new(id, T::default(), measure, Some(server_err));
-                if let Err(e) = tx.send_with(task, WakePolicy::Immediately) {
-                    warn!("KvService response batch commands fail"; "err" => ?e);
-                }
-            }
             _ => {}
         };
     };
@@ -1509,14 +1479,13 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                             .any(|task| !task.get_versioned_ranges().is_empty())
                     {
                         let begin_instant = Instant::now();
-                        let status = RpcStatus::with_message(
-                            RpcStatusCode::INVALID_ARGUMENT,
+                        let mut resp = Response::default();
+                        resp.set_other_error(
                             "versioned_ranges is only supported by VersionedKv.VersionedCoprocessor"
                                 .to_string(),
                         );
-                        let resp = future::err::<batch_commands_response::Response, Error>(Error::Grpc(
-                            GrpcError::RpcFailure(status),
-                        ));
+                        let resp = future::ok(resp)
+                            .map_ok(oneof!(batch_commands_response::response::Cmd::Coprocessor));
                         response_batch_commands_request(
                             id,
                             resp,
