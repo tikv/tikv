@@ -17,7 +17,7 @@ use futures_util::TryStreamExt;
 use google_cloud_storage::client::{Storage, StorageControl};
 use google_cloud_storage::model_ext::ReadRange;
 use kvproto::brpb::Gcs as InputConfig;
-use tikv_util::time::Instant;
+use tikv_util::{error, info, time::Instant};
 use tokio::sync::OnceCell;
 use url::Url;
 
@@ -174,10 +174,12 @@ pub struct GcsStorage {
 struct GcsStorageInner {
     data_client: OnceCell<Storage>,
     data_endpoint: Option<String>,
-    data_credentials: Option<google_cloud_auth::credentials::Credentials>,
+    // Store credentials as JSON to defer google_cloud_auth calls to async context
+    data_credentials_json: Option<String>,
     control_client: OnceCell<StorageControl>,
     control_endpoint: Option<String>,
-    control_credentials: Option<google_cloud_auth::credentials::Credentials>,
+    // Store credentials as JSON to defer google_cloud_auth calls to async context
+    control_credentials_json: Option<String>,
     config: Config,
 }
 
@@ -186,15 +188,32 @@ impl GcsStorageInner {
         let client = self
             .data_client
             .get_or_try_init(|| async {
+                info!("initializing GCS data client");
+                let start = Instant::now();
+                
                 let mut builder = Storage::builder();
                 if let Some(ep) = &self.data_endpoint {
                     builder = builder.with_endpoint(ep);
                 }
-                if let Some(creds) = self.data_credentials.clone() {
-                    builder = builder.with_credentials(creds);
+                
+                // Build credentials in async context to avoid tokio::spawn in sync context
+                if let Some(creds_json) = &self.data_credentials_json {
+                    if creds_json == "anonymous" {
+                        // Anonymous credentials
+                        let creds = google_cloud_auth::credentials::anonymous::Builder::new().build();
+                        builder = builder.with_credentials(creds);
+                    } else {
+                        // Service account credentials
+                        let creds_value: serde_json::Value = serde_json::from_str(creds_json)
+                            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+                        let creds = google_cloud_auth::credentials::service_account::Builder::new(creds_value)
+                            .build()
+                            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+                        builder = builder.with_credentials(creds);
+                    }
                 }
 
-                builder
+                let result = builder
                     .build()
                     .await
                     .map_err(|e: google_cloud_gax::client_builder::Error| {
@@ -206,7 +225,15 @@ impl GcsStorageInner {
                             io::ErrorKind::Other
                         };
                         io::Error::new(kind, e)
-                    })
+                    });
+                
+                if let Ok(_) = &result {
+                    info!("GCS data client initialized successfully"; "duration" => ?start.saturating_elapsed());
+                } else if let Err(e) = &result {
+                    error!("GCS data client initialization failed"; "err" => ?e, "duration" => ?start.saturating_elapsed());
+                }
+                
+                result
             })
             .await?;
         Ok(client.clone())
@@ -216,14 +243,32 @@ impl GcsStorageInner {
         let client = self
             .control_client
             .get_or_try_init(|| async {
+                info!("initializing GCS control client");
+                let start = Instant::now();
+                
                 let mut builder = StorageControl::builder();
                 if let Some(ep) = &self.control_endpoint {
                     builder = builder.with_endpoint(ep);
                 }
-                if let Some(creds) = self.control_credentials.clone() {
-                    builder = builder.with_credentials(creds);
+                
+                // Build credentials in async context to avoid tokio::spawn in sync context
+                if let Some(creds_json) = &self.control_credentials_json {
+                    if creds_json == "anonymous" {
+                        // Anonymous credentials
+                        let creds = google_cloud_auth::credentials::anonymous::Builder::new().build();
+                        builder = builder.with_credentials(creds);
+                    } else {
+                        // Service account credentials
+                        let creds_value: serde_json::Value = serde_json::from_str(creds_json)
+                            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+                        let creds = google_cloud_auth::credentials::service_account::Builder::new(creds_value)
+                            .build()
+                            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+                        builder = builder.with_credentials(creds);
+                    }
                 }
-                builder
+                
+                let result = builder
                     .build()
                     .await
                     .map_err(|e: google_cloud_gax::client_builder::Error| {
@@ -235,7 +280,15 @@ impl GcsStorageInner {
                             io::ErrorKind::Other
                         };
                         io::Error::new(kind, e)
-                    })
+                    });
+                
+                if let Ok(_) = &result {
+                    info!("GCS control client initialized successfully"; "duration" => ?start.saturating_elapsed());
+                } else if let Err(e) = &result {
+                    error!("GCS control client initialization failed"; "err" => ?e, "duration" => ?start.saturating_elapsed());
+                }
+                
+                result
             })
             .await?;
         Ok(client.clone())
@@ -253,16 +306,18 @@ impl GcsStorage {
         let storage_class = Self::parse_storage_class(&input.storage_class)?;
         let predefined_acl = Self::parse_predefined_acl(&input.predefined_acl)?;
 
-        let creds = if !input.credentials_blob.is_empty() {
-            let creds_json: serde_json::Value = serde_json::from_str(&input.credentials_blob)
+        // CRITICAL FIX: Store credentials as JSON string instead of building Credentials object
+        // google_cloud_auth::credentials::Builder::build() may call tokio::spawn internally,
+        // which will panic if called from a non-Tokio thread (like Backup-Worker thread).
+        // We defer the credential building to async context in get_data_client/get_control_client.
+        let creds_json = if !input.credentials_blob.is_empty() {
+            // Validate JSON format but don't build credentials yet
+            let _: serde_json::Value = serde_json::from_str(&input.credentials_blob)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-
-            let creds = google_cloud_auth::credentials::service_account::Builder::new(creds_json)
-                .build()
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-            Some(creds)
+            Some(input.credentials_blob.clone())
         } else if endpoint.is_some() {
-            Some(google_cloud_auth::credentials::anonymous::Builder::new().build())
+            // Use special marker for anonymous credentials
+            Some("anonymous".to_string())
         } else {
             None
         };
@@ -271,10 +326,10 @@ impl GcsStorage {
             inner: std::sync::Arc::new(GcsStorageInner {
                 data_client: OnceCell::new(),
                 data_endpoint: endpoint.clone(),
-                data_credentials: creds.clone(),
+                data_credentials_json: creds_json.clone(),
                 control_client: OnceCell::new(),
                 control_endpoint: endpoint.clone(),
-                control_credentials: creds,
+                control_credentials_json: creds_json,
                 config: Config {
                     bucket,
                     prefix,
@@ -330,6 +385,21 @@ impl GcsStorage {
 
     async fn get_control_client(&self) -> io::Result<StorageControl> {
         self.inner.get_control_client().await
+    }
+    
+    /// Warm up the storage by initializing clients eagerly.
+    /// This should be called right after from_input() to avoid lazy initialization delays
+    /// during critical operations like backup.
+    pub async fn warmup(&self) -> io::Result<()> {
+        info!("warming up GCS storage clients");
+        let start = Instant::now();
+        
+        // Initialize both clients
+        self.get_data_client().await?;
+        self.get_control_client().await?;
+        
+        info!("GCS storage clients warmed up"; "duration" => ?start.saturating_elapsed());
+        Ok(())
     }
     
     fn full_path(&self, name: &str) -> String {
