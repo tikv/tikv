@@ -652,7 +652,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let mut sample = quota_limiter.new_sample(true);
         with_tls_tracker(|tracker| {
             tracker.metrics.grpc_process_nanos =
-                tracker.req_info.begin.saturating_elapsed().as_nanos() as u64;
+                stage_begin_ts.saturating_elapsed().as_nanos() as u64;
         });
 
         self.read_pool_spawn_with_busy_check(
@@ -746,7 +746,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         .as_ref()
                         .unwrap_or(&None)
                         .as_ref()
-                        .map_or(0, |v| v.len());
+                        .map_or(0, |v| v.value.len());
                     record_network_out_bytes(result_len as u64);
                     let read_bytes = key.len() + result_len;
                     sample.add_read_bytes(read_bytes);
@@ -980,7 +980,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                     statistics.add(&stat);
                                     let value_size = v
                                         .as_ref()
-                                        .map_or(0, |v| v.as_ref().map_or(0, |v1| v1.len()) as u64);
+                                        .map_or(0, |v| {
+                                            v.as_ref().map_or(0, |v1| v1.value.len()) as u64
+                                        });
                                     record_network_out_bytes(value_size);
                                     record_logical_read_bytes(statistics.processed_size as u64);
                                     consumer.consume(
@@ -1359,7 +1361,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                     .get(CMD)
                                     .observe(kv_pairs.len() as f64);
                                 record_network_out_bytes(kv_pairs.iter().fold(0u64, |acc, r| {
-                                    acc + r.as_ref().map_or(0, |(k, v)| k.len() + v.len()) as u64
+                                    acc + r.as_ref().map_or(0, |(k, v)| k.len() + v.value.len()) as u64
                                 }));
                                 kv_pairs
                             });
