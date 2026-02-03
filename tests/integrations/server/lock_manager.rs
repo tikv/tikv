@@ -668,5 +668,5 @@ fn test_shared_lock_deadlock_with_update_waiter() {
     assert_eq!(resp.results[0].get_type(), LockResultNormal);
 
     must_kv_pessimistic_rollback(&client, ctx.clone(), key_a.to_vec(), 40, 40);
-    must_kv_pessimistic_rollback(&client, ctx, key_b.to_vec(), 30, 30);
+    must_kv_pessimistic_rollback(&client, ctx, key_b.to_vec(), 40, 40);
 }
