@@ -1052,11 +1052,20 @@ impl<'a> From<&'a Lock> for TxnLockRef<'a> {
 
 pub trait LockInfoExt {
     fn is_shared_lock(&self) -> bool;
+    fn iter_locks(&self) -> impl Iterator<Item = &LockInfo>;
 }
 
 impl LockInfoExt for LockInfo {
     fn is_shared_lock(&self) -> bool {
         self.lock_type == Op::SharedLock
+    }
+
+    fn iter_locks(&self) -> impl Iterator<Item = &LockInfo> {
+        if self.is_shared_lock() {
+            Either::Left(self.get_shared_lock_infos().iter())
+        } else {
+            Either::Right(std::iter::once(self))
+        }
     }
 }
 
