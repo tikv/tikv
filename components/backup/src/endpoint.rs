@@ -929,6 +929,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
     fn get_config(&self) -> BackendConfig {
         BackendConfig {
             s3_multi_part_size: self.config_manager.0.read().unwrap().s3_multi_part_size.0 as usize,
+            gcs_v2_enable: self.config_manager.0.read().unwrap().gcs_v2_enable,
             hdfs_config: HdfsConfig {
                 hadoop_home: self.config_manager.0.read().unwrap().hadoop.home.clone(),
                 linux_user: self
