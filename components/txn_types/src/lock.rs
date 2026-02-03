@@ -871,6 +871,19 @@ impl SharedLocks {
         Ok(())
     }
 
+    /// Truncates the SharedLocks to contain at most `n` locks.
+    /// Keeps locks with smallest timestamps for deterministic behavior.
+    pub fn truncate_to(&mut self, n: usize) {
+        if self.len() <= n {
+            return;
+        }
+        let mut all_ts: Vec<TimeStamp> = self.txn_info_segments.keys().cloned().collect();
+        all_ts.sort();
+        for ts in all_ts.into_iter().skip(n) {
+            self.txn_info_segments.remove(&ts);
+        }
+    }
+
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut b = Vec::with_capacity(self.pre_allocate_size());
         b.push(LockType::Shared.to_u8());
