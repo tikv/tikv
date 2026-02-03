@@ -2000,11 +2000,10 @@ pub mod tests {
 
     #[test]
     fn test_scan_locks_from_storage_shared_locks_limit() {
-        // This test demonstrates that scan_locks_from_storage counts KEYS, not
-        // individual locks. When SharedLocks are present on a key, the total
-        // number of individual locks returned can exceed the limit value.
+        // This test guarantees that the limit parameter take effect on shared locks as
+        // well.
         let path = tempfile::Builder::new()
-            .prefix("_test_scan_locks_shared_limit")
+            .prefix("_test_storage_mvcc_reader_scan_locks_from_storage_shared_locks_limit")
             .tempdir()
             .unwrap();
         let path = path.path().to_str().unwrap();
@@ -2017,7 +2016,7 @@ pub mod tests {
         for i in 1..=5u64 {
             let lock = Lock::new(
                 LockType::Pessimistic,
-                b"k1".to_vec(),
+                format!("k{}", i).into_bytes(),
                 i.into(),
                 100,
                 None,
@@ -2030,7 +2029,7 @@ pub mod tests {
         }
 
         // Write SharedLocks directly to CF_LOCK
-        let key = Key::from_raw(b"k1");
+        let key = Key::from_raw(b"shared_lock_key");
         engine.write(vec![Modify::Put(
             CF_LOCK,
             key.clone(),
@@ -2053,12 +2052,9 @@ pub mod tests {
             })
             .sum();
 
-        // REGRESSION TEST: This assertion will FAIL with current implementation
-        // because limit=1 returns 1 KEY which contains 5 individual locks
         assert!(
             total_locks <= 1,
-            "Expected at most 1 lock when limit=1, but got {} locks. \
-             The limit parameter counts KEYS, not individual locks in SharedLocks.",
+            "Expected at most 1 lock when limit=1, but got {} locks.",
             total_locks
         );
     }
