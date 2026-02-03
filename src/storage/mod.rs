@@ -95,8 +95,8 @@ use raftstore::store::{util::build_key_range, ReadStats, TxnExt, WriteStats};
 use rand::prelude::*;
 use resource_control::{ResourceController, ResourceGroupManager, ResourceLimiter, TaskMetadata};
 use resource_metering::{
-    FutureExt, ResourceTagFactory, record_logical_read_bytes, record_network_in_bytes,
-    record_network_out_bytes,
+    record_logical_read_bytes, record_network_in_bytes, record_network_out_bytes, FutureExt,
+    ResourceTagFactory,
 };
 use tikv_kv::{OnAppliedCb, SnapshotExt};
 use tikv_util::{
@@ -978,11 +978,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         buckets.as_ref(),
                                     );
                                     statistics.add(&stat);
-                                    let value_size = v
-                                        .as_ref()
-                                        .map_or(0, |v| {
-                                            v.as_ref().map_or(0, |v1| v1.value.len()) as u64
-                                        });
+                                    let value_size = v.as_ref().map_or(0, |v| {
+                                        v.as_ref().map_or(0, |v1| v1.value.len()) as u64
+                                    });
                                     record_network_out_bytes(value_size);
                                     record_logical_read_bytes(statistics.processed_size as u64);
                                     consumer.consume(
@@ -1361,7 +1359,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                     .get(CMD)
                                     .observe(kv_pairs.len() as f64);
                                 record_network_out_bytes(kv_pairs.iter().fold(0u64, |acc, r| {
-                                    acc + r.as_ref().map_or(0, |(k, v)| k.len() + v.value.len()) as u64
+                                    acc + r.as_ref().map_or(0, |(k, v)| k.len() + v.value.len())
+                                        as u64
                                 }));
                                 kv_pairs
                             });

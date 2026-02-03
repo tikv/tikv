@@ -20,12 +20,13 @@ use tikv_util::{
 };
 
 use crate::{
+    handle_records_impl,
     recorder::{CollectorGuard, CollectorRegHandle},
     reporter::{
         collector_impl::CollectorImpl,
         data_sink_reg::{DataSinkId, DataSinkReg, DataSinkRegHandle},
     },
-    handle_records_impl, Config, DataSink, RawRecords, Records, RegionRecords,
+    Config, DataSink, RawRecords, Records, RegionRecords,
 };
 
 /// A structure for reporting statistics through [Client].

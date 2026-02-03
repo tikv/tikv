@@ -2,7 +2,7 @@
 
 use std::{
     fmt::{self, Display, Formatter},
-    sync::{Arc, atomic::Ordering::Relaxed},
+    sync::{atomic::Ordering::Relaxed, Arc},
     time::Duration,
 };
 
@@ -16,8 +16,8 @@ use tikv_util::{
 
 use self::{collector_reg::CollectorReg, sub_recorder::SubRecorder};
 use crate::{
-    Config, RawRecords, ResourceTagFactory, collector::Collector,
-    config::ENABLE_NETWORK_IO_COLLECTION,
+    collector::Collector, config::ENABLE_NETWORK_IO_COLLECTION, Config, RawRecords,
+    ResourceTagFactory,
 };
 mod collector_reg;
 mod localstorage;
@@ -29,8 +29,8 @@ pub use self::{
     sub_recorder::{
         cpu::CpuRecorder,
         summary::{
-            SummaryRecorder, record_logical_read_bytes, record_logical_write_bytes,
-            record_network_in_bytes, record_network_out_bytes, record_read_keys, record_write_keys,
+            record_logical_read_bytes, record_logical_write_bytes, record_network_in_bytes,
+            record_network_out_bytes, record_read_keys, record_write_keys, SummaryRecorder,
         },
     },
 };

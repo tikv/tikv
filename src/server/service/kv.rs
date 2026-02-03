@@ -46,7 +46,7 @@ use tikv_util::{
     worker::Scheduler,
 };
 use tracker::{
-    GLOBAL_TRACKERS, RequestInfo, RequestType, Tracker, set_tls_tracker_token, with_tls_tracker,
+    set_tls_tracker_token, with_tls_tracker, RequestInfo, RequestType, Tracker, GLOBAL_TRACKERS,
 };
 use txn_types::{self, Key};
 

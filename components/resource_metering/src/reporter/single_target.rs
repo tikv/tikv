@@ -3,8 +3,8 @@
 use std::{
     fmt::{self, Display, Formatter},
     sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
+        Arc,
     },
     time::Duration,
 };

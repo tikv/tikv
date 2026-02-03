@@ -23,8 +23,8 @@ use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
 use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
 use resource_metering::{
-    FutureExt, ResourceTagFactory, StreamExt, record_logical_read_bytes, record_network_in_bytes,
-    record_network_out_bytes,
+    record_logical_read_bytes, record_network_in_bytes, record_network_out_bytes, FutureExt,
+    ResourceTagFactory, StreamExt,
 };
 use tidb_query_common::{
     error::StorageError,

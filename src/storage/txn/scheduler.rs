@@ -49,8 +49,8 @@ use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
 use resource_control::{ResourceController, ResourceGroupManager, TaskMetadata};
 use resource_metering::{
-    FutureExt, ResourceTagFactory, record_logical_read_bytes, record_logical_write_bytes,
-    record_network_in_bytes,
+    record_logical_read_bytes, record_logical_write_bytes, record_network_in_bytes, FutureExt,
+    ResourceTagFactory,
 };
 use smallvec::{smallvec, SmallVec};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};

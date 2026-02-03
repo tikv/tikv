@@ -6,12 +6,11 @@ use collections::HashMap;
 use tikv_util::sys::thread::Pid;
 
 use crate::{
-    ENABLE_NETWORK_IO_COLLECTION,
-    RawRecords,
     recorder::{
         localstorage::{LocalStorage, STORAGE},
         SubRecorder,
     },
+    RawRecords, ENABLE_NETWORK_IO_COLLECTION,
 };
 
 /// Records how many keys have been read in the current context.
