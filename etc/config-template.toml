@@ -1322,6 +1322,9 @@
 ## in order to reduce impact on the cluster's performance during back up.
 # enable-auto-tune = true
 
+## Enable GCS v2 external storage backend for backup/restore.
+# gcs-v2-enable = false
+
 [log-backup]
 ## Number of threads to perform backup stream tasks.
 ## The default value is CPU_NUM * 0.5, and limited to [2, 12].

@@ -73,11 +73,11 @@ fn create_backend(
             blob_store(s)
         }
         Backend::Gcs(config) => {
-            if config.storage_class.starts_with("v2") {
-                 info!("external storage selected: gcs_v2");
-                 blob_store(GcsStorageV2::from_input(config.clone())?)
+            if backend_config.gcs_v2_enable {
+                info!("external storage selected: gcs_v2");
+                blob_store(GcsStorageV2::from_input(config.clone())?)
             } else {
-                 blob_store(GcsStorage::from_input(config.clone())?)
+                blob_store(GcsStorage::from_input(config.clone())?)
             }
         },
         Backend::AzureBlobStorage(config) => blob_store(AzureStorage::from_input(config.clone())?),
