@@ -3049,6 +3049,9 @@ pub struct BackupConfig {
     // Do not expose this config to user.
     // It used to debug s3 503 error.
     pub s3_multi_part_size: ReadableSize,
+    /// Enable GCS v2 external storage backend for backup/restore.
+    #[serde(alias = "gcs_v2_enable")]
+    pub gcs_v2_enable: bool,
     #[online_config(submodule)]
     pub hadoop: HadoopConfig,
 }
@@ -3098,6 +3101,7 @@ impl Default for BackupConfig {
             io_thread_size: 2,
             // 5MB is the minimum part size that S3 allowed.
             s3_multi_part_size: ReadableSize::mb(5),
+            gcs_v2_enable: false,
             hadoop: Default::default(),
         }
     }

@@ -71,6 +71,7 @@ pub type ExternalData<'a> = Box<dyn AsyncRead + Unpin + Send + 'a>;
 #[derive(Debug, Default)]
 pub struct BackendConfig {
     pub s3_multi_part_size: usize,
+    pub gcs_v2_enable: bool,
     pub hdfs_config: HdfsConfig,
 }
 
