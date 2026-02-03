@@ -90,12 +90,8 @@ use kvproto::{
     pdpb::QueryKind,
 };
 use pd_client::FeatureGate;
-<<<<<<< HEAD
-use raftstore::store::{util::build_key_range, ReadStats, TxnExt, WriteStats};
-=======
 use protobuf::Message;
-use raftstore::store::{ReadStats, TxnExt, WriteStats, util::build_key_range};
->>>>>>> df964f90b0 (resource_metering: collect network/io info for coprocessor in TopSQL (#18923))
+use raftstore::store::{util::build_key_range, ReadStats, TxnExt, WriteStats};
 use rand::prelude::*;
 use resource_control::{ResourceController, ResourceGroupManager, ResourceLimiter, TaskMetadata};
 use resource_metering::{
@@ -654,15 +650,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
         let quota_limiter = self.quota_limiter.clone();
         let mut sample = quota_limiter.new_sample(true);
-        let mut process_nanos = 0u64;
         with_tls_tracker(|tracker| {
             tracker.metrics.grpc_process_nanos =
-<<<<<<< HEAD
-                stage_begin_ts.saturating_elapsed().as_nanos() as u64;
-=======
                 tracker.req_info.begin.saturating_elapsed().as_nanos() as u64;
-            process_nanos = tracker.metrics.grpc_process_nanos;
->>>>>>> df964f90b0 (resource_metering: collect network/io info for coprocessor in TopSQL (#18923))
         });
 
         self.read_pool_spawn_with_busy_check(
@@ -752,14 +742,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         now.saturating_duration_since(command_duration),
                     ));
 
-<<<<<<< HEAD
-                    let read_bytes = key.len()
-                        + result
-                            .as_ref()
-                            .unwrap_or(&None)
-                            .as_ref()
-                            .map_or(0, |v| v.value.len());
-=======
                     let result_len = result
                         .as_ref()
                         .unwrap_or(&None)
@@ -767,7 +749,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         .map_or(0, |v| v.len());
                     record_network_out_bytes(result_len as u64);
                     let read_bytes = key.len() + result_len;
->>>>>>> df964f90b0 (resource_metering: collect network/io info for coprocessor in TopSQL (#18923))
                     sample.add_read_bytes(read_bytes);
                     let quota_delay = quota_limiter.consume_sample(sample, true).await;
                     if !quota_delay.is_zero() {

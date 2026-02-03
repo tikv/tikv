@@ -6,15 +6,12 @@ use collections::HashMap;
 use tikv_util::sys::thread::Pid;
 
 use crate::{
-<<<<<<< HEAD
-=======
-    ENABLE_NETWORK_IO_COLLECTION, RawRecords,
->>>>>>> df964f90b0 (resource_metering: collect network/io info for coprocessor in TopSQL (#18923))
+    ENABLE_NETWORK_IO_COLLECTION,
+    RawRecords,
     recorder::{
         localstorage::{LocalStorage, STORAGE},
         SubRecorder,
     },
-    RawRecords,
 };
 
 /// Records how many keys have been read in the current context.

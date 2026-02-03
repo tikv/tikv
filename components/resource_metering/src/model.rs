@@ -3,13 +3,8 @@
 use std::{
     cell::Cell,
     sync::{
-<<<<<<< HEAD
-        atomic::{AtomicU32, Ordering::Relaxed},
-        Arc,
-=======
         Arc,
         atomic::{AtomicU32, AtomicU64, Ordering::Relaxed},
->>>>>>> df964f90b0 (resource_metering: collect network/io info for coprocessor in TopSQL (#18923))
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };

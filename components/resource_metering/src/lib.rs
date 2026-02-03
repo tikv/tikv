@@ -20,16 +20,10 @@ pub use collector::Collector;
 pub use config::{Config, ConfigManager, ENABLE_NETWORK_IO_COLLECTION};
 pub use model::*;
 pub use recorder::{
-<<<<<<< HEAD
-    init_recorder, record_read_keys, record_write_keys, CollectorGuard, CollectorId,
-    CollectorRegHandle, ConfigChangeNotifier as RecorderConfigChangeNotifier, CpuRecorder,
-    Recorder, RecorderBuilder, SummaryRecorder,
-=======
     CollectorGuard, CollectorId, CollectorRegHandle,
     ConfigChangeNotifier as RecorderConfigChangeNotifier, CpuRecorder, Recorder, RecorderBuilder,
     SummaryRecorder, init_recorder, record_logical_read_bytes, record_logical_write_bytes,
     record_network_in_bytes, record_network_out_bytes, record_read_keys, record_write_keys,
->>>>>>> df964f90b0 (resource_metering: collect network/io info for coprocessor in TopSQL (#18923))
 };
 use recorder::{LocalStorage, LocalStorageRef, STORAGE};
 pub use reporter::{

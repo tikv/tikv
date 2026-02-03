@@ -48,16 +48,11 @@ use parking_lot::{Mutex, MutexGuard, RwLockWriteGuard};
 use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
 use resource_control::{ResourceController, ResourceGroupManager, TaskMetadata};
-<<<<<<< HEAD
-use resource_metering::{FutureExt, ResourceTagFactory};
-use smallvec::{smallvec, SmallVec};
-=======
 use resource_metering::{
     FutureExt, ResourceTagFactory, record_logical_read_bytes, record_logical_write_bytes,
     record_network_in_bytes,
 };
-use smallvec::{SmallVec, smallvec};
->>>>>>> df964f90b0 (resource_metering: collect network/io info for coprocessor in TopSQL (#18923))
+use smallvec::{smallvec, SmallVec};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};
 use tikv_util::{
     memory::MemoryQuota, quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE,

@@ -15,15 +15,10 @@ use tikv_util::{
 };
 
 use self::{collector_reg::CollectorReg, sub_recorder::SubRecorder};
-<<<<<<< HEAD
-use crate::{collector::Collector, Config, RawRecords, ResourceTagFactory};
-
-=======
 use crate::{
     Config, RawRecords, ResourceTagFactory, collector::Collector,
     config::ENABLE_NETWORK_IO_COLLECTION,
 };
->>>>>>> df964f90b0 (resource_metering: collect network/io info for coprocessor in TopSQL (#18923))
 mod collector_reg;
 mod localstorage;
 mod sub_recorder;
@@ -33,14 +28,10 @@ pub use self::{
     localstorage::{LocalStorage, LocalStorageRef, STORAGE},
     sub_recorder::{
         cpu::CpuRecorder,
-<<<<<<< HEAD
-        summary::{record_read_keys, record_write_keys, SummaryRecorder},
-=======
         summary::{
             SummaryRecorder, record_logical_read_bytes, record_logical_write_bytes,
             record_network_in_bytes, record_network_out_bytes, record_read_keys, record_write_keys,
         },
->>>>>>> df964f90b0 (resource_metering: collect network/io info for coprocessor in TopSQL (#18923))
     },
 };
 

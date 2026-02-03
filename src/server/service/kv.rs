@@ -45,13 +45,9 @@ use tikv_util::{
     time::Instant,
     worker::Scheduler,
 };
-<<<<<<< HEAD
-use tracker::{set_tls_tracker_token, RequestInfo, RequestType, Tracker, GLOBAL_TRACKERS};
-=======
 use tracker::{
     GLOBAL_TRACKERS, RequestInfo, RequestType, Tracker, set_tls_tracker_token, with_tls_tracker,
 };
->>>>>>> df964f90b0 (resource_metering: collect network/io info for coprocessor in TopSQL (#18923))
 use txn_types::{self, Key};
 
 use super::batch::{BatcherBuilder, ReqBatcher};
