@@ -216,9 +216,7 @@ impl<E: Engine> Endpoint<E> {
         let is_versioned_lookup = !versioned_ranges.is_empty();
         if is_versioned_lookup {
             if !ranges.is_empty() {
-                return Err(box_err!(
-                    "versioned_ranges requires ranges to be empty"
-                ));
+                return Err(box_err!("versioned_ranges requires ranges to be empty"));
             }
             ranges = Vec::with_capacity(versioned_ranges.len());
             range_versions = Vec::with_capacity(versioned_ranges.len());

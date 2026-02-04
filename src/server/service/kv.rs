@@ -1649,7 +1649,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> VersionedKv for Service<E, L, F> {
                 RpcStatusCode::INVALID_ARGUMENT,
                 ERR_VERSIONED_RANGES_REQUIRED_VERSIONED_COPR.into(),
             );
-            ctx.spawn(sink.fail(e).unwrap_or_else(|e| error!("kv rpc failed"; "err" => ?e)));
+            ctx.spawn(
+                sink.fail(e)
+                    .unwrap_or_else(|e| error!("kv rpc failed"; "err" => ?e)),
+            );
             return;
         }
 
