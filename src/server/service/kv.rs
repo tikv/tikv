@@ -1876,21 +1876,26 @@ fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat>(
             }
         }
     }
+    let max_version = req.get_max_version();
+    let limit = req.get_limit() as usize;
     let start_key = Key::from_raw_maybe_unbounded(req.get_start_key());
     let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
     let storage = storage.clone();
 
     async move {
         let v = if should_skip {
-            Ok(Vec::new())
+            Ok(storage::ScanLockResult {
+                locks: Vec::new(),
+                is_lock_free: false,
+            })
         } else {
             storage
-                .scan_lock(
+                .scan_lock_with_check(
                     req.take_context(),
-                    req.get_max_version().into(),
+                    max_version.into(),
                     start_key,
                     end_key,
-                    req.get_limit() as usize,
+                    limit,
                 )
                 .await
         };
@@ -1899,15 +1904,15 @@ fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat>(
             resp.set_region_error(err);
         } else {
             match v {
-                Ok(locks) => {
-                    if is_region_level && locks.is_empty() {
+                Ok(result) => {
+                    if is_region_level && result.is_lock_free {
                         if let (Some(accessor), Some(version)) =
                             (region_info_accessor.as_ref(), write_version)
                         {
                             accessor.mark_resolve_lock_clean_if_version(region_id, version);
                         }
                     }
-                    resp.set_locks(locks.into());
+                    resp.set_locks(result.locks.into());
                 }
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
@@ -2543,16 +2548,12 @@ fn future_resolve_lock<E: Engine, L: LockManager, F: KvFormat>(
     let region_id = req.get_context().get_region_id();
     let is_region_level = req.get_keys().is_empty();
     let region_info_accessor = storage.get_region_info_accessor();
-    let mut write_version = None;
     let mut should_skip = false;
     if is_region_level {
         if let Some(accessor) = region_info_accessor.as_ref() {
             should_skip = accessor
                 .should_skip_resolve_lock(region_id)
                 .unwrap_or(false);
-            if !should_skip {
-                write_version = accessor.get_region_write_version(region_id).ok();
-            }
         }
     }
 
@@ -2578,13 +2579,6 @@ fn future_resolve_lock<E: Engine, L: LockManager, F: KvFormat>(
             resp.set_region_error(err);
         } else if let Err(e) = v {
             resp.set_error(extract_key_error(&e));
-        }
-
-        if is_region_level && !resp.has_region_error() && !resp.has_error() {
-            if let (Some(accessor), Some(version)) = (region_info_accessor.as_ref(), write_version)
-            {
-                accessor.mark_resolve_lock_clean_if_version(region_id, version);
-            }
         }
 
         GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {

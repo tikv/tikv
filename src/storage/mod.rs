@@ -155,6 +155,11 @@ use crate::{
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 
+pub struct ScanLockResult {
+    pub locks: Vec<LockInfo>,
+    pub is_lock_free: bool,
+}
+
 macro_rules! check_key_size {
     ($key_iter:expr, $max_key_size:expr, $callback:ident) => {
         for k in $key_iter {
@@ -1672,12 +1677,24 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
     pub fn scan_lock(
         &self,
-        mut ctx: Context,
+        ctx: Context,
         max_ts: TimeStamp,
         start_key: Option<Key>,
         end_key: Option<Key>,
         limit: usize,
     ) -> impl Future<Output = Result<Vec<LockInfo>>> {
+        let fut = self.scan_lock_with_check(ctx, max_ts, start_key, end_key, limit);
+        async move { fut.await.map(|result| result.locks) }
+    }
+
+    pub fn scan_lock_with_check(
+        &self,
+        mut ctx: Context,
+        max_ts: TimeStamp,
+        start_key: Option<Key>,
+        end_key: Option<Key>,
+        limit: usize,
+    ) -> impl Future<Output = Result<ScanLockResult>> {
         const CMD: CommandKind = CommandKind::scan_lock;
         let priority = ctx.get_priority();
         let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
@@ -1784,11 +1801,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         Some(ScanMode::Forward),
                         !ctx.get_not_fill_cache(),
                     );
+                    let has_any_lock = AtomicBool::new(false);
                     let read_res = reader
                         .scan_locks(
                             start_key.as_ref(),
                             end_key.as_ref(),
-                            |_, lock| lock.get_start_ts() <= max_ts,
+                            |_, lock| {
+                                has_any_lock.store(true, Ordering::Relaxed);
+                                lock.get_start_ts() <= max_ts
+                            },
                             limit,
                             resolve_lock,
                         )
@@ -1828,7 +1849,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         locks.iter().map(|l| l.compute_size()).sum::<u32>() as u64
                     );
                     record_logical_read_bytes(statistics.processed_size as u64);
-                    Ok(locks)
+                    Ok(ScanLockResult {
+                        locks,
+                        is_lock_free: !has_any_lock.load(Ordering::Relaxed),
+                    })
                 })
             }
             .in_resource_metering_tag(resource_tag),
@@ -8459,6 +8483,44 @@ mod tests {
         .unwrap();
         assert_eq!(res, vec![lock_b, lock_c, lock_x, lock_y]);
         drop(guard);
+    }
+
+    #[test]
+    fn test_scan_lock_with_check() {
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .build()
+            .unwrap();
+
+        let res =
+            block_on(storage.scan_lock_with_check(Context::default(), 10.into(), None, None, 10))
+                .unwrap();
+        assert!(res.locks.is_empty());
+        assert!(res.is_lock_free);
+
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::Prewrite::with_defaults(
+                    vec![Mutation::make_put(Key::from_raw(b"x"), b"foo".to_vec())],
+                    b"x".to_vec(),
+                    100.into(),
+                ),
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        let res =
+            block_on(storage.scan_lock_with_check(Context::default(), 99.into(), None, None, 10))
+                .unwrap();
+        assert!(res.locks.is_empty());
+        assert!(!res.is_lock_free);
+
+        let res =
+            block_on(storage.scan_lock_with_check(Context::default(), 100.into(), None, None, 10))
+                .unwrap();
+        assert!(!res.locks.is_empty());
+        assert!(!res.is_lock_free);
     }
 
     #[test]
