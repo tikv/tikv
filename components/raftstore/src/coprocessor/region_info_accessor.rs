@@ -12,7 +12,7 @@ use std::{
 };
 
 use collections::{HashMap, HashSet};
-use engine_traits::KvEngine;
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE, KvEngine, Mutable, Result as EngineResult, WriteBatch, WriteOptions};
 use itertools::Itertools;
 use kvproto::metapb::Region;
 use pd_client::RegionStat;
@@ -25,10 +25,14 @@ use tikv_util::{
 };
 
 use super::{
-    BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
-    RegionChangeEvent, RegionChangeObserver, RegionHeartbeatObserver, Result, RoleChange,
-    RoleObserver, dispatcher::BoxRegionHeartbeatObserver, metrics::*,
+    BoxRegionChangeObserver, BoxRegionHibernateObserver, BoxRoleObserver, Coprocessor,
+    CoprocessorHost, ObserverContext, RegionChangeEvent, RegionChangeObserver,
+    RegionHeartbeatObserver, RegionHibernateObserver, Result, RoleChange, RoleObserver,
+    dispatcher::{BoxRegionHeartbeatObserver, BoxWriteBatchObserver},
+    metrics::*,
+    ObservableWriteBatch, WriteBatchObserver,
 };
+use crate::store::hibernate_state::GroupState;
 
 // TODO(SpadeA): this 100 may be adjusted by observing more workloads.
 const ITERATED_COUNT_FILTER_FACTOR: usize = 100;
@@ -78,6 +82,10 @@ pub enum RaftStoreEvent {
         region: Region,
         activity: RegionActivity,
     },
+    UpdateRegionHibernateState {
+        region: Region,
+        is_hibernated: bool,
+    },
 }
 
 impl RaftStoreEvent {
@@ -88,6 +96,7 @@ impl RaftStoreEvent {
             | RaftStoreEvent::DestroyRegion { region, .. }
             | RaftStoreEvent::UpdateRegionBuckets { region, .. }
             | RaftStoreEvent::UpdateRegionActivity { region, .. }
+            | RaftStoreEvent::UpdateRegionHibernateState { region, .. }
             | RaftStoreEvent::RoleChange { region, .. } => region,
         }
     }
@@ -117,6 +126,12 @@ pub struct RegionActivity {
     // TODO: add region's MVCC version/tombstone count to measure effectiveness of the in-memory
     // cache for that region's data. This information could be collected from rocksdb, see:
     // collection_regions_to_compact.
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ResolveLockState {
+    write_version: u64,
+    last_clean_version: Option<u64>,
 }
 
 type RegionsMap = HashMap<u64, RegionInfo>;
@@ -175,6 +190,21 @@ pub enum RegionInfoQuery {
         region_ids: Vec<u64>,
         callback: Callback<Vec<(Region, RegionStat)>>,
     },
+    MarkRegionWrite {
+        region_id: u64,
+    },
+    MarkResolveLockCleanIfVersion {
+        region_id: u64,
+        write_version: u64,
+    },
+    GetRegionWriteVersion {
+        region_id: u64,
+        callback: Callback<u64>,
+    },
+    ShouldSkipResolveLock {
+        region_id: u64,
+        callback: Callback<bool>,
+    },
     /// Gets all contents from the collection. Only used for testing.
     DebugDump(mpsc::Sender<(RegionsMap, RegionRangesMap)>),
 }
@@ -202,6 +232,23 @@ impl Display for RegionInfoQuery {
             }
             RegionInfoQuery::GetRegionsStat { region_ids, .. } => {
                 write!(f, "GetRegionsActivity(region_ids: {:?})", region_ids)
+            }
+            RegionInfoQuery::MarkRegionWrite { region_id } => {
+                write!(f, "MarkRegionWrite(region_id: {})", region_id)
+            }
+            RegionInfoQuery::MarkResolveLockCleanIfVersion {
+                region_id,
+                write_version,
+            } => write!(
+                f,
+                "MarkResolveLockCleanIfVersion(region_id: {}, write_version: {})",
+                region_id, write_version
+            ),
+            RegionInfoQuery::GetRegionWriteVersion { region_id, .. } => {
+                write!(f, "GetRegionWriteVersion(region_id: {})", region_id)
+            }
+            RegionInfoQuery::ShouldSkipResolveLock { region_id, .. } => {
+                write!(f, "ShouldSkipResolveLock(region_id: {})", region_id)
             }
             RegionInfoQuery::DebugDump(_) => write!(f, "DebugDump"),
         }
@@ -274,6 +321,151 @@ impl RegionHeartbeatObserver for RegionEventListener {
     }
 }
 
+impl RegionHibernateObserver for RegionEventListener {
+    fn on_region_hibernate_state(&self, context: &mut ObserverContext<'_>, state: GroupState) {
+        let region = context.region().clone();
+        let event = RaftStoreEvent::UpdateRegionHibernateState {
+            region,
+            is_hibernated: state == GroupState::Idle,
+        };
+        let _ = self
+            .scheduler
+            .schedule(RegionInfoQuery::RaftStoreEvent(event));
+    }
+}
+
+#[derive(Clone)]
+struct RegionWriteObserver {
+    scheduler: Scheduler<RegionInfoQuery>,
+}
+
+impl Coprocessor for RegionWriteObserver {}
+
+impl WriteBatchObserver for RegionWriteObserver {
+    fn create_observable_write_batch(&self) -> Box<dyn ObservableWriteBatch> {
+        Box::new(RegionWriteBatch::new(self.scheduler.clone()))
+    }
+}
+
+struct RegionWriteBatch {
+    scheduler: Scheduler<RegionInfoQuery>,
+    current_region_id: Option<u64>,
+    dirty_regions: HashSet<u64>,
+}
+
+impl RegionWriteBatch {
+    fn new(scheduler: Scheduler<RegionInfoQuery>) -> Self {
+        Self {
+            scheduler,
+            current_region_id: None,
+            dirty_regions: HashSet::default(),
+        }
+    }
+
+    fn mark_dirty(&mut self, cf: &str) {
+        if matches!(cf, CF_DEFAULT | CF_LOCK | CF_WRITE) {
+            if let Some(region_id) = self.current_region_id {
+                self.dirty_regions.insert(region_id);
+            }
+        }
+    }
+
+    fn flush_dirty(&mut self) {
+        if self.dirty_regions.is_empty() {
+            return;
+        }
+        for region_id in self.dirty_regions.drain() {
+            let _ = self
+                .scheduler
+                .schedule(RegionInfoQuery::MarkRegionWrite { region_id });
+        }
+    }
+}
+
+impl ObservableWriteBatch for RegionWriteBatch {
+    fn prepare_for_region(&mut self, region: &Region) {
+        self.current_region_id = Some(region.get_id());
+    }
+
+    fn write_opt_seq(&mut self, _opts: &WriteOptions, _seq_num: u64) {}
+
+    fn post_write(&mut self) {
+        self.flush_dirty();
+    }
+}
+
+impl WriteBatch for RegionWriteBatch {
+    fn write_opt(&mut self, _opts: &WriteOptions) -> EngineResult<u64> {
+        Ok(0)
+    }
+
+    fn data_size(&self) -> usize {
+        0
+    }
+
+    fn count(&self) -> usize {
+        0
+    }
+
+    fn is_empty(&self) -> bool {
+        true
+    }
+
+    fn should_write_to_engine(&self) -> bool {
+        false
+    }
+
+    fn clear(&mut self) {
+        self.dirty_regions.clear();
+    }
+
+    fn set_save_point(&mut self) {}
+
+    fn pop_save_point(&mut self) -> EngineResult<()> {
+        Ok(())
+    }
+
+    fn rollback_to_save_point(&mut self) -> EngineResult<()> {
+        Ok(())
+    }
+
+    fn merge(&mut self, _: Self) -> EngineResult<()> {
+        Ok(())
+    }
+}
+
+impl Mutable for RegionWriteBatch {
+    fn put(&mut self, _key: &[u8], _value: &[u8]) -> EngineResult<()> {
+        self.mark_dirty(CF_DEFAULT);
+        Ok(())
+    }
+
+    fn put_cf(&mut self, cf: &str, _key: &[u8], _value: &[u8]) -> EngineResult<()> {
+        self.mark_dirty(cf);
+        Ok(())
+    }
+
+    fn delete(&mut self, _key: &[u8]) -> EngineResult<()> {
+        self.mark_dirty(CF_DEFAULT);
+        Ok(())
+    }
+
+    fn delete_cf(&mut self, cf: &str, _key: &[u8]) -> EngineResult<()> {
+        self.mark_dirty(cf);
+        Ok(())
+    }
+
+    fn delete_range(&mut self, _begin_key: &[u8], _end_key: &[u8]) -> EngineResult<()> {
+        self.mark_dirty(CF_DEFAULT);
+        Ok(())
+    }
+
+    fn delete_range_cf(&mut self, cf: &str, _begin_key: &[u8], _end_key: &[u8]) -> EngineResult<()> {
+        self.mark_dirty(cf);
+        Ok(())
+    }
+}
+
 /// Creates an `RegionEventListener` and register it to given coprocessor host.
 fn register_region_event_listener(
     host: &mut CoprocessorHost<impl KvEngine>,
@@ -284,6 +476,9 @@ fn register_region_event_listener(
         scheduler,
         region_stats_manager_enabled_cb,
     };
+    let write_observer = RegionWriteObserver {
+        scheduler: listener.scheduler.clone(),
+    };
 
     host.registry
         .register_role_observer(1, BoxRoleObserver::new(listener.clone()));
@@ -291,7 +486,11 @@ fn register_region_event_listener(
         .register_region_change_observer(1, BoxRegionChangeObserver::new(listener.clone()));
 
     host.registry
-        .register_region_heartbeat_observer(1, BoxRegionHeartbeatObserver::new(listener))
+        .register_region_heartbeat_observer(1, BoxRegionHeartbeatObserver::new(listener.clone()));
+    host.registry
+        .register_region_hibernate_observer(1, BoxRegionHibernateObserver::new(listener));
+    host.registry
+        .register_write_batch_observer(BoxWriteBatchObserver::new(write_observer));
 }
 
 /// `RegionCollector` is the place where we hold all region information we
@@ -307,6 +506,10 @@ pub struct RegionCollector {
     // TODO: add BinaryHeap to keep track of top N regions. Wrap the HashMap and BinaryHeap
     // together in a struct exposing add, delete, and get_top_regions methods.
     region_activity: RegionActivityMap,
+    // HashMap: region_id -> is_hibernated
+    region_hibernate_state: HashMap<u64, bool>,
+    // HashMap: region_id -> resolve lock tracking state
+    resolve_lock_state: HashMap<u64, ResolveLockState>,
     region_leaders: Arc<RwLock<HashSet<u64>>>,
     // It is calculated as '(next + prev) / processed_keys'
     mvcc_amplification_threshold: Box<dyn Fn() -> usize + Send>,
@@ -321,6 +524,8 @@ impl RegionCollector {
             region_leaders,
             regions: HashMap::default(),
             region_activity: HashMap::default(),
+            region_hibernate_state: HashMap::default(),
+            resolve_lock_state: HashMap::default(),
             region_ranges: BTreeMap::default(),
             mvcc_amplification_threshold,
         }
@@ -400,6 +605,51 @@ impl RegionCollector {
             .insert(region_id, region_activity.clone())
     }
 
+    fn handle_update_region_hibernate_state(&mut self, region_id: u64, is_hibernated: bool) {
+        _ = self
+            .region_hibernate_state
+            .insert(region_id, is_hibernated);
+    }
+
+    fn handle_mark_region_write(&mut self, region_id: u64) {
+        let state = self.resolve_lock_state.entry(region_id).or_default();
+        state.write_version = state.write_version.saturating_add(1);
+    }
+
+    fn handle_mark_resolve_lock_clean_if_version(&mut self, region_id: u64, write_version: u64) {
+        let state = self.resolve_lock_state.entry(region_id).or_default();
+        if state.write_version == write_version {
+            state.last_clean_version = Some(write_version);
+        }
+    }
+
+    fn handle_get_region_write_version(&self, region_id: u64, callback: Callback<u64>) {
+        let version = self
+            .resolve_lock_state
+            .get(&region_id)
+            .map(|state| state.write_version)
+            .unwrap_or(0);
+        callback(version);
+    }
+
+    fn handle_should_skip_resolve_lock(&self, region_id: u64, callback: Callback<bool>) {
+        let is_hibernated = self
+            .region_hibernate_state
+            .get(&region_id)
+            .copied()
+            .unwrap_or(false);
+        if !is_hibernated || !self.region_leaders.read().unwrap().contains(&region_id) {
+            callback(false);
+            return;
+        }
+        let should_skip = self.resolve_lock_state.get(&region_id).is_some_and(|state| {
+            state
+                .last_clean_version
+                .is_some_and(|clean_version| clean_version == state.write_version)
+        });
+        callback(should_skip);
+    }
+
     fn handle_update_region(&mut self, region: Region, role: StateRole) {
         if self.regions.contains_key(&region.get_id()) {
             self.update_region(region);
@@ -434,6 +684,8 @@ impl RegionCollector {
             assert_eq!(removed_id, region.get_id());
             // Remove any activity associated with this id.
             self.region_activity.remove(&removed_id);
+            self.region_hibernate_state.remove(&removed_id);
+            self.resolve_lock_state.remove(&removed_id);
         } else {
             // It's possible that the region is already removed because it's end_key is used
             // by another newer region.
@@ -773,6 +1025,12 @@ impl RegionCollector {
             RaftStoreEvent::UpdateRegionActivity { region, activity } => {
                 self.handle_update_region_activity(region.get_id(), &activity)
             }
+            RaftStoreEvent::UpdateRegionHibernateState {
+                region,
+                is_hibernated,
+            } => {
+                self.handle_update_region_hibernate_state(region.get_id(), is_hibernated);
+            }
         }
     }
 }
@@ -809,6 +1067,21 @@ impl Runnable for RegionCollector {
                 callback,
             } => {
                 self.handle_get_regions_stat(region_ids, callback);
+            }
+            RegionInfoQuery::MarkRegionWrite { region_id } => {
+                self.handle_mark_region_write(region_id);
+            }
+            RegionInfoQuery::MarkResolveLockCleanIfVersion {
+                region_id,
+                write_version,
+            } => {
+                self.handle_mark_resolve_lock_clean_if_version(region_id, write_version);
+            }
+            RegionInfoQuery::GetRegionWriteVersion { region_id, callback } => {
+                self.handle_get_region_write_version(region_id, callback);
+            }
+            RegionInfoQuery::ShouldSkipResolveLock { region_id, callback } => {
+                self.handle_should_skip_resolve_lock(region_id, callback);
             }
             RegionInfoQuery::DebugDump(tx) => {
                 tx.send((self.regions.clone(), self.region_ranges.clone()))
@@ -912,6 +1185,15 @@ impl RegionInfoAccessor {
         rx.recv().unwrap()
     }
 
+    pub fn mark_resolve_lock_clean_if_version(&self, region_id: u64, write_version: u64) {
+        let _ = self
+            .scheduler
+            .schedule(RegionInfoQuery::MarkResolveLockCleanIfVersion {
+                region_id,
+                write_version,
+            });
+    }
+
     #[cfg(any(test, feature = "testexport"))]
     pub fn scheduler(&self) -> &Scheduler<RegionInfoQuery> {
         &self.scheduler
@@ -950,6 +1232,14 @@ pub trait RegionInfoProvider: Send + Sync {
 
     fn get_regions_stat(&self, _: Vec<u64>) -> Result<Vec<(Region, RegionStat)>> {
         unimplemented!()
+    }
+
+    fn get_region_write_version(&self, _region_id: u64) -> Result<u64> {
+        Ok(0)
+    }
+
+    fn should_skip_resolve_lock(&self, _region_id: u64) -> Result<bool> {
+        Ok(false)
     }
 }
 
@@ -1063,6 +1353,52 @@ impl RegionInfoProvider for RegionInfoAccessor {
                 rx.recv().map_err(|e| {
                     box_err!(
                         "failed to receive get_regions_activity result from region_collector: {:?}",
+                        e
+                    )
+                })
+            })
+    }
+
+    fn get_region_write_version(&self, region_id: u64) -> Result<u64> {
+        let (tx, rx) = mpsc::channel();
+        let msg = RegionInfoQuery::GetRegionWriteVersion {
+            region_id,
+            callback: Box::new(move |version| {
+                if let Err(e) = tx.send(version) {
+                    warn!("failed to send get_region_write_version result: {:?}", e);
+                }
+            }),
+        };
+        self.scheduler
+            .schedule(msg)
+            .map_err(|e| box_err!("failed to send request to region collector: {:?}", e))
+            .and_then(|_| {
+                rx.recv().map_err(|e| {
+                    box_err!(
+                        "failed to receive get_region_write_version result from region_collector: {:?}",
+                        e
+                    )
+                })
+            })
+    }
+
+    fn should_skip_resolve_lock(&self, region_id: u64) -> Result<bool> {
+        let (tx, rx) = mpsc::channel();
+        let msg = RegionInfoQuery::ShouldSkipResolveLock {
+            region_id,
+            callback: Box::new(move |skip| {
+                if let Err(e) = tx.send(skip) {
+                    warn!("failed to send should_skip_resolve_lock result: {:?}", e);
+                }
+            }),
+        };
+        self.scheduler
+            .schedule(msg)
+            .map_err(|e| box_err!("failed to send request to region collector: {:?}", e))
+            .and_then(|_| {
+                rx.recv().map_err(|e| {
+                    box_err!(
+                        "failed to receive should_skip_resolve_lock result from region_collector: {:?}",
                         e
                     )
                 })

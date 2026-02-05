@@ -16,7 +16,7 @@ use read_write::WriteBatchObserver;
 use tikv_util::box_try;
 
 use super::{split_observer::SplitObserver, *};
-use crate::store::BucketRange;
+use crate::store::{BucketRange, hibernate_state::GroupState};
 
 /// A handle for coprocessor to schedule some command back to raftstore.
 pub trait StoreHandle: Clone + Send {
@@ -310,6 +310,11 @@ impl_box_observer!(
     WrappedRegionHeartbeatObserver
 );
 impl_box_observer!(
+    BoxRegionHibernateObserver,
+    RegionHibernateObserver,
+    WrappedRegionHibernateObserver
+);
+impl_box_observer!(
     BoxWriteBatchObserver,
     WriteBatchObserver,
     WrappedBoxWriteBatchObserver
@@ -349,6 +354,7 @@ where
     update_safe_ts_observers: Vec<Entry<BoxUpdateSafeTsObserver>>,
     raft_message_observers: Vec<Entry<BoxRaftMessageObserver>>,
     region_heartbeat_observers: Vec<Entry<BoxRegionHeartbeatObserver>>,
+    region_hibernate_observers: Vec<Entry<BoxRegionHibernateObserver>>,
     destroy_peer_observers: Vec<Entry<BoxDestroyPeerObserver>>,
     transfer_leader_observers: Vec<Entry<BoxTransferLeaderObserver>>,
     // For now, `write_batch_observer` and `snapshot_observer` can only have one
@@ -375,6 +381,7 @@ impl<E: KvEngine> Default for Registry<E> {
             update_safe_ts_observers: Default::default(),
             raft_message_observers: Default::default(),
             region_heartbeat_observers: Default::default(),
+            region_hibernate_observers: Default::default(),
             destroy_peer_observers: Default::default(),
             transfer_leader_observers: Default::default(),
             write_batch_observer: None,
@@ -458,6 +465,14 @@ impl<E: KvEngine> Registry<E> {
         qo: BoxRegionHeartbeatObserver,
     ) {
         push!(priority, qo, self.region_heartbeat_observers);
+    }
+
+    pub fn register_region_hibernate_observer(
+        &mut self,
+        priority: u32,
+        qo: BoxRegionHibernateObserver,
+    ) {
+        push!(priority, qo, self.region_hibernate_observers);
     }
 
     pub fn register_destroy_peer_observer(
@@ -925,6 +940,15 @@ impl<E: KvEngine> CoprocessorHost<E> {
             &self.registry.region_heartbeat_observers,
             on_region_heartbeat,
             region_stat
+        );
+    }
+
+    pub fn on_region_hibernate_state(&self, region: &Region, state: GroupState) {
+        loop_ob!(
+            region,
+            &self.registry.region_hibernate_observers,
+            on_region_hibernate_state,
+            state
         );
     }
 

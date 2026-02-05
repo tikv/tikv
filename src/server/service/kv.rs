@@ -28,6 +28,7 @@ use protobuf::{Message, RepeatedField};
 use raft::eraftpb::MessageType;
 use raftstore::{
     Error as RaftStoreError, Result as RaftStoreResult,
+    coprocessor::RegionInfoProvider,
     store::{
         CheckLeaderTask, get_memory_usage_entry_cache,
         memory::{MEMTRACE_APPLYS, MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES},
@@ -1860,25 +1861,52 @@ fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat>(
     with_tls_tracker(|tracker| {
         tracker.metrics.grpc_req_size = req.compute_size() as u64;
     });
+    let region_id = req.get_context().get_region_id();
+    let is_region_level = req.get_start_key().is_empty() && req.get_end_key().is_empty();
+    let region_info_accessor = storage.get_region_info_accessor();
+    let mut write_version = None;
+    let mut should_skip = false;
+    if is_region_level {
+        if let Some(accessor) = region_info_accessor.as_ref() {
+            should_skip = accessor.should_skip_resolve_lock(region_id).unwrap_or(false);
+            if !should_skip {
+                write_version = accessor.get_region_write_version(region_id).ok();
+            }
+        }
+    }
     let start_key = Key::from_raw_maybe_unbounded(req.get_start_key());
     let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
-
-    let v = storage.scan_lock(
-        req.take_context(),
-        req.get_max_version().into(),
-        start_key,
-        end_key,
-        req.get_limit() as usize,
-    );
+    let storage = storage.clone();
 
     async move {
-        let v = v.await;
+        let v = if should_skip {
+            Ok(Vec::new())
+        } else {
+            storage
+                .scan_lock(
+                    req.take_context(),
+                    req.get_max_version().into(),
+                    start_key,
+                    end_key,
+                    req.get_limit() as usize,
+                )
+                .await
+        };
         let mut resp = ScanLockResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
             match v {
-                Ok(locks) => resp.set_locks(locks.into()),
+                Ok(locks) => {
+                    if is_region_level && locks.is_empty() {
+                        if let (Some(accessor), Some(version)) =
+                            (region_info_accessor.as_ref(), write_version)
+                        {
+                            accessor.mark_resolve_lock_clean_if_version(region_id, version);
+                        }
+                    }
+                    resp.set_locks(locks.into());
+                }
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
         }
@@ -2496,11 +2524,74 @@ txn_command_future!(future_batch_rollback, BatchRollbackRequest, BatchRollbackRe
         resp.set_error(extract_key_error(&e));
     };
 });
-txn_command_future!(future_resolve_lock, ResolveLockRequest, ResolveLockResponse, (v, resp, tracker) {
-    if let Err(e) = v {
-        resp.set_error(extract_key_error(&e));
+fn future_resolve_lock<E: Engine, L: LockManager, F: KvFormat>(
+    storage: &Storage<E, L, F>,
+    mut req: ResolveLockRequest,
+) -> impl Future<Output = ServerResult<ResolveLockResponse>> {
+    let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
+        req.get_context(),
+        RequestType::Unknown,
+        0,
+    )));
+    set_tls_tracker_token(tracker);
+    with_tls_tracker(|tracker| {
+        tracker.metrics.grpc_req_size = req.compute_size() as u64;
+    });
+
+    let region_id = req.get_context().get_region_id();
+    let is_region_level = req.get_keys().is_empty();
+    let region_info_accessor = storage.get_region_info_accessor();
+    let mut write_version = None;
+    let mut should_skip = false;
+    if is_region_level {
+        if let Some(accessor) = region_info_accessor.as_ref() {
+            should_skip = accessor.should_skip_resolve_lock(region_id).unwrap_or(false);
+            if !should_skip {
+                write_version = accessor.get_region_write_version(region_id).ok();
+            }
+        }
     }
-});
+
+    let storage = storage.clone();
+    async move {
+        defer! {{
+            GLOBAL_TRACKERS.remove(tracker);
+        }};
+
+        if should_skip {
+            return Ok(ResolveLockResponse::default());
+        }
+
+        let (cb, f) = paired_future_callback();
+        let res = storage.sched_txn_command(req.into(), cb);
+
+        let v = match res {
+            Err(e) => Err(e),
+            Ok(_) => f.await?,
+        };
+        let mut resp = ResolveLockResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else if let Err(e) = v {
+            resp.set_error(extract_key_error(&e));
+        }
+
+        if is_region_level && !resp.has_region_error() && !resp.has_error() {
+            if let (Some(accessor), Some(version)) = (region_info_accessor.as_ref(), write_version)
+            {
+                accessor.mark_resolve_lock_clean_if_version(region_id, version);
+            }
+        }
+
+        GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+            tracker.write_scan_detail(resp.mut_exec_details_v2().mut_scan_detail_v2());
+            tracker.write_write_detail(resp.mut_exec_details_v2().mut_write_detail());
+            tracker.merge_time_detail(resp.mut_exec_details_v2().mut_time_detail_v2());
+        });
+
+        Ok(resp)
+    }
+}
 txn_command_future!(future_commit, CommitRequest, CommitResponse, (v, resp, tracker) {
     match v {
         Ok(TxnStatus::Committed { commit_ts }) => {

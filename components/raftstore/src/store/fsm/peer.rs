@@ -408,11 +408,13 @@ where
         self.peer.mut_store().schedule_applying_snapshot();
     }
 
-    pub fn reset_hibernate_state(&mut self, state: GroupState) {
+    pub fn reset_hibernate_state(&mut self, state: GroupState) -> bool {
+        let prev_state = self.hibernate_state.group_state();
         self.hibernate_state.reset(state);
         if state == GroupState::Idle {
             self.peer.raft_group.raft.maybe_free_inflight_buffers();
         }
+        prev_state != state
     }
 
     /// The condition for leader hibernation includes:
@@ -1292,7 +1294,7 @@ where
             CasualMessage::RegionOverlapped => {
                 debug!("start ticking for overlapped"; "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id());
                 // Maybe do some safe check first?
-                self.fsm.reset_hibernate_state(GroupState::Chaos);
+                self.reset_hibernate_state(GroupState::Chaos);
                 self.register_raft_base_tick();
 
                 if is_learner(&self.fsm.peer.peer) {
@@ -1624,7 +1626,7 @@ where
                         .peer
                         .maybe_cancel_gen_snap_task(unreachable_store_id);
                 } else if to_peer_id == self.fsm.peer.leader_id() {
-                    self.fsm.reset_hibernate_state(GroupState::Chaos);
+                    self.reset_hibernate_state(GroupState::Chaos);
                     self.register_raft_base_tick();
                 }
             }
@@ -1634,7 +1636,7 @@ where
                         self.fsm.peer.raft_group.report_unreachable(peer_id);
                         self.fsm.peer.maybe_cancel_gen_snap_task(Some(store_id));
                     } else if peer_id == self.fsm.peer.leader_id() {
-                        self.fsm.reset_hibernate_state(GroupState::Chaos);
+                        self.reset_hibernate_state(GroupState::Chaos);
                         self.register_raft_base_tick();
                     }
                 }
@@ -2312,7 +2314,7 @@ where
             self.ctx.raft_metrics.ready.has_ready_region.inc();
 
             if self.fsm.peer.leader_unreachable {
-                self.fsm.reset_hibernate_state(GroupState::Chaos);
+                self.reset_hibernate_state(GroupState::Chaos);
                 self.register_raft_base_tick();
                 self.fsm.peer.leader_unreachable = false;
             }
@@ -2330,6 +2332,15 @@ where
     #[inline]
     fn region(&self) -> &Region {
         self.fsm.peer.region()
+    }
+
+    #[inline]
+    fn reset_hibernate_state(&mut self, state: GroupState) {
+        if self.fsm.reset_hibernate_state(state) {
+            self.ctx
+                .coprocessor_host
+                .on_region_hibernate_state(self.region(), state);
+        }
     }
 
     #[inline]
@@ -2518,7 +2529,7 @@ where
             "region_id" => self.region_id(),
             "peer_id" => self.fsm.peer_id(),
             "election_elapsed" => self.fsm.peer.raft_group.raft.election_elapsed);
-        self.fsm.reset_hibernate_state(GroupState::Idle);
+        self.reset_hibernate_state(GroupState::Idle);
         // Followers will stop ticking at L789. Keep ticking for followers
         // to allow it to campaign quickly when abnormal situation is detected.
         if !self.fsm.peer.is_leader() {
@@ -2960,7 +2971,7 @@ where
 
         if util::is_vote_msg(msg.get_message()) || msg_type == MessageType::MsgTimeoutNow {
             if self.fsm.hibernate_state.group_state() != GroupState::Chaos {
-                self.fsm.reset_hibernate_state(GroupState::Chaos);
+                self.reset_hibernate_state(GroupState::Chaos);
                 self.register_raft_base_tick();
             }
         } else if msg.get_from_peer().get_id() == self.fsm.peer.leader_id() {
@@ -3330,7 +3341,7 @@ where
             "region_id"=> self.fsm.region_id(),
             "peer_id" => self.fsm.peer_id(),
         );
-        self.fsm.reset_hibernate_state(state);
+        self.reset_hibernate_state(state);
         self.fsm.missing_ticks = 0;
         self.fsm.peer.should_wake_up = false;
         self.register_raft_base_tick();
@@ -4590,7 +4601,7 @@ where
                 need_ping = false;
             }
         } else if !self.fsm.peer.has_valid_leader() {
-            self.fsm.reset_hibernate_state(GroupState::Chaos);
+            self.reset_hibernate_state(GroupState::Chaos);
             self.register_raft_base_tick();
         }
         if need_ping {
@@ -5941,7 +5952,7 @@ where
         {
             self.ctx.raft_metrics.invalid_proposal.not_leader.inc();
             let leader = self.fsm.peer.get_peer_from_cache(leader_id);
-            self.fsm.reset_hibernate_state(GroupState::Chaos);
+            self.reset_hibernate_state(GroupState::Chaos);
             self.register_raft_base_tick();
             return Err(Error::NotLeader(region_id, leader));
         }
@@ -7025,7 +7036,7 @@ where
                     if !self.fsm.tick_registry[PeerTick::Raft as usize] {
                         // If leader is able to receive message but can't send out any,
                         // follower should be able to start an election.
-                        self.fsm.reset_hibernate_state(GroupState::PreChaos);
+                        self.reset_hibernate_state(GroupState::PreChaos);
                     }
                 } else {
                     self.fsm.has_ready = true;
@@ -7034,7 +7045,7 @@ where
                     self.register_pd_heartbeat_tick();
                 }
             } else if group_state == GroupState::PreChaos {
-                self.fsm.reset_hibernate_state(GroupState::Chaos);
+                self.reset_hibernate_state(GroupState::Chaos);
             } else if group_state == GroupState::Chaos {
                 // Register tick if it's not yet. Only when it fails to receive ping from leader
                 // after two stale check can a follower actually tick.

@@ -89,8 +89,10 @@ use kvproto::{
     },
     pdpb::QueryKind,
 };
+use parking_lot::RwLock;
 use pd_client::FeatureGate;
 use protobuf::Message;
+use raftstore::coprocessor::RegionInfoAccessor;
 use raftstore::store::{ReadStats, TxnExt, WriteStats, util::build_key_range};
 use rand::prelude::*;
 use resource_control::{ResourceController, ResourceGroupManager, ResourceLimiter, TaskMetadata};
@@ -223,6 +225,8 @@ pub struct Storage<E: Engine, L: LockManager, F: KvFormat> {
     quota_limiter: Arc<QuotaLimiter>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
 
+    region_info_accessor: Arc<RwLock<Option<Arc<RegionInfoAccessor>>>>,
+
     _phantom: PhantomData<F>,
 }
 
@@ -247,6 +251,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Clone for Storage<E, L, F> {
             resource_tag_factory: self.resource_tag_factory.clone(),
             quota_limiter: self.quota_limiter.clone(),
             resource_manager: self.resource_manager.clone(),
+            region_info_accessor: self.region_info_accessor.clone(),
             _phantom: PhantomData,
         }
     }
@@ -321,6 +326,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             resource_tag_factory,
             quota_limiter,
             resource_manager,
+            region_info_accessor: Arc::new(RwLock::new(None)),
             _phantom: PhantomData,
         })
     }
@@ -328,6 +334,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     /// Get the underlying `Engine` of the `Storage`.
     pub fn get_engine(&self) -> E {
         self.engine.clone()
+    }
+
+    pub fn set_region_info_accessor(&self, accessor: Arc<RegionInfoAccessor>) {
+        *self.region_info_accessor.write() = Some(accessor);
+    }
+
+    pub fn get_region_info_accessor(&self) -> Option<Arc<RegionInfoAccessor>> {
+        self.region_info_accessor.read().clone()
     }
 
     pub fn get_scheduler(&self) -> TxnScheduler<E, L> {

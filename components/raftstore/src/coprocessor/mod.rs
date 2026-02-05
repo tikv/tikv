@@ -21,6 +21,7 @@ use kvproto::{
 };
 use pd_client::RegionStat;
 use raft::{StateRole, eraftpb};
+use crate::store::hibernate_state::GroupState;
 
 pub mod config;
 mod consistency_check;
@@ -39,8 +40,8 @@ pub use self::{
     dispatcher::{
         BoxAdminObserver, BoxApplySnapshotObserver, BoxCmdObserver, BoxConsistencyCheckObserver,
         BoxPdTaskObserver, BoxQueryObserver, BoxRaftMessageObserver, BoxRegionChangeObserver,
-        BoxRoleObserver, BoxSplitCheckObserver, BoxUpdateSafeTsObserver, CoprocessorHost, Registry,
-        StoreHandle,
+        BoxRegionHibernateObserver, BoxRoleObserver, BoxSplitCheckObserver, BoxUpdateSafeTsObserver,
+        CoprocessorHost, Registry, StoreHandle,
     },
     error::{Error, Result},
     read_write::{
@@ -363,6 +364,10 @@ pub trait RegionChangeObserver: Coprocessor {
 }
 pub trait RegionHeartbeatObserver: Coprocessor {
     fn on_region_heartbeat(&self, _: &mut ObserverContext<'_>, _: &RegionStat) {}
+}
+
+pub trait RegionHibernateObserver: Coprocessor {
+    fn on_region_hibernate_state(&self, _: &mut ObserverContext<'_>, _: GroupState) {}
 }
 
 pub trait RaftMessageObserver: Coprocessor {
