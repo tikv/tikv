@@ -12,7 +12,10 @@ use std::{
 };
 
 use collections::{HashMap, HashSet};
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE, KvEngine, Mutable, Result as EngineResult, WriteBatch, WriteOptions};
+use engine_traits::{
+    CF_DEFAULT, CF_LOCK, CF_WRITE, KvEngine, Mutable, Result as EngineResult, WriteBatch,
+    WriteOptions,
+};
 use itertools::Itertools;
 use kvproto::metapb::Region;
 use pd_client::RegionStat;
@@ -26,13 +29,13 @@ use tikv_util::{
 
 use super::{
     BoxRegionChangeObserver, BoxRegionHibernateObserver, BoxRoleObserver, Coprocessor,
-    CoprocessorHost, ObserverContext, RegionChangeEvent, RegionChangeObserver,
-    RegionHeartbeatObserver, RegionHibernateObserver, Result, RoleChange, RoleObserver,
+    CoprocessorHost, ObservableWriteBatch, ObserverContext, RegionChangeEvent,
+    RegionChangeObserver, RegionHeartbeatObserver, RegionHibernateObserver, Result, RoleChange,
+    RoleObserver, WriteBatchObserver,
     dispatcher::{BoxRegionHeartbeatObserver, BoxWriteBatchObserver},
     metrics::*,
-    ObservableWriteBatch, WriteBatchObserver,
 };
-use crate::store::hibernate_state::GroupState;
+use crate::store::GroupState;
 
 // TODO(SpadeA): this 100 may be adjusted by observing more workloads.
 const ITERATED_COUNT_FILTER_FACTOR: usize = 100;
@@ -460,7 +463,12 @@ impl Mutable for RegionWriteBatch {
         Ok(())
     }
 
-    fn delete_range_cf(&mut self, cf: &str, _begin_key: &[u8], _end_key: &[u8]) -> EngineResult<()> {
+    fn delete_range_cf(
+        &mut self,
+        cf: &str,
+        _begin_key: &[u8],
+        _end_key: &[u8],
+    ) -> EngineResult<()> {
         self.mark_dirty(cf);
         Ok(())
     }
@@ -606,9 +614,7 @@ impl RegionCollector {
     }
 
     fn handle_update_region_hibernate_state(&mut self, region_id: u64, is_hibernated: bool) {
-        _ = self
-            .region_hibernate_state
-            .insert(region_id, is_hibernated);
+        _ = self.region_hibernate_state.insert(region_id, is_hibernated);
     }
 
     fn handle_mark_region_write(&mut self, region_id: u64) {
@@ -642,11 +648,14 @@ impl RegionCollector {
             callback(false);
             return;
         }
-        let should_skip = self.resolve_lock_state.get(&region_id).is_some_and(|state| {
-            state
-                .last_clean_version
-                .is_some_and(|clean_version| clean_version == state.write_version)
-        });
+        let should_skip = self
+            .resolve_lock_state
+            .get(&region_id)
+            .is_some_and(|state| {
+                state
+                    .last_clean_version
+                    .is_some_and(|clean_version| clean_version == state.write_version)
+            });
         callback(should_skip);
     }
 
@@ -1077,10 +1086,16 @@ impl Runnable for RegionCollector {
             } => {
                 self.handle_mark_resolve_lock_clean_if_version(region_id, write_version);
             }
-            RegionInfoQuery::GetRegionWriteVersion { region_id, callback } => {
+            RegionInfoQuery::GetRegionWriteVersion {
+                region_id,
+                callback,
+            } => {
                 self.handle_get_region_write_version(region_id, callback);
             }
-            RegionInfoQuery::ShouldSkipResolveLock { region_id, callback } => {
+            RegionInfoQuery::ShouldSkipResolveLock {
+                region_id,
+                callback,
+            } => {
                 self.handle_should_skip_resolve_lock(region_id, callback);
             }
             RegionInfoQuery::DebugDump(tx) => {

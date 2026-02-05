@@ -1868,7 +1868,9 @@ fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat>(
     let mut should_skip = false;
     if is_region_level {
         if let Some(accessor) = region_info_accessor.as_ref() {
-            should_skip = accessor.should_skip_resolve_lock(region_id).unwrap_or(false);
+            should_skip = accessor
+                .should_skip_resolve_lock(region_id)
+                .unwrap_or(false);
             if !should_skip {
                 write_version = accessor.get_region_write_version(region_id).ok();
             }
@@ -2526,7 +2528,7 @@ txn_command_future!(future_batch_rollback, BatchRollbackRequest, BatchRollbackRe
 });
 fn future_resolve_lock<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
-    mut req: ResolveLockRequest,
+    req: ResolveLockRequest,
 ) -> impl Future<Output = ServerResult<ResolveLockResponse>> {
     let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
         req.get_context(),
@@ -2545,7 +2547,9 @@ fn future_resolve_lock<E: Engine, L: LockManager, F: KvFormat>(
     let mut should_skip = false;
     if is_region_level {
         if let Some(accessor) = region_info_accessor.as_ref() {
-            should_skip = accessor.should_skip_resolve_lock(region_id).unwrap_or(false);
+            should_skip = accessor
+                .should_skip_resolve_lock(region_id)
+                .unwrap_or(false);
             if !should_skip {
                 write_version = accessor.get_region_write_version(region_id).ok();
             }

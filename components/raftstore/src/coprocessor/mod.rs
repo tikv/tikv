@@ -21,7 +21,8 @@ use kvproto::{
 };
 use pd_client::RegionStat;
 use raft::{StateRole, eraftpb};
-use crate::store::hibernate_state::GroupState;
+
+use crate::store::GroupState;
 
 pub mod config;
 mod consistency_check;
@@ -40,8 +41,8 @@ pub use self::{
     dispatcher::{
         BoxAdminObserver, BoxApplySnapshotObserver, BoxCmdObserver, BoxConsistencyCheckObserver,
         BoxPdTaskObserver, BoxQueryObserver, BoxRaftMessageObserver, BoxRegionChangeObserver,
-        BoxRegionHibernateObserver, BoxRoleObserver, BoxSplitCheckObserver, BoxUpdateSafeTsObserver,
-        CoprocessorHost, Registry, StoreHandle,
+        BoxRegionHibernateObserver, BoxRoleObserver, BoxSplitCheckObserver,
+        BoxUpdateSafeTsObserver, CoprocessorHost, Registry, StoreHandle,
     },
     error::{Error, Result},
     read_write::{

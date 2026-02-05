@@ -16,7 +16,7 @@ use read_write::WriteBatchObserver;
 use tikv_util::box_try;
 
 use super::{split_observer::SplitObserver, *};
-use crate::store::{BucketRange, hibernate_state::GroupState};
+use crate::store::{BucketRange, GroupState};
 
 /// A handle for coprocessor to schedule some command back to raftstore.
 pub trait StoreHandle: Clone + Send {

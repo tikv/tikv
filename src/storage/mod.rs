@@ -92,8 +92,10 @@ use kvproto::{
 use parking_lot::RwLock;
 use pd_client::FeatureGate;
 use protobuf::Message;
-use raftstore::coprocessor::RegionInfoAccessor;
-use raftstore::store::{ReadStats, TxnExt, WriteStats, util::build_key_range};
+use raftstore::{
+    coprocessor::RegionInfoAccessor,
+    store::{ReadStats, TxnExt, WriteStats, util::build_key_range},
+};
 use rand::prelude::*;
 use resource_control::{ResourceController, ResourceGroupManager, ResourceLimiter, TaskMetadata};
 use resource_metering::{

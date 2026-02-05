@@ -739,7 +739,7 @@ where
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
         if let Some(region_info_accessor) = self.region_info_accessor.clone() {
-            storage.set_region_info_accessor(region_info_accessor);
+            storage.set_region_info_accessor(Arc::new(region_info_accessor));
         }
         cfg_controller.register(
             tikv::config::Module::Storage,
