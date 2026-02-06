@@ -3051,6 +3051,8 @@ pub struct BackupConfig {
     pub s3_multi_part_size: ReadableSize,
     #[online_config(submodule)]
     pub hadoop: HadoopConfig,
+    #[online_config(submodule)]
+    pub iceberg: BackupIcebergConfig,
 }
 
 impl BackupConfig {
@@ -3079,6 +3081,8 @@ impl BackupConfig {
             self.s3_multi_part_size = default_cfg.s3_multi_part_size;
         }
 
+        self.iceberg.validate()?;
+
         Ok(())
     }
 }
@@ -3099,7 +3103,48 @@ impl Default for BackupConfig {
             // 5MB is the minimum part size that S3 allowed.
             s3_multi_part_size: ReadableSize::mb(5),
             hadoop: Default::default(),
+            iceberg: Default::default(),
         }
+    }
+}
+
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+/// Iceberg manifest writing configuration for BR backup export.
+pub struct BackupIcebergConfig {
+    /// Enables writing Iceberg-compatible JSON manifests for BR exports.
+    pub enable: bool,
+    /// Warehouse root path/prefix (for example, `warehouse`).
+    pub warehouse: String,
+    /// Iceberg namespace (dot-separated, for example, `analytics.core`).
+    pub namespace: String,
+    /// Iceberg table name.
+    pub table: String,
+    /// Prefix used when naming generated manifest files.
+    pub manifest_prefix: String,
+}
+
+impl BackupIcebergConfig {
+    fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if !self.enable {
+            return Ok(());
+        }
+        if self.warehouse.trim().is_empty() {
+            return Err("backup.iceberg.warehouse must be set when iceberg.enable is true".into());
+        }
+        if self.namespace.trim().is_empty() {
+            return Err("backup.iceberg.namespace must be set when iceberg.enable is true".into());
+        }
+        if self.table.trim().is_empty() {
+            return Err("backup.iceberg.table must be set when iceberg.enable is true".into());
+        }
+        if self.manifest_prefix.trim().is_empty() {
+            return Err(
+                "backup.iceberg.manifest-prefix must be set when iceberg.enable is true".into(),
+            );
+        }
+        Ok(())
     }
 }
 
