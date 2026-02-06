@@ -271,6 +271,7 @@ impl S3Storage {
         Http: HttpClient + 'static,
         Creds: ProvideCredentials + 'static,
     {
+        // Don't block the current thread, as it would prevent handling responses
         block_on(Self::new_with_creds_client_async(
             config,
             client,
