@@ -160,6 +160,16 @@ where
     ///
     /// This will be reset to 0 once it receives any messages from leader.
     missing_ticks: usize,
+    /// Ticks for speeding up campaign if forcefully awakened by PD.
+    ///
+    /// Followers will keep ticking until the ticks expire. If the
+    /// ticks have not timed out, all incoming leader renew lease requests will
+    /// be rejected to ensure new election safety.
+    ///
+    /// The first one is time-to-expire, the second one is the max number of
+    /// ticks. This will be reset to (0, 0) once the role changes or ticks
+    /// expire.
+    reject_lease_ticks: (usize, usize),
     hibernate_state: HibernateState,
     stopped: bool,
     has_ready: bool,
@@ -302,6 +312,7 @@ where
                 )?,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
+                reject_lease_ticks: (0, 0),
                 hibernate_state: HibernateState::ordered(),
                 stopped: false,
                 has_ready: false,
@@ -364,6 +375,7 @@ where
                 )?,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
+                reject_lease_ticks: (0, 0),
                 hibernate_state: HibernateState::ordered(),
                 stopped: false,
                 has_ready: false,
@@ -2287,6 +2299,8 @@ where
                 );
                 self.on_force_leader_fail();
             }
+            // Reset the reject lease ticks after role changed.
+            self.fsm.reject_lease_ticks = (0, 0);
         }
     }
 
@@ -2445,6 +2459,10 @@ where
 
         self.check_force_leader();
 
+        // If the peer is forcely awaken by PD, it should wait the `reject_lease_ticks`
+        // timeout and trigger a new election immediately.
+        let reject_lease_ticks_ttl = self.on_check_reject_lease_ticks();
+
         let mut res = None;
         let down_peer_ids = self.fsm.peer.get_down_peer_ids();
         if self.ctx.cfg.hibernate_regions {
@@ -2505,6 +2523,7 @@ where
         // Keep ticking if there are still pending read requests or this node is within
         // hibernate timeout.
         if res.is_none() /* hibernate_region is false */ ||
+            reject_lease_ticks_ttl > 0 /* awaken state and new leader has not been elected */ ||
             !self.fsm.peer.check_after_tick(self.fsm.hibernate_state.group_state(), res.unwrap()) ||
             (self.fsm.peer.is_leader() && !self.quorum_agree_to_hibernate(&down_peer_ids))
         {
@@ -2974,16 +2993,24 @@ where
             self.on_transfer_leader_msg(msg.get_message(), peer_disk_usage);
             Ok(())
         } else {
-            // This can be a message that sent when it's still a follower. Nevertheleast,
-            // it's meaningless to continue to handle the request as callbacks are cleared.
-            if msg_type == MessageType::MsgReadIndex
-                && self.fsm.peer.is_leader()
-                && (msg.get_message().get_from() == raft::INVALID_ID
-                    || msg.get_message().get_from() == self.fsm.peer_id())
-            {
-                self.ctx.raft_metrics.message_dropped.stale_msg.inc();
-                return Ok(());
+            if msg_type == MessageType::MsgReadIndex {
+                // This can be a message that sent when it's still a follower.
+                // Nevertheless, it's meaningless to continue to handle the request
+                // as callbacks are cleared.
+                let is_stale_msg = self.fsm.peer.is_leader()
+                    && (msg.get_message().get_from() == raft::INVALID_ID
+                        || msg.get_message().get_from() == self.fsm.peer_id());
+                // Or if the peer is forcely awaken by PD and waited to trigger
+                // a new election, the lease updating should be rejected. It
+                // could make the safety for handling `Read` by
+                // lease.
+                let should_reject = self.fsm.reject_lease_ticks.0 > 0;
+                if is_stale_msg || should_reject {
+                    self.ctx.raft_metrics.message_dropped.stale_msg.inc();
+                    return Ok(());
+                }
             }
+
             self.fsm.peer.step(self.ctx, msg.take_message())
         };
 
@@ -3221,15 +3248,20 @@ where
         match msg.get_extra_msg().get_type() {
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
                 if msg.get_extra_msg().forcely_awaken {
-                    // Forcely awaken this region by manually setting the GroupState
-                    // into `Chaos` to trigger a new voting in the Raft Group.
-                    // Meanwhile, it avoids the peer entering the `PreChaos` state,
-                    // which would wait for another long tick to enter the `Chaos` state.
-                    self.reset_raft_tick(if !self.fsm.peer.is_leader() {
-                        GroupState::Chaos
-                    } else {
-                        GroupState::Ordered
-                    });
+                    // Forcibly awaken this region by manually setting the GroupState
+                    // into `Chaos` with adding `raft_max_election_timeout_tick` to
+                    // `reject_lease_ticks`, to trigger a new voting in the
+                    // Raft Group immediately. Meanwhile, it avoids the peer
+                    // entering the `PreChaos` state, which would wait for
+                    // another long tick to enter the `Chaos` state.
+                    self.reset_raft_tick_with_reject_lease_tick(
+                        if !self.fsm.peer.is_leader() {
+                            GroupState::Chaos
+                        } else {
+                            GroupState::Ordered
+                        },
+                        self.ctx.cfg.raft_max_election_timeout_ticks,
+                    );
                 }
                 if self.fsm.hibernate_state.group_state() == GroupState::Idle {
                     self.reset_raft_tick(GroupState::Ordered);
@@ -3339,6 +3371,15 @@ where
             self.register_report_region_buckets_tick();
             self.register_check_long_uncommitted_tick();
         }
+    }
+
+    fn reset_raft_tick_with_reject_lease_tick(
+        &mut self,
+        state: GroupState,
+        max_reject_lease_ticks: usize,
+    ) {
+        self.fsm.reject_lease_ticks = (max_reject_lease_ticks, max_reject_lease_ticks);
+        self.reset_raft_tick(state);
     }
 
     // return false means the message is invalid, and can be ignored.
@@ -7291,6 +7332,34 @@ where
             );
             self.fsm.peer.busy_on_apply = None;
         }
+    }
+
+    /// Check the reject lease ticks of this peer.
+    ///
+    /// If the peer is forcely awaken by PD, it will return the timeout ticks
+    /// of rejecting lease.
+    fn on_check_reject_lease_ticks(&mut self) -> usize {
+        let (reject_lease_ticks_ttl, reject_lease_ticks) = self.fsm.reject_lease_ticks;
+        fail_point!(
+            "on_raft_base_tick_check_rejected_lease_ticks",
+            reject_lease_ticks_ttl == 1
+                && reject_lease_ticks >= self.ctx.cfg.raft_max_election_timeout_ticks,
+            |_| { 0 }
+        );
+        if reject_lease_ticks_ttl > 0 {
+            self.fsm.reject_lease_ticks = (reject_lease_ticks_ttl - 1, reject_lease_ticks);
+        } else {
+            // If the rejected lease reached the limit, it should step all cached ticks
+            // immediately, to make a fast leader election if possible.
+            for _ in 0..reject_lease_ticks {
+                if self.fsm.peer.raft_group.tick() {
+                    self.fsm.has_ready = true;
+                }
+            }
+            // Reset the reject lease ticks.
+            self.fsm.reject_lease_ticks = (0, 0);
+        }
+        reject_lease_ticks_ttl
     }
 }
 
