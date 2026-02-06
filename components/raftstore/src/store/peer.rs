@@ -4320,6 +4320,16 @@ where
             }
         } else {
             fail_point!("propose_readindex_from_follower");
+            // reject replica_read request if tikv's disk is (near) full because the
+            // read_index will be block for a long time as its raft log
+            // replication is stopped.
+            if req.get_header().get_replica_read() && poll_ctx.self_disk_usage != DiskUsage::Normal
+            {
+                let msg = "reject follower read request when self disk is full".to_string();
+                cmd_resp::bind_error(&mut err_resp, Error::DiskFull(vec![poll_ctx.store.id], msg));
+                cb.report_error(err_resp);
+                return false;
+            }
         }
 
         if !self.is_leader() && self.leader_id() == INVALID_ID {
