@@ -538,17 +538,17 @@ expected at least {} bytes after first flag, got {}",
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
-        if self.physical_table_id_column_cnt > 0 {
-            self.process_physical_table_id_column(key, columns)?;
-        }
-
         Self::extract_columns_from_datum_format(
             &mut key_payload,
             &mut columns[..self.columns_id_without_handle.len()],
         )?;
 
         match self.decode_handle_strategy {
-            NoDecode => {}
+            NoDecode => {
+                if self.physical_table_id_column_cnt > 0 {
+                    self.process_physical_table_id_column(key, columns)?;
+                }
+            }
             // For non-unique index, it is placed at the end of the key and any columns prior to it
             // are ensured to be interested. For unique index, it is placed in the
             // value.
@@ -558,6 +558,9 @@ expected at least {} bytes after first flag, got {}",
                 columns[self.columns_id_without_handle.len()]
                     .mut_decoded()
                     .push_int(Some(handle_val));
+                if self.physical_table_id_column_cnt > 0 {
+                    self.process_physical_table_id_column(key, columns)?;
+                }
             }
             DecodeIntHandle => {
                 // This is a non-unique index, and we should look up PK handle in the key.
@@ -581,6 +584,16 @@ expected at least {} bytes after first flag, got {}",
                         ));
                     }
                 }
+                // For global indexes, use the partition ID as physical table ID
+                // instead of the index table ID from the key prefix.
+                if self.physical_table_id_column_cnt > 0 {
+                    if let Some(pid) = partition_id {
+                        let col_index = columns.columns_len() - 1;
+                        columns[col_index].mut_decoded().push_int(Some(pid));
+                    } else {
+                        self.process_physical_table_id_column(key, columns)?;
+                    }
+                }
             }
             DecodeCommonHandle => {
                 // Otherwise, if the handle is common handle, we extract it from the key.
@@ -595,6 +608,9 @@ expected at least {} bytes after first flag, got {}",
                     &mut key_payload,
                     &mut columns[self.columns_id_without_handle.len()..end_index],
                 )?;
+                if self.physical_table_id_column_cnt > 0 {
+                    self.process_physical_table_id_column(key, columns)?;
+                }
             }
         }
 
@@ -3903,159 +3919,211 @@ mod tests {
         let handle_values: Vec<i64> = vec![-999, 0, 999];
         let pid_in_value_options = [true, false]; // V1 vs V2
         let request_pid_column_options = [true, false];
+        let request_phys_table_id_column_options = [true, false];
 
         for &partition_id in &partition_ids {
             for &indexed_value in &indexed_values {
                 for &handle_value in &handle_values {
                     for &pid_in_value in &pid_in_value_options {
                         for &request_pid_column in &request_pid_column_options {
-                            let version = if pid_in_value { "V1" } else { "V2" };
-                            let pid_col = if request_pid_column {
-                                "with_pid_col"
-                            } else {
-                                "no_pid_col"
-                            };
+                            for &request_phys_table_id_column in
+                                &request_phys_table_id_column_options
+                            {
+                                let version = if pid_in_value { "V1" } else { "V2" };
+                                let pid_col = if request_pid_column {
+                                    "with_pid_col"
+                                } else {
+                                    "no_pid_col"
+                                };
+                                let phys_col = if request_phys_table_id_column {
+                                    "with_phys_col"
+                                } else {
+                                    "no_phys_col"
+                                };
 
-                            // Build columns based on test configuration
-                            let mut columns_info = vec![
-                                make_column(1, false), // indexed column
-                                make_column(-1, true), // handle column
-                            ];
-                            let mut schema: Vec<FieldType> =
-                                vec![FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()];
-                            if request_pid_column {
-                                columns_info
-                                    .push(make_column(table::EXTRA_PARTITION_ID_COL_ID, false));
-                                schema.push(FieldTypeTp::LongLong.into());
-                            }
+                                // Build columns based on test configuration
+                                // Order: [indexed_col, handle, pid(-2), phys_table_id(-3)]
+                                let mut columns_info = vec![
+                                    make_column(1, false), // indexed column
+                                    make_column(-1, true), // handle column
+                                ];
+                                let mut schema: Vec<FieldType> = vec![
+                                    FieldTypeTp::LongLong.into(),
+                                    FieldTypeTp::LongLong.into(),
+                                ];
+                                if request_pid_column {
+                                    columns_info
+                                        .push(make_column(table::EXTRA_PARTITION_ID_COL_ID, false));
+                                    schema.push(FieldTypeTp::LongLong.into());
+                                }
+                                if request_phys_table_id_column {
+                                    columns_info.push(make_column(
+                                        table::EXTRA_PHYSICAL_TABLE_ID_COL_ID,
+                                        false,
+                                    ));
+                                    schema.push(FieldTypeTp::LongLong.into());
+                                }
 
-                            // Build index key:
-                            // [indexed_col][PARTITION_ID_FLAG][partition_id][handle]
-                            let mut index_key_data = datum::encode_key(
-                                &mut EvalContext::default(),
-                                &[Datum::I64(indexed_value)],
-                            )
-                            .unwrap();
-                            index_key_data.push(table::INDEX_VALUE_PARTITION_ID_FLAG);
-                            index_key_data.write_i64(partition_id).unwrap();
-                            let handle_data = datum::encode_key(
-                                &mut EvalContext::default(),
-                                &[Datum::I64(handle_value)],
-                            )
-                            .unwrap();
-                            index_key_data.extend(handle_data);
-                            let key =
-                                table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_key_data);
-
-                            // Build index value (with or without partition ID based on version)
-                            let value = if pid_in_value {
-                                let mut v = vec![0u8]; // tail_len = 0
-                                v.push(table::INDEX_VALUE_PARTITION_ID_FLAG);
-                                let mut pid_bytes = vec![0u8; 8];
-                                NumberCodec::encode_i64(&mut pid_bytes, partition_id);
-                                v.extend(&pid_bytes);
-                                v
-                            } else {
-                                vec![0u8] // V2: no partition ID in value
-                            };
-
-                            let key_ranges = vec![{
-                                let mut range = KeyRange::default();
-                                range.set_start(key.clone());
-                                range.set_end(key.clone());
-                                convert_to_prefix_next(range.mut_end());
-                                range
-                            }];
-
-                            let store = FixtureStorage::from(vec![(key, value)]);
-                            let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
-                                store,
-                                Arc::new(EvalConfig::default()),
-                                columns_info,
-                                key_ranges,
-                                0,
-                                false,
-                                false,
-                                false,
-                                false,
-                            )
-                            .unwrap();
-
-                            let mut result = block_on(executor.next_batch(10));
-                            let expected_cols = if request_pid_column { 3 } else { 2 };
-
-                            assert!(
-                                result.is_drained.as_ref().unwrap().stop(),
-                                "{} {} pid={} idx={} handle={}",
-                                version,
-                                pid_col,
-                                partition_id,
-                                indexed_value,
-                                handle_value
-                            );
-                            assert_eq!(
-                                result.physical_columns.columns_len(),
-                                expected_cols,
-                                "{} {} pid={} idx={} handle={}",
-                                version,
-                                pid_col,
-                                partition_id,
-                                indexed_value,
-                                handle_value
-                            );
-                            assert_eq!(
-                                result.physical_columns.rows_len(),
-                                1,
-                                "{} {} pid={} idx={} handle={}",
-                                version,
-                                pid_col,
-                                partition_id,
-                                indexed_value,
-                                handle_value
-                            );
-
-                            // Verify indexed column
-                            result.physical_columns[0]
-                                .ensure_all_decoded_for_test(
+                                // Build index key:
+                                // [indexed_col][PARTITION_ID_FLAG][partition_id][handle]
+                                let mut index_key_data = datum::encode_key(
                                     &mut EvalContext::default(),
-                                    &schema[0],
+                                    &[Datum::I64(indexed_value)],
                                 )
                                 .unwrap();
-                            assert_eq!(
-                                result.physical_columns[0].decoded().to_int_vec(),
-                                &[Some(indexed_value)],
-                                "{} {} pid={} idx={} handle={}: indexed column mismatch",
-                                version,
-                                pid_col,
-                                partition_id,
-                                indexed_value,
-                                handle_value
-                            );
+                                index_key_data.push(table::INDEX_VALUE_PARTITION_ID_FLAG);
+                                index_key_data.write_i64(partition_id).unwrap();
+                                let handle_data = datum::encode_key(
+                                    &mut EvalContext::default(),
+                                    &[Datum::I64(handle_value)],
+                                )
+                                .unwrap();
+                                index_key_data.extend(handle_data);
+                                let key = table::encode_index_seek_key(
+                                    TABLE_ID,
+                                    INDEX_ID,
+                                    &index_key_data,
+                                );
 
-                            // Verify handle
-                            assert_eq!(
-                                result.physical_columns[1].decoded().to_int_vec(),
-                                &[Some(handle_value)],
-                                "{} {} pid={} idx={} handle={}: handle mismatch",
-                                version,
-                                pid_col,
-                                partition_id,
-                                indexed_value,
-                                handle_value
-                            );
+                                // Build index value (with or without partition ID based on
+                                // version)
+                                let value = if pid_in_value {
+                                    let mut v = vec![0u8]; // tail_len = 0
+                                    v.push(table::INDEX_VALUE_PARTITION_ID_FLAG);
+                                    let mut pid_bytes = vec![0u8; 8];
+                                    NumberCodec::encode_i64(&mut pid_bytes, partition_id);
+                                    v.extend(&pid_bytes);
+                                    v
+                                } else {
+                                    vec![0u8] // V2: no partition ID in value
+                                };
 
-                            // Verify partition ID if requested
-                            if request_pid_column {
-                                assert_eq!(
-                                    result.physical_columns[2].decoded().to_int_vec(),
-                                    &[Some(partition_id)],
-                                    "{} {} pid={} idx={} handle={}: partition ID mismatch",
+                                let key_ranges = vec![{
+                                    let mut range = KeyRange::default();
+                                    range.set_start(key.clone());
+                                    range.set_end(key.clone());
+                                    convert_to_prefix_next(range.mut_end());
+                                    range
+                                }];
+
+                                let store = FixtureStorage::from(vec![(key, value)]);
+                                let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
+                                    store,
+                                    Arc::new(EvalConfig::default()),
+                                    columns_info,
+                                    key_ranges,
+                                    0,
+                                    false,
+                                    false,
+                                    false,
+                                    false,
+                                )
+                                .unwrap();
+
+                                let mut result = block_on(executor.next_batch(10));
+                                let expected_cols = 2
+                                    + request_pid_column as usize
+                                    + request_phys_table_id_column as usize;
+
+                                assert!(
+                                    result.is_drained.as_ref().unwrap().stop(),
+                                    "{} {} {} pid={} idx={} handle={}",
                                     version,
                                     pid_col,
+                                    phys_col,
                                     partition_id,
                                     indexed_value,
                                     handle_value
                                 );
+                                assert_eq!(
+                                    result.physical_columns.columns_len(),
+                                    expected_cols,
+                                    "{} {} {} pid={} idx={} handle={}",
+                                    version,
+                                    pid_col,
+                                    phys_col,
+                                    partition_id,
+                                    indexed_value,
+                                    handle_value
+                                );
+                                assert_eq!(
+                                    result.physical_columns.rows_len(),
+                                    1,
+                                    "{} {} {} pid={} idx={} handle={}",
+                                    version,
+                                    pid_col,
+                                    phys_col,
+                                    partition_id,
+                                    indexed_value,
+                                    handle_value
+                                );
+
+                                // Verify indexed column
+                                result.physical_columns[0]
+                                    .ensure_all_decoded_for_test(
+                                        &mut EvalContext::default(),
+                                        &schema[0],
+                                    )
+                                    .unwrap();
+                                assert_eq!(
+                                    result.physical_columns[0].decoded().to_int_vec(),
+                                    &[Some(indexed_value)],
+                                    "{} {} {} pid={} idx={} handle={}: indexed column mismatch",
+                                    version,
+                                    pid_col,
+                                    phys_col,
+                                    partition_id,
+                                    indexed_value,
+                                    handle_value
+                                );
+
+                                // Verify handle
+                                assert_eq!(
+                                    result.physical_columns[1].decoded().to_int_vec(),
+                                    &[Some(handle_value)],
+                                    "{} {} {} pid={} idx={} handle={}: handle mismatch",
+                                    version,
+                                    pid_col,
+                                    phys_col,
+                                    partition_id,
+                                    indexed_value,
+                                    handle_value
+                                );
+
+                                // Verify partition ID if requested
+                                let mut next_col = 2;
+                                if request_pid_column {
+                                    assert_eq!(
+                                        result.physical_columns[next_col].decoded().to_int_vec(),
+                                        &[Some(partition_id)],
+                                        "{} {} {} pid={} idx={} handle={}: partition ID mismatch",
+                                        version,
+                                        pid_col,
+                                        phys_col,
+                                        partition_id,
+                                        indexed_value,
+                                        handle_value
+                                    );
+                                    next_col += 1;
+                                }
+
+                                // Verify physical_table_id column if requested.
+                                // For global indexes, it should return the partition ID
+                                // (not the index table ID).
+                                if request_phys_table_id_column {
+                                    assert_eq!(
+                                        result.physical_columns[next_col].decoded().to_int_vec(),
+                                        &[Some(partition_id)],
+                                        "{} {} {} pid={} idx={} handle={}: \
+                                         physical_table_id should equal partition_id",
+                                        version,
+                                        pid_col,
+                                        phys_col,
+                                        partition_id,
+                                        indexed_value,
+                                        handle_value
+                                    );
+                                }
                             }
                         }
                     }
