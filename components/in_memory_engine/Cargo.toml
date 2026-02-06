@@ -20,6 +20,12 @@ path = "benches/load_region.rs"
 harness = false
 
 [dependencies]
+bytes = { workspace = true }
+collections = { workspace = true }
+crossbeam = { workspace = true }
+crossbeam-skiplist = { workspace = true }
+dashmap = "5.1"
+engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
 collections = { workspace = true }
 crossbeam-skiplist = { workspace = true }

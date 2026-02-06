@@ -450,6 +450,7 @@ tracing = { version = "0.1.39", default-features = false, features = [
 openssl = "0.10"
 openssl-sys = "0.9"
 heck = "0.3"
+bytes = "1.11"
 crossbeam = "0.8"
 crossbeam-channel = "0.5"
 crossbeam-utils = "0.8"
