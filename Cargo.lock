@@ -7290,6 +7290,8 @@ dependencies = [
  "prometheus-static-metric",
  "raft",
  "serde_json",
+ "slog",
+ "slog-global",
  "thiserror 1.0.40",
  "tikv_util",
  "time 0.1.43",
