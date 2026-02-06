@@ -34,6 +34,7 @@ extern crate fail;
 extern crate lazy_static;
 #[macro_use]
 extern crate serde_derive;
+#[cfg(test)]
 #[macro_use]
 extern crate more_asserts;
 #[macro_use]
