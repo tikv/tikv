@@ -65,6 +65,9 @@ const DEFAULT_GRPC_MEMORY_POOL_QUOTA: u64 = isize::MAX as u64;
 const DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE: u64 = 2 * 1024 * 1024;
 const DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL: usize = 2;
 const DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS: usize = 4096;
+const DEFAULT_GRPC_MAX_CONNECTION_IDLE: ReadableDuration = ReadableDuration::hours(2);
+const DEFAULT_GRPC_MAX_CONNECTION_AGE: ReadableDuration = ReadableDuration::secs(0);
+const DEFAULT_GRPC_MAX_CONNECTION_AGE_GRACE: ReadableDuration = ReadableDuration::secs(0);
 
 // Number of rows in each chunk.
 const DEFAULT_ENDPOINT_BATCH_ROW_LIMIT: usize = 64;
@@ -185,6 +188,12 @@ pub struct Config {
     pub grpc_keepalive_time: ReadableDuration,
     #[online_config(skip)]
     pub grpc_keepalive_timeout: ReadableDuration,
+    #[online_config(skip)]
+    pub grpc_max_connection_idle: ReadableDuration,
+    #[online_config(skip)]
+    pub grpc_max_connection_age: ReadableDuration,
+    #[online_config(skip)]
+    pub grpc_max_connection_age_grace: ReadableDuration,
     /// How many snapshots can be sent concurrently.
     pub concurrent_send_snap_limit: usize,
     /// How many snapshots can be recv concurrently.
@@ -324,6 +333,9 @@ impl Default for Config {
             // than 10 senconds.
             grpc_keepalive_time: ReadableDuration::secs(10),
             grpc_keepalive_timeout: ReadableDuration::secs(3),
+            grpc_max_connection_idle: DEFAULT_GRPC_MAX_CONNECTION_IDLE,
+            grpc_max_connection_age: DEFAULT_GRPC_MAX_CONNECTION_AGE,
+            grpc_max_connection_age_grace: DEFAULT_GRPC_MAX_CONNECTION_AGE_GRACE,
             concurrent_send_snap_limit: 32,
             concurrent_recv_snap_limit: 32,
             end_point_concurrency: None, // deprecated
