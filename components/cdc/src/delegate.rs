@@ -23,7 +23,9 @@ use kvproto::{
     },
     kvrpcpb::ExtraOp as TxnExtraOp,
     metapb::{Region, RegionEpoch},
-    raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, PutRequest, Request},
+    raft_cmdpb::{
+        AdminCmdType, AdminRequest, AdminResponse, CmdType, DeleteRequest, PutRequest, Request,
+    },
 };
 use raftstore::{
     Error as RaftStoreError,
@@ -387,7 +389,7 @@ impl Delegate {
         Ok(lock_modified_count)
     }
 
-    fn pop_lock(&mut self, key: Key, start_ts: TimeStamp) -> Result<Vec<LockModifiedCount>> {
+    fn pop_lock(&mut self, key: Key) -> Result<Vec<LockModifiedCount>> {
         let mut lock_modified_count = Vec::new();
         match &mut self.lock_tracker {
             LockTracker::Pending => unreachable!(),
@@ -399,13 +401,12 @@ impl Delegate {
             }
             LockTracker::Prepared { locks, .. } => {
                 if let BTreeMapEntry::Occupied(x) = locks.entry(key) {
-                    if x.get().ts == start_ts {
-                        let (key, _) = x.remove_entry();
-                        let bytes = key.approximate_heap_size();
-                        self.memory_quota.free(bytes);
-                        CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
-                        lock_modified_count.push(LockModifiedCount::new(start_ts, -1));
-                    }
+                    let (key, _) = x.remove_entry();
+                    let start_ts = locks.get_mut(&key).unwrap().ts;
+                    let bytes = key.approximate_heap_size();
+                    self.memory_quota.free(bytes);
+                    CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
+                    lock_modified_count.push(LockModifiedCount::new(start_ts, -1));
                 }
             }
         }
@@ -880,6 +881,7 @@ impl Delegate {
         for mut req in requests {
             match req.get_cmd_type() {
                 CmdType::Put => self.sink_put(req.take_put(), &mut rows_builder)?,
+                CmdType::Delete => self.sink_delete(req.take_delete(), &mut rows_builder)?,
                 _ => debug!("cdc skip other command";
                     "region_id" => self.region_id,
                     "command" => ?req),
@@ -889,6 +891,22 @@ impl Delegate {
         let (raws, txns) = rows_builder.finish_build();
         self.sink_downstream_raw(raws, index)?;
         self.sink_downstream_tidb(txns, read_old_value)?;
+        Ok(())
+    }
+
+    fn sink_delete(&mut self, mut delete: DeleteRequest, rows: &mut RowsBuilder) -> Result<()> {
+        // RawKV (API v2, and only API v2 can use CDC) has no lock and will write to
+        // default cf only.
+        match delete.cf.as_str() {
+            "lock" => {
+                let key = Key::from_encoded(delete.take_key());
+                let row = rows.txns_by_key.entry(key.clone()).or_default();
+                let mut modified = self.pop_lock(key)?;
+                row.lock_modified_counts.append(&mut modified);
+            }
+            "" | "default" | "write" => {}
+            other => panic!("invalid cf {}", other),
+        }
         Ok(())
     }
 
@@ -1041,10 +1059,6 @@ impl Delegate {
                     set_event_row_type(&mut row.v, EventLogType::Committed);
                     let read_old_ts = TimeStamp::from(row.v.commit_ts).prev();
                     row.needs_old_value = Some(read_old_ts);
-                } else {
-                    let start_ts = TimeStamp::from(row.v.start_ts);
-                    let mut modified = self.pop_lock(key, start_ts)?;
-                    row.lock_modified_counts.append(&mut modified);
                 }
             }
             "lock" => {
@@ -1931,14 +1945,10 @@ mod tests {
         assert_eq!(modified_counts.unwrap().len(), 0);
         assert_eq!(quota.in_use(), 100);
 
-        delegate
-            .pop_lock(Key::from_raw(b"key1"), TimeStamp::from(99))
-            .unwrap();
+        delegate.pop_lock(Key::from_raw(b"key1")).unwrap();
         assert_eq!(quota.in_use(), 117);
 
-        delegate
-            .pop_lock(Key::from_raw(b"key1"), TimeStamp::from(100))
-            .unwrap();
+        delegate.pop_lock(Key::from_raw(b"key1")).unwrap();
         assert_eq!(quota.in_use(), 134);
 
         let mut k2 = Vec::with_capacity(200);
@@ -1957,12 +1967,8 @@ mod tests {
             .unwrap();
         assert_eq!(quota.in_use(), 34);
 
-        delegate
-            .pop_lock(Key::from_raw(b"key2"), TimeStamp::from(100))
-            .unwrap();
-        delegate
-            .pop_lock(Key::from_raw(b"key3"), TimeStamp::from(100))
-            .unwrap();
+        delegate.pop_lock(Key::from_raw(b"key2")).unwrap();
+        delegate.pop_lock(Key::from_raw(b"key3")).unwrap();
         assert_eq!(quota.in_use(), 0);
 
         let modified_counts = delegate
@@ -1985,9 +1991,7 @@ mod tests {
         assert!(delegate.init_lock_tracker());
         assert!(!delegate.init_lock_tracker());
 
-        delegate
-            .pop_lock(Key::from_raw(b"key1"), TimeStamp::zero())
-            .unwrap();
+        delegate.pop_lock(Key::from_raw(b"key1")).unwrap();
         let mut scaned_locks = BTreeMap::default();
         scaned_locks.insert(Key::from_raw(b"key2"), MiniLock::from_ts(100));
         delegate
