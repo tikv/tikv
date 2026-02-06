@@ -396,6 +396,7 @@ openssl = "0.10"
 openssl-sys = "0.9"
 compact-log-backup = { path = "components/compact-log-backup" }
 heck = "0.3"
+bytes = "1.11"
 crossbeam = "0.8"
 crossbeam-channel = "0.5"
 crossbeam-utils = "0.8"
@@ -421,7 +422,7 @@ opt-level = 1
 [profile.dev]
 opt-level = 0
 debug = 0
-codegen-units = 4
+codegen-units = 256
 lto = false
 incremental = true
 panic = 'unwind'
