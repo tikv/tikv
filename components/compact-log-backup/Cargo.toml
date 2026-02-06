@@ -8,8 +8,17 @@ edition = "2021"
 failpoints = ["fail/failpoints"]
 
 [dependencies]
+<<<<<<< HEAD
 async-compression = { version = "0.4.12", features = ["tokio", "futures-io", "zstd"] }
 bytes = "1"
+=======
+async-compression = { version = "0.4.27", features = [
+  "tokio",
+  "futures-io",
+  "zstd",
+] }
+bytes = { workspace = true }
+>>>>>>> 2a5584807a (*: fix clippy by upgrading bytes crate (#19346))
 chrono = { workspace = true }
 cloud = { workspace = true }
 codec = { workspace = true }
