@@ -68,6 +68,79 @@ fn deadlock(client: &TikvClient, ctx: Context, key1: &[u8], ts: u64) -> bool {
     resp.errors[0].has_deadlock()
 }
 
+fn kv_shared_pessimistic_lock(
+    client: &TikvClient,
+    ctx: Context,
+    keys: Vec<Vec<u8>>,
+    ts: u64,
+    for_update_ts: u64,
+) -> PessimisticLockResponse {
+    let mut req = PessimisticLockRequest::default();
+    req.set_context(ctx);
+    let primary = keys[0].clone();
+    let mut mutations = vec![];
+    for key in keys {
+        let mut mutation = Mutation::default();
+        mutation.set_op(Op::SharedPessimisticLock);
+        mutation.set_key(key);
+        mutations.push(mutation);
+    }
+    req.set_mutations(mutations.into());
+    req.primary_lock = primary;
+    req.start_version = ts;
+    req.for_update_ts = for_update_ts;
+    req.lock_ttl = 20;
+    req.is_first_lock = false;
+    req.return_values = false;
+    client.kv_pessimistic_lock(&req).unwrap()
+}
+
+fn must_kv_shared_pessimistic_lock(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) {
+    let resp = kv_shared_pessimistic_lock(client, ctx.clone(), vec![key], ts, ts);
+    assert!(
+        !resp.has_region_error(),
+        "{:?}, ctx:{:?}",
+        resp.get_region_error(),
+        ctx
+    );
+    assert!(resp.errors.is_empty(), "{:?}", resp.get_errors());
+}
+
+fn force_shared_lock_shrink_only(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) {
+    let mut req = PessimisticLockRequest::default();
+    req.set_context(ctx);
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::PessimisticLock);
+    mutation.set_key(key.clone());
+    req.set_mutations(vec![mutation].into());
+    req.primary_lock = key;
+    req.start_version = ts;
+    req.for_update_ts = ts;
+    req.lock_ttl = 20;
+    req.is_first_lock = false;
+    req.wait_timeout = -1;
+    let resp = client.kv_pessimistic_lock(&req).unwrap();
+    assert!(resp.region_error.is_none());
+    assert_eq!(resp.errors.len(), 1);
+    assert!(resp.errors[0].has_locked(), "{:?}", resp.errors[0]);
+}
+
+fn async_pessimistic_lock_resumable(
+    client: Arc<TikvClient>,
+    ctx: Context,
+    key: &[u8],
+    ts: u64,
+) -> mpsc::Receiver<PessimisticLockResponse> {
+    let (tx, rx) = mpsc::channel();
+    let key = vec![key.to_vec()];
+    thread::spawn(move || {
+        let resp =
+            kv_pessimistic_lock_resumable(&client, ctx, key, ts, ts, Some(1000), false, false);
+        tx.send(resp).unwrap();
+    });
+    rx
+}
+
 fn build_leader_client(cluster: &mut Cluster<ServerCluster>, key: &[u8]) -> (TikvClient, Context) {
     let region_id = cluster.get_region_id(key);
     let leader = cluster.leader_of_region(region_id).unwrap();
@@ -392,4 +465,208 @@ fn test_detect_deadlock_when_updating_wait_info() {
     assert!(resp.errors.is_empty());
     assert_eq!(resp.results[0].get_type(), LockResultNormal);
     must_kv_pessimistic_rollback(&client, ctx, key2.to_vec(), 11, 11);
+}
+
+#[test]
+fn test_shared_lock_deadlock_basic() {
+    use kvproto::kvrpcpb::PessimisticLockKeyResultType::*;
+
+    let mut cluster = new_cluster_for_deadlock_test(3);
+    let key1 = b"slock_basic_k1";
+    let key2 = b"slock_basic_k2";
+    let (client, ctx) = build_leader_client(&mut cluster, key1);
+    let client = Arc::new(client);
+
+    must_kv_shared_pessimistic_lock(&client, ctx.clone(), key1.to_vec(), 10);
+    must_kv_shared_pessimistic_lock(&client, ctx.clone(), key2.to_vec(), 20);
+    // Mark both shared-lock sets as shrink-only so waiters can be tracked safely.
+    force_shared_lock_shrink_only(&client, ctx.clone(), key1.to_vec(), 100);
+    force_shared_lock_shrink_only(&client, ctx.clone(), key2.to_vec(), 101);
+
+    // txn10 tries to lock key2 and should wait on txn20's shared lock.
+    let rx_txn10_k2 = async_pessimistic_lock_resumable(client.clone(), ctx.clone(), key2, 10);
+    thread::sleep(Duration::from_millis(100));
+    // txn20 tries to lock key1 while txn10 is waiting on key2 -> deadlock detected
+    // on txn20.
+    let resp = kv_pessimistic_lock_resumable(
+        &client,
+        ctx.clone(),
+        vec![key1.to_vec()],
+        20,
+        20,
+        Some(1000),
+        false,
+        false,
+    );
+    assert!(resp.region_error.is_none());
+    assert_eq!(resp.results[0].get_type(), LockResultFailed);
+    assert!(resp.errors[0].has_deadlock());
+
+    // Release txn20's lock so txn10 can proceed.
+    must_kv_pessimistic_rollback(&client, ctx.clone(), key2.to_vec(), 20, 20);
+
+    let resp = rx_txn10_k2
+        .recv_timeout(Duration::from_millis(500))
+        .unwrap();
+    assert!(resp.region_error.is_none());
+    assert!(resp.errors.is_empty(), "{:?}", resp.errors);
+    assert_eq!(resp.results[0].get_type(), LockResultNormal);
+
+    must_kv_pessimistic_rollback(&client, ctx.clone(), key1.to_vec(), 10, 10);
+    must_kv_pessimistic_rollback(&client, ctx, key2.to_vec(), 10, 10);
+}
+
+#[test]
+fn test_shared_lock_deadlock_cleanup_partial_edges() {
+    use kvproto::kvrpcpb::PessimisticLockKeyResultType::*;
+
+    let mut cluster = new_cluster_for_deadlock_test(3);
+    let key_a = b"slock_multi_key";
+    let key_b = b"slock_block_key";
+    let (client, ctx) = build_leader_client(&mut cluster, key_a);
+    let client = Arc::new(client);
+
+    must_kv_shared_pessimistic_lock(&client, ctx.clone(), key_a.to_vec(), 10);
+    must_kv_shared_pessimistic_lock(&client, ctx.clone(), key_a.to_vec(), 20);
+    // key_a has multiple shared locks; make it shrink-only for deadlock tracking.
+    force_shared_lock_shrink_only(&client, ctx.clone(), key_a.to_vec(), 102);
+
+    // txn30 holds key_b to form a cycle later.
+    must_kv_pessimistic_lock(&client, ctx.clone(), key_b.to_vec(), 30);
+
+    // txn20 waits on key_b (held by txn30).
+    let rx_txn20_kb = async_pessimistic_lock_resumable(client.clone(), ctx.clone(), key_b, 20);
+    assert_eq!(
+        rx_txn20_kb
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap_err(),
+        RecvTimeoutError::Timeout
+    );
+
+    // txn30 tries key_a and should hit a deadlock after partially detecting shared
+    // locks.
+    let resp = kv_pessimistic_lock_resumable(
+        &client,
+        ctx.clone(),
+        vec![key_a.to_vec()],
+        30,
+        30,
+        Some(1000),
+        false,
+        false,
+    );
+    assert!(resp.region_error.is_none());
+    assert_eq!(resp.results[0].get_type(), LockResultFailed);
+    assert!(resp.errors[0].has_deadlock());
+    thread::sleep(Duration::from_millis(100));
+
+    // txn10 also waits on key_b; it should not see edge(txn30 wait for txn10 on
+    // key_a), thus no deadlock.
+    let rx_txn10_kb = async_pessimistic_lock_resumable(client.clone(), ctx.clone(), key_b, 10);
+    assert_eq!(
+        rx_txn10_kb
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap_err(),
+        RecvTimeoutError::Timeout
+    );
+
+    // rollback txn30 to release key_b and let txn10 and txn20 proceed.
+    must_kv_pessimistic_rollback(&client, ctx.clone(), key_b.to_vec(), 30, 30);
+
+    match (
+        rx_txn10_kb.recv_timeout(Duration::from_millis(100)),
+        rx_txn20_kb.recv_timeout(Duration::from_millis(100)),
+    ) {
+        (Ok(resp), Err(RecvTimeoutError::Timeout)) => {
+            // txn10 got the lock, txn20 is still waiting
+            assert!(resp.region_error.is_none());
+            assert_eq!(resp.results[0].get_type(), LockResultNormal);
+        }
+        (Err(RecvTimeoutError::Timeout), Ok(resp)) => {
+            // txn20 got the lock, txn10 is still waiting
+            assert!(resp.region_error.is_none());
+            assert_eq!(resp.results[0].get_type(), LockResultNormal);
+        }
+        _ => panic!("one of txn10 and txn20 should get the lock"),
+    }
+
+    must_kv_pessimistic_rollback(&client, ctx.clone(), key_b.to_vec(), 20, 20);
+    must_kv_pessimistic_rollback(&client, ctx.clone(), key_b.to_vec(), 10, 10);
+    must_kv_pessimistic_rollback(&client, ctx.clone(), key_a.to_vec(), 10, 10);
+    must_kv_pessimistic_rollback(&client, ctx, key_a.to_vec(), 20, 20);
+}
+
+#[test]
+fn test_shared_lock_deadlock_with_update_waiter() {
+    use kvproto::kvrpcpb::PessimisticLockKeyResultType::*;
+
+    let mut cluster = new_cluster_for_deadlock_test(3);
+    let key_a = b"slock_update_key";
+    let key_b = b"slock_wait_key";
+    let (client, ctx) = build_leader_client(&mut cluster, key_a);
+    let client = Arc::new(client);
+
+    must_kv_shared_pessimistic_lock(&client, ctx.clone(), key_a.to_vec(), 10);
+    must_kv_shared_pessimistic_lock(&client, ctx.clone(), key_a.to_vec(), 20);
+    // Prepare shared locks on key_a in shrink-only mode.
+    force_shared_lock_shrink_only(&client, ctx.clone(), key_a.to_vec(), 103);
+
+    // txn40 holds key_b, then waits on key_a. txn30 also waits on key_a and has
+    // higher priority.
+    must_kv_pessimistic_lock(&client, ctx.clone(), key_b.to_vec(), 40);
+    let rx_txn30_ka = async_pessimistic_lock_resumable(client.clone(), ctx.clone(), key_a, 30);
+    assert_eq!(
+        rx_txn30_ka
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap_err(),
+        RecvTimeoutError::Timeout
+    );
+    let rx_txn40_ka = async_pessimistic_lock_resumable(client.clone(), ctx.clone(), key_a, 40);
+    assert_eq!(
+        rx_txn40_ka
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap_err(),
+        RecvTimeoutError::Timeout
+    );
+
+    // Remove shared locks so txn30 gets key_a and txn40 keeps waiting on txn30.
+    must_kv_pessimistic_rollback(&client, ctx.clone(), key_a.to_vec(), 10, 10);
+    must_kv_pessimistic_rollback(&client, ctx.clone(), key_a.to_vec(), 20, 20);
+
+    let resp = rx_txn30_ka
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap();
+    assert!(resp.region_error.is_none());
+    assert!(resp.errors.is_empty(), "{:?}", resp.errors);
+    assert_eq!(resp.results[0].get_type(), LockResultNormal);
+
+    // txn30 now waits on key_b (held by txn40); deadlock should be detected only
+    // after update_waiter switches txn40's wait-for from shared-lock owners to
+    // txn30.
+    let resp = kv_pessimistic_lock_resumable(
+        &client,
+        ctx.clone(),
+        vec![key_b.to_vec()],
+        30,
+        30,
+        Some(1000),
+        false,
+        false,
+    );
+    assert!(resp.region_error.is_none());
+    assert_eq!(resp.results[0].get_type(), LockResultFailed);
+    assert!(resp.errors[0].has_deadlock(), "{:?}", resp.errors[0]);
+
+    // Release txn30 on key_a, then rx_txn40_ka can finish.
+    must_kv_pessimistic_rollback(&client, ctx.clone(), key_a.to_vec(), 30, 30);
+
+    let resp = rx_txn40_ka
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap();
+    assert!(resp.region_error.is_none());
+    assert!(resp.errors.is_empty(), "{:?}", resp.errors);
+    assert_eq!(resp.results[0].get_type(), LockResultNormal);
+
+    must_kv_pessimistic_rollback(&client, ctx.clone(), key_a.to_vec(), 40, 40);
+    must_kv_pessimistic_rollback(&client, ctx, key_b.to_vec(), 40, 40);
 }

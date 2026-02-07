@@ -814,7 +814,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ///
     /// Only writes that are committed before their respective `start_ts` are
     /// visible.
-    pub fn batch_get_command<P: 'static + ResponseBatchConsumer<(Option<Vec<u8>>, Statistics)>>(
+    pub fn batch_get_command<
+        P: 'static + ResponseBatchConsumer<(Option<ValueEntry>, Statistics)>,
+    >(
         &self,
         requests: Vec<GetRequest>,
         ids: Vec<u64>,
@@ -874,6 +876,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 for ((mut req, id), tracker) in requests.into_iter().zip(ids).zip(trackers) {
                     set_tls_tracker_token(tracker);
+                    let need_commit_ts = req.get_need_commit_ts();
                     let mut ctx = req.take_context();
                     let deadline = Self::get_deadline(&ctx);
                     let source = ctx.take_request_source();
@@ -931,6 +934,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         fill_cache,
                         bypass_locks,
                         access_locks,
+                        need_commit_ts,
                         region_id,
                         id,
                         source,
@@ -948,6 +952,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         fill_cache,
                         bypass_locks,
                         access_locks,
+                        need_commit_ts,
                         region_id,
                         id,
                         source,
@@ -978,7 +983,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                 .build()
                             {
                                 Ok(mut point_getter) => {
-                                    let v = point_getter.get(&key);
+                                    let v = point_getter.get_entry(&key, need_commit_ts);
                                     let stat = point_getter.take_statistics();
                                     metrics::tls_collect_read_flow(
                                         region_id,
@@ -988,9 +993,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         buckets.as_ref(),
                                     );
                                     statistics.add(&stat);
-                                    let value_size = v
-                                        .as_ref()
-                                        .map_or(0, |v| v.as_ref().map_or(0, |v1| v1.len()) as u64);
+                                    let value_size = v.as_ref().map_or(0, |v| {
+                                        v.as_ref().map_or(0, |v1| v1.value.len()) as u64
+                                    });
                                     record_network_out_bytes(value_size);
                                     record_logical_read_bytes(statistics.processed_size as u64);
                                     consumer.consume(
@@ -1775,15 +1780,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     statistics.add(&reader.statistics);
                     let (read_locks, _) = read_res?;
                     let mut locks = Vec::with_capacity(read_locks.len());
-                    for (key, lock) in read_locks.into_iter() {
-                        let lock = match lock {
-                            Either::Left(lock) => lock,
-                            Either::Right(_shared_locks) => unimplemented!(
-                                "SharedLocks returned from scan_locks is not supported here"
-                            ),
+                    for (key, lock_or_shared_locks) in read_locks.into_iter() {
+                        let lock_info = match lock_or_shared_locks {
+                            Either::Left(lock) => {
+                                lock.into_lock_info(key.into_raw().map_err(txn::Error::from)?)
+                            }
+                            Either::Right(shared_locks) => shared_locks
+                                .into_lock_info(key.into_raw().map_err(txn::Error::from)?),
                         };
-                        let lock_info =
-                            lock.into_lock_info(key.into_raw().map_err(txn::Error::from)?);
                         locks.push(lock_info);
                     }
 
@@ -2084,7 +2088,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     }
 
     /// Get the values of a set of raw keys, return a list of `Result`s.
-    pub fn raw_batch_get_command<P: 'static + ResponseBatchConsumer<Option<Vec<u8>>>>(
+    pub fn raw_batch_get_command<P: 'static + ResponseBatchConsumer<Option<ValueEntry>>>(
         &self,
         gets: Vec<RawGetRequest>,
         ids: Vec<u64>,
@@ -2185,6 +2189,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         id,
                                         store
                                             .raw_get_key_value(cf, &key, &mut stats)
+                                            .map(|v| v.map(ValueEntry::from_value))
                                             .map_err(Error::from),
                                         begin_instant,
                                         ctx.take_request_source(),
@@ -4228,7 +4233,7 @@ pub mod test_util {
 
     pub struct GetResult {
         id: u64,
-        res: Result<Option<Vec<u8>>>,
+        res: Result<Option<ValueEntry>>,
     }
 
     #[derive(Clone)]
@@ -4243,11 +4248,18 @@ pub mod test_util {
             }
         }
 
-        pub fn take_data(self) -> Vec<Result<Option<Vec<u8>>>> {
+        pub fn take_data(self) -> Vec<Result<Option<ValueEntry>>> {
             let mut data = self.data.lock().unwrap();
             let mut results = std::mem::take(&mut *data);
             results.sort_by_key(|k| k.id);
             results.into_iter().map(|v| v.res).collect()
+        }
+
+        pub fn take_values(self) -> Vec<Result<Option<Vec<u8>>>> {
+            self.take_data()
+                .into_iter()
+                .map(|r| r.map(|opt| opt.map(|entry| entry.value)))
+                .collect()
         }
     }
 
@@ -4257,11 +4269,11 @@ pub mod test_util {
         }
     }
 
-    impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics)> for GetConsumer {
+    impl ResponseBatchConsumer<(Option<ValueEntry>, Statistics)> for GetConsumer {
         fn consume(
             &self,
             id: u64,
-            res: Result<(Option<Vec<u8>>, Statistics)>,
+            res: Result<(Option<ValueEntry>, Statistics)>,
             _: Instant,
             _source: String,
             _resource_priority: ResourcePriority,
@@ -4273,11 +4285,11 @@ pub mod test_util {
         }
     }
 
-    impl ResponseBatchConsumer<Option<Vec<u8>>> for GetConsumer {
+    impl ResponseBatchConsumer<Option<ValueEntry>> for GetConsumer {
         fn consume(
             &self,
             id: u64,
-            res: Result<Option<Vec<u8>>>,
+            res: Result<Option<ValueEntry>>,
             _: Instant,
             _source: String,
             _resource_priority: ResourcePriority,
@@ -5285,7 +5297,7 @@ mod tests {
             Instant::now(),
         ))
         .unwrap();
-        let mut x = consumer.take_data();
+        let mut x = consumer.take_values();
         expect_error(
             |e| match e {
                 Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
@@ -5329,7 +5341,7 @@ mod tests {
         .unwrap();
 
         let x: Vec<Option<Vec<u8>>> = consumer
-            .take_data()
+            .take_values()
             .into_iter()
             .map(|x| x.unwrap())
             .collect();
@@ -5341,6 +5353,112 @@ mod tests {
                 Some(b"aa".to_vec()),
                 Some(b"bb".to_vec()),
             ]
+        );
+    }
+
+    fn create_get_request_with_need_commit_ts(
+        key: &[u8],
+        start_ts: u64,
+        need_commit_ts: bool,
+    ) -> GetRequest {
+        let mut req = create_get_request(key, start_ts);
+        req.set_need_commit_ts(need_commit_ts);
+        req
+    }
+
+    #[test]
+    fn test_batch_get_command_need_commit_ts() {
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+        // Commit one key so that we can verify commit_ts is returned when requested.
+        storage
+            .sched_txn_command(
+                commands::Prewrite::with_defaults(
+                    vec![Mutation::make_put(Key::from_raw(b"c"), b"cc".to_vec())],
+                    b"c".to_vec(),
+                    10.into(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .sched_txn_command(
+                commands::Commit::new(
+                    vec![Key::from_raw(b"c")],
+                    10.into(),
+                    20.into(),
+                    None,
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 1),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Leave one key locked so that we can verify committed_locks is ignored when
+        // need_commit_ts is true.
+        storage
+            .sched_txn_command(
+                commands::Prewrite::with_defaults(
+                    vec![Mutation::make_put(Key::from_raw(b"l"), b"ll".to_vec())],
+                    b"l".to_vec(),
+                    50.into(),
+                ),
+                expect_ok_callback(tx, 2),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        let mut ctx_with_committed_lock = Context::default();
+        ctx_with_committed_lock.set_committed_locks(vec![50]);
+
+        let mut read_through_lock = create_get_request_with_need_commit_ts(b"l", 60, false);
+        read_through_lock.set_context(ctx_with_committed_lock.clone());
+
+        let mut lock_conflict = create_get_request_with_need_commit_ts(b"l", 60, true);
+        lock_conflict.set_context(ctx_with_committed_lock);
+
+        let consumer = GetConsumer::new();
+        block_on(storage.batch_get_command(
+            vec![
+                create_get_request_with_need_commit_ts(b"c", 100, true),
+                read_through_lock,
+                lock_conflict,
+            ],
+            vec![1, 2, 3],
+            vec![INVALID_TRACKER_TOKEN; 3],
+            consumer.clone(),
+            Instant::now(),
+        ))
+        .unwrap();
+
+        let mut results = consumer.take_data().into_iter();
+
+        // Committed key: should return commit_ts.
+        let committed = results.next().unwrap().unwrap().unwrap();
+        assert_eq!(committed.value, b"cc".to_vec());
+        assert_eq!(committed.commit_ts.unwrap().into_inner(), 20);
+
+        // Locked key with need_commit_ts = false: should read through committed_locks
+        // and return value with no commit_ts.
+        let locked = results.next().unwrap().unwrap().unwrap();
+        assert_eq!(locked.value, b"ll".to_vec());
+        assert!(locked.commit_ts.is_none());
+
+        // Locked key with need_commit_ts = true: committed_locks should be ignored and
+        // return lock error.
+        let res = results.next().unwrap();
+        expect_error(
+            |e| match e {
+                Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+                    box mvcc::ErrorInner::KeyIsLocked(..),
+                ))))) => {}
+                e => panic!("unexpected error chain: {:?}", e),
+            },
+            res.map(|_| ()),
         );
     }
 
@@ -6883,7 +7001,7 @@ mod tests {
         let consumer = GetConsumer::new();
         block_on(storage.raw_batch_get_command(cmds, ids, consumer.clone())).unwrap();
         let x: Vec<Option<Vec<u8>>> = consumer
-            .take_data()
+            .take_values()
             .into_iter()
             .map(|x| x.unwrap())
             .collect();
@@ -10417,7 +10535,7 @@ mod tests {
             Instant::now(),
         ))
         .unwrap();
-        let res = consumer.take_data();
+        let res = consumer.take_values();
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].as_ref().unwrap(), &Some(v1.clone()));
         // scan
@@ -12200,6 +12318,72 @@ mod tests {
                     must_locked(&mut storage.engine, key.as_slice(), start_ts);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_scan_lock_with_shared_lock() {
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+        let key = Key::from_raw(b"shared-lock");
+        let pk1 = b"shared-pk-1".to_vec();
+        let pk2 = b"shared-pk-2".to_vec();
+
+        for (start_ts, primary) in [(10, pk1.clone()), (20, pk2.clone())] {
+            storage
+                .sched_txn_command(
+                    new_acquire_pessimistic_lock_command_with_pk_with_shared(
+                        vec![(key.clone(), false, true)],
+                        Some(primary.as_slice()),
+                        start_ts,
+                        start_ts + 1,
+                        false,
+                        false,
+                    ),
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+        }
+        storage
+            .sched_txn_command(
+                commands::PrewritePessimistic::with_defaults(
+                    vec![(
+                        txn_types::Mutation::make_shared_lock(key),
+                        DoPessimisticCheck,
+                    )],
+                    pk2.clone(),
+                    20.into(),
+                    21.into(),
+                ),
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        let locks =
+            block_on(storage.scan_lock(Context::default(), 30.into(), None, None, 10)).unwrap();
+        assert_eq!(locks.len(), 1);
+        let lock = &locks[0];
+        assert_eq!(lock.get_key(), b"shared-lock");
+        assert_eq!(lock.get_lock_type(), Op::SharedLock);
+
+        let mut shared_locks = HashMap::default();
+        for lock in lock.get_shared_lock_infos() {
+            shared_locks.insert(lock.get_lock_version(), lock);
+        }
+        assert_eq!(shared_locks.len(), 2);
+
+        for (ts, for_update_ts, primary, op) in
+            [(10, 11, pk1, Op::PessimisticLock), (20, 21, pk2, Op::Lock)]
+        {
+            let shared_lock = shared_locks.get(&ts).expect("shared lock missing");
+            assert_eq!(shared_lock.get_key(), b"shared-lock");
+            assert_eq!(shared_lock.get_primary_lock(), primary.as_slice());
+            assert_eq!(shared_lock.get_lock_type(), op);
+            assert_eq!(shared_lock.get_lock_for_update_ts(), for_update_ts);
         }
     }
 }
