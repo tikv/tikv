@@ -4,12 +4,12 @@ use std::{cmp::Ordering, sync::Arc};
 
 use async_trait::async_trait;
 use tidb_query_common::{Result, storage::IntervalRange};
-use tipb::FieldType;
+use tipb::{FieldType, Expr};
 use tidb_query_datatype::{
     codec::{batch::LazyBatchColumnVec, data_type::*},
     expr::{EvalConfig, EvalContext, EvalWarnings},
 };
-use tidb_query_expr::{RpnStackNode, RpnExpression};
+use tidb_query_expr::{RpnStackNode, RpnExpression, RpnExpressionBuilder};
 
 use crate::{interface::*, util::{ensure_columns_decoded, eval_exprs_decoded_no_lifetime}};
 
@@ -55,30 +55,66 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
         })
     }
 
+    pub fn new_rank_limit_for_test(
+        src: Src,
+        limit: usize,
+        is_src_scan_executor: bool,
+        config: Arc<EvalConfig>,
+        truncate_key_exp: Vec<RpnExpression>
+    ) -> Result<Self> {
+        return Self::new_rank_limit_impl(src, limit, is_src_scan_executor, config, truncate_key_exp)
+    }
+
+    pub fn new_rank_limit_impl(
+        src: Src,
+        limit: usize,
+        is_src_scan_executor: bool,
+        config: Arc<EvalConfig>,
+        truncate_key_exp: Vec<RpnExpression>
+    ) -> Result<Self> {
+        let truncate_key_num = truncate_key_exp.len();
+        let truncate_keys_field_type: Vec<FieldType> = truncate_key_exp
+            .iter()
+            .map(|exp| exp.ret_field_type(src.schema()).clone())
+            .collect();
+        Ok(Self {
+            src,
+            remaining_rows: limit,
+            is_src_scan_executor,
+            context: EvalContext::new(config),
+            truncate_keys_exps: truncate_key_exp,
+            truncate_keys_field_type,
+            truncate_key_num,
+            prev_truncate_keys: Vec::with_capacity(truncate_key_num),
+            current_truncate_keys_unsafe: Vec::with_capacity(truncate_key_num),
+            executed_in_limit_for_test: false,
+            executed_in_rank_limit_for_test: false,
+        })
+    }
+
+    // truncate_key_exp_defs: Vec<RpnExpression>
     pub fn new_rank_limit(
         src: Src,
         limit: usize,
         is_src_scan_executor: bool,
         config: Arc<EvalConfig>,
-        truncate_key_exp_defs: Vec<RpnExpression>) -> Result<Self> {
-            let truncate_key_num = truncate_key_exp_defs.len();
-            let truncate_keys_field_type: Vec<FieldType> = truncate_key_exp_defs
-                .iter()
-                .map(|exp| exp.ret_field_type(src.schema()).clone())
-                .collect();
-            Ok(Self {
-                src,
-                remaining_rows: limit,
-                is_src_scan_executor,
-                context: EvalContext::new(config),
-                truncate_keys_exps: truncate_key_exp_defs,
-                truncate_keys_field_type,
-                truncate_key_num,
-                prev_truncate_keys: Vec::with_capacity(truncate_key_num),
-                current_truncate_keys_unsafe: Vec::with_capacity(truncate_key_num),
-                executed_in_limit_for_test: false,
-                executed_in_rank_limit_for_test: false,
-            })
+        truncate_key_exp_defs: Vec<Expr>) -> Result<Self> {
+        
+        let schema_len = src.schema().len();
+        let mut truncate_key_exp = Vec::with_capacity(truncate_key_exp_defs.len());
+        let mut ctx = EvalContext::new(config.clone());
+        for def in truncate_key_exp_defs {
+            truncate_key_exp.push(RpnExpressionBuilder::build_from_expr_tree(
+                def, &mut ctx, schema_len,
+            )?);
+        }
+        Self::new_rank_limit_impl(
+            src,
+            limit,
+            is_src_scan_executor,
+            config,
+            truncate_key_exp
+        )
     }
 
     #[cfg(test)]
@@ -620,7 +656,7 @@ mod tests {
             RpnExpressionBuilder::new_for_test()
                 .push_column_ref_for_test(1)
                 .build_for_test();
-        let mut exec = BatchLimitExecutor::new_rank_limit(src_exec, 0, false, config, vec![truncate_key_exp]).unwrap();
+        let mut exec = BatchLimitExecutor::new_rank_limit_for_test(src_exec, 0, false, config, vec![truncate_key_exp]).unwrap();
 
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
@@ -690,7 +726,7 @@ mod tests {
                     .push_column_ref_for_test(1)
                     .build_for_test();
 
-            let mut exec = BatchLimitExecutor::new_rank_limit(src_exec, limits[i], false, config, vec![truncate_key_exp]).unwrap();
+            let mut exec = BatchLimitExecutor::new_rank_limit_for_test(src_exec, limits[i], false, config, vec![truncate_key_exp]).unwrap();
 
             let r = block_on(exec.next_batch(10));
             assert_eq!(r.logical_rows, results[i]);
@@ -878,7 +914,7 @@ mod tests {
                 RpnExpressionBuilder::new_for_test()
                     .push_column_ref_for_test(1)
                     .build_for_test();
-            let mut exec = BatchLimitExecutor::new_rank_limit(src_exec, limits[i], false, config, vec![truncate_key_exp]).unwrap();
+            let mut exec = BatchLimitExecutor::new_rank_limit_for_test(src_exec, limits[i], false, config, vec![truncate_key_exp]).unwrap();
 
             let mut actual_logical_rows: Vec<usize> = vec![];
 
@@ -1066,7 +1102,7 @@ mod tests {
                 RpnExpressionBuilder::new_for_test()
                     .push_column_ref_for_test(1)
                     .build_for_test();
-            let mut exec = BatchLimitExecutor::new_rank_limit(src_exec, limits[i], false, config, vec![truncate_key_exp]).unwrap();
+            let mut exec = BatchLimitExecutor::new_rank_limit_for_test(src_exec, limits[i], false, config, vec![truncate_key_exp]).unwrap();
 
             let mut actual_logical_rows: Vec<usize> = vec![];
 
