@@ -278,7 +278,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
 
     #[inline]
     async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        let real_scan_rows = if self.is_src_scan_executor {
+        let mut real_scan_rows = if self.is_src_scan_executor {
             std::cmp::min(scan_rows, self.remaining_rows)
         } else {
             scan_rows
@@ -294,6 +294,10 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(BatchExecIsDrain::Drain)
                 };
+            }
+
+            if real_scan_rows == 0 {
+                real_scan_rows = crate::runner::BATCH_MAX_SIZE;
             }
 
             let mut result = self.src.next_batch(real_scan_rows).await;
@@ -656,7 +660,7 @@ mod tests {
             RpnExpressionBuilder::new_for_test()
                 .push_column_ref_for_test(1)
                 .build_for_test();
-        let mut exec = BatchLimitExecutor::new_rank_limit_for_test(src_exec, 0, false, config, vec![truncate_key_exp]).unwrap();
+        let mut exec = BatchLimitExecutor::new_rank_limit_for_test(src_exec, 0, true, config, vec![truncate_key_exp]).unwrap();
 
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
@@ -726,7 +730,7 @@ mod tests {
                     .push_column_ref_for_test(1)
                     .build_for_test();
 
-            let mut exec = BatchLimitExecutor::new_rank_limit_for_test(src_exec, limits[i], false, config, vec![truncate_key_exp]).unwrap();
+            let mut exec = BatchLimitExecutor::new_rank_limit_for_test(src_exec, limits[i], true, config, vec![truncate_key_exp]).unwrap();
 
             let r = block_on(exec.next_batch(10));
             assert_eq!(r.logical_rows, results[i]);
@@ -914,7 +918,7 @@ mod tests {
                 RpnExpressionBuilder::new_for_test()
                     .push_column_ref_for_test(1)
                     .build_for_test();
-            let mut exec = BatchLimitExecutor::new_rank_limit_for_test(src_exec, limits[i], false, config, vec![truncate_key_exp]).unwrap();
+            let mut exec = BatchLimitExecutor::new_rank_limit_for_test(src_exec, limits[i], true, config, vec![truncate_key_exp]).unwrap();
 
             let mut actual_logical_rows: Vec<usize> = vec![];
 
@@ -1102,7 +1106,7 @@ mod tests {
                 RpnExpressionBuilder::new_for_test()
                     .push_column_ref_for_test(1)
                     .build_for_test();
-            let mut exec = BatchLimitExecutor::new_rank_limit_for_test(src_exec, limits[i], false, config, vec![truncate_key_exp]).unwrap();
+            let mut exec = BatchLimitExecutor::new_rank_limit_for_test(src_exec, limits[i], true, config, vec![truncate_key_exp]).unwrap();
 
             let mut actual_logical_rows: Vec<usize> = vec![];
 
