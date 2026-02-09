@@ -14,7 +14,7 @@ use test_raftstore::*;
 use test_raftstore_macro::test_case;
 use test_storage::*;
 use tidb_query_datatype::{
-    codec::{datum, Datum, table::encode_row_key},
+    codec::{datum, table::encode_row_key, Datum},
     expr::EvalContext,
 };
 use tikv::{
