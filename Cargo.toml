@@ -430,7 +430,7 @@ grpcio-health = { version = "0.10.4", default-features = false, features = [
   "protobuf-codec",
 ] }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-8.5" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "feature/materialized_view" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 tokio-executor = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
@@ -450,6 +450,7 @@ tracing = { version = "0.1.39", default-features = false, features = [
 openssl = "0.10"
 openssl-sys = "0.9"
 heck = "0.3"
+bytes = "1.11"
 crossbeam = "0.8"
 crossbeam-channel = "0.5"
 crossbeam-utils = "0.8"

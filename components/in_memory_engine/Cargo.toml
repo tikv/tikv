@@ -20,11 +20,13 @@ path = "benches/load_region.rs"
 harness = false
 
 [dependencies]
-engine_traits = { workspace = true }
+bytes = { workspace = true }
 collections = { workspace = true }
-crossbeam-skiplist = { workspace = true }
-bytes = "1.0"
 crossbeam = { workspace = true }
+crossbeam-skiplist = { workspace = true }
+dashmap = "5.1"
+engine_rocks = { workspace = true }
+engine_traits = { workspace = true }
 futures = { version = "0.3", features = ["compat"] }
 tikv_util = { workspace = true }
 txn_types = { workspace = true }
@@ -32,14 +34,12 @@ kvproto = { workspace = true }
 log_wrappers = { workspace = true }
 pd_client = { workspace = true }
 raftstore = { workspace = true }
-dashmap = "5.1"
 security = { workspace = true }
 serde = "1.0"
 serde_json = "1.0"
 slog-global = { workspace = true }
 slog = { workspace = true }
 strum = { version = "0.20", features = ["derive"] }
-engine_rocks = { workspace = true }
 fail = "0.5"
 yatp = { workspace = true }
 parking_lot = "0.12"
