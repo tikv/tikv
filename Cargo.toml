@@ -184,6 +184,7 @@ txn_types = { workspace = true }
 url = "2"
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 walkdir = "2"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 yatp = { workspace = true }
 
 [dev-dependencies]
