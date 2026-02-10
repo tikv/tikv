@@ -509,7 +509,7 @@ impl<'client> S3Uploader<'client> {
                 .set_storage_class(self.storage_class.as_ref().map(|s| s.as_str().into()))
                 .customize()
                 .mutate_request(|req| {
-                    req.headers_mut().insert("content-length", "0");
+                    req.headers_mut().insert(http::header::CONTENT_LENGTH, "0");
                 })
                 .send()
                 .await?
@@ -553,12 +553,6 @@ impl<'client> S3Uploader<'client> {
                         .set_parts(Some(aws_parts))
                         .build(),
                 )
-                .customize()
-                .mutate_request(|req| {
-                    let body_len = req.body().content_length().unwrap_or(0);
-                    req.headers_mut()
-                        .insert("content-length", body_len.to_string());
-                })
                 .send()
                 .await?;
             Ok(())
@@ -579,10 +573,6 @@ impl<'client> S3Uploader<'client> {
                 .bucket(&self.bucket)
                 .key(&self.key)
                 .upload_id(&self.upload_id)
-                .customize()
-                .mutate_request(|req| {
-                    req.headers_mut().insert("content-length", "0");
-                })
                 .send()
                 .await?;
             Ok(())
@@ -760,7 +750,10 @@ mod tests {
     use std::assert_matches::assert_matches;
 
     use aws_sdk_s3::{config::Credentials, primitives::SdkBody};
-    use aws_smithy_runtime::{assert_str_contains, client::http::test_util::{ReplayEvent, StaticReplayClient}};
+    use aws_smithy_runtime::{
+        assert_str_contains,
+        client::http::test_util::{ReplayEvent, StaticReplayClient},
+    };
     use http::Uri;
 
     use super::*;
@@ -866,6 +859,7 @@ mod tests {
             ),
             ReplayEvent::new(
                 http::Request::builder()
+                    .header("content-length", "2")
                     .uri(Uri::from_static(
                         "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?x-id=UploadPart&partNumber=3&uploadId=1"
                     ))
@@ -936,7 +930,7 @@ mod tests {
         config.force_path_style = true;
 
         // split magic_contents into 3 parts, so we mock 5 requests here(1 begin + 3
-        // part + 1 complete)
+        // part + 1 abort)
         let client = StaticReplayClient::new(vec![
             ReplayEvent::new(
                 http::Request::builder()
@@ -979,6 +973,7 @@ mod tests {
             ),
             ReplayEvent::new(
                 http::Request::builder()
+                    .header("content-length", "2")
                     .uri(Uri::from_static(
                         "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?x-id=UploadPart&partNumber=3&uploadId=1"
                     ))
@@ -988,7 +983,6 @@ mod tests {
             ),
             ReplayEvent::new(
                 http::Request::builder()
-                    .header("content-length", "0")
                     .uri(Uri::from_static(
                         "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?x-id=AbortMultipartUpload&uploadId=1"
                     ))
@@ -996,29 +990,21 @@ mod tests {
                     .unwrap(),
                 http::Response::builder()
                     .status(200)
-                    .body(SdkBody::from(
-                        r#"<?xml version="1.0" encoding="UTF-8"?>
-                            <CompleteMultipartUploadResult>
-                                <Location>https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey</Location>
-                                <Bucket>mybucket</Bucket>
-                                <Key>mykey</Key>
-                                <Etag></ETag>
-                            </CompleteMultipartUploadResult>
-                            "#
-                    )).unwrap()
+                    .body(SdkBody::from("")).unwrap()
             ),
         ]);
 
         let creds = Credentials::from_keys("abc".to_string(), "xyz".to_string(), None);
 
         let s = S3Storage::new_with_creds_client(config.clone(), client.clone(), creds).unwrap();
-        let err = s.put(
-            "mykey",
-            PutResource(Box::new(magic_contents.as_bytes())),
-            magic_contents.len() as u64,
-        )
-        .await
-        .unwrap_err();
+        let err = s
+            .put(
+                "mykey",
+                PutResource(Box::new(magic_contents.as_bytes())),
+                magic_contents.len() as u64,
+            )
+            .await
+            .unwrap_err();
 
         assert_str_contains!(err.to_string(), "Not Found");
 
