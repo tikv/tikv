@@ -931,6 +931,19 @@ fn hotspot_cpu_usage_report_threshold() -> u64 {
     HOTSPOT_CPU_USAGE_THRESHOLD
 }
 
+#[inline]
+fn should_report_read_peer(
+    read_bytes: u64,
+    read_keys: u64,
+    query_stats: &QueryStats,
+    cpu_usage: u64,
+) -> bool {
+    !(read_bytes < hotspot_byte_report_threshold()
+        && read_keys < hotspot_key_report_threshold()
+        && query_stats.get_read_query_num() < hotspot_query_num_report_threshold()
+        && cpu_usage < hotspot_cpu_usage_report_threshold())
+}
+
 /// Max limitation of delayed store_heartbeat.
 const STORE_HEARTBEAT_DELAY_LIMIT: u64 = 5 * 60;
 
@@ -1315,11 +1328,7 @@ where
                 region_peer
                     .last_store_report_query_stats
                     .fill_query_stats(&region_peer.query_stats);
-                if read_bytes < hotspot_byte_report_threshold()
-                    && read_keys < hotspot_key_report_threshold()
-                    && query_stats.get_read_query_num() < hotspot_query_num_report_threshold()
-                    && cpu_usage < hotspot_cpu_usage_report_threshold()
-                {
+                if !should_report_read_peer(read_bytes, read_keys, &query_stats, cpu_usage) {
                     continue;
                 }
             let mut read_stat = pdpb::PeerStat::default();
@@ -1857,9 +1866,17 @@ where
     }
 
     fn handle_destroy_peer(&mut self, region_id: u64) {
-        match self.region_peers.write().unwrap().remove(&region_id) {
-            None => {}
-            Some(_) => info!("remove peer statistic record in pd"; "region_id" => region_id),
+        let removed = {
+            let mut region_peers = self.region_peers.write().unwrap();
+            remove_peer_stat_from_maps(
+                region_id,
+                &mut region_peers,
+                &mut self.region_cpu_records,
+                &mut self.region_cpu_records_store,
+            )
+        };
+        if removed {
+            info!("remove peer statistic record in pd"; "region_id" => region_id);
         }
     }
 
@@ -2743,6 +2760,18 @@ fn collect_report_read_peer_stats(
     stats
 }
 
+fn remove_peer_stat_from_maps(
+    region_id: u64,
+    region_peers: &mut HashMap<u64, PeerStat>,
+    region_cpu_records: &mut HashMap<u64, u32>,
+    region_cpu_records_store: &mut HashMap<u64, u32>,
+) -> bool {
+    let removed = region_peers.remove(&region_id).is_some();
+    region_cpu_records.remove(&region_id);
+    region_cpu_records_store.remove(&region_id);
+    removed
+}
+
 fn collect_engine_size<EK: KvEngine>(coprocessor_host: &CoprocessorHost<EK>) -> (u64, u64, u64) {
     if let Some(engine_size) = coprocessor_host.on_compute_engine_size() {
         (engine_size.capacity, engine_size.used, engine_size.avail)
@@ -2895,7 +2924,50 @@ mod tests {
         }
         let mut store_stats = pdpb::StoreStats::default();
         store_stats = collect_report_read_peer_stats(1, report_stats, store_stats);
-        assert_eq!(store_stats.peer_stats.len(), 4)
+        let reported: HashSet<u64> = store_stats
+            .peer_stats
+            .iter()
+            .map(|stat| stat.get_region_id())
+            .collect();
+        assert_eq!(reported.len(), 4);
+        for region_id in 1..5 {
+            assert!(reported.contains(&region_id));
+        }
+    }
+
+    #[test]
+    fn test_should_report_read_peer_cpu_threshold() {
+        let query_stats = QueryStats::default();
+        let threshold = hotspot_cpu_usage_report_threshold();
+        if threshold > 0 {
+            assert!(!should_report_read_peer(
+                0,
+                0,
+                &query_stats,
+                threshold.saturating_sub(1),
+            ));
+        }
+        assert!(should_report_read_peer(0, 0, &query_stats, threshold));
+    }
+
+    #[test]
+    fn test_remove_peer_stat_from_maps() {
+        let mut region_peers = HashMap::default();
+        region_peers.insert(1, PeerStat::default());
+        let mut region_cpu_records = HashMap::default();
+        region_cpu_records.insert(1, 10);
+        let mut region_cpu_records_store = HashMap::default();
+        region_cpu_records_store.insert(1, 12);
+
+        assert!(remove_peer_stat_from_maps(
+            1,
+            &mut region_peers,
+            &mut region_cpu_records,
+            &mut region_cpu_records_store,
+        ));
+        assert!(region_peers.is_empty());
+        assert!(region_cpu_records.is_empty());
+        assert!(region_cpu_records_store.is_empty());
     }
 
     use engine_test::kv::KvTestEngine;

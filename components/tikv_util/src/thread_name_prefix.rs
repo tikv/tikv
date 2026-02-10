@@ -57,22 +57,7 @@ pub const CDC_THREAD: &str = "cdc";
 
 pub const PD_WORKER_THREAD: &str = "pd-worker";
 
-// Keep the legacy prefix to preserve existing monitoring; it will be truncated by Linux.
-pub const UNIFIED_READ_POOL_THREAD: &str = "unified-read-pool";
-
-const LINUX_THREAD_NAME_MAX_LEN: usize = 15;
-
-#[inline]
-pub fn matches_thread_name_prefix(thread_name: &str, prefix: &str) -> bool {
-    if thread_name.contains(prefix) {
-        return true;
-    }
-    if prefix.len() <= LINUX_THREAD_NAME_MAX_LEN {
-        return false;
-    }
-    // Thread name prefixes are ASCII; byte slicing is safe here.
-    thread_name.contains(&prefix[..LINUX_THREAD_NAME_MAX_LEN])
-}
+pub const UNIFIED_READ_POOL_THREAD: &str = "unified-read";
 
 pub const DEBUGGER_THREAD: &str = "debugger";
 
@@ -169,3 +154,43 @@ pub const SNAP_SENDER_THREAD: &str = "snap-sender";
 pub const TABLET_SNAP_SENDER_THREAD: &str = "tablet-snap";
 
 pub const STATUS_SERVER_THREAD: &str = "status-server";
+
+const LINUX_THREAD_NAME_MAX_LEN: usize = 15;
+
+#[inline]
+pub fn matches_thread_name_prefix(thread_name: &str, prefix: &str) -> bool {
+    if thread_name.starts_with(prefix) {
+        return true;
+    }
+    if prefix.len() <= LINUX_THREAD_NAME_MAX_LEN {
+        return false;
+    }
+    // Thread name prefixes are ASCII; byte slicing is safe here.
+    thread_name.starts_with(&prefix[..LINUX_THREAD_NAME_MAX_LEN])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LINUX_THREAD_NAME_MAX_LEN, matches_thread_name_prefix};
+
+    #[test]
+    fn test_matches_thread_name_prefix_basic() {
+        assert!(matches_thread_name_prefix("unified-read-1", "unified-read"));
+        assert!(!matches_thread_name_prefix(
+            "foo-unified-read",
+            "unified-read"
+        ));
+    }
+
+    #[test]
+    fn test_matches_thread_name_prefix_truncated() {
+        let long_prefix = "unified-read-pool";
+        let truncated = &long_prefix[..LINUX_THREAD_NAME_MAX_LEN];
+        let thread_name = format!("{truncated}-1");
+        assert!(matches_thread_name_prefix(&thread_name, long_prefix));
+        assert!(!matches_thread_name_prefix(
+            &format!("x{thread_name}"),
+            long_prefix
+        ));
+    }
+}

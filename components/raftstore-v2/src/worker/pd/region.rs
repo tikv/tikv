@@ -422,11 +422,14 @@ where
     }
 
     pub fn handle_destroy_peer(&mut self, region_id: u64) {
-        match self.region_peers.remove(&region_id) {
-            None => {}
-            Some(_) => {
-                info!(self.logger, "remove peer statistic record in pd"; "region_id" => region_id)
-            }
+        let removed = remove_peer_stat_from_maps(
+            region_id,
+            &mut self.region_peers,
+            &mut self.region_cpu_records,
+            &mut self.region_cpu_records_store,
+        );
+        if removed {
+            info!(self.logger, "remove peer statistic record in pd"; "region_id" => region_id);
         }
     }
 
@@ -457,5 +460,42 @@ where
             // Reporting a region heartbeat later will clear the corresponding record.
             *region_cpu_records.entry(tag.region_id).or_insert(0) += record.cpu_time;
         }
+    }
+}
+
+fn remove_peer_stat_from_maps(
+    region_id: u64,
+    region_peers: &mut HashMap<u64, PeerStat>,
+    region_cpu_records: &mut HashMap<u64, u32>,
+    region_cpu_records_store: &mut HashMap<u64, u32>,
+) -> bool {
+    let removed = region_peers.remove(&region_id).is_some();
+    region_cpu_records.remove(&region_id);
+    region_cpu_records_store.remove(&region_id);
+    removed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_remove_peer_stat_from_maps() {
+        let mut region_peers = HashMap::default();
+        region_peers.insert(1, PeerStat::default());
+        let mut region_cpu_records = HashMap::default();
+        region_cpu_records.insert(1, 10);
+        let mut region_cpu_records_store = HashMap::default();
+        region_cpu_records_store.insert(1, 12);
+
+        assert!(remove_peer_stat_from_maps(
+            1,
+            &mut region_peers,
+            &mut region_cpu_records,
+            &mut region_cpu_records_store,
+        ));
+        assert!(region_peers.is_empty());
+        assert!(region_cpu_records.is_empty());
+        assert!(region_cpu_records_store.is_empty());
     }
 }
