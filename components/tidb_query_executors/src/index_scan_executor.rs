@@ -73,7 +73,7 @@ impl<S: Storage, F: KvFormat> BatchIndexScanExecutor<S, F> {
         // last one is real). We accept this kind of request for compatibility
         // considerations, but will be forbidden soon.
         //
-        // Deprecated, now only `table::EXTRA_PHYSICAL_TAGBLE_ID_COL_ID` is used by
+        // Deprecated, now only `table::EXTRA_PHYSICAL_TABLE_ID_COL_ID` is used by
         // TiDB. See https://github.com/pingcap/tidb/pull/53974 and
         // https://github.com/tikv/tikv/pull/17141.
         // Note 4: When process global indexes, an extra partition ID
