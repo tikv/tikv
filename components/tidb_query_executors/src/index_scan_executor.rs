@@ -431,33 +431,10 @@ impl IndexScanExecutorImpl {
     /// Indexes.
     #[inline]
     fn decode_int_handle_and_partition_from_key(&self, key: &[u8]) -> Result<(i64, Option<i64>)> {
-        let mut val = key;
-        if val.is_empty() {
-            return Err(other_err!("Key is empty, cannot decode handle"));
-        }
-        let flag = val[0];
-
-        // Support partition handle prefix: PARTITION_ID_FLAG + partition_id(8 bytes) +
-        // inner_handle
-        let partition_id = if flag == table::INDEX_VALUE_PARTITION_ID_FLAG {
-            // Ensure there are at least 8 bytes for partition id + 1 byte for handle flag
-            val = &val[1..];
-            if val.len() < table::ID_LEN + 1 {
-                return Err(other_err!(
-                    "Insufficient data to decode partition ID and handle flag: \
-expected at least {} bytes after first flag, got {}",
-                    table::ID_LEN + 1,
-                    val.len()
-                ));
-            }
-            // Extract the partition id (8 bytes)
-            let pid = (&val[..table::ID_LEN])
-                .read_i64()
-                .map_err(|_| other_err!("Failed to decode partition ID from key"))?;
-            val = &val[table::ID_LEN..];
-            Some(pid)
+        let (pid_bytes, val) = Self::split_partition_id(key)?;
+        let partition_id = if !pid_bytes.is_empty() {
+            Some(NumberCodec::decode_i64(pid_bytes))
         } else {
-            // first_flag is already the handle flag
             None
         };
         let handle = self.decode_int_handle_from_key(val)?;
@@ -828,18 +805,12 @@ expected at least {} bytes after first flag, got {}",
                     datum::skip_n(&mut key_payload, self.columns_id_without_handle.len())?;
 
                     // V1/V2: Check for partition ID in key (after indexed columns, before handle)
-                    if !key_payload.is_empty()
-                        && key_payload[0] == table::INDEX_VALUE_PARTITION_ID_FLAG
-                    {
-                        if key_payload.len() < 1 + table::ID_LEN {
-                            return Err(other_err!(
-                                "Key too short to contain partition ID: {} bytes",
-                                key_payload.len()
-                            ));
-                        }
-                        partition_id_from_key = Some(&key_payload[1..1 + table::ID_LEN]);
-                        key_payload = &key_payload[1 + table::ID_LEN..]; // Skip flag + partition ID
+                    let (pid_from_key, remaining_key) =
+                        Self::split_partition_id(key_payload)?;
+                    if !pid_from_key.is_empty() {
+                        partition_id_from_key = Some(pid_from_key);
                     }
+                    key_payload = remaining_key;
 
                     DecodeHandleOp::IntFromKey(key_payload)
                 }
