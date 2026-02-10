@@ -840,7 +840,7 @@ mod tests {
     use std::assert_matches::assert_matches;
 
     use aws_sdk_s3::{config::Credentials, primitives::SdkBody};
-    use aws_smithy_runtime::client::http::test_util::{ReplayEvent, StaticReplayClient};
+    use aws_smithy_runtime::{assert_str_contains, client::http::test_util::{ReplayEvent, StaticReplayClient}};
     use http::Uri;
 
     use super::*;
@@ -988,6 +988,119 @@ mod tests {
         )
         .await
         .unwrap();
+
+        client.assert_requests_match(&[]);
+
+        assert_eq!(
+            CLOUD_REQUEST_HISTOGRAM_VEC
+                .get_metric_with_label_values(&["s3", "upload_part"])
+                .unwrap()
+                .get_sample_count(),
+            // length of magic_contents
+            (magic_contents.len() / multi_part_size) as u64,
+        );
+    }
+
+    #[tokio::test]
+    async fn test_s3_storage_multi_part_abort() {
+        let magic_contents = "567890";
+
+        let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
+        let mut bucket = BucketConf::default(bucket_name);
+        bucket.region = Some(StringNonEmpty::required("cn-north-1".to_string()).unwrap());
+
+        let mut config = Config::default(bucket);
+        let multi_part_size = 2;
+        // set multi_part_size to use upload_part function
+        config.multi_part_size = multi_part_size;
+        config.force_path_style = true;
+
+        // split magic_contents into 3 parts, so we mock 5 requests here(1 begin + 3
+        // part + 1 complete)
+        let client = StaticReplayClient::new(vec![
+            ReplayEvent::new(
+                http::Request::builder()
+                    .header("Content-Length", "0")
+                    .uri(Uri::from_static(
+                        "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?uploads"
+                    ))
+                    .body(SdkBody::from(""))
+                    .unwrap(),
+                http::Response::builder()
+                    .status(200)
+                    .body(SdkBody::from(
+                        r#"<?xml version="1.0" encoding="UTF-8"?>
+                            <InitiateMultipartUploadResult>
+                                <Bucket>mybucket</Bucket>
+                                <Key>mykey</Key>
+                                <UploadId>1</UploadId>
+                            </InitiateMultipartUploadResult>"#
+                    )).unwrap()
+            ),
+            ReplayEvent::new(
+                http::Request::builder()
+                    .header("Content-Length", "2")
+                    .uri(Uri::from_static(
+                        "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?x-id=UploadPart&partNumber=1&uploadId=1"
+                    ))
+                    .body(SdkBody::from("56"))
+                    .unwrap(),
+                http::Response::builder().status(200).body(SdkBody::from("")).unwrap()
+            ),
+            ReplayEvent::new(
+                http::Request::builder()
+                    .header("Content-Length", "2")
+                    .uri(Uri::from_static(
+                        "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?x-id=UploadPart&partNumber=2&uploadId=1"
+                    ))
+                    .body(SdkBody::from("78"))
+                    .unwrap(),
+                http::Response::builder().status(200).body(SdkBody::from("")).unwrap()
+            ),
+            ReplayEvent::new(
+                http::Request::builder()
+                    .uri(Uri::from_static(
+                        "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?x-id=UploadPart&partNumber=3&uploadId=1"
+                    ))
+                    .body(SdkBody::from("90"))
+                    .unwrap(),
+                http::Response::builder().status(404).body(SdkBody::from("Not Found")).unwrap()
+            ),
+            ReplayEvent::new(
+                http::Request::builder()
+                    .header("Content-Length", "0")
+                    .uri(Uri::from_static(
+                        "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?x-id=AbortMultipartUpload&uploadId=1"
+                    ))
+                    .body(SdkBody::from(""))
+                    .unwrap(),
+                http::Response::builder()
+                    .status(200)
+                    .body(SdkBody::from(
+                        r#"<?xml version="1.0" encoding="UTF-8"?>
+                            <CompleteMultipartUploadResult>
+                                <Location>https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey</Location>
+                                <Bucket>mybucket</Bucket>
+                                <Key>mykey</Key>
+                                <Etag></ETag>
+                            </CompleteMultipartUploadResult>
+                            "#
+                    )).unwrap()
+            ),
+        ]);
+
+        let creds = Credentials::from_keys("abc".to_string(), "xyz".to_string(), None);
+
+        let s = S3Storage::new_with_creds_client(config.clone(), client.clone(), creds).unwrap();
+        let err = s.put(
+            "mykey",
+            PutResource(Box::new(magic_contents.as_bytes())),
+            magic_contents.len() as u64,
+        )
+        .await
+        .unwrap_err();
+
+        assert_str_contains!(err.to_string(), "Not Found");
 
         client.assert_requests_match(&[]);
 
