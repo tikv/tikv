@@ -205,54 +205,57 @@ where
         is_fake_hb: bool,
         store_report: Option<pdpb::StoreReport>,
     ) {
-        let mut report_peers = HashMap::default();
         let now = UnixSecs::now();
-        let interval_seconds = now
-            .into_inner()
-            .saturating_sub(self.store_stat.last_report_ts.into_inner());
-        for (region_id, region_peer) in &mut self.region_peers {
-            let read_bytes = region_peer.read_bytes - region_peer.last_store_report_read_bytes;
-            let read_keys = region_peer.read_keys - region_peer.last_store_report_read_keys;
-            let query_stats = region_peer
-                .query_stats
-                .sub_query_stats(&region_peer.last_store_report_query_stats);
-            let cpu_usage = if interval_seconds > 0 {
-                let cpu_time_duration = Duration::from_millis(
-                    self.region_cpu_records_store.remove(region_id).unwrap_or(0) as u64,
-                );
-                ((cpu_time_duration.as_secs_f64() * 100.0) / interval_seconds as f64) as u64
-            } else {
-                0
-            };
-            let cpu_usage = if cpu_usage < hotspot_cpu_usage_report_threshold() {
-                0
-            } else {
-                cpu_usage
-            };
-            region_peer.last_store_report_read_bytes = region_peer.read_bytes;
-            region_peer.last_store_report_read_keys = region_peer.read_keys;
-            region_peer
-                .last_store_report_query_stats
-                .fill_query_stats(&region_peer.query_stats);
-            if read_bytes < hotspot_byte_report_threshold()
-                && read_keys < hotspot_key_report_threshold()
-                && query_stats.get_read_query_num() < hotspot_query_num_report_threshold()
-                && cpu_usage < hotspot_cpu_usage_report_threshold()
-            {
-                continue;
+        if !is_fake_hb {
+            let mut report_peers = HashMap::default();
+            let interval_seconds = now
+                .into_inner()
+                .saturating_sub(self.store_stat.last_report_ts.into_inner());
+            for (region_id, region_peer) in &mut self.region_peers {
+                let read_bytes = region_peer.read_bytes - region_peer.last_store_report_read_bytes;
+                let read_keys = region_peer.read_keys - region_peer.last_store_report_read_keys;
+                let query_stats = region_peer
+                    .query_stats
+                    .sub_query_stats(&region_peer.last_store_report_query_stats);
+                let cpu_usage = if interval_seconds > 0 {
+                    let cpu_time_duration = Duration::from_millis(
+                        self.region_cpu_records_store.remove(region_id).unwrap_or(0) as u64,
+                    );
+                    ((cpu_time_duration.as_secs_f64() * 100.0) / interval_seconds as f64) as u64
+                } else {
+                    self.region_cpu_records_store.remove(region_id);
+                    0
+                };
+                let cpu_usage = if cpu_usage < hotspot_cpu_usage_report_threshold() {
+                    0
+                } else {
+                    cpu_usage
+                };
+                region_peer.last_store_report_read_bytes = region_peer.read_bytes;
+                region_peer.last_store_report_read_keys = region_peer.read_keys;
+                region_peer
+                    .last_store_report_query_stats
+                    .fill_query_stats(&region_peer.query_stats);
+                if read_bytes < hotspot_byte_report_threshold()
+                    && read_keys < hotspot_key_report_threshold()
+                    && query_stats.get_read_query_num() < hotspot_query_num_report_threshold()
+                    && cpu_usage < hotspot_cpu_usage_report_threshold()
+                {
+                    continue;
+                }
+                let mut read_stat = pdpb::PeerStat::default();
+                read_stat.set_region_id(*region_id);
+                read_stat.set_read_keys(read_keys);
+                read_stat.set_read_bytes(read_bytes);
+                read_stat.set_query_stats(query_stats.0);
+                let mut cpu_stats = pdpb::CpuStats::default();
+                cpu_stats.set_unified_read(cpu_usage);
+                read_stat.set_cpu_stats(cpu_stats);
+                report_peers.insert(*region_id, read_stat);
             }
-            let mut read_stat = pdpb::PeerStat::default();
-            read_stat.set_region_id(*region_id);
-            read_stat.set_read_keys(read_keys);
-            read_stat.set_read_bytes(read_bytes);
-            read_stat.set_query_stats(query_stats.0);
-            let mut cpu_stats = pdpb::CpuStats::default();
-            cpu_stats.set_unified_read(cpu_usage);
-            read_stat.set_cpu_stats(cpu_stats);
-            report_peers.insert(*region_id, read_stat);
-        }
 
-        stats = collect_report_read_peer_stats(HOTSPOT_REPORT_CAPACITY, report_peers, stats);
+            stats = collect_report_read_peer_stats(HOTSPOT_REPORT_CAPACITY, report_peers, stats);
+        }
         let (capacity, used_size, available) = self.collect_engine_size();
         if available == 0 {
             warn!(self.logger, "no available space");
