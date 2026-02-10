@@ -96,6 +96,10 @@ ignore = [
     # RUSTSEC-2026-0002 (Stacked Borrows UB). Upstream dependency
     # constraints prevent upgrading at the moment.
     "RUSTSEC-2026-0002",
+    # time v0.3.41 triggers RUSTSEC-2026-0009, and needs to be updated to
+    # >= v0.3.47. But that needs serde_core v1.0.220, which is blocked by
+    # raft-engine, which locks it to =1.0.194.
+    "RUSTSEC-2026-0009",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,
