@@ -98,7 +98,7 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
         let mut is_drained = false;
         let mut collector = self.new_collector();
         let mut ctx = EvalContext::default();
-        let mut batch_fm_hashes: Vec<Vec<u64>> = vec![Vec::new(); self.columns_info.len()];
+        let mut batch_fm_vals: Vec<Vec<Vec<u8>>> = vec![Vec::new(); self.columns_info.len()];
         while !is_drained {
             let mut sample = self.quota_limiter.new_sample(!self.is_auto_analyze);
             let mut read_size: usize = 0;
@@ -116,9 +116,9 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                 let columns_slice = result.physical_columns.as_slice();
                 let mut column_vals: Vec<Vec<u8>> = vec![vec![]; self.columns_info.len()];
                 let mut collation_key_vals: Vec<Vec<u8>> = vec![vec![]; self.columns_info.len()];
-                for hashes in &mut batch_fm_hashes {
-                    hashes.clear();
-                    hashes.reserve(result.logical_rows.len());
+                for vals in &mut batch_fm_vals {
+                    vals.clear();
+                    vals.reserve(result.logical_rows.len());
                 }
                 for logical_row in &result.logical_rows {
                     for i in 0..self.columns_info.len() {
@@ -158,12 +158,11 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                                 continue;
                             }
                             base.total_sizes[i] += column_vals[i].len() as i64 - 1;
-                            let fm_bytes = if self.columns_info[i].as_accessor().is_string_like() {
-                                &collation_key_vals[i]
+                            if self.columns_info[i].as_accessor().is_string_like() {
+                                batch_fm_vals[i].push(collation_key_vals[i].clone());
                             } else {
-                                &column_vals[i]
-                            };
-                            batch_fm_hashes[i].push(FmSketch::hash_bytes(fm_bytes));
+                                batch_fm_vals[i].push(column_vals[i].clone());
+                            }
                         }
                     }
                     collector.collect_column_group(
@@ -176,11 +175,11 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                 }
                 {
                     let base = collector.mut_base();
-                    for (i, hashes) in batch_fm_hashes.iter().enumerate() {
-                        if hashes.is_empty() {
+                    for (i, vals) in batch_fm_vals.iter().enumerate() {
+                        if vals.is_empty() {
                             continue;
                         }
-                        base.fm_sketches[i].insert_hash_batch(hashes);
+                        base.fm_sketches[i].insert_batch(vals);
                     }
                 }
             }

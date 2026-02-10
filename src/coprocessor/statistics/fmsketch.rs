@@ -40,6 +40,8 @@ pub struct FmSketch {
     max_size: usize,
     /// A set to store unique hashed values.
     hash_set: HashSet<u64>,
+    // Scratch space for batch hashing to reduce allocations.
+    batch_hashes: Vec<u64>,
 }
 
 impl FmSketch {
@@ -49,6 +51,7 @@ impl FmSketch {
             mask: 0,
             max_size,
             hash_set: HashSet::with_capacity_and_hasher(max_size + 1, Default::default()),
+            batch_hashes: Vec::new(),
         }
     }
 
@@ -107,6 +110,22 @@ impl FmSketch {
             self.hash_set.retain(|&x| x & mask == 0);
             self.mask = mask;
         }
+    }
+
+    /// Inserts a batch of values by hashing them first, then inserting hashes.
+    pub fn insert_batch<T: AsRef<[u8]>>(&mut self, values: &[T]) {
+        if values.is_empty() {
+            return;
+        }
+        let mut hashes = std::mem::take(&mut self.batch_hashes);
+        hashes.clear();
+        hashes.reserve(values.len());
+        for v in values {
+            hashes.push(Self::hash_bytes(v.as_ref()));
+        }
+        self.insert_hash_batch(&hashes);
+        hashes.clear();
+        self.batch_hashes = hashes;
     }
 }
 
