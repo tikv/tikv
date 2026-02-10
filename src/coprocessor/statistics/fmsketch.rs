@@ -53,8 +53,12 @@ impl FmSketch {
     }
 
     pub fn insert(&mut self, bytes: &[u8]) {
-        let hash = xxh3_64(bytes);
+        let hash = Self::hash_bytes(bytes);
         self.insert_hash_value(hash);
+    }
+
+    pub(crate) fn hash_bytes(bytes: &[u8]) -> u64 {
+        xxh3_64(bytes)
     }
 
     pub fn insert_hash_value(&mut self, hash_val: u64) {
@@ -70,6 +74,31 @@ impl FmSketch {
         // distinct values at each level. This way, the final estimation is less
         // likely to be skewed by outliers.
         if self.hash_set.len() > self.max_size {
+            // If the size of the hashset exceeds the maximum size, move the mask to the
+            // next level.
+            let mask = (self.mask << 1) | 1;
+            // Clean up the hashset by removing the hashed values with trailing zeroes less
+            // than the new mask.
+            self.hash_set.retain(|&x| x & mask == 0);
+            self.mask = mask;
+        }
+    }
+
+    pub fn insert_hash_batch(&mut self, hashes: &[u64]) {
+        for &hash_val in hashes {
+            // If the hashed value is already covered by the mask, we can skip it.
+            // This is because the number of trailing zeroes in the hashed value is less
+            // than the mask.
+            if (hash_val & self.mask) != 0 {
+                continue;
+            }
+            // Put the hashed value into the hashset.
+            self.hash_set.insert(hash_val);
+        }
+        // We track the unique hashed values level by level to ensure a minimum count of
+        // distinct values at each level. This way, the final estimation is less
+        // likely to be skewed by outliers.
+        while self.hash_set.len() > self.max_size {
             // If the size of the hashset exceeds the maximum size, move the mask to the
             // next level.
             let mask = (self.mask << 1) | 1;
