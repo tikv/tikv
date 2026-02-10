@@ -18,8 +18,8 @@ use tikv_util::{
     Either, metrics::CRITICAL_ERROR, panic_when_unexpected_key_or_data, set_panic_mark,
 };
 pub use txn_types::{
-    Key, Lock, LockType, Mutation, SHORT_VALUE_MAX_LEN, TimeStamp, Value, Write, WriteRef,
-    WriteType,
+    Key, Lock, LockType, Mutation, SHORT_VALUE_MAX_LEN, SharedLocks, TimeStamp, Value, Write,
+    WriteRef, WriteType,
 };
 
 pub use self::{
@@ -191,6 +191,9 @@ pub enum ErrorInner {
     #[error("{0}")]
     InvalidMaxTsUpdate(#[from] concurrency_manager::InvalidMaxTsUpdate),
 
+    #[error("key is locked by shared locks without shrink-only flag: {0:?}")]
+    NotInShrinkMode(SharedLocks),
+
     #[error("{0:?}")]
     Other(#[from] Box<dyn error::Error + Sync + Send>),
 }
@@ -335,6 +338,9 @@ impl ErrorInner {
                 ErrorInner::GenerationOutOfOrder(*gen, key.clone(), lock_info.clone()),
             ),
             ErrorInner::InvalidMaxTsUpdate(e) => Some(ErrorInner::InvalidMaxTsUpdate(e.clone())),
+            ErrorInner::NotInShrinkMode(shared_locks) => {
+                Some(ErrorInner::NotInShrinkMode(shared_locks.clone()))
+            }
             ErrorInner::Io(_) | ErrorInner::Other(_) => None,
         }
     }
@@ -445,6 +451,7 @@ impl ErrorCodeExt for Error {
             ErrorInner::PrimaryMismatch(_) => error_code::storage::PRIMARY_MISMATCH,
             ErrorInner::GenerationOutOfOrder(..) => error_code::storage::GENERATION_OUT_OF_ORDER,
             ErrorInner::InvalidMaxTsUpdate(_) => error_code::storage::INVALID_MAX_TS_UPDATE,
+            ErrorInner::NotInShrinkMode(_) => error_code::storage::KEY_IS_LOCKED,
             ErrorInner::Other(_) => error_code::storage::UNKNOWN,
         }
     }
@@ -904,5 +911,16 @@ pub mod tests {
             reader.scan_keys(start.map(Key::from_raw), limit).unwrap(),
             expect
         );
+    }
+
+    pub fn must_load_shared_lock<E: Engine>(engine: &mut E, key: &[u8]) -> SharedLocks {
+        use tikv_util::Either;
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, true);
+        let lock_or_shared = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
+        match lock_or_shared {
+            Either::Right(shared_locks) => shared_locks,
+            Either::Left(_) => panic!("Expected SharedLocks, got Lock"),
+        }
     }
 }

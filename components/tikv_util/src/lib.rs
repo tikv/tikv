@@ -350,6 +350,21 @@ where
     }
 }
 
+impl<L, R, T> Iterator for Either<L, R>
+where
+    L: Iterator<Item = T>,
+    R: Iterator<Item = T>,
+{
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Either::Left(l) => l.next(),
+            Either::Right(r) => r.next(),
+        }
+    }
+}
+
 /// A simple ring queue with fixed capacity.
 pub struct RingQueue<T> {
     buf: VecDeque<T>,

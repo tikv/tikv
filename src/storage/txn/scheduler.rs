@@ -57,7 +57,7 @@ use tikv_util::{
     memory::MemoryQuota, quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE,
 };
 use tracker::{GLOBAL_TRACKERS, TrackerToken, TrackerTokenArray, set_tls_tracker_token, track};
-use txn_types::TimeStamp;
+use txn_types::{LockInfoExt, TimeStamp};
 
 use super::task::Task;
 use crate::{
@@ -1510,11 +1510,17 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             return None;
         }
 
+        // When xlock encounters slock without shrink-only flag, slock will be marked as
+        // shrink-only and written back to storage, in which case we can not use in-mem
+        // pessimistic lock.
+        let update_shared_lock = matches!(pr.get_key_lock_info(), Some(l) if l.is_shared_lock());
+
         if matches!(
             tag,
             CommandKind::acquire_pessimistic_lock | CommandKind::acquire_pessimistic_lock_resumed
         ) && txn_scheduler.pessimistic_lock_mode() == PessimisticLockMode::InMemory
             && !is_shared_lock_cmd
+            && !update_shared_lock
             && txn_scheduler.try_write_in_memory_pessimistic_locks(
                 txn_ext.as_deref(),
                 &mut to_be_write,
@@ -1882,6 +1888,27 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let deadline = task.cmd().deadline();
         let write_result = Self::handle_task(self.clone(), snapshot, task, sched_details).await;
 
+        // Feed MVCC scan stats into the per-request tracker before any callback/early
+        // response can be triggered, so the gRPC layer can include them in
+        // `ExecDetailsV2.scan_detail_v2`.
+        let mvcc_total_versions = sched_details.stat.write.total_op_count() as u64;
+        let mvcc_processed_versions = sched_details.stat.write.processed_keys as u64;
+        let mvcc_processed_versions_size = sched_details.stat.processed_size as u64;
+        GLOBAL_TRACKERS.with_tracker(tracker_token, |tracker| {
+            tracker.metrics.mvcc_total_versions = tracker
+                .metrics
+                .mvcc_total_versions
+                .saturating_add(mvcc_total_versions);
+            tracker.metrics.mvcc_processed_versions = tracker
+                .metrics
+                .mvcc_processed_versions
+                .saturating_add(mvcc_processed_versions);
+            tracker.metrics.mvcc_processed_versions_size = tracker
+                .metrics
+                .mvcc_processed_versions_size
+                .saturating_add(mvcc_processed_versions_size);
+        });
+
         let mut write_result = match deadline
             .check()
             .map_err(StorageError::from)
@@ -2087,7 +2114,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let mut slot = self.inner.get_task_slot(cid);
         let task_ctx = slot.get_mut(&cid).unwrap();
         let cb = task_ctx.cb.take().unwrap();
-        let is_shared_lock = lock_info.lock_info_pb.lock_type == kvrpcpb::Op::SharedLock;
+        let is_shared_lock = lock_info.is_shared_lock_request;
 
         let ctx = LockWaitContext::new(
             lock_info.key.clone(),
@@ -2122,6 +2149,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         lock_info: WriteResultLockInfo,
         cb: PessimisticLockKeyCallback,
     ) -> Box<LockWaitEntry> {
+        // the resuming process may contains lock info from other transactions, so
+        // this assertion need to be changed when force locking is compatible with
+        // shared locks.
         assert!(lock_info.lock_info_pb.lock_type != kvrpcpb::Op::SharedLock);
         Box::new(LockWaitEntry {
             key: lock_info.key,
@@ -2175,9 +2205,20 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         for (result, cb) in original_results.into_iter().zip(original_cbs) {
             if let PessimisticLockKeyResult::Waiting = &result {
                 let lock_info = lock_info_it.next().unwrap();
-                let lock_info_pb = lock_info.lock_info_pb.clone();
-                let entry = self.make_lock_waiting_after_resuming(lock_info, cb);
-                lock_wait_entries.push((entry, lock_info_pb));
+                // When encountering a shared lock after resuming, return KeyIsLocked error
+                // directly instead of waiting again. This keeps the scheduler logic simple
+                // and lets the client retry.
+                if lock_info.lock_info_pb.is_shared_lock() {
+                    let err = StorageError::from(Error::from(MvccError::from(
+                        MvccErrorInner::KeyIsLocked(lock_info.lock_info_pb),
+                    )));
+                    results.push(PessimisticLockKeyResult::Failed(err.into()));
+                    cbs.push(cb);
+                } else {
+                    let lock_info_pb = lock_info.lock_info_pb.clone();
+                    let entry = self.make_lock_waiting_after_resuming(lock_info, cb);
+                    lock_wait_entries.push((entry, lock_info_pb));
+                }
             } else {
                 results.push(result);
                 cbs.push(cb);
@@ -2306,14 +2347,16 @@ mod tests {
     use futures_executor::block_on;
     use kvproto::kvrpcpb::{
         BatchRollbackRequest, CheckSecondaryLocksRequest, CheckTxnStatusRequest, Context,
+        ResourceControlContext,
     };
-    use raftstore::store::{ReadStats, WriteStats};
+    use raftstore::store::{LocksStatus, ReadStats, WriteStats};
     use tikv_util::{
+        Either,
         config::ReadableSize,
         future::{block_on_timeout, paired_future_callback},
         memory::HeapSize,
     };
-    use txn_types::{Key, TimeStamp};
+    use txn_types::{Key, LockType, SharedLocks, TimeStamp};
 
     use super::*;
     use crate::storage::{
@@ -2766,6 +2809,89 @@ mod tests {
             scheduler.pessimistic_lock_mode(),
             PessimisticLockMode::Pipelined
         );
+    }
+
+    #[test]
+    fn test_handle_non_persistent_write_result_skip_in_memory_for_shared_lock_update() {
+        let (scheduler, mut engine) = new_test_scheduler();
+        scheduler
+            .inner
+            .in_memory_pessimistic_lock
+            .store(true, Ordering::SeqCst);
+
+        let key = Key::from_raw(b"shared-lock");
+        let mut shared_locks = SharedLocks::new();
+        let lock = mvcc::Lock::new(
+            LockType::Pessimistic,
+            b"pk".to_vec(),
+            5.into(),
+            1000,
+            None,
+            5.into(),
+            0,
+            TimeStamp::zero(),
+            false,
+        );
+        shared_locks.insert_lock(lock).unwrap();
+        shared_locks.set_shrink_only();
+        let lock_info = shared_locks.clone().into_lock_info(key.to_raw().unwrap());
+        let to_be_write = WriteData::from_modifies(vec![Modify::Put(
+            CF_LOCK,
+            key.clone(),
+            shared_locks.to_bytes(),
+        )]);
+        let pr = ProcessResult::PessimisticLockRes {
+            res: Err(StorageError::from(Error::from(MvccError::from(
+                MvccErrorInner::KeyIsLocked(lock_info),
+            )))),
+        };
+        let write_result = WriteResult::new(
+            Context::default(),
+            to_be_write,
+            0,
+            pr,
+            vec![],
+            ReleasedLocks::new(),
+            vec![],
+            vec![],
+            ResponsePolicy::OnProposed,
+            vec![],
+        );
+        let mut sched_details = SchedulerDetails::new(TrackerToken::default());
+        let task_meta_data = TaskMetadata::from_ctx(&ResourceControlContext::default());
+        let txn_ext = Arc::new(TxnExt::default());
+        {
+            let mut locks = txn_ext.pessimistic_locks.write();
+            locks.status = LocksStatus::Normal;
+            locks.term = 1;
+            locks.version = 1;
+        }
+
+        let result = TxnScheduler::handle_non_persistent_write_result(
+            scheduler.clone(),
+            1,
+            CommandKind::acquire_pessimistic_lock,
+            TrackerToken::default(),
+            task_meta_data,
+            write_result,
+            &mut sched_details,
+            Some(txn_ext.clone()),
+            false,
+        )
+        .expect("shared lock update should be persisted");
+
+        assert!(txn_ext.pessimistic_locks.read().is_empty());
+        engine
+            .write(&Context::default(), result.0.to_be_write)
+            .unwrap();
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut reader = mvcc::MvccReader::new(snapshot, None, true);
+        let lock_or_shared = reader.load_lock(&key).unwrap().unwrap();
+        match lock_or_shared {
+            Either::Right(shared_locks) => assert!(shared_locks.is_shrink_only()),
+            Either::Left(_) => panic!("expected shared locks"),
+        }
     }
 
     #[test]
