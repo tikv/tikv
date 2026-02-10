@@ -507,6 +507,10 @@ impl<'client> S3Uploader<'client> {
                 )
                 .set_ssekms_key_id(self.sse_kms_key_id.as_ref().map(|s| s.to_string()))
                 .set_storage_class(self.storage_class.as_ref().map(|s| s.as_str().into()))
+                .customize()
+                .mutate_request(|req| {
+                    req.headers_mut().insert("Content-Length", "0");
+                })
                 .send()
                 .await?
                 .upload_id()
@@ -549,6 +553,12 @@ impl<'client> S3Uploader<'client> {
                         .set_parts(Some(aws_parts))
                         .build(),
                 )
+                .customize()
+                .mutate_request(|req| {
+                    let body_len = req.body().content_length().unwrap_or(0);
+                    req.headers_mut()
+                        .insert("Content-Length", body_len.to_string());
+                })
                 .send()
                 .await?;
             Ok(())
@@ -569,6 +579,10 @@ impl<'client> S3Uploader<'client> {
                 .bucket(&self.bucket)
                 .key(&self.key)
                 .upload_id(&self.upload_id)
+                .customize()
+                .mutate_request(|req| {
+                    req.headers_mut().insert("Content-Length", "0");
+                })
                 .send()
                 .await?;
             Ok(())
@@ -813,6 +827,7 @@ mod tests {
         let client = StaticReplayClient::new(vec![
             ReplayEvent::new(
                 http::Request::builder()
+                    .header("Content-Length", "0")
                     .uri(Uri::from_static(
                         "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?uploads"
                     ))
@@ -831,6 +846,7 @@ mod tests {
             ),
             ReplayEvent::new(
                 http::Request::builder()
+                    .header("Content-Length", "2")
                     .uri(Uri::from_static(
                         "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?x-id=UploadPart&partNumber=1&uploadId=1"
                     ))
@@ -840,6 +856,7 @@ mod tests {
             ),
             ReplayEvent::new(
                 http::Request::builder()
+                    .header("Content-Length", "2")
                     .uri(Uri::from_static(
                         "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?x-id=UploadPart&partNumber=2&uploadId=1"
                     ))
@@ -858,6 +875,7 @@ mod tests {
             ),
             ReplayEvent::new(
                 http::Request::builder()
+                    .header("Content-Length", "216")
                     .uri(Uri::from_static(
                         "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?uploadId=1"
                     ))
