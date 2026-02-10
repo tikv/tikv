@@ -3753,7 +3753,7 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_int_handle_from_key() {
+    fn test_decode_int_handle_and_partition_from_key() {
         let idx_exe = IndexScanExecutorImpl {
             context: Default::default(),
             schema: vec![],
