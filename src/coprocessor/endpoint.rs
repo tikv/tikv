@@ -2628,10 +2628,8 @@ mod tests {
         dag.mut_executors().push(scan_exec);
         req.set_data(dag.write_to_bytes().unwrap());
 
-        assert!(
-            copr.parse_request_and_check_memory_locks_impl::<ApiV1>(req, None, false)
-                .is_ok()
-        );
+        copr.parse_request_and_check_memory_locks_impl::<ApiV1>(req, None, false)
+            .unwrap();
     }
 
     #[test]
