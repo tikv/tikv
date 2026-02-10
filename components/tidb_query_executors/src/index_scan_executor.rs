@@ -73,8 +73,13 @@ impl<S: Storage, F: KvFormat> BatchIndexScanExecutor<S, F> {
         // last one is real). We accept this kind of request for compatibility
         // considerations, but will be forbidden soon.
         //
-        // Note 4: When process global indexes, an extra partition ID column with column
-        // ID `table::EXTRA_PARTITION_ID_COL_ID` will append to column info to indicate which partiton handles belong to. See https://github.com/pingcap/parser/pull/1010 for more information.
+        // Deprecated, now only `table::EXTRA_PHYSICAL_TAGBLE_ID_COL_ID` is used by
+        // TiDB. See https://github.com/pingcap/tidb/pull/53974 and
+        // https://github.com/tikv/tikv/pull/17141.
+        // Note 4: When process global indexes, an extra partition ID
+        // column with column ID `table::EXTRA_PARTITION_ID_COL_ID` will append
+        // to column info to indicate which partiton handles belong to.
+        // See https://github.com/pingcap/parser/pull/1010 for more information.
         //
         // Note 5: When process a partitioned table's index under
         // tidb_partition_prune_mode = 'dynamic' and with either an active transaction
@@ -572,18 +577,6 @@ expected at least {} bytes after first flag, got {}",
                 columns[self.columns_id_without_handle.len()]
                     .mut_decoded()
                     .push_int(Some(handle_val));
-                // V2: Populate partition ID column if requested
-                if self.pid_column_cnt > 0 {
-                    if let Some(pid) = partition_id {
-                        let pid_col_idx =
-                            columns.columns_len() - self.physical_table_id_column_cnt - 1;
-                        columns[pid_col_idx].mut_decoded().push_int(Some(pid));
-                    } else {
-                        return Err(other_err!(
-                            "Expect to decode partition id in old collation path but not found in key"
-                        ));
-                    }
-                }
                 // For global indexes, use the partition ID as physical table ID
                 // instead of the index table ID from the key prefix.
                 if self.physical_table_id_column_cnt > 0 {
@@ -852,11 +845,6 @@ expected at least {} bytes after first flag, got {}",
         } else if let Some(pid_from_key) = partition_id_from_key {
             // V2: partition ID in key ONLY
             DecodePartitionIdOp::Pid(pid_from_key)
-        } else if self.pid_column_cnt > 0 || self.physical_table_id_column_cnt > 0 {
-            // Expect partition ID but none found
-            return Err(other_err!(
-                "Expect to decode partition id but payload is empty"
-            ));
         } else {
             DecodePartitionIdOp::Nop
         };
