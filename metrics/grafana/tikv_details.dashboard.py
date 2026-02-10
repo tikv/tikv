@@ -2355,22 +2355,23 @@ def RaftPropose() -> RowPanel:
                     target(
                         expr=expr_histogram_quantile(
                             0.99,
-                            "tikv_raftstore_store_perf_context_time_duration_secs",
-                            by_labels=["type"],
-                            is_optional_quantile=True,
-                        ),
-                        legend_format="store-{{type}}-" + OPTIONAL_QUANTILE_INPUT,
-                        additional_groupby=True,
-                    ),
-                    target(
-                        expr=expr_histogram_quantile(
-                            0.99,
                             "tikv_raftstore_apply_perf_context_time_duration_secs",
                             by_labels=["type"],
                             is_optional_quantile=True,
                         ),
                         legend_format="apply-{{type}}-" + OPTIONAL_QUANTILE_INPUT,
                         additional_groupby=True,
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_raftstore_store_perf_context_time_duration_secs",
+                            by_labels=["type"],
+                            is_optional_quantile=True,
+                        ),
+                        legend_format="store-{{type}}-" + OPTIONAL_QUANTILE_INPUT,
+                        additional_groupby=True,
+                        hide=True,
                     ),
                 ],
             ),
@@ -4190,6 +4191,42 @@ def GC() -> RowPanel:
                         legend_format="pending candidates",
                     ),
                 ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Auto Compaction Num Tombstones",
+                description="Histogram of number of tombstones in compaction candidates",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                metric="tikv_auto_compaction_num_tombstones",
+                hide_count=True,
+            ),
+            graph_panel_histogram_quantiles(
+                title="Auto Compaction Num Discardable",
+                description="Histogram of number of discardable MVCC versions in compaction candidates",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                metric="tikv_auto_compaction_num_discardable",
+                hide_count=True,
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Auto Compaction MVCC Versions Scanned",
+                description="Histogram of average MVCC versions scanned per request for compaction candidates",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                metric="tikv_auto_compaction_mvcc_versions_scanned",
+                hide_count=True,
+            ),
+            graph_panel_histogram_quantiles(
+                title="Auto Compaction Score",
+                description="Histogram of compaction scores for candidates",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                metric="tikv_auto_compaction_score",
+                hide_count=True,
             ),
         ]
     )

@@ -83,8 +83,10 @@ use tikv::{
 use tikv_util::{
     HandyRwLock,
     config::VersionTrack,
+    memory::MemoryQuota,
     quota_limiter::QuotaLimiter,
     sys::thread::ThreadBuildWrapper,
+    thread_name_prefix::RESOLVED_TS_WORKER_THREAD,
     time::ThreadReadId,
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
 };
@@ -422,8 +424,11 @@ impl ServerCluster {
         let txn_status_cache = Arc::new(TxnStatusCache::new_for_test());
         let rts_worker = if cfg.resolved_ts.enable {
             // Resolved ts worker
-            let mut rts_worker = LazyWorker::new("resolved-ts");
-            let rts_ob = resolved_ts::Observer::new(rts_worker.scheduler());
+            let rts_memory_quota =
+                Arc::new(MemoryQuota::new(cfg.resolved_ts.memory_quota.0 as usize));
+            let mut rts_worker = LazyWorker::new(RESOLVED_TS_WORKER_THREAD);
+            let rts_ob =
+                resolved_ts::Observer::new(rts_worker.scheduler(), rts_memory_quota.clone());
             rts_ob.register_to(&mut coprocessor_host);
             // resolved ts endpoint needs store id.
             store_meta.lock().unwrap().store_id = Some(node_id);
@@ -438,6 +443,7 @@ impl ServerCluster {
                 self.env.clone(),
                 self.security_mgr.clone(),
                 txn_status_cache.clone(),
+                rts_memory_quota,
             );
             // Start the worker
             rts_worker.start(rts_endpoint);

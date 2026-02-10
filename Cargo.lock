@@ -929,6 +929,7 @@ dependencies = [
  "raft",
  "raftstore",
  "rand 0.8.5",
+ "regex",
  "resolved_ts",
  "serde",
  "serde_json",
@@ -1160,9 +1161,9 @@ checksum = "14c189c53d098945499cdfa7ecc63567cf3886b3332b312a5b4585d8d3a6a610"
 
 [[package]]
 name = "bytes"
-version = "1.7.2"
+version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "428d9aa8fbc0670b7b8d6030a7fadd0f86151cae55e4dbbece15f3780a3dfaf3"
+checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
 name = "bytes-utils"
@@ -1553,10 +1554,12 @@ dependencies = [
  "keys",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "pin-project",
  "pprof",
  "prometheus",
  "protobuf 2.8.0",
+ "rand 0.8.5",
  "serde",
  "serde_json",
  "slog",
@@ -3770,7 +3773,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#b6fd818387cdc401d1b220e357dcf9d466dd731a"
+source = "git+https://github.com/pingcap/kvproto.git#9f0ac2fc9a1a6bb8337e01ff72d6b864802698b6"
 dependencies = [
  "bytes",
  "futures 0.3.15",
@@ -3929,9 +3932,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.20"
+version = "0.4.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5e6163cb8c49088c2c36f57875e58ccd8c87c7427f7fbd50ea6710b2f3f2e8f"
+checksum = "34080505efa8e45a4b816c349525ebe327ceaa8559756f0356cba97ef3bf7432"
 
 [[package]]
 name = "log_wrappers"
@@ -5736,6 +5739,7 @@ dependencies = [
  "protobuf 2.8.0",
  "raft",
  "raftstore",
+ "rand 0.8.5",
  "security",
  "slog",
  "slog-global",
@@ -7388,6 +7392,7 @@ dependencies = [
  "panic_hook",
  "profiler",
  "protobuf 2.8.0",
+ "rand 0.8.5",
  "regex",
  "serde",
  "serde_json",
@@ -7399,7 +7404,7 @@ dependencies = [
  "time 0.1.43",
  "tipb",
  "tipb_helper",
- "uuid 0.8.2",
+ "uuid 1.7.0",
 ]
 
 [[package]]
@@ -7820,7 +7825,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#85a019a5df23fa11f93c53ebf7fc05462813df1e"
+source = "git+https://github.com/pingcap/tipb.git#1374320b4bd8f0bbf1b8b479182b99c22a6d25bd"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -8071,7 +8076,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 0.1.10",
+ "cfg-if 1.0.0",
  "static_assertions",
 ]
 
@@ -8193,6 +8198,7 @@ version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f00cc9702ca12d3c81455259621e676d0f7251cec66a21e98fe2e9a37db93b2a"
 dependencies = [
+ "atomic",
  "getrandom 0.2.11",
  "serde",
 ]

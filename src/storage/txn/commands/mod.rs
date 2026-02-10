@@ -217,9 +217,10 @@ impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLock
             .take_mutations()
             .into_iter()
             .map(|x| match x.get_op() {
-                Op::PessimisticLock => (
+                Op::PessimisticLock | Op::SharedPessimisticLock => (
                     Key::from_raw(x.get_key()),
                     x.get_assertion() == Assertion::NotExist,
+                    x.get_op() == Op::SharedPessimisticLock,
                 ),
                 _ => panic!("mismatch Op in pessimistic lock mutations"),
             })
@@ -505,6 +506,8 @@ pub struct WriteResultLockInfo {
     pub lock_info_pb: LockInfo,
     pub parameters: PessimisticLockParameters,
     pub hash_for_latch: u64,
+    /// Whether the pending request is trying to acquire a shared lock.
+    pub is_shared_lock_request: bool,
     /// If a request is woken up after waiting for some lock, and it encounters
     /// another lock again after resuming, this field will carry the token
     /// that was already allocated before.
@@ -520,6 +523,7 @@ impl WriteResultLockInfo {
         parameters: PessimisticLockParameters,
         key: Key,
         should_not_exist: bool,
+        is_shared_lock_request: bool,
     ) -> Self {
         let lock = lock_manager::LockDigest {
             ts: lock_info_pb.get_lock_version().into(),
@@ -533,6 +537,7 @@ impl WriteResultLockInfo {
             lock_info_pb,
             parameters,
             hash_for_latch,
+            is_shared_lock_request,
             lock_wait_token: LockWaitToken(None),
             req_states: None,
         }
@@ -1124,7 +1129,7 @@ pub mod test_util {
         let concurrency_manager = ConcurrencyManager::new_for_test(start_ts.into());
         let cmd = AcquirePessimisticLock::new(
             keys.into_iter()
-                .map(|key| (Key::from_raw(key.0), key.1))
+                .map(|key| (Key::from_raw(key.0), key.1, false))
                 .collect(),
             primary,
             TimeStamp::from(start_ts),

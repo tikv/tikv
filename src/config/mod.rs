@@ -1557,10 +1557,10 @@ impl DbConfig {
         let rate_limiter = if self.rate_bytes_per_sec.0 > 0 {
             // for raft-v2, we use a longer window to make the compaction io smoother
             let (tune_per_secs, window_size, recent_size) = match engine {
-                // 1s tune duraion, long term window is 5m, short term window is 30s.
+                // 1s tune duration, long term window is 5m, short term window is 30s.
                 // this is the default settings.
                 EngineType::RaftKv => (1, 300, 30),
-                // 5s tune duraion, long term window is 1h, short term window is 5m
+                // 5s tune duration, long term window is 1h, short term window is 5m
                 EngineType::RaftKv2 => (5, 720, 60),
             };
             Some(Arc::new(RateLimiter::new_writeampbased_with_auto_tuned(
@@ -3337,6 +3337,11 @@ pub struct ResolvedTsConfig {
     pub scan_lock_pool_size: usize,
     pub memory_quota: ReadableSize,
     pub incremental_scan_concurrency: usize,
+    pub memory_quota_active_check_interval: ReadableDuration,
+    // Re-register regions backoff duration when memory quota is exceeded.
+    // The actual backoff duration will be in the range
+    // [configured_duration, 2 * configured_duration)
+    pub memory_quota_exceeded_backoff_duration: ReadableDuration,
 }
 
 impl ResolvedTsConfig {
@@ -3359,6 +3364,8 @@ impl Default for ResolvedTsConfig {
             scan_lock_pool_size: 2,
             memory_quota: ReadableSize::mb(256),
             incremental_scan_concurrency: 6,
+            memory_quota_active_check_interval: ReadableDuration::secs(10),
+            memory_quota_exceeded_backoff_duration: ReadableDuration::secs(30),
         }
     }
 }

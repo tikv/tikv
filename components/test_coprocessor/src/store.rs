@@ -26,7 +26,7 @@ use tikv::{
     },
 };
 use tikv_util::future::block_on_timeout;
-use txn_types::{Key, Mutation, TimeStamp};
+use txn_types::{Key, Mutation, TimeStamp, ValueEntry};
 
 use super::*;
 
@@ -317,7 +317,7 @@ impl<E: Engine> Store<E> {
         let data = self
             .export()
             .into_iter()
-            .map(|(key, value)| (Key::from_raw(&key), Ok(value)))
+            .map(|(key, value)| (Key::from_raw(&key), Ok(ValueEntry::from_value(value))))
             .collect();
         FixtureStore::new(data)
     }

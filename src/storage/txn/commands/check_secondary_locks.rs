@@ -3,6 +3,7 @@
 // #[PerformanceCriticalPath]
 use protobuf::Message;
 use resource_metering::record_network_out_bytes;
+use tikv_util::Either;
 use txn_types::{Key, Lock, WriteType};
 
 use crate::storage::{
@@ -167,16 +168,25 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
             // Checks whether the given secondary lock exists.
             let (status, need_rollback, rollback_overlapped_write) = match reader.load_lock(&key)? {
                 // The lock exists, the lock information is returned.
-                Some(lock) if lock.ts == self.start_ts => {
+                Some(Either::Left(lock)) if lock.ts == self.start_ts => {
                     let (status, need_rollback, rollback_overlapped_write, lock_released) =
                         check_status_from_lock(&mut txn, &mut reader, lock, &key, region_id)?;
                     released_lock = lock_released;
                     (status, need_rollback, rollback_overlapped_write)
                 }
+                // Async commit transactions don't write shared locks, so if we get SharedLocks,
+                // check the write CF for the commit record directly.
+                Some(Either::Right(_)) => check_determined_txn_status(&mut reader, &key)?,
                 // Searches the write CF for the commit record of the lock and returns the commit
                 // timestamp (0 if the lock is not committed).
                 l => {
-                    mismatch_lock = l;
+                    // SharedLocks is already handled by the previous match arm, so this is
+                    // unreachable.
+                    mismatch_lock = l.map(|lock_or_shared_locks| {
+                        lock_or_shared_locks
+                            .left()
+                            .expect("SharedLocks is handled above, should not reach here")
+                    });
                     check_determined_txn_status(&mut reader, &key)?
                 }
             };
