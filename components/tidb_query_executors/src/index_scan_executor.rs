@@ -805,8 +805,7 @@ impl IndexScanExecutorImpl {
                     datum::skip_n(&mut key_payload, self.columns_id_without_handle.len())?;
 
                     // V1/V2: Check for partition ID in key (after indexed columns, before handle)
-                    let (pid_from_key, remaining_key) =
-                        Self::split_partition_id(key_payload)?;
+                    let (pid_from_key, remaining_key) = Self::split_partition_id(key_payload)?;
                     if !pid_from_key.is_empty() {
                         partition_id_from_key = Some(pid_from_key);
                     }
@@ -4145,35 +4144,26 @@ mod tests {
         for request_phys_table_id_column in [true, false] {
             // Build columns: [indexed_col, handle, phys_table_id?]
             let mut columns_info = vec![
-                make_column(1, false),  // indexed column
-                make_column(-1, true),  // handle column
+                make_column(1, false), // indexed column
+                make_column(-1, true), // handle column
             ];
-            let mut schema: Vec<FieldType> = vec![
-                FieldTypeTp::LongLong.into(),
-                FieldTypeTp::LongLong.into(),
-            ];
+            let mut schema: Vec<FieldType> =
+                vec![FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()];
             if request_phys_table_id_column {
-                columns_info.push(make_column(
-                    table::EXTRA_PHYSICAL_TABLE_ID_COL_ID,
-                    false,
-                ));
+                columns_info.push(make_column(table::EXTRA_PHYSICAL_TABLE_ID_COL_ID, false));
                 schema.push(FieldTypeTp::LongLong.into());
             }
 
             // Build index key:
             // [indexed_col][PARTITION_ID_FLAG][partition_id][handle]
-            let mut index_key_data = datum::encode_key(
-                &mut EvalContext::default(),
-                &[Datum::I64(indexed_value)],
-            )
-            .unwrap();
+            let mut index_key_data =
+                datum::encode_key(&mut EvalContext::default(), &[Datum::I64(indexed_value)])
+                    .unwrap();
             index_key_data.push(table::INDEX_VALUE_PARTITION_ID_FLAG);
             index_key_data.write_i64(partition_id).unwrap();
-            let handle_data = datum::encode_key(
-                &mut EvalContext::default(),
-                &[Datum::I64(handle_value)],
-            )
-            .unwrap();
+            let handle_data =
+                datum::encode_key(&mut EvalContext::default(), &[Datum::I64(handle_value)])
+                    .unwrap();
             index_key_data.extend(handle_data);
             let key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_key_data);
 
