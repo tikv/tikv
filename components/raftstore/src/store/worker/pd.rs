@@ -1306,7 +1306,8 @@ where
             {
                 let mut region_peers = self.region_peers.write().unwrap();
                 for (region_id, region_peer) in region_peers.iter_mut() {
-                    let read_bytes = region_peer.read_bytes - region_peer.last_store_report_read_bytes;
+                    let read_bytes =
+                        region_peer.read_bytes - region_peer.last_store_report_read_bytes;
                     let read_keys = region_peer.read_keys - region_peer.last_store_report_read_keys;
                     let query_stats = region_peer
                         .query_stats
@@ -2027,11 +2028,7 @@ where
         // Send Region CPU info to AutoSplitController inside the stats_monitor.
         self.stats_monitor.maybe_send_cpu_stats(&records);
         calculate_region_cpu_records(self.store_id, records.clone(), &mut self.region_cpu_records);
-        calculate_region_cpu_records(
-            self.store_id,
-            records,
-            &mut self.region_cpu_records_store,
-        );
+        calculate_region_cpu_records(self.store_id, records, &mut self.region_cpu_records_store);
     }
 
     fn handle_report_min_resolved_ts(&self, store_id: u64, min_resolved_ts: u64) {
