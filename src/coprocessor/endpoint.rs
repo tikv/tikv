@@ -1287,6 +1287,7 @@ mod tests {
     use raft::StateRole;
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use tidb_query_common::{storage::Storage, util::convert_to_prefix_next};
+    use tidb_query_datatype::codec::table::encode_row_key;
     use tikv_kv::{MockEngine, MockEngineBuilder, destroy_tls_engine, set_tls_engine};
     use tipb::{Executor, Expr};
     use txn_types::{Key, LockType};
@@ -2642,12 +2643,13 @@ mod tests {
         ));
         let cm = ConcurrencyManager::new_for_test(1.into());
 
-        let key = Key::from_raw(b"key");
+        let point_key = encode_row_key(1, 1);
+        let key = Key::from_raw(&point_key);
         let guard = block_on(cm.lock_key(&key));
         guard.with_lock(|lock| {
             *lock = Some(txn_types::Lock::new(
                 LockType::Put,
-                b"key".to_vec(),
+                point_key.clone(),
                 10.into(),
                 100,
                 Some(vec![]),
@@ -2667,31 +2669,73 @@ mod tests {
             None,
         );
 
+        let table_scan_data = {
+            let mut dag = DagRequest::default();
+            let mut scan_exec = Executor::default();
+            scan_exec.set_tp(ExecType::TypeTableScan);
+            dag.mut_executors().push(scan_exec);
+            dag.write_to_bytes().unwrap()
+        };
+
+        assert_eq!(cm.max_ts(), 1.into());
+
+        // Case 1: versioned point range (point getter path).
         let mut req = coppb::Request::default();
         req.mut_context().set_isolation_level(IsolationLevel::Si);
         req.set_start_ts(100);
         req.set_tp(REQ_TYPE_DAG);
-
-        let mut end = b"key".to_vec();
+        let mut end = point_key.clone();
         convert_to_prefix_next(&mut end);
         let mut key_range = coppb::KeyRange::default();
-        key_range.set_start(b"key".to_vec());
+        key_range.set_start(point_key.clone());
         key_range.set_end(end);
         let mut vr = coppb::VersionedKeyRange::default();
         vr.set_range(key_range);
         vr.set_read_ts(10);
         req.mut_versioned_ranges().push(vr);
-
-        let mut dag = DagRequest::default();
-        let mut scan_exec = Executor::default();
-        scan_exec.set_tp(ExecType::TypeTableScan);
-        dag.mut_executors().push(scan_exec);
-        req.set_data(dag.write_to_bytes().unwrap());
-
-        assert_eq!(cm.max_ts(), 1.into());
+        req.set_data(table_scan_data.clone());
+        let resp = block_on(copr.parse_and_handle_unary_request(req, None));
         assert!(
-            copr.parse_request_and_check_memory_locks_impl::<ApiV1>(req, None, false)
-                .is_ok()
+            resp.get_other_error().is_empty(),
+            "{}",
+            resp.get_other_error()
+        );
+        assert_eq!(cm.max_ts(), 1.into());
+
+        // Case 2: versioned lookup with multiple point ranges (not stale read).
+        let mut req = coppb::Request::default();
+        req.mut_context().set_isolation_level(IsolationLevel::Si);
+        req.set_start_ts(100);
+        req.set_tp(REQ_TYPE_DAG);
+
+        let key1 = encode_row_key(1, 1);
+        let mut end1 = key1.clone();
+        convert_to_prefix_next(&mut end1);
+        let mut key_range1 = coppb::KeyRange::default();
+        key_range1.set_start(key1);
+        key_range1.set_end(end1);
+        let mut vr1 = coppb::VersionedKeyRange::default();
+        vr1.set_range(key_range1);
+        vr1.set_read_ts(10);
+        req.mut_versioned_ranges().push(vr1);
+
+        let key2 = encode_row_key(1, 2);
+        let mut end2 = key2.clone();
+        convert_to_prefix_next(&mut end2);
+        let mut key_range2 = coppb::KeyRange::default();
+        key_range2.set_start(key2);
+        key_range2.set_end(end2);
+        let mut vr2 = coppb::VersionedKeyRange::default();
+        vr2.set_range(key_range2);
+        vr2.set_read_ts(20);
+        req.mut_versioned_ranges().push(vr2);
+
+        req.set_data(table_scan_data);
+        let resp = block_on(copr.parse_and_handle_unary_request(req, None));
+        assert!(
+            resp.get_other_error().is_empty(),
+            "{}",
+            resp.get_other_error()
         );
         assert_eq!(cm.max_ts(), 1.into());
     }
