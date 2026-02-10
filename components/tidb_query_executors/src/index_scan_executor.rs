@@ -548,6 +548,9 @@ expected at least {} bytes after first flag, got {}",
             &mut columns[..self.columns_id_without_handle.len()],
         )?;
 
+        // Track partition ID extracted from key (for pid_column_cnt handling below).
+        let mut partition_id: Option<i64> = None;
+
         match self.decode_handle_strategy {
             NoDecode => {
                 if self.physical_table_id_column_cnt > 0 {
@@ -572,8 +575,9 @@ expected at least {} bytes after first flag, got {}",
                 // For non-unique, non-clustered tables, Global Index Version V1+
                 // the key also includes the partition id, to allow duplicate _tidb_rowid
                 // across partitions.
-                let (handle_val, partition_id) =
+                let (handle_val, pid) =
                     self.decode_int_handle_and_partition_from_key(key_payload)?;
+                partition_id = pid;
                 columns[self.columns_id_without_handle.len()]
                     .mut_decoded()
                     .push_int(Some(handle_val));
@@ -604,6 +608,21 @@ expected at least {} bytes after first flag, got {}",
                 if self.physical_table_id_column_cnt > 0 {
                     self.process_physical_table_id_column(key, columns)?;
                 }
+            }
+        }
+
+        // Deprecated: Keep this for old tidb version during upgrade.
+        // If need partition id, append partition id to the last column before physical
+        // table id column if exists.
+        if self.pid_column_cnt > 0 {
+            let pid_col_idx = columns.columns_len() - self.physical_table_id_column_cnt - 1;
+            if let Some(pid) = partition_id {
+                columns[pid_col_idx].mut_decoded().push_int(Some(pid));
+            } else {
+                // No partition ID found in key. Fall back to table ID from key prefix
+                // (local index on a partition has the partition's table ID in the key).
+                let table_id = table::decode_table_id(key)?;
+                columns[pid_col_idx].mut_decoded().push_int(Some(table_id));
             }
         }
 
@@ -753,11 +772,19 @@ expected at least {} bytes after first flag, got {}",
         // If need partition id, append partition id to the last column before physical
         // table id column if exists.
         if self.pid_column_cnt > 0 {
-            self.decode_pid_columns(
-                columns,
-                columns.columns_len() - self.physical_table_id_column_cnt - 1,
-                decode_pid,
-            )?;
+            let pid_col_idx = columns.columns_len() - self.physical_table_id_column_cnt - 1;
+            match decode_pid {
+                DecodePartitionIdOp::Nop => {
+                    // No partition ID found in key or value. Fall back to table ID
+                    // from key prefix (local index on a partition has the partition's
+                    // table ID encoded in the key).
+                    let table_id = table::decode_table_id(key)?;
+                    columns[pid_col_idx].mut_decoded().push_int(Some(table_id));
+                }
+                DecodePartitionIdOp::Pid(_) => {
+                    self.decode_pid_columns(columns, pid_col_idx, decode_pid)?;
+                }
+            }
         }
 
         Ok(())
