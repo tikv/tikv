@@ -4117,4 +4117,148 @@ mod tests {
             }
         }
     }
+
+    /// Exercises the V2 global index path through `process_kv_general` →
+    /// `build_operations`, where partition ID comes from the KEY only (the
+    /// `else if partition_id_from_key` fallback). The base
+    /// `test_global_index_formats` V2 case uses a 1-byte value which routes
+    /// through `process_old_collation_kv` instead.
+    #[test]
+    fn test_v2_global_index_new_encoding_path() {
+        const TABLE_ID: i64 = 100;
+        const INDEX_ID: i64 = 5;
+
+        fn make_column(col_id: i64, is_pk_handle: bool) -> ColumnInfo {
+            let mut ci = ColumnInfo::default();
+            ci.set_column_id(col_id);
+            if is_pk_handle {
+                ci.set_pk_handle(true);
+            }
+            ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+            ci
+        }
+
+        let partition_id: i64 = 42;
+        let indexed_value: i64 = 7;
+        let handle_value: i64 = 123;
+
+        for request_phys_table_id_column in [true, false] {
+            // Build columns: [indexed_col, handle, phys_table_id?]
+            let mut columns_info = vec![
+                make_column(1, false),  // indexed column
+                make_column(-1, true),  // handle column
+            ];
+            let mut schema: Vec<FieldType> = vec![
+                FieldTypeTp::LongLong.into(),
+                FieldTypeTp::LongLong.into(),
+            ];
+            if request_phys_table_id_column {
+                columns_info.push(make_column(
+                    table::EXTRA_PHYSICAL_TABLE_ID_COL_ID,
+                    false,
+                ));
+                schema.push(FieldTypeTp::LongLong.into());
+            }
+
+            // Build index key:
+            // [indexed_col][PARTITION_ID_FLAG][partition_id][handle]
+            let mut index_key_data = datum::encode_key(
+                &mut EvalContext::default(),
+                &[Datum::I64(indexed_value)],
+            )
+            .unwrap();
+            index_key_data.push(table::INDEX_VALUE_PARTITION_ID_FLAG);
+            index_key_data.write_i64(partition_id).unwrap();
+            let handle_data = datum::encode_key(
+                &mut EvalContext::default(),
+                &[Datum::I64(handle_value)],
+            )
+            .unwrap();
+            index_key_data.extend(handle_data);
+            let key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_key_data);
+
+            // Build V2 new-encoding value (index_version=1, no partition ID in
+            // value). Include a minimal v2 row as restore data so that
+            // value.len() > MAX_OLD_ENCODED_VALUE_LEN (9), routing to
+            // process_kv_general instead of process_old_collation_kv.
+            let mut value = Vec::new();
+            value.push(0x00); // tail_len = 0 (non-unique, handle in key)
+            value.push(INDEX_VALUE_VERSION_FLAG); // version segment marker
+            value.push(0x01); // version = 1
+            // Minimal valid v2 row (empty row with one null column_id=1):
+            //   [CODEC_VERSION=0x80][flags=0x00][non_null_cnt=0][null_cnt=1][null_id=1]
+            value.extend_from_slice(&[0x80, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01]);
+            assert!(value.len() > MAX_OLD_ENCODED_VALUE_LEN);
+
+            let key_ranges = vec![{
+                let mut range = KeyRange::default();
+                range.set_start(key.clone());
+                range.set_end(key.clone());
+                convert_to_prefix_next(range.mut_end());
+                range
+            }];
+
+            let store = FixtureStorage::from(vec![(key, value)]);
+            let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
+                store,
+                Arc::new(EvalConfig::default()),
+                columns_info,
+                key_ranges,
+                0,
+                false,
+                false,
+                false,
+                false,
+            )
+            .unwrap();
+
+            let mut result = block_on(executor.next_batch(10));
+
+            let phys_label = if request_phys_table_id_column {
+                "with_phys_col"
+            } else {
+                "no_phys_col"
+            };
+
+            assert!(
+                result.is_drained.as_ref().unwrap().stop(),
+                "V2 new-encoding {}",
+                phys_label
+            );
+            assert_eq!(
+                result.physical_columns.rows_len(),
+                1,
+                "V2 new-encoding {}",
+                phys_label
+            );
+
+            // Verify indexed column
+            result.physical_columns[0]
+                .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[0])
+                .unwrap();
+            assert_eq!(
+                result.physical_columns[0].decoded().to_int_vec(),
+                &[Some(indexed_value)],
+                "V2 new-encoding {}: indexed column mismatch",
+                phys_label
+            );
+
+            // Verify handle
+            assert_eq!(
+                result.physical_columns[1].decoded().to_int_vec(),
+                &[Some(handle_value)],
+                "V2 new-encoding {}: handle mismatch",
+                phys_label
+            );
+
+            // Verify physical_table_id column uses the partition ID from the key
+            if request_phys_table_id_column {
+                assert_eq!(
+                    result.physical_columns[2].decoded().to_int_vec(),
+                    &[Some(partition_id)],
+                    "V2 new-encoding: physical_table_id should equal partition_id"
+                );
+            }
+        }
+    }
 }
