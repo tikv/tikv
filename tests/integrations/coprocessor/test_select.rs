@@ -110,7 +110,7 @@ fn test_versioned_lookup_versioned_ranges_reads_old_version() {
     store
         .insert_into(&product)
         .set(&product["id"], Datum::I64(1))
-        .set(&product["name"], Some("name:new").map(str::as_bytes).into())
+        .set(&product["name"], Some("name:new".as_bytes()).into())
         .set(&product["count"], Datum::I64(2))
         .execute_with_ctx(Context::default());
     store.commit();
