@@ -30,6 +30,9 @@ use crate::{
     storage::{Snapshot, SnapshotStore},
 };
 
+// Disable FM sketch computation in full sampling to measure analyze cost.
+const ENABLE_FULL_SAMPLING_FM_SKETCH: bool = false;
+
 pub(crate) struct RowSampleBuilder<S: Snapshot, F: KvFormat> {
     pub(crate) data: BatchTableScanExecutor<TikvStorage<SnapshotStore<S>>, F>,
 
@@ -114,18 +117,25 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
 
                 let columns_slice = result.physical_columns.as_slice();
                 let mut column_vals: Vec<Vec<u8>> = vec![vec![]; self.columns_info.len()];
-                let mut collation_key_vals: Vec<Vec<u8>> = vec![vec![]; self.columns_info.len()];
+                let mut collation_key_vals: Vec<Vec<u8>> = Vec::new();
+                if ENABLE_FULL_SAMPLING_FM_SKETCH {
+                    collation_key_vals = vec![vec![]; self.columns_info.len()];
+                }
                 for logical_row in &result.logical_rows {
                     for i in 0..self.columns_info.len() {
                         column_vals[i].clear();
-                        collation_key_vals[i].clear();
+                        if ENABLE_FULL_SAMPLING_FM_SKETCH {
+                            collation_key_vals[i].clear();
+                        }
                         columns_slice[i].encode(
                             *logical_row,
                             &self.columns_info[i],
                             &mut ctx,
                             &mut column_vals[i],
                         )?;
-                        if self.columns_info[i].as_accessor().is_string_like() {
+                        if ENABLE_FULL_SAMPLING_FM_SKETCH
+                            && self.columns_info[i].as_accessor().is_string_like()
+                        {
                             match_template_collator! {
                                 TT, match self.columns_info[i].as_accessor().collation()? {
                                     Collation::TT => {
@@ -145,13 +155,18 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                         read_size += column_vals[i].len();
                     }
                     collector.mut_base().count += 1;
+                    let collation_keys_val: &[Vec<u8>] = if ENABLE_FULL_SAMPLING_FM_SKETCH {
+                        &collation_key_vals
+                    } else {
+                        &[]
+                    };
                     collector.collect_column_group(
                         &column_vals,
-                        &collation_key_vals,
+                        collation_keys_val,
                         &self.columns_info,
                         &self.column_groups,
                     );
-                    collector.collect_column(&column_vals, &collation_key_vals, &self.columns_info);
+                    collector.collect_column(&column_vals, collation_keys_val, &self.columns_info);
                 }
             }
 
@@ -183,8 +198,10 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             // iterating all rows. Also, we can directly copy total_size and null_count.
             let col_pos = offsets[0] as usize;
             let col_group_pos = self.columns_info.len() + i;
-            collector.mut_base().fm_sketches[col_group_pos] =
-                collector.mut_base().fm_sketches[col_pos].clone();
+            if ENABLE_FULL_SAMPLING_FM_SKETCH {
+                collector.mut_base().fm_sketches[col_group_pos] =
+                    collector.mut_base().fm_sketches[col_pos].clone();
+            }
             collector.mut_base().null_count[col_group_pos] =
                 collector.mut_base().null_count[col_pos];
             collector.mut_base().total_sizes[col_group_pos] =
@@ -281,15 +298,17 @@ impl BaseRowSampleCollector {
                 }
                 self.total_sizes[col_len + i] += columns_val[*j as usize].len() as i64 - 1
             }
-            let mut hasher = Hasher128::with_seed(0);
-            for j in offsets {
-                if columns_info[*j as usize].as_accessor().is_string_like() {
-                    hasher.write(&collation_keys_val[*j as usize]);
-                } else {
-                    hasher.write(&columns_val[*j as usize]);
+            if ENABLE_FULL_SAMPLING_FM_SKETCH {
+                let mut hasher = Hasher128::with_seed(0);
+                for j in offsets {
+                    if columns_info[*j as usize].as_accessor().is_string_like() {
+                        hasher.write(&collation_keys_val[*j as usize]);
+                    } else {
+                        hasher.write(&columns_val[*j as usize]);
+                    }
                 }
+                self.fm_sketches[col_len + i].insert_hash_value(hasher.finish());
             }
-            self.fm_sketches[col_len + i].insert_hash_value(hasher.finish());
         }
     }
 
@@ -304,10 +323,12 @@ impl BaseRowSampleCollector {
                 self.null_count[i] += 1;
                 continue;
             }
-            if columns_info[i].as_accessor().is_string_like() {
-                self.fm_sketches[i].insert(&collation_keys_val[i]);
-            } else {
-                self.fm_sketches[i].insert(&columns_val[i]);
+            if ENABLE_FULL_SAMPLING_FM_SKETCH {
+                if columns_info[i].as_accessor().is_string_like() {
+                    self.fm_sketches[i].insert(&collation_keys_val[i]);
+                } else {
+                    self.fm_sketches[i].insert(&columns_val[i]);
+                }
             }
             self.total_sizes[i] += columns_val[i].len() as i64 - 1;
         }
