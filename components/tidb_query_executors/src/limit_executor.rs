@@ -303,7 +303,6 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
             let mut result = self.src.next_batch(real_scan_rows).await;
             let total_row_num = result.logical_rows.len();
             if total_row_num == 0 {
-                result.is_drained = Ok(BatchExecIsDrain::Drain);
                 return result;
             }
 
