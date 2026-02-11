@@ -1293,9 +1293,8 @@ impl Runnable for BackgroundRunner {
                 self.cross_check_worker = Some(cross_check_worker);
             }
             BackgroundTask::CheckLoadPendingRegions(s) => {
-                if let Some(router) = &self.raft_casual_router
-                    && let Some(e) = &self.rocks_engine
-                {
+                if let Some(router) = &self.raft_casual_router {
+                    if let Some(e) = &self.rocks_engine {
                     let pending_regions: Vec<_> = self
                         .core
                         .engine
@@ -1335,6 +1334,7 @@ impl Runnable for BackgroundRunner {
                         ) {
                             warn!("ime send load pending cache region msg failed"; "err" => ?e);
                         }
+                    }
                     }
                 }
             }

@@ -650,10 +650,10 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
             };
 
             for checker in self.cf_checkers.values() {
-                if let Some(long_term_pending_bytes) = checker.long_term_pending_bytes.as_ref()
-                    && num < long_term_pending_bytes.get_recent()
-                {
-                    return;
+                if let Some(long_term_pending_bytes) = checker.long_term_pending_bytes.as_ref() {
+                    if num < long_term_pending_bytes.get_recent() {
+                        return;
+                    }
                 }
             }
 

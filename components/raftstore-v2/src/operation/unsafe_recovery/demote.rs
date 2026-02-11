@@ -40,14 +40,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let exit_joint = exit_joint_request(self.region(), self.peer());
             let (ch, sub) = CmdResChannel::pair();
             self.on_admin_command(ctx, exit_joint, ch);
-            if let Some(resp) = sub.try_result()
-                && resp.get_header().has_error()
-            {
-                error!(self.logger,
-                    "Unsafe recovery, fail to exit residual joint state";
-                    "err" => ?resp.get_header().get_error(),
-                );
-                return;
+            if let Some(resp) = sub.try_result() {
+                if resp.get_header().has_error() {
+                    error!(self.logger,
+                        "Unsafe recovery, fail to exit residual joint state";
+                        "err" => ?resp.get_header().get_error(),
+                    );
+                    return;
+                }
             }
             *self.unsafe_recovery_state_mut() = Some(UnsafeRecoveryState::DemoteFailedVoters {
                 syncer,
@@ -72,15 +72,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "req" => ?req);
             let (ch, sub) = CmdResChannel::pair();
             self.on_admin_command(ctx, req, ch);
-            if let Some(resp) = sub.try_result()
-                && resp.get_header().has_error()
-            {
-                error!(self.logger,
-                    "Unsafe recovery, fail to finish demotion";
-                    "err" => ?resp.get_header().get_error(),
-                );
-                *self.unsafe_recovery_state_mut() = Some(UnsafeRecoveryState::Failed);
-                return;
+            if let Some(resp) = sub.try_result() {
+                if resp.get_header().has_error() {
+                    error!(self.logger,
+                        "Unsafe recovery, fail to finish demotion";
+                        "err" => ?resp.get_header().get_error(),
+                    );
+                    *self.unsafe_recovery_state_mut() = Some(UnsafeRecoveryState::Failed);
+                    return;
+                }
             }
             *self.unsafe_recovery_state_mut() = Some(UnsafeRecoveryState::DemoteFailedVoters {
                 syncer,
@@ -132,14 +132,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     let exit_joint = exit_joint_request(self.region(), self.peer());
                     let (ch, sub) = CmdResChannel::pair();
                     self.on_admin_command(ctx, exit_joint, ch);
-                    if let Some(resp) = sub.try_result()
-                        && resp.get_header().has_error()
-                    {
-                        error!(self.logger,
-                            "Unsafe recovery, fail to exit joint state";
-                            "err" => ?resp.get_header().get_error(),
-                        );
-                        *self.unsafe_recovery_state_mut() = Some(UnsafeRecoveryState::Failed);
+                    if let Some(resp) = sub.try_result() {
+                        if resp.get_header().has_error() {
+                            error!(self.logger,
+                                "Unsafe recovery, fail to exit joint state";
+                                "err" => ?resp.get_header().get_error(),
+                            );
+                            *self.unsafe_recovery_state_mut() = Some(UnsafeRecoveryState::Failed);
+                        }
                     }
                 } else {
                     error!(self.logger,

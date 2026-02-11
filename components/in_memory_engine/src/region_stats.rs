@@ -441,12 +441,12 @@ fn sort_cached_region_stats(
         let mut cop_requests_avg = stat.query_stats.coprocessor as usize;
         let mut cop_requests_count = 0;
         let cop_requests = stat.query_stats.coprocessor as usize;
-        if let Some(cached_region) = cached_regions.get(&region.id)
-            && let Ok(mut avg) = cached_region.lock()
-        {
-            avg.observe(cop_requests as f64);
-            cop_requests_avg = avg.get_avg().ceil() as usize;
-            cop_requests_count = avg.get_count();
+        if let Some(cached_region) = cached_regions.get(&region.id) {
+            if let Ok(mut avg) = cached_region.lock() {
+                avg.observe(cop_requests as f64);
+                cop_requests_avg = avg.get_avg().ceil() as usize;
+                cop_requests_count = avg.get_count();
+            }
         }
         crss.push(CachedRegionStat {
             iterated_count: stat.cop_detail.iterated_count(),

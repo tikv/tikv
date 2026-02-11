@@ -67,13 +67,13 @@ fn get_engine_type(dir: &str) -> EngineType {
     let mut engine1 = false;
     let mut engine2 = false;
     while let Some(Ok(e)) = entries.next() {
-        if let Ok(ty) = e.file_type()
-            && ty.is_dir()
-        {
-            if e.file_name() == "tablets" {
-                engine2 = true;
-            } else if e.file_name() == "db" {
-                engine1 = true;
+        if let Ok(ty) = e.file_type() {
+            if ty.is_dir() {
+                if e.file_name() == "tablets" {
+                    engine2 = true;
+                } else if e.file_name() == "db" {
+                    engine1 = true;
+                }
             }
         }
     }

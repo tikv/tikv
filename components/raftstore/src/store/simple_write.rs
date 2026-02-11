@@ -1,7 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::assert_matches::debug_assert_matches;
-
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::{
     import_sstpb::SstMeta,
@@ -170,30 +168,30 @@ impl SimpleWriteEncoder {
 
     #[inline]
     pub fn put(&mut self, cf: &str, key: &[u8], value: &[u8]) {
-        debug_assert_matches!(
+        debug_assert!(matches!(
             self.write_type,
             WriteType::Unspecified | WriteType::PutDelete
-        );
+        ));
         encode(SimpleWrite::Put(Put { cf, key, value }), &mut self.buf);
         self.write_type = WriteType::PutDelete;
     }
 
     #[inline]
     pub fn delete(&mut self, cf: &str, key: &[u8]) {
-        debug_assert_matches!(
+        debug_assert!(matches!(
             self.write_type,
             WriteType::Unspecified | WriteType::PutDelete
-        );
+        ));
         encode(SimpleWrite::Delete(Delete { cf, key }), &mut self.buf);
         self.write_type = WriteType::PutDelete;
     }
 
     #[inline]
     pub fn delete_range(&mut self, cf: &str, start_key: &[u8], end_key: &[u8], notify_only: bool) {
-        debug_assert_matches!(
+        debug_assert!(matches!(
             self.write_type,
             WriteType::Unspecified | WriteType::DeleteRange
-        );
+        ));
         encode(
             SimpleWrite::DeleteRange(DeleteRange {
                 cf,
@@ -208,7 +206,10 @@ impl SimpleWriteEncoder {
 
     #[inline]
     pub fn ingest(&mut self, sst: Vec<SstMeta>) {
-        debug_assert_matches!(self.write_type, WriteType::Unspecified | WriteType::Ingest);
+        debug_assert!(matches!(
+            self.write_type,
+            WriteType::Unspecified | WriteType::Ingest
+        ));
         encode(SimpleWrite::Ingest(sst), &mut self.buf);
         self.write_type = WriteType::Ingest;
     }

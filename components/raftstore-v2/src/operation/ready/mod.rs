@@ -637,12 +637,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         msg: RaftMessage,
     ) {
         let message = msg.get_message();
-        if message.get_msg_type() == MessageType::MsgAppend
-            && let Some(fe) = message.get_entries().first()
-            && let Some(le) = message.get_entries().last()
-        {
-            let last = (le.get_term(), le.get_index());
-            let first = (fe.get_term(), fe.get_index());
+        if message.get_msg_type() == MessageType::MsgAppend {
+            if let (Some(fe), Some(le)) = (
+                message.get_entries().first(),
+                message.get_entries().last(),
+            ) {
+                let last = (le.get_term(), le.get_index());
+                let first = (fe.get_term(), fe.get_index());
             let now = Instant::now();
             let queue = self.proposals_mut().queue_mut();
             // Proposals are batched up, so it will liely hit after one or two steps.
@@ -663,6 +664,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     });
                 }
                 p.sent = true;
+            }
             }
         }
         if message.get_msg_type() == MessageType::MsgTimeoutNow {

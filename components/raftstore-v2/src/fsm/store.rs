@@ -63,9 +63,8 @@ impl<EK> StoreMeta<EK> {
             .regions
             .insert(region_id, (region.clone(), initialized));
         // `prev` only makes sense when it's initialized.
-        if let Some((prev, prev_init)) = prev
-            && prev_init
-        {
+        if let Some((prev, prev_init)) = prev {
+            if prev_init {
             assert!(initialized, "{} region corrupted", SlogFormat(logger));
             if prev.get_region_epoch().get_version() != version {
                 let prev_id = self.region_ranges.remove(&(
@@ -94,10 +93,11 @@ impl<EK> StoreMeta<EK> {
                     .insert((data_end_key(region.get_end_key()), version), region_id)
                     .is_none(),
                 "{} region corrupted",
-                SlogFormat(logger)
-            );
+                    SlogFormat(logger)
+                );
+            }
+            }
         }
-    }
 
     pub fn remove_region(&mut self, region_id: u64) {
         let prev = self.regions.remove(&region_id);

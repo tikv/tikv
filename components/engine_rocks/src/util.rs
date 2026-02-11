@@ -411,20 +411,20 @@ impl<A: CompactionFilterFactory, B: CompactionFilterFactory> CompactionFilterFac
         let mut outer_filter = None;
         let mut inner_filter = None;
         let mut full_name = String::new();
-        if self.outer_should_filter[i]
-            && let Some((name, filter)) = self.outer.create_compaction_filter(context)
-        {
-            outer_filter = Some(filter);
-            full_name = name.into_string().unwrap();
-        }
-        if self.inner_should_filter[i]
-            && let Some((name, filter)) = self.inner.create_compaction_filter(context)
-        {
-            inner_filter = Some(filter);
-            if !full_name.is_empty() {
-                full_name += ".";
+        if self.outer_should_filter[i] {
+            if let Some((name, filter)) = self.outer.create_compaction_filter(context) {
+                outer_filter = Some(filter);
+                full_name = name.into_string().unwrap();
             }
-            full_name += name.to_str().unwrap();
+        }
+        if self.inner_should_filter[i] {
+            if let Some((name, filter)) = self.inner.create_compaction_filter(context) {
+                inner_filter = Some(filter);
+                if !full_name.is_empty() {
+                    full_name += ".";
+                }
+                full_name += name.to_str().unwrap();
+            }
         }
         if outer_filter.is_none() && inner_filter.is_none() {
             None
@@ -456,12 +456,13 @@ impl<A: CompactionFilter, B: CompactionFilter> CompactionFilter for StackingComp
         value: &[u8],
         value_type: CompactionFilterValueType,
     ) -> CompactionFilterDecision {
-        if let Some(outer) = self.outer.as_mut()
-            && let r = outer.unsafe_filter(level, key, value, value_type)
-            && !matches!(r, CompactionFilterDecision::Keep)
-        {
-            r
-        } else if let Some(inner) = self.inner.as_mut() {
+        if let Some(outer) = self.outer.as_mut() {
+            let r = outer.unsafe_filter(level, key, value, value_type);
+            if !matches!(r, CompactionFilterDecision::Keep) {
+                return r;
+            }
+        }
+        if let Some(inner) = self.inner.as_mut() {
             inner.unsafe_filter(level, key, value, value_type)
         } else {
             CompactionFilterDecision::Keep

@@ -963,20 +963,20 @@ where
 
     fn dump_kv_stats(&self) -> Result<String> {
         let mut kv_str = box_try!(MiscExt::dump_stats(&self.engines.kv));
-        if let Some(s) = self.kv_statistics.as_ref()
-            && let Some(s) = s.to_string()
-        {
-            kv_str.push_str(&s);
+        if let Some(s) = self.kv_statistics.as_ref() {
+            if let Some(s) = s.to_string() {
+                kv_str.push_str(&s);
+            }
         }
         Ok(kv_str)
     }
 
     fn dump_raft_stats(&self) -> Result<String> {
         let mut raft_str = box_try!(RaftEngine::dump_stats(&self.engines.raft));
-        if let Some(s) = self.raft_statistics.as_ref()
-            && let Some(s) = s.to_string()
-        {
-            raft_str.push_str(&s);
+        if let Some(s) = self.raft_statistics.as_ref() {
+            if let Some(s) = s.to_string() {
+                raft_str.push_str(&s);
+            }
         }
         Ok(raft_str)
     }

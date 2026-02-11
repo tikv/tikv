@@ -61,7 +61,6 @@ mod read_pool;
 mod types;
 
 use std::{
-    assert_matches::assert_matches,
     borrow::Cow,
     iter,
     marker::PhantomData,
@@ -3374,7 +3373,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 if txn_status.is_completed {
                     // large_txn_cache is only for **ongoing** large txns, so remove it when
                     // completed.
-                    assert_matches!(txn_state, TxnState::Committed { .. } | TxnState::RolledBack);
+                    assert!(matches!(
+                        txn_state,
+                        TxnState::Committed { .. } | TxnState::RolledBack
+                    ));
                     cache.remove_large_txn(txn_status.start_ts.into());
                 }
                 cache.upsert(txn_status.start_ts.into(), txn_state, now);
