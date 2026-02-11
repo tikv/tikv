@@ -165,6 +165,29 @@ impl Reporter {
         }
     }
 
+<<<<<<< HEAD
+=======
+    fn upload_region_record(&mut self) {
+        if !self.config.enable_network_io_collection || self.region_records.is_empty() {
+            return;
+        }
+
+        // Whether endpoint exists or not, records should be taken in order to reset.
+        let region_records = std::mem::take(&mut self.region_records);
+        let report_data: Arc<Vec<ResourceUsageRecord>> = Arc::new(region_records.into());
+        for data_sink in self.data_sinks.values_mut() {
+            if let Err(err) = data_sink.try_send(report_data.clone()) {
+                warn!("failed to send data to datasink"; "group_by" => "region" ,"error" => ?err);
+            }
+        }
+    }
+
+    fn upload(&mut self) {
+        self.upload_grouptag_record();
+        self.upload_region_record();
+    }
+
+>>>>>>> d2d7ee3fe4 (topsql: Read enable_network_io_collection config when tikv initialization and make it take effect (#19076))
     fn reset(&mut self) {
         self.collector.take();
         self.records.clear();
