@@ -2,7 +2,7 @@
 
 use tikv_kv::SnapshotExt;
 // #[PerformanceCriticalPath]
-use txn_types::{Key, Lock, TimeStamp, Write, WriteType};
+use txn_types::{Key, Lock, SharedLocks, TimeStamp, Write, WriteType};
 
 use crate::storage::{
     Snapshot, TxnStatus,
@@ -304,6 +304,8 @@ pub fn rollback_lock(
     is_pessimistic_txn: bool,
     collapse_rollback: bool,
 ) -> Result<Option<ReleasedLock>> {
+    // Lock is never shared in the current branch's architecture - shared locks use
+    // SharedLocks type
     let overlapped_write = match reader.get_txn_commit_record(&key)? {
         TxnCommitRecord::None { overlapped_write } => overlapped_write,
         TxnCommitRecord::SingleRecord { write, commit_ts }
@@ -352,6 +354,70 @@ pub fn rollback_lock(
     }
 
     Ok(txn.unlock_key(key, is_pessimistic_txn, TimeStamp::zero()))
+}
+
+/// `rollback_shared_lock` likes `rollback_lock` but for shared locks. It
+/// considers reader.start_ts as the lock ts, removes the corresponding lock
+/// from the `shared_lock`, and writes a rollback if necessary. It does not
+/// write the `shared_lock` back to txn so that the caller can rollback multiple
+/// sub-locks and then call `txn.update_shared_locked_key` once in the end.
+pub fn rollback_shared_lock(
+    txn: &mut MvccTxn,
+    reader: &mut SnapshotReader<impl Snapshot>,
+    key: Key,
+    mut shared_locks: SharedLocks,
+    lock_ts: TimeStamp,
+    collapse_rollback: bool,
+) -> Result<Option<ReleasedLock>> {
+    let lock = match shared_locks.remove_lock(&lock_ts)? {
+        Some(l) => l,
+        None => {
+            // misuse of rollback_shared_lock? maybe print a warning with stack?
+            return Ok(None);
+        }
+    };
+
+    let overlapped_write = match reader.get_txn_commit_record(&key)? {
+        TxnCommitRecord::None { overlapped_write } => overlapped_write,
+        TxnCommitRecord::SingleRecord { write, commit_ts }
+            if write.write_type != WriteType::Rollback =>
+        {
+            panic!(
+                "txn record found but not expected: {:?} {} {:?} {:?} [region_id={}]",
+                write,
+                commit_ts,
+                txn,
+                lock,
+                reader.reader.snapshot_ext().get_region_id().unwrap_or(0)
+            )
+        }
+        _ => {
+            return if shared_locks.is_empty() {
+                Ok(txn.unlock_key(key, true, TimeStamp::zero()))
+            } else {
+                txn.put_shared_locks(key.clone(), &shared_locks, false);
+                Ok(None)
+            };
+        }
+    };
+
+    // `protected` is always false for a shared lock
+    assert!(!key.is_encoded_from(&lock.primary));
+    assert!(lock.generation == 0);
+    if let Some(write) = make_rollback(reader.start_ts, false, overlapped_write) {
+        txn.put_write(key.clone(), reader.start_ts, write.as_ref().to_bytes());
+    }
+
+    if collapse_rollback {
+        collapse_prev_rollback(txn, reader, &key)?;
+    }
+
+    if shared_locks.is_empty() {
+        Ok(txn.unlock_key(key, true, TimeStamp::zero()))
+    } else {
+        txn.put_shared_locks(key.clone(), &shared_locks, false);
+        Ok(None)
+    }
 }
 
 pub fn collapse_prev_rollback(

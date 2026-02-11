@@ -13,7 +13,7 @@ async-compression = { version = "0.4.27", features = [
   "futures-io",
   "zstd",
 ] }
-bytes = "1"
+bytes = { workspace = true }
 chrono = { workspace = true }
 cloud = { workspace = true }
 codec = { workspace = true }

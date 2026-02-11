@@ -3337,6 +3337,11 @@ pub struct ResolvedTsConfig {
     pub scan_lock_pool_size: usize,
     pub memory_quota: ReadableSize,
     pub incremental_scan_concurrency: usize,
+    pub memory_quota_active_check_interval: ReadableDuration,
+    // Re-register regions backoff duration when memory quota is exceeded.
+    // The actual backoff duration will be in the range
+    // [configured_duration, 2 * configured_duration)
+    pub memory_quota_exceeded_backoff_duration: ReadableDuration,
 }
 
 impl ResolvedTsConfig {
@@ -3359,6 +3364,8 @@ impl Default for ResolvedTsConfig {
             scan_lock_pool_size: 2,
             memory_quota: ReadableSize::mb(256),
             incremental_scan_concurrency: 6,
+            memory_quota_active_check_interval: ReadableDuration::secs(10),
+            memory_quota_exceeded_backoff_duration: ReadableDuration::secs(30),
         }
     }
 }

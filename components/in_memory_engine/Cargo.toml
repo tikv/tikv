@@ -20,7 +20,7 @@ path = "benches/load_region.rs"
 harness = false
 
 [dependencies]
-bytes = "1.0"
+bytes = { workspace = true }
 collections = { workspace = true }
 crossbeam = { workspace = true }
 crossbeam-skiplist = { workspace = true }
