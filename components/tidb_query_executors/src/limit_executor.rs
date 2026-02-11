@@ -302,6 +302,11 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
 
             let mut result = self.src.next_batch(real_scan_rows).await;
             let total_row_num = result.logical_rows.len();
+            if total_row_num == 0 {
+                result.is_drained = Ok(BatchExecIsDrain::Drain);
+                return result;
+            }
+
             let output_row_num;
             if total_row_num < self.remaining_rows {
                 output_row_num = total_row_num;
@@ -338,7 +343,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
             }
 
             // We don't need to touch the physical data.
-            result.logical_rows.truncate(output_row_num);            
+            result.logical_rows.truncate(output_row_num);
             return result;
         } else {
             #[cfg(debug_assertions)] { self.executed_in_limit_for_test = true; }
