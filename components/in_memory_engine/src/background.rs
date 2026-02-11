@@ -1295,46 +1295,46 @@ impl Runnable for BackgroundRunner {
             BackgroundTask::CheckLoadPendingRegions(s) => {
                 if let Some(router) = &self.raft_casual_router {
                     if let Some(e) = &self.rocks_engine {
-                    let pending_regions: Vec<_> = self
-                        .core
-                        .engine
-                        .region_manager()
-                        .regions_map()
-                        .read()
-                        .regions()
-                        .values()
-                        .filter_map(|meta| {
-                            if meta.get_state() == RegionState::Pending {
-                                Some(meta.get_region().id)
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
+                        let pending_regions: Vec<_> = self
+                            .core
+                            .engine
+                            .region_manager()
+                            .regions_map()
+                            .read()
+                            .regions()
+                            .values()
+                            .filter_map(|meta| {
+                                if meta.get_state() == RegionState::Pending {
+                                    Some(meta.get_region().id)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
 
-                    for region_id in pending_regions {
-                        let scheduler = s.clone();
-                        let rocks_engine = e.clone();
-                        let ime_engine = self.core.engine.clone();
-                        if let Err(e) = router.send(
-                            region_id,
-                            CasualMessage::InMemoryEngineLoadRegion {
+                        for region_id in pending_regions {
+                            let scheduler = s.clone();
+                            let rocks_engine = e.clone();
+                            let ime_engine = self.core.engine.clone();
+                            if let Err(e) = router.send(
                                 region_id,
-                                trigger_load_cb: Box::new(move |r| {
-                                    let cache_region = CacheRegion::from_region(r);
-                                    _ = ime_engine.prepare_for_apply(
-                                        &cache_region,
-                                        Some(&rocks_engine),
-                                        &scheduler,
-                                        false,
-                                        r.is_in_flashback,
-                                    );
-                                }),
-                            },
-                        ) {
-                            warn!("ime send load pending cache region msg failed"; "err" => ?e);
+                                CasualMessage::InMemoryEngineLoadRegion {
+                                    region_id,
+                                    trigger_load_cb: Box::new(move |r| {
+                                        let cache_region = CacheRegion::from_region(r);
+                                        _ = ime_engine.prepare_for_apply(
+                                            &cache_region,
+                                            Some(&rocks_engine),
+                                            &scheduler,
+                                            false,
+                                            r.is_in_flashback,
+                                        );
+                                    }),
+                                },
+                            ) {
+                                warn!("ime send load pending cache region msg failed"; "err" => ?e);
+                            }
                         }
-                    }
                     }
                 }
             }

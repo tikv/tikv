@@ -65,39 +65,39 @@ impl<EK> StoreMeta<EK> {
         // `prev` only makes sense when it's initialized.
         if let Some((prev, prev_init)) = prev {
             if prev_init {
-            assert!(initialized, "{} region corrupted", SlogFormat(logger));
-            if prev.get_region_epoch().get_version() != version {
-                let prev_id = self.region_ranges.remove(&(
-                    data_end_key(prev.get_end_key()),
-                    prev.get_region_epoch().get_version(),
-                ));
-                assert_eq!(
-                    prev_id,
-                    Some(region_id),
-                    "{} region corrupted",
-                    SlogFormat(logger)
-                );
-            } else {
+                assert!(initialized, "{} region corrupted", SlogFormat(logger));
+                if prev.get_region_epoch().get_version() != version {
+                    let prev_id = self.region_ranges.remove(&(
+                        data_end_key(prev.get_end_key()),
+                        prev.get_region_epoch().get_version(),
+                    ));
+                    assert_eq!(
+                        prev_id,
+                        Some(region_id),
+                        "{} region corrupted",
+                        SlogFormat(logger)
+                    );
+                } else {
+                    assert!(
+                        self.region_ranges
+                            .contains_key(&(data_end_key(prev.get_end_key()), version)),
+                        "{} region corrupted",
+                        SlogFormat(logger)
+                    );
+                    return;
+                }
+            }
+            if initialized {
                 assert!(
                     self.region_ranges
-                        .contains_key(&(data_end_key(prev.get_end_key()), version)),
+                        .insert((data_end_key(region.get_end_key()), version), region_id)
+                        .is_none(),
                     "{} region corrupted",
                     SlogFormat(logger)
                 );
-                return;
             }
         }
-        if initialized {
-            assert!(
-                self.region_ranges
-                    .insert((data_end_key(region.get_end_key()), version), region_id)
-                    .is_none(),
-                "{} region corrupted",
-                    SlogFormat(logger)
-                );
-            }
-            }
-        }
+    }
 
     pub fn remove_region(&mut self, region_id: u64) {
         let prev = self.regions.remove(&region_id);

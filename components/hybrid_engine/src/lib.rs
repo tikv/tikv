@@ -3,7 +3,6 @@
 // `HybridEngineSnapshot` and `HybridEngineIterator` into in_memory_engine
 // crate.
 
-
 mod db_vector;
 mod engine;
 mod engine_iterator;

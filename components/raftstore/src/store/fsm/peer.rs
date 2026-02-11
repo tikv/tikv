@@ -903,14 +903,14 @@ where
     ) {
         if let Some(state) = &self.fsm.peer.unsafe_recovery_state {
             if !state.is_abort() {
-            warn!(
-                "Unsafe recovery, demote failed voters has already been initiated";
-                "region_id" => self.region().get_id(),
-                "peer_id" => self.fsm.peer.peer.get_id(),
-                "state" => ?state,
-            );
-            syncer.abort();
-            return;
+                warn!(
+                    "Unsafe recovery, demote failed voters has already been initiated";
+                    "region_id" => self.region().get_id(),
+                    "peer_id" => self.fsm.peer.peer.get_id(),
+                    "state" => ?state,
+                );
+                syncer.abort();
+                return;
             }
         }
 
@@ -1011,14 +1011,14 @@ where
     fn on_unsafe_recovery_destroy(&mut self, syncer: UnsafeRecoveryExecutePlanSyncer) {
         if let Some(state) = &self.fsm.peer.unsafe_recovery_state {
             if !state.is_abort() {
-            warn!(
-                "Unsafe recovery, can't destroy, another plan is executing in progress";
-                "region_id" => self.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "state" => ?state,
-            );
-            syncer.abort();
-            return;
+                warn!(
+                    "Unsafe recovery, can't destroy, another plan is executing in progress";
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "state" => ?state,
+                );
+                syncer.abort();
+                return;
             }
         }
         self.fsm.peer.unsafe_recovery_state = Some(UnsafeRecoveryState::Destroy(syncer));
@@ -1032,14 +1032,14 @@ where
     fn on_unsafe_recovery_wait_apply(&mut self, syncer: UnsafeRecoveryWaitApplySyncer) {
         if let Some(state) = &self.fsm.peer.unsafe_recovery_state {
             if !state.is_abort() {
-            warn!(
-                "Unsafe recovery, can't wait apply, another plan is executing in progress";
-                "region_id" => self.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "state" => ?state,
-            );
-            syncer.abort();
-            return;
+                warn!(
+                    "Unsafe recovery, can't wait apply, another plan is executing in progress";
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "state" => ?state,
+                );
+                syncer.abort();
+                return;
             }
         }
         let target_index = if self.fsm.peer.force_leader.is_some() {

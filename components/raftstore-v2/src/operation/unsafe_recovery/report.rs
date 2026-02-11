@@ -29,12 +29,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_unsafe_recovery_wait_apply(&mut self, syncer: UnsafeRecoveryWaitApplySyncer) {
         if let Some(state) = self.unsafe_recovery_state() {
             if !state.is_abort() {
-            warn!(self.logger,
-                "Unsafe recovery, can't wait apply, another plan is executing in progress";
-                "state" => ?state,
-            );
-            syncer.abort();
-            return;
+                warn!(self.logger,
+                    "Unsafe recovery, can't wait apply, another plan is executing in progress";
+                    "state" => ?state,
+                );
+                syncer.abort();
+                return;
             }
         }
         let target_index = if self.has_force_leader() {

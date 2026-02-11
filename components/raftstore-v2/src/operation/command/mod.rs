@@ -344,9 +344,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 let mut proposal = queue.find_proposal(e.term, e.index, current_term);
                 if let Some(p) = &mut proposal {
                     if p.must_pass_epoch_check {
-                    // In this case the apply can be guaranteed to be successful. Invoke the
-                    // on_committed callback if necessary.
-                    p.cb.notify_committed();
+                        // In this case the apply can be guaranteed to be successful. Invoke the
+                        // on_committed callback if necessary.
+                        p.cb.notify_committed();
                     }
                 }
                 entry_and_proposals.push((e, proposal.map_or_else(Vec::new, |p| p.cb)));

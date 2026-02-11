@@ -62,9 +62,9 @@ impl Store {
 
         let ranges = ctx.sst_importer.ranges_in_import();
         for (region_id, ssts) in region_ssts {
-            if let Err(TrySendError::Disconnected(msg)) =
-                ctx.router
-                    .send(region_id, PeerMsg::CleanupImportSst(ssts.into()))
+            if let Err(TrySendError::Disconnected(msg)) = ctx
+                .router
+                .send(region_id, PeerMsg::CleanupImportSst(ssts.into()))
             {
                 if ctx.router.is_shutdown() {
                     continue;

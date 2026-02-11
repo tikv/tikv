@@ -470,13 +470,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let first_index = self.entry_storage().first_index();
         if let Some(i) = self.merge_context().and_then(|c| c.max_compact_log_index()) {
             if res.compact_index > i {
-            info!(
-                self.logger,
-                "in merging mode, adjust compact index";
-                "old_index" => res.compact_index,
-                "new_index" => i,
-            );
-            res.compact_index = i;
+                info!(
+                    self.logger,
+                    "in merging mode, adjust compact index";
+                    "old_index" => res.compact_index,
+                    "new_index" => i,
+                );
+                res.compact_index = i;
             }
         }
         if res.compact_index <= first_index {

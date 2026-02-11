@@ -617,8 +617,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .and_then(|c| c.prepare_status.as_ref())
         {
             if start_time.saturating_elapsed() > TRIM_CHECK_TIMEOUT {
-            info!(self.logger, "cancel merge because trim check timed out");
-            self.take_merge_context();
+                info!(self.logger, "cancel merge because trim check timed out");
+                self.take_merge_context();
             }
         }
     }

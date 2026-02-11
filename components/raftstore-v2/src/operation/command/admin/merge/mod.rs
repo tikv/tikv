@@ -54,8 +54,7 @@ impl MergeContext {
 
     #[inline]
     pub fn maybe_take_pending_prepare(&mut self, applied: u64) -> Option<RaftCmdRequest> {
-        if let Some(PrepareStatus::WaitForFence { fence, req, .. }) = self.prepare_status.as_mut()
-        {
+        if let Some(PrepareStatus::WaitForFence { fence, req, .. }) = self.prepare_status.as_mut() {
             if applied >= *fence {
                 // The status will be updated during processing the proposal.
                 return req.take();

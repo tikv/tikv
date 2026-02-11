@@ -547,13 +547,13 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             let mut states = self.snap_states.borrow_mut();
             if let Some(state) = states.get(&id) {
                 if matches!(*state, SnapState::Generating { .. }) {
-                info!(
-                    self.logger(),
-                    "snapshot is canceled";
-                    "to_peer" => to_peer,
-                );
-                self.cancel_snap_task(to_peer);
-                states.remove(&id);
+                    info!(
+                        self.logger(),
+                        "snapshot is canceled";
+                        "to_peer" => to_peer,
+                    );
+                    self.cancel_snap_task(to_peer);
+                    states.remove(&id);
                 }
             }
         } else {
@@ -613,11 +613,11 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             // See https://github.com/pingcap/tiflash/issues/7568#issuecomment-1576382311
             if let Some(p) = find_peer_by_id(self.region(), to_peer_id) {
                 if p.get_role() == PeerRole::Learner {
-                let mut snapshot_data = RaftSnapshotData::default();
-                if snapshot_data.merge_from_bytes(snapshot.get_data()).is_ok() {
-                    snapshot_data.mut_meta().set_commit_index_hint(commit_index);
-                    snapshot.set_data(snapshot_data.write_to_bytes().unwrap().into());
-                }
+                    let mut snapshot_data = RaftSnapshotData::default();
+                    if snapshot_data.merge_from_bytes(snapshot.get_data()).is_ok() {
+                        snapshot_data.mut_meta().set_commit_index_hint(commit_index);
+                        snapshot.set_data(snapshot_data.write_to_bytes().unwrap().into());
+                    }
                 }
             }
             *state = SnapState::Generated(Box::new(snapshot));

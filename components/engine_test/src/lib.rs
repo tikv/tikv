@@ -55,7 +55,6 @@
 //! storage engines, and that it be extracted into its own crate for use in
 //! TiKV, once the full requirements are better understood.
 
-
 /// Types and constructors for the "raft" engine
 pub mod raft {
     #[cfg(feature = "test-engine-raft-panic")]
