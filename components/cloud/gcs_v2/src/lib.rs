@@ -424,7 +424,12 @@ impl GcsStorage {
     }
     
     fn bucket_resource_name(&self) -> String {
-        format!("projects/_/buckets/{}", self.inner.config.bucket)
+        let bucket = self.inner.config.bucket.as_str();
+        if bucket.starts_with("projects/") {
+            bucket.to_owned()
+        } else {
+            format!("projects/_/buckets/{bucket}")
+        }
     }
 }
 

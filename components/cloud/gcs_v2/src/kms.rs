@@ -8,7 +8,6 @@ use google_cloud_gax::{
     client_builder::Error as GaxBuildError,
     error::{Error as GaxError, rpc::Code as RpcCode},
 };
-use google_cloud_auth::credentials::Credentials;
 use google_cloud_kms_v1::{client::KeyManagementService, model::ProtectionLevel};
 use tikv_util::box_err;
 use tikv_util::stream::RetryError;
@@ -21,7 +20,7 @@ pub struct GcpKms {
     config: Config,
     location: String,
     endpoint: Option<String>,
-    credentials: Option<Credentials>,
+    credentials_json: Option<String>,
     client: OnceCell<KeyManagementService>,
 }
 
@@ -55,29 +54,28 @@ impl GcpKms {
             Some(config.location.endpoint.clone())
         };
 
-        let credentials = match config.gcp.as_ref().and_then(|c| c.credential_file_path.as_deref())
-        {
+        let credentials_json =
+            match config.gcp.as_ref().and_then(|c| c.credential_file_path.as_deref()) {
             Some(path) => {
                 let json_data = std::fs::read(path).map_err(|e| {
                     CloudError::KmsError(KmsError::Other(cloud::error::OtherError::from_box(
                         box_err!("read credential file: {}", e),
                     )))
                 })?;
-                let creds_json: serde_json::Value = serde_json::from_slice(&json_data).map_err(|e| {
+                serde_json::from_slice::<serde_json::Value>(&json_data).map_err(|e| {
                     CloudError::KmsError(KmsError::Other(cloud::error::OtherError::from_box(
                         box_err!("parse credential file as json: {}", e),
                     )))
                 })?;
-                let creds = google_cloud_auth::credentials::service_account::Builder::new(creds_json)
-                    .build()
-                    .map_err(|e| {
+                Some(
+                    String::from_utf8(json_data).map_err(|e| {
                         CloudError::KmsError(KmsError::Other(cloud::error::OtherError::from_box(
-                            box_err!("build service account credentials: {}", e),
+                            box_err!("credential file is not valid utf-8: {}", e),
                         )))
-                    })?;
-                Some(creds)
+                    })?,
+                )
             }
-            None if endpoint.is_some() => Some(google_cloud_auth::credentials::anonymous::Builder::new().build()),
+            None if endpoint.is_some() => Some("anonymous".to_string()),
             None => None,
         };
 
@@ -85,7 +83,7 @@ impl GcpKms {
             config,
             location,
             endpoint,
-            credentials,
+            credentials_json,
             client: OnceCell::new(),
         })
     }
@@ -98,8 +96,34 @@ impl GcpKms {
                 if let Some(ep) = self.endpoint.as_ref() {
                     builder = builder.with_endpoint(ep);
                 }
-                if let Some(creds) = self.credentials.clone() {
-                    builder = builder.with_credentials(creds);
+                if let Some(creds_json) = self.credentials_json.as_ref() {
+                    if creds_json == "anonymous" {
+                        let creds = google_cloud_auth::credentials::anonymous::Builder::new().build();
+                        builder = builder.with_credentials(creds);
+                    } else {
+                        let creds_value: serde_json::Value =
+                            serde_json::from_str(creds_json).map_err(|e| {
+                                CloudError::KmsError(KmsError::Other(
+                                    cloud::error::OtherError::from_box(box_err!(
+                                        "parse credential json: {}",
+                                        e
+                                    )),
+                                ))
+                            })?;
+                        let creds = google_cloud_auth::credentials::service_account::Builder::new(
+                            creds_value,
+                        )
+                        .build()
+                        .map_err(|e| {
+                            CloudError::KmsError(KmsError::Other(
+                                cloud::error::OtherError::from_box(box_err!(
+                                    "build service account credentials: {}",
+                                    e
+                                )),
+                            ))
+                        })?;
+                        builder = builder.with_credentials(creds);
+                    }
                 }
                 builder
                     .build()
