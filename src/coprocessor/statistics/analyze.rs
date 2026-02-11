@@ -2,14 +2,23 @@
 
 use std::{cmp::Reverse, collections::BinaryHeap, hash::Hasher, mem, sync::Arc};
 
-use api_version::KvFormat;
+use api_version::{KvFormat, keyspace::KvPairEntry};
+use collections::{HashMap, HashSet};
 use kvproto::coprocessor::KeyRange;
 use mur3::Hasher128;
 use rand::{Rng, rngs::StdRng};
+use tidb_query_common::storage::{
+    Range,
+    scanner::{RangesScanner, RangesScannerOptions},
+};
 use tidb_query_datatype::{
-    FieldTypeAccessor,
+    FieldTypeAccessor, FieldTypeFlag,
     codec::{
-        datum::{DURATION_FLAG, Datum, DatumDecoder, INT_FLAG, NIL_FLAG, UINT_FLAG, encode_value},
+        datum::{
+            DATUM_DATA_NULL, DURATION_FLAG, Datum, DatumDecoder, INT_FLAG, NIL_FLAG, UINT_FLAG,
+            VAR_INT_FLAG, encode_value,
+        },
+        datum_codec::DatumFlagAndPayloadEncoder,
         table,
     },
     def::Collation,
@@ -23,15 +32,264 @@ use tikv_util::{
     quota_limiter::QuotaLimiter,
 };
 use tipb::{self, AnalyzeColumnsReq};
+use txn_types::TimeStamp;
 
 use super::{cmsketch::CmSketch, fmsketch::FmSketch, histogram::Histogram};
 use crate::{
     coprocessor::{MEMTRACE_ANALYZE, dag::TikvStorage, *},
-    storage::{Snapshot, SnapshotStore},
+    storage::{Snapshot, SnapshotStore, Statistics},
 };
 
+const ANALYZE_DIRECT_SCAN_ENV: &str = "TIKV_ANALYZE_DIRECT_SCAN";
+
+#[inline]
+fn analyze_direct_scan_enabled() -> bool {
+    match std::env::var(ANALYZE_DIRECT_SCAN_ENV) {
+        Ok(v) => {
+            let v = v.trim();
+            !(v.eq_ignore_ascii_case("0") || v.eq_ignore_ascii_case("false"))
+        }
+        Err(_) => false,
+    }
+}
+
+enum RowSampleData<S: Snapshot, F: KvFormat> {
+    TableScan(BatchTableScanExecutor<TikvStorage<SnapshotStore<S>>, F>),
+    Direct(DirectRowSampleExecutor<S, F>),
+}
+
+impl<S: Snapshot, F: KvFormat> RowSampleData<S, F> {
+    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
+        match self {
+            RowSampleData::TableScan(exec) => exec.collect_storage_stats(dest),
+            RowSampleData::Direct(exec) => exec.scanner.collect_storage_stats(dest),
+        }
+    }
+}
+
+struct DirectRowSampleExecutor<S: Snapshot, F: KvFormat> {
+    scanner: RangesScanner<TikvStorage<SnapshotStore<S>>, F>,
+    decoder: DirectTableRowDecoder,
+}
+
+impl<S: Snapshot, F: KvFormat> DirectRowSampleExecutor<S, F> {
+    fn new(
+        storage: TikvStorage<SnapshotStore<S>>,
+        key_ranges: Vec<KeyRange>,
+        columns_info: &[tipb::ColumnInfo],
+        primary_column_ids: Vec<i64>,
+        primary_prefix_column_ids: Vec<i64>,
+    ) -> Result<Self> {
+        table::check_table_ranges::<F>(&key_ranges)?;
+
+        let accept_point_range = primary_column_ids.is_empty();
+        let key_ranges = key_ranges
+            .into_iter()
+            .map(|r| Range::from_pb_range(r, accept_point_range))
+            .collect();
+
+        let primary_column_ids_set = primary_column_ids.iter().collect::<HashSet<_>>();
+        let primary_prefix_column_ids_set =
+            primary_prefix_column_ids.iter().collect::<HashSet<_>>();
+
+        let mut columns_default_value = Vec::with_capacity(columns_info.len());
+        let mut column_id_index = HashMap::default();
+        let mut handle_indices = Vec::new();
+        let mut is_key_only = true;
+
+        for (index, ci) in columns_info.iter().enumerate() {
+            columns_default_value.push(ci.get_default_val().to_vec());
+
+            if ci.get_pk_handle() {
+                handle_indices.push(index);
+            } else {
+                if !primary_column_ids_set.contains(&ci.get_column_id())
+                    || primary_prefix_column_ids_set.contains(&ci.get_column_id())
+                    || ci.need_restored_data()
+                {
+                    is_key_only = false;
+                }
+                column_id_index.insert(ci.get_column_id(), index);
+            }
+        }
+
+        let physical_table_id_column_idx = column_id_index
+            .get(&table::EXTRA_PHYSICAL_TABLE_ID_COL_ID)
+            .copied();
+        let commit_ts_column_idx = column_id_index.get(&table::EXTRA_COMMIT_TS_COL_ID).copied();
+        let load_commit_ts = commit_ts_column_idx.is_some();
+
+        let decoder = DirectTableRowDecoder {
+            columns_default_value,
+            column_id_index,
+            handle_indices,
+            primary_column_ids,
+            physical_table_id_column_idx,
+            commit_ts_column_idx,
+            is_column_filled: vec![false; columns_info.len()],
+        };
+
+        let scanner = RangesScanner::new(RangesScannerOptions {
+            storage,
+            ranges: key_ranges,
+            scan_backward_in_range: false,
+            is_key_only,
+            is_scanned_range_aware: false,
+            load_commit_ts,
+        });
+
+        Ok(Self { scanner, decoder })
+    }
+}
+
+struct DirectTableRowDecoder {
+    columns_default_value: Vec<Vec<u8>>,
+    column_id_index: HashMap<i64, usize>,
+    handle_indices: Vec<usize>,
+    primary_column_ids: Vec<i64>,
+    physical_table_id_column_idx: Option<usize>,
+    commit_ts_column_idx: Option<usize>,
+    is_column_filled: Vec<bool>,
+}
+
+impl DirectTableRowDecoder {
+    fn decode_row(
+        &mut self,
+        key: &[u8],
+        value: &[u8],
+        commit_ts: Option<TimeStamp>,
+        columns_info: &[tipb::ColumnInfo],
+        columns_val: &mut [Vec<u8>],
+    ) -> Result<()> {
+        if value.is_empty() || (value.len() == 1 && value[0] == NIL_FLAG) {
+            // Do nothing.
+        } else if value[0] == tidb_query_datatype::codec::row::v2::CODEC_VERSION {
+            self.process_v2(value, columns_info, columns_val)?;
+        } else {
+            self.process_v1(key, value, columns_val)?;
+        }
+
+        if !self.handle_indices.is_empty() {
+            let handle = table::decode_int_handle(key)?;
+            for handle_index in &self.handle_indices {
+                if !self.is_column_filled[*handle_index] {
+                    columns_val[*handle_index].write_datum_i64(handle)?;
+                    self.is_column_filled[*handle_index] = true;
+                }
+            }
+        } else if !self.primary_column_ids.is_empty() {
+            let mut handle = table::decode_common_handle(key)?;
+            for primary_id in self.primary_column_ids.iter() {
+                let (datum, remain) =
+                    tidb_query_datatype::codec::datum::split_datum(handle, false)?;
+                handle = remain;
+                if let Some(&index) = self.column_id_index.get(primary_id) {
+                    if !self.is_column_filled[index] {
+                        columns_val[index].extend_from_slice(datum);
+                        self.is_column_filled[index] = true;
+                    }
+                }
+            }
+        } else {
+            table::check_record_key(key)?;
+        }
+
+        if let Some(idx) = self.physical_table_id_column_idx {
+            let table_id = table::decode_table_id(key)?;
+            columns_val[idx].write_datum_i64(table_id)?;
+            self.is_column_filled[idx] = true;
+        }
+        if let Some(idx) = self.commit_ts_column_idx {
+            if let Some(ts) = commit_ts {
+                columns_val[idx].write_datum_i64(ts.into_inner() as i64)?;
+                self.is_column_filled[idx] = true;
+            } else {
+                return Err(box_err!(
+                    "Query asks for _tidb_commit_ts, but the data is missing"
+                ));
+            }
+        }
+
+        let columns_len = columns_val.len();
+        for i in 0..columns_len {
+            if !self.is_column_filled[i] {
+                let default_value = if !self.columns_default_value[i].is_empty() {
+                    self.columns_default_value[i].as_slice()
+                } else if !columns_info[i]
+                    .as_accessor()
+                    .flag()
+                    .contains(FieldTypeFlag::NOT_NULL)
+                {
+                    DATUM_DATA_NULL
+                } else {
+                    return Err(box_err!(
+                        "Data is corrupted, missing data for NOT NULL column (offset = {})",
+                        i
+                    ));
+                };
+                columns_val[i].extend_from_slice(default_value);
+            } else {
+                self.is_column_filled[i] = false;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn process_v1(&mut self, _key: &[u8], value: &[u8], columns_val: &mut [Vec<u8>]) -> Result<()> {
+        use codec::prelude::NumberDecoder;
+
+        let mut remaining = value;
+        while !remaining.is_empty() {
+            if remaining[0] != VAR_INT_FLAG {
+                return Err(box_err!("Unable to decode row: column id must be VAR_INT"));
+            }
+            remaining = &remaining[1..];
+            let column_id = box_try!(remaining.read_var_i64());
+            let (val, new_remaining) =
+                tidb_query_datatype::codec::datum::split_datum(remaining, false)?;
+            remaining = new_remaining;
+
+            if let Some(&idx) = self.column_id_index.get(&column_id) {
+                if !self.is_column_filled[idx] {
+                    columns_val[idx].extend_from_slice(val);
+                    self.is_column_filled[idx] = true;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn process_v2(
+        &mut self,
+        value: &[u8],
+        columns_info: &[tipb::ColumnInfo],
+        columns_val: &mut [Vec<u8>],
+    ) -> Result<()> {
+        use tidb_query_datatype::codec::row::v2::{RowSlice, V1CompatibleEncoder};
+
+        let row = RowSlice::from_bytes(value)?;
+        for (col_id, idx) in &self.column_id_index {
+            if self.is_column_filled[*idx] {
+                continue;
+            }
+            if let Some((start, offset)) = row.search_in_non_null_ids(*col_id)? {
+                columns_val[*idx].write_v2_as_datum(
+                    &row.values()[start..offset],
+                    columns_info[*idx].as_accessor(),
+                )?;
+                self.is_column_filled[*idx] = true;
+            } else if row.search_in_null_ids(*col_id) {
+                columns_val[*idx].extend_from_slice(DATUM_DATA_NULL);
+                self.is_column_filled[*idx] = true;
+            }
+        }
+        Ok(())
+    }
+}
+
 pub(crate) struct RowSampleBuilder<S: Snapshot, F: KvFormat> {
-    pub(crate) data: BatchTableScanExecutor<TikvStorage<SnapshotStore<S>>, F>,
+    data: RowSampleData<S, F>,
 
     max_sample_size: usize,
     max_fm_sketch_size: usize,
@@ -54,19 +312,31 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
         if columns_info.is_empty() {
             return Err(box_err!("empty columns_info"));
         }
-        let common_handle_ids = req.take_primary_column_ids();
-        let table_scanner = BatchTableScanExecutor::new(
-            storage,
-            Arc::new(EvalConfig::default()),
-            columns_info.clone(),
-            ranges,
-            common_handle_ids,
-            false,
-            false, // Streaming mode is not supported in Analyze request, always false here
-            req.take_primary_prefix_column_ids(),
-        )?;
+        let primary_column_ids = req.take_primary_column_ids();
+        let primary_prefix_column_ids = req.take_primary_prefix_column_ids();
+        let data = if analyze_direct_scan_enabled() {
+            RowSampleData::Direct(DirectRowSampleExecutor::new(
+                storage,
+                ranges,
+                &columns_info,
+                primary_column_ids,
+                primary_prefix_column_ids,
+            )?)
+        } else {
+            let table_scanner = BatchTableScanExecutor::new(
+                storage,
+                Arc::new(EvalConfig::default()),
+                columns_info.clone(),
+                ranges,
+                primary_column_ids,
+                false,
+                false, // Streaming mode is not supported in Analyze request, always false here
+                primary_prefix_column_ids,
+            )?;
+            RowSampleData::TableScan(table_scanner)
+        };
         Ok(Self {
-            data: table_scanner,
+            data,
             max_sample_size: req.get_sample_size() as usize,
             max_fm_sketch_size: req.get_sketch_size() as usize,
             sample_rate: req.get_sample_rate(),
@@ -75,6 +345,10 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             quota_limiter,
             is_auto_analyze,
         })
+    }
+
+    pub(crate) fn collect_storage_stats(&mut self, dest: &mut Statistics) {
+        self.data.collect_storage_stats(dest);
     }
 
     fn new_collector(&mut self) -> Box<dyn RowSampleCollector> {
@@ -97,61 +371,127 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
 
         let mut is_drained = false;
         let mut collector = self.new_collector();
+        let columns_info = &self.columns_info;
+        let column_groups = &self.column_groups;
+        let columns_len = columns_info.len();
+        let mut column_vals: Vec<Vec<u8>> = vec![Vec::new(); columns_len];
+        let mut collation_key_vals: Vec<Vec<u8>> = vec![Vec::new(); columns_len];
         let mut ctx = EvalContext::default();
         while !is_drained {
             let mut sample = self.quota_limiter.new_sample(!self.is_auto_analyze);
             let mut read_size: usize = 0;
-            {
-                let result = {
-                    let (duration, res) = sample
-                        .observe_cpu_async(self.data.next_batch(BATCH_MAX_SIZE))
-                        .await;
-                    sample.add_cpu_time(duration);
-                    res
-                };
-                let _guard = sample.observe_cpu();
-                is_drained = result.is_drained?.stop();
+            match &mut self.data {
+                RowSampleData::TableScan(exec) => {
+                    let result = {
+                        let (duration, res) = sample.observe_cpu_async(exec.next_batch(BATCH_MAX_SIZE)).await;
+                        sample.add_cpu_time(duration);
+                        res
+                    };
+                    let _guard = sample.observe_cpu();
+                    is_drained = result.is_drained?.stop();
 
-                let columns_slice = result.physical_columns.as_slice();
-                let mut column_vals: Vec<Vec<u8>> = vec![vec![]; self.columns_info.len()];
-                let mut collation_key_vals: Vec<Vec<u8>> = vec![vec![]; self.columns_info.len()];
-                for logical_row in &result.logical_rows {
-                    for i in 0..self.columns_info.len() {
-                        column_vals[i].clear();
-                        collation_key_vals[i].clear();
-                        columns_slice[i].encode(
-                            *logical_row,
-                            &self.columns_info[i],
-                            &mut ctx,
-                            &mut column_vals[i],
-                        )?;
-                        if self.columns_info[i].as_accessor().is_string_like() {
-                            match_template_collator! {
-                                TT, match self.columns_info[i].as_accessor().collation()? {
-                                    Collation::TT => {
-                                        let mut mut_val = &column_vals[i][..];
-                                        let decoded_val = table::decode_col_value(&mut mut_val, &mut ctx, &self.columns_info[i])?;
-                                        if decoded_val == Datum::Null {
-                                            collation_key_vals[i].clone_from(&column_vals[i]);
-                                        } else {
-                                            // Only if the `decoded_val` is Datum::Null, `decoded_val` is a Ok(None).
-                                            // So it is safe the unwrap the Ok value.
-                                            TT::write_sort_key(&mut collation_key_vals[i], &decoded_val.as_string()?.unwrap())?;
+                    let columns_slice = result.physical_columns.as_slice();
+                    for logical_row in &result.logical_rows {
+                        for i in 0..columns_len {
+                            column_vals[i].clear();
+                            collation_key_vals[i].clear();
+                            columns_slice[i].encode(
+                                *logical_row,
+                                &columns_info[i],
+                                &mut ctx,
+                                &mut column_vals[i],
+                            )?;
+                            if columns_info[i].as_accessor().is_string_like() {
+                                match_template_collator! {
+                                    TT, match columns_info[i].as_accessor().collation()? {
+                                        Collation::TT => {
+                                            let mut mut_val = &column_vals[i][..];
+                                            let decoded_val = table::decode_col_value(&mut mut_val, &mut ctx, &columns_info[i])?;
+                                            if decoded_val == Datum::Null {
+                                                collation_key_vals[i].clone_from(&column_vals[i]);
+                                            } else {
+                                                TT::write_sort_key(&mut collation_key_vals[i], &decoded_val.as_string()?.unwrap())?;
+                                            }
                                         }
                                     }
-                                }
-                            };
+                                };
+                            }
+                            read_size += column_vals[i].len();
                         }
-                        read_size += column_vals[i].len();
+                        collector.mut_base().count += 1;
+                        collector.collect_column_group(
+                            &column_vals,
+                            &collation_key_vals,
+                            columns_info,
+                            column_groups,
+                        );
+                        collector.collect_column(&column_vals, &collation_key_vals, columns_info);
                     }
-                    collector.mut_base().count += 1;
-                    collector.collect_column_group(
-                        &column_vals,
-                        &collation_key_vals,
-                        &self.columns_info,
-                        &self.column_groups,
-                    );
-                    collector.collect_column(&column_vals, &collation_key_vals, &self.columns_info);
+                }
+                RowSampleData::Direct(exec) => {
+                    let (duration, res) = sample
+                        .observe_cpu_async(async {
+                            let mut batch_read_size: usize = 0;
+                            for scanned_rows in 0..BATCH_MAX_SIZE {
+                                let some_row = exec
+                                    .scanner
+                                    .next_opt(scanned_rows == BATCH_MAX_SIZE - 1)
+                                    .await?;
+                                let Some(row) = some_row else {
+                                    return Ok::<(bool, usize), Error>((true, batch_read_size));
+                                };
+                                for i in 0..columns_len {
+                                    column_vals[i].clear();
+                                    collation_key_vals[i].clear();
+                                }
+                                let (key, value) = row.kv();
+                                exec.decoder.decode_row(
+                                    key,
+                                    value,
+                                    row.commit_ts(),
+                                    columns_info,
+                                    &mut column_vals,
+                                )?;
+
+                                for i in 0..columns_len {
+                                    if columns_info[i].as_accessor().is_string_like() {
+                                        match_template_collator! {
+                                            TT, match columns_info[i].as_accessor().collation()? {
+                                                Collation::TT => {
+                                                    let mut mut_val = &column_vals[i][..];
+                                                    let decoded_val = table::decode_col_value(&mut mut_val, &mut ctx, &columns_info[i])?;
+                                                    if decoded_val == Datum::Null {
+                                                        collation_key_vals[i].clone_from(&column_vals[i]);
+                                                    } else {
+                                                        TT::write_sort_key(&mut collation_key_vals[i], &decoded_val.as_string()?.unwrap())?;
+                                                    }
+                                                }
+                                            }
+                                        };
+                                    }
+                                    batch_read_size += column_vals[i].len();
+                                }
+
+                                collector.mut_base().count += 1;
+                                collector.collect_column_group(
+                                    &column_vals,
+                                    &collation_key_vals,
+                                    columns_info,
+                                    column_groups,
+                                );
+                                collector.collect_column(
+                                    &column_vals,
+                                    &collation_key_vals,
+                                    columns_info,
+                                );
+                            }
+                            Ok::<(bool, usize), Error>((false, batch_read_size))
+                        })
+                        .await;
+                    sample.add_cpu_time(duration);
+                    let (drained, batch_read_size) = res?;
+                    is_drained = drained;
+                    read_size = batch_read_size;
                 }
             }
 
@@ -1055,6 +1395,116 @@ mod tests {
             }
             assert_eq!(collector.samples.len(), 0);
         }
+    }
+
+    #[test]
+    fn test_direct_table_row_decoder_matches_batch_table_scan_v2() {
+        use api_version::ApiV1;
+        use futures::executor::block_on;
+        use tidb_query_common::{storage::test_fixture::FixtureStorage, util::convert_to_prefix_next};
+        use tidb_query_datatype::{
+            FieldTypeTp,
+            codec::{
+                data_type::ScalarValue,
+                row::v2::encoder_for_test::{Column, RowEncoder},
+            },
+        };
+
+        let table_id: i64 = 7;
+        let handle: i64 = 1;
+        let key = table::encode_row_key(table_id, handle);
+
+        let mut row_ctx = EvalContext::default();
+        let mut value = Vec::new();
+        value
+            .write_row(
+                &mut row_ctx,
+                vec![
+                    Column::new(2, ScalarValue::Int(Some(42))).with_tp(FieldTypeTp::LongLong),
+                    Column::new(3, ScalarValue::Bytes(Some(b"abc".to_vec())))
+                        .with_tp(FieldTypeTp::VarString),
+                ],
+            )
+            .unwrap();
+
+        let store = FixtureStorage::from(vec![(key.clone(), value.clone())]);
+
+        let mut end_key = key.clone();
+        convert_to_prefix_next(&mut end_key);
+        let mut range = KeyRange::default();
+        range.set_start(key.clone());
+        range.set_end(end_key);
+
+        let mut ci_handle = tipb::ColumnInfo::default();
+        ci_handle.set_column_id(1);
+        ci_handle.set_pk_handle(true);
+        ci_handle.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+
+        let mut ci_i64 = tipb::ColumnInfo::default();
+        ci_i64.set_column_id(2);
+        ci_i64.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+
+        let mut ci_str = tipb::ColumnInfo::default();
+        ci_str.set_column_id(3);
+        ci_str.as_mut_accessor().set_tp(FieldTypeTp::VarString);
+
+        let columns_info = vec![ci_handle, ci_i64, ci_str];
+
+        let mut exec = BatchTableScanExecutor::<_, ApiV1>::new(
+            store,
+            Arc::new(EvalConfig::default()),
+            columns_info.clone(),
+            vec![range],
+            vec![],
+            false,
+            false,
+            vec![],
+        )
+        .unwrap();
+
+        let result = block_on(exec.next_batch(1));
+        assert!(!result.logical_rows.is_empty());
+        let logical_row = result.logical_rows[0];
+        let columns_slice = result.physical_columns.as_slice();
+
+        let mut baseline_ctx = EvalContext::default();
+        let mut baseline = vec![Vec::new(); columns_info.len()];
+        for i in 0..columns_info.len() {
+            columns_slice[i]
+                .encode(logical_row, &columns_info[i], &mut baseline_ctx, &mut baseline[i])
+                .unwrap();
+        }
+
+        let mut decoder = DirectTableRowDecoder {
+            columns_default_value: columns_info
+                .iter()
+                .map(|ci| ci.get_default_val().to_vec())
+                .collect(),
+            column_id_index: {
+                let mut m = collections::HashMap::default();
+                for (idx, ci) in columns_info.iter().enumerate() {
+                    if !ci.get_pk_handle() {
+                        m.insert(ci.get_column_id(), idx);
+                    }
+                }
+                m
+            },
+            handle_indices: columns_info
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, ci)| ci.get_pk_handle().then_some(idx))
+                .collect(),
+            primary_column_ids: vec![],
+            physical_table_id_column_idx: None,
+            commit_ts_column_idx: None,
+            is_column_filled: vec![false; columns_info.len()],
+        };
+        let mut direct = vec![Vec::new(); columns_info.len()];
+        decoder
+            .decode_row(&key, &value, None, &columns_info, &mut direct)
+            .unwrap();
+
+        assert_eq!(direct, baseline);
     }
 }
 
