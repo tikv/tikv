@@ -40,17 +40,10 @@ use crate::{
     storage::{Snapshot, SnapshotStore, Statistics},
 };
 
-const ANALYZE_DIRECT_SCAN_ENV: &str = "TIKV_ANALYZE_DIRECT_SCAN";
 
 #[inline]
 fn analyze_direct_scan_enabled() -> bool {
-    match std::env::var(ANALYZE_DIRECT_SCAN_ENV) {
-        Ok(v) => {
-            let v = v.trim();
-            !(v.eq_ignore_ascii_case("0") || v.eq_ignore_ascii_case("false"))
-        }
-        Err(_) => false,
-    }
+    return true
 }
 
 enum RowSampleData<S: Snapshot, F: KvFormat> {
