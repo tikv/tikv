@@ -2,20 +2,27 @@
 
 use std::{cmp::Reverse, collections::BinaryHeap, hash::Hasher, mem, sync::Arc};
 
-use api_version::{KvFormat, keyspace::KvPairEntry};
+use api_version::{keyspace::KvPairEntry, KvFormat};
 use collections::{HashMap, HashSet};
 use kvproto::coprocessor::KeyRange;
 use mur3::Hasher128;
-use rand::{Rng, rngs::StdRng};
+use rand::{rngs::StdRng, Rng};
+use tidb_query_common::storage::{
+    scanner::{RangesScanner, RangesScannerOptions},
+    Range,
+};
 use tidb_query_datatype::{
-    FieldTypeAccessor,
     codec::{
-        datum::{DURATION_FLAG, Datum, DatumDecoder, INT_FLAG, NIL_FLAG, UINT_FLAG, encode_value},
+        datum::{
+            encode_value, Datum, DatumDecoder, DURATION_FLAG, INT_FLAG, NIL_FLAG, UINT_FLAG,
+            DATUM_DATA_NULL, VAR_INT_FLAG,
+        },
+        datum_codec::DatumFlagAndPayloadEncoder,
         table,
     },
     def::Collation,
     expr::{EvalConfig, EvalContext},
-    FieldTypeAccessor,
+    FieldTypeAccessor, FieldTypeFlag,
 };
 use tidb_query_executors::{interface::BatchExecutor, BatchTableScanExecutor};
 use tidb_query_expr::BATCH_MAX_SIZE;
@@ -29,14 +36,13 @@ use txn_types::TimeStamp;
 
 use super::{cmsketch::CmSketch, fmsketch::FmSketch, histogram::Histogram};
 use crate::{
-    coprocessor::{MEMTRACE_ANALYZE, dag::TikvStorage, *},
+    coprocessor::{dag::TikvStorage, MEMTRACE_ANALYZE, *},
     storage::{Snapshot, SnapshotStore},
 };
 
-
 #[inline]
 fn analyze_direct_scan_enabled() -> bool {
-    return true
+    return true;
 }
 
 enum RowSampleData<S: Snapshot, F: KvFormat> {
@@ -369,7 +375,9 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             match &mut self.data {
                 RowSampleData::TableScan(exec) => {
                     let result = {
-                        let (duration, res) = sample.observe_cpu_async(exec.next_batch(BATCH_MAX_SIZE)).await;
+                        let (duration, res) = sample
+                            .observe_cpu_async(exec.next_batch(BATCH_MAX_SIZE))
+                            .await;
                         sample.add_cpu_time(duration);
                         res
                     };
@@ -1385,13 +1393,15 @@ mod tests {
     fn test_direct_table_row_decoder_matches_batch_table_scan_v2() {
         use api_version::ApiV1;
         use futures::executor::block_on;
-        use tidb_query_common::{storage::test_fixture::FixtureStorage, util::convert_to_prefix_next};
+        use tidb_query_common::{
+            storage::test_fixture::FixtureStorage, util::convert_to_prefix_next,
+        };
         use tidb_query_datatype::{
-            FieldTypeTp,
             codec::{
                 data_type::ScalarValue,
                 row::v2::encoder_for_test::{Column, RowEncoder},
             },
+            FieldTypeTp,
         };
 
         let table_id: i64 = 7;
@@ -1455,7 +1465,12 @@ mod tests {
         let mut baseline = vec![Vec::new(); columns_info.len()];
         for i in 0..columns_info.len() {
             columns_slice[i]
-                .encode(logical_row, &columns_info[i], &mut baseline_ctx, &mut baseline[i])
+                .encode(
+                    logical_row,
+                    &columns_info[i],
+                    &mut baseline_ctx,
+                    &mut baseline[i],
+                )
                 .unwrap();
         }
 
