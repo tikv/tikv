@@ -297,17 +297,25 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
                 tracker.reset_if_needed();
             }
 
-            // Ensure a minimum gap between compaction rounds so the MVCC read
-            // tracker has time to accumulate meaningful stats after the reset.
+            // Sleep for remaining time in check interval, or start next round
+            // immediately. When MVCC-read-aware scoring is enabled, enforce a
+            // minimum gap so the tracker can accumulate meaningful stats after
+            // the reset.
             const MIN_GAP_BETWEEN_ROUNDS: Duration = Duration::from_secs(20);
             let remaining_sleep = if elapsed < check_interval {
                 check_interval - elapsed
             } else {
                 Duration::ZERO
             };
-            let sleep_duration = remaining_sleep.max(MIN_GAP_BETWEEN_ROUNDS);
-            if self.sleep_or_stop(sleep_duration) {
-                break;
+            let sleep_duration = if config.auto_compaction.mvcc_read_aware_enabled {
+                remaining_sleep.max(MIN_GAP_BETWEEN_ROUNDS)
+            } else {
+                remaining_sleep
+            };
+            if sleep_duration > Duration::ZERO {
+                if self.sleep_or_stop(sleep_duration) {
+                    break;
+                }
             }
         }
         debug!("compaction-runner stopped");
