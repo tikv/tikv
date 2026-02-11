@@ -284,7 +284,7 @@ impl<S: Snapshot, F: KvFormat> RequestHandler for AnalyzeContext<S, F> {
                 )?;
 
                 let res = AnalyzeContext::handle_full_sampling(&mut builder).await;
-                builder.data.collect_storage_stats(&mut self.storage_stats);
+                builder.collect_storage_stats(&mut self.storage_stats);
                 res
             }
 
