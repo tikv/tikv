@@ -944,6 +944,55 @@ fn should_report_read_peer(
         && cpu_usage < hotspot_cpu_usage_report_threshold())
 }
 
+fn collect_report_peers_for_store_heartbeat(
+    region_peers: &mut HashMap<u64, PeerStat>,
+    region_cpu_records_since_store_heartbeat: &mut HashMap<u64, u32>,
+    interval_seconds: u64,
+) -> HashMap<u64, pdpb::PeerStat> {
+    let mut report_peers = HashMap::default();
+    for (region_id, region_peer) in region_peers.iter_mut() {
+        let read_bytes = region_peer.read_bytes - region_peer.last_store_report_read_bytes;
+        let read_keys = region_peer.read_keys - region_peer.last_store_report_read_keys;
+        let query_stats = region_peer
+            .query_stats
+            .sub_query_stats(&region_peer.last_store_report_query_stats);
+        let cpu_usage = if interval_seconds > 0 {
+            let cpu_time_duration = Duration::from_millis(
+                region_cpu_records_since_store_heartbeat
+                    .remove(region_id)
+                    .unwrap_or(0) as u64,
+            );
+            ((cpu_time_duration.as_secs_f64() * 100.0) / interval_seconds as f64) as u64
+        } else {
+            region_cpu_records_since_store_heartbeat.remove(region_id);
+            0
+        };
+        let cpu_usage = if cpu_usage < hotspot_cpu_usage_report_threshold() {
+            0
+        } else {
+            cpu_usage
+        };
+        region_peer.last_store_report_read_bytes = region_peer.read_bytes;
+        region_peer.last_store_report_read_keys = region_peer.read_keys;
+        region_peer
+            .last_store_report_query_stats
+            .fill_query_stats(&region_peer.query_stats);
+        if !should_report_read_peer(read_bytes, read_keys, &query_stats, cpu_usage) {
+            continue;
+        }
+        let mut read_stat = pdpb::PeerStat::default();
+        read_stat.set_region_id(*region_id);
+        read_stat.set_read_keys(read_keys);
+        read_stat.set_read_bytes(read_bytes);
+        read_stat.set_query_stats(query_stats.0);
+        let mut cpu_stats = pdpb::CpuStats::default();
+        cpu_stats.set_unified_read(cpu_usage);
+        read_stat.set_cpu_stats(cpu_stats);
+        report_peers.insert(*region_id, read_stat);
+    }
+    report_peers
+}
+
 /// Max limitation of delayed store_heartbeat.
 const STORE_HEARTBEAT_DELAY_LIMIT: u64 = 5 * 60;
 
@@ -971,9 +1020,9 @@ where
     store_heartbeat_interval: Duration,
 
     // region_id -> total_cpu_time_ms (since last region heartbeat)
-    region_cpu_records: HashMap<u64, u32>,
+    region_cpu_records_since_region_heartbeat: HashMap<u64, u32>,
     // region_id -> total_cpu_time_ms (since last store heartbeat)
-    region_cpu_records_store: HashMap<u64, u32>,
+    region_cpu_records_since_store_heartbeat: HashMap<u64, u32>,
 
     concurrency_manager: ConcurrencyManager,
     snap_mgr: SnapManager,
@@ -1078,8 +1127,8 @@ where
             scheduler,
             store_heartbeat_interval,
             stats_monitor,
-            region_cpu_records: HashMap::default(),
-            region_cpu_records_store: HashMap::default(),
+            region_cpu_records_since_region_heartbeat: HashMap::default(),
+            region_cpu_records_since_store_heartbeat: HashMap::default(),
             concurrency_manager,
             snap_mgr,
             remote,
@@ -1298,53 +1347,20 @@ where
         dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     ) {
         let now = UnixSecs::now();
+        // For fake heartbeats, keep peer deltas and CPU records untouched so the
+        // next real heartbeat still reports a full interval.
         if !is_fake_heartbeat {
-            let mut report_peers = HashMap::default();
             let interval_seconds = now
                 .into_inner()
                 .saturating_sub(self.store_stat.last_report_ts.into_inner());
-            {
+            let report_peers = {
                 let mut region_peers = self.region_peers.write().unwrap();
-                for (region_id, region_peer) in region_peers.iter_mut() {
-                    let read_bytes =
-                        region_peer.read_bytes - region_peer.last_store_report_read_bytes;
-                    let read_keys = region_peer.read_keys - region_peer.last_store_report_read_keys;
-                    let query_stats = region_peer
-                        .query_stats
-                        .sub_query_stats(&region_peer.last_store_report_query_stats);
-                    let cpu_usage = if interval_seconds > 0 {
-                        let cpu_time_duration = Duration::from_millis(
-                            self.region_cpu_records_store.remove(region_id).unwrap_or(0) as u64,
-                        );
-                        ((cpu_time_duration.as_secs_f64() * 100.0) / interval_seconds as f64) as u64
-                    } else {
-                        self.region_cpu_records_store.remove(region_id);
-                        0
-                    };
-                    let cpu_usage = if cpu_usage < hotspot_cpu_usage_report_threshold() {
-                        0
-                    } else {
-                        cpu_usage
-                    };
-                    region_peer.last_store_report_read_bytes = region_peer.read_bytes;
-                    region_peer.last_store_report_read_keys = region_peer.read_keys;
-                    region_peer
-                        .last_store_report_query_stats
-                        .fill_query_stats(&region_peer.query_stats);
-                    if !should_report_read_peer(read_bytes, read_keys, &query_stats, cpu_usage) {
-                        continue;
-                    }
-                    let mut read_stat = pdpb::PeerStat::default();
-                    read_stat.set_region_id(*region_id);
-                    read_stat.set_read_keys(read_keys);
-                    read_stat.set_read_bytes(read_bytes);
-                    read_stat.set_query_stats(query_stats.0);
-                    let mut cpu_stats = pdpb::CpuStats::default();
-                    cpu_stats.set_unified_read(cpu_usage);
-                    read_stat.set_cpu_stats(cpu_stats);
-                    report_peers.insert(*region_id, read_stat);
-                }
-            }
+                collect_report_peers_for_store_heartbeat(
+                    &mut region_peers,
+                    &mut self.region_cpu_records_since_store_heartbeat,
+                    interval_seconds,
+                )
+            };
             stats = collect_report_read_peer_stats(HOTSPOT_REPORT_CAPACITY, report_peers, stats);
         }
         // Fetch all size infos and update last reported infos on engine_size.
@@ -1874,8 +1890,8 @@ where
             remove_peer_stat_from_maps(
                 region_id,
                 &mut region_peers,
-                &mut self.region_cpu_records,
-                &mut self.region_cpu_records_store,
+                &mut self.region_cpu_records_since_region_heartbeat,
+                &mut self.region_cpu_records_since_store_heartbeat,
             )
         };
         if removed {
@@ -2027,8 +2043,16 @@ where
     fn handle_region_cpu_records(&mut self, records: Arc<RawRecords>) {
         // Send Region CPU info to AutoSplitController inside the stats_monitor.
         self.stats_monitor.maybe_send_cpu_stats(&records);
-        calculate_region_cpu_records(self.store_id, records.clone(), &mut self.region_cpu_records);
-        calculate_region_cpu_records(self.store_id, records, &mut self.region_cpu_records_store);
+        calculate_region_cpu_records(
+            self.store_id,
+            records.clone(),
+            &mut self.region_cpu_records_since_region_heartbeat,
+        );
+        calculate_region_cpu_records(
+            self.store_id,
+            records,
+            &mut self.region_cpu_records_since_store_heartbeat,
+        );
     }
 
     fn handle_report_min_resolved_ts(&self, store_id: u64, min_resolved_ts: u64) {
@@ -2439,7 +2463,9 @@ where
                     let cpu_usage = {
                         // Take out the region CPU record.
                         let cpu_time_duration = Duration::from_millis(
-                            self.region_cpu_records.remove(&region_id).unwrap_or(0) as u64,
+                            self.region_cpu_records_since_region_heartbeat
+                                .remove(&region_id)
+                                .unwrap_or(0) as u64,
                         );
                         let interval_second =
                             unix_secs_now.into_inner() - last_report_ts.into_inner();
@@ -2762,12 +2788,12 @@ fn collect_report_read_peer_stats(
 fn remove_peer_stat_from_maps(
     region_id: u64,
     region_peers: &mut HashMap<u64, PeerStat>,
-    region_cpu_records: &mut HashMap<u64, u32>,
-    region_cpu_records_store: &mut HashMap<u64, u32>,
+    region_cpu_records_since_region_heartbeat: &mut HashMap<u64, u32>,
+    region_cpu_records_since_store_heartbeat: &mut HashMap<u64, u32>,
 ) -> bool {
     let removed = region_peers.remove(&region_id).is_some();
-    region_cpu_records.remove(&region_id);
-    region_cpu_records_store.remove(&region_id);
+    region_cpu_records_since_region_heartbeat.remove(&region_id);
+    region_cpu_records_since_store_heartbeat.remove(&region_id);
     removed
 }
 
@@ -2953,20 +2979,20 @@ mod tests {
     fn test_remove_peer_stat_from_maps() {
         let mut region_peers = HashMap::default();
         region_peers.insert(1, PeerStat::default());
-        let mut region_cpu_records = HashMap::default();
-        region_cpu_records.insert(1, 10);
-        let mut region_cpu_records_store = HashMap::default();
-        region_cpu_records_store.insert(1, 12);
+        let mut region_cpu_records_since_region_heartbeat = HashMap::default();
+        region_cpu_records_since_region_heartbeat.insert(1, 10);
+        let mut region_cpu_records_since_store_heartbeat = HashMap::default();
+        region_cpu_records_since_store_heartbeat.insert(1, 12);
 
         assert!(remove_peer_stat_from_maps(
             1,
             &mut region_peers,
-            &mut region_cpu_records,
-            &mut region_cpu_records_store,
+            &mut region_cpu_records_since_region_heartbeat,
+            &mut region_cpu_records_since_store_heartbeat,
         ));
         assert!(region_peers.is_empty());
-        assert!(region_cpu_records.is_empty());
-        assert!(region_cpu_records_store.is_empty());
+        assert!(region_cpu_records_since_region_heartbeat.is_empty());
+        assert!(region_cpu_records_since_store_heartbeat.is_empty());
     }
 
     use engine_test::kv::KvTestEngine;
@@ -2978,7 +3004,7 @@ mod tests {
     #[test]
     fn test_calculate_region_cpu_records() {
         // region_id -> total_cpu_time_ms
-        let mut region_cpu_records: HashMap<u64, u32> = HashMap::default();
+        let mut region_cpu_records_since_region_heartbeat: HashMap<u64, u32> = HashMap::default();
 
         let region_num = 3;
         for i in 0..region_num * 10 {
@@ -3018,14 +3044,19 @@ mod tests {
             calculate_region_cpu_records(
                 DEFAULT_TEST_STORE_ID,
                 cpu_records,
-                &mut region_cpu_records,
+                &mut region_cpu_records_since_region_heartbeat,
             );
 
             sleep(Duration::from_millis(50));
         }
 
         for region_id in 1..region_num + 1 {
-            assert!(*region_cpu_records.get(&region_id).unwrap_or(&0) > 0)
+            assert!(
+                *region_cpu_records_since_region_heartbeat
+                    .get(&region_id)
+                    .unwrap_or(&0)
+                    > 0
+            )
         }
     }
 
