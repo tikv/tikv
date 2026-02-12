@@ -219,11 +219,14 @@ where
                     .sub_query_stats(&region_peer.last_store_report_query_stats);
                 let cpu_usage = if interval_seconds > 0 {
                     let cpu_time_duration = Duration::from_millis(
-                        self.region_cpu_records_store.remove(region_id).unwrap_or(0) as u64,
+                        self.region_cpu_records_since_store_heartbeat
+                            .remove(region_id)
+                            .unwrap_or(0) as u64,
                     );
                     ((cpu_time_duration.as_secs_f64() * 100.0) / interval_seconds as f64) as u64
                 } else {
-                    self.region_cpu_records_store.remove(region_id);
+                    self.region_cpu_records_since_store_heartbeat
+                        .remove(region_id);
                     0
                 };
                 let cpu_usage = if cpu_usage < hotspot_cpu_usage_report_threshold() {

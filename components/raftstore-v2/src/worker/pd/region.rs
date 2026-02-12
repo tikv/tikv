@@ -142,7 +142,9 @@ where
         let cpu_usage = {
             // Take out the region CPU record.
             let cpu_time_duration = Duration::from_millis(
-                self.region_cpu_records.remove(&region_id).unwrap_or(0) as u64,
+                self.region_cpu_records_since_region_heartbeat
+                    .remove(&region_id)
+                    .unwrap_or(0) as u64,
             );
             let interval_second = unix_secs_now.into_inner() - last_report_ts.into_inner();
             // Keep consistent with the calculation of cpu_usages in a store heartbeat.
@@ -412,12 +414,12 @@ where
         Self::calculate_region_cpu_records(
             self.store_id,
             records.clone(),
-            &mut self.region_cpu_records,
+            &mut self.region_cpu_records_since_region_heartbeat,
         );
         Self::calculate_region_cpu_records(
             self.store_id,
             records,
-            &mut self.region_cpu_records_store,
+            &mut self.region_cpu_records_since_store_heartbeat,
         );
     }
 
@@ -425,8 +427,8 @@ where
         let removed = remove_peer_stat_from_maps(
             region_id,
             &mut self.region_peers,
-            &mut self.region_cpu_records,
-            &mut self.region_cpu_records_store,
+            &mut self.region_cpu_records_since_region_heartbeat,
+            &mut self.region_cpu_records_since_store_heartbeat,
         );
         if removed {
             info!(self.logger, "remove peer statistic record in pd"; "region_id" => region_id);
@@ -466,12 +468,12 @@ where
 fn remove_peer_stat_from_maps(
     region_id: u64,
     region_peers: &mut HashMap<u64, PeerStat>,
-    region_cpu_records: &mut HashMap<u64, u32>,
-    region_cpu_records_store: &mut HashMap<u64, u32>,
+    region_cpu_records_since_region_heartbeat: &mut HashMap<u64, u32>,
+    region_cpu_records_since_store_heartbeat: &mut HashMap<u64, u32>,
 ) -> bool {
     let removed = region_peers.remove(&region_id).is_some();
-    region_cpu_records.remove(&region_id);
-    region_cpu_records_store.remove(&region_id);
+    region_cpu_records_since_region_heartbeat.remove(&region_id);
+    region_cpu_records_since_store_heartbeat.remove(&region_id);
     removed
 }
 
@@ -483,19 +485,19 @@ mod tests {
     fn test_remove_peer_stat_from_maps() {
         let mut region_peers = HashMap::default();
         region_peers.insert(1, PeerStat::default());
-        let mut region_cpu_records = HashMap::default();
-        region_cpu_records.insert(1, 10);
-        let mut region_cpu_records_store = HashMap::default();
-        region_cpu_records_store.insert(1, 12);
+        let mut region_cpu_records_since_region_heartbeat = HashMap::default();
+        region_cpu_records_since_region_heartbeat.insert(1, 10);
+        let mut region_cpu_records_since_store_heartbeat = HashMap::default();
+        region_cpu_records_since_store_heartbeat.insert(1, 12);
 
         assert!(remove_peer_stat_from_maps(
             1,
             &mut region_peers,
-            &mut region_cpu_records,
-            &mut region_cpu_records_store,
+            &mut region_cpu_records_since_region_heartbeat,
+            &mut region_cpu_records_since_store_heartbeat,
         ));
         assert!(region_peers.is_empty());
-        assert!(region_cpu_records.is_empty());
-        assert!(region_cpu_records_store.is_empty());
+        assert!(region_cpu_records_since_region_heartbeat.is_empty());
+        assert!(region_cpu_records_since_store_heartbeat.is_empty());
     }
 }

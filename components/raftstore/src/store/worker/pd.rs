@@ -906,6 +906,13 @@ const HOTSPOT_BYTE_RATE_THRESHOLD: u64 = 8 * 1024;
 const HOTSPOT_REPORT_CAPACITY: usize = 1000;
 
 // TODO: support dynamic configure threshold in future.
+fn hotspot_cpu_usage_report_threshold() -> u64 {
+    const HOTSPOT_CPU_USAGE_THRESHOLD: u64 = 1;
+    fail_point!("mock_hotspot_threshold", |_| { 0 });
+
+    HOTSPOT_CPU_USAGE_THRESHOLD
+}
+
 fn hotspot_key_report_threshold() -> u64 {
     fail_point!("mock_hotspot_threshold", |_| { 0 });
 
@@ -924,13 +931,6 @@ fn hotspot_query_num_report_threshold() -> u64 {
     HOTSPOT_QUERY_RATE_THRESHOLD * 10
 }
 
-fn hotspot_cpu_usage_report_threshold() -> u64 {
-    const HOTSPOT_CPU_USAGE_THRESHOLD: u64 = 1;
-    fail_point!("mock_hotspot_threshold", |_| { 0 });
-
-    HOTSPOT_CPU_USAGE_THRESHOLD
-}
-
 #[inline]
 fn should_report_read_peer(
     read_bytes: u64,
@@ -946,6 +946,7 @@ fn should_report_read_peer(
 
 fn collect_report_peers_for_store_heartbeat(
     region_peers: &mut HashMap<u64, PeerStat>,
+    // region_id -> total_cpu_time_ms accumulated since last store heartbeat.
     region_cpu_records_since_store_heartbeat: &mut HashMap<u64, u32>,
     interval_seconds: u64,
 ) -> HashMap<u64, pdpb::PeerStat> {
@@ -990,6 +991,8 @@ fn collect_report_peers_for_store_heartbeat(
         read_stat.set_cpu_stats(cpu_stats);
         report_peers.insert(*region_id, read_stat);
     }
+    // Drain orphan CPU records for regions no longer tracked in `region_peers`.
+    region_cpu_records_since_store_heartbeat.clear();
     report_peers
 }
 
@@ -2973,6 +2976,23 @@ mod tests {
             ));
         }
         assert!(should_report_read_peer(0, 0, &query_stats, threshold));
+    }
+
+    #[test]
+    fn test_collect_report_peers_for_store_heartbeat_clears_orphan_cpu_records() {
+        let mut region_peers = HashMap::default();
+        region_peers.insert(1, PeerStat::default());
+        let mut region_cpu_records_since_store_heartbeat = HashMap::default();
+        region_cpu_records_since_store_heartbeat.insert(1, 10);
+        region_cpu_records_since_store_heartbeat.insert(2, 12);
+
+        collect_report_peers_for_store_heartbeat(
+            &mut region_peers,
+            &mut region_cpu_records_since_store_heartbeat,
+            1,
+        );
+
+        assert!(region_cpu_records_since_store_heartbeat.is_empty());
     }
 
     #[test]

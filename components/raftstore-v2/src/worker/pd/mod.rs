@@ -216,9 +216,9 @@ where
     region_peers: HashMap<u64, region::PeerStat>,
     region_buckets: HashMap<u64, region::ReportBucket>,
     // region_id -> total_cpu_time_ms (since last region heartbeat)
-    region_cpu_records: HashMap<u64, u32>,
+    region_cpu_records_since_region_heartbeat: HashMap<u64, u32>,
     // region_id -> total_cpu_time_ms (since last store heartbeat)
-    region_cpu_records_store: HashMap<u64, u32>,
+    region_cpu_records_since_store_heartbeat: HashMap<u64, u32>,
     is_hb_receiver_scheduled: bool,
 
     // For update_max_timestamp.
@@ -292,8 +292,8 @@ where
             store_stat: store::StoreStat::default(),
             region_peers: HashMap::default(),
             region_buckets: HashMap::default(),
-            region_cpu_records: HashMap::default(),
-            region_cpu_records_store: HashMap::default(),
+            region_cpu_records_since_region_heartbeat: HashMap::default(),
+            region_cpu_records_since_store_heartbeat: HashMap::default(),
             is_hb_receiver_scheduled: false,
             concurrency_manager,
             causal_ts_provider,
