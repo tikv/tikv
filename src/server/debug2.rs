@@ -930,7 +930,7 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
             let talbet = tablet_cache.latest().unwrap();
             let mut prop = dump_write_cf_properties(
                 talbet,
-                start_key.as_ref().map(|k| (k.as_bytes())).unwrap_or(start),
+                start_key.as_ref().map(|k| k.as_bytes()).unwrap_or(start),
                 end_key.as_ref().map(|k| k.as_bytes()).unwrap_or(end),
             )
             .unwrap();

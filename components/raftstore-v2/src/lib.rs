@@ -21,7 +21,6 @@
 // Functionalities like read, write, etc should be implemented in [`operation`]
 // using a standalone modules.
 
-#![feature(array_windows)]
 #![feature(box_into_inner)]
 #![feature(assert_matches)]
 

@@ -13,7 +13,6 @@
 //!   its term.
 
 #![feature(box_patterns)]
-#![feature(result_flattening)]
 
 #[macro_use]
 extern crate tikv_util;
