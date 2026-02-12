@@ -561,6 +561,7 @@ mod tests {
 
     use super::*;
 
+    #[allow(dead_code)]
     struct StepRunner {
         count: Arc<AtomicU64>,
         timeout_duration: Duration,
