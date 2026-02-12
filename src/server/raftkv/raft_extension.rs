@@ -69,7 +69,6 @@ where
                 error!("failed to send raft message"; "region_id" => region_id, "msg_ty" => ?msg_ty, "err" => ?e);
             }
         }
-        }
     }
 
     #[inline]
