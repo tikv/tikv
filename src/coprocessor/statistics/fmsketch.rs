@@ -79,6 +79,39 @@ impl FmSketch {
             self.mask = mask;
         }
     }
+
+    /// Returns the approximate number of distinct elements.
+    ///
+    /// The estimated count of distinct values is 2^r * count, where 'r' is the
+    /// maximum number of trailing zeroes observed and 'count' is the number of
+    /// unique hashed values. The fundamental idea is that the hash function
+    /// maps the input domain onto a logarithmic scale.
+    pub fn ndv(&self) -> u64 {
+        (self.mask + 1) * (self.hash_set.len() as u64)
+    }
+
+    /// Merges another FMSketch (from protobuf) into this one.
+    pub fn merge_from_proto(&mut self, other: &tipb::FmSketch) {
+        let other_mask = other.get_mask();
+        // Align masks - keep the larger mask (higher level)
+        if other_mask > self.mask {
+            // Need to level up our sketch
+            self.hash_set.retain(|&x| x & other_mask == 0);
+            self.mask = other_mask;
+        }
+        // Insert values from other that pass our mask
+        for &hash_val in other.get_hashset() {
+            if (hash_val & self.mask) == 0 {
+                self.hash_set.insert(hash_val);
+            }
+        }
+        // Check if we need to level up after merge
+        while self.hash_set.len() > self.max_size {
+            let mask = (self.mask << 1) | 1;
+            self.hash_set.retain(|&x| x & mask == 0);
+            self.mask = mask;
+        }
+    }
 }
 
 impl From<FmSketch> for tipb::FmSketch {

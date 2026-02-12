@@ -5,3 +5,4 @@ pub mod analyze_context;
 pub mod cmsketch;
 pub mod fmsketch;
 pub mod histogram;
+pub mod progressive_fmsketch;
