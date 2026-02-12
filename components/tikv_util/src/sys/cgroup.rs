@@ -337,17 +337,17 @@ fn parse_cpu_cores(value: &str) -> HashSet<usize> {
 
 fn parse_cpu_quota_v2(line: &str) -> Option<f64> {
     let mut iter = line.split(' ');
-    if let Some(max) = iter.next() {
-        if max != "max" {
-            if let Ok(max) = max.parse::<f64>()
-                && let Some(period) = iter.next()
-                && let Ok(period) = period.parse::<f64>()
-                && period > 0.0
-            {
-                return Some(max / period);
-            }
-            warn!("fail to parse cpu quota v2: {}", line);
+    if let Some(max) = iter.next()
+        && max != "max"
+    {
+        if let Ok(max) = max.parse::<f64>()
+            && let Some(period) = iter.next()
+            && let Ok(period) = period.parse::<f64>()
+            && period > 0.0
+        {
+            return Some(max / period);
         }
+        warn!("fail to parse cpu quota v2: {}", line);
     }
     None
 }
