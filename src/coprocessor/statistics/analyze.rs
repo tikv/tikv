@@ -1,10 +1,17 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp::Reverse, collections::BinaryHeap, hash::Hasher, mem, sync::Arc};
+use std::{
+    cmp::Reverse,
+    collections::BinaryHeap,
+    hash::Hasher,
+    mem,
+    sync::Arc,
+};
 
+use collections::HashSet;
 use api_version::KvFormat;
 use kvproto::coprocessor::KeyRange;
-use mur3::Hasher128;
+use mur3::{Hasher128, murmurhash3_x64_128};
 use rand::{Rng, rngs::StdRng};
 use tidb_query_datatype::{
     FieldTypeAccessor,
@@ -185,6 +192,8 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             let col_group_pos = self.columns_info.len() + i;
             collector.mut_base().fm_sketches[col_group_pos] =
                 collector.mut_base().fm_sketches[col_pos].clone();
+            collector.mut_base().f1_sketches[col_group_pos] =
+                collector.mut_base().f1_sketches[col_pos].clone();
             collector.mut_base().null_count[col_group_pos] =
                 collector.mut_base().null_count[col_pos];
             collector.mut_base().total_sizes[col_group_pos] =
@@ -222,10 +231,65 @@ trait RowSampleCollector: Send {
 }
 
 #[derive(Clone)]
+struct F1Sketch {
+    mask: u64,
+    max_size: usize,
+    once: HashSet<u64>,
+    multi: HashSet<u64>,
+}
+
+impl F1Sketch {
+    fn new(max_size: usize) -> F1Sketch {
+        F1Sketch {
+            mask: 0,
+            max_size,
+            once: HashSet::with_capacity_and_hasher(max_size + 1, Default::default()),
+            multi: HashSet::with_capacity_and_hasher(max_size + 1, Default::default()),
+        }
+    }
+
+    fn insert(&mut self, bytes: &[u8]) {
+        let hash = murmurhash3_x64_128(bytes, 0).0;
+        self.insert_hash_value(hash);
+    }
+
+    fn insert_hash_value(&mut self, hash_val: u64) {
+        if (hash_val & self.mask) != 0 {
+            return;
+        }
+        if self.multi.contains(&hash_val) {
+            return;
+        }
+        if self.once.remove(&hash_val) {
+            self.multi.insert(hash_val);
+        } else {
+            self.once.insert(hash_val);
+        }
+        if self.once.len() + self.multi.len() > self.max_size {
+            let mask = (self.mask << 1) | 1;
+            self.once.retain(|&x| x & mask == 0);
+            self.multi.retain(|&x| x & mask == 0);
+            self.mask = mask;
+        }
+    }
+}
+
+impl From<F1Sketch> for tipb::FmSketch {
+    fn from(sketch: F1Sketch) -> tipb::FmSketch {
+        let mut proto = tipb::FmSketch::default();
+        proto.set_mask(sketch.mask);
+        let hash = sketch.once.into_iter().collect();
+        proto.set_hashset(hash);
+        proto
+    }
+}
+
+#[derive(Clone)]
 struct BaseRowSampleCollector {
     null_count: Vec<i64>,
     count: u64,
     fm_sketches: Vec<FmSketch>,
+    f1_sketches: Vec<F1Sketch>,
     rng: StdRng,
     total_sizes: Vec<i64>,
     memory_usage: usize,
@@ -238,6 +302,7 @@ impl Default for BaseRowSampleCollector {
             null_count: vec![],
             count: 0,
             fm_sketches: vec![],
+            f1_sketches: vec![],
             rng: StdRng::from_entropy(),
             total_sizes: vec![],
             memory_usage: 0,
@@ -252,6 +317,7 @@ impl BaseRowSampleCollector {
             null_count: vec![0; col_and_group_len],
             count: 0,
             fm_sketches: vec![FmSketch::new(max_fm_sketch_size); col_and_group_len],
+            f1_sketches: vec![F1Sketch::new(max_fm_sketch_size); col_and_group_len],
             rng: StdRng::from_entropy(),
             total_sizes: vec![0; col_and_group_len],
             memory_usage: 0,
@@ -291,7 +357,9 @@ impl BaseRowSampleCollector {
                     hasher.write(&columns_val[*j as usize]);
                 }
             }
-            self.fm_sketches[col_len + i].insert_hash_value(hasher.finish());
+            let hash = hasher.finish();
+            self.fm_sketches[col_len + i].insert_hash_value(hash);
+            self.f1_sketches[col_len + i].insert_hash_value(hash);
         }
     }
 
@@ -308,8 +376,10 @@ impl BaseRowSampleCollector {
             }
             if columns_info[i].as_accessor().is_string_like() {
                 self.fm_sketches[i].insert(&collation_keys_val[i]);
+                self.f1_sketches[i].insert(&collation_keys_val[i]);
             } else {
                 self.fm_sketches[i].insert(&columns_val[i]);
+                self.f1_sketches[i].insert(&columns_val[i]);
             }
             self.total_sizes[i] += columns_val[i].len() as i64 - 1;
         }
@@ -323,6 +393,11 @@ impl BaseRowSampleCollector {
             .map(|fm_sketch| fm_sketch.into())
             .collect();
         proto_collector.set_fm_sketch(pb_fm_sketches);
+        let pb_f1_sketches = mem::take(&mut self.f1_sketches)
+            .into_iter()
+            .map(|fm_sketch| fm_sketch.into())
+            .collect();
+        proto_collector.set_f1_sketch(pb_f1_sketches);
         proto_collector.set_total_size(self.total_sizes.clone());
     }
 
