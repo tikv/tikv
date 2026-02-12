@@ -3,9 +3,11 @@
 use std::{cmp::Reverse, collections::BinaryHeap, hash::Hasher, mem, sync::Arc};
 
 use api_version::KvFormat;
+use collections::HashSet;
 use kvproto::coprocessor::KeyRange;
-use mur3::Hasher128;
+use mur3::{Hasher128, murmurhash3_x64_128};
 use rand::{Rng, rngs::StdRng};
+use tidb_query_common::execute_stats::ExecuteStats;
 use tidb_query_datatype::{
     FieldTypeAccessor,
     codec::{
@@ -29,6 +31,8 @@ use crate::{
     coprocessor::{MEMTRACE_ANALYZE, dag::TikvStorage, metrics, *},
     storage::{Snapshot, SnapshotStore, Statistics},
 };
+
+const NDV_FM_SKETCH_SAMPLE_RATE: f64 = 0.05;
 
 pub(crate) struct RowSampleBuilder<S: Snapshot, F: KvFormat> {
     pub(crate) data: BatchTableScanExecutor<TikvStorage<SnapshotStore<S>>, F>,
@@ -59,8 +63,10 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
         if columns_info.is_empty() {
             return Err(box_err!("empty columns_info"));
         }
+        let max_sample_size = req.get_sample_size() as usize;
+        let sample_rate = req.get_sample_rate();
         let common_handle_ids = req.take_primary_column_ids();
-        let table_scanner = BatchTableScanExecutor::new(
+        let mut table_scanner = BatchTableScanExecutor::new(
             storage,
             Arc::new(EvalConfig::default()),
             columns_info.clone(),
@@ -70,12 +76,13 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             false, // Streaming mode is not supported in Analyze request, always false here
             req.take_primary_prefix_column_ids(),
         )?;
+        table_scanner.set_row_sample_rate(NDV_FM_SKETCH_SAMPLE_RATE);
         Ok(Self {
             data: table_scanner,
             accumulated_storage_stats: Statistics::default(),
-            max_sample_size: req.get_sample_size() as usize,
+            max_sample_size,
             max_fm_sketch_size: req.get_sketch_size() as usize,
-            sample_rate: req.get_sample_rate(),
+            sample_rate,
             columns_info,
             column_groups: req.take_column_groups().into(),
             quota_limiter,
@@ -158,6 +165,10 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                     .inc();
                 let _guard = sample.observe_cpu();
                 is_drained = result.is_drained?.stop();
+                let mut exec_stats = ExecuteStats::new(0);
+                self.data.collect_exec_stats(&mut exec_stats);
+                collector.mut_base().count +=
+                    exec_stats.scanned_rows_per_range.into_iter().sum::<usize>() as u64;
 
                 let columns_slice = result.physical_columns.as_slice();
                 let mut column_vals: Vec<Vec<u8>> = vec![vec![]; self.columns_info.len()];
@@ -191,7 +202,7 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                         }
                         read_size += column_vals[i].len();
                     }
-                    collector.mut_base().count += 1;
+                    collector.mut_base().sketch_sample_count += 1;
                     collector.collect_column_group(
                         &column_vals,
                         &collation_key_vals,
@@ -217,6 +228,29 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                     .inc_by(quota_delay.as_micros() as u64);
             }
         }
+        {
+            let base = collector.mut_base();
+            let sampled_count = base.sketch_sample_count;
+            let total_count = base.count;
+            if sampled_count > 0 && total_count > sampled_count {
+                let sampled_count_u128 = sampled_count as u128;
+                let total_count_u128 = total_count as u128;
+                for null_count in &mut base.null_count {
+                    let sampled_null_count = (*null_count).max(0) as u128;
+                    let estimated_null_count = (sampled_null_count * total_count_u128
+                        + sampled_count_u128 / 2)
+                        / sampled_count_u128;
+                    *null_count = estimated_null_count.min(total_count_u128) as i64;
+                }
+                for total_size in &mut base.total_sizes {
+                    let sampled_total_size = (*total_size).max(0) as u128;
+                    let estimated_total_size = (sampled_total_size * total_count_u128
+                        + sampled_count_u128 / 2)
+                        / sampled_count_u128;
+                    *total_size = estimated_total_size.min(i64::MAX as u128) as i64;
+                }
+            }
+        }
         for i in 0..self.column_groups.len() {
             let offsets = self.column_groups[i].get_column_offsets();
             if offsets.len() != 1 {
@@ -230,6 +264,8 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             let col_group_pos = self.columns_info.len() + i;
             collector.mut_base().fm_sketches[col_group_pos] =
                 collector.mut_base().fm_sketches[col_pos].clone();
+            collector.mut_base().f1_sketches[col_group_pos] =
+                collector.mut_base().f1_sketches[col_pos].clone();
             collector.mut_base().null_count[col_group_pos] =
                 collector.mut_base().null_count[col_pos];
             collector.mut_base().total_sizes[col_group_pos] =
@@ -267,10 +303,57 @@ trait RowSampleCollector: Send {
 }
 
 #[derive(Clone)]
+struct F1Sketch {
+    mask: u64,
+    once: HashSet<u64>,
+    multi: HashSet<u64>,
+}
+
+impl F1Sketch {
+    fn new() -> F1Sketch {
+        F1Sketch {
+            mask: 0,
+            once: HashSet::with_capacity_and_hasher(0, Default::default()),
+            multi: HashSet::with_capacity_and_hasher(0, Default::default()),
+        }
+    }
+
+    fn insert(&mut self, bytes: &[u8]) {
+        let hash = murmurhash3_x64_128(bytes, 0).0;
+        self.insert_hash_value(hash);
+    }
+
+    fn insert_hash_value(&mut self, hash_val: u64) {
+        if (hash_val & self.mask) != 0 {
+            return;
+        }
+        if self.multi.contains(&hash_val) {
+            return;
+        }
+        if self.once.remove(&hash_val) {
+            self.multi.insert(hash_val);
+        } else {
+            self.once.insert(hash_val);
+        }
+    }
+
+    fn into_proto(self, max_fm_sketch_size: usize) -> tipb::FmSketch {
+        let mut fm_sketch = FmSketch::new(max_fm_sketch_size);
+        for hash in self.once {
+            fm_sketch.insert_hash_value(hash);
+        }
+        fm_sketch.into()
+    }
+}
+
+#[derive(Clone)]
 struct BaseRowSampleCollector {
     null_count: Vec<i64>,
     count: u64,
+    sketch_sample_count: u64,
+    max_fm_sketch_size: usize,
     fm_sketches: Vec<FmSketch>,
+    f1_sketches: Vec<F1Sketch>,
     rng: StdRng,
     total_sizes: Vec<i64>,
     memory_usage: usize,
@@ -282,7 +365,10 @@ impl Default for BaseRowSampleCollector {
         BaseRowSampleCollector {
             null_count: vec![],
             count: 0,
+            sketch_sample_count: 0,
+            max_fm_sketch_size: 0,
             fm_sketches: vec![],
+            f1_sketches: vec![],
             rng: StdRng::from_entropy(),
             total_sizes: vec![],
             memory_usage: 0,
@@ -296,7 +382,10 @@ impl BaseRowSampleCollector {
         BaseRowSampleCollector {
             null_count: vec![0; col_and_group_len],
             count: 0,
+            sketch_sample_count: 0,
+            max_fm_sketch_size,
             fm_sketches: vec![FmSketch::new(max_fm_sketch_size); col_and_group_len],
+            f1_sketches: vec![F1Sketch::new(); col_and_group_len],
             rng: StdRng::from_entropy(),
             total_sizes: vec![0; col_and_group_len],
             memory_usage: 0,
@@ -336,7 +425,9 @@ impl BaseRowSampleCollector {
                     hasher.write(&columns_val[*j as usize]);
                 }
             }
-            self.fm_sketches[col_len + i].insert_hash_value(hasher.finish());
+            let hash = hasher.finish();
+            self.fm_sketches[col_len + i].insert_hash_value(hash);
+            self.f1_sketches[col_len + i].insert_hash_value(hash);
         }
     }
 
@@ -353,8 +444,10 @@ impl BaseRowSampleCollector {
             }
             if columns_info[i].as_accessor().is_string_like() {
                 self.fm_sketches[i].insert(&collation_keys_val[i]);
+                self.f1_sketches[i].insert(&collation_keys_val[i]);
             } else {
                 self.fm_sketches[i].insert(&columns_val[i]);
+                self.f1_sketches[i].insert(&columns_val[i]);
             }
             self.total_sizes[i] += columns_val[i].len() as i64 - 1;
         }
@@ -368,6 +461,12 @@ impl BaseRowSampleCollector {
             .map(|fm_sketch| fm_sketch.into())
             .collect();
         proto_collector.set_fm_sketch(pb_fm_sketches);
+        let pb_f1_sketches = mem::take(&mut self.f1_sketches)
+            .into_iter()
+            .map(|fm_sketch| fm_sketch.into_proto(self.max_fm_sketch_size))
+            .collect();
+        proto_collector.set_f1_sketch(pb_f1_sketches);
+        proto_collector.set_sketch_sample_count(self.sketch_sample_count as i64);
         proto_collector.set_total_size(self.total_sizes.clone());
     }
 
@@ -954,6 +1053,18 @@ mod tests {
     use tidb_query_datatype::codec::{datum, datum::Datum};
 
     use super::*;
+
+    #[test]
+    fn test_f1_sketch_proto_respects_max_size() {
+        let max_fm_sketch_size = 8;
+        let mut sketch = F1Sketch::new();
+        for i in 0..(max_fm_sketch_size * 4) {
+            sketch.insert_hash_value((i as u64) * 11400714819323198485);
+        }
+
+        let proto = sketch.into_proto(max_fm_sketch_size);
+        assert!(proto.get_hashset().len() <= max_fm_sketch_size);
+    }
 
     #[test]
     fn test_sample_collector() {
