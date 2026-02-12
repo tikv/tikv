@@ -202,12 +202,12 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.set_requests(vec![req].into());
-        let res: tikv_kv::Result<()> = {
+        let res: tikv_kv::Result<()> = (|| {
             fail_point!("raftkv_async_snapshot_err", |_| {
                 Err(box_err!("injected error for async_snapshot"))
             });
             Ok(())
-        };
+        })();
         let f = if res.is_err() {
             None
         } else {
@@ -296,7 +296,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
         let region_id = ctx.region_id;
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
 
-        let inject_region_not_found = {
+        let inject_region_not_found = (|| {
             // If rid is some, only the specified region reports error.
             // If rid is None, all regions report error.
             fail_point!("raftkv_early_error_report", |rid| -> bool {
@@ -304,7 +304,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
                     .is_none_or(|rid: u64| rid == region_id)
             });
             false
-        };
+        })();
 
         let begin_instant = Instant::now_coarse();
         let mut header = Box::new(new_request_header(ctx, None));

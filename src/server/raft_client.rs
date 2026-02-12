@@ -1358,12 +1358,12 @@ impl HealthChecker {
             return;
         }
         let mut watched_stores = HashSet::default();
-        let check_interval = {
+        let check_interval = (|| {
             fail_point!("network_inspection_interval", |_| {
                 Duration::from_millis(10)
             });
             Duration::from_secs(30)
-        };
+        })();
 
         loop {
             // Check current stores in the pool

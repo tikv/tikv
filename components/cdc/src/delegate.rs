@@ -68,9 +68,10 @@ impl Default for DownstreamId {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum DownstreamState {
     /// It's just created and rejects change events and resolved timestamps.
+    #[default]
     Uninitialized,
     /// It has got a snapshot for incremental scan, and change events will be
     /// accepted. However, it still rejects resolved timestamps.
@@ -79,12 +80,6 @@ pub enum DownstreamState {
     /// now.
     Normal,
     Stopped,
-}
-
-impl Default for DownstreamState {
-    fn default() -> Self {
-        Self::Uninitialized
-    }
 }
 
 /// Should only be called when it's uninitialized or stopped. Return false if
