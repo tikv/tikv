@@ -441,50 +441,46 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                             }
                         }
                     }
+                    if pending_peers.is_empty() {
+                        let mailbox = match store_ctx.router.mailbox(region_id) {
+                            Some(mailbox) => mailbox,
+                            None => {
+                                assert!(
+                                    store_ctx.router.is_shutdown(),
+                                    "{} router should have been closed",
+                                    SlogFormat(&self.logger)
+                                );
+                                return;
+                            }
+                        };
+                        let mut req = req.take().unwrap();
+                        req.mut_header()
+                            .set_flags(WriteBatchFlags::PRE_FLUSH_FINISHED.bits());
+                        let logger = self.logger.clone();
+                        let on_flush_finish = move || {
+                            let (ch, _) = CmdResChannel::pair();
+                            if let Err(e) =
+                                mailbox.force_send(PeerMsg::AdminCommand(RaftRequest::new(req, ch)))
+                            {
+                                error!(
+                                    logger,
+                                    "send PrepareMerge request failed after pre-flush finished";
+                                    "err" => ?e,
+                                );
+                                // We rely on
+                                // `maybe_clean_up_stale_merge_context` to
+                                // clean this up.
+                            }
+                        };
+                        self.start_pre_flush(
+                            store_ctx,
+                            "prepare_merge",
+                            false,
+                            &self.region().clone(),
+                            Box::new(on_flush_finish),
+                        );
+                    }
                 }
-            }
-        }
-        if let Some(PrepareStatus::WaitForTrimStatus {
-            pending_peers, req, ..
-        }) = self.merge_context_mut().prepare_status.as_mut()
-        {
-            if req.is_some() && pending_peers.is_empty() {
-                let mailbox = match store_ctx.router.mailbox(region_id) {
-                    Some(mailbox) => mailbox,
-                    None => {
-                        assert!(
-                            store_ctx.router.is_shutdown(),
-                            "{} router should have been closed",
-                            SlogFormat(&self.logger)
-                        );
-                        return;
-                    }
-                };
-                let mut req = req.take().unwrap();
-                req.mut_header()
-                    .set_flags(WriteBatchFlags::PRE_FLUSH_FINISHED.bits());
-                let logger = self.logger.clone();
-                let on_flush_finish = move || {
-                    let (ch, _) = CmdResChannel::pair();
-                    if let Err(e) =
-                        mailbox.force_send(PeerMsg::AdminCommand(RaftRequest::new(req, ch)))
-                    {
-                        error!(
-                            logger,
-                            "send PrepareMerge request failed after pre-flush finished";
-                            "err" => ?e,
-                        );
-                        // We rely on `maybe_clean_up_stale_merge_context` to
-                        // clean this up.
-                    }
-                };
-                self.start_pre_flush(
-                    store_ctx,
-                    "prepare_merge",
-                    false,
-                    &self.region().clone(),
-                    Box::new(on_flush_finish),
-                );
             }
         }
     }

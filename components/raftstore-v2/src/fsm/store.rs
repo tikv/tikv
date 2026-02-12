@@ -87,15 +87,15 @@ impl<EK> StoreMeta<EK> {
                     return;
                 }
             }
-            if initialized {
-                assert!(
-                    self.region_ranges
-                        .insert((data_end_key(region.get_end_key()), version), region_id)
-                        .is_none(),
-                    "{} region corrupted",
-                    SlogFormat(logger)
-                );
-            }
+        }
+        if initialized {
+            assert!(
+                self.region_ranges
+                    .insert((data_end_key(region.get_end_key()), version), region_id)
+                    .is_none(),
+                "{} region corrupted",
+                SlogFormat(logger)
+            );
         }
     }
 
