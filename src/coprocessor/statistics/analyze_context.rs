@@ -16,7 +16,9 @@ use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_util::quota_limiter::QuotaLimiter;
 use tipb::{self, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 
-use super::{cmsketch::CmSketch, fmsketch::FmSketch, histogram::Histogram};
+use super::{
+    cmsketch::CmSketch, fmsketch::FmSketch, histogram::Histogram, hllsketch::HllSketch,
+};
 use crate::{
     coprocessor::{
         MEMTRACE_ANALYZE,
@@ -142,6 +144,7 @@ impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
             req.get_cmsketch_width() as usize,
         );
         let mut fms = FmSketch::new(req.get_sketch_size() as usize);
+        let mut hll = HllSketch::new();
         let mut topn_heap = BinaryHeap::new();
         // cur_val recording the current value's data and its counts when iterating
         // index's rows. Once we met a new value, the old value will be pushed
@@ -180,6 +183,7 @@ impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
                 }
             }
             fms.insert(&data);
+            hll.insert(&data);
             if stats_version == AnalyzeVersion::V2 {
                 hist.append(&data, true);
                 if cur_val.1 == data {
@@ -213,7 +217,8 @@ impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
             }
         }
 
-        let res: tipb::AnalyzeIndexResp = AnalyzeIndexResult::new(hist, cms, Some(fms)).into();
+        let res: tipb::AnalyzeIndexResp =
+            AnalyzeIndexResult::new(hist, cms, Some(fms), Some(hll)).into();
         let dt = box_try!(res.write_to_bytes());
         Ok(dt)
     }

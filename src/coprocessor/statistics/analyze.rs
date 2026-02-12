@@ -24,11 +24,15 @@ use tikv_util::{
 };
 use tipb::{self, AnalyzeColumnsReq};
 
-use super::{cmsketch::CmSketch, fmsketch::FmSketch, histogram::Histogram};
+use super::{
+    cmsketch::CmSketch, fmsketch::FmSketch, histogram::Histogram, hllsketch::HllSketch,
+};
 use crate::{
     coprocessor::{MEMTRACE_ANALYZE, dag::TikvStorage, *},
     storage::{Snapshot, SnapshotStore},
 };
+
+const SKETCH_SAMPLE_RATE: f64 = 0.05;
 
 pub(crate) struct RowSampleBuilder<S: Snapshot, F: KvFormat> {
     pub(crate) data: BatchTableScanExecutor<TikvStorage<SnapshotStore<S>>, F>,
@@ -144,14 +148,27 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                         }
                         read_size += column_vals[i].len();
                     }
-                    collector.mut_base().count += 1;
+                    let collect_sketch = {
+                        let base = collector.mut_base();
+                        base.count += 1;
+                        base.rng.gen_range(0.0, 1.0) < SKETCH_SAMPLE_RATE
+                    };
+                    if collect_sketch {
+                        collector.mut_base().sketch_sample_count += 1;
+                    }
                     collector.collect_column_group(
                         &column_vals,
                         &collation_key_vals,
                         &self.columns_info,
                         &self.column_groups,
+                        collect_sketch,
                     );
-                    collector.collect_column(&column_vals, &collation_key_vals, &self.columns_info);
+                    collector.collect_column(
+                        &column_vals,
+                        &collation_key_vals,
+                        &self.columns_info,
+                        collect_sketch,
+                    );
                 }
             }
 
@@ -185,6 +202,8 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             let col_group_pos = self.columns_info.len() + i;
             collector.mut_base().fm_sketches[col_group_pos] =
                 collector.mut_base().fm_sketches[col_pos].clone();
+            collector.mut_base().hll_sketches[col_group_pos] =
+                collector.mut_base().hll_sketches[col_pos].clone();
             collector.mut_base().null_count[col_group_pos] =
                 collector.mut_base().null_count[col_pos];
             collector.mut_base().total_sizes[col_group_pos] =
@@ -202,12 +221,14 @@ trait RowSampleCollector: Send {
         collation_keys_val: &[Vec<u8>],
         columns_info: &[tipb::ColumnInfo],
         column_groups: &[tipb::AnalyzeColumnGroup],
+        collect_sketch: bool,
     );
     fn collect_column(
         &mut self,
         columns_val: &[Vec<u8>],
         collation_keys_val: &[Vec<u8>],
         columns_info: &[tipb::ColumnInfo],
+        collect_sketch: bool,
     );
     fn sampling(&mut self, data: &[Vec<u8>]);
     fn to_proto(&mut self) -> tipb::RowSampleCollector;
@@ -225,7 +246,9 @@ trait RowSampleCollector: Send {
 struct BaseRowSampleCollector {
     null_count: Vec<i64>,
     count: u64,
+    sketch_sample_count: u64,
     fm_sketches: Vec<FmSketch>,
+    hll_sketches: Vec<HllSketch>,
     rng: StdRng,
     total_sizes: Vec<i64>,
     memory_usage: usize,
@@ -237,7 +260,9 @@ impl Default for BaseRowSampleCollector {
         BaseRowSampleCollector {
             null_count: vec![],
             count: 0,
+            sketch_sample_count: 0,
             fm_sketches: vec![],
+            hll_sketches: vec![],
             rng: StdRng::from_entropy(),
             total_sizes: vec![],
             memory_usage: 0,
@@ -251,7 +276,9 @@ impl BaseRowSampleCollector {
         BaseRowSampleCollector {
             null_count: vec![0; col_and_group_len],
             count: 0,
+            sketch_sample_count: 0,
             fm_sketches: vec![FmSketch::new(max_fm_sketch_size); col_and_group_len],
+            hll_sketches: vec![HllSketch::new(); col_and_group_len],
             rng: StdRng::from_entropy(),
             total_sizes: vec![0; col_and_group_len],
             memory_usage: 0,
@@ -265,6 +292,7 @@ impl BaseRowSampleCollector {
         collation_keys_val: &[Vec<u8>],
         columns_info: &[tipb::ColumnInfo],
         column_groups: &[tipb::AnalyzeColumnGroup],
+        collect_sketch: bool,
     ) {
         let col_len = columns_val.len();
         for i in 0..column_groups.len() {
@@ -283,6 +311,9 @@ impl BaseRowSampleCollector {
                 }
                 self.total_sizes[col_len + i] += columns_val[*j as usize].len() as i64 - 1
             }
+            if !collect_sketch {
+                continue;
+            }
             let mut hasher = Hasher128::with_seed(0);
             for j in offsets {
                 if columns_info[*j as usize].as_accessor().is_string_like() {
@@ -291,7 +322,9 @@ impl BaseRowSampleCollector {
                     hasher.write(&columns_val[*j as usize]);
                 }
             }
-            self.fm_sketches[col_len + i].insert_hash_value(hasher.finish());
+            let hash = hasher.finish();
+            self.fm_sketches[col_len + i].insert_hash_value(hash);
+            self.hll_sketches[col_len + i].insert_hash_value(hash);
         }
     }
 
@@ -300,16 +333,25 @@ impl BaseRowSampleCollector {
         columns_val: &[Vec<u8>],
         collation_keys_val: &[Vec<u8>],
         columns_info: &[tipb::ColumnInfo],
+        collect_sketch: bool,
     ) {
         for i in 0..columns_val.len() {
             if columns_val[i][0] == NIL_FLAG {
                 self.null_count[i] += 1;
                 continue;
             }
-            if columns_info[i].as_accessor().is_string_like() {
-                self.fm_sketches[i].insert(&collation_keys_val[i]);
-            } else {
-                self.fm_sketches[i].insert(&columns_val[i]);
+            if collect_sketch {
+                let encoded_value = if columns_info[i].as_accessor().is_string_like() {
+                    &collation_keys_val[i]
+                } else {
+                    &columns_val[i]
+                };
+                self.hll_sketches[i].insert(encoded_value);
+                if columns_info[i].as_accessor().is_string_like() {
+                    self.fm_sketches[i].insert(&collation_keys_val[i]);
+                } else {
+                    self.fm_sketches[i].insert(&columns_val[i]);
+                }
             }
             self.total_sizes[i] += columns_val[i].len() as i64 - 1;
         }
@@ -323,6 +365,11 @@ impl BaseRowSampleCollector {
             .map(|fm_sketch| fm_sketch.into())
             .collect();
         proto_collector.set_fm_sketch(pb_fm_sketches);
+        let pb_hll_sketches = mem::take(&mut self.hll_sketches)
+            .into_iter()
+            .map(|hll_sketch| hll_sketch.into())
+            .collect();
+        proto_collector.set_hll_sketch(pb_hll_sketches);
         proto_collector.set_total_size(self.total_sizes.clone());
     }
 
@@ -381,12 +428,14 @@ impl RowSampleCollector for BernoulliRowSampleCollector {
         collation_keys_val: &[Vec<u8>],
         columns_info: &[tipb::ColumnInfo],
         column_groups: &[tipb::AnalyzeColumnGroup],
+        collect_sketch: bool,
     ) {
         self.base.collect_column_group(
             columns_val,
             collation_keys_val,
             columns_info,
             column_groups,
+            collect_sketch,
         );
     }
     fn collect_column(
@@ -394,9 +443,14 @@ impl RowSampleCollector for BernoulliRowSampleCollector {
         columns_val: &[Vec<u8>],
         collation_keys_val: &[Vec<u8>],
         columns_info: &[tipb::ColumnInfo],
+        collect_sketch: bool,
     ) {
-        self.base
-            .collect_column(columns_val, collation_keys_val, columns_info);
+        self.base.collect_column(
+            columns_val,
+            collation_keys_val,
+            columns_info,
+            collect_sketch,
+        );
         self.sampling(columns_val);
     }
     fn sampling(&mut self, data: &[Vec<u8>]) {
@@ -458,12 +512,14 @@ impl RowSampleCollector for ReservoirRowSampleCollector {
         collation_keys_val: &[Vec<u8>],
         columns_info: &[tipb::ColumnInfo],
         column_groups: &[tipb::AnalyzeColumnGroup],
+        collect_sketch: bool,
     ) {
         self.base.collect_column_group(
             columns_val,
             collation_keys_val,
             columns_info,
             column_groups,
+            collect_sketch,
         );
     }
 
@@ -472,9 +528,14 @@ impl RowSampleCollector for ReservoirRowSampleCollector {
         columns_val: &[Vec<u8>],
         collation_keys_val: &[Vec<u8>],
         columns_info: &[tipb::ColumnInfo],
+        collect_sketch: bool,
     ) {
-        self.base
-            .collect_column(columns_val, collation_keys_val, columns_info);
+        self.base.collect_column(
+            columns_val,
+            collation_keys_val,
+            columns_info,
+            collect_sketch,
+        );
         self.sampling(columns_val);
     }
 
@@ -609,6 +670,7 @@ impl<S: Snapshot, F: KvFormat> SampleBuilder<S, F> {
         let mut common_handle_hist = Histogram::new(self.max_bucket_size);
         let mut common_handle_cms = CmSketch::new(self.cm_sketch_depth, self.cm_sketch_width);
         let mut common_handle_fms = FmSketch::new(self.max_fm_sketch_size);
+        let mut common_handle_hll = HllSketch::new();
         let mut ctx = EvalContext::default();
         while !is_drained {
             let result = self.data.next_batch(BATCH_MAX_SIZE).await;
@@ -643,6 +705,7 @@ impl<S: Snapshot, F: KvFormat> SampleBuilder<S, F> {
                         }
                     }
                     common_handle_fms.insert(&data);
+                    common_handle_hll.insert(&data);
                     common_handle_hist.append(&data, false)
                 }
             }
@@ -706,6 +769,7 @@ impl<S: Snapshot, F: KvFormat> SampleBuilder<S, F> {
                 common_handle_hist,
                 common_handle_cms,
                 Some(common_handle_fms),
+                Some(common_handle_hll),
             ))
         } else {
             None
@@ -723,6 +787,7 @@ struct SampleCollector {
     count: u64,
     max_sample_size: usize,
     fm_sketch: FmSketch,
+    hll_sketch: HllSketch,
     cm_sketch: Option<CmSketch>,
     rng: StdRng,
     total_size: u64,
@@ -741,6 +806,7 @@ impl SampleCollector {
             count: 0,
             max_sample_size,
             fm_sketch: FmSketch::new(max_fm_sketch_size),
+            hll_sketch: HllSketch::new(),
             cm_sketch: CmSketch::new(cm_sketch_depth, cm_sketch_width),
             rng: StdRng::from_entropy(),
             total_size: 0,
@@ -754,6 +820,7 @@ impl SampleCollector {
         }
         self.count += 1;
         self.fm_sketch.insert(&data);
+        self.hll_sketch.insert(&data);
         if let Some(c) = self.cm_sketch.as_mut() {
             c.insert(&data);
         }
@@ -777,6 +844,7 @@ impl From<SampleCollector> for tipb::SampleCollector {
         s.set_null_count(collector.null_count as i64);
         s.set_count(collector.count as i64);
         s.set_fm_sketch(collector.fm_sketch.into());
+        s.set_hll_sketch(collector.hll_sketch.into());
         s.set_samples(collector.samples.into());
         if let Some(c) = collector.cm_sketch {
             s.set_cm_sketch(c.into())
@@ -850,6 +918,7 @@ pub(crate) struct AnalyzeIndexResult {
     hist: Histogram,
     cms: Option<CmSketch>,
     fms: Option<FmSketch>,
+    hll: Option<HllSketch>,
 }
 
 impl AnalyzeIndexResult {
@@ -857,8 +926,14 @@ impl AnalyzeIndexResult {
         hist: Histogram,
         cms: Option<CmSketch>,
         fms: Option<FmSketch>,
+        hll: Option<HllSketch>,
     ) -> AnalyzeIndexResult {
-        AnalyzeIndexResult { hist, cms, fms }
+        AnalyzeIndexResult {
+            hist,
+            cms,
+            fms,
+            hll,
+        }
     }
 }
 
@@ -872,6 +947,9 @@ impl From<AnalyzeIndexResult> for tipb::AnalyzeIndexResp {
         if let Some(f) = result.fms {
             let mut s = tipb::SampleCollector::default();
             s.set_fm_sketch(f.into());
+            if let Some(hll) = result.hll {
+                s.set_hll_sketch(hll.into());
+            }
             res.set_collector(s);
         }
         res
@@ -1125,7 +1203,7 @@ mod benches {
         let mut collector = BaseRowSampleCollector::new(10000, 4);
         let (column_vals, collation_key_vals, columns_info, _) = prepare_arguments();
         b.iter(|| {
-            collector.collect_column(&column_vals, &collation_key_vals, &columns_info);
+            collector.collect_column(&column_vals, &collation_key_vals, &columns_info, true);
         })
     }
 
@@ -1139,6 +1217,7 @@ mod benches {
                 &collation_key_vals,
                 &columns_info,
                 &column_groups,
+                true,
             );
         })
     }
