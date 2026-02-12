@@ -557,8 +557,10 @@ where
 
     fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
         let tag = record.tag();
-        if self.slow.is_some() && tag.starts_with("slow_log") {
-            self.slow.as_ref().unwrap().log(record, values)
+        if let Some(slow) = self.slow.as_ref()
+            && tag == "slow_log"
+        {
+            slow.log(record, values)
         } else if tag.starts_with("rocksdb_log") {
             self.rocksdb.log(record, values)
         } else if tag.starts_with("raftdb_log") {
@@ -1068,13 +1070,13 @@ mod tests {
         .fuse();
         let logger = slog::Logger::root_typed(drain, slog_o!());
         slog_info!(logger, "Hello World");
-        slog_info!(logger, #"slow_log", "nothing");
-        slog_info!(logger, #"slow_log", "🆗"; "takes" => LogCost(30));
-        slog_info!(logger, #"slow_log", "🐢"; "takes" => LogCost(200));
-        slog_info!(logger, #"slow_log", "🐢🐢"; "takes" => LogCost(201));
-        slog_info!(logger, #"slow_log", "without cost"; "a" => "b");
-        slog_info!(logger, #"slow_log_by_timer", "⏰");
-        slog_info!(logger, #"slow_log_by_timer", "⏰"; "takes" => LogCost(1000));
+        slog_info!(logger, # "slow_log", "nothing");
+        slog_info!(logger, # "slow_log", "🆗"; "takes" => LogCost(30));
+        slog_info!(logger, # "slow_log", "🐢"; "takes" => LogCost(200));
+        slog_info!(logger, # "slow_log", "🐢🐢"; "takes" => LogCost(201));
+        slog_info!(logger, # "slow_log", "without cost"; "a" => "b");
+        slog_info!(logger, # "slow_log_by_timer", "⏰");
+        slog_info!(logger, # "slow_log_by_timer", "⏰"; "takes" => LogCost(1000));
         let re = Regex::new(r"(?P<datetime>\[.*?\])\s(?P<level>\[.*?\])\s(?P<source_file>\[.*?\])\s(?P<msg>\[.*?\])\s?(?P<kvs>\[.*\])?").unwrap();
         NORMAL_BUFFER.with(|buffer| {
             let buffer = buffer.borrow_mut();

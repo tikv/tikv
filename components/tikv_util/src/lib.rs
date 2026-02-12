@@ -613,7 +613,9 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
 /// Checks environment variables that affect TiKV.
 pub fn check_environment_variables() {
     if cfg!(unix) && env::var("TZ").is_err() {
-        env::set_var("TZ", ":/etc/localtime");
+        unsafe {
+            env::set_var("TZ", ":/etc/localtime");
+        }
         warn!("environment variable `TZ` is missing, using `/etc/localtime`");
     }
 

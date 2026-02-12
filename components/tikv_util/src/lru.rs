@@ -28,13 +28,15 @@ struct Trace<K> {
 
 #[inline]
 unsafe fn suture<K>(mut leading: NonNull<Record<K>>, mut following: NonNull<Record<K>>) {
-    leading.as_mut().next = following;
-    following.as_mut().prev = leading;
+    unsafe {
+        leading.as_mut().next = following;
+        following.as_mut().prev = leading;
+    }
 }
 
 #[inline]
 unsafe fn cut_out<K>(record: NonNull<Record<K>>) {
-    suture(record.as_ref().prev, record.as_ref().next)
+    unsafe { suture(record.as_ref().prev, record.as_ref().next) }
 }
 
 impl<K> Trace<K> {
