@@ -431,7 +431,7 @@ async fn accept_missing(
 ) -> Result<u64> {
     let mut digest = Digest::default();
     let mut received_bytes: u64 = 0;
-    let mut key_importer = key_manager.as_deref().map(|m| DataKeyImporter::new(m));
+    let mut key_importer = key_manager.as_deref().map(DataKeyImporter::new);
     for name in missing_ssts {
         let chunk = match stream.next().await {
             Some(Ok(mut req)) if req.has_chunk() => req.take_chunk(),
@@ -1027,7 +1027,7 @@ pub fn copy_tablet_snapshot(
     let mut key_importer = recver_snap_mgr
         .key_manager()
         .as_deref()
-        .map(|m| DataKeyImporter::new(m));
+        .map(DataKeyImporter::new);
     for path in files {
         let recv = recv_path.join(path.file_name().unwrap());
         std::fs::copy(&path, &recv)?;

@@ -1756,10 +1756,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         while let Some(ev) = res.next().await {
             match ev {
                 WriteEvent::Committed => {
-                    let early_return = (|| {
+                    let early_return = {
                         fail_point!("before_async_apply_prewrite_finish", |_| false);
                         true
-                    })();
+                    };
                     if WriteEvent::subscribed_committed(subscribed) && early_return {
                         // Currently, the only case that response is returned after finishing
                         // commit is async applying prewrites for async commit transactions.
@@ -1775,10 +1775,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     }
                 }
                 WriteEvent::Proposed => {
-                    let early_return = (|| {
+                    let early_return = {
                         fail_point!("before_pipelined_write_finish", |_| false);
                         true
-                    })();
+                    };
                     if WriteEvent::subscribed_proposed(subscribed) && early_return {
                         // The normal write process is respond to clients and release
                         // latches after async write finished. If pipelined pessimistic

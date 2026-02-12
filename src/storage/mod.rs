@@ -3164,7 +3164,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         self.sched_raw_command(metadata, priority, CMD, async move {
             let key = F::encode_raw_key_owned(key, None);
             let cmd = RawCompareAndSwap::new(cf, key, previous_value, value, ttl, api_version, ctx);
-            Self::sched_raw_atomic_command(sched, cmd, Box::new(|res| callback(res)));
+            Self::sched_raw_atomic_command(sched, cmd, Box::new(callback));
         })
     }
 
@@ -3193,7 +3193,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         self.sched_raw_command(metadata, priority, CMD, async move {
             let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls, None);
             let cmd = RawAtomicStore::new(cf, modifies, ctx);
-            Self::sched_raw_atomic_command(sched, cmd, Box::new(|res| callback(res)));
+            Self::sched_raw_atomic_command(sched, cmd, Box::new(callback));
         })
     }
 
@@ -3218,7 +3218,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 .map(|k| Self::raw_delete_request_to_modify(cf, k, None))
                 .collect();
             let cmd = RawAtomicStore::new(cf, modifies, ctx);
-            Self::sched_raw_atomic_command(sched, cmd, Box::new(|res| callback(res)));
+            Self::sched_raw_atomic_command(sched, cmd, Box::new(callback));
         })
     }
 
@@ -3347,7 +3347,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             self.read_pool
                 .spawn_handle(future, priority, task_id, metadata, resource_limiter)
                 .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-                .and_then(|res| future::ready(res)),
+                .and_then(future::ready),
         )
     }
 
@@ -7447,9 +7447,8 @@ mod tests {
             (b"c".to_vec(), b"c3".to_vec()),
         ]);
         // TODO: refactor to use `Api` parameter.
-        assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false),
-            true
+        assert!(
+            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false)
         );
 
         let ranges = make_ranges(vec![
@@ -7457,9 +7456,8 @@ mod tests {
             (b"b".to_vec(), vec![]),
             (b"c".to_vec(), vec![]),
         ]);
-        assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false),
-            true
+        assert!(
+            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false)
         );
 
         let ranges = make_ranges(vec![
@@ -7467,9 +7465,8 @@ mod tests {
             (b"b3".to_vec(), b"b".to_vec()),
             (b"c3".to_vec(), b"c".to_vec()),
         ]);
-        assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false),
-            false
+        assert!(
+            !<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false)
         );
 
         // if end_key is omitted, the next start_key is used instead. so, false is
@@ -7479,9 +7476,8 @@ mod tests {
             (b"b".to_vec(), vec![]),
             (b"a".to_vec(), vec![]),
         ]);
-        assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false),
-            false
+        assert!(
+            !<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false)
         );
 
         let ranges = make_ranges(vec![
@@ -7489,9 +7485,8 @@ mod tests {
             (b"b3".to_vec(), b"b".to_vec()),
             (b"c3".to_vec(), b"c".to_vec()),
         ]);
-        assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true),
-            true
+        assert!(
+            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true)
         );
 
         let ranges = make_ranges(vec![
@@ -7499,9 +7494,8 @@ mod tests {
             (b"b3".to_vec(), vec![]),
             (b"a3".to_vec(), vec![]),
         ]);
-        assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true),
-            true
+        assert!(
+            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true)
         );
 
         let ranges = make_ranges(vec![
@@ -7509,9 +7503,8 @@ mod tests {
             (b"b".to_vec(), b"b3".to_vec()),
             (b"c".to_vec(), b"c3".to_vec()),
         ]);
-        assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true),
-            false
+        assert!(
+            !<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true)
         );
 
         let ranges = make_ranges(vec![
@@ -7519,9 +7512,8 @@ mod tests {
             (b"b3".to_vec(), vec![]),
             (b"c3".to_vec(), vec![]),
         ]);
-        assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true),
-            false
+        assert!(
+            !<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true)
         );
     }
 
@@ -9119,14 +9111,14 @@ mod tests {
         let results_values = |res: Vec<Option<Value>>| {
             PessimisticLockResults(
                 res.into_iter()
-                    .map(|v| PessimisticLockKeyResult::Value(v))
+                    .map(PessimisticLockKeyResult::Value)
                     .collect::<Vec<_>>(),
             )
         };
         let results_existence = |res: Vec<bool>| {
             PessimisticLockResults(
                 res.into_iter()
-                    .map(|v| PessimisticLockKeyResult::Existence(v))
+                    .map(PessimisticLockKeyResult::Existence)
                     .collect::<Vec<_>>(),
             )
         };
@@ -10031,7 +10023,7 @@ mod tests {
                         hash: Key::from_raw(&k).gen_hash(),
                     }
                 );
-                assert_eq!(is_first_lock, true);
+                assert!(is_first_lock);
                 assert_eq!(timeout, Some(WaitTimeout::Millis(100)));
             }
 

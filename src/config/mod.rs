@@ -6212,7 +6212,7 @@ mod tests {
 
         // update some configs on default cf
         let cf_opts = db.get_options_cf(CF_DEFAULT).unwrap();
-        assert_eq!(cf_opts.get_disable_auto_compactions(), false);
+        assert!(!cf_opts.get_disable_auto_compactions());
         assert_eq!(cf_opts.get_target_file_size_base(), ReadableSize::mb(64).0);
 
         let mut change = HashMap::new();
@@ -6227,7 +6227,7 @@ mod tests {
         cfg_controller.update(change).unwrap();
 
         let cf_opts = db.get_options_cf(CF_DEFAULT).unwrap();
-        assert_eq!(cf_opts.get_disable_auto_compactions(), true);
+        assert!(cf_opts.get_disable_auto_compactions());
         assert_eq!(cf_opts.get_target_file_size_base(), ReadableSize::mb(32).0);
     }
 
@@ -6241,17 +6241,15 @@ mod tests {
         let db = storage.get_engine().get_rocksdb();
 
         // update rate_limiter_auto_tuned
-        assert_eq!(
-            db.get_db_options().get_rate_limiter_auto_tuned().unwrap(),
-            true
+        assert!(
+            db.get_db_options().get_rate_limiter_auto_tuned().unwrap()
         );
 
         cfg_controller
             .update_config("rocksdb.rate_limiter_auto_tuned", "false")
             .unwrap();
-        assert_eq!(
-            db.get_db_options().get_rate_limiter_auto_tuned().unwrap(),
-            false
+        assert!(
+            !db.get_db_options().get_rate_limiter_auto_tuned().unwrap()
         );
     }
 
@@ -6718,7 +6716,7 @@ mod tests {
         let should_delay = block_on(quota_limiter.consume_sample(sample, false));
         assert_eq!(should_delay, Duration::from_millis(50));
 
-        assert_eq!(cfg.quota.enable_auto_tune, false);
+        assert!(!cfg.quota.enable_auto_tune);
         cfg_controller
             .update_config("quota.enable-auto-tune", "true")
             .unwrap();
@@ -7961,33 +7959,30 @@ mod tests {
             50
         );
 
-        assert_eq!(
+        assert!(
             db.get_options_cf(CF_DEFAULT)
                 .unwrap()
-                .get_disable_write_stall(),
-            true
+                .get_disable_write_stall()
         );
-        assert_eq!(flow_controller.enabled(), true);
+        assert!(flow_controller.enabled());
         cfg_controller
             .update_config("storage.flow-control.enable", "false")
             .unwrap();
-        assert_eq!(
-            db.get_options_cf(CF_DEFAULT)
+        assert!(
+            !db.get_options_cf(CF_DEFAULT)
                 .unwrap()
-                .get_disable_write_stall(),
-            false
+                .get_disable_write_stall()
         );
-        assert_eq!(flow_controller.enabled(), false);
+        assert!(!flow_controller.enabled());
         cfg_controller
             .update_config("storage.flow-control.enable", "true")
             .unwrap();
-        assert_eq!(
+        assert!(
             db.get_options_cf(CF_DEFAULT)
                 .unwrap()
-                .get_disable_write_stall(),
-            true
+                .get_disable_write_stall()
         );
-        assert_eq!(flow_controller.enabled(), true);
+        assert!(flow_controller.enabled());
     }
 
     #[test]

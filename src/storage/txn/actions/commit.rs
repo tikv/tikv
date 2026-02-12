@@ -245,7 +245,6 @@ pub fn commit<S: Snapshot>(
 }
 
 pub mod tests {
-    #[cfg(test)]
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
     #[cfg(test)]
@@ -696,7 +695,7 @@ pub mod tests {
                     assert_eq!(key, k.to_vec());
                     assert_eq!(start_ts,  10.into(), "key: {}", key_str);
                     assert_eq!( commit_ts,  20.into(), "key: {}", key_str);
-                    assert!(matches!(mvcc_info.clone(), None), "key: {}", key_str);
+                    assert!(mvcc_info.clone().is_none(), "key: {}", key_str);
                     true
                 }
             ));

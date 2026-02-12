@@ -447,7 +447,7 @@ impl<E: Engine> GcRunnerCore<E> {
                 .last()
                 .unwrap()
                 .to_raw()
-                .map_err(|e| EngineError::Codec(e))?;
+                .map_err(EngineError::Codec)?;
             k.push(0);
             Key::from_raw(&k)
         };
@@ -568,7 +568,7 @@ impl<E: Engine> GcRunnerCore<E> {
                 .last()
                 .unwrap()
                 .to_raw()
-                .map_err(|e| EngineError::Codec(e))?;
+                .map_err(EngineError::Codec)?;
             k.push(0);
             Key::from_raw(&k)
         };

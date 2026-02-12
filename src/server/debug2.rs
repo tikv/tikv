@@ -841,7 +841,7 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
     fn get_store_ident(&self) -> Result<StoreIdent> {
         self.raft_engine
             .get_store_ident()
-            .map_err(|e| Error::EngineTrait(e))
+            .map_err(Error::EngineTrait)
             .and_then(|ident| match ident {
                 Some(ident) => Ok(ident),
                 None => Err(Error::NotFound("No store ident key".to_owned())),
@@ -1179,7 +1179,7 @@ fn deivde_regions_for_concurrency<ER: RaftEngine>(
         region_sizes.push((region_size, region_state));
         total_size += region_size;
     }
-    region_sizes.sort_by(|a, b| a.0.cmp(&b.0));
+    region_sizes.sort_by_key(|a| a.0);
 
     let group_size = total_size.div_ceil(threads);
     let mut cur_group = vec![];
@@ -1751,7 +1751,7 @@ mod tests {
         debugger.raft_engine.consume(&mut lb, true).unwrap();
 
         let mut bad_regions = debugger.bad_regions().unwrap();
-        bad_regions.sort_by(|a, b| a.0.cmp(&b.0));
+        bad_regions.sort_by_key(|a| a.0);
         assert_eq!(bad_regions.len(), 4);
         for (i, (region_id, _)) in bad_regions.into_iter().enumerate() {
             assert_eq!(region_id, (10 + i) as u64);

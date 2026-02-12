@@ -986,9 +986,9 @@ pub(super) mod tests {
 
     pub fn test_flow_controller_basic_impl(flow_controller: &FlowController, region_id: u64) {
         // enable flow controller
-        assert_eq!(flow_controller.enabled(), true);
-        assert_eq!(flow_controller.should_drop(region_id), false);
-        assert_eq!(flow_controller.is_unlimited(region_id), true);
+        assert!(flow_controller.enabled());
+        assert!(!flow_controller.should_drop(region_id));
+        assert!(flow_controller.is_unlimited(region_id));
         assert_eq!(flow_controller.consume(region_id, 0), Duration::ZERO);
         assert_eq!(flow_controller.consume(region_id, 1000), Duration::ZERO);
 
@@ -998,14 +998,14 @@ pub(super) mod tests {
             ConfigValue::Bool(false),
         )]);
         flow_controller.update_config(change).unwrap();
-        assert_eq!(flow_controller.enabled(), false);
+        assert!(!flow_controller.enabled());
         // re-enable flow controller
         let change =
             std::collections::HashMap::from_iter([("enable".to_string(), ConfigValue::Bool(true))]);
         flow_controller.update_config(change).unwrap();
-        assert_eq!(flow_controller.enabled(), true);
-        assert_eq!(flow_controller.should_drop(region_id), false);
-        assert_eq!(flow_controller.is_unlimited(region_id), true);
+        assert!(flow_controller.enabled());
+        assert!(!flow_controller.should_drop(region_id));
+        assert!(flow_controller.is_unlimited(region_id));
         assert_eq!(flow_controller.consume(region_id, 1), Duration::ZERO);
     }
 
@@ -1043,9 +1043,9 @@ pub(super) mod tests {
         // exceeds the threshold on start
         stub.0.num_memtables.store(8, Ordering::Relaxed);
         send_flow_info(tx, region_id);
-        assert_eq!(flow_controller.should_drop(region_id), false);
+        assert!(!flow_controller.should_drop(region_id));
         // on start check forbids flow control
-        assert_eq!(flow_controller.is_unlimited(region_id), true);
+        assert!(flow_controller.is_unlimited(region_id));
         // once falls below the threshold, pass the on start check
         stub.0.num_memtables.store(1, Ordering::Relaxed);
         send_flow_info(tx, region_id);
@@ -1053,14 +1053,14 @@ pub(super) mod tests {
         // threshold
         stub.0.num_memtables.store(6, Ordering::Relaxed);
         send_flow_info(tx, region_id);
-        assert_eq!(flow_controller.should_drop(region_id), false);
-        assert_eq!(flow_controller.is_unlimited(region_id), true);
+        assert!(!flow_controller.should_drop(region_id));
+        assert!(flow_controller.is_unlimited(region_id));
 
         // the average of sliding window exceeds the threshold
         stub.0.num_memtables.store(6, Ordering::Relaxed);
         send_flow_info(tx, region_id);
-        assert_eq!(flow_controller.should_drop(region_id), false);
-        assert_eq!(flow_controller.is_unlimited(region_id), false);
+        assert!(!flow_controller.should_drop(region_id));
+        assert!(!flow_controller.is_unlimited(region_id));
         assert_ne!(flow_controller.consume(region_id, 2000), Duration::ZERO);
 
         // increase the threshold.
@@ -1070,8 +1070,8 @@ pub(super) mod tests {
         )]);
         flow_controller.update_config(change).unwrap();
         send_flow_info(tx, region_id);
-        assert_eq!(flow_controller.should_drop(region_id), false);
-        assert_eq!(flow_controller.is_unlimited(region_id), true);
+        assert!(!flow_controller.should_drop(region_id));
+        assert!(flow_controller.is_unlimited(region_id));
 
         // decrease the threshold.
         let change = std::collections::HashMap::from_iter([(
@@ -1080,14 +1080,14 @@ pub(super) mod tests {
         )]);
         flow_controller.update_config(change).unwrap();
         send_flow_info(tx, region_id);
-        assert_eq!(flow_controller.should_drop(region_id), false);
-        assert_eq!(flow_controller.is_unlimited(region_id), false);
+        assert!(!flow_controller.should_drop(region_id));
+        assert!(!flow_controller.is_unlimited(region_id));
 
         // not throttle once the number of memtables falls below the threshold
         stub.0.num_memtables.store(1, Ordering::Relaxed);
         send_flow_info(tx, region_id);
-        assert_eq!(flow_controller.should_drop(region_id), false);
-        assert_eq!(flow_controller.is_unlimited(region_id), true);
+        assert!(!flow_controller.should_drop(region_id));
+        assert!(flow_controller.is_unlimited(region_id));
     }
 
     #[test]
@@ -1117,9 +1117,9 @@ pub(super) mod tests {
         // exceeds the threshold
         stub.0.num_l0_files.store(30, Ordering::Relaxed);
         send_flow_info(tx, region_id);
-        assert_eq!(flow_controller.should_drop(region_id), false);
+        assert!(!flow_controller.should_drop(region_id));
         // on start check forbids flow control
-        assert_eq!(flow_controller.is_unlimited(region_id), true);
+        assert!(flow_controller.is_unlimited(region_id));
         // once fall below the threshold, pass the on start check
         stub.0.num_l0_files.store(10, Ordering::Relaxed);
         send_flow_info(tx, region_id);
@@ -1127,8 +1127,8 @@ pub(super) mod tests {
         // exceeds the threshold, throttle now
         stub.0.num_l0_files.store(30, Ordering::Relaxed);
         send_flow_info(tx, region_id);
-        assert_eq!(flow_controller.should_drop(region_id), false);
-        assert_eq!(flow_controller.is_unlimited(region_id), false);
+        assert!(!flow_controller.should_drop(region_id));
+        assert!(!flow_controller.is_unlimited(region_id));
         assert_ne!(flow_controller.consume(region_id, 2000), Duration::ZERO);
 
         // increase the threshold.
@@ -1138,8 +1138,8 @@ pub(super) mod tests {
         )]);
         flow_controller.update_config(change).unwrap();
         send_flow_info(tx, region_id);
-        assert_eq!(flow_controller.should_drop(region_id), false);
-        assert_eq!(flow_controller.is_unlimited(region_id), true);
+        assert!(!flow_controller.should_drop(region_id));
+        assert!(flow_controller.is_unlimited(region_id));
     }
 
     #[test]

@@ -1306,7 +1306,7 @@ mod tests {
 
         FixtureStore::new(
             data.into_iter()
-                .map(|(k, v)| (k, v.map(|val| ValueEntry::from_value(val))))
+                .map(|(k, v)| (k, v.map(ValueEntry::from_value)))
                 .collect(),
         )
     }

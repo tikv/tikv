@@ -62,13 +62,13 @@ const MIN_SNAP_SEND_SPEED: u64 = MIB;
 
 #[inline]
 fn get_snap_timeout(size: u64) -> Duration {
-    let timeout = (|| {
+    let timeout = {
         fail_point!("snap_send_duration_timeout", |t| -> Duration {
             let t = t.unwrap().parse::<u64>();
             Duration::from_millis(t.unwrap())
         });
         SNAP_SEND_TIMEOUT_DURATION
-    })();
+    };
     let max_expected_dur = Duration::from_secs(size / MIN_SNAP_SEND_SPEED);
     std::cmp::max(timeout, max_expected_dur)
 }

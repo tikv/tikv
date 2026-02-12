@@ -1369,7 +1369,7 @@ impl MvccChecker {
 
     fn check_mvcc_key(&mut self, wb: &mut RocksWriteBatchVec, key: &[u8]) -> Result<()> {
         self.scan_count += 1;
-        if self.scan_count % 1_000_000 == 0 {
+        if self.scan_count.is_multiple_of(1_000_000) {
             info!(
                 "thread {}: scan {} rows",
                 self.thread_index, self.scan_count

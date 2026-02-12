@@ -521,7 +521,7 @@ where
         if res.is_ok() {
             // If rid is some, only the specified region reports error.
             // If rid is None, all regions report error.
-            res = (|| {
+            res = {
                 fail_point!("raftkv_early_error_report", |rid| {
                     let region_id = ctx.get_region_id();
                     rid.and_then(|rid| {
@@ -531,7 +531,7 @@ where
                     .ok_or_else(|| RaftServerError::RegionNotFound(region_id).into())
                 });
                 Ok(())
-            })();
+            };
         }
 
         let reqs: Vec<Request> = batch.modifies.into_iter().map(Into::into).collect();
@@ -742,12 +742,12 @@ where
     E: KvEngine,
     S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
-    let mut res: kv::Result<()> = (|| {
+    let mut res: kv::Result<()> = {
         fail_point!("raftkv_async_snapshot_err", |_| {
             Err(box_err!("injected error for async_snapshot"))
         });
         Ok(())
-    })();
+    };
 
     let mut req = Request::default();
     req.set_cmd_type(CmdType::Snap);
