@@ -686,7 +686,7 @@ impl PdConnector {
         for m in members
             .iter()
             .filter(|m| *m != previous_leader)
-            .chain(&[previous_leader.clone()])
+            .chain(std::slice::from_ref(previous_leader))
         {
             for ep in m.get_client_urls() {
                 match self.connect(ep.as_str()).await {

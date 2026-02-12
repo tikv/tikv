@@ -514,7 +514,7 @@ mod tests {
             &change_host(&endpoint, &format!("{}/foo", h2)).unwrap(),
             "http://example.com/storage/v1/foo"
         );
-        assert!(matches!(&change_host(&endpoint, "foo"), None));
+        assert!(&change_host(&endpoint, "foo").is_none());
 
         // if we get the endpoint with suffix "/storage/v1/"
         let endpoint = StringNonEmpty::static_str("http://example.com/storage/v1/");
