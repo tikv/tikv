@@ -22,7 +22,6 @@
 // using a standalone modules.
 
 #![feature(box_into_inner)]
-#![feature(assert_matches)]
 
 mod batch;
 mod bootstrap;

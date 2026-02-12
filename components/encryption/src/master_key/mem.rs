@@ -98,7 +98,6 @@ impl MemAesGcmBackend {
 #[cfg(test)]
 mod tests {
     use hex::FromHex;
-    use matches::assert_matches;
 
     use super::*;
 
@@ -139,12 +138,12 @@ mod tests {
         encrypted_content_missing_method
             .mut_metadata()
             .remove(MetadataKey::Method.as_str());
-        assert_matches!(
+        assert!(matches!(
             backend
                 .decrypt_content(&encrypted_content_missing_method)
                 .unwrap_err(),
             Error::Other(_)
-        );
+        ));
 
         // Must fail if method is not aes256-gcm.
         let mut encrypted_content_invalid_method = encrypted_content.clone();
@@ -154,24 +153,24 @@ mod tests {
             .get_mut(MetadataKey::Method.as_str())
             .unwrap()
             .append(&mut invalid_suffix);
-        assert_matches!(
+        assert!(matches!(
             backend
                 .decrypt_content(&encrypted_content_invalid_method)
                 .unwrap_err(),
             Error::Other(_)
-        );
+        ));
 
         // Must fail if tag not found.
         let mut encrypted_content_missing_tag = encrypted_content.clone();
         encrypted_content_missing_tag
             .mut_metadata()
             .remove(MetadataKey::AesGcmTag.as_str());
-        assert_matches!(
+        assert!(matches!(
             backend
                 .decrypt_content(&encrypted_content_missing_tag)
                 .unwrap_err(),
             Error::Other(_)
-        );
+        ));
 
         // Must fail with WrongMasterKey error due to mismatched tag.
         let mut encrypted_content_mismatch_tag = encrypted_content;
@@ -179,11 +178,11 @@ mod tests {
             .mut_metadata()
             .get_mut(MetadataKey::AesGcmTag.as_str())
             .unwrap()[0] ^= 0b11111111u8;
-        assert_matches!(
+        assert!(matches!(
             backend
                 .decrypt_content(&encrypted_content_mismatch_tag)
                 .unwrap_err(),
             Error::WrongMasterKey(_)
-        );
+        ));
     }
 }

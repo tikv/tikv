@@ -28,7 +28,6 @@
 #![feature(impl_trait_in_assoc_type)]
 #![allow(incomplete_features)]
 #![feature(core_io_borrowed_buf)]
-#![feature(assert_matches)]
 
 #[macro_use(fail_point)]
 extern crate fail;

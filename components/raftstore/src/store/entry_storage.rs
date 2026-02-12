@@ -1433,7 +1433,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
 
 #[cfg(test)]
 pub mod tests {
-    use std::{assert_matches::assert_matches, sync::mpsc};
+    use std::sync::mpsc;
 
     use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
     use engine_traits::RaftEngineReadOnly;
@@ -2123,14 +2123,14 @@ pub mod tests {
         assert_eq!(store.entry_cache_first_index().unwrap(), 6);
 
         // The return value should be None when it is already warmed up.
-        assert_matches!(store.async_warm_up_entry_cache(6), None);
+        assert!(matches!(store.async_warm_up_entry_cache(6), None));
 
         // The high index should be equal to the entry_cache_first_index.
-        assert_matches!(store.async_warm_up_entry_cache(5), Some((5, 6)));
+        assert!(matches!(store.async_warm_up_entry_cache(5), Some((5, 6))));
 
         store.cache.compact_to(7); // Clean cache.
         // The high index should be equal to the last_index + 1.
-        assert_matches!(store.async_warm_up_entry_cache(5), Some((5, 7)));
+        assert!(matches!(store.async_warm_up_entry_cache(5), Some((5, 7))));
     }
 
     #[test]

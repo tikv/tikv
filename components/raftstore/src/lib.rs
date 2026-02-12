@@ -3,7 +3,6 @@
 #![cfg_attr(test, feature(test))]
 #![feature(min_specialization)]
 #![feature(box_patterns)]
-#![feature(assert_matches)]
 #![feature(type_alias_impl_trait)]
 #![feature(impl_trait_in_assoc_type)]
 #![recursion_limit = "256"]

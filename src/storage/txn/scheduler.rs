@@ -2342,7 +2342,7 @@ impl SchedulerDetails {
 
 #[cfg(test)]
 mod tests {
-    use std::{assert_matches::assert_matches, thread};
+    use std::thread;
 
     use futures_executor::block_on;
     use kvproto::kvrpcpb::{
@@ -2938,12 +2938,12 @@ mod tests {
             scheduler.run_cmd(cmd, StorageCallback::SecondaryLocksStatus(cb));
             if i >= max_request_count {
                 // If memory quota exceeds, scheduler returns SchedTooBusy.
-                assert_matches!(
+                assert!(matches!(
                     fut.try_recv(),
                     Ok(Some(Err(StorageError(box StorageErrorInner::SchedTooBusy))))
-                );
+                ));
             } else {
-                assert_matches!(fut.try_recv(), Ok(None));
+                assert!(matches!(fut.try_recv(), Ok(None)));
                 requests.push(fut);
             }
         }

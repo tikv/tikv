@@ -246,8 +246,6 @@ pub fn commit<S: Snapshot>(
 
 pub mod tests {
     #[cfg(test)]
-    use std::assert_matches::assert_matches;
-
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
     #[cfg(test)]
@@ -493,7 +491,7 @@ pub mod tests {
             expected_min_commit_ts: TimeStamp,
             has_mvcc: bool,
         ) {
-            assert_matches!(err, Error(box ErrorInner::CommitTsExpired {
+            assert!(matches!(err, Error(box ErrorInner::CommitTsExpired {
                 start_ts,
                 commit_ts,
                 key,
@@ -506,7 +504,7 @@ pub mod tests {
                 assert_eq!(min_commit_ts,  expected_min_commit_ts);
                 assert_eq!(has_mvcc, mvcc_info.is_some());
                 true
-            })
+            }))
         }
 
         // The min_commit_ts should be ts(20, 1)
@@ -687,7 +685,7 @@ pub mod tests {
                 None
             };
             let err = must_err(&mut engine, k, start_ts, commit_ts, role);
-            assert_matches!(
+            assert!(matches!(
                 err,
                 Error(box ErrorInner::TxnLockNotFound {
                     start_ts,
@@ -698,10 +696,10 @@ pub mod tests {
                     assert_eq!(key, k.to_vec());
                     assert_eq!(start_ts,  10.into(), "key: {}", key_str);
                     assert_eq!( commit_ts,  20.into(), "key: {}", key_str);
-                    assert_matches!(mvcc_info.clone(), None, "key: {}", key_str);
+                    assert!(matches!(mvcc_info.clone(), None), "key: {}", key_str);
                     true
                 }
-            );
+            ));
         }
 
         // Should collect mvcc for debugging when secondary commit returns an error
@@ -720,7 +718,7 @@ pub mod tests {
                 commit_ts,
                 Some(CommitRole::Secondary),
             );
-            assert_matches!(
+            assert!(matches!(
                 err,
                 Error(box ErrorInner::TxnLockNotFound {
                     start_ts,
@@ -740,7 +738,7 @@ pub mod tests {
                     assert_eq!(values.clone(), expected_values, "key: {}", key_str);
                     true
                 }
-            );
+            ));
         }
     }
 

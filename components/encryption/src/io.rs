@@ -652,7 +652,6 @@ mod tests {
     use std::{cmp::min, io::Cursor, task::Waker};
 
     use byteorder::{BigEndian, ByteOrder};
-    use matches::assert_matches;
     use openssl::rand;
 
     use super::*;
@@ -1069,10 +1068,10 @@ mod tests {
         let mut wt = EncrypterWriter::new(YieldOnce::new(buf), method, &key, iv).unwrap();
         let waker = Waker::noop();
         let mut cx = Context::from_waker(waker);
-        assert_matches!(
+        assert!(matches!(
             Pin::new(&mut wt).poll_write(&mut cx, &plain_text[..size / 2]),
             Poll::Pending
-        );
+        ));
         std::io::Write::write(&mut wt.0, &plain_text[size / 2..]).unwrap();
     }
 

@@ -528,7 +528,6 @@ fn decode<'a>(buf: &mut &'a [u8]) -> Option<SimpleWrite<'a>> {
 
 #[cfg(test)]
 mod tests {
-    use std::assert_matches::assert_matches;
 
     use kvproto::raft_cmdpb::{CmdType, Request};
     use slog::o;
@@ -586,7 +585,7 @@ mod tests {
         };
         assert_eq!(delete.cf, CF_WRITE);
         assert_eq!(delete.key, &delete_key);
-        assert_matches!(decoder.next(), None);
+        assert!(matches!(decoder.next(), None));
 
         let (bytes, _) = req_encoder2.encode();
         decoder =
@@ -632,7 +631,7 @@ mod tests {
             panic!("should be ingest")
         };
         assert_eq!(exp, ssts);
-        assert_matches!(decoder.next(), None);
+        assert!(matches!(decoder.next(), None));
     }
 
     #[test]

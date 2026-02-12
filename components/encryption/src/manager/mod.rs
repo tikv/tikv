@@ -1133,7 +1133,6 @@ impl Drop for DataKeyImporter<'_> {
 mod tests {
     use file_system::{File, remove_file};
     use kvproto::encryptionpb::EncryptionMethod;
-    use matches::assert_matches;
     use tempfile::TempDir;
     use test_util::create_test_key_file;
 
@@ -1349,7 +1348,10 @@ mod tests {
             ..Default::default()
         });
         let manager = new_mock_key_manager(&tmp_dir, None, master_key, previous_master_key);
-        assert_matches!(manager.err(), Some(Error::BothMasterKeyFail(_, _)));
+        assert!(matches!(
+            manager.err(),
+            Some(Error::BothMasterKeyFail(_, _))
+        ));
     }
 
     #[test]
