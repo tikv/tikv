@@ -7447,27 +7447,21 @@ mod tests {
             (b"c".to_vec(), b"c3".to_vec()),
         ]);
         // TODO: refactor to use `Api` parameter.
-        assert!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false)
-        );
+        assert!(<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false));
 
         let ranges = make_ranges(vec![
             (b"a".to_vec(), vec![]),
             (b"b".to_vec(), vec![]),
             (b"c".to_vec(), vec![]),
         ]);
-        assert!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false)
-        );
+        assert!(<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false));
 
         let ranges = make_ranges(vec![
             (b"a3".to_vec(), b"a".to_vec()),
             (b"b3".to_vec(), b"b".to_vec()),
             (b"c3".to_vec(), b"c".to_vec()),
         ]);
-        assert!(
-            !<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false)
-        );
+        assert!(!<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false));
 
         // if end_key is omitted, the next start_key is used instead. so, false is
         // returned.
@@ -7476,45 +7470,35 @@ mod tests {
             (b"b".to_vec(), vec![]),
             (b"a".to_vec(), vec![]),
         ]);
-        assert!(
-            !<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false)
-        );
+        assert!(!<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false));
 
         let ranges = make_ranges(vec![
             (b"a3".to_vec(), b"a".to_vec()),
             (b"b3".to_vec(), b"b".to_vec()),
             (b"c3".to_vec(), b"c".to_vec()),
         ]);
-        assert!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true)
-        );
+        assert!(<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true));
 
         let ranges = make_ranges(vec![
             (b"c3".to_vec(), vec![]),
             (b"b3".to_vec(), vec![]),
             (b"a3".to_vec(), vec![]),
         ]);
-        assert!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true)
-        );
+        assert!(<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true));
 
         let ranges = make_ranges(vec![
             (b"a".to_vec(), b"a3".to_vec()),
             (b"b".to_vec(), b"b3".to_vec()),
             (b"c".to_vec(), b"c3".to_vec()),
         ]);
-        assert!(
-            !<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true)
-        );
+        assert!(!<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true));
 
         let ranges = make_ranges(vec![
             (b"a3".to_vec(), vec![]),
             (b"b3".to_vec(), vec![]),
             (b"c3".to_vec(), vec![]),
         ]);
-        assert!(
-            !<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true)
-        );
+        assert!(!<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true));
     }
 
     #[test]

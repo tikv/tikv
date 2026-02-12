@@ -6241,16 +6241,12 @@ mod tests {
         let db = storage.get_engine().get_rocksdb();
 
         // update rate_limiter_auto_tuned
-        assert!(
-            db.get_db_options().get_rate_limiter_auto_tuned().unwrap()
-        );
+        assert!(db.get_db_options().get_rate_limiter_auto_tuned().unwrap());
 
         cfg_controller
             .update_config("rocksdb.rate_limiter_auto_tuned", "false")
             .unwrap();
-        assert!(
-            !db.get_db_options().get_rate_limiter_auto_tuned().unwrap()
-        );
+        assert!(!db.get_db_options().get_rate_limiter_auto_tuned().unwrap());
     }
 
     #[test]

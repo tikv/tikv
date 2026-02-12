@@ -443,11 +443,7 @@ impl<E: Engine> GcRunnerCore<E> {
         let count = keys.len();
         let range_start_key = keys.first().unwrap().clone();
         let range_end_key = {
-            let mut k = keys
-                .last()
-                .unwrap()
-                .to_raw()
-                .map_err(EngineError::Codec)?;
+            let mut k = keys.last().unwrap().to_raw().map_err(EngineError::Codec)?;
             k.push(0);
             Key::from_raw(&k)
         };
@@ -564,11 +560,7 @@ impl<E: Engine> GcRunnerCore<E> {
     ) -> Result<(usize, usize)> {
         let range_start_key = keys.first().unwrap().clone();
         let range_end_key = {
-            let mut k = keys
-                .last()
-                .unwrap()
-                .to_raw()
-                .map_err(EngineError::Codec)?;
+            let mut k = keys.last().unwrap().to_raw().map_err(EngineError::Codec)?;
             k.push(0);
             Key::from_raw(&k)
         };
