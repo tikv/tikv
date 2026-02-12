@@ -152,7 +152,7 @@ mod imp {
 
     // Sadly the std lib does not have any support for setting `errno`, so we
     // have to implement this ourselves.
-    extern "C" {
+    unsafe extern "C" {
         #[link_name = "__errno_location"]
         fn errno_location() -> *mut c_int;
     }
