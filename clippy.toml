@@ -1,5 +1,4 @@
 avoid-breaking-exported-api = false
-upper-case-acronyms-aggressive = true
 
 [[disallowed-methods]]
 path = "std::thread::Builder::spawn"
