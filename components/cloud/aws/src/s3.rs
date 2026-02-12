@@ -895,6 +895,13 @@ mod tests {
         config.multi_part_size = multi_part_size;
         config.force_path_style = true;
 
+        // Record sample count before the test to compute delta, avoiding
+        // interference from other tests sharing the global metric.
+        let sample_count_before = CLOUD_REQUEST_HISTOGRAM_VEC
+            .get_metric_with_label_values(&["s3", "upload_part"])
+            .unwrap()
+            .get_sample_count();
+
         // split magic_contents into 3 parts, so we mock 5 requests here(1 begin + 3
         // part + 1 complete)
         let client = StaticReplayClient::new(vec![
@@ -985,11 +992,12 @@ mod tests {
 
         client.assert_requests_match(&[]);
 
+        let sample_count_after = CLOUD_REQUEST_HISTOGRAM_VEC
+            .get_metric_with_label_values(&["s3", "upload_part"])
+            .unwrap()
+            .get_sample_count();
         assert_eq!(
-            CLOUD_REQUEST_HISTOGRAM_VEC
-                .get_metric_with_label_values(&["s3", "upload_part"])
-                .unwrap()
-                .get_sample_count(),
+            sample_count_after - sample_count_before,
             // length of magic_contents
             (magic_contents.len() / multi_part_size) as u64,
         );
@@ -1008,6 +1016,13 @@ mod tests {
         // set multi_part_size to use upload_part function
         config.multi_part_size = multi_part_size;
         config.force_path_style = true;
+
+        // Record sample count before the test to compute delta, avoiding
+        // interference from other tests sharing the global metric.
+        let sample_count_before = CLOUD_REQUEST_HISTOGRAM_VEC
+            .get_metric_with_label_values(&["s3", "upload_part"])
+            .unwrap()
+            .get_sample_count();
 
         // split magic_contents into 3 parts, so we mock 5 requests here(1 begin + 3
         // part + 1 abort)
@@ -1090,11 +1105,12 @@ mod tests {
 
         client.assert_requests_match(&[]);
 
+        let sample_count_after = CLOUD_REQUEST_HISTOGRAM_VEC
+            .get_metric_with_label_values(&["s3", "upload_part"])
+            .unwrap()
+            .get_sample_count();
         assert_eq!(
-            CLOUD_REQUEST_HISTOGRAM_VEC
-                .get_metric_with_label_values(&["s3", "upload_part"])
-                .unwrap()
-                .get_sample_count(),
+            sample_count_after - sample_count_before,
             // length of magic_contents
             (magic_contents.len() / multi_part_size) as u64,
         );
