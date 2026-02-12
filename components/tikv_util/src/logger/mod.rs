@@ -453,11 +453,11 @@ where
             let mut s = SlowCostSerializer { cost: None };
             let kv = record.kv();
             let _ = kv.serialize(record, &mut s);
-            if let Some(cost) = s.cost {
-                if cost <= self.threshold {
-                    // Filter slow logs which are actually not that slow
-                    return Ok(());
-                }
+            if let Some(cost) = s.cost
+                && cost <= self.threshold
+            {
+                // Filter slow logs which are actually not that slow
+                return Ok(());
             }
         }
         self.inner.log(record, values)
