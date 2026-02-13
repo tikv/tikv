@@ -27,6 +27,10 @@ command! {
     /// RawCompareAndSwap checks whether the previous value of the key equals to the given value.
     /// If they are equal, write the new value. The bool indicates whether they are equal.
     /// The previous value is always returned regardless of whether the new value is set.
+    ///
+    /// If `Context::raw_cas_delete` is true and the comparison succeeds, this command deletes the
+    /// key instead of writing `value`. For API V2 this is a logical delete; for earlier versions
+    /// it is a physical delete.
     RawCompareAndSwap:
         cmd_ty => (Option<Value>, bool),
         display => { "kv::command::raw_compare_and_swap {:?}", (ctx), }
