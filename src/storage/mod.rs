@@ -7974,6 +7974,71 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
 
+        // CAS delete when comparison succeeds
+        let mut delete_ctx = ctx.clone();
+        delete_ctx.set_raw_cas_delete(true);
+        let expected = (Some(b"v4".to_vec()), true);
+        storage
+            .raw_compare_and_swap_atomic(
+                delete_ctx,
+                "".to_string(),
+                key.to_vec(),
+                Some(b"v4".to_vec()),
+                b"ignored".to_vec(),
+                0,
+                expect_value_callback(tx.clone(), 0, expected),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_none(
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), key.to_vec())).unwrap(),
+        );
+        expect_multi_values(
+            vec![],
+            block_on(storage.raw_scan(
+                ctx.clone(),
+                "".to_string(),
+                b"r".to_vec(),
+                Some(b"rz".to_vec()),
+                20,
+                false,
+                false,
+            ))
+            .unwrap(),
+        );
+
+        // CAS delete with wrong expected value should not delete
+        storage
+            .raw_batch_put_atomic(
+                ctx.clone(),
+                "".to_string(),
+                vec![(key.to_vec(), b"v5".to_vec())],
+                vec![0],
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        let mut wrong_delete_ctx = ctx.clone();
+        wrong_delete_ctx.set_raw_cas_delete(true);
+        let expected = (Some(b"v5".to_vec()), false);
+        storage
+            .raw_compare_and_swap_atomic(
+                wrong_delete_ctx,
+                "".to_string(),
+                key.to_vec(),
+                Some(b"v4".to_vec()),
+                b"ignored".to_vec(),
+                0,
+                expect_value_callback(tx.clone(), 0, expected),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_value(
+            b"v5".to_vec(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), key.to_vec())).unwrap(),
+        );
+
         // delete
         storage
             .raw_batch_delete_atomic(

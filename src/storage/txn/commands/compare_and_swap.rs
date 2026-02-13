@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use api_version::{KvFormat, RawValue, match_template_api_version};
+use api_version::{ApiV2, KvFormat, RawValue, match_template_api_version};
 use engine_traits::{CfName, raw_ttl::ttl_to_expire_ts};
 use kvproto::kvrpcpb::ApiVersion;
 use raw::RawStore;
@@ -74,24 +74,32 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
         )?;
 
         let (pr, lock_guards) = if old_value == previous_value {
-            let raw_value = RawValue {
-                user_value: value,
-                expire_ts: ttl_to_expire_ts(self.ttl),
-                is_delete: false,
-            };
-            let encoded_raw_value = match_template_api_version!(
-                API,
-                match self.api_version {
-                    ApiVersion::API => API::encode_raw_value_owned(raw_value),
-                }
-            );
-
             if let Some(ref raw_ext) = raw_ext {
                 key = key.append_ts(raw_ext.ts);
             }
 
-            let m = Modify::Put(cf, key, encoded_raw_value);
-            data.push(m);
+            if ctx.get_raw_cas_delete() {
+                let m = match self.api_version {
+                    ApiVersion::V2 => Modify::Put(cf, key, ApiV2::ENCODED_LOGICAL_DELETE.to_vec()),
+                    _ => Modify::Delete(cf, key),
+                };
+                data.push(m);
+            } else {
+                let raw_value = RawValue {
+                    user_value: value,
+                    expire_ts: ttl_to_expire_ts(self.ttl),
+                    is_delete: false,
+                };
+                let encoded_raw_value = match_template_api_version!(
+                    API,
+                    match self.api_version {
+                        ApiVersion::API => API::encode_raw_value_owned(raw_value),
+                    }
+                );
+                let m = Modify::Put(cf, key, encoded_raw_value);
+                data.push(m);
+            }
+
             (
                 ProcessResult::RawCompareAndSwapRes {
                     previous_value: old_value,
