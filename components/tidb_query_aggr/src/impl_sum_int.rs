@@ -114,10 +114,9 @@ impl AggrFnStateSumIntSigned {
                     self.has_value = true;
                     return Ok(());
                 }
-                self.sum = self
-                    .sum
-                    .checked_add(value)
-                    .ok_or_else(|| Error::overflow("BIGINT", format!("({}, {})", self.sum, value)))?;
+                self.sum = self.sum.checked_add(value).ok_or_else(|| {
+                    Error::overflow("BIGINT", format!("({}, {})", self.sum, value))
+                })?;
                 Ok(())
             }
         }
@@ -194,8 +193,9 @@ impl super::ConcreteAggrFunctionState for AggrFnStateSumIntUnsigned {
         if !self.has_value {
             target[0].push_int(None);
         } else {
-            // Note: Integer values are carried by `i64` in TiKV/TiDB DAG, and will be interpreted
-            // by the output field type's UNSIGNED flag in upper layer.
+            // Note: Integer values are carried by `i64` in TiKV/TiDB DAG, and will be
+            // interpreted by the output field type's UNSIGNED flag in upper
+            // layer.
             target[0].push_int(Some(self.sum as Int));
         }
         Ok(())
