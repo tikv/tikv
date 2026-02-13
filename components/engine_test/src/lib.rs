@@ -430,16 +430,12 @@ pub mod ctor {
                 rocks_db_opts.enable_pipelined_write(false);
                 rocks_db_opts.enable_multi_batch_write(false);
                 rocks_db_opts.allow_concurrent_memtable_write(false);
-                if let Some(storage) = db_opt.state_storage {
-                    if let Some(flush_state) = ctx.flush_state {
-                        let listener = PersistenceListener::new(
-                            ctx.id,
-                            ctx.suffix.unwrap(),
-                            flush_state,
-                            storage,
-                        );
-                        rocks_db_opts.add_event_listener(RocksPersistenceListener::new(listener));
-                    }
+                if let Some(storage) = db_opt.state_storage
+                    && let Some(flush_state) = ctx.flush_state
+                {
+                    let listener =
+                        PersistenceListener::new(ctx.id, ctx.suffix.unwrap(), flush_state, storage);
+                    rocks_db_opts.add_event_listener(RocksPersistenceListener::new(listener));
                 }
                 let factory =
                     RangeCompactionFilterFactory::new(ctx.start_key.clone(), ctx.end_key.clone());
