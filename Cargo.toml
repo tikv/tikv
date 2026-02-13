@@ -210,7 +210,7 @@ snappy-sys = { git = "https://github.com/tikv/rust-snappy.git", branch = "static
 # NOTICE: use openssl for signature to support fips 140
 
 [patch."https://github.com/pingcap/tipb.git"]
-tipb = { path = "/Users/poe/code/tipb" }
+tipb = { git = "https://github.com/0xPoe/tipb", branch = "poe-patch-sampling" }
 tame-oauth = { git = "https://github.com/tikv/tame-oauth", branch = "fips-0.9" }
 
 # remove this when https://github.com/danburkert/fs2-rs/pull/42 is merged.
