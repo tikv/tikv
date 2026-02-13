@@ -215,12 +215,12 @@ pub fn get_engine_compression_ratio_at_level(
     level: usize,
 ) -> Option<f64> {
     let prop = format!("{}{}", ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, level);
-    if let Some(v) = engine.get_property_value_cf(handle, &prop) {
-        if let Ok(f) = f64::from_str(&v) {
-            // RocksDB returns -1.0 if the level is empty.
-            if f >= 0.0 {
-                return Some(f);
-            }
+    if let Some(v) = engine.get_property_value_cf(handle, &prop)
+        && let Ok(f) = f64::from_str(&v)
+    {
+        // RocksDB returns -1.0 if the level is empty.
+        if f >= 0.0 {
+            return Some(f);
         }
     }
     None
@@ -411,20 +411,20 @@ impl<A: CompactionFilterFactory, B: CompactionFilterFactory> CompactionFilterFac
         let mut outer_filter = None;
         let mut inner_filter = None;
         let mut full_name = String::new();
-        if self.outer_should_filter[i] {
-            if let Some((name, filter)) = self.outer.create_compaction_filter(context) {
-                outer_filter = Some(filter);
-                full_name = name.into_string().unwrap();
-            }
+        if self.outer_should_filter[i]
+            && let Some((name, filter)) = self.outer.create_compaction_filter(context)
+        {
+            outer_filter = Some(filter);
+            full_name = name.into_string().unwrap();
         }
-        if self.inner_should_filter[i] {
-            if let Some((name, filter)) = self.inner.create_compaction_filter(context) {
-                inner_filter = Some(filter);
-                if !full_name.is_empty() {
-                    full_name += ".";
-                }
-                full_name += name.to_str().unwrap();
+        if self.inner_should_filter[i]
+            && let Some((name, filter)) = self.inner.create_compaction_filter(context)
+        {
+            inner_filter = Some(filter);
+            if !full_name.is_empty() {
+                full_name += ".";
             }
+            full_name += name.to_str().unwrap();
         }
         if outer_filter.is_none() && inner_filter.is_none() {
             None
