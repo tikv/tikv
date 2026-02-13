@@ -740,16 +740,15 @@ impl BackgroundRunnerCore {
             regions_to_delete.extend(deletable_regions);
         }
 
-        if !regions_to_delete.is_empty() {
-            if let Err(e) = delete_range_scheduler
+        if !regions_to_delete.is_empty()
+            && let Err(e) = delete_range_scheduler
                 .schedule_force(BackgroundTask::DeleteRegions(regions_to_delete))
-            {
-                error!(
-                    "ime schedule delete range failed";
-                    "err" => ?e,
-                );
-                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
-            }
+        {
+            error!(
+                "ime schedule delete range failed";
+                "err" => ?e,
+            );
+            assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
         }
         for _ in 0..evict_count {
             if rx.recv().await.is_none() {
@@ -1293,47 +1292,47 @@ impl Runnable for BackgroundRunner {
                 self.cross_check_worker = Some(cross_check_worker);
             }
             BackgroundTask::CheckLoadPendingRegions(s) => {
-                if let Some(router) = &self.raft_casual_router {
-                    if let Some(e) = &self.rocks_engine {
-                        let pending_regions: Vec<_> = self
-                            .core
-                            .engine
-                            .region_manager()
-                            .regions_map()
-                            .read()
-                            .regions()
-                            .values()
-                            .filter_map(|meta| {
-                                if meta.get_state() == RegionState::Pending {
-                                    Some(meta.get_region().id)
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect();
-
-                        for region_id in pending_regions {
-                            let scheduler = s.clone();
-                            let rocks_engine = e.clone();
-                            let ime_engine = self.core.engine.clone();
-                            if let Err(e) = router.send(
-                                region_id,
-                                CasualMessage::InMemoryEngineLoadRegion {
-                                    region_id,
-                                    trigger_load_cb: Box::new(move |r| {
-                                        let cache_region = CacheRegion::from_region(r);
-                                        _ = ime_engine.prepare_for_apply(
-                                            &cache_region,
-                                            Some(&rocks_engine),
-                                            &scheduler,
-                                            false,
-                                            r.is_in_flashback,
-                                        );
-                                    }),
-                                },
-                            ) {
-                                warn!("ime send load pending cache region msg failed"; "err" => ?e);
+                if let Some(router) = &self.raft_casual_router
+                    && let Some(e) = &self.rocks_engine
+                {
+                    let pending_regions: Vec<_> = self
+                        .core
+                        .engine
+                        .region_manager()
+                        .regions_map()
+                        .read()
+                        .regions()
+                        .values()
+                        .filter_map(|meta| {
+                            if meta.get_state() == RegionState::Pending {
+                                Some(meta.get_region().id)
+                            } else {
+                                None
                             }
+                        })
+                        .collect();
+
+                    for region_id in pending_regions {
+                        let scheduler = s.clone();
+                        let rocks_engine = e.clone();
+                        let ime_engine = self.core.engine.clone();
+                        if let Err(e) = router.send(
+                            region_id,
+                            CasualMessage::InMemoryEngineLoadRegion {
+                                region_id,
+                                trigger_load_cb: Box::new(move |r| {
+                                    let cache_region = CacheRegion::from_region(r);
+                                    _ = ime_engine.prepare_for_apply(
+                                        &cache_region,
+                                        Some(&rocks_engine),
+                                        &scheduler,
+                                        false,
+                                        r.is_in_flashback,
+                                    );
+                                }),
+                            },
+                        ) {
+                            warn!("ime send load pending cache region msg failed"; "err" => ?e);
                         }
                     }
                 }

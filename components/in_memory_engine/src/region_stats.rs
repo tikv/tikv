@@ -393,16 +393,15 @@ impl RegionStatsManager {
                 ));
                 self.handle_region_evicted(r);
             }
-            if !deletable_regions.is_empty() {
-                if let Err(e) = delete_range_scheduler
+            if !deletable_regions.is_empty()
+                && let Err(e) = delete_range_scheduler
                     .schedule_force(BackgroundTask::DeleteRegions(deletable_regions))
-                {
-                    error!(
-                        "ime schedule delete regions failed";
-                        "err" => ?e,
-                    );
-                    assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
-                }
+            {
+                error!(
+                    "ime schedule delete regions failed";
+                    "err" => ?e,
+                );
+                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
             }
             for _ in 0..regions.len() {
                 // It's better to use `timeout(Duration, rx.recv())` but which needs to use
@@ -441,12 +440,12 @@ fn sort_cached_region_stats(
         let mut cop_requests_avg = stat.query_stats.coprocessor as usize;
         let mut cop_requests_count = 0;
         let cop_requests = stat.query_stats.coprocessor as usize;
-        if let Some(cached_region) = cached_regions.get(&region.id) {
-            if let Ok(mut avg) = cached_region.lock() {
-                avg.observe(cop_requests as f64);
-                cop_requests_avg = avg.get_avg().ceil() as usize;
-                cop_requests_count = avg.get_count();
-            }
+        if let Some(cached_region) = cached_regions.get(&region.id)
+            && let Ok(mut avg) = cached_region.lock()
+        {
+            avg.observe(cop_requests as f64);
+            cop_requests_avg = avg.get_avg().ceil() as usize;
+            cop_requests_count = avg.get_count();
         }
         crss.push(CachedRegionStat {
             iterated_count: stat.cop_detail.iterated_count(),

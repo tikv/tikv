@@ -128,10 +128,10 @@ impl RegionCacheWriteBatch {
     pub fn prepare_for_region(&mut self, region: &metapb::Region) {
         // If the region is already prepared for write, we do not need to prepare it
         // again. See comments for the `prepared_regions` field for more details.
-        if let Some(current_region) = &self.current_region {
-            if current_region.id == region.id {
-                return;
-            }
+        if let Some(current_region) = &self.current_region
+            && current_region.id == region.id
+        {
+            return;
         }
         let time = Instant::now();
         // verify that the region is not prepared before
@@ -311,18 +311,17 @@ impl RegionCacheWriteBatch {
         if self.memory_controller.memory_checking() {
             return;
         }
-        if !self.memory_controller.set_memory_checking(true) {
-            if let Err(e) = self
+        if !self.memory_controller.set_memory_checking(true)
+            && let Err(e) = self
                 .engine
                 .bg_worker_manager()
                 .schedule_task(BackgroundTask::MemoryCheckAndEvict)
-            {
-                error!(
-                    "ime schedule memory check failed";
-                    "err" => ?e,
-                );
-                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
-            }
+        {
+            error!(
+                "ime schedule memory check failed";
+                "err" => ?e,
+            );
+            assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
         }
     }
 

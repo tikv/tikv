@@ -96,18 +96,17 @@ impl Drop for RegionCacheSnapshot {
             .core
             .region_manager
             .remove_region_snapshot(&self.snapshot_meta);
-        if !regions_removable.is_empty() {
-            if let Err(e) = self
+        if !regions_removable.is_empty()
+            && let Err(e) = self
                 .engine
                 .bg_worker_manager()
                 .schedule_task(BackgroundTask::DeleteRegions(regions_removable))
-            {
-                error!(
-                    "ime schedule delete range failed";
-                    "err" => ?e,
-                );
-                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
-            }
+        {
+            error!(
+                "ime schedule delete range failed";
+                "err" => ?e,
+            );
+            assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
         }
     }
 }
@@ -297,11 +296,11 @@ impl RegionCacheIterator {
                 break;
             }
 
-            if let Some(ref prefix) = self.prefix {
-                if prefix != self.prefix_extractor.as_mut().unwrap().transform(user_key) {
-                    // stop iterating due to unmatched prefix
-                    break;
-                }
+            if let Some(ref prefix) = self.prefix
+                && prefix != self.prefix_extractor.as_mut().unwrap().transform(user_key)
+            {
+                // stop iterating due to unmatched prefix
+                break;
             }
 
             if self.is_visible(sequence) {
@@ -368,11 +367,11 @@ impl RegionCacheIterator {
                 break;
             }
 
-            if let Some(ref prefix) = self.prefix {
-                if prefix != self.prefix_extractor.as_mut().unwrap().transform(user_key) {
-                    // stop iterating due to unmatched prefix
-                    break;
-                }
+            if let Some(ref prefix) = self.prefix
+                && prefix != self.prefix_extractor.as_mut().unwrap().transform(user_key)
+            {
+                // stop iterating due to unmatched prefix
+                break;
             }
 
             if !self.find_value_for_current_key(guard) {

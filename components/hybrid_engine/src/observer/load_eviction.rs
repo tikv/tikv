@@ -371,15 +371,15 @@ impl RoleObserver for LoadEvictionObserver {
                 "region" => ?cache_region,
             );
             self.try_load_region(cache_region);
-        } else if let StateRole::Follower = change.state {
-            if change.initialized {
-                let cache_region = CacheRegion::from_region(ctx.region());
-                debug!(
-                    "ime try to evict region due to became follower";
-                    "region" => ?cache_region,
-                );
-                self.evict_region(cache_region, EvictReason::BecomeFollower);
-            }
+        } else if let StateRole::Follower = change.state
+            && change.initialized
+        {
+            let cache_region = CacheRegion::from_region(ctx.region());
+            debug!(
+                "ime try to evict region due to became follower";
+                "region" => ?cache_region,
+            );
+            self.evict_region(cache_region, EvictReason::BecomeFollower);
         }
     }
 }

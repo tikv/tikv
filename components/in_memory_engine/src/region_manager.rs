@@ -437,11 +437,11 @@ impl RegionMetaMap {
 
     fn on_all_overlapped_regions(&self, region: &CacheRegion, mut f: impl FnMut(&CacheRegionMeta)) {
         // fast path: region epoch match
-        if let Some(region_meta) = self.region_meta(region.id) {
-            if region_meta.region.epoch_version == region.epoch_version {
-                f(region_meta);
-                return;
-            }
+        if let Some(region_meta) = self.region_meta(region.id)
+            && region_meta.region.epoch_version == region.epoch_version
+        {
+            f(region_meta);
+            return;
         }
         // epoch not match, need to iter all overlapped regions.
         self.iter_overlapped_regions(region, |meta| {
@@ -730,27 +730,27 @@ impl RegionManager {
     ) -> Vec<CacheRegion> {
         let regions_map = self.regions_map.read();
         // fast path: in most case, region is not changed.
-        if let Some(region_meta) = regions_map.region_meta(snapshot_meta.region.id) {
-            if region_meta.region.epoch_version == snapshot_meta.region.epoch_version {
-                // epoch not changed
-                let mut snapshot_list = region_meta.region_snapshot_list.lock().unwrap();
-                snapshot_list.remove_snapshot(snapshot_meta.snapshot_ts);
-                if Self::region_ready_to_evict(
-                    region_meta,
-                    &snapshot_list,
-                    &self.historical_regions.lock().unwrap(),
-                ) {
-                    drop(snapshot_list);
-                    drop(regions_map);
-                    let mut regions_map = self.regions_map.write();
-                    let region_meta = regions_map
-                        .mut_region_meta(snapshot_meta.region.id)
-                        .unwrap();
-                    region_meta.set_state(RegionState::Evicting);
-                    return vec![region_meta.region.clone()];
-                }
-                return vec![];
+        if let Some(region_meta) = regions_map.region_meta(snapshot_meta.region.id)
+            && region_meta.region.epoch_version == snapshot_meta.region.epoch_version
+        {
+            // epoch not changed
+            let mut snapshot_list = region_meta.region_snapshot_list.lock().unwrap();
+            snapshot_list.remove_snapshot(snapshot_meta.snapshot_ts);
+            if Self::region_ready_to_evict(
+                region_meta,
+                &snapshot_list,
+                &self.historical_regions.lock().unwrap(),
+            ) {
+                drop(snapshot_list);
+                drop(regions_map);
+                let mut regions_map = self.regions_map.write();
+                let region_meta = regions_map
+                    .mut_region_meta(snapshot_meta.region.id)
+                    .unwrap();
+                region_meta.set_state(RegionState::Evicting);
+                return vec![region_meta.region.clone()];
             }
+            return vec![];
         }
 
         // slow path: region not found or epoch version changes, must fell in the
