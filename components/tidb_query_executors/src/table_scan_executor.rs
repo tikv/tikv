@@ -359,6 +359,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         LazyBatchColumnVec::from(columns)
     }
 
+    #[allow(unused_assignments)]
     fn process_kv_pair(
         &mut self,
         key: &[u8],
@@ -390,6 +391,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
                 // due to lifetime restriction.
                 if !self.is_column_filled[*handle_index] {
                     columns[*handle_index].mut_decoded().push_int(Some(handle));
+                    decoded_columns += 1;
                     self.is_column_filled[*handle_index] = true;
                 }
             }
@@ -407,6 +409,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
                 if let Some(&index) = index {
                     if !self.is_column_filled[index] {
                         columns[index].mut_raw().push(datum);
+                        decoded_columns += 1;
                         self.is_column_filled[index] = true;
                     }
                 }

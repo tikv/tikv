@@ -413,11 +413,10 @@ impl Worker {
             .compat();
         let stop = self.stop.clone();
         let _ = self.pool.spawn(async move {
-            while !stop.load(Ordering::Relaxed) {
-                match interval.next().await {
-                    Some(Ok(_)) => func(),
-                    _ => break,
-                }
+            while !stop.load(Ordering::Relaxed)
+                && let Some(Ok(_)) = interval.next().await
+            {
+                func();
             }
         });
     }
@@ -432,14 +431,10 @@ impl Worker {
             .compat();
         let stop = self.stop.clone();
         let _ = self.pool.spawn(async move {
-            while !stop.load(Ordering::Relaxed) {
-                match interval.next().await {
-                    Some(Ok(_)) => {
-                        let fut = func();
-                        fut.await;
-                    }
-                    _ => break,
-                }
+            while !stop.load(Ordering::Relaxed)
+                && let Some(Ok(_)) = interval.next().await
+            {
+                func();
             }
         });
     }
