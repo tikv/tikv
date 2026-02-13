@@ -155,6 +155,7 @@ impl<S: Storage, F: KvFormat> BatchIndexScanExecutor<S, F> {
             accept_point_range: unique,
             is_scanned_range_aware,
             load_commit_ts: false,
+            range_versions: None,
         })?;
         Ok(Self(wrapper))
     }

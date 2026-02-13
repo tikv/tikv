@@ -26,6 +26,9 @@ pub struct PointGetterBuilder<S: Snapshot> {
     bypass_locks: TsSet,
     access_locks: TsSet,
     check_has_newer_ts_data: bool,
+    /// If true, this getter is used by versioned lookup, which must ignore all
+    /// txn-related checks (lock checking, RcCheckTs newer-ts check).
+    is_versioned_lookup: bool,
 }
 
 impl<S: Snapshot> PointGetterBuilder<S> {
@@ -40,6 +43,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
             bypass_locks: Default::default(),
             access_locks: Default::default(),
             check_has_newer_ts_data: false,
+            is_versioned_lookup: false,
         }
     }
 
@@ -107,6 +111,17 @@ impl<S: Snapshot> PointGetterBuilder<S> {
         self
     }
 
+    /// Mark this getter as used by versioned lookup and skip all txn-related
+    /// checks (lock checking and `RcCheckTs` newer-ts check).
+    ///
+    /// Defaults to `false`.
+    #[inline]
+    #[must_use]
+    pub(crate) fn set_versioned_lookup(mut self, enabled: bool) -> Self {
+        self.is_versioned_lookup = enabled;
+        self
+    }
+
     /// Build `PointGetter` from the current configuration.
     pub fn build(self) -> Result<PointGetter<S>> {
         let write_cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
@@ -127,6 +142,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
             } else {
                 NewerTsCheckState::Unknown
             },
+            is_versioned_lookup: self.is_versioned_lookup,
 
             statistics: Statistics::default(),
 
@@ -148,6 +164,7 @@ pub struct PointGetter<S: Snapshot> {
     bypass_locks: TsSet,
     access_locks: TsSet,
     met_newer_ts_data: NewerTsCheckState,
+    is_versioned_lookup: bool,
 
     statistics: Statistics,
 
@@ -191,7 +208,7 @@ impl<S: Snapshot> PointGetter<S> {
         load_commit_ts: bool,
     ) -> Result<Option<ValueEntry>> {
         fail_point!("point_getter_get");
-        if need_check_locks(self.isolation_level) {
+        if !self.is_versioned_lookup && need_check_locks(self.isolation_level) {
             // Check locks that signal concurrent writes for `Si` or more recent writes for
             // `RcCheckTs`.
             if let Some(lock) = self.load_and_check_lock(user_key, !load_commit_ts)? {
@@ -274,8 +291,9 @@ impl<S: Snapshot> PointGetter<S> {
         let mut use_near_seek = false;
         let mut seek_key = user_key.clone();
 
-        if self.met_newer_ts_data == NewerTsCheckState::NotMetYet
-            || self.isolation_level == IsolationLevel::RcCheckTs
+        if !self.is_versioned_lookup
+            && (self.met_newer_ts_data == NewerTsCheckState::NotMetYet
+                || self.isolation_level == IsolationLevel::RcCheckTs)
         {
             seek_key = seek_key.append_ts(TimeStamp::max());
             if !self
@@ -866,6 +884,7 @@ mod tests {
             bypass_locks: Default::default(),
             access_locks: Default::default(),
             met_newer_ts_data: NewerTsCheckState::NotMetYet,
+            is_versioned_lookup: false,
             statistics: Statistics::default(),
             write_cursor,
         };
@@ -1449,5 +1468,50 @@ mod tests {
         // the lock should be seen as conflict
         let err = must_get_entry_err(&mut getter, key, true);
         assert_matches!(err.0, box ErrorInner::KeyIsLocked { .. });
+    }
+
+    #[test]
+    fn test_versioned_lookup_skips_lock_conflict() {
+        let mut engine = new_sample_engine_2();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+
+        let mut normal = PointGetterBuilder::new(snapshot.clone(), 5.into())
+            .isolation_level(IsolationLevel::Si)
+            .build()
+            .unwrap();
+        let err = must_get_entry_err(&mut normal, b"bar", false);
+        assert_matches!(err.0, box ErrorInner::KeyIsLocked { .. });
+
+        let mut bypass = PointGetterBuilder::new(snapshot, 5.into())
+            .isolation_level(IsolationLevel::Si)
+            .set_versioned_lookup(true)
+            .build()
+            .unwrap();
+        must_get_entry(&mut bypass, b"bar", false, b"barval", None);
+    }
+
+    #[test]
+    fn test_versioned_lookup_skips_rc_check_ts_newer_version() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"k";
+
+        must_prewrite_put(&mut engine, key, b"v20", key, 10);
+        must_commit(&mut engine, key, 10, 20);
+        must_prewrite_put(&mut engine, key, b"v40", key, 30);
+        must_commit(&mut engine, key, 30, 40);
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut normal = PointGetterBuilder::new(snapshot.clone(), 35.into())
+            .isolation_level(IsolationLevel::RcCheckTs)
+            .build()
+            .unwrap();
+        must_get_err(&mut normal, key);
+
+        let mut bypass = PointGetterBuilder::new(snapshot, 35.into())
+            .isolation_level(IsolationLevel::RcCheckTs)
+            .set_versioned_lookup(true)
+            .build()
+            .unwrap();
+        must_get_value(&mut bypass, key, b"v20");
     }
 }

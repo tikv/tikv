@@ -72,6 +72,11 @@ use crate::{
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
+const ERR_VERSIONED_RANGES_ONLY_VERSIONED_COPR: &str =
+    "versioned_ranges is only supported by VersionedKv.VersionedCoprocessor";
+const ERR_VERSIONED_RANGES_REQUIRED_VERSIONED_COPR: &str =
+    "versioned_ranges must be non-empty for VersionedKv.VersionedCoprocessor";
+
 pub trait RaftGrpcMessageFilter: Send + Sync {
     fn should_reject_raft_message(&self, _: &RaftMessage) -> bool;
     fn should_reject_snapshot(&self) -> bool;
@@ -589,6 +594,17 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
 
     fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
         reject_if_cluster_id_mismatch!(req, self, ctx, sink);
+        if has_versioned_ranges(&req) {
+            let e = RpcStatus::with_message(
+                RpcStatusCode::INVALID_ARGUMENT,
+                ERR_VERSIONED_RANGES_ONLY_VERSIONED_COPR.into(),
+            );
+            ctx.spawn(
+                sink.fail(e)
+                    .unwrap_or_else(|e| error!("kv rpc failed"; "err" => ?e)),
+            );
+            return;
+        }
         forward_unary!(self.proxy, coprocessor, ctx, req, sink);
         let source = req.get_context().get_request_source().to_owned();
         let resource_control_ctx = req.get_context().get_resource_control_context();
@@ -735,6 +751,17 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         mut sink: ServerStreamingSink<Response>,
     ) {
         reject_if_cluster_id_mismatch!(req, self, ctx, sink);
+        if has_versioned_ranges(&req) {
+            let e = RpcStatus::with_message(
+                RpcStatusCode::INVALID_ARGUMENT,
+                ERR_VERSIONED_RANGES_ONLY_VERSIONED_COPR.into(),
+            );
+            ctx.spawn(
+                sink.fail(e)
+                    .unwrap_or_else(|e| error!("kv rpc failed"; "err" => ?e)),
+            );
+            return;
+        }
         let begin_instant = Instant::now();
         let resource_control_ctx = req.get_context().get_resource_control_context();
         let mut resource_group_priority = ResourcePriority::unknown;
@@ -1438,6 +1465,23 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                 },
                 Some(batch_commands_request::request::Cmd::Coprocessor(req)) => {
                     handle_cluster_id_mismatch!(cluster_id, req);
+                    if has_versioned_ranges(&req) {
+                        let begin_instant = Instant::now();
+                        let mut resp = Response::default();
+                        resp.set_other_error(ERR_VERSIONED_RANGES_ONLY_VERSIONED_COPR.into());
+                        let resp = future::ok(resp)
+                            .map_ok(oneof!(batch_commands_response::response::Cmd::Coprocessor));
+                        response_batch_commands_request(
+                            id,
+                            resp,
+                            tx.clone(),
+                            begin_instant,
+                            GrpcTypeKind::invalid,
+                            String::default(),
+                            ResourcePriority::unknown,
+                        );
+                        return Ok(());
+                    }
                     let resource_control_ctx = req.get_context().get_resource_control_context();
                     let mut resource_group_priority = ResourcePriority::unknown;
                     if let Some(resource_manager) = resource_manager {
@@ -1589,6 +1633,68 @@ fn handle_measures_for_batch_commands(measures: &mut MeasuredBatchResponse) {
                 .mut_time_detail_v2()
                 .set_kv_grpc_wait_time_ns(wait.as_nanos() as u64);
         }
+    }
+}
+
+impl<E: Engine, L: LockManager, F: KvFormat> VersionedKv for Service<E, L, F> {
+    fn versioned_coprocessor(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: Request,
+        sink: UnarySink<Response>,
+    ) {
+        reject_if_cluster_id_mismatch!(req, self, ctx, sink);
+        if !has_versioned_ranges(&req) {
+            let e = RpcStatus::with_message(
+                RpcStatusCode::INVALID_ARGUMENT,
+                ERR_VERSIONED_RANGES_REQUIRED_VERSIONED_COPR.into(),
+            );
+            ctx.spawn(
+                sink.fail(e)
+                    .unwrap_or_else(|e| error!("kv rpc failed"; "err" => ?e)),
+            );
+            return;
+        }
+
+        let source = req.get_context().get_request_source().to_owned();
+        let resource_control_ctx = req.get_context().get_resource_control_context();
+        let mut resource_group_priority = ResourcePriority::unknown;
+        if let Some(resource_manager) = &self.resource_manager {
+            resource_manager.consume_penalty(resource_control_ctx);
+            resource_group_priority =
+                ResourcePriority::from(resource_control_ctx.override_priority);
+        }
+
+        GRPC_RESOURCE_GROUP_COUNTER_VEC
+            .with_label_values(&[
+                resource_control_ctx.get_resource_group_name(),
+                resource_control_ctx.get_resource_group_name(),
+            ])
+            .inc();
+
+        let begin_instant = Instant::now();
+        let future = future_copr(&self.copr, Some(ctx.peer()), req);
+        let task = async move {
+            let resp = future.await?.consume();
+
+            let elapsed = begin_instant.saturating_elapsed();
+            sink.success(resp).await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .coprocessor
+                .get(resource_group_priority)
+                .observe(elapsed.as_secs_f64());
+            record_request_source_metrics(source, elapsed);
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            log_net_error!(e, "kv rpc failed";
+                "request" => "versioned_coprocessor"
+            );
+            GRPC_MSG_FAIL_COUNTER.coprocessor.inc();
+        })
+        .map(|_| ());
+
+        ctx.spawn(task);
     }
 }
 
@@ -2353,6 +2459,15 @@ fn future_copr<E: Engine>(
 ) -> impl Future<Output = ServerResult<MemoryTraceGuard<Response>>> {
     let ret = copr.parse_and_handle_unary_request(req, peer);
     async move { Ok(ret.await) }
+}
+
+#[inline]
+fn has_versioned_ranges(req: &Request) -> bool {
+    !req.get_versioned_ranges().is_empty()
+        || req
+            .get_tasks()
+            .iter()
+            .any(|task| !task.get_versioned_ranges().is_empty())
 }
 
 fn future_raw_coprocessor<E: Engine, L: LockManager, F: KvFormat>(

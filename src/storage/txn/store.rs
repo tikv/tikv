@@ -15,6 +15,31 @@ use crate::storage::{
 };
 
 pub trait Store: Send {
+    /// Fetch the provided key at the specified read timestamp.
+    ///
+    /// This API is intended for special read paths that need per-key read ts
+    /// and must bypass all txn-related checks (lock checking and `RcCheckTs`
+    /// newer-ts conflicts).
+    ///
+    /// Currently this is only used by the versioned lookup coprocessor path
+    /// (the `VersionedKv` RPC carrying `versioned_ranges`), which is intended
+    /// for TiCI.
+    ///
+    /// WARNING: This method intentionally violates transactional semantics. It
+    /// may read through locks and ignore `RcCheckTs` write conflicts. Do not
+    /// use it for normal reads.
+    ///
+    /// Implementations must provide a per-key read path; this interface
+    /// intentionally bypasses transaction checks. There is **no default**
+    /// to force every `Store` to acknowledge the semantic cost.
+    fn get_entry_at_ts(
+        &self,
+        key: &Key,
+        ts: TimeStamp,
+        load_commit_ts: bool,
+        statistics: &mut Statistics,
+    ) -> Result<Option<ValueEntry>>;
+
     /// The scanner type returned by `scanner()`.
     type Scanner: Scanner;
 
@@ -346,15 +371,17 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         load_commit_ts: bool,
         statistics: &mut Statistics,
     ) -> Result<Option<ValueEntry>> {
-        let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
-            .fill_cache(self.fill_cache)
-            .isolation_level(self.isolation_level)
-            .bypass_locks(self.bypass_locks.clone())
-            .access_locks(self.access_locks.clone())
-            .build()?;
-        let v = point_getter.get_entry(key, load_commit_ts)?;
-        statistics.add(&point_getter.take_statistics());
-        Ok(v)
+        self.get_entry_internal(key, self.start_ts, load_commit_ts, false, statistics)
+    }
+
+    fn get_entry_at_ts(
+        &self,
+        key: &Key,
+        ts: TimeStamp,
+        load_commit_ts: bool,
+        statistics: &mut Statistics,
+    ) -> Result<Option<ValueEntry>> {
+        self.get_entry_internal(key, ts, load_commit_ts, true, statistics)
     }
 
     fn incremental_get_entry(
@@ -549,6 +576,27 @@ impl<S: Snapshot> SnapshotStore<S> {
     }
 
     #[inline]
+    fn get_entry_internal(
+        &self,
+        key: &Key,
+        ts: TimeStamp,
+        load_commit_ts: bool,
+        is_versioned_lookup: bool,
+        statistics: &mut Statistics,
+    ) -> Result<Option<ValueEntry>> {
+        let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), ts)
+            .fill_cache(self.fill_cache)
+            .isolation_level(self.isolation_level)
+            .bypass_locks(self.bypass_locks.clone())
+            .access_locks(self.access_locks.clone())
+            .set_versioned_lookup(is_versioned_lookup)
+            .build()?;
+        let v = point_getter.get_entry(key, load_commit_ts)?;
+        statistics.add(&point_getter.take_statistics());
+        Ok(v)
+    }
+
+    #[inline]
     pub fn is_fill_cache(&self) -> bool {
         self.fill_cache
     }
@@ -639,6 +687,17 @@ impl Store for FixtureStore {
             })),
             Some(Err(e)) => Err(e.maybe_clone().unwrap()),
         }
+    }
+
+    fn get_entry_at_ts(
+        &self,
+        key: &Key,
+        ts: TimeStamp,
+        load_commit_ts: bool,
+        statistics: &mut Statistics,
+    ) -> Result<Option<ValueEntry>> {
+        let _ = ts;
+        self.get_entry(key, load_commit_ts, statistics)
     }
 
     #[inline]

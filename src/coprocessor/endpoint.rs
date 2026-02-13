@@ -30,6 +30,7 @@ use tidb_query_common::{
     error::StorageError,
     execute_stats::ExecSummary,
     storage::{FindRegionResult, RegionStorageAccessor, Result as StorageResult},
+    util::is_point,
 };
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::{ExtraRegionOverride, SnapshotExt};
@@ -195,13 +196,43 @@ impl<E: Engine> Endpoint<E> {
             "unsupported tp (failpoint)"
         )));
 
-        let (context, data, ranges, mut start_ts) = (
+        let (context, data, mut ranges, mut start_ts) = (
             req.take_context(),
             req.take_data(),
             req.take_ranges().to_vec(),
             req.get_start_ts(),
         );
-        let cache_match_version = if req.get_is_cache_enabled() {
+        // `versioned_ranges` is an extension for "versioned lookup" reads
+        // (key + per-key read ts). It intentionally bypasses txn-related
+        // checks (e.g. memory lock checks / max_ts update), so it is expected
+        // to be used only via the dedicated `VersionedKv` RPC (the normal
+        // coprocessor RPC rejects requests carrying it).
+        //
+        // Invariants:
+        // - When `versioned_ranges` is non-empty, `ranges` must be empty.
+        // - All `versioned_ranges[i].range` must be point ranges.
+        let mut range_versions = Vec::new();
+        let versioned_ranges = req.take_versioned_ranges();
+        let is_versioned_lookup = !versioned_ranges.is_empty();
+        if is_versioned_lookup {
+            if !ranges.is_empty() {
+                return Err(box_err!("versioned_ranges requires ranges to be empty"));
+            }
+            ranges = Vec::with_capacity(versioned_ranges.len());
+            range_versions = Vec::with_capacity(versioned_ranges.len());
+            for mut versioned_range in versioned_ranges.into_iter() {
+                let range = versioned_range.take_range();
+                if !is_point(&range) {
+                    return Err(box_err!(
+                        "versioned_ranges is only supported for point ranges"
+                    ));
+                }
+                ranges.push(range);
+                range_versions.push(versioned_range.get_read_ts());
+            }
+        }
+        let is_cache_enabled = req.get_is_cache_enabled() && !is_versioned_lookup;
+        let cache_match_version = if is_cache_enabled {
             Some(req.get_cache_if_match_version())
         } else {
             None
@@ -213,6 +244,13 @@ impl<E: Engine> Endpoint<E> {
         let req_ctx: ReqContext;
         let handler_builder: RequestHandlerBuilder<E::IMSnap>;
         let req_tag: ReqTag;
+
+        if is_versioned_lookup && req.get_tp() != REQ_TYPE_DAG {
+            return Err(box_err!(
+                "versioned_ranges is only supported for DAG requests"
+            ));
+        }
+
         match req.get_tp() {
             REQ_TYPE_DAG => {
                 let mut dag = DagRequest::default();
@@ -252,11 +290,19 @@ impl<E: Engine> Endpoint<E> {
                     tracker.req_info.start_ts = start_ts;
                 });
 
-                self.check_memory_locks(&req_ctx)?;
+                if !is_versioned_lookup {
+                    self.check_memory_locks(&req_ctx)?;
+                }
 
                 let batch_row_limit = self.get_batch_row_limit(is_streaming);
                 let quota_limiter = self.quota_limiter.clone();
                 let concurrency_manager = self.concurrency_manager.clone();
+                let paging_size = req.get_paging_size();
+                let range_versions = if is_versioned_lookup {
+                    Some(range_versions)
+                } else {
+                    None
+                };
                 handler_builder = Box::new(move |snap, req_ctx| {
                     let data_version = snap.ext().get_data_version();
                     let store = SnapshotStore::new(
@@ -266,24 +312,24 @@ impl<E: Engine> Endpoint<E> {
                         !req_ctx.context.get_not_fill_cache(),
                         req_ctx.bypass_locks.clone(),
                         req_ctx.access_locks.clone(),
-                        req.get_is_cache_enabled(),
+                        is_cache_enabled,
                     );
-                    let paging_size = match req.get_paging_size() {
+                    let paging_size = match paging_size {
                         0 => None,
                         i => Some(i),
                     };
-
                     let extra_store_accessor =
                         ExtraSnapStoreAccessor::<E>::new(req_ctx.clone(), concurrency_manager);
                     dag::DagHandlerBuilder::<_, _, F>::new(
                         dag,
                         req_ctx.ranges.clone(),
+                        range_versions,
                         store,
                         extra_store_accessor,
                         req_ctx.deadline,
                         batch_row_limit,
                         is_streaming,
-                        req.get_is_cache_enabled(),
+                        is_cache_enabled,
                         paging_size,
                         quota_limiter,
                     )
@@ -702,6 +748,7 @@ impl<E: Engine> Endpoint<E> {
                 // coprocessor cache related fields are not passed in the "task" by now.
                 new_req.is_cache_enabled = false;
                 new_req.ranges = task.take_ranges();
+                new_req.versioned_ranges = task.take_versioned_ranges();
                 let new_context = new_req.mut_context();
                 new_context.set_region_id(task.get_region_id());
                 new_context.set_region_epoch(task.take_region_epoch());
@@ -1233,12 +1280,14 @@ mod tests {
         thread, vec,
     };
 
+    use api_version::ApiV1;
     use futures::executor::{block_on, block_on_stream};
     use kvproto::kvrpcpb::{IsolationLevel, LockInfo};
     use protobuf::Message;
     use raft::StateRole;
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
-    use tidb_query_common::storage::Storage;
+    use tidb_query_common::{storage::Storage, util::convert_to_prefix_next};
+    use tidb_query_datatype::codec::table::encode_row_key;
     use tikv_kv::{MockEngine, MockEngineBuilder, destroy_tls_engine, set_tls_engine};
     use tipb::{Executor, Expr};
     use txn_types::{Key, LockType};
@@ -2408,6 +2457,376 @@ mod tests {
 
         let resp = block_on(copr.parse_and_handle_unary_request(req, None));
         assert_eq!(resp.get_locked().get_key(), b"key");
+    }
+
+    #[test]
+    fn test_versioned_ranges_requires_empty_ranges() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cm = ConcurrencyManager::new_for_test(1.into());
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            None,
+        );
+
+        let mut req = coppb::Request::default();
+        req.mut_context().set_isolation_level(IsolationLevel::Si);
+        req.set_start_ts(100);
+        req.set_tp(REQ_TYPE_DAG);
+
+        let mut r1 = coppb::KeyRange::default();
+        r1.set_start(b"k1".to_vec());
+        r1.set_end(b"k2".to_vec());
+        req.mut_ranges().push(r1);
+
+        // `versioned_ranges` must keep `ranges` empty.
+        let mut r = coppb::KeyRange::default();
+        r.set_start(b"k1".to_vec());
+        r.set_end(b"k2".to_vec());
+        let mut vr = coppb::VersionedKeyRange::default();
+        vr.set_range(r);
+        vr.set_read_ts(10);
+        req.mut_versioned_ranges().push(vr);
+
+        let mut dag = DagRequest::default();
+        dag.mut_executors().push(Executor::default());
+        req.set_data(dag.write_to_bytes().unwrap());
+
+        let resp = block_on(copr.parse_and_handle_unary_request(req, None));
+        assert!(!resp.get_other_error().is_empty());
+        assert!(
+            resp.get_other_error()
+                .contains("versioned_ranges requires ranges to be empty")
+        );
+    }
+
+    #[test]
+    fn test_versioned_ranges_requires_point_ranges() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cm = ConcurrencyManager::new_for_test(1.into());
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            None,
+        );
+
+        let mut req = coppb::Request::default();
+        req.mut_context().set_isolation_level(IsolationLevel::Si);
+        req.set_start_ts(100);
+        req.set_tp(REQ_TYPE_DAG);
+
+        let mut r = coppb::KeyRange::default();
+        r.set_start(b"a".to_vec());
+        r.set_end(b"z".to_vec());
+        let mut vr = coppb::VersionedKeyRange::default();
+        vr.set_range(r);
+        vr.set_read_ts(10);
+        req.mut_versioned_ranges().push(vr);
+
+        let mut dag = DagRequest::default();
+        dag.mut_executors().push(Executor::default());
+        req.set_data(dag.write_to_bytes().unwrap());
+
+        let resp = block_on(copr.parse_and_handle_unary_request(req, None));
+        assert!(!resp.get_other_error().is_empty());
+        assert!(
+            resp.get_other_error()
+                .contains("only supported for point ranges")
+        );
+    }
+
+    #[test]
+    fn test_versioned_ranges_requires_dag_request() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cm = ConcurrencyManager::new_for_test(1.into());
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            None,
+        );
+
+        let mut req = coppb::Request::default();
+        req.mut_context().set_isolation_level(IsolationLevel::Si);
+        req.set_start_ts(100);
+        req.set_tp(REQ_TYPE_ANALYZE);
+
+        let mut r = coppb::KeyRange::default();
+        r.set_start(b"k1".to_vec());
+        r.set_end(b"k2".to_vec());
+        let mut vr = coppb::VersionedKeyRange::default();
+        vr.set_range(r);
+        vr.set_read_ts(10);
+        req.mut_versioned_ranges().push(vr);
+
+        let mut analyze = AnalyzeReq::default();
+        analyze.set_tp(AnalyzeType::TypeIndex);
+        req.set_data(analyze.write_to_bytes().unwrap());
+
+        let resp = block_on(copr.parse_and_handle_unary_request(req, None));
+        assert!(!resp.get_other_error().is_empty());
+        assert!(
+            resp.get_other_error()
+                .contains("only supported for DAG requests")
+        );
+    }
+
+    #[test]
+    fn test_versioned_ranges_allows_common_handle_table_scan() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cm = ConcurrencyManager::new_for_test(1.into());
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            None,
+        );
+
+        let mut req = coppb::Request::default();
+        req.mut_context().set_isolation_level(IsolationLevel::Si);
+        req.set_start_ts(100);
+        req.set_tp(REQ_TYPE_DAG);
+
+        let mut r = coppb::KeyRange::default();
+        r.set_start(b"k1".to_vec());
+        r.set_end(b"k2".to_vec());
+        let mut vr = coppb::VersionedKeyRange::default();
+        vr.set_range(r);
+        vr.set_read_ts(10);
+        req.mut_versioned_ranges().push(vr);
+
+        let mut dag = DagRequest::default();
+        let mut scan_exec = Executor::default();
+        scan_exec.set_tp(ExecType::TypeTableScan);
+        scan_exec.mut_tbl_scan().mut_primary_column_ids().push(1);
+        dag.mut_executors().push(scan_exec);
+        req.set_data(dag.write_to_bytes().unwrap());
+
+        copr.parse_request_and_check_memory_locks_impl::<ApiV1>(req, None, false)
+            .unwrap();
+    }
+
+    #[test]
+    fn test_versioned_ranges_skip_memory_lock_check_and_max_ts_not_updated() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cm = ConcurrencyManager::new_for_test(1.into());
+
+        let point_key = encode_row_key(1, 1);
+        let key = Key::from_raw(&point_key);
+        let guard = block_on(cm.lock_key(&key));
+        guard.with_lock(|lock| {
+            *lock = Some(txn_types::Lock::new(
+                LockType::Put,
+                point_key.clone(),
+                10.into(),
+                100,
+                Some(vec![]),
+                0.into(),
+                1,
+                20.into(),
+                false,
+            ));
+        });
+
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm.clone(),
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            None,
+        );
+
+        let table_scan_data = {
+            let mut dag = DagRequest::default();
+            let mut scan_exec = Executor::default();
+            scan_exec.set_tp(ExecType::TypeTableScan);
+            dag.mut_executors().push(scan_exec);
+            dag.write_to_bytes().unwrap()
+        };
+
+        assert_eq!(cm.max_ts(), 1.into());
+
+        // Case 1: versioned point range (point getter path).
+        let mut req = coppb::Request::default();
+        req.mut_context().set_isolation_level(IsolationLevel::Si);
+        req.set_start_ts(100);
+        req.set_tp(REQ_TYPE_DAG);
+        let mut end = point_key.clone();
+        convert_to_prefix_next(&mut end);
+        let mut key_range = coppb::KeyRange::default();
+        key_range.set_start(point_key.clone());
+        key_range.set_end(end);
+        let mut vr = coppb::VersionedKeyRange::default();
+        vr.set_range(key_range);
+        vr.set_read_ts(10);
+        req.mut_versioned_ranges().push(vr);
+        req.set_data(table_scan_data.clone());
+        let resp = block_on(copr.parse_and_handle_unary_request(req, None));
+        assert!(
+            resp.get_other_error().is_empty(),
+            "{}",
+            resp.get_other_error()
+        );
+        assert_eq!(cm.max_ts(), 1.into());
+
+        // Case 2: versioned lookup with multiple point ranges (not stale read).
+        let mut req = coppb::Request::default();
+        req.mut_context().set_isolation_level(IsolationLevel::Si);
+        req.set_start_ts(100);
+        req.set_tp(REQ_TYPE_DAG);
+
+        let key1 = encode_row_key(1, 1);
+        let mut end1 = key1.clone();
+        convert_to_prefix_next(&mut end1);
+        let mut key_range1 = coppb::KeyRange::default();
+        key_range1.set_start(key1);
+        key_range1.set_end(end1);
+        let mut vr1 = coppb::VersionedKeyRange::default();
+        vr1.set_range(key_range1);
+        vr1.set_read_ts(10);
+        req.mut_versioned_ranges().push(vr1);
+
+        let key2 = encode_row_key(1, 2);
+        let mut end2 = key2.clone();
+        convert_to_prefix_next(&mut end2);
+        let mut key_range2 = coppb::KeyRange::default();
+        key_range2.set_start(key2);
+        key_range2.set_end(end2);
+        let mut vr2 = coppb::VersionedKeyRange::default();
+        vr2.set_range(key_range2);
+        vr2.set_read_ts(20);
+        req.mut_versioned_ranges().push(vr2);
+
+        req.set_data(table_scan_data);
+        let resp = block_on(copr.parse_and_handle_unary_request(req, None));
+        assert!(
+            resp.get_other_error().is_empty(),
+            "{}",
+            resp.get_other_error()
+        );
+        assert_eq!(cm.max_ts(), 1.into());
+    }
+
+    #[test]
+    fn test_versioned_ranges_disables_cache_match_version() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cm = ConcurrencyManager::new_for_test(1.into());
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            None,
+        );
+
+        let mut req = coppb::Request::default();
+        req.mut_context().set_isolation_level(IsolationLevel::Si);
+        req.set_start_ts(100);
+        req.set_tp(REQ_TYPE_DAG);
+
+        req.set_is_cache_enabled(true);
+        req.set_cache_if_match_version(42);
+
+        let mut end = b"key".to_vec();
+        convert_to_prefix_next(&mut end);
+        let mut key_range = coppb::KeyRange::default();
+        key_range.set_start(b"key".to_vec());
+        key_range.set_end(end);
+        let mut vr = coppb::VersionedKeyRange::default();
+        vr.set_range(key_range);
+        vr.set_read_ts(10);
+        req.mut_versioned_ranges().push(vr);
+
+        let mut dag = DagRequest::default();
+        let mut scan_exec = Executor::default();
+        scan_exec.set_tp(ExecType::TypeTableScan);
+        dag.mut_executors().push(scan_exec);
+        req.set_data(dag.write_to_bytes().unwrap());
+
+        let parsed = copr
+            .parse_request_and_check_memory_locks_impl::<ApiV1>(req, None, false)
+            .unwrap();
+        assert!(parsed.req_ctx.cache_match_version.is_none());
+    }
+
+    #[test]
+    fn test_cache_match_version_kept_for_normal_lookup() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cm = ConcurrencyManager::new_for_test(1.into());
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            None,
+        );
+
+        let mut req = coppb::Request::default();
+        req.mut_context().set_isolation_level(IsolationLevel::Si);
+        req.set_start_ts(100);
+        req.set_tp(REQ_TYPE_DAG);
+
+        req.set_is_cache_enabled(true);
+        req.set_cache_if_match_version(42);
+
+        let mut end = b"key".to_vec();
+        convert_to_prefix_next(&mut end);
+        let mut key_range = coppb::KeyRange::default();
+        key_range.set_start(b"key".to_vec());
+        key_range.set_end(end);
+        req.mut_ranges().push(key_range);
+
+        let mut dag = DagRequest::default();
+        let mut scan_exec = Executor::default();
+        scan_exec.set_tp(ExecType::TypeTableScan);
+        dag.mut_executors().push(scan_exec);
+        req.set_data(dag.write_to_bytes().unwrap());
+
+        let parsed = copr
+            .parse_request_and_check_memory_locks_impl::<ApiV1>(req, None, false)
+            .unwrap();
+        assert_eq!(parsed.req_ctx.cache_match_version, Some(42));
     }
 
     #[test]
