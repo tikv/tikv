@@ -456,13 +456,12 @@ impl<A: CompactionFilter, B: CompactionFilter> CompactionFilter for StackingComp
         value: &[u8],
         value_type: CompactionFilterValueType,
     ) -> CompactionFilterDecision {
-        if let Some(outer) = self.outer.as_mut() {
-            let r = outer.unsafe_filter(level, key, value, value_type);
-            if !matches!(r, CompactionFilterDecision::Keep) {
-                return r;
-            }
-        }
-        if let Some(inner) = self.inner.as_mut() {
+        if let Some(outer) = self.outer.as_mut()
+            && let r = outer.unsafe_filter(level, key, value, value_type)
+            && !matches!(r, CompactionFilterDecision::Keep)
+        {
+            r
+        } else if let Some(inner) = self.inner.as_mut() {
             inner.unsafe_filter(level, key, value, value_type)
         } else {
             CompactionFilterDecision::Keep
