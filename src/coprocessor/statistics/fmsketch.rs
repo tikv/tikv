@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use collections::HashSet;
-use mur3::murmurhash3_x64_128;
+use xxhash_rust::xxh3::xxh3_64;
 
 /// FMSketch (Flajolet-Martin Sketch) is a probabilistic data structure that
 /// estimates the count of unique elements in a stream. It employs a hash
@@ -53,7 +53,7 @@ impl FmSketch {
     }
 
     pub fn insert(&mut self, bytes: &[u8]) {
-        let hash = murmurhash3_x64_128(bytes, 0).0;
+        let hash = xxh3_64(bytes);
         self.insert_hash_value(hash);
     }
 
@@ -93,7 +93,7 @@ impl From<FmSketch> for tipb::FmSketch {
 
 #[cfg(test)]
 mod tests {
-    use std::{iter::repeat, slice::from_ref};
+    use std::{collections::HashSet, iter::repeat, slice::from_ref};
 
     use tidb_query_datatype::{
         codec::{datum, datum::Datum, Result},
@@ -150,6 +150,15 @@ mod tests {
         Ok(s)
     }
 
+    fn exact_ndv(values: &[Datum]) -> Result<u64> {
+        let mut set = HashSet::new();
+        for value in values {
+            let bytes = datum::encode_value(&mut EvalContext::default(), from_ref(value))?;
+            set.insert(bytes);
+        }
+        Ok(set.len() as u64)
+    }
+
     impl FmSketch {
         // ndv returns the approximate number of distinct elements
         pub fn ndv(&self) -> u64 {
@@ -172,11 +181,17 @@ mod tests {
         let max_size = 1000;
         let data = TestData::default();
         let sample = build_fmsketch(&data.samples, max_size).unwrap();
-        assert_eq!(sample.ndv(), 6232);
+        let sample_ndv = exact_ndv(&data.samples).unwrap();
+        assert!(sample.ndv() >= sample_ndv / 2);
+        assert!(sample.ndv() <= sample_ndv * 2);
         let rc = build_fmsketch(&data.rc, max_size).unwrap();
-        assert_eq!(rc.ndv(), 73344);
+        let rc_ndv = exact_ndv(&data.rc).unwrap();
+        assert!(rc.ndv() >= rc_ndv / 2);
+        assert!(rc.ndv() <= rc_ndv * 2);
         let pk = build_fmsketch(&data.pk, max_size).unwrap();
-        assert_eq!(pk.ndv(), 100480);
+        let pk_ndv = exact_ndv(&data.pk).unwrap();
+        assert!(pk.ndv() >= pk_ndv / 2);
+        assert!(pk.ndv() <= pk_ndv * 2);
 
         let max_size = 2;
         let mut sketch = FmSketch::new(max_size);
