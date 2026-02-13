@@ -85,11 +85,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
                         key = key.append_ts(raw_ext.ts);
                     }
                     let m = match self.api_version {
-                        ApiVersion::V2 => Modify::Put(
-                            cf,
-                            key,
-                            ApiV2::ENCODED_LOGICAL_DELETE.to_vec(),
-                        ),
+                        ApiVersion::V2 => {
+                            Modify::Put(cf, key, ApiV2::ENCODED_LOGICAL_DELETE.to_vec())
+                        }
                         _ => Modify::Delete(cf, key),
                     };
                     data.push(m);
@@ -152,7 +150,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
 mod tests {
     use std::sync::Arc;
 
-    use api_version::{test_kv_format_impl};
+    use api_version::test_kv_format_impl;
     use causal_ts::CausalTsProviderImpl;
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_DEFAULT;
@@ -391,8 +389,13 @@ mod tests {
         );
         let mut statistic = Statistics::default();
         let snap = engine.snapshot(Default::default()).unwrap();
-        let raw_ext =
-            block_on(get_raw_ext(ts_provider.clone(), cm.clone(), true, &delete_cmd.cmd)).unwrap();
+        let raw_ext = block_on(get_raw_ext(
+            ts_provider.clone(),
+            cm.clone(),
+            true,
+            &delete_cmd.cmd,
+        ))
+        .unwrap();
         let expected_guard_key = raw_ext.as_ref().map(|r| r.key_guard.key().clone());
         let context = WriteContext {
             lock_mgr: &MockLockManager::new(),
@@ -428,7 +431,13 @@ mod tests {
         );
         let mut statistic = Statistics::default();
         let snap = engine.snapshot(Default::default()).unwrap();
-        let raw_ext = block_on(get_raw_ext(ts_provider.clone(), cm.clone(), true, &wrong_delete_cmd.cmd)).unwrap();
+        let raw_ext = block_on(get_raw_ext(
+            ts_provider.clone(),
+            cm.clone(),
+            true,
+            &wrong_delete_cmd.cmd,
+        ))
+        .unwrap();
         let context = WriteContext {
             lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm,

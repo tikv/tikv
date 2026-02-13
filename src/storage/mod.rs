@@ -7990,9 +7990,7 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        expect_none(
-            block_on(storage.raw_get(ctx.clone(), "".to_string(), key.to_vec())).unwrap(),
-        );
+        expect_none(block_on(storage.raw_get(ctx.clone(), "".to_string(), key.to_vec())).unwrap());
         expect_multi_values(
             vec![],
             block_on(storage.raw_scan(
@@ -8066,9 +8064,7 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        expect_none(
-            block_on(storage.raw_get(ctx.clone(), "".to_string(), key.to_vec())).unwrap(),
-        );
+        expect_none(block_on(storage.raw_get(ctx.clone(), "".to_string(), key.to_vec())).unwrap());
         expect_multi_values(
             vec![],
             block_on(storage.raw_scan(
