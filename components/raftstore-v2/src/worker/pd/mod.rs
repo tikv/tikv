@@ -215,9 +215,11 @@ where
     // For region.
     region_peers: HashMap<u64, region::PeerStat>,
     region_buckets: HashMap<u64, region::ReportBucket>,
-    // region_id -> total_cpu_time_ms (since last region heartbeat)
+    // region_id -> total_cpu_time_ms accumulated for RegionHeartbeat reporting.
+    // This map is consumed/cleared by the region-heartbeat path.
     region_cpu_records_since_region_heartbeat: HashMap<u64, u32>,
-    // region_id -> total_cpu_time_ms (since last store heartbeat)
+    // region_id -> total_cpu_time_ms accumulated for StoreHeartbeat peer_stats.
+    // This map is consumed/cleared by real store heartbeats (not fake ones).
     region_cpu_records_since_store_heartbeat: HashMap<u64, u32>,
     is_hb_receiver_scheduled: bool,
 
