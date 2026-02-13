@@ -625,8 +625,8 @@ fn test_increase_snap_generator_pool_size() {
     let t = Instant::now();
     while t.saturating_elapsed() < Duration::from_secs(1) {
         let val = engine.get_value(b"zkey0030").unwrap();
-        if val.is_some() {
-            assert_eq!(val.unwrap(), b"val");
+        if let Some(val) = val {
+            assert_eq!(val, b"val");
             break;
         }
     }

@@ -726,7 +726,7 @@ impl<'a> PrewriteMutation<'a> {
         };
 
         // safety check for shared lock.
-        if shared_locks.is_some() {
+        if let Some(mut shared) = shared_locks {
             if generation > 0 {
                 return Err(ErrorInner::Other(box_err!(
                     "shared lock prewrite does not support non-zero generation, generation: {}",
@@ -747,7 +747,6 @@ impl<'a> PrewriteMutation<'a> {
                 .into());
             }
 
-            let mut shared = shared_locks.expect("shared_locks must be Some");
             shared.update_lock(lock)?;
             #[cfg(debug_assertions)]
             {

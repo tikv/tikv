@@ -900,23 +900,18 @@ impl AutoSplitController {
                 });
                 let region_id = top_cpu_usage[0];
                 let recorder = self.recorders.get_mut(&region_id).unwrap();
-                if recorder.hottest_key_range.is_some() {
+                if let Some(hottest_key_range) = recorder.hottest_key_range.as_ref() {
                     split_infos.push(SplitInfo::with_start_end_key(
                         region_id,
                         recorder.peer.clone(),
-                        recorder
-                            .hottest_key_range
-                            .as_ref()
-                            .unwrap()
-                            .start_key
-                            .clone(),
-                        recorder.hottest_key_range.as_ref().unwrap().end_key.clone(),
+                        hottest_key_range.start_key.clone(),
+                        hottest_key_range.end_key.clone(),
                     ));
                     LOAD_BASE_SPLIT_EVENT.ready_to_split_cpu_top.inc();
                     info!("load base split region";
                         "region_id" => region_id,
-                        "start_key" => log_wrappers::Value::key(&recorder.hottest_key_range.as_ref().unwrap().start_key),
-                        "end_key" => log_wrappers::Value::key(&recorder.hottest_key_range.as_ref().unwrap().end_key),
+                        "start_key" => log_wrappers::Value::key(&hottest_key_range.start_key),
+                        "end_key" => log_wrappers::Value::key(&hottest_key_range.end_key),
                         "cpu_usage" => recorder.cpu_usage,
                     );
                 } else {

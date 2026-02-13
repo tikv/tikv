@@ -3,6 +3,7 @@
 #![allow(internal_features)]
 #![feature(core_intrinsics)]
 #![feature(slice_pattern)]
+#![feature(str_as_str)]
 
 use std::sync::Arc;
 

@@ -10286,7 +10286,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
 
-        let mut h = lock_blocked(&[key.clone()], 105, start_ts.into_inner(), 0);
+        let mut h = lock_blocked(std::slice::from_ref(&key), 105, start_ts.into_inner(), 0);
 
         // Not expire
         storage

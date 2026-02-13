@@ -1022,14 +1022,14 @@ mod tests {
         // Index schema: (INT, FLOAT)
 
         // the elements in data are: [int index, float index, handle id].
-        let data = vec![
+        let data = [
             [Datum::I64(-5), Datum::F64(0.3), Datum::I64(10)],
             [Datum::I64(5), Datum::F64(5.1), Datum::I64(5)],
             [Datum::I64(5), Datum::F64(10.5), Datum::I64(2)],
         ];
 
         // The column info for each column in `data`. Used to build the executor.
-        let columns_info = vec![
+        let columns_info = [
             {
                 let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
@@ -1055,7 +1055,7 @@ mod tests {
         ];
 
         // The schema of these columns. Used to check executor output.
-        let schema = vec![
+        let schema = [
             FieldTypeTp::LongLong.into(),
             FieldTypeTp::Double.into(),
             FieldTypeTp::LongLong.into(),

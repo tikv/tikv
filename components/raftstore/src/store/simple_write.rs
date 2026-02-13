@@ -585,7 +585,7 @@ mod tests {
         };
         assert_eq!(delete.cf, CF_WRITE);
         assert_eq!(delete.key, &delete_key);
-        assert!(matches!(decoder.next(), None));
+        assert!(decoder.next().is_none());
 
         let (bytes, _) = req_encoder2.encode();
         decoder =
@@ -631,7 +631,7 @@ mod tests {
             panic!("should be ingest")
         };
         assert_eq!(exp, ssts);
-        assert!(matches!(decoder.next(), None));
+        assert!(decoder.next().is_none());
     }
 
     #[test]

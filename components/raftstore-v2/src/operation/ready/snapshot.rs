@@ -484,7 +484,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 },
             );
             let task = GenSnapTask::new(self.region().get_id(), to, index, canceled);
-            *gen_snap_task = Box::new(Some(task));
+            **gen_snap_task = Some(task);
         }
         Err(raft::Error::Store(
             raft::StorageError::SnapshotTemporarilyUnavailable,

@@ -34,7 +34,7 @@ fn vec_l2_distance(a: VectorFloat32Ref, b: VectorFloat32Ref) -> Result<Option<Re
 #[inline]
 fn vec_negative_inner_product(a: VectorFloat32Ref, b: VectorFloat32Ref) -> Result<Option<Real>> {
     // TiKV does not support NaN. This turns NaN into null
-    Ok(Real::new(a.inner_product(b)? * -1.0).ok())
+    Ok(Real::new(-a.inner_product(b)?).ok())
 }
 
 #[rpn_fn]

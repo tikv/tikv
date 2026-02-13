@@ -2112,7 +2112,7 @@ pub mod tests {
             expect_is_remain: bool,
         }
 
-        let cases = vec![
+        let cases = [
             // Test the limit.
             Case {
                 start_key: None,

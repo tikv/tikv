@@ -2735,6 +2735,7 @@ macro_rules! readpool_config {
         mod $test_mod_name {
             use super::*;
 
+            #[allow(unused_assignments)]
             #[test]
             fn test_validate() {
                 let cfg = $struct_name::default();

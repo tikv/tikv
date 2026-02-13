@@ -279,8 +279,7 @@ fn get_regions_for_range_of_keys(
 fn get_keys_in_region(keys: &mut Peekable<IntoIter<Key>>, region: &Region) -> Vec<Key> {
     let mut keys_in_region = Vec::new();
 
-    loop {
-        let Some(key) = keys.peek() else { break };
+    while let Some(key) = keys.peek() {
         let key = key.as_encoded().as_slice();
 
         if key < region.get_start_key() {
@@ -1575,6 +1574,7 @@ pub mod test_gc_worker {
         }
     }
 
+    #[allow(dead_code)]
     #[derive(Clone, Default)]
     pub struct MultiRocksEngine {
         pub engines: Arc<Mutex<HashMap<u64, PrefixedEngine>>>,

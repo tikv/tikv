@@ -125,7 +125,7 @@ impl RegionStatsManager {
     ) -> Vec<CachedRegionStat> {
         match self
             .info_provider
-            .get_regions_stat(cached_regions.iter().map(|(id, _)| *id).collect())
+            .get_regions_stat(cached_regions.keys().copied().collect())
         {
             Ok(regions_stat) => sort_cached_region_stats(regions_stat, cached_regions),
             Err(e) => {
@@ -567,7 +567,7 @@ pub mod tests {
         let mc = MemoryController::new(config.clone(), skiplist_engine);
         mc.acquire(config.value().stop_load_threshold() * 2);
 
-        let regions = vec![
+        let regions = [
             new_region(1, b"k01", b"k02"),
             new_region(2, b"k03", b"k04"),
             new_region(3, b"k05", b"k06"),

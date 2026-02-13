@@ -75,6 +75,7 @@ impl fmt::Display for Tz {
     }
 }
 
+#[allow(deprecated)]
 impl TimeZone for Tz {
     type Offset = TzOffset;
 

@@ -417,7 +417,7 @@ where
         // make the statistics of slowness percepted by PD timely.
         (interval_second > store_heartbeat_interval)
             && (interval_second <= STORE_HEARTBEAT_DELAY_LIMIT)
-            && (interval_second % store_heartbeat_interval == 0)
+            && interval_second.is_multiple_of(store_heartbeat_interval)
     }
 
     pub fn handle_inspect_latency(&self, send_time: TiInstant, inspector: LatencyInspector) {

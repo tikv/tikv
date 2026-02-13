@@ -109,7 +109,7 @@ impl<EK: KvEngine, ER> Storage<EK, ER> {
         let mut task = self.gen_snap_task.borrow_mut();
         if let Some(t) = &**task {
             if to == t.to_peer() {
-                *task = Box::new(None);
+                **task = None;
             };
         }
     }

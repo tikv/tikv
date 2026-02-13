@@ -327,6 +327,7 @@ impl<L: LockManager> LockWaitQueues<L> {
     /// queue while executing, and in this case the caller will be responsible
     /// to wake it up. When the head of the queue is a shared lock wait, all
     /// consecutive shared lock waits are returned together in the vector.
+    #[allow(clippy::vec_box)]
     pub fn pop_for_waking_up(
         &self,
         key: &Key,

@@ -2898,8 +2898,8 @@ mod tests {
     fn test_run_cmd_memory_quota() {
         let key_a = Key::from_raw(&[b'a'; 64]);
         let key_b = Key::from_raw(&[b'b'; 64]);
-        let mut lock_a = Lock::new(&[key_a.clone()]);
-        let mut lock_b = Lock::new(&[key_b.clone()]);
+        let mut lock_a = Lock::new(std::slice::from_ref(&key_a));
+        let mut lock_b = Lock::new(std::slice::from_ref(&key_b));
         let build_cmd = || {
             let mut req = CheckSecondaryLocksRequest::default();
             req.set_keys(

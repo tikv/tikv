@@ -800,7 +800,7 @@ mod tests {
         chan.notify_proposed();
         chan.notify_committed();
         drop(chan);
-        assert!(matches!(block_on(stream.next()), None));
+        assert!(block_on(stream.next()).is_none());
 
         let mut builder = CmdResChannelBuilder::default();
         builder.subscribe_proposed();
@@ -813,7 +813,7 @@ mod tests {
             Some(CmdResEvent::Proposed)
         ));
         drop(chan);
-        assert!(matches!(block_on(stream.next()), None));
+        assert!(block_on(stream.next()).is_none());
 
         let mut builder = CmdResChannelBuilder::default();
         builder.subscribe_committed();
@@ -826,6 +826,6 @@ mod tests {
             Some(CmdResEvent::Committed)
         ));
         drop(chan);
-        assert!(matches!(block_on(stream.next()), None));
+        assert!(block_on(stream.next()).is_none());
     }
 }
