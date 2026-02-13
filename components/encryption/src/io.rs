@@ -286,12 +286,12 @@ impl<R: Read> Read for CrypterReader<R> {
     #[inline]
     fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
         let count = self.reader.read(buf)?;
-        if let Some(crypter) = self.crypter.as_mut() {
-            if let Err(e) = crypter.do_crypter_in_place(&mut buf[..count]) {
-                // FIXME: We can't recover from this without rollback `reader` to old offset.
-                // But that requires `Seek` which requires a wider refactor of user code.
-                panic!("`do_crypter_in_place` failed: {:?}", e);
-            }
+        if let Some(crypter) = self.crypter.as_mut()
+            && let Err(e) = crypter.do_crypter_in_place(&mut buf[..count])
+        {
+            // FIXME: We can't recover from this without rollback `reader` to old offset.
+            // But that requires `Seek` which requires a wider refactor of user code.
+            panic!("`do_crypter_in_place` failed: {:?}", e);
         }
         Ok(count)
     }
@@ -321,12 +321,12 @@ impl<R: AsyncRead + Unpin> AsyncRead for CrypterReader<R> {
             Poll::Ready(Ok(read_count)) if read_count > 0 => read_count,
             _ => return poll,
         };
-        if let Some(crypter) = inner.crypter.as_mut() {
-            if let Err(e) = crypter.do_crypter_in_place(&mut buf[..read_count]) {
-                // FIXME: We can't recover from this without rollback `reader` to old offset.
-                // But that requires `Seek` which requires a wider refactor of user code.
-                panic!("`do_crypter_in_place` failed: {:?}", e);
-            }
+        if let Some(crypter) = inner.crypter.as_mut()
+            && let Err(e) = crypter.do_crypter_in_place(&mut buf[..read_count])
+        {
+            // FIXME: We can't recover from this without rollback `reader` to old offset.
+            // But that requires `Seek` which requires a wider refactor of user code.
+            panic!("`do_crypter_in_place` failed: {:?}", e);
         }
         Poll::Ready(Ok(read_count))
     }

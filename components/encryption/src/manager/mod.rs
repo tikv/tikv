@@ -1094,26 +1094,25 @@ impl<'a> DataKeyImporter<'a> {
         // If the duration is longer than the window, we cannot delete keys because they
         // may already be referenced by other files.
         // System time can drift, use 1s as safety padding.
-        if !self.key_additions.is_empty() {
-            if let Ok(duration) = self.start_time.elapsed() {
-                if duration.as_secs() < Self::EXPECTED_TIME_WINDOW_SECS - 1 {
-                    for key_id in self.key_additions.drain(..) {
-                        let mut key_dict = self.manager.dicts.key_dict.lock().unwrap();
-                        info!("rollback one imported data key"; "key_id" => key_id);
-                        key_dict.keys.remove(&key_id);
-                    }
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    self.manager
-                        .rotate_tx
-                        .send(RotateTask::Save(tx))
-                        .map_err(|_| {
-                            Error::Other(box_err!("Failed to request background key dict rotation"))
-                        })?;
-                    rx.recv().map_err(|_| {
-                        Error::Other(box_err!("Failed to wait for background key dict rotation"))
-                    })?;
-                }
+        if !self.key_additions.is_empty()
+            && let Ok(duration) = self.start_time.elapsed()
+            && duration.as_secs() < Self::EXPECTED_TIME_WINDOW_SECS - 1
+        {
+            for key_id in self.key_additions.drain(..) {
+                let mut key_dict = self.manager.dicts.key_dict.lock().unwrap();
+                info!("rollback one imported data key"; "key_id" => key_id);
+                key_dict.keys.remove(&key_id);
             }
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.manager
+                .rotate_tx
+                .send(RotateTask::Save(tx))
+                .map_err(|_| {
+                    Error::Other(box_err!("Failed to request background key dict rotation"))
+                })?;
+            rx.recv().map_err(|_| {
+                Error::Other(box_err!("Failed to wait for background key dict rotation"))
+            })?;
         }
         Ok(())
     }
@@ -1121,10 +1120,10 @@ impl<'a> DataKeyImporter<'a> {
 
 impl Drop for DataKeyImporter<'_> {
     fn drop(&mut self) {
-        if !self.committed {
-            if let Err(e) = self.rollback() {
-                warn!("failed to rollback imported data keys"; "err" => ?e);
-            }
+        if !self.committed
+            && let Err(e) = self.rollback()
+        {
+            warn!("failed to rollback imported data keys"; "err" => ?e);
         }
     }
 }
