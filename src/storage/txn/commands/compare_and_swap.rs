@@ -364,7 +364,7 @@ mod tests {
         let modifies_with_ts = vec![Modify::Put(
             CF_DEFAULT,
             F::encode_raw_key(raw_key, expected_ts),
-            F::encode_raw_value_owned(encode_value),
+            F::encode_raw_value_owned(encode_value.clone()),
         )];
         assert_eq!(write_result.to_be_write.modifies, modifies_with_ts);
         if F::TAG == ApiVersion::V2 {
@@ -376,12 +376,19 @@ mod tests {
         }
 
         // compare-and-delete success
+        let initial_write = WriteData::from_modifies(vec![Modify::Put(
+            CF_DEFAULT,
+            F::encode_raw_key(raw_key, None),
+            F::encode_raw_value_owned(encode_value.clone()),
+        )]);
+        engine.write(&Context::default(), initial_write).unwrap();
+
         let mut delete_ctx = Context::default();
         delete_ctx.set_raw_cas_delete(true);
         let delete_cmd = RawCompareAndSwap::new(
             CF_DEFAULT,
             F::encode_raw_key(raw_key, None),
-            None,
+            Some(raw_value.to_vec()),
             raw_value.to_vec(),
             ttl,
             F::TAG,
@@ -396,6 +403,7 @@ mod tests {
             &delete_cmd.cmd,
         ))
         .unwrap();
+        let expected_ts = raw_ext.as_ref().map(|r| r.ts);
         let expected_guard_key = raw_ext.as_ref().map(|r| r.key_guard.key().clone());
         let context = WriteContext {
             lock_mgr: &MockLockManager::new(),
@@ -408,7 +416,15 @@ mod tests {
         };
         let cmd: Command = delete_cmd.into();
         let write_result = cmd.process_write(snap, context).unwrap();
-        assert!(write_result.to_be_write.modifies.is_empty());
+        let expected_modify = match F::TAG {
+            ApiVersion::V2 => Modify::Put(
+                CF_DEFAULT,
+                F::encode_raw_key(raw_key, expected_ts),
+                ApiV2::ENCODED_LOGICAL_DELETE.to_vec(),
+            ),
+            _ => Modify::Delete(CF_DEFAULT, F::encode_raw_key(raw_key, expected_ts)),
+        };
+        assert_eq!(write_result.to_be_write.modifies, vec![expected_modify]);
         if F::TAG == ApiVersion::V2 {
             assert_eq!(write_result.lock_guards.len(), 1);
             assert_eq!(
@@ -456,7 +472,7 @@ mod tests {
                 succeed,
             } => {
                 assert!(!succeed);
-                assert!(previous_value.is_none());
+                assert_eq!(previous_value, Some(raw_value.to_vec()));
             }
             _ => unreachable!(),
         }
