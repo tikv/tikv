@@ -1,15 +1,9 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    cmp::Reverse,
-    collections::BinaryHeap,
-    hash::Hasher,
-    mem,
-    sync::Arc,
-};
+use std::{cmp::Reverse, collections::BinaryHeap, hash::Hasher, mem, sync::Arc};
 
-use collections::HashSet;
 use api_version::KvFormat;
+use collections::HashSet;
 use kvproto::coprocessor::KeyRange;
 use mur3::{Hasher128, murmurhash3_x64_128};
 use rand::{Rng, rngs::StdRng};
@@ -37,7 +31,7 @@ use crate::{
     storage::{Snapshot, SnapshotStore},
 };
 
-const SKETCH_SAMPLE_RATE: f64 = 0.01;
+const SKETCH_SAMPLE_RATE: f64 = 0.05;
 
 pub(crate) struct RowSampleBuilder<S: Snapshot, F: KvFormat> {
     pub(crate) data: BatchTableScanExecutor<TikvStorage<SnapshotStore<S>>, F>,
