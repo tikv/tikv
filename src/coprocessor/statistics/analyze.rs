@@ -250,18 +250,16 @@ trait RowSampleCollector: Send {
 #[derive(Clone)]
 struct F1Sketch {
     mask: u64,
-    max_size: usize,
     once: HashSet<u64>,
     multi: HashSet<u64>,
 }
 
 impl F1Sketch {
-    fn new(max_size: usize) -> F1Sketch {
+    fn new() -> F1Sketch {
         F1Sketch {
             mask: 0,
-            max_size,
-            once: HashSet::with_capacity_and_hasher(max_size + 1, Default::default()),
-            multi: HashSet::with_capacity_and_hasher(max_size + 1, Default::default()),
+            once: HashSet::with_capacity_and_hasher(0, Default::default()),
+            multi: HashSet::with_capacity_and_hasher(0, Default::default()),
         }
     }
 
@@ -281,12 +279,6 @@ impl F1Sketch {
             self.multi.insert(hash_val);
         } else {
             self.once.insert(hash_val);
-        }
-        if self.once.len() + self.multi.len() > self.max_size {
-            let mask = (self.mask << 1) | 1;
-            self.once.retain(|&x| x & mask == 0);
-            self.multi.retain(|&x| x & mask == 0);
-            self.mask = mask;
         }
     }
 }
@@ -337,7 +329,7 @@ impl BaseRowSampleCollector {
             count: 0,
             sketch_sample_count: 0,
             fm_sketches: vec![FmSketch::new(max_fm_sketch_size); col_and_group_len],
-            f1_sketches: vec![F1Sketch::new(max_fm_sketch_size); col_and_group_len],
+            f1_sketches: vec![F1Sketch::new(); col_and_group_len],
             rng: StdRng::from_entropy(),
             total_sizes: vec![0; col_and_group_len],
             memory_usage: 0,
