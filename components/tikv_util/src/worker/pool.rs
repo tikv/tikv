@@ -434,7 +434,8 @@ impl Worker {
             while !stop.load(Ordering::Relaxed)
                 && let Some(Ok(_)) = interval.next().await
             {
-                func();
+                let fut = func();
+                fut.await;
             }
         });
     }
