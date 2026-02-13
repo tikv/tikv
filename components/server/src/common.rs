@@ -1048,8 +1048,10 @@ impl DiskUsageChecker {
                         }
                     }
                 };
-                let raft_disk_available =
-                    cmp::min(raft_disk_cap.strict_sub(raft_used_size), raft_disk_avail);
+                let raft_disk_available = cmp::min(
+                    raft_disk_cap.saturating_sub(raft_used_size),
+                    raft_disk_avail,
+                );
                 if raft_disk_available <= raft_already_full_thd {
                     disk::DiskUsage::AlreadyFull
                 } else if raft_disk_available <= self.raft_almost_full_thd {
