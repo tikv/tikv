@@ -207,8 +207,40 @@ mod tests {
             F::TAG,
             Context::default(),
         );
-        let (prev_val, succeed) = sched_command(&mut engine, cm, cmd, ts_provider).unwrap();
+        let (prev_val, succeed) =
+            sched_command(&mut engine, cm.clone(), cmd, ts_provider.clone()).unwrap();
         assert_eq!(prev_val, Some(b"v1".to_vec()));
+        assert!(succeed);
+
+        // compare-and-delete failure (wrong expected value)
+        let mut delete_ctx = Context::default();
+        delete_ctx.set_raw_cas_delete(true);
+        let cmd = RawCompareAndSwap::new(
+            CF_DEFAULT,
+            F::encode_raw_key(key, None),
+            Some(b"nope".to_vec()),
+            b"ignored".to_vec(),
+            0,
+            F::TAG,
+            delete_ctx.clone(),
+        );
+        let (prev_val, succeed) =
+            sched_command(&mut engine, cm.clone(), cmd, ts_provider.clone()).unwrap();
+        assert_eq!(prev_val, Some(b"v3".to_vec()));
+        assert!(!succeed);
+
+        // compare-and-delete success
+        let cmd = RawCompareAndSwap::new(
+            CF_DEFAULT,
+            F::encode_raw_key(key, None),
+            Some(b"v3".to_vec()),
+            b"ignored".to_vec(),
+            0,
+            F::TAG,
+            delete_ctx,
+        );
+        let (prev_val, succeed) = sched_command(&mut engine, cm, cmd, ts_provider).unwrap();
+        assert_eq!(prev_val, Some(b"v3".to_vec()));
         assert!(succeed);
     }
 
@@ -277,10 +309,13 @@ mod tests {
         );
         let mut statistic = Statistics::default();
         let snap = engine.snapshot(Default::default()).unwrap();
-        let raw_ext = block_on(get_raw_ext(ts_provider, cm.clone(), true, &cmd.cmd)).unwrap();
+        let raw_ext =
+            block_on(get_raw_ext(ts_provider.clone(), cm.clone(), true, &cmd.cmd)).unwrap();
+        let expected_ts = raw_ext.as_ref().map(|r| r.ts);
+        let expected_guard_key = raw_ext.as_ref().map(|r| r.key_guard.key().clone());
         let context = WriteContext {
             lock_mgr: &MockLockManager::new(),
-            concurrency_manager: cm,
+            concurrency_manager: cm.clone(),
             extra_op: kvproto::kvrpcpb::ExtraOp::Noop,
             statistics: &mut statistic,
             async_apply_prewrite: false,
@@ -291,18 +326,100 @@ mod tests {
         let write_result = cmd.process_write(snap, context).unwrap();
         let modifies_with_ts = vec![Modify::Put(
             CF_DEFAULT,
-            F::encode_raw_key(raw_key, Some(101.into())),
+            F::encode_raw_key(raw_key, expected_ts),
             F::encode_raw_value_owned(encode_value),
         )];
         assert_eq!(write_result.to_be_write.modifies, modifies_with_ts);
         if F::TAG == ApiVersion::V2 {
             assert_eq!(write_result.lock_guards.len(), 1);
-            let raw_key = vec![api_version::api_v2::RAW_KEY_PREFIX];
-            let encoded_key = ApiV2::encode_raw_key(&raw_key, Some(100.into()));
             assert_eq!(
                 write_result.lock_guards.first().unwrap().key(),
-                &encoded_key
+                expected_guard_key.as_ref().unwrap()
             );
+        }
+
+        // compare-and-delete success
+        let mut delete_ctx = Context::default();
+        delete_ctx.set_raw_cas_delete(true);
+        let delete_cmd = RawCompareAndSwap::new(
+            CF_DEFAULT,
+            F::encode_raw_key(raw_key, None),
+            None,
+            raw_value.to_vec(),
+            ttl,
+            F::TAG,
+            delete_ctx,
+        );
+        let mut statistic = Statistics::default();
+        let snap = engine.snapshot(Default::default()).unwrap();
+        let raw_ext =
+            block_on(get_raw_ext(ts_provider.clone(), cm.clone(), true, &delete_cmd.cmd)).unwrap();
+        let expected_ts = raw_ext.as_ref().map(|r| r.ts);
+        let expected_guard_key = raw_ext.as_ref().map(|r| r.key_guard.key().clone());
+        let context = WriteContext {
+            lock_mgr: &MockLockManager::new(),
+            concurrency_manager: cm.clone(),
+            extra_op: kvproto::kvrpcpb::ExtraOp::Noop,
+            statistics: &mut statistic,
+            async_apply_prewrite: false,
+            raw_ext,
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+        };
+        let cmd: Command = delete_cmd.into();
+        let write_result = cmd.process_write(snap, context).unwrap();
+        let expected_modify = match F::TAG {
+            ApiVersion::V2 => Modify::Put(
+                CF_DEFAULT,
+                F::encode_raw_key(raw_key, expected_ts),
+                ApiV2::ENCODED_LOGICAL_DELETE.to_vec(),
+            ),
+            _ => Modify::Delete(CF_DEFAULT, F::encode_raw_key(raw_key, expected_ts)),
+        };
+        assert_eq!(write_result.to_be_write.modifies, vec![expected_modify]);
+        if F::TAG == ApiVersion::V2 {
+            assert_eq!(write_result.lock_guards.len(), 1);
+            assert_eq!(
+                write_result.lock_guards.first().unwrap().key(),
+                expected_guard_key.as_ref().unwrap()
+            );
+        }
+
+        // compare-and-delete failure
+        let mut wrong_delete_ctx = Context::default();
+        wrong_delete_ctx.set_raw_cas_delete(true);
+        let wrong_delete_cmd = RawCompareAndSwap::new(
+            CF_DEFAULT,
+            F::encode_raw_key(raw_key, None),
+            Some(b"wrong".to_vec()),
+            raw_value.to_vec(),
+            ttl,
+            F::TAG,
+            wrong_delete_ctx,
+        );
+        let mut statistic = Statistics::default();
+        let snap = engine.snapshot(Default::default()).unwrap();
+        let raw_ext = block_on(get_raw_ext(ts_provider.clone(), cm.clone(), true, &wrong_delete_cmd.cmd)).unwrap();
+        let context = WriteContext {
+            lock_mgr: &MockLockManager::new(),
+            concurrency_manager: cm,
+            extra_op: kvproto::kvrpcpb::ExtraOp::Noop,
+            statistics: &mut statistic,
+            async_apply_prewrite: false,
+            raw_ext,
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+        };
+        let cmd: Command = wrong_delete_cmd.into();
+        let write_result = cmd.process_write(snap, context).unwrap();
+        assert!(write_result.to_be_write.modifies.is_empty());
+        match write_result.pr {
+            ProcessResult::RawCompareAndSwapRes {
+                previous_value,
+                succeed,
+            } => {
+                assert!(!succeed);
+                assert!(previous_value.is_none());
+            }
+            _ => unreachable!(),
         }
     }
 }
