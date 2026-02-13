@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use api_version::{KvFormat, RawValue, match_template_api_version};
+use api_version::{ApiV2, KvFormat, RawValue, match_template_api_version};
 use engine_traits::{CfName, raw_ttl::ttl_to_expire_ts};
 use kvproto::kvrpcpb::ApiVersion;
 use raw::RawStore;
@@ -27,6 +27,10 @@ command! {
     /// RawCompareAndSwap checks whether the previous value of the key equals to the given value.
     /// If they are equal, write the new value. The bool indicates whether they are equal.
     /// The previous value is always returned regardless of whether the new value is set.
+    ///
+    /// If `Context::raw_cas_delete` is true and the comparison succeeds, this command deletes the
+    /// key instead of writing `value`. For API V2 this is a logical delete; for earlier versions
+    /// it is a physical delete.
     RawCompareAndSwap:
         cmd_ty => (Option<Value>, bool),
         display => { "kv::command::raw_compare_and_swap {:?}", (ctx), }
@@ -74,24 +78,39 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
         )?;
 
         let (pr, lock_guards) = if old_value == previous_value {
-            let raw_value = RawValue {
-                user_value: value,
-                expire_ts: ttl_to_expire_ts(self.ttl),
-                is_delete: false,
-            };
-            let encoded_raw_value = match_template_api_version!(
-                API,
-                match self.api_version {
-                    ApiVersion::API => API::encode_raw_value_owned(raw_value),
+            if ctx.get_raw_cas_delete() {
+                // If the key doesn't exist, do nothing instead of creating a tombstone.
+                if old_value.is_some() {
+                    if let Some(ref raw_ext) = raw_ext {
+                        key = key.append_ts(raw_ext.ts);
+                    }
+                    let m = match self.api_version {
+                        ApiVersion::V2 => {
+                            Modify::Put(cf, key, ApiV2::ENCODED_LOGICAL_DELETE.to_vec())
+                        }
+                        _ => Modify::Delete(cf, key),
+                    };
+                    data.push(m);
                 }
-            );
-
-            if let Some(ref raw_ext) = raw_ext {
-                key = key.append_ts(raw_ext.ts);
+            } else {
+                if let Some(ref raw_ext) = raw_ext {
+                    key = key.append_ts(raw_ext.ts);
+                }
+                let raw_value = RawValue {
+                    user_value: value,
+                    expire_ts: ttl_to_expire_ts(self.ttl),
+                    is_delete: false,
+                };
+                let encoded_raw_value = match_template_api_version!(
+                    API,
+                    match self.api_version {
+                        ApiVersion::API => API::encode_raw_value_owned(raw_value),
+                    }
+                );
+                let m = Modify::Put(cf, key, encoded_raw_value);
+                data.push(m);
             }
 
-            let m = Modify::Put(cf, key, encoded_raw_value);
-            data.push(m);
             (
                 ProcessResult::RawCompareAndSwapRes {
                     previous_value: old_value,
@@ -131,7 +150,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
 mod tests {
     use std::sync::Arc;
 
-    use api_version::{ApiV2, test_kv_format_impl};
+    use api_version::test_kv_format_impl;
     use causal_ts::CausalTsProviderImpl;
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_DEFAULT;
@@ -199,9 +218,67 @@ mod tests {
             F::TAG,
             Context::default(),
         );
-        let (prev_val, succeed) = sched_command(&mut engine, cm, cmd, ts_provider).unwrap();
+        let (prev_val, succeed) =
+            sched_command(&mut engine, cm.clone(), cmd, ts_provider.clone()).unwrap();
         assert_eq!(prev_val, Some(b"v1".to_vec()));
         assert!(succeed);
+
+        // compare-and-delete failure (wrong expected value)
+        let mut delete_ctx = Context::default();
+        delete_ctx.set_raw_cas_delete(true);
+        let cmd = RawCompareAndSwap::new(
+            CF_DEFAULT,
+            F::encode_raw_key(key, None),
+            Some(b"nope".to_vec()),
+            b"ignored".to_vec(),
+            0,
+            F::TAG,
+            delete_ctx.clone(),
+        );
+        let (prev_val, succeed) =
+            sched_command(&mut engine, cm.clone(), cmd, ts_provider.clone()).unwrap();
+        assert_eq!(prev_val, Some(b"v3".to_vec()));
+        assert!(!succeed);
+
+        // compare-and-delete success
+        let cmd = RawCompareAndSwap::new(
+            CF_DEFAULT,
+            F::encode_raw_key(key, None),
+            Some(b"v3".to_vec()),
+            b"ignored".to_vec(),
+            0,
+            F::TAG,
+            delete_ctx,
+        );
+        let (prev_val, succeed) =
+            sched_command(&mut engine, cm.clone(), cmd, ts_provider.clone()).unwrap();
+        assert_eq!(prev_val, Some(b"v3".to_vec()));
+        assert!(succeed);
+
+        let missing_key = b"rk_missing";
+        let encoded_missing_key = F::encode_raw_key(missing_key, None);
+
+        // compare-and-delete success (key does not exist)
+        let mut missing_delete_ctx = Context::default();
+        missing_delete_ctx.set_raw_cas_delete(true);
+        let cmd = RawCompareAndSwap::new(
+            CF_DEFAULT,
+            encoded_missing_key.clone(),
+            None,
+            b"ignored".to_vec(),
+            0,
+            F::TAG,
+            missing_delete_ctx,
+        );
+        let (prev_val, succeed) =
+            sched_command(&mut engine, cm.clone(), cmd, ts_provider.clone()).unwrap();
+        assert!(prev_val.is_none());
+        assert!(succeed);
+        let snap = engine.snapshot(Default::default()).unwrap();
+        let missing_value = RawStore::new(snap, F::TAG)
+            .raw_get_key_value(CF_DEFAULT, &encoded_missing_key, &mut Statistics::default())
+            .unwrap();
+        assert!(missing_value.is_none());
     }
 
     pub fn sched_command<E: Engine>(
@@ -230,7 +307,7 @@ mod tests {
                 previous_value,
                 succeed,
             } => {
-                if succeed {
+                if succeed && !ret.to_be_write.modifies.is_empty() {
                     let ctx = Context::default();
                     engine.write(&ctx, ret.to_be_write).unwrap();
                 }
@@ -269,10 +346,13 @@ mod tests {
         );
         let mut statistic = Statistics::default();
         let snap = engine.snapshot(Default::default()).unwrap();
-        let raw_ext = block_on(get_raw_ext(ts_provider, cm.clone(), true, &cmd.cmd)).unwrap();
+        let raw_ext =
+            block_on(get_raw_ext(ts_provider.clone(), cm.clone(), true, &cmd.cmd)).unwrap();
+        let expected_ts = raw_ext.as_ref().map(|r| r.ts);
+        let expected_guard_key = raw_ext.as_ref().map(|r| r.key_guard.key().clone());
         let context = WriteContext {
             lock_mgr: &MockLockManager::new(),
-            concurrency_manager: cm,
+            concurrency_manager: cm.clone(),
             extra_op: kvproto::kvrpcpb::ExtraOp::Noop,
             statistics: &mut statistic,
             async_apply_prewrite: false,
@@ -283,18 +363,118 @@ mod tests {
         let write_result = cmd.process_write(snap, context).unwrap();
         let modifies_with_ts = vec![Modify::Put(
             CF_DEFAULT,
-            F::encode_raw_key(raw_key, Some(101.into())),
-            F::encode_raw_value_owned(encode_value),
+            F::encode_raw_key(raw_key, expected_ts),
+            F::encode_raw_value_owned(encode_value.clone()),
         )];
         assert_eq!(write_result.to_be_write.modifies, modifies_with_ts);
         if F::TAG == ApiVersion::V2 {
             assert_eq!(write_result.lock_guards.len(), 1);
-            let raw_key = vec![api_version::api_v2::RAW_KEY_PREFIX];
-            let encoded_key = ApiV2::encode_raw_key(&raw_key, Some(100.into()));
             assert_eq!(
                 write_result.lock_guards.first().unwrap().key(),
-                &encoded_key
+                expected_guard_key.as_ref().unwrap()
             );
+        }
+
+        // compare-and-delete success
+        let initial_write = WriteData::from_modifies(vec![Modify::Put(
+            CF_DEFAULT,
+            F::encode_raw_key(raw_key, None),
+            F::encode_raw_value_owned(encode_value.clone()),
+        )]);
+        engine.write(&Context::default(), initial_write).unwrap();
+
+        let mut delete_ctx = Context::default();
+        delete_ctx.set_raw_cas_delete(true);
+        let delete_cmd = RawCompareAndSwap::new(
+            CF_DEFAULT,
+            F::encode_raw_key(raw_key, None),
+            Some(raw_value.to_vec()),
+            raw_value.to_vec(),
+            ttl,
+            F::TAG,
+            delete_ctx,
+        );
+        let mut statistic = Statistics::default();
+        let snap = engine.snapshot(Default::default()).unwrap();
+        let raw_ext = block_on(get_raw_ext(
+            ts_provider.clone(),
+            cm.clone(),
+            true,
+            &delete_cmd.cmd,
+        ))
+        .unwrap();
+        let expected_ts = raw_ext.as_ref().map(|r| r.ts);
+        let expected_guard_key = raw_ext.as_ref().map(|r| r.key_guard.key().clone());
+        let context = WriteContext {
+            lock_mgr: &MockLockManager::new(),
+            concurrency_manager: cm.clone(),
+            extra_op: kvproto::kvrpcpb::ExtraOp::Noop,
+            statistics: &mut statistic,
+            async_apply_prewrite: false,
+            raw_ext,
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+        };
+        let cmd: Command = delete_cmd.into();
+        let write_result = cmd.process_write(snap, context).unwrap();
+        let expected_modify = match F::TAG {
+            ApiVersion::V2 => Modify::Put(
+                CF_DEFAULT,
+                F::encode_raw_key(raw_key, expected_ts),
+                ApiV2::ENCODED_LOGICAL_DELETE.to_vec(),
+            ),
+            _ => Modify::Delete(CF_DEFAULT, F::encode_raw_key(raw_key, expected_ts)),
+        };
+        assert_eq!(write_result.to_be_write.modifies, vec![expected_modify]);
+        if F::TAG == ApiVersion::V2 {
+            assert_eq!(write_result.lock_guards.len(), 1);
+            assert_eq!(
+                write_result.lock_guards.first().unwrap().key(),
+                expected_guard_key.as_ref().unwrap()
+            );
+        }
+
+        // compare-and-delete failure
+        let mut wrong_delete_ctx = Context::default();
+        wrong_delete_ctx.set_raw_cas_delete(true);
+        let wrong_delete_cmd = RawCompareAndSwap::new(
+            CF_DEFAULT,
+            F::encode_raw_key(raw_key, None),
+            Some(b"wrong".to_vec()),
+            raw_value.to_vec(),
+            ttl,
+            F::TAG,
+            wrong_delete_ctx,
+        );
+        let mut statistic = Statistics::default();
+        let snap = engine.snapshot(Default::default()).unwrap();
+        let raw_ext = block_on(get_raw_ext(
+            ts_provider.clone(),
+            cm.clone(),
+            true,
+            &wrong_delete_cmd.cmd,
+        ))
+        .unwrap();
+        let context = WriteContext {
+            lock_mgr: &MockLockManager::new(),
+            concurrency_manager: cm,
+            extra_op: kvproto::kvrpcpb::ExtraOp::Noop,
+            statistics: &mut statistic,
+            async_apply_prewrite: false,
+            raw_ext,
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+        };
+        let cmd: Command = wrong_delete_cmd.into();
+        let write_result = cmd.process_write(snap, context).unwrap();
+        assert!(write_result.to_be_write.modifies.is_empty());
+        match write_result.pr {
+            ProcessResult::RawCompareAndSwapRes {
+                previous_value,
+                succeed,
+            } => {
+                assert!(!succeed);
+                assert_eq!(previous_value, Some(raw_value.to_vec()));
+            }
+            _ => unreachable!(),
         }
     }
 }
