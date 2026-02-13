@@ -31,7 +31,8 @@ use crate::{
     storage::{Snapshot, SnapshotStore},
 };
 
-const SKETCH_SAMPLE_RATE: f64 = 0.2;
+const SKETCH_SAMPLE_RATE: f64 = 0.01;
+const DEFAULT_HLL_PRECISION: u8 = 16;
 
 pub(crate) struct RowSampleBuilder<S: Snapshot, F: KvFormat> {
     pub(crate) data: BatchTableScanExecutor<TikvStorage<SnapshotStore<S>>, F>,
@@ -201,6 +202,8 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             let col_group_pos = self.columns_info.len() + i;
             collector.mut_base().fm_sketches[col_group_pos] =
                 collector.mut_base().fm_sketches[col_pos].clone();
+            collector.mut_base().hll_sketches[col_group_pos] =
+                collector.mut_base().hll_sketches[col_pos].clone();
             collector.mut_base().f1_sketches[col_group_pos] =
                 collector.mut_base().f1_sketches[col_pos].clone();
             collector.mut_base().null_count[col_group_pos] =
@@ -257,11 +260,6 @@ impl F1Sketch {
         }
     }
 
-    fn insert(&mut self, bytes: &[u8]) {
-        let hash = murmurhash3_x64_128(bytes, 0).0;
-        self.insert_hash_value(hash);
-    }
-
     fn insert_hash_value(&mut self, hash_val: u64) {
         if (hash_val & self.mask) != 0 {
             return;
@@ -274,6 +272,58 @@ impl F1Sketch {
         } else {
             self.once.insert(hash_val);
         }
+    }
+
+    fn to_hll(&self, b: u8) -> HllSketch {
+        let mut sketch = HllSketch::new(b);
+        for hash in &self.once {
+            sketch.insert_hash_value(*hash);
+        }
+        sketch
+    }
+}
+
+#[derive(Clone)]
+struct HllSketch {
+    b: u8,
+    registers: Vec<u8>,
+}
+
+impl HllSketch {
+    fn new(mut b: u8) -> HllSketch {
+        if b < 4 {
+            b = 4;
+        } else if b > 30 {
+            b = 30;
+        }
+        let m = 1usize << b;
+        HllSketch {
+            b,
+            registers: vec![0; m],
+        }
+    }
+
+    fn insert_hash_value(&mut self, hash_val: u64) {
+        let shift = 64 - self.b as u32;
+        let idx = (hash_val >> shift) as usize;
+        let w = hash_val << self.b;
+        let mut rank = (w.leading_zeros() + 1) as u8;
+        let max_rank = (64 - self.b as u32 + 1) as u8;
+        if rank > max_rank {
+            rank = max_rank;
+        }
+        if rank > self.registers[idx] {
+            self.registers[idx] = rank;
+        }
+    }
+}
+
+impl From<HllSketch> for tipb::HllSketch {
+    fn from(sketch: HllSketch) -> tipb::HllSketch {
+        let mut proto = tipb::HllSketch::default();
+        proto.set_b(sketch.b as u32);
+        proto.set_registers(sketch.registers);
+        proto
     }
 }
 
@@ -293,6 +343,7 @@ struct BaseRowSampleCollector {
     count: u64,
     sketch_sample_count: u64,
     fm_sketches: Vec<FmSketch>,
+    hll_sketches: Vec<HllSketch>,
     f1_sketches: Vec<F1Sketch>,
     rng: StdRng,
     total_sizes: Vec<i64>,
@@ -307,6 +358,7 @@ impl Default for BaseRowSampleCollector {
             count: 0,
             sketch_sample_count: 0,
             fm_sketches: vec![],
+            hll_sketches: vec![],
             f1_sketches: vec![],
             rng: StdRng::from_entropy(),
             total_sizes: vec![],
@@ -323,6 +375,7 @@ impl BaseRowSampleCollector {
             count: 0,
             sketch_sample_count: 0,
             fm_sketches: vec![FmSketch::new(max_fm_sketch_size); col_and_group_len],
+            hll_sketches: vec![HllSketch::new(DEFAULT_HLL_PRECISION); col_and_group_len],
             f1_sketches: vec![F1Sketch::new(); col_and_group_len],
             rng: StdRng::from_entropy(),
             total_sizes: vec![0; col_and_group_len],
@@ -369,6 +422,7 @@ impl BaseRowSampleCollector {
             }
             let hash = hasher.finish();
             self.fm_sketches[col_len + i].insert_hash_value(hash);
+            self.hll_sketches[col_len + i].insert_hash_value(hash);
             self.f1_sketches[col_len + i].insert_hash_value(hash);
         }
     }
@@ -386,13 +440,15 @@ impl BaseRowSampleCollector {
                 continue;
             }
             if collect_sketch {
-                if columns_info[i].as_accessor().is_string_like() {
-                    self.fm_sketches[i].insert(&collation_keys_val[i]);
-                    self.f1_sketches[i].insert(&collation_keys_val[i]);
+                let bytes = if columns_info[i].as_accessor().is_string_like() {
+                    &collation_keys_val[i]
                 } else {
-                    self.fm_sketches[i].insert(&columns_val[i]);
-                    self.f1_sketches[i].insert(&columns_val[i]);
-                }
+                    &columns_val[i]
+                };
+                let hash = murmurhash3_x64_128(bytes, 0).0;
+                self.fm_sketches[i].insert_hash_value(hash);
+                self.hll_sketches[i].insert_hash_value(hash);
+                self.f1_sketches[i].insert_hash_value(hash);
             }
             self.total_sizes[i] += columns_val[i].len() as i64 - 1;
         }
@@ -406,11 +462,20 @@ impl BaseRowSampleCollector {
             .map(|fm_sketch| fm_sketch.into())
             .collect();
         proto_collector.set_fm_sketch(pb_fm_sketches);
-        let pb_f1_sketches = mem::take(&mut self.f1_sketches)
+        let f1_sketches = mem::take(&mut self.f1_sketches);
+        let mut pb_f1_sketches = Vec::with_capacity(f1_sketches.len());
+        let mut pb_f1_hll_sketches = Vec::with_capacity(f1_sketches.len());
+        for f1_sketch in f1_sketches {
+            pb_f1_hll_sketches.push(f1_sketch.to_hll(DEFAULT_HLL_PRECISION).into());
+            pb_f1_sketches.push(f1_sketch.into());
+        }
+        proto_collector.set_f1_sketch(pb_f1_sketches.into());
+        let pb_hll_sketches = mem::take(&mut self.hll_sketches)
             .into_iter()
-            .map(|fm_sketch| fm_sketch.into())
+            .map(|hll_sketch| hll_sketch.into())
             .collect();
-        proto_collector.set_f1_sketch(pb_f1_sketches);
+        proto_collector.set_hll_sketch(pb_hll_sketches);
+        proto_collector.set_hll_f1_sketch(pb_f1_hll_sketches.into());
         proto_collector.set_sketch_sample_count(self.sketch_sample_count as i64);
         proto_collector.set_total_size(self.total_sizes.clone());
     }
