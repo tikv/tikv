@@ -904,6 +904,7 @@ const HOTSPOT_KEY_RATE_THRESHOLD: u64 = 128;
 const HOTSPOT_QUERY_RATE_THRESHOLD: u64 = 128;
 const HOTSPOT_BYTE_RATE_THRESHOLD: u64 = 8 * 1024;
 const HOTSPOT_REPORT_CAPACITY: usize = 1000;
+const HOTSPOT_REPORT_METRICS: usize = 4;
 
 // TODO: support dynamic configure threshold in future.
 fn hotspot_cpu_usage_report_threshold() -> u64 {
@@ -950,6 +951,7 @@ fn collect_report_peers_for_store_heartbeat(
     region_cpu_records_since_store_heartbeat: &mut HashMap<u64, u32>,
     interval_seconds: u64,
 ) -> HashMap<u64, pdpb::PeerStat> {
+    let has_interval = interval_seconds > 0;
     let mut report_peers = HashMap::default();
     for (region_id, region_peer) in region_peers.iter_mut() {
         let read_bytes = region_peer.read_bytes - region_peer.last_store_report_read_bytes;
@@ -957,7 +959,7 @@ fn collect_report_peers_for_store_heartbeat(
         let query_stats = region_peer
             .query_stats
             .sub_query_stats(&region_peer.last_store_report_query_stats);
-        let cpu_usage = if interval_seconds > 0 {
+        let cpu_usage = if has_interval {
             let cpu_time_duration = Duration::from_millis(
                 region_cpu_records_since_store_heartbeat
                     .remove(region_id)
@@ -965,6 +967,8 @@ fn collect_report_peers_for_store_heartbeat(
             );
             ((cpu_time_duration.as_secs_f64() * 100.0) / interval_seconds as f64) as u64
         } else {
+            // `interval_seconds == 0` is unexpected but can happen in corner cases.
+            // Drain the record and report 0 to avoid division by zero.
             region_cpu_records_since_store_heartbeat.remove(region_id);
             0
         };
@@ -2735,7 +2739,7 @@ fn collect_report_read_peer_stats(
     mut report_read_stats: HashMap<u64, pdpb::PeerStat>,
     mut stats: pdpb::StoreStats,
 ) -> pdpb::StoreStats {
-    if report_read_stats.len() < capacity * 4 {
+    if report_read_stats.len() < capacity * HOTSPOT_REPORT_METRICS {
         for (_, read_stat) in report_read_stats {
             stats.peer_stats.push(read_stat);
         }
@@ -2993,6 +2997,30 @@ mod tests {
         );
 
         assert!(region_cpu_records_since_store_heartbeat.is_empty());
+    }
+
+    #[test]
+    fn test_collect_report_peers_for_store_heartbeat_with_zero_interval() {
+        let mut region_peers = HashMap::default();
+        let peer_stat = PeerStat {
+            read_bytes: hotspot_byte_report_threshold(),
+            ..Default::default()
+        };
+        region_peers.insert(1, peer_stat);
+
+        let mut region_cpu_records_since_store_heartbeat = HashMap::default();
+        region_cpu_records_since_store_heartbeat.insert(1, 42);
+
+        let report_peers = collect_report_peers_for_store_heartbeat(
+            &mut region_peers,
+            &mut region_cpu_records_since_store_heartbeat,
+            0,
+        );
+
+        assert!(region_cpu_records_since_store_heartbeat.is_empty());
+        let reported = report_peers.get(&1).unwrap();
+        assert_eq!(reported.get_cpu_stats().get_unified_read(), 0);
+        assert_eq!(reported.get_read_bytes(), hotspot_byte_report_threshold());
     }
 
     #[test]
