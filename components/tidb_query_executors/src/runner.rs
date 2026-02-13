@@ -136,6 +136,9 @@ impl BatchExecutorsRunner<()> {
                     BatchProjectionExecutor::check_supported(descriptor)
                         .map_err(|e| other_err!("BatchProjectionExecutor: {}", e))?;
                 }
+                ExecType::TypeIndexLookUp => {
+                    return Err(other_err!("IndexLookUp executor not implemented"));
+                }
                 ExecType::TypeJoin => {
                     return Err(other_err!("Join executor not implemented"));
                 }
