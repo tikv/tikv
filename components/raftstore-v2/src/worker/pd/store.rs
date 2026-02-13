@@ -257,6 +257,8 @@ where
                 report_peers.insert(*region_id, read_stat);
             }
 
+            // Drain orphan CPU records for regions no longer tracked in `region_peers`.
+            self.region_cpu_records_since_store_heartbeat.clear();
             stats = collect_report_read_peer_stats(HOTSPOT_REPORT_CAPACITY, report_peers, stats);
         }
         let (capacity, used_size, available) = self.collect_engine_size();
