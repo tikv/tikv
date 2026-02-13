@@ -8050,6 +8050,39 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
 
+        // CAS delete when key doesn't exist should no-op
+        let mut missing_delete_ctx = ctx.clone();
+        missing_delete_ctx.set_raw_cas_delete(true);
+        let expected = (None, true);
+        storage
+            .raw_compare_and_swap_atomic(
+                missing_delete_ctx,
+                "".to_string(),
+                key.to_vec(),
+                None,
+                b"ignored".to_vec(),
+                0,
+                expect_value_callback(tx.clone(), 0, expected),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_none(
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), key.to_vec())).unwrap(),
+        );
+        expect_multi_values(
+            vec![],
+            block_on(storage.raw_scan(
+                ctx.clone(),
+                "".to_string(),
+                b"r".to_vec(),
+                Some(b"rz".to_vec()),
+                20,
+                false,
+                false,
+            ))
+            .unwrap(),
+        );
+
         // "None" -> "v"
         let expected = (None, true);
         storage

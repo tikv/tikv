@@ -78,17 +78,26 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
         )?;
 
         let (pr, lock_guards) = if old_value == previous_value {
-            if let Some(ref raw_ext) = raw_ext {
-                key = key.append_ts(raw_ext.ts);
-            }
-
             if ctx.get_raw_cas_delete() {
-                let m = match self.api_version {
-                    ApiVersion::V2 => Modify::Put(cf, key, ApiV2::ENCODED_LOGICAL_DELETE.to_vec()),
-                    _ => Modify::Delete(cf, key),
-                };
-                data.push(m);
+                // If the key doesn't exist, do nothing instead of creating a tombstone.
+                if old_value.is_some() {
+                    if let Some(ref raw_ext) = raw_ext {
+                        key = key.append_ts(raw_ext.ts);
+                    }
+                    let m = match self.api_version {
+                        ApiVersion::V2 => Modify::Put(
+                            cf,
+                            key,
+                            ApiV2::ENCODED_LOGICAL_DELETE.to_vec(),
+                        ),
+                        _ => Modify::Delete(cf, key),
+                    };
+                    data.push(m);
+                }
             } else {
+                if let Some(ref raw_ext) = raw_ext {
+                    key = key.append_ts(raw_ext.ts);
+                }
                 let raw_value = RawValue {
                     user_value: value,
                     expire_ts: ttl_to_expire_ts(self.ttl),
@@ -143,7 +152,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
 mod tests {
     use std::sync::Arc;
 
-    use api_version::{ApiV2, test_kv_format_impl};
+    use api_version::{test_kv_format_impl};
     use causal_ts::CausalTsProviderImpl;
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_DEFAULT;
@@ -243,9 +252,35 @@ mod tests {
             F::TAG,
             delete_ctx,
         );
-        let (prev_val, succeed) = sched_command(&mut engine, cm, cmd, ts_provider).unwrap();
+        let (prev_val, succeed) =
+            sched_command(&mut engine, cm.clone(), cmd, ts_provider.clone()).unwrap();
         assert_eq!(prev_val, Some(b"v3".to_vec()));
         assert!(succeed);
+
+        let missing_key = b"rk_missing";
+        let encoded_missing_key = F::encode_raw_key(missing_key, None);
+
+        // compare-and-delete success (key does not exist)
+        let mut missing_delete_ctx = Context::default();
+        missing_delete_ctx.set_raw_cas_delete(true);
+        let cmd = RawCompareAndSwap::new(
+            CF_DEFAULT,
+            encoded_missing_key.clone(),
+            None,
+            b"ignored".to_vec(),
+            0,
+            F::TAG,
+            missing_delete_ctx,
+        );
+        let (prev_val, succeed) =
+            sched_command(&mut engine, cm.clone(), cmd, ts_provider.clone()).unwrap();
+        assert!(prev_val.is_none());
+        assert!(succeed);
+        let snap = engine.snapshot(Default::default()).unwrap();
+        let missing_value = RawStore::new(snap, F::TAG)
+            .raw_get_key_value(CF_DEFAULT, &encoded_missing_key, &mut Statistics::default())
+            .unwrap();
+        assert!(missing_value.is_none());
     }
 
     pub fn sched_command<E: Engine>(
@@ -274,7 +309,7 @@ mod tests {
                 previous_value,
                 succeed,
             } => {
-                if succeed {
+                if succeed && !ret.to_be_write.modifies.is_empty() {
                     let ctx = Context::default();
                     engine.write(&ctx, ret.to_be_write).unwrap();
                 }
@@ -358,7 +393,6 @@ mod tests {
         let snap = engine.snapshot(Default::default()).unwrap();
         let raw_ext =
             block_on(get_raw_ext(ts_provider.clone(), cm.clone(), true, &delete_cmd.cmd)).unwrap();
-        let expected_ts = raw_ext.as_ref().map(|r| r.ts);
         let expected_guard_key = raw_ext.as_ref().map(|r| r.key_guard.key().clone());
         let context = WriteContext {
             lock_mgr: &MockLockManager::new(),
@@ -371,15 +405,7 @@ mod tests {
         };
         let cmd: Command = delete_cmd.into();
         let write_result = cmd.process_write(snap, context).unwrap();
-        let expected_modify = match F::TAG {
-            ApiVersion::V2 => Modify::Put(
-                CF_DEFAULT,
-                F::encode_raw_key(raw_key, expected_ts),
-                ApiV2::ENCODED_LOGICAL_DELETE.to_vec(),
-            ),
-            _ => Modify::Delete(CF_DEFAULT, F::encode_raw_key(raw_key, expected_ts)),
-        };
-        assert_eq!(write_result.to_be_write.modifies, vec![expected_modify]);
+        assert!(write_result.to_be_write.modifies.is_empty());
         if F::TAG == ApiVersion::V2 {
             assert_eq!(write_result.lock_guards.len(), 1);
             assert_eq!(
