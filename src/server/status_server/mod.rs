@@ -274,6 +274,7 @@ where
                     .unwrap_or_else(|| backtrace::SymbolName::new(b"<unknown>"));
                 syms.push(name.to_string());
             });
+            println!("resolved addr: {:#x}, symbols: {:?}", addr, syms);
 
             if !syms.is_empty() {
                 // join inline functions with '--'
@@ -285,6 +286,7 @@ where
                 text.push_str(format!("{:#x} ??\n", addr).as_str());
             }
         }
+        println!("resolved symbols: \n{}", text);
         let response = Response::builder()
             .header("Content-Type", mime::TEXT_PLAIN.to_string())
             .header("X-Content-Type-Options", "nosniff")
@@ -1939,13 +1941,20 @@ mod tests {
         let resp = block_on(handle).unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body_bytes = block_on(hyper::body::to_bytes(resp.into_body())).unwrap();
+        let resolved_symbol = String::from_utf8(body_bytes.as_ref().to_owned())
+            .unwrap()
+            .split(' ')
+            .next_back()
+            .unwrap()
+            .to_owned();
+        println!(
+            "body: {}",
+            resolved_symbol
+        );
         assert!(
-            String::from_utf8(body_bytes.as_ref().to_owned())
-                .unwrap()
-                .split(' ')
-                .next_back()
-                .unwrap()
-                .starts_with("backtrace::backtrace")
+            resolved_symbol.contains("test_pprof_symbol_service"),
+            "resolved symbol: {}",
+            resolved_symbol
         );
         status_server.stop();
     }

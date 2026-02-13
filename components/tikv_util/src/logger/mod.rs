@@ -558,7 +558,7 @@ where
     fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
         let tag = record.tag();
         if let Some(slow) = self.slow.as_ref()
-            && tag == "slow_log"
+            && tag.starts_with("slow_log")
         {
             slow.log(record, values)
         } else if tag.starts_with("rocksdb_log") {
