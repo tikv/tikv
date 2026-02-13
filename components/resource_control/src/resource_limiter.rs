@@ -91,10 +91,10 @@ impl ResourceLimiter {
             self.limiters[ResourceType::Cpu as usize].consume(cpu_time.as_micros() as u64, wait);
         let io_dur = self.limiters[ResourceType::Io as usize].consume_io(io_bytes, wait);
         let wait_dur = cpu_dur.max(io_dur);
-        if !wait_dur.is_zero() {
-            if let Some(h) = &self.wait_histogram {
-                h.observe(wait_dur.as_secs_f64());
-            }
+        if !wait_dur.is_zero()
+            && let Some(h) = &self.wait_histogram
+        {
+            h.observe(wait_dur.as_secs_f64());
         }
         wait_dur
     }
