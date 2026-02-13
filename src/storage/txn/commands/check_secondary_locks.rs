@@ -1,6 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use protobuf::Message;
+use resource_metering::record_network_out_bytes;
 use txn_types::{Key, Lock, WriteType};
 
 use crate::storage::{
@@ -158,7 +160,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
         );
         let mut released_locks = ReleasedLocks::new();
         let mut result = SecondaryLocksStatus::Locked(Vec::new());
-
+        let mut result_size: u64 = 0;
         for key in self.keys {
             let mut released_lock = None;
             let mut mismatch_lock = None;
@@ -195,7 +197,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
             released_locks.push(released_lock);
             match status {
                 SecondaryLockStatus::Locked(lock) => {
-                    result.push(lock.into_lock_info(key.to_raw()?));
+                    let lock_info = lock.into_lock_info(key.to_raw()?);
+                    result_size += lock_info.compute_size() as u64;
+                    result.push(lock_info);
                 }
                 SecondaryLockStatus::Committed(commit_ts) => {
                     result = SecondaryLocksStatus::Committed(commit_ts);
@@ -208,6 +212,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
             }
         }
 
+        record_network_out_bytes(result_size);
         let write_result_known_txn_status =
             if let SecondaryLocksStatus::Committed(commit_ts) = &result {
                 vec![(self.start_ts, *commit_ts)]

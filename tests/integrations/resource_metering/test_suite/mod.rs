@@ -55,7 +55,10 @@ impl TestSuite {
         let cfg_controller = ConfigController::new(tikv_cfg);
 
         let (recorder_notifier, collector_reg_handle, resource_tag_factory, recorder_worker) =
-            resource_metering::init_recorder(cfg.precision.as_millis());
+            resource_metering::init_recorder(
+                cfg.precision.as_millis(),
+                cfg.enable_network_io_collection,
+            );
         let (reporter_notifier, data_sink_reg_handle, reporter_worker) =
             resource_metering::init_reporter(cfg.clone(), collector_reg_handle);
         let env = Arc::new(Environment::new(2));
@@ -155,6 +158,13 @@ impl TestSuite {
         let precision = precision.into();
         self.cfg_controller
             .update_config("resource-metering.precision", &precision)
+            .unwrap();
+    }
+
+    pub fn cfg_enable_network_io_collection(&self, flag: impl Into<String>) {
+        let flag = flag.into();
+        self.cfg_controller
+            .update_config("resource-metering.enable-network-io-collection", &flag)
             .unwrap();
     }
 
