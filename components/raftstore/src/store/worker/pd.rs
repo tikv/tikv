@@ -2981,7 +2981,12 @@ mod tests {
                 threshold.saturating_sub(1),
             ));
         }
-        assert!(should_report_hotspot_read_peer(0, 0, &query_stats, threshold));
+        assert!(should_report_hotspot_read_peer(
+            0,
+            0,
+            &query_stats,
+            threshold
+        ));
     }
 
     #[test]
