@@ -26,6 +26,10 @@ use thiserror::Error;
 use tikv_util::{
     resource_control::TaskMetadata,
     sys::{SysQuota, cpu_time::ProcessStat},
+<<<<<<< HEAD
+=======
+    thread_name_prefix::{UNIFIED_READ_POOL_THREAD, matches_thread_name_prefix},
+>>>>>>> c257cc0b63 (pd: report hot read cpu in heartbeat (#19305))
     time::Instant,
     worker::{Runnable, RunnableWithTimer, Scheduler, Worker},
     yatp_pool::{self, CleanupMethod, FuturePool, PoolTicker, YatpPoolBuilder},
@@ -597,7 +601,11 @@ impl ReadPoolCpuTimeTracker {
         for &tid in &tids {
             if let Ok(stat) = full_thread_stat(pid, tid) {
                 // Look for unified read pool thread name pattern
+<<<<<<< HEAD
                 if stat.command.contains("unified-read-po") {
+=======
+                if matches_thread_name_prefix(&stat.command, UNIFIED_READ_POOL_THREAD) {
+>>>>>>> c257cc0b63 (pd: report hot read cpu in heartbeat (#19305))
                     // Sum utime + stime (user + system time)
                     current_total_cpu_time += stat.utime + stat.stime;
                 }
