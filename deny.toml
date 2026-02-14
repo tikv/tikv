@@ -96,6 +96,7 @@ ignore = [
     # RUSTSEC-2026-0002 (Stacked Borrows UB). Upstream dependency
     # constraints prevent upgrading at the moment.
     "RUSTSEC-2026-0002",
+<<<<<<< HEAD
     # time@0.3.47 requires rustc 1.88.0. 
     # TODO: Upgrade rust toolchain and remove this ignore.
     "RUSTSEC-2026-0009",
@@ -103,6 +104,12 @@ ignore = [
     # custom logger, while TiKV's logger implementations don't use rand. Keep the
     # release branch change minimal until dependencies can be upgraded safely.
     "RUSTSEC-2026-0097",
+=======
+    # time >=0.3.47 fixes RUSTSEC-2026-0009, but upgrading from 0.3.41
+    # currently conflicts with raft-engine's pinned serde (=1.0.194).
+    # We will remove this once raft-engine / serde constraints are relaxed.
+    "RUSTSEC-2026-0009",
+>>>>>>> c257cc0b63 (pd: report hot read cpu in heartbeat (#19305))
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,
