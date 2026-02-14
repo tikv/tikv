@@ -327,6 +327,10 @@ impl<S: Snapshot> PointGetter<S> {
         }
 
         let mut write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
+        // Commit ts of `write` when it is loaded by `last_change` shortcut via
+        // `get_cf`. In that case write cursor still points to a newer version
+        // and its ts must not be used.
+        let mut loaded_write_commit_ts = None;
         let mut owned_value: Vec<u8>; // To work around lifetime problem
         loop {
             if !write.check_gc_fence_as_latest_version(self.ts) {
@@ -336,8 +340,12 @@ impl<S: Snapshot> PointGetter<S> {
             match write.write_type {
                 WriteType::Put => {
                     let key_commit_ts = if load_commit_ts {
-                        let cursor_key = self.write_cursor.key(&mut self.statistics.write);
-                        Some(Key::decode_ts_from(cursor_key)?)
+                        if let Some(ts) = loaded_write_commit_ts {
+                            Some(ts)
+                        } else {
+                            let cursor_key = self.write_cursor.key(&mut self.statistics.write);
+                            Some(Key::decode_ts_from(cursor_key)?)
+                        }
                     } else {
                         None
                     };
@@ -378,6 +386,7 @@ impl<S: Snapshot> PointGetter<S> {
                                 Some(v) => owned_value = v,
                                 None => return Ok(None),
                             }
+                            loaded_write_commit_ts = Some(commit_ts);
                             self.statistics.write.get += 1;
                             write = WriteRef::parse(&owned_value)?;
                             assert!(
@@ -399,6 +408,7 @@ impl<S: Snapshot> PointGetter<S> {
             if !self.write_cursor.next(&mut self.statistics.write) {
                 return Ok(None);
             }
+            loaded_write_commit_ts = None;
             // No need to compare user key because it uses prefix seek.
             write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
         }
@@ -1439,5 +1449,14 @@ mod tests {
         // the lock should be seen as conflict
         let err = must_get_entry_err(&mut getter, key, true);
         assert_matches!(err.0, box ErrorInner::KeyIsLocked { .. });
+    }
+
+    #[test]
+    fn test_point_get_load_commit_ts_with_top_lock_versions() {
+        let mut engine = new_sample_engine();
+        let mut getter = new_point_getter(&mut engine, 200.into());
+        // `foo2` has many committed `LOCK` writes on top of one visible `PUT` at
+        // commit_ts = 5.
+        must_get_entry(&mut getter, b"foo2", true, b"foo2", Some(5));
     }
 }
