@@ -288,6 +288,21 @@ async fn test_checkpointing() {
         .unwrap();
     assert_eq!(subc.len(), 15);
     assert_eq!(cnt.load(Ordering::SeqCst), 15);
+
+    let artifacts = mig.compactions[0].get_artifacts();
+    let mut cmeta_objects = 0usize;
+    let mut s = st.storage().iter_prefix(artifacts);
+    while let Some(obj) = s.try_next().await.unwrap() {
+        if obj.key.ends_with(".cmeta") {
+            cmeta_objects += 1;
+        }
+    }
+    assert!(
+        cmeta_objects < subc.len(),
+        "expected cmeta batching to reduce object count, got {} objects for {} subcompactions",
+        cmeta_objects,
+        subc.len()
+    );
 }
 
 async fn put_checkpoint(storage: &dyn ExternalStorage, store: u64, cp: u64) {

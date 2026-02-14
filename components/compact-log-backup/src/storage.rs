@@ -7,6 +7,7 @@ use std::{
     pin::Pin,
     sync::Arc,
     task::{Context, Poll, ready},
+    time::Duration,
 };
 
 use cloud::blob::read_to_end;
@@ -26,6 +27,7 @@ use protobuf::{Chars, ProtobufEnum};
 use tikv_util::{
     info, retry_expr,
     stream::{JustRetry, RetryExt},
+    warn,
 };
 use tokio::time::Instant;
 use tokio_stream::Stream;

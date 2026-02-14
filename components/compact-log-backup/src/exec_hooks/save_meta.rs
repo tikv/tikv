@@ -1,11 +1,12 @@
-use std::{sync::Arc, time::Instant};
+use std::{path::Path, sync::Arc, time::Instant};
 
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 use chrono::Local;
 pub use engine_traits::SstCompressionType;
-use external_storage::UnpinReader;
-use futures::{future::TryFutureExt, io::Cursor};
+use external_storage::{ExternalStorage, UnpinReader};
+use futures::{future::TryFutureExt, io::AsyncReadExt, io::Cursor, stream::TryStreamExt};
 use kvproto::brpb;
+use protobuf::{Message, parse_from_bytes};
 use tikv_util::{
     info,
     stream::{JustRetry, retry},
@@ -21,7 +22,6 @@ use crate::{
         SubcompactionSkippedCtx, SubcompactionStartCtx,
     },
     statistic::CompactLogBackupStatistic,
-    util,
 };
 
 /// Save the metadata to external storage after every subcompaction. After
@@ -50,6 +50,7 @@ pub struct SaveMeta {
     collector: CompactionRunInfoBuilder,
     stats: CollectStatistic,
     begin: chrono::DateTime<Local>,
+    meta_writer: Option<MetaBatchWriter>,
 }
 
 impl Default for SaveMeta {
@@ -58,7 +59,135 @@ impl Default for SaveMeta {
             collector: Default::default(),
             stats: Default::default(),
             begin: Local::now(),
+            meta_writer: None,
         }
+    }
+}
+
+/// A rolling batch writer for `.cmeta` objects.
+///
+/// It reduces object-count by writing batched `.cmeta` payloads, while still
+/// persisting every finished subcompaction by overwriting the current batch
+/// object.
+///
+/// Note: overwriting the same object per subcompaction trades write-amplification
+/// for stable resume semantics and low object-count.
+struct MetaBatchWriter {
+    dir: String,
+    current_seq: u64,
+    buffer: brpb::LogFileSubcompactions,
+    max_subcompactions_per_cmeta: usize,
+    target_bytes_per_cmeta: usize,
+}
+
+impl MetaBatchWriter {
+    const DEFAULT_MAX_SUBCOMPACTIONS_PER_CMETA: usize = 128;
+    const DEFAULT_TARGET_BYTES_PER_CMETA: usize = 4 * 1024 * 1024;
+
+    fn new(dir: String, current_seq: u64, buffer: brpb::LogFileSubcompactions) -> Self {
+        Self {
+            dir,
+            current_seq,
+            buffer,
+            max_subcompactions_per_cmeta: Self::DEFAULT_MAX_SUBCOMPACTIONS_PER_CMETA,
+            target_bytes_per_cmeta: Self::DEFAULT_TARGET_BYTES_PER_CMETA,
+        }
+    }
+
+    fn current_key(&self) -> String {
+        format!("{}/batch_{:06}.cmeta", self.dir, self.current_seq)
+    }
+
+    fn parse_batch_seq(key: &str) -> Option<u64> {
+        let file_name = Path::new(key).file_name()?.to_str()?;
+        let seq = file_name.strip_prefix("batch_")?;
+        let seq = seq.strip_suffix(".cmeta")?;
+        seq.parse().ok()
+    }
+
+    async fn load_or_new(storage: &dyn ExternalStorage, out_prefix: &str) -> Result<Self> {
+        let dir = format!("{}/{}", out_prefix, META_OUT_REL);
+        let list_prefix = format!("{}/", dir);
+
+        let mut max_seq_and_key: Option<(u64, String)> = None;
+        let mut stream = storage.iter_prefix(&list_prefix);
+        while let Some(item) = stream.try_next().await? {
+            let Some(seq) = Self::parse_batch_seq(&item.key) else {
+                continue;
+            };
+            match &mut max_seq_and_key {
+                None => max_seq_and_key = Some((seq, item.key)),
+                Some((max_seq, key)) if seq > *max_seq => {
+                    *max_seq = seq;
+                    *key = item.key;
+                }
+                _ => {}
+            }
+        }
+
+        let Some((max_seq, key)) = max_seq_and_key else {
+            return Ok(Self::new(dir, 0, brpb::LogFileSubcompactions::new()));
+        };
+
+        let mut content = vec![];
+        if let Err(err) = storage.read(&key).read_to_end(&mut content).await {
+            warn!(
+                "SaveMeta: failed to read existing cmeta batch, starting a new batch.";
+                "key" => %key,
+                "err" => %err
+            );
+            return Ok(Self::new(dir, max_seq + 1, brpb::LogFileSubcompactions::new()));
+        }
+
+        match parse_from_bytes::<brpb::LogFileSubcompactions>(&content) {
+            Ok(buffer) => {
+                let mut this = Self::new(dir, max_seq, buffer);
+                let current_bytes = this.buffer.write_to_bytes()?.len();
+                if this.buffer.subcompactions.len() >= this.max_subcompactions_per_cmeta
+                    || current_bytes >= this.target_bytes_per_cmeta
+                {
+                    this.current_seq = max_seq + 1;
+                    this.buffer = brpb::LogFileSubcompactions::new();
+                }
+                Ok(this)
+            }
+            Err(err) => {
+                warn!(
+                    "SaveMeta: failed to parse existing cmeta batch, starting a new batch.";
+                    "key" => %key,
+                    "err" => %err
+                );
+                Ok(Self::new(dir, max_seq + 1, brpb::LogFileSubcompactions::new()))
+            }
+        }
+    }
+
+    async fn append_and_flush(
+        &mut self,
+        storage: &dyn ExternalStorage,
+        subcompaction: brpb::LogFileSubcompaction,
+    ) -> Result<()> {
+        self.buffer.mut_subcompactions().push(subcompaction);
+        let bytes = self.buffer.write_to_bytes()?;
+        let key = self.current_key();
+
+        retry(|| async {
+            let reader = UnpinReader(Box::new(Cursor::new(&bytes)));
+            storage
+                .write(&key, reader, bytes.len() as _)
+                .map_err(JustRetry)
+                .await
+        })
+        .await
+        .map_err(|err| err.0)?;
+
+        if self.buffer.subcompactions.len() >= self.max_subcompactions_per_cmeta
+            || bytes.len() >= self.target_bytes_per_cmeta
+        {
+            self.current_seq += 1;
+            self.buffer = brpb::LogFileSubcompactions::new();
+        }
+        Ok(())
     }
 }
 
@@ -84,6 +213,7 @@ impl SaveMeta {
 impl ExecHooks for SaveMeta {
     async fn before_execution_started(&mut self, cx: BeforeStartCtx<'_>) -> Result<()> {
         self.begin = Local::now();
+        self.meta_writer = Some(MetaBatchWriter::load_or_new(cx.storage, &cx.this.out_prefix).await?);
         let run_info = &mut self.collector;
         run_info.mut_meta().set_name(cx.this.gen_name());
         run_info
@@ -118,45 +248,15 @@ impl ExecHooks for SaveMeta {
         _cid: CId,
         cx: SubcompactionFinishCtx<'_>,
     ) -> Result<()> {
-        use protobuf::Message;
-
         self.collector.add_subcompaction(cx.result);
         self.stats.update_subcompaction(cx.result);
 
-        let first_version = cx
-            .result
-            .meta
-            .region_meta_hints
-            .first()
-            .map(|h| {
-                format!(
-                    "_{}_{}",
-                    h.get_region_epoch().get_version(),
-                    h.get_region_epoch().get_conf_ver()
-                )
-            })
-            .unwrap_or_default();
-        let meta_name = format!(
-            "{}_{}_{}_{}{}.cmeta",
-            util::aligned_u64(cx.result.origin.input_min_ts),
-            util::aligned_u64(cx.result.origin.input_max_ts),
-            util::aligned_u64(cx.result.origin.crc64()),
-            cx.result.origin.region_id,
-            first_version
-        );
-        let meta_name = format!("{}/{}/{}", cx.this.out_prefix, META_OUT_REL, meta_name);
-        let mut metas = brpb::LogFileSubcompactions::new();
-        metas.mut_subcompactions().push(cx.result.meta.clone());
-        let meta_bytes = metas.write_to_bytes()?;
-        retry(|| async {
-            let reader = UnpinReader(Box::new(Cursor::new(&meta_bytes)));
-            cx.external_storage
-                .write(&meta_name, reader, meta_bytes.len() as _)
-                .map_err(JustRetry)
-                .await
-        })
-        .await
-        .map_err(|err| err.0)?;
+        let Some(writer) = self.meta_writer.as_mut() else {
+            return Err(crate::ErrorKind::Other("SaveMeta: meta writer not initialized".to_owned()).into());
+        };
+        writer
+            .append_and_flush(cx.external_storage, cx.result.meta.clone())
+            .await?;
         Result::Ok(())
     }
 
@@ -175,3 +275,4 @@ impl ExecHooks for SaveMeta {
         Ok(())
     }
 }
+

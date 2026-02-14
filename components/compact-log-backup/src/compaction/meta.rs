@@ -85,6 +85,7 @@ impl Subcompaction {
         out.set_table_id(self.table_id);
         out.set_region_id(self.region_id);
         out.set_cf(self.cf.to_owned());
+        out.set_ty(self.ty);
         out.set_size(self.size);
         out.set_input_min_ts(self.input_min_ts);
         out.set_input_max_ts(self.input_max_ts);

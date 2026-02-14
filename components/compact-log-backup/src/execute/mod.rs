@@ -27,7 +27,8 @@ use tokio::{
     runtime::Handle,
     task::{JoinError, JoinHandle},
 };
-use tracing::trace_span;
+use tokio_util::either::Either;
+use tracing::{Instrument, trace_span};
 use tracing_active_tree::{frame, root};
 use txn_types::TimeStamp;
 
