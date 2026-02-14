@@ -1459,4 +1459,166 @@ mod tests {
         // commit_ts = 5.
         must_get_entry(&mut getter, b"foo2", true, b"foo2", Some(5));
     }
+
+    #[test]
+    fn test_point_get_load_commit_ts_with_lt_seek_bound_lock_versions_above_put() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+
+        must_prewrite_put(&mut engine, b"k", b"v", b"k", 1);
+        must_commit(&mut engine, b"k", 1, 1);
+
+        let lock_count = SEEK_BOUND - 1;
+        for ts in 2..=lock_count + 1 {
+            must_prewrite_lock(&mut engine, b"k", b"k", ts);
+            must_commit(&mut engine, b"k", ts, ts);
+        }
+
+        // Sanity check it won't take the `last_change` seek shortcut.
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let top_lock_ts = lock_count + 1;
+        let write_value = snapshot
+            .get_cf(CF_WRITE, &Key::from_raw(b"k").append_ts(top_lock_ts.into()))
+            .unwrap()
+            .unwrap();
+        let write = WriteRef::parse(&write_value).unwrap();
+        assert_eq!(write.write_type, WriteType::Lock);
+        match write.last_change {
+            LastChange::Exist {
+                last_change_ts,
+                estimated_versions_to_last_change,
+            } => {
+                assert_eq!(last_change_ts, 1.into());
+                assert!(estimated_versions_to_last_change < SEEK_BOUND);
+            }
+            other => panic!("unexpected last_change: {:?}", other),
+        }
+
+        let mut getter = new_point_getter(&mut engine, (top_lock_ts + 10).into());
+        must_get_entry(&mut getter, b"k", true, b"v", Some(1));
+    }
+
+    #[test]
+    fn test_point_get_load_commit_ts_with_ge_seek_bound_lock_versions_above_put() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+
+        must_prewrite_put(&mut engine, b"k", b"v", b"k", 1);
+        must_commit(&mut engine, b"k", 1, 1);
+
+        let lock_count = SEEK_BOUND + 1;
+        for ts in 2..=lock_count + 1 {
+            must_prewrite_lock(&mut engine, b"k", b"k", ts);
+            must_commit(&mut engine, b"k", ts, ts);
+        }
+
+        // Sanity check it will take the `last_change` seek shortcut.
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let top_lock_ts = lock_count + 1;
+        let write_value = snapshot
+            .get_cf(CF_WRITE, &Key::from_raw(b"k").append_ts(top_lock_ts.into()))
+            .unwrap()
+            .unwrap();
+        let write = WriteRef::parse(&write_value).unwrap();
+        assert_eq!(write.write_type, WriteType::Lock);
+        match write.last_change {
+            LastChange::Exist {
+                last_change_ts,
+                estimated_versions_to_last_change,
+            } => {
+                assert_eq!(last_change_ts, 1.into());
+                assert!(estimated_versions_to_last_change >= SEEK_BOUND);
+            }
+            other => panic!("unexpected last_change: {:?}", other),
+        }
+
+        let mut getter = new_point_getter(&mut engine, (top_lock_ts + 10).into());
+        must_get_entry(&mut getter, b"k", true, b"v", Some(1));
+    }
+
+    #[test]
+    fn test_point_get_load_commit_ts_with_lt_seek_bound_lock_versions_above_delete() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+
+        must_prewrite_put(&mut engine, b"k", b"v", b"k", 1);
+        must_commit(&mut engine, b"k", 1, 1);
+        must_prewrite_delete(&mut engine, b"k", b"k", 2);
+        must_commit(&mut engine, b"k", 2, 2);
+
+        let lock_count = SEEK_BOUND - 1;
+        for ts in 3..=lock_count + 2 {
+            must_prewrite_lock(&mut engine, b"k", b"k", ts);
+            must_commit(&mut engine, b"k", ts, ts);
+        }
+
+        // Sanity check it won't take the `last_change` seek shortcut.
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let top_lock_ts = lock_count + 2;
+        let write_value = snapshot
+            .get_cf(CF_WRITE, &Key::from_raw(b"k").append_ts(top_lock_ts.into()))
+            .unwrap()
+            .unwrap();
+        let write = WriteRef::parse(&write_value).unwrap();
+        assert_eq!(write.write_type, WriteType::Lock);
+        match write.last_change {
+            LastChange::Exist {
+                last_change_ts,
+                estimated_versions_to_last_change,
+            } => {
+                assert_eq!(last_change_ts, 2.into());
+                assert!(estimated_versions_to_last_change < SEEK_BOUND);
+            }
+            other => panic!("unexpected last_change: {:?}", other),
+        }
+
+        let mut getter = new_point_getter(&mut engine, (top_lock_ts + 10).into());
+        assert!(
+            getter
+                .get_entry(&Key::from_raw(b"k"), true)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_point_get_load_commit_ts_with_ge_seek_bound_lock_versions_above_delete() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+
+        must_prewrite_put(&mut engine, b"k", b"v", b"k", 1);
+        must_commit(&mut engine, b"k", 1, 1);
+        must_prewrite_delete(&mut engine, b"k", b"k", 2);
+        must_commit(&mut engine, b"k", 2, 2);
+
+        let lock_count = SEEK_BOUND + 1;
+        for ts in 3..=lock_count + 2 {
+            must_prewrite_lock(&mut engine, b"k", b"k", ts);
+            must_commit(&mut engine, b"k", ts, ts);
+        }
+
+        // Sanity check it will take the `last_change` seek shortcut.
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let top_lock_ts = lock_count + 2;
+        let write_value = snapshot
+            .get_cf(CF_WRITE, &Key::from_raw(b"k").append_ts(top_lock_ts.into()))
+            .unwrap()
+            .unwrap();
+        let write = WriteRef::parse(&write_value).unwrap();
+        assert_eq!(write.write_type, WriteType::Lock);
+        match write.last_change {
+            LastChange::Exist {
+                last_change_ts,
+                estimated_versions_to_last_change,
+            } => {
+                assert_eq!(last_change_ts, 2.into());
+                assert!(estimated_versions_to_last_change >= SEEK_BOUND);
+            }
+            other => panic!("unexpected last_change: {:?}", other),
+        }
+
+        let mut getter = new_point_getter(&mut engine, (top_lock_ts + 10).into());
+        assert!(
+            getter
+                .get_entry(&Key::from_raw(b"k"), true)
+                .unwrap()
+                .is_none()
+        );
+    }
 }
