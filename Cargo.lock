@@ -3692,7 +3692,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=feature/materialized_view#b43671caa4013fce9738becef4d92d2a4416e126"
+source = "git+https://github.com/pingcap/kvproto.git?branch=feature/release-8.5-materialized-view#b43671caa4013fce9738becef4d92d2a4416e126"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -7723,7 +7723,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#cf70966bef25e205cb845c19265301542d1238d1"
+source = "git+https://github.com/pingcap/tipb.git?branch=feature/release-8.5-materialized-view#59b3af7d5324b197f7d0ea5bce8d213e55784a59"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
