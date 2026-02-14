@@ -65,12 +65,31 @@ pub struct LoadStatistic {
     pub keys_in: u64,
     /// How many bytes we fetched from network, physically?
     pub physical_bytes_in: u64,
+    /// How many "whole-object" read calls we made to external storage.
+    ///
+    /// This is typically > 0 only when the local input cache is enabled.
+    pub remote_read_calls: u64,
+    /// How many span (`read_part`) calls we made to external storage.
+    ///
+    /// This is typically > 0 only when the local input cache is disabled.
+    pub remote_read_part_calls: u64,
     /// How many bytes the keys we loaded have, in their original form?
     pub logical_key_bytes_in: u64,
     /// How many bytes the values we loaded have, without compression?
     pub logical_value_bytes_in: u64,
     /// How many errors happened during fetching from remote?
     pub error_during_downloading: u64,
+
+    /// How many times a span load hit the local input cache.
+    pub cache_hit: u64,
+    /// How many times a span load triggered a whole-object download to cache.
+    pub cache_miss: u64,
+    /// How many times a span load waited for an in-flight download.
+    pub cache_inflight_wait: u64,
+    /// How many cached whole-object files were evicted.
+    pub cache_evicted_files: u64,
+    /// How many bytes were evicted from cache (best-effort).
+    pub cache_evicted_bytes: u64,
 }
 
 /// The statistic of executing a subcompaction.

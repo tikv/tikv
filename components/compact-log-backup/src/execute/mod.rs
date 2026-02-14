@@ -4,7 +4,13 @@ pub mod hooking;
 #[cfg(test)]
 mod test;
 
-use std::{borrow::Cow, cell::Cell, path::Path, str::FromStr, sync::Arc};
+use std::{
+    borrow::Cow,
+    cell::Cell,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::Arc,
+};
 
 use chrono::Utc;
 use engine_rocks::RocksEngine;
@@ -38,6 +44,7 @@ use crate::{
     compaction::{SubcompactionResult, exec::SubcompactionExecArg},
     errors::{Result, TraceResultExt},
     execute::hooking::SubcompactionSkippedCtx,
+    input_cache::LocalObjectCache,
     util,
 };
 
@@ -151,6 +158,13 @@ impl FromStr for ShardConfigArg {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct InputCacheConfig {
+    pub dir: PathBuf,
+    pub capacity: ReadableSize,
+    pub max_inflight_downloads: usize,
+}
+
 /// The config for an execution of a compaction.
 ///
 /// This structure itself fully defines what work the compaction need to do.
@@ -176,6 +190,9 @@ pub struct ExecutionConfig {
     ///
     /// If `None`, we will use the default level of the selected algorithm.
     pub compression_level: Option<i32>,
+
+    /// Optional per-execution local cache for input objects.
+    pub input_cache: Option<InputCacheConfig>,
 }
 
 impl slog::KV for ExecutionConfig {
@@ -205,6 +222,14 @@ impl slog::KV for ExecutionConfig {
         serializer.emit_arguments("compression", &format_args!("{:?}", self.compression))?;
         if let Some(level) = self.compression_level {
             serializer.emit_i32("compression.level", level)?;
+        }
+        if let Some(cache) = &self.input_cache {
+            serializer.emit_str("input_cache.dir", &cache.dir.to_string_lossy())?;
+            serializer.emit_u64("input_cache.capacity", cache.capacity.0)?;
+            serializer.emit_u64(
+                "input_cache.max_inflight",
+                cache.max_inflight_downloads as u64,
+            )?;
         }
 
         Ok(())
@@ -318,6 +343,25 @@ impl Execution {
         };
         hooks.before_execution_started(cx).await?;
 
+        let input_cache = match &self.cfg.input_cache {
+            Some(cfg) => {
+                let cache = LocalObjectCache::new(
+                    cfg.dir.clone(),
+                    cfg.capacity.0,
+                    cfg.max_inflight_downloads,
+                )
+                .await?;
+                tikv_util::info!(
+                    "Input cache enabled.";
+                    "dir" => %cache.dir().display(),
+                    "capacity" => cfg.capacity.0,
+                    "max_inflight" => cfg.max_inflight_downloads
+                );
+                Some(Arc::new(cache))
+            }
+            None => None,
+        };
+
         // Avoid setting an explicit parent here: this span may be dropped while
         // the parent span is not currently entered (e.g. early-abort paths),
         // which can violate invariants of `tracing-active-tree`.
@@ -381,6 +425,7 @@ impl Execution {
                 out_prefix: Some(Path::new(&self.out_prefix).to_owned()),
                 db: self.db.clone(),
                 storage: Arc::clone(&storage),
+                input_cache: input_cache.clone(),
             };
             let compact_worker = SubcompactionExec::from(compact_args);
             let mut ext = SubcompactExt::default();

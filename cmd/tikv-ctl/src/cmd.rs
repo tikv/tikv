@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{borrow::ToOwned, str, string::ToString, sync::LazyLock};
+use std::{borrow::ToOwned, path::PathBuf, str, string::ToString, sync::LazyLock};
 
 use clap::{AppSettings, crate_authors};
 use compact_log_backup::ShardConfigArg;
@@ -730,6 +730,38 @@ pub enum Cmd {
             help("specify the maximum count of spawning tasks to download a metadata")
         )]
         prefetch_buffer_count: u64,
+
+        #[structopt(
+            long = "input-cache-dir",
+            value_name = "PATH",
+            help(
+                "enable per-run local input cache by specifying the base directory. \
+                When enabled, each remote log object will be downloaded as a whole at most once \
+                (per run, or after eviction) and spans will be served from local slices."
+            )
+        )]
+        input_cache_dir: Option<PathBuf>,
+
+        #[structopt(
+            long = "input-cache-capacity",
+            default_value = "64G",
+            help(
+                "the capacity limit of the local input cache. \
+                Eviction is performed by whole-object files (LRU). \
+                Only effective when --input-cache-dir is set."
+            )
+        )]
+        input_cache_capacity: ReadableSize,
+
+        #[structopt(
+            long = "input-cache-max-inflight",
+            default_value = "4",
+            help(
+                "limit the maximum number of concurrent whole-object downloads for the local input cache. \
+                Set to 0 to disable the limit. Only effective when --input-cache-dir is set."
+            )
+        )]
+        input_cache_max_inflight: usize,
     },
     /// Get the state of a region's RegionReadProgress.
     GetRegionReadProgress {

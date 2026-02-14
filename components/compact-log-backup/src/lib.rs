@@ -5,6 +5,7 @@
 
 mod compaction;
 mod errors;
+mod input_cache;
 mod source;
 mod statistic;
 mod storage;

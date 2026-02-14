@@ -71,3 +71,5 @@ pprof = { version = "0.15", default-features = false, features = [
 ] }
 tempdir = "0.3"
 test_util = { workspace = true }
+url = "2"
+async-trait = "0.1"
