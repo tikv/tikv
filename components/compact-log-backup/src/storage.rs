@@ -42,11 +42,16 @@ pub const METADATA_PREFIX: &str = "v1/backupmeta";
 pub const DEFAULT_COMPACTION_OUT_PREFIX: &str = "v1/compaction_out";
 pub const MIGRATION_PREFIX: &str = "v1/migrations";
 pub const LOCK_PREFIX: &str = "v1/LOCK";
+pub const MIGRATION_APPEND_LOCK: &str = "v1/APPEND_LOCK";
 
 /// The in-memory presentation of the message [`brpb::Metadata`].
 #[derive(Debug, PartialEq, Eq)]
 pub struct MetaFile {
     pub name: Arc<str>,
+    /// The store ID that produced this metadata (when available).
+    ///
+    /// For older metadata formats, this may be absent.
+    pub store_id: Option<u64>,
     pub physical_files: Vec<PhysicalLogFile>,
     pub min_ts: u64,
     pub max_ts: u64,
@@ -61,6 +66,7 @@ impl From<Metadata> for MetaFile {
 impl MetaFile {
     pub fn from_file(name: Arc<str>, mut meta_file: Metadata) -> Self {
         let mut log_files = vec![];
+        let store_id = (meta_file.store_id > 0).then_some(meta_file.store_id as u64);
         let min_ts = meta_file.min_ts;
         let max_ts = meta_file.max_ts;
 
@@ -79,6 +85,7 @@ impl MetaFile {
 
         Self {
             name,
+            store_id,
             physical_files: log_files,
             min_ts,
             max_ts,
@@ -740,6 +747,26 @@ impl<'a> MigrationStorageWrapper<'a> {
         }
     }
 
+    async fn write_next_migration(&self, migration: &Migration) -> Result<()> {
+        use protobuf::Message;
+
+        let id = self.largest_id().await?;
+        let name = name_of_migration(id + 1, migration);
+        let bytes = migration.write_to_bytes()?;
+        retry_expr!(
+            self.storage
+                .write(
+                    &format!("{}/{}", self.migrations_prefix, name),
+                    UnpinReader(Box::new(Cursor::new(&bytes))),
+                    bytes.len() as u64
+                )
+                .map_err(|err| JustRetry(err))
+        )
+        .await
+        .map_err(|err| err.0)?;
+        Ok(())
+    }
+
     pub async fn load(&self) -> Result<Vec<Migration>> {
         self.storage
             .iter_prefix(self.migrations_prefix)
@@ -754,26 +781,34 @@ impl<'a> MigrationStorageWrapper<'a> {
     }
 
     pub async fn write(&self, migration: VersionedMigration) -> Result<()> {
-        use protobuf::Message;
+        use external_storage::locking::LockExt;
 
         let migration = migration.0;
-        let id = self.largest_id().await?;
-        // Note: perhaps we need to verify that there isn't concurrency writing in the
-        // future.
-        let name = name_of_migration(id + 1, &migration);
-        let bytes = migration.write_to_bytes()?;
-        retry_expr!(
+
+        let hint = format!(
+            "compact-log-backup writing a migration {}",
+            migration.get_creator()
+        );
+        let lock = retry_expr!(
             self.storage
-                .write(
-                    &format!("{}/{}", self.migrations_prefix, name),
-                    UnpinReader(Box::new(Cursor::new(&bytes))),
-                    bytes.len() as u64
-                )
+                .lock_for_write(MIGRATION_APPEND_LOCK, hint.clone())
                 .map_err(|err| JustRetry(err))
         )
         .await
         .map_err(|err| err.0)?;
-        Ok(())
+
+        let write_res = self.write_next_migration(&migration).await;
+        let unlock_res: Result<()> = lock.unlock(self.storage).await.adapt_err();
+
+        match write_res {
+            Ok(()) => unlock_res,
+            Err(write_err) => match unlock_res {
+                Ok(()) => Err(write_err),
+                Err(unlock_err) => Err(write_err.message(format_args!(
+                    "also failed to unlock migration write lock: {unlock_err}"
+                ))),
+            },
+        }
     }
 
     pub async fn largest_id(&self) -> Result<u64> {

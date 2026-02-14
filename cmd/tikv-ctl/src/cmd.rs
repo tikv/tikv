@@ -3,6 +3,7 @@
 use std::{borrow::ToOwned, str, string::ToString, sync::LazyLock};
 
 use clap::{AppSettings, crate_authors};
+use compact_log_backup::ShardConfigArg;
 use engine_traits::{CF_DEFAULT, SstCompressionType};
 use raft_engine::ReadableSize;
 use structopt::StructOpt;
@@ -641,6 +642,16 @@ pub enum Cmd {
             )
         )]
         name: String,
+        #[structopt(
+            long,
+            value_name = "INDEX/TOTAL",
+            help(
+                "shard the compaction work by store_id when present; otherwise by a stable \
+                metadata-path hash. Only data from stores assigned to this shard is compacted. \
+                Format: INDEX/TOTAL, where INDEX is 1-based (e.g. 1/3)."
+            )
+        )]
+        shard: Option<ShardConfigArg>,
         #[structopt(
             long = "from",
             help(

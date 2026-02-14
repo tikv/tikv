@@ -404,6 +404,7 @@ fn main() {
             compression,
             compression_level,
             name,
+            shard,
             force_regenerate,
             minimal_compaction_size,
             prefetch_running_count,
@@ -432,6 +433,7 @@ fn main() {
                 }
             };
             let ccfg = compact_log::ExecutionConfig {
+                shard: shard.map(|v| v.0),
                 from_ts,
                 until_ts,
                 prefetch_running_count,

@@ -613,6 +613,30 @@ impl TmpStorage {
         .await
     }
 
+    pub async fn build_flush_with_store_id(
+        &self,
+        store_id: u64,
+        log_path: &str,
+        meta_path: &str,
+        data_kv_file_builders: impl IntoIterator<Item = LogFileBuilder>,
+    ) -> MetaFile {
+        let mut result =
+            save_many_log_files(log_path, data_kv_file_builders, self.storage.as_ref())
+                .await
+                .unwrap();
+        result.store_id = store_id as i64;
+        let content = result.write_to_bytes().unwrap();
+        self.storage
+            .write(
+                meta_path,
+                ACursor::new(&content).into(),
+                content.len() as u64,
+            )
+            .await
+            .unwrap();
+        MetaFile::from_file(Arc::from(meta_path), result)
+    }
+
     pub async fn build_flush_with_meta(
         &self,
         log_path: &str,

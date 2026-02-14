@@ -3,6 +3,7 @@
 use std::{
     collections::HashMap,
     future::Future,
+    ops::RangeInclusive,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -15,7 +16,7 @@ use futures::{future::FutureExt, stream::TryStreamExt};
 use kvproto::brpb::StorageBackend;
 use tokio::sync::mpsc::Sender;
 
-use super::{Execution, ExecutionConfig};
+use super::{Execution, ExecutionConfig, ShardConfig};
 use crate::{
     ErrorKind,
     compaction::SubcompactionResult,
@@ -25,7 +26,7 @@ use crate::{
         skip_small_compaction::SkipSmallCompaction,
     },
     execute::hooking::{CId, ExecHooks, SubcompactionFinishCtx},
-    storage::LOCK_PREFIX,
+    storage::{LOCK_PREFIX, hash_meta_edit},
     test_util::{CompactInMem, KvGen, LogFileBuilder, TmpStorage, gen_step},
 };
 
@@ -67,6 +68,7 @@ fn gen_builder(cm: &mut HashMap<usize, CompactInMem>, batch: i64, num: i64) -> V
 pub fn create_compaction(st: StorageBackend) -> Execution {
     Execution::<RocksEngine> {
         cfg: ExecutionConfig {
+            shard: None,
             from_ts: 0,
             until_ts: u64::MAX,
             compression: engine_traits::SstCompressionType::Lz4,
@@ -79,6 +81,89 @@ pub fn create_compaction(st: StorageBackend) -> Execution {
         db: None,
         out_prefix: "test-output".to_owned(),
     }
+}
+
+fn gen_store_builders(store_id: u64) -> Vec<LogFileBuilder> {
+    (0..4)
+        .map(|n| {
+            let it = KvGen::new(
+                gen_step(store_id as i64, store_id as i64 * 1000 + n as i64, 7),
+                move |_| vec![store_id as u8; 16],
+            )
+            .take(200);
+            let mut b = LogFileBuilder::new(|v| v.region_id = store_id * 100 + n as u64);
+            for kv in it {
+                b.add_encoded(&kv.key, &kv.value)
+            }
+            b
+        })
+        .collect()
+}
+
+async fn populate_stores(st: &TmpStorage, stores: RangeInclusive<u64>) -> HashMap<String, u64> {
+    let mut meta_path_to_store_id = HashMap::<String, u64>::new();
+    for store_id in stores {
+        let meta_path = format!("v1/backupmeta/store_{store_id}.meta");
+        let log_path = format!("store_{store_id}.log");
+        st.build_flush_with_store_id(
+            store_id,
+            &log_path,
+            &meta_path,
+            gen_store_builders(store_id),
+        )
+        .await;
+        meta_path_to_store_id.insert(meta_path, store_id);
+    }
+    meta_path_to_store_id
+}
+
+async fn run_exec(st: StorageBackend, shard: Option<ShardConfig>, name: &str) -> String {
+    let mut exec = create_compaction(st);
+    exec.cfg.shard = shard;
+    exec.out_prefix = exec.cfg.recommended_prefix(name);
+    let out_prefix = exec.out_prefix.clone();
+    tokio::task::spawn_blocking(move || exec.run(SaveMeta::default()))
+        .await
+        .unwrap()
+        .unwrap();
+    out_prefix
+}
+
+fn out_prefix_from_artifacts(artifacts: &str) -> &str {
+    artifacts.strip_suffix("/metas").unwrap_or(artifacts)
+}
+
+async fn load_migrations_by_out_prefix(
+    st: &TmpStorage,
+) -> HashMap<String, kvproto::brpb::Migration> {
+    let mut migs = st
+        .load_migrations()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|(id, _)| *id > 0)
+        .collect::<Vec<_>>();
+    migs.sort_by_key(|(id, _)| *id);
+
+    let mut mig_by_out_prefix = HashMap::<String, kvproto::brpb::Migration>::new();
+    for (_id, mig) in migs {
+        let artifacts = mig
+            .compactions
+            .get(0)
+            .map(|c| c.get_artifacts())
+            .unwrap_or_default();
+        let out_prefix = out_prefix_from_artifacts(artifacts).to_owned();
+        mig_by_out_prefix.insert(out_prefix, mig);
+    }
+    mig_by_out_prefix
+}
+
+fn meta_edits_by_path(mig: &kvproto::brpb::Migration) -> HashMap<String, kvproto::brpb::MetaEdit> {
+    let mut by_path = HashMap::new();
+    for edit in &mig.edit_meta {
+        by_path.insert(edit.get_path().to_owned(), edit.clone());
+    }
+    by_path
 }
 
 #[tokio::test]
@@ -349,5 +434,73 @@ async fn test_filter_out_small_compactions() {
     assert_eq!(cs.len(), 8, "{:?}", cs);
     for c in &cs {
         assert!(c.get_meta().get_size() >= 27800, "{:?}", c.get_meta());
+    }
+}
+
+#[tokio::test]
+async fn test_sharding_by_store_and_union_matches_unsharded() {
+    let st_sharded = TmpStorage::create();
+    let st_unsharded = TmpStorage::create();
+
+    let meta_path_to_store_id = populate_stores(&st_sharded, 1..=6u64).await;
+    let _ = populate_stores(&st_unsharded, 1..=6u64).await;
+
+    let shard1 = ShardConfig::new(1, 2).unwrap();
+    let shard2 = ShardConfig::new(2, 2).unwrap();
+
+    let out_prefix1 = run_exec(st_sharded.backend(), Some(shard1), "sharding_test").await;
+    let out_prefix2 = run_exec(st_sharded.backend(), Some(shard2), "sharding_test").await;
+
+    assert_ne!(out_prefix1, out_prefix2);
+
+    let mut mig_by_out_prefix = load_migrations_by_out_prefix(&st_sharded).await;
+    assert_eq!(mig_by_out_prefix.len(), 2);
+
+    let mig1 = mig_by_out_prefix
+        .remove(&out_prefix1)
+        .expect("missing shard1 migration");
+    let mig2 = mig_by_out_prefix
+        .remove(&out_prefix2)
+        .expect("missing shard2 migration");
+    assert!(mig_by_out_prefix.is_empty());
+
+    for edit in &mig1.edit_meta {
+        let store_id = *meta_path_to_store_id
+            .get(edit.get_path())
+            .expect("unknown meta edit path");
+        assert!(shard1.contains_store_id(store_id));
+        assert!(!shard2.contains_store_id(store_id));
+    }
+    for edit in &mig2.edit_meta {
+        let store_id = *meta_path_to_store_id
+            .get(edit.get_path())
+            .expect("unknown meta edit path");
+        assert!(shard2.contains_store_id(store_id));
+        assert!(!shard1.contains_store_id(store_id));
+    }
+
+    let out_prefix_all = run_exec(st_unsharded.backend(), None, "sharding_test").await;
+    let mut mig_by_out_prefix_all = load_migrations_by_out_prefix(&st_unsharded).await;
+    assert_eq!(mig_by_out_prefix_all.len(), 1);
+    let mig_all = mig_by_out_prefix_all
+        .remove(&out_prefix_all)
+        .expect("missing unsharded migration");
+
+    let mut union = meta_edits_by_path(&mig1);
+    for (path, edit) in meta_edits_by_path(&mig2) {
+        let prev = union.insert(path.clone(), edit);
+        assert!(prev.is_none(), "duplicate meta edit for {}", path);
+    }
+    let expected = meta_edits_by_path(&mig_all);
+
+    assert_eq!(union.len(), expected.len());
+    for (path, expected_edit) in expected {
+        let union_edit = union.get(&path).unwrap();
+        assert_eq!(union_edit.destruct_self, expected_edit.destruct_self);
+        assert_eq!(
+            union_edit.all_data_files_compacted,
+            expected_edit.all_data_files_compacted
+        );
+        assert_eq!(hash_meta_edit(union_edit), hash_meta_edit(&expected_edit));
     }
 }

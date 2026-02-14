@@ -15,5 +15,6 @@ pub mod exec_hooks;
 pub mod execute;
 
 pub use errors::{Error, ErrorKind, OtherErrExt, Result, TraceResultExt};
+pub use execute::{ShardConfig, ShardConfigArg};
 
 mod util;
