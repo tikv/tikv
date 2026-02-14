@@ -933,7 +933,7 @@ fn hotspot_query_num_report_threshold() -> u64 {
 }
 
 #[inline]
-fn should_report_read_peer(
+fn should_report_hotspot_read_peer(
     read_bytes: u64,
     read_keys: u64,
     query_stats: &QueryStats,
@@ -982,7 +982,7 @@ fn collect_report_peers_for_store_heartbeat(
         region_peer
             .last_store_report_query_stats
             .fill_query_stats(&region_peer.query_stats);
-        if !should_report_read_peer(read_bytes, read_keys, &query_stats, cpu_usage) {
+        if !should_report_hotspot_read_peer(read_bytes, read_keys, &query_stats, cpu_usage) {
             continue;
         }
         let mut read_stat = pdpb::PeerStat::default();
@@ -2970,18 +2970,18 @@ mod tests {
     }
 
     #[test]
-    fn test_should_report_read_peer_cpu_threshold() {
+    fn test_should_report_hotspot_read_peer_cpu_threshold() {
         let query_stats = QueryStats::default();
         let threshold = hotspot_cpu_usage_report_threshold();
         if threshold > 0 {
-            assert!(!should_report_read_peer(
+            assert!(!should_report_hotspot_read_peer(
                 0,
                 0,
                 &query_stats,
                 threshold.saturating_sub(1),
             ));
         }
-        assert!(should_report_read_peer(0, 0, &query_stats, threshold));
+        assert!(should_report_hotspot_read_peer(0, 0, &query_stats, threshold));
     }
 
     #[test]
