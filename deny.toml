@@ -101,6 +101,10 @@ ignore = [
     # RUSTSEC-2026-0002 (Stacked Borrows UB). Upstream dependency
     # constraints prevent upgrading at the moment.
     "RUSTSEC-2026-0002",
+    # aws-sdk-s3/aws-config currently pin a dependency chain that keeps
+    # time at 0.3.20. Upgrading time to >=0.3.47 currently conflicts with
+    # raft-engine's serde =1.0.194 requirement in this branch.
+    "RUSTSEC-2026-0009",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,
