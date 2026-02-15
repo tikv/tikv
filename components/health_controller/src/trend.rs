@@ -578,7 +578,7 @@ impl Trend {
         if self.sample_interval <= 1 {
             return true;
         }
-        let should = self.sample_sequence_id % self.sample_interval == 0;
+        let should = self.sample_sequence_id.is_multiple_of(self.sample_interval);
         self.sample_sequence_id += 1;
         should
     }

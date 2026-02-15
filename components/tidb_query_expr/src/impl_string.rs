@@ -954,7 +954,7 @@ fn line_wrap(buf: &mut [u8], input_len: usize) {
     if input_len <= line_len {
         return;
     }
-    let last_line_len = if input_len % line_len == 0 {
+    let last_line_len = if input_len.is_multiple_of(line_len) {
         line_len
     } else {
         input_len % line_len
@@ -994,7 +994,7 @@ pub fn from_base64(bs: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
         .checked_mul(BASE64_INPUT_CHUNK_LENGTH)
         .is_none();
     // mysql will return "" when the input is incorrectly padded
-    let invalid_padding = input_copy.len() % BASE64_ENCODED_CHUNK_LENGTH != 0;
+    let invalid_padding = !input_copy.len().is_multiple_of(BASE64_ENCODED_CHUNK_LENGTH);
     if will_overflow || invalid_padding {
         Ok(writer.write_ref(Some(b"")))
     } else {

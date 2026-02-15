@@ -140,10 +140,10 @@ mod imp {
             let ret = libc::getpriority(libc::PRIO_PROCESS, tid as u32);
             if ret == -1 {
                 let e = Error::last_os_error();
-                if let Some(errno) = e.raw_os_error() {
-                    if errno != 0 {
-                        return Err(e);
-                    }
+                if let Some(errno) = e.raw_os_error()
+                    && errno != 0
+                {
+                    return Err(e);
                 }
             }
             Ok(ret)
@@ -152,7 +152,7 @@ mod imp {
 
     // Sadly the std lib does not have any support for setting `errno`, so we
     // have to implement this ourselves.
-    extern "C" {
+    unsafe extern "C" {
         #[link_name = "__errno_location"]
         fn errno_location() -> *mut c_int;
     }
@@ -192,6 +192,7 @@ mod imp {
 
 #[cfg(target_os = "macos")]
 #[allow(bad_style)]
+#[allow(deprecated)]
 mod imp {
     use std::{io, iter::FromIterator, mem::size_of, ptr::null_mut, slice};
 
@@ -203,7 +204,7 @@ mod imp {
     type thread_act_t = mach_port_t;
     type thread_act_array_t = *mut thread_act_t;
 
-    extern "C" {
+    unsafe extern "C" {
         fn task_threads(
             target_task: task_inspect_t,
             act_list: *mut thread_act_array_t,

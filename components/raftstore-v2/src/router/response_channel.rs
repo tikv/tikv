@@ -728,7 +728,6 @@ pub use flush_channel::{FlushChannel, FlushSubscriber};
 
 #[cfg(test)]
 mod tests {
-    use std::assert_matches::assert_matches;
 
     use futures::{StreamExt, executor::block_on};
 
@@ -791,7 +790,9 @@ mod tests {
         let (chan, sub) = builder.build();
         let mut stream = CmdResStream::new(sub);
         chan.set_result(RaftCmdResponse::default());
-        assert_matches!(block_on(stream.next()), Some(CmdResEvent::Finished(res)) if res.get_header().get_current_term() == 6);
+        assert!(
+            matches!(block_on(stream.next()), Some(CmdResEvent::Finished(res)) if res.get_header().get_current_term() == 6)
+        );
 
         // When using builder, no event is subscribed by default.
         let (mut chan, sub) = CmdResChannelBuilder::default().build();
@@ -799,7 +800,7 @@ mod tests {
         chan.notify_proposed();
         chan.notify_committed();
         drop(chan);
-        assert_matches!(block_on(stream.next()), None);
+        assert!(block_on(stream.next()).is_none());
 
         let mut builder = CmdResChannelBuilder::default();
         builder.subscribe_proposed();
@@ -807,9 +808,12 @@ mod tests {
         let mut stream = CmdResStream::new(sub);
         chan.notify_proposed();
         chan.notify_committed();
-        assert_matches!(block_on(stream.next()), Some(CmdResEvent::Proposed));
+        assert!(matches!(
+            block_on(stream.next()),
+            Some(CmdResEvent::Proposed)
+        ));
         drop(chan);
-        assert_matches!(block_on(stream.next()), None);
+        assert!(block_on(stream.next()).is_none());
 
         let mut builder = CmdResChannelBuilder::default();
         builder.subscribe_committed();
@@ -817,8 +821,11 @@ mod tests {
         let mut stream = CmdResStream::new(sub);
         chan.notify_proposed();
         chan.notify_committed();
-        assert_matches!(block_on(stream.next()), Some(CmdResEvent::Committed));
+        assert!(matches!(
+            block_on(stream.next()),
+            Some(CmdResEvent::Committed)
+        ));
         drop(chan);
-        assert_matches!(block_on(stream.next()), None);
+        assert!(block_on(stream.next()).is_none());
     }
 }

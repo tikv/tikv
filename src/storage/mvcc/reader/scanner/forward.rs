@@ -171,17 +171,13 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
     /// Get the next key-value pair, in forward order.
     pub fn read_next(&mut self) -> Result<Option<P::Output>> {
         if !self.is_started {
-            if self.cfg.lower_bound.is_some() {
+            if let Some(lower_bound) = &self.cfg.lower_bound {
                 // TODO: `seek_to_first` is better, however it has performance issues currently.
-                self.cursors.write.seek(
-                    self.cfg.lower_bound.as_ref().unwrap(),
-                    &mut self.statistics.write,
-                )?;
+                self.cursors
+                    .write
+                    .seek(lower_bound, &mut self.statistics.write)?;
                 if let Some(lock_cursor) = self.cursors.lock.as_mut() {
-                    lock_cursor.seek(
-                        self.cfg.lower_bound.as_ref().unwrap(),
-                        &mut self.statistics.lock,
-                    )?;
+                    lock_cursor.seek(lower_bound, &mut self.statistics.lock)?;
                 }
             } else {
                 self.cursors.write.seek_to_first(&mut self.statistics.write);

@@ -64,6 +64,7 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
     struct TickRunner {
         ch: mpsc::Sender<&'static str>,
     }

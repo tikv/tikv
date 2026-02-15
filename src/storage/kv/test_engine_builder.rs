@@ -341,7 +341,7 @@ mod tests {
             &mut statistics,
         )
         .unwrap();
-        assert_eq!(iter.valid().unwrap(), true);
+        assert!(iter.valid().unwrap());
         assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 0);
 
         let perf_statistics = ReadPerfInstant::new();
@@ -350,7 +350,7 @@ mod tests {
             &mut statistics,
         )
         .unwrap();
-        assert_eq!(iter.valid().unwrap(), false);
+        assert!(!iter.valid().unwrap());
         assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 1);
         let perf_statistics = ReadPerfInstant::new();
         iter.seek(
@@ -358,7 +358,7 @@ mod tests {
             &mut statistics,
         )
         .unwrap();
-        assert_eq!(iter.valid().unwrap(), false);
+        assert!(!iter.valid().unwrap());
         assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 1);
         let perf_statistics = ReadPerfInstant::new();
         iter.seek(
@@ -366,18 +366,17 @@ mod tests {
             &mut statistics,
         )
         .unwrap();
-        assert_eq!(iter.valid().unwrap(), false);
+        assert!(!iter.valid().unwrap());
         assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 1);
         let perf_statistics = ReadPerfInstant::new();
-        assert_eq!(
+        assert!(
             iter.seek(
                 &Key::from_raw(b"foo4").append_ts(TimeStamp::zero()),
                 &mut statistics
             )
-            .unwrap(),
-            true
+            .unwrap()
         );
-        assert_eq!(iter.valid().unwrap(), true);
+        assert!(iter.valid().unwrap());
         assert_eq!(
             iter.key(&mut statistics),
             Key::from_raw(b"foo4")

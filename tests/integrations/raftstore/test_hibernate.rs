@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::RocksSnapshot;
 use futures::executor::block_on;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use pd_client::PdClient;
@@ -807,7 +807,7 @@ fn test_hibernate_quorum_feature_voter_down_shortly() {
 
 fn make_cb(cmd: &RaftCmdRequest) -> (Callback<RocksSnapshot>, CbReceivers) {
     let (proposed_tx, proposed_rx) = mpsc::channel();
-    let (cb, _applied_rx) = make_cb_ext::<RocksEngine>(
+    let (cb, _applied_rx) = make_cb_ext(
         cmd,
         Some(Box::new(move || proposed_tx.send(()).unwrap())),
         None,

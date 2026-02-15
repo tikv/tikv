@@ -751,7 +751,7 @@ where
         let props = tikv_util::thread_group::current_properties();
 
         fn is_enable_tick(timer_cnt: u64, interval: u64) -> bool {
-            interval != 0 && timer_cnt % interval == 0
+            interval != 0 && timer_cnt.is_multiple_of(interval)
         }
         let h = Builder::new()
             .name(thd_name!(STATS_MONITOR_THREAD))
@@ -2388,7 +2388,9 @@ where
                         // Try to split the region on half within the given key
                         // range if there is no `split_key` been given.
                         } else if split_info.start_key.is_some() && split_info.end_key.is_some() {
+                            #[allow(clippy::unnecessary_unwrap)]
                             let start_key = split_info.start_key.unwrap();
+                            #[allow(clippy::unnecessary_unwrap)]
                             let end_key = split_info.end_key.unwrap();
                             let region_id = region.get_id();
                             let msg = Box::new(CasualMessage::HalfSplitRegion {

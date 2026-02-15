@@ -327,6 +327,7 @@ impl<L: LockManager> LockWaitQueues<L> {
     /// queue while executing, and in this case the caller will be responsible
     /// to wake it up. When the head of the queue is a shared lock wait, all
     /// consecutive shared lock waits are returned together in the vector.
+    #[allow(clippy::vec_box)]
     pub fn pop_for_waking_up(
         &self,
         key: &Key,
@@ -986,12 +987,12 @@ mod tests {
     fn test_simple_push_pop() {
         let queues = LockWaitQueues::new(MockLockManager::new());
         assert_eq!(queues.entry_count(), 0);
-        assert_eq!(queues.is_empty(), true);
+        assert!(queues.is_empty());
 
         queues.mock_lock_wait(b"k1", 10, 5, false);
         queues.mock_lock_wait(b"k2", 11, 5, false);
         assert_eq!(queues.entry_count(), 2);
-        assert_eq!(queues.is_empty(), false);
+        assert!(!queues.is_empty());
 
         queues
             .must_pop(b"k1", 5, 6)
@@ -1000,7 +1001,7 @@ mod tests {
         queues.must_pop_none(b"k1", 5, 6);
         queues.must_not_contain_key(b"k1");
         assert_eq!(queues.entry_count(), 1);
-        assert_eq!(queues.is_empty(), false);
+        assert!(!queues.is_empty());
 
         queues
             .must_pop(b"k2", 5, 6)
@@ -1009,7 +1010,7 @@ mod tests {
         queues.must_pop_none(b"k2", 5, 6);
         queues.must_not_contain_key(b"k2");
         assert_eq!(queues.entry_count(), 0);
-        assert_eq!(queues.is_empty(), true);
+        assert!(queues.is_empty());
     }
 
     #[test]
@@ -1305,7 +1306,7 @@ mod tests {
             entry.check_shared(true);
             start_ts_set.push(entry.parameters.start_ts.into_inner());
         }
-        start_ts_set.sort_by(|a, b| a.cmp(b));
+        start_ts_set.sort();
         assert_eq!(start_ts_set, vec![10, 11, 12]);
         assert!(future.is_some());
 

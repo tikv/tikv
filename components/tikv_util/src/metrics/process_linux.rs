@@ -62,11 +62,10 @@ impl ProcessCollector {
         .unwrap();
         descs.extend(start_time.desc().into_iter().cloned());
         // proc_start_time init once because it is immutable
-        if let Ok(boot_time) = procfs::boot_time_secs() {
-            if let Ok(p) = procfs::process::Process::myself() {
-                start_time
-                    .set(p.stat.starttime as i64 / thread::ticks_per_second() + boot_time as i64);
-            }
+        if let Ok(boot_time) = procfs::boot_time_secs()
+            && let Ok(p) = procfs::process::Process::myself()
+        {
+            start_time.set(p.stat.starttime as i64 / thread::ticks_per_second() + boot_time as i64);
         }
 
         Self {

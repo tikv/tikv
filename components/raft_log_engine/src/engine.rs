@@ -811,7 +811,6 @@ fn transfer_error(e: RaftEngineError) -> engine_traits::Error {
 
 #[cfg(test)]
 mod tests {
-    use std::assert_matches::assert_matches;
 
     use engine_traits::ALL_CFS;
 
@@ -825,10 +824,10 @@ mod tests {
             ..Default::default()
         };
         let engine = RaftLogEngine::new(cfg, None, None).unwrap();
-        assert_matches!(engine.get_region_state(2, u64::MAX), Ok(None));
-        assert_matches!(engine.get_apply_state(2, u64::MAX), Ok(None));
+        assert!(matches!(engine.get_region_state(2, u64::MAX), Ok(None)));
+        assert!(matches!(engine.get_apply_state(2, u64::MAX), Ok(None)));
         for cf in ALL_CFS {
-            assert_matches!(engine.get_flushed_index(2, cf), Ok(None));
+            assert!(matches!(engine.get_flushed_index(2, cf), Ok(None)));
         }
 
         let mut wb = engine.log_batch(10);
@@ -844,10 +843,10 @@ mod tests {
         engine.consume(&mut wb, false).unwrap();
 
         for cf in ALL_CFS.iter().take(2) {
-            assert_matches!(engine.get_flushed_index(2, cf), Ok(Some(4)));
+            assert!(matches!(engine.get_flushed_index(2, cf), Ok(Some(4))));
         }
         for cf in ALL_CFS.iter().skip(2) {
-            assert_matches!(engine.get_flushed_index(2, cf), Ok(None));
+            assert!(matches!(engine.get_flushed_index(2, cf), Ok(None)));
         }
 
         let mut region_state2 = region_state.clone();
@@ -861,14 +860,14 @@ mod tests {
         }
         engine.consume(&mut wb, false).unwrap();
 
-        assert_matches!(engine.get_region_state(2, 0), Ok(None));
-        assert_matches!(engine.get_region_state(2, 1), Ok(Some(s)) if s == region_state);
-        assert_matches!(engine.get_region_state(2, 4), Ok(Some(s)) if s == region_state2);
-        assert_matches!(engine.get_apply_state(2, 0), Ok(None));
-        assert_matches!(engine.get_apply_state(2, 3), Ok(Some(s)) if s == apply_state);
-        assert_matches!(engine.get_apply_state(2, 5), Ok(Some(s)) if s == apply_state2);
+        assert!(matches!(engine.get_region_state(2, 0), Ok(None)));
+        assert!(matches!(engine.get_region_state(2, 1), Ok(Some(s)) if s == region_state));
+        assert!(matches!(engine.get_region_state(2, 4), Ok(Some(s)) if s == region_state2));
+        assert!(matches!(engine.get_apply_state(2, 0), Ok(None)));
+        assert!(matches!(engine.get_apply_state(2, 3), Ok(Some(s)) if s == apply_state));
+        assert!(matches!(engine.get_apply_state(2, 5), Ok(Some(s)) if s == apply_state2));
         for cf in ALL_CFS {
-            assert_matches!(engine.get_flushed_index(2, cf), Ok(Some(5)));
+            assert!(matches!(engine.get_flushed_index(2, cf), Ok(Some(5))));
         }
     }
 }

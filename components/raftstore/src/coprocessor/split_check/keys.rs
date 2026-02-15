@@ -518,11 +518,7 @@ mod tests {
             let split_count =
                 calc_split_keys_count(region_size.0, split_size.0, max_region_size.0, split_limit);
             let avg_split_size = region_size.0 / (split_count + 1);
-            let diff = if avg_split_size >= split_size.0 {
-                avg_split_size - split_size.0
-            } else {
-                split_size.0 - avg_split_size
-            };
+            let diff = avg_split_size.abs_diff(split_size.0);
             // the diff of actual split size and split_size is less than 1/3 split_size
             assert!(
                 diff <= split_size.0 / 3,

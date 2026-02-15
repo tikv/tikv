@@ -247,9 +247,9 @@ where
         // before and the `cached_read_id` of it is None because only a consecutive
         // requests will have the same cache and the cache will be cleared after the
         // last request of the batch.
-        if self.read_id.is_some() {
+        if let Some(read_id) = &self.read_id {
             if self.snap_cache.cached_read_id == self.read_id
-                && self.read_id.as_ref().unwrap().create_time >= delegate_last_valid_ts
+                && read_id.create_time >= delegate_last_valid_ts
             {
                 // Cache hit
                 return false;

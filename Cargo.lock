@@ -340,7 +340,7 @@ dependencies = [
  "bytes",
  "fastrand 2.0.1",
  "http 0.2.12",
- "time 0.3.41",
+ "time 0.3.47",
  "tokio",
  "tracing",
  "url",
@@ -483,7 +483,7 @@ dependencies = [
  "once_cell",
  "percent-encoding",
  "sha2",
- "time 0.3.41",
+ "time 0.3.47",
  "tracing",
 ]
 
@@ -658,7 +658,7 @@ dependencies = [
  "pin-utils",
  "ryu",
  "serde",
- "time 0.3.41",
+ "time 0.3.47",
  "tokio",
  "tokio-util",
 ]
@@ -708,7 +708,7 @@ dependencies = [
  "slog",
  "slog-global",
  "tikv_util",
- "time 0.3.41",
+ "time 0.3.47",
  "tokio",
  "url",
  "uuid 1.7.0",
@@ -738,7 +738,7 @@ dependencies = [
  "rustc_version 0.4.0",
  "serde",
  "serde_json",
- "time 0.3.41",
+ "time 0.3.47",
  "url",
  "uuid 1.7.0",
 ]
@@ -757,7 +757,7 @@ dependencies = [
  "oauth2",
  "pin-project",
  "serde",
- "time 0.3.41",
+ "time 0.3.47",
  "tz-rs",
  "url",
  "uuid 1.7.0",
@@ -774,7 +774,7 @@ dependencies = [
  "futures 0.3.15",
  "serde",
  "serde_json",
- "time 0.3.41",
+ "time 0.3.47",
 ]
 
 [[package]]
@@ -791,7 +791,7 @@ dependencies = [
  "log",
  "serde",
  "serde_derive",
- "time 0.3.41",
+ "time 0.3.47",
  "url",
  "uuid 1.7.0",
 ]
@@ -812,7 +812,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
- "time 0.3.41",
+ "time 0.3.47",
  "url",
  "uuid 1.7.0",
 ]
@@ -830,7 +830,7 @@ dependencies = [
  "once_cell",
  "serde",
  "serde_json",
- "time 0.3.41",
+ "time 0.3.47",
 ]
 
 [[package]]
@@ -1358,18 +1358,16 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
 name = "chrono"
-version = "0.4.22"
+version = "0.4.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bfd4d1b31faaa3a89d7934dbded3111da0d2ef28e3ebccdb4f0179f5929d1ef1"
+checksum = "fac4744fb15ae8337dc853fee7fb3f4e48c0fbaa23d0afe49c447b4fab126118"
 dependencies = [
  "iana-time-zone",
  "js-sys",
- "num-integer",
  "num-traits",
  "serde",
- "time 0.1.43",
  "wasm-bindgen",
- "winapi 0.3.9",
+ "windows-link",
 ]
 
 [[package]]
@@ -1980,9 +1978,9 @@ dependencies = [
 
 [[package]]
 name = "deranged"
-version = "0.4.0"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c9e6a11ca8224451684bc0d7d5a7adbf8f2fd6887261a1cfc3c0432f9d4068e"
+checksum = "d630bccd429a5bb5a64b5e94f693bfc48c9f8566418fda4c494cc94f911f87cc"
 dependencies = [
  "powerfmt",
  "serde",
@@ -2205,7 +2203,7 @@ dependencies = [
  "tempfile",
  "tikv_alloc",
  "tikv_util",
- "time 0.1.43",
+ "time 0.1.45",
  "toml",
  "tracker",
  "txn_types",
@@ -4381,9 +4379,9 @@ dependencies = [
 
 [[package]]
 name = "num-conv"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51d515d32fb182ee37cda2ccdcb92950d6a3c2893aa280e540671c2cd0f3b1d9"
+checksum = "cf97ec579c3c42f953ef76dbf8d55ac91fb219dde70e49aa4a6b7d74e9919050"
 
 [[package]]
 name = "num-derive"
@@ -5249,7 +5247,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.4.2"
-source = "git+https://github.com/tikv/raft-engine.git#03f77d90c09793a6f79411ff5f88233715eb23da"
+source = "git+https://github.com/tikv/raft-engine.git#b6e85af33fb451314b9e169dd081e067ff5f356d"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -5283,7 +5281,7 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.4.2"
-source = "git+https://github.com/tikv/raft-engine.git#03f77d90c09793a6f79411ff5f88233715eb23da"
+source = "git+https://github.com/tikv/raft-engine.git#b6e85af33fb451314b9e169dd081e067ff5f356d"
 dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",
@@ -5383,7 +5381,7 @@ dependencies = [
  "tidb_query_datatype",
  "tikv_alloc",
  "tikv_util",
- "time 0.1.43",
+ "time 0.1.45",
  "tokio",
  "tracker",
  "txn_types",
@@ -5432,7 +5430,7 @@ dependencies = [
  "test_util",
  "thiserror 1.0.40",
  "tikv_util",
- "time 0.1.43",
+ "time 0.1.45",
  "tracker",
  "txn_types",
  "walkdir",
@@ -6095,10 +6093,11 @@ checksum = "f97841a747eef040fcd2e7b3b9a220a7205926e60488e673d9e4926d27772ce5"
 
 [[package]]
 name = "serde"
-version = "1.0.194"
+version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b114498256798c94a0689e1a15fec6005dee8ac1f41de56404b67afc2a4b773"
+checksum = "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"
 dependencies = [
+ "serde_core",
  "serde_derive",
 ]
 
@@ -6113,10 +6112,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_derive"
-version = "1.0.194"
+name = "serde_core"
+version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3385e45322e8f9931410f01b3031ec534c3947d0e94c18049af4d9f9907d4e0"
+checksum = "41d385c7d4ca58e59fc732af25c3983b67ac852c1a25000afe1175de458b67ad"
+dependencies = [
+ "serde_derive",
+]
+
+[[package]]
+name = "serde_derive"
+version = "1.0.228"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d540f220d3187173da220f885ab66608367b6574e925011a9353e4badda91d79"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7097,7 +7105,7 @@ dependencies = [
  "slog-global",
  "tempfile",
  "tikv_util",
- "time 0.1.43",
+ "time 0.1.45",
 ]
 
 [[package]]
@@ -7172,7 +7180,7 @@ dependencies = [
  "tikv",
  "tikv_kv",
  "tikv_util",
- "time 0.1.43",
+ "time 0.1.45",
  "tipb",
  "tipb_helper",
  "tokio",
@@ -7292,7 +7300,7 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.40",
  "tikv_util",
- "time 0.1.43",
+ "time 0.1.45",
  "yatp",
 ]
 
@@ -7401,7 +7409,7 @@ dependencies = [
  "tidb_query_common",
  "tidb_query_datatype",
  "tikv_util",
- "time 0.1.43",
+ "time 0.1.45",
  "tipb",
  "tipb_helper",
  "uuid 1.7.0",
@@ -7517,7 +7525,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_kv",
  "tikv_util",
- "time 0.1.43",
+ "time 0.1.45",
  "tipb",
  "tokio",
  "tokio-openssl",
@@ -7573,7 +7581,7 @@ dependencies = [
  "tempfile",
  "tikv",
  "tikv_util",
- "time 0.1.43",
+ "time 0.1.45",
  "tokio",
  "toml",
  "txn_types",
@@ -7622,7 +7630,7 @@ dependencies = [
  "server",
  "tikv",
  "tikv_util",
- "time 0.1.43",
+ "time 0.1.45",
  "toml",
  "tracing-active-tree",
  "tracing-subscriber",
@@ -7732,7 +7740,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.40",
  "tikv_alloc",
- "time 0.1.43",
+ "time 0.1.45",
  "tokio",
  "tokio-executor",
  "tokio-timer",
@@ -7745,19 +7753,20 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.1.43"
+version = "0.1.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca8a50ef2360fbd1eeb0ecd46795a87a19024eb4b53c5dc916ca1fd95fe62438"
+checksum = "1b797afad3f312d1c66a56d11d0316f916356d11bd158fbc6ca6389ff6bf805a"
 dependencies = [
  "libc 0.2.176",
+ "wasi 0.10.0+wasi-snapshot-preview1",
  "winapi 0.3.9",
 ]
 
 [[package]]
 name = "time"
-version = "0.3.41"
+version = "0.3.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a7619e19bc266e0f9c5e6686659d394bc57973859340060a69221e57dbc0c40"
+checksum = "743bd48c283afc0388f9b8827b976905fb217ad9e647fae3a379a9283c4def2c"
 dependencies = [
  "deranged",
  "itoa 1.0.1",
@@ -7766,22 +7775,22 @@ dependencies = [
  "num-conv",
  "num_threads",
  "powerfmt",
- "serde",
+ "serde_core",
  "time-core",
  "time-macros",
 ]
 
 [[package]]
 name = "time-core"
-version = "0.1.4"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9e9a38711f559d9e3ce1cdb06dd7c5b8ea546bc90052da6d06bb76da74bb07c"
+checksum = "7694e1cfe791f8d31026952abf09c69ca6f6fa4e1a1229e18988f06a04a12dca"
 
 [[package]]
 name = "time-macros"
-version = "0.2.22"
+version = "0.2.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3526739392ec93fd8b359c8e98514cb3e8e021beb4e5f597b00a0221f8ed8a49"
+checksum = "2e70e4c5a0e0a8a4823ad65dfe1a6930e4f4d756dcd9dd7939022b5e8c501215"
 dependencies = [
  "num-conv",
  "time-core",
@@ -8076,7 +8085,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 1.0.0",
+ "cfg-if 0.1.10",
  "static_assertions",
 ]
 
@@ -8286,6 +8295,12 @@ name = "wasi"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b89c3ce4ce14bdc6fb6beaf9ec7928ca331de5df7e5ea278375642a2f478570d"
+
+[[package]]
+name = "wasi"
+version = "0.10.0+wasi-snapshot-preview1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a143597ca7c7793eff794def352d41792a93c481eb1042423ff7ff72ba2c31f"
 
 [[package]]
 name = "wasi"

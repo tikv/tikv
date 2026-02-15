@@ -29,7 +29,7 @@ impl Retry {
 
     fn is_ok(&self) -> bool {
         let count = self.count.fetch_add(1, Ordering::SeqCst);
-        if count != 0 && count % self.retry == 0 {
+        if count != 0 && count.is_multiple_of(self.retry) {
             // it's ok.
             return true;
         }

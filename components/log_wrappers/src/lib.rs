@@ -66,17 +66,12 @@ impl<T: std::fmt::Debug> slog::Value for DebugValue<T> {
 
 /// RedactOption is exposed to user to manually control the redaction of log
 /// data.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum RedactOption {
+    #[default]
     Off,
     On,
     Marker,
-}
-
-impl Default for RedactOption {
-    fn default() -> Self {
-        Self::Off
-    }
 }
 
 impl fmt::Display for RedactOption {

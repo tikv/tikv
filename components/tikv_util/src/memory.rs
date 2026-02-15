@@ -36,7 +36,7 @@ pub unsafe fn vec_transmute<F, T>(from: Vec<F>) -> Vec<T> {
     debug_assert!(mem::size_of::<F>() == mem::size_of::<T>());
     debug_assert!(mem::align_of::<F>() == mem::align_of::<T>());
     let (ptr, len, cap) = from.into_raw_parts();
-    Vec::from_raw_parts(ptr as _, len, cap)
+    unsafe { Vec::from_raw_parts(ptr as _, len, cap) }
 }
 
 /// Query the number of bytes of an object.

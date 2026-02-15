@@ -241,10 +241,10 @@ fn check_if_to_peer_destroyed<ER: RaftEngine>(
     if util::is_epoch_stale(msg.get_region_epoch(), local_epoch) {
         return Ok(true);
     }
-    if let Some(local_peer) = find_peer(local_state.get_region(), store_id)
-        && to_peer.id <= local_peer.get_id()
-    {
-        return Ok(true);
+    if let Some(local_peer) = find_peer(local_state.get_region(), store_id) {
+        if to_peer.id <= local_peer.get_id() {
+            return Ok(true);
+        }
     }
     // If the peer is destroyed by conf change, all above checks will pass.
     if local_state

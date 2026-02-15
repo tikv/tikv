@@ -256,10 +256,10 @@ impl Runner {
         let mut logs = Vec::new();
         for f in fs::read_dir(&self.log_dir)? {
             let f = f?;
-            if f.file_type()?.is_file() {
-                if let Some(dt) = dt_from_file_name(f.path().as_path(), &self.file_name) {
-                    logs.push(LogInfo { f, dt });
-                }
+            if f.file_type()?.is_file()
+                && let Some(dt) = dt_from_file_name(f.path().as_path(), &self.file_name)
+            {
+                logs.push(LogInfo { f, dt });
             }
         }
         logs.sort_by(|l1, l2| l2.dt.cmp(&l1.dt));

@@ -546,7 +546,7 @@ impl Suite {
         for sn in (from..(from + n)).map(|x| x * 2) {
             let sn = sn as u64;
             let key = make_record_key(for_table, sn);
-            let value = if sn % 4 == 0 {
+            let value = if sn.is_multiple_of(4) {
                 Self::PROMISED_SHORT_VALUE.to_vec()
             } else {
                 Self::PROMISED_LONG_VALUE.to_vec()
