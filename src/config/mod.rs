@@ -3135,6 +3135,7 @@ pub struct BackupStreamConfig {
     #[online_config(skip)]
     pub initial_scan_rate_limit: ReadableSize,
     pub initial_scan_concurrency: usize,
+    pub s3_multi_part_size: ReadableSize,
 }
 
 impl BackupStreamConfig {
@@ -3168,6 +3169,14 @@ impl BackupStreamConfig {
         if self.initial_scan_rate_limit.0 < 1024 {
             return Err("the `initial_scan_rate_limit` should be at least 1024 bytes".into());
         }
+        if self.s3_multi_part_size.0 > ReadableSize::gb(5).0 {
+            warn!(
+                "backup.s3_multi_part_size cannot larger than 5GB, change it to {:?}",
+                default_cfg.s3_multi_part_size
+            );
+            self.s3_multi_part_size = default_cfg.s3_multi_part_size;
+        }
+
         Ok(())
     }
 }
@@ -3197,6 +3206,7 @@ impl Default for BackupStreamConfig {
             initial_scan_rate_limit: ReadableSize::mb(60),
             initial_scan_concurrency: 6,
             temp_file_memory_quota: cache_size,
+            s3_multi_part_size: ReadableSize::mb(5),
         }
     }
 }
