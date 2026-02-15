@@ -1,5 +1,4 @@
 [toolchain]
-#WARN: Before upgrading to a new toolchain, please ensure https://github.com/rust-lang/rust/issues/141306 is fixed.
-channel = "nightly-2025-02-28"
+channel = "nightly-2026-01-30"
 components = ["rustfmt", "clippy", "rust-src", "rust-analyzer"]
 profile = "minimal"

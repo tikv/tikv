@@ -473,53 +473,53 @@ impl<'a> PrewriteMutation<'a> {
                 .into());
             }
 
-            if let Some(ts) = expected_for_update_ts
-                && lock.for_update_ts != ts
-            {
-                // The constraint on for_update_ts of the pessimistic lock is violated.
-                // Consider the following case:
-                //
-                // 1. A pessimistic lock of transaction `T1` succeeded with`WakeUpModeForceLock`
-                //    enabled, then it returns to the client and the client continues its
-                //    execution.
-                // 2. The lock is lost for some reason such as pipelined locking or in-memory
-                //    pessimistic lock.
-                // 3. Another transaction `T2` writes the key and committed.
-                // 4. The key then receives a stale pessimistic lock request of `T1` that has
-                //    been received in step 1 (maybe because of retrying due to network issue in
-                //    step 1). Since it allows locking with conflict, though there's a newer
-                //    version that's later than the request's `for_update_ts`, the request can
-                //    still acquire the lock. However no one will check the response, which
-                //    tells the latest commit_ts it met.
-                // 5. The transaction `T1` commits. When it prewrites it checks if each key is
-                //    pessimistic-locked.
-                //
-                // Transaction `T1` won't notice anything wrong without this check since it
-                // does have a pessimistic lock of the same transaction. However, actually
-                // one of the key is locked in a larger version than that the client would
-                // expect. As a result, the conflict between transaction `T1` and `T2` is
-                // missed.
-                // To avoid this problem, we check the for_update_ts written on the
-                // pessimistic locks that's acquired in force-locking mode. If it doesn't match
-                // the one known by the client, the lock that we expected to have will be
-                // regarded as missing.
-                //
-                // It's actually theoretically safe to allow `lock.for_update_ts` <
-                // `expected_for_update_ts`, but the possibility to encounter this case is very
-                // low. For simplicity, we don't consider that case and only allow
-                // `lock.for_update_ts` to exactly match that we expect.
-                warn!("pessimistic lock have different for_update_ts than expected. the expected lock must have been lost";
-                    "key" => %self.key,
-                    "start_ts" => self.txn_props.start_ts,
-                    "expected_for_update_ts" => ts,
-                    "lock" => ?lock);
+            if let Some(ts) = expected_for_update_ts {
+                if lock.for_update_ts != ts {
+                    // The constraint on for_update_ts of the pessimistic lock is violated.
+                    // Consider the following case:
+                    //
+                    // 1. A pessimistic lock of transaction `T1` succeeded with`WakeUpModeForceLock`
+                    //    enabled, then it returns to the client and the client continues its
+                    //    execution.
+                    // 2. The lock is lost for some reason such as pipelined locking or in-memory
+                    //    pessimistic lock.
+                    // 3. Another transaction `T2` writes the key and committed.
+                    // 4. The key then receives a stale pessimistic lock request of `T1` that has
+                    //    been received in step 1 (maybe because of retrying due to network issue in
+                    //    step 1). Since it allows locking with conflict, though there's a newer
+                    //    version that's later than the request's `for_update_ts`, the request can
+                    //    still acquire the lock. However no one will check the response, which
+                    //    tells the latest commit_ts it met.
+                    // 5. The transaction `T1` commits. When it prewrites it checks if each key is
+                    //    pessimistic-locked.
+                    //
+                    // Transaction `T1` won't notice anything wrong without this check since it
+                    // does have a pessimistic lock of the same transaction. However, actually
+                    // one of the key is locked in a larger version than that the client would
+                    // expect. As a result, the conflict between transaction `T1` and `T2` is
+                    // missed.
+                    // To avoid this problem, we check the for_update_ts written on the
+                    // pessimistic locks that's acquired in force-locking mode. If it doesn't match
+                    // the one known by the client, the lock that we expected to have will be
+                    // regarded as missing.
+                    //
+                    // It's actually theoretically safe to allow `lock.for_update_ts` <
+                    // `expected_for_update_ts`, but the possibility to encounter this case is very
+                    // low. For simplicity, we don't consider that case and only allow
+                    // `lock.for_update_ts` to exactly match that we expect.
+                    warn!("pessimistic lock have different for_update_ts than expected. the expected lock must have been lost";
+                        "key" => %self.key,
+                        "start_ts" => self.txn_props.start_ts,
+                        "expected_for_update_ts" => ts,
+                        "lock" => ?lock);
 
-                return Err(ErrorInner::PessimisticLockNotFound {
-                    start_ts: self.txn_props.start_ts,
-                    key: self.key.to_raw()?,
-                    reason: PessimisticLockNotFoundReason::LockForUpdateTsMismatch,
+                    return Err(ErrorInner::PessimisticLockNotFound {
+                        start_ts: self.txn_props.start_ts,
+                        key: self.key.to_raw()?,
+                        reason: PessimisticLockNotFoundReason::LockForUpdateTsMismatch,
+                    }
+                    .into());
                 }
-                .into());
             }
 
             // The lock is pessimistic and owned by this txn, go through to overwrite it.
@@ -726,7 +726,7 @@ impl<'a> PrewriteMutation<'a> {
         };
 
         // safety check for shared lock.
-        if shared_locks.is_some() {
+        if let Some(mut shared) = shared_locks {
             if generation > 0 {
                 return Err(ErrorInner::Other(box_err!(
                     "shared lock prewrite does not support non-zero generation, generation: {}",
@@ -747,7 +747,6 @@ impl<'a> PrewriteMutation<'a> {
                 .into());
             }
 
-            let mut shared = shared_locks.expect("shared_locks must be Some");
             shared.update_lock(lock)?;
             #[cfg(debug_assertions)]
             {

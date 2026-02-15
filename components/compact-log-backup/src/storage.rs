@@ -762,10 +762,11 @@ impl<'a> MigrationStorageWrapper<'a> {
         // future.
         let name = name_of_migration(id + 1, &migration);
         let bytes = migration.write_to_bytes()?;
+        let full_name = format!("{}/{}", self.migrations_prefix, name);
         retry_expr!(
             self.storage
                 .write(
-                    &format!("{}/{}", self.migrations_prefix, name),
+                    &full_name,
                     UnpinReader(Box::new(Cursor::new(&bytes))),
                     bytes.len() as u64
                 )

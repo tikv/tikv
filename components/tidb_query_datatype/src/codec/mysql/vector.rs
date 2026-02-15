@@ -126,7 +126,7 @@ impl PartialOrd for VectorFloat32Ref<'_> {
 
 impl<'a> VectorFloat32Ref<'a> {
     pub fn new(value: &[u8]) -> Result<VectorFloat32Ref<'_>> {
-        if value.len() % F32_SIZE != 0 {
+        if !value.len().is_multiple_of(F32_SIZE) {
             return Err(box_err!("Vector length error. Please check the input."));
         }
         let check_vec = VectorFloat32Ref { value };

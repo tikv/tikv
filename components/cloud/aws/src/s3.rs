@@ -827,7 +827,6 @@ impl IterableStorage for S3Storage {
 
 #[cfg(test)]
 mod tests {
-    use std::assert_matches::assert_matches;
 
     use aws_sdk_s3::{config::Credentials, primitives::SdkBody};
     use aws_smithy_runtime::{
@@ -1411,10 +1410,10 @@ mod tests {
 
         let mut data = AllowStdIo::new(ThrottleRead(Cursor::new(b"muthologia.")));
         let mut buf = vec![0u8; 6];
-        assert_matches!(try_read_exact(&mut data, &mut buf).await, Ok(6));
+        assert!(matches!(try_read_exact(&mut data, &mut buf).await, Ok(6)));
         assert_eq!(buf, b"muthol");
-        assert_matches!(try_read_exact(&mut data, &mut buf).await, Ok(5));
+        assert!(matches!(try_read_exact(&mut data, &mut buf).await, Ok(5)));
         assert_eq!(&buf[..5], b"ogia.");
-        assert_matches!(try_read_exact(&mut data, &mut buf).await, Ok(0));
+        assert!(matches!(try_read_exact(&mut data, &mut buf).await, Ok(0)));
     }
 }

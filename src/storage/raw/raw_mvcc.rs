@@ -362,6 +362,6 @@ mod tests {
         assert_eq!(pairs, ret_data);
 
         // two way direction scan is not supported.
-        assert_eq!(iter.next().is_err(), true);
+        iter.next().unwrap_err();
     }
 }

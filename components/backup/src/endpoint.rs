@@ -824,8 +824,8 @@ impl<R: RegionInfoProvider> Progress<R> {
                 let mut count = 0;
                 for info in iter {
                     let region = &info.region;
-                    if end_key.is_some() {
-                        let end_slice = end_key.as_ref().unwrap().as_encoded().as_slice();
+                    if let Some(end_key) = &end_key {
+                        let end_slice = end_key.as_encoded().as_slice();
                         if end_slice <= region.get_start_key() {
                             // We have reached the end.
                             // The range is defined as [start, end) so break if
@@ -1247,15 +1247,15 @@ fn get_max_start_key(start_key: Option<&Key>, region: &Region) -> Option<Key> {
     } else {
         Some(Key::from_encoded_slice(region.get_start_key()))
     };
-    if start_key.is_none() {
-        region_start
-    } else {
-        let start_slice = start_key.as_ref().unwrap().as_encoded().as_slice();
+    if let Some(start_key_ref) = &start_key {
+        let start_slice = start_key_ref.as_encoded().as_slice();
         if start_slice < region.get_start_key() {
             region_start
         } else {
             start_key.cloned()
         }
+    } else {
+        region_start
     }
 }
 

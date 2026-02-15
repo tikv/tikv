@@ -608,7 +608,6 @@ where
 #[cfg(test)]
 pub mod tests {
     use std::{
-        assert_matches,
         collections::HashMap,
         sync::{Arc, Mutex, RwLock},
         time::Duration,
@@ -777,16 +776,20 @@ pub mod tests {
         mgr.do_update(region(2, 35, 8), TimeStamp::new(16));
         mgr.do_update(region(2, 35, 8), TimeStamp::new(14));
         let r = mgr.get_from_region(RegionIdWithVersion::new(1, 32));
-        assert_matches::assert_matches!(r, GetCheckpointResult::NotFound { .. });
+        assert!(matches!(r, GetCheckpointResult::NotFound { .. }));
 
         mgr.freeze_and_flush();
         let r = mgr.get_from_region(RegionIdWithVersion::new(1, 32));
-        assert_matches::assert_matches!(r, GetCheckpointResult::Ok { checkpoint , .. } if checkpoint.into_inner() == 8);
+        assert!(
+            matches!(r, GetCheckpointResult::Ok { checkpoint , .. } if checkpoint.into_inner() == 8)
+        );
         let r = mgr.get_from_region(RegionIdWithVersion::new(2, 35));
-        assert_matches::assert_matches!(r, GetCheckpointResult::Ok { checkpoint , .. } if checkpoint.into_inner() == 16);
+        assert!(
+            matches!(r, GetCheckpointResult::Ok { checkpoint , .. } if checkpoint.into_inner() == 16)
+        );
         mgr.freeze_and_flush();
         let r = mgr.get_from_region(RegionIdWithVersion::new(1, 32));
-        assert_matches::assert_matches!(r, GetCheckpointResult::NotFound { .. });
+        assert!(matches!(r, GetCheckpointResult::NotFound { .. }));
     }
 
     #[test]
@@ -795,25 +798,35 @@ pub mod tests {
         mgr.update_region_checkpoint(&region(1, 32, 8), TimeStamp::new(8));
         mgr.update_region_checkpoint(&region(2, 34, 8), TimeStamp::new(15));
         let r = mgr.get_from_region(RegionIdWithVersion::new(1, 32));
-        assert_matches::assert_matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 8);
+        assert!(
+            matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 8)
+        );
         let r = mgr.get_from_region(RegionIdWithVersion::new(2, 33));
-        assert_matches::assert_matches!(r, GetCheckpointResult::EpochNotMatch { .. });
+        assert!(matches!(r, GetCheckpointResult::EpochNotMatch { .. }));
         let r = mgr.get_from_region(RegionIdWithVersion::new(3, 44));
-        assert_matches::assert_matches!(r, GetCheckpointResult::NotFound { .. });
+        assert!(matches!(r, GetCheckpointResult::NotFound { .. }));
 
         mgr.update_region_checkpoint(&region(1, 30, 8), TimeStamp::new(16));
         let r = mgr.get_from_region(RegionIdWithVersion::new(1, 32));
-        assert_matches::assert_matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 8);
+        assert!(
+            matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 8)
+        );
 
         mgr.update_region_checkpoint(&region(1, 30, 8), TimeStamp::new(16));
         let r = mgr.get_from_region(RegionIdWithVersion::new(1, 32));
-        assert_matches::assert_matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 8);
+        assert!(
+            matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 8)
+        );
         mgr.update_region_checkpoint(&region(1, 32, 8), TimeStamp::new(16));
         let r = mgr.get_from_region(RegionIdWithVersion::new(1, 32));
-        assert_matches::assert_matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 16);
+        assert!(
+            matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 16)
+        );
         mgr.update_region_checkpoint(&region(1, 33, 8), TimeStamp::new(24));
         let r = mgr.get_from_region(RegionIdWithVersion::new(1, 33));
-        assert_matches::assert_matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 24);
+        assert!(
+            matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 24)
+        );
     }
 
     #[test]
@@ -835,9 +848,9 @@ pub mod tests {
         // Freezed
         mgr.freeze();
         let r = mgr.get_from_region(RegionIdWithVersion::new(1, 32));
-        assert_matches::assert_matches!(r, GetCheckpointResult::NotFound { .. });
+        assert!(matches!(r, GetCheckpointResult::NotFound { .. }));
         let r = mgr.get_from_region(RegionIdWithVersion::new(2, 34));
-        assert_matches::assert_matches!(r, GetCheckpointResult::NotFound { .. });
+        assert!(matches!(r, GetCheckpointResult::NotFound { .. }));
         // Shouldn't be recorded to resolved ts.
         mgr.resolve_regions(vec![ResolveResult {
             region: region(1, 32, 8),
@@ -853,9 +866,13 @@ pub mod tests {
         }]);
 
         let r = mgr.get_from_region(RegionIdWithVersion::new(1, 32));
-        assert_matches::assert_matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 8);
+        assert!(
+            matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 8)
+        );
         let r = mgr.get_from_region(RegionIdWithVersion::new(2, 34));
-        assert_matches::assert_matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 17);
+        assert!(
+            matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 17)
+        );
     }
 
     pub struct MockPdClient {

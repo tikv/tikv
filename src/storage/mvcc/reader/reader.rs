@@ -1359,16 +1359,16 @@ pub mod tests {
 
             for (i, expect_ts) in res.iter().enumerate() {
                 if i == 0 {
-                    assert_eq!(iter.seek_to_first().unwrap(), true);
+                    assert!(iter.seek_to_first().unwrap());
                 } else {
-                    assert_eq!(iter.next().unwrap(), true);
+                    assert!(iter.next().unwrap());
                 }
 
                 let ts = Key::decode_ts_from(iter.key()).unwrap();
                 assert_eq!(ts.into_inner(), *expect_ts);
             }
 
-            assert_eq!(iter.next().unwrap(), false);
+            assert!(!iter.next().unwrap());
         }
     }
 
@@ -1406,7 +1406,7 @@ pub mod tests {
         let mut iter = snap.iter(CF_WRITE, iopt).unwrap();
 
         // Must not omit the latest deletion of key1 to prevent seeing outdated record.
-        assert_eq!(iter.seek_to_first().unwrap(), true);
+        assert!(iter.seek_to_first().unwrap());
         assert_eq!(
             Key::from_encoded_slice(iter.key())
                 .to_raw()
@@ -1414,7 +1414,7 @@ pub mod tests {
                 .as_slice(),
             key2
         );
-        assert_eq!(iter.next().unwrap(), false);
+        assert!(!iter.next().unwrap());
     }
 
     #[test]
@@ -2112,7 +2112,7 @@ pub mod tests {
             expect_is_remain: bool,
         }
 
-        let cases = vec![
+        let cases = [
             // Test the limit.
             Case {
                 start_key: None,

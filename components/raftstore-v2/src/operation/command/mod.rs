@@ -342,12 +342,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if !queue.is_empty() {
             for e in committed_entries {
                 let mut proposal = queue.find_proposal(e.term, e.index, current_term);
-                if let Some(p) = &mut proposal
-                    && p.must_pass_epoch_check
-                {
-                    // In this case the apply can be guaranteed to be successful. Invoke the
-                    // on_committed callback if necessary.
-                    p.cb.notify_committed();
+                if let Some(p) = &mut proposal {
+                    if p.must_pass_epoch_check {
+                        // In this case the apply can be guaranteed to be successful. Invoke the
+                        // on_committed callback if necessary.
+                        p.cb.notify_committed();
+                    }
                 }
                 entry_and_proposals.push((e, proposal.map_or_else(Vec::new, |p| p.cb)));
             }
@@ -850,31 +850,31 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         }
         control.need_flush = false;
         let flush_state = self.flush_state().clone();
-        if let Some(wb) = &self.write_batch
-            && !wb.is_empty()
-        {
-            self.perf_context().start_observe();
-            let mut write_opt = WriteOptions::default();
-            write_opt.set_disable_wal(true);
-            let wb = self.write_batch.as_mut().unwrap();
-            if let Err(e) = wb.write_callback_opt(&write_opt, |_| {
-                flush_state.set_applied_index(index);
-            }) {
-                slog_panic!(self.logger, "failed to write data"; "error" => ?e);
+        if let Some(wb) = &self.write_batch {
+            if !wb.is_empty() {
+                self.perf_context().start_observe();
+                let mut write_opt = WriteOptions::default();
+                write_opt.set_disable_wal(true);
+                let wb = self.write_batch.as_mut().unwrap();
+                if let Err(e) = wb.write_callback_opt(&write_opt, |_| {
+                    flush_state.set_applied_index(index);
+                }) {
+                    slog_panic!(self.logger, "failed to write data"; "error" => ?e);
+                }
+                self.metrics.written_bytes += wb.data_size() as u64;
+                self.metrics.written_keys += wb.count() as u64;
+                if wb.data_size() <= APPLY_WB_SHRINK_SIZE {
+                    wb.clear();
+                } else {
+                    self.write_batch.take();
+                }
+                let tokens: Vec<_> = self
+                    .callbacks_mut()
+                    .iter()
+                    .flat_map(|(v, _)| v.write_trackers().flat_map(|t| t.as_tracker_token()))
+                    .collect();
+                self.perf_context().report_metrics(&tokens);
             }
-            self.metrics.written_bytes += wb.data_size() as u64;
-            self.metrics.written_keys += wb.count() as u64;
-            if wb.data_size() <= APPLY_WB_SHRINK_SIZE {
-                wb.clear();
-            } else {
-                self.write_batch.take();
-            }
-            let tokens: Vec<_> = self
-                .callbacks_mut()
-                .iter()
-                .flat_map(|(v, _)| v.write_trackers().flat_map(|t| t.as_tracker_token()))
-                .collect();
-            self.perf_context().report_metrics(&tokens);
         }
         let mut apply_res = ApplyRes::default();
         apply_res.applied_index = index;

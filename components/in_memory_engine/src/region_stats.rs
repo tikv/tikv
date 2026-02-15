@@ -125,7 +125,7 @@ impl RegionStatsManager {
     ) -> Vec<CachedRegionStat> {
         match self
             .info_provider
-            .get_regions_stat(cached_regions.iter().map(|(id, _)| *id).collect())
+            .get_regions_stat(cached_regions.keys().copied().collect())
         {
             Ok(regions_stat) => sort_cached_region_stats(regions_stat, cached_regions),
             Err(e) => {
@@ -393,16 +393,15 @@ impl RegionStatsManager {
                 ));
                 self.handle_region_evicted(r);
             }
-            if !deletable_regions.is_empty() {
-                if let Err(e) = delete_range_scheduler
+            if !deletable_regions.is_empty()
+                && let Err(e) = delete_range_scheduler
                     .schedule_force(BackgroundTask::DeleteRegions(deletable_regions))
-                {
-                    error!(
-                        "ime schedule delete regions failed";
-                        "err" => ?e,
-                    );
-                    assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
-                }
+            {
+                error!(
+                    "ime schedule delete regions failed";
+                    "err" => ?e,
+                );
+                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
             }
             for _ in 0..regions.len() {
                 // It's better to use `timeout(Duration, rx.recv())` but which needs to use
@@ -567,7 +566,7 @@ pub mod tests {
         let mc = MemoryController::new(config.clone(), skiplist_engine);
         mc.acquire(config.value().stop_load_threshold() * 2);
 
-        let regions = vec![
+        let regions = [
             new_region(1, b"k01", b"k02"),
             new_region(2, b"k03", b"k04"),
             new_region(3, b"k05", b"k06"),
