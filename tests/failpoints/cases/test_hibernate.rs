@@ -241,6 +241,77 @@ fn test_restart_peer_busy_on_apply() {
     fail::remove("on_check_peer_complete_apply_1003");
 }
 
+/// Regression test for the "restart + waiting_for_leader_info" stall:
+///
+/// A restarted follower can be marked busy on apply because it hasn't refreshed
+/// `last_leader_committed_idx` yet, and then locally
+/// enter `Idle` due to the follower-side `check_after_tick` predicate not
+/// considering that "waiting for leader committed index" state.
+///
+/// When that happens, the peer may not actively drive raft ready to send the
+/// `MsgReadIndex` fetch and ends up relying on `peer_stale_state_check_interval`
+/// (default 5m) to be awakened (Idle -> PreChaos).
+///
+/// This test failure demonstrates the restarted peer enters `Idle` while it is still
+/// waiting for the leader committed index (i.e. before the first `MsgAppend` /
+/// `MsgReadIndexResp` that refreshes it).
+#[test]
+fn test_restart_peer_waiting_for_leader_committed_index_should_not_hibernate() {
+    let mut cluster = new_node_cluster(0, 3);
+    let base_tick_ms = 50;
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(base_tick_ms);
+    cluster.cfg.raft_store.raft_heartbeat_ticks = 2;
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 10;
+    cluster.cfg.raft_store.raft_min_election_timeout_ticks = 10;
+    cluster.cfg.raft_store.raft_max_election_timeout_ticks = 11;
+    // Make the "wake by stale-state tick" path less likely to interfere with this short test.
+    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::secs(60);
+    cluster.cfg.raft_store.min_pending_apply_region_count = 1;
+    configure_for_hibernate(&mut cluster.cfg);
+    cluster.pd_client.disable_default_operator();
+
+    let r = cluster.run_conf_change();
+    cluster.pd_client.must_add_peer(r, new_peer(2, 1002));
+    cluster.pd_client.must_add_peer(r, new_peer(3, 1003));
+
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    cluster.stop_node(3);
+    // Restart peer 1003 but skip updating leader committed index so it keeps
+    // `needs_update_last_leader_committed_idx()` = true for a while.
+    fail::cfg("on_check_peer_complete_apply_1003_skip", "return").unwrap();
+    cluster.run_node(3).unwrap();
+
+    // Wait long enough for the buggy behavior to potentially enter Idle.
+    thread::sleep(Duration::from_millis(base_tick_ms * 30));
+
+    // If peer 1003 entered Idle, then forcing a raft base tick while it is Idle
+    // will trigger the failpoint callback which sends a message to the channel.
+    let (tx, rx) = mpsc::sync_channel(128);
+    fail::cfg_callback("on_raft_base_tick_idle_1003", move || tx.send(0).unwrap()).unwrap();
+
+    let router = cluster.sim.rl().get_router(3).unwrap();
+    // Force a raft base tick. If the peer has entered Idle, `on_raft_base_tick_idle_1003`
+    // will be triggered.
+    router.send(1, PeerMsg::Tick(PeerTick::Raft)).unwrap();
+
+    // If we receive a message from the channel within a short window, it means the peer has entered Idle.
+    rx.recv_timeout(Duration::from_millis(base_tick_ms * 20))
+        .unwrap_err();
+
+    fail::remove("on_raft_base_tick_idle_1003");
+
+    // Now allow the peer to receive the leader messages and clear busy state quickly.
+    fail::remove("on_check_peer_complete_apply_1003_skip");
+    thread::sleep(Duration::from_millis(base_tick_ms * 20));
+    cluster.must_send_store_heartbeat(3);
+    thread::sleep(Duration::from_millis(base_tick_ms * 10));
+    let stats = cluster.pd_client.get_store_stats(3).unwrap();
+    assert!(!stats.is_busy);
+}
+
 #[test]
 fn test_forcely_awaken_hibenrate_regions() {
     let mut cluster = new_node_cluster(0, 3);
