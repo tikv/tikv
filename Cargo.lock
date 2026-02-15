@@ -1487,7 +1487,8 @@ dependencies = [
 [[package]]
 name = "cmake"
 version = "0.1.54"
-source = "git+https://github.com/rust-lang/cmake-rs#fd56c5a6b4ecda8815c863eb5b12d7b3f0391197"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7caa3f9de89ddbe2c607f4101924c5abec803763ae9534e4f4d7d8f84aa81f0"
 dependencies = [
  "cc",
 ]
@@ -2627,7 +2628,8 @@ checksum = "6c2141d6d6c8512188a7891b4b01590a45f6dac67afb4f255c4124dbb86d4eaa"
 [[package]]
 name = "fs2"
 version = "0.4.3"
-source = "git+https://github.com/tikv/fs2-rs?branch=tikv#cd503764a19a99d74c1ab424dd13d6bcd093fcae"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
 dependencies = [
  "libc 0.2.176",
  "winapi 0.3.9",
@@ -5847,6 +5849,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ring"
+version = "0.17.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4689e6c2294d81e88dc6261c768b63bc4fcdb852be6d1352498b114f61383b7"
+dependencies = [
+ "cc",
+ "cfg-if 1.0.0",
+ "getrandom 0.2.11",
+ "libc 0.2.176",
+ "untrusted",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
 name = "rocksdb"
 version = "0.3.0"
 source = "git+https://github.com/tikv/rust-rocksdb.git#a6b0bb0483986cbcec14530064f53b7f14facfa2"
@@ -6726,7 +6742,8 @@ dependencies = [
 [[package]]
 name = "sysinfo"
 version = "0.26.9"
-source = "git+https://github.com/tikv/sysinfo?branch=0.26-fix-cpu#5a1bcf08816979624ef2ad79cfb896de432a9501"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c18a6156d1f27a9592ee18c1a846ca8dd5c258b7179fc193ae87c74ebb666f5"
 dependencies = [
  "cfg-if 1.0.0",
  "core-foundation-sys",
@@ -6787,13 +6804,12 @@ dependencies = [
 [[package]]
 name = "tame-oauth"
 version = "0.9.6"
-source = "git+https://github.com/tikv/tame-oauth?branch=fips-0.9#487e287c0d316b832dc44735cd9b7f7c432a10aa"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd95ca1e8f5d9d3e83a626370af9ff1356ed1605ad128d99f9bea57432c112be"
 dependencies = [
  "data-encoding",
  "http 0.2.12",
- "lock_api",
- "openssl",
- "parking_lot 0.11.1",
+ "ring",
  "serde",
  "serde_json",
  "twox-hash",
@@ -7834,7 +7850,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#1374320b4bd8f0bbf1b8b479182b99c22a6d25bd"
+source = "git+https://github.com/0xPoe/tipb?branch=poe-patch-sampling#8f797d567323d1d9ce9b4c64f3911ac07b4486bc"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -8160,6 +8176,12 @@ name = "unicode-xid"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f962df74c8c05a667b5ee8bcf162993134c104e96440b663c8daa176dc772d8c"
+
+[[package]]
+name = "untrusted"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "url"
@@ -8943,3 +8965,23 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
+
+[[patch.unused]]
+name = "cmake"
+version = "0.1.54"
+source = "git+https://github.com/rust-lang/cmake-rs#fd56c5a6b4ecda8815c863eb5b12d7b3f0391197"
+
+[[patch.unused]]
+name = "fs2"
+version = "0.4.3"
+source = "git+https://github.com/tikv/fs2-rs?branch=tikv#cd503764a19a99d74c1ab424dd13d6bcd093fcae"
+
+[[patch.unused]]
+name = "sysinfo"
+version = "0.26.9"
+source = "git+https://github.com/tikv/sysinfo?branch=0.26-fix-cpu#5a1bcf08816979624ef2ad79cfb896de432a9501"
+
+[[patch.unused]]
+name = "tame-oauth"
+version = "0.9.6"
+source = "git+https://github.com/tikv/tame-oauth?branch=fips-0.9#487e287c0d316b832dc44735cd9b7f7c432a10aa"
