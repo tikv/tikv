@@ -31,7 +31,7 @@ use crate::{
     storage::{Snapshot, SnapshotStore},
 };
 
-const SKETCH_SAMPLE_RATE: f64 = 0.5;
+const SKETCH_SAMPLE_RATE: f64 = 0.05;
 const DEFAULT_HLL_PRECISION: u8 = 16;
 
 pub(crate) struct RowSampleBuilder<S: Snapshot, F: KvFormat> {
