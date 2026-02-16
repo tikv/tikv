@@ -1446,6 +1446,10 @@ mod tests {
                     cpu_time: cpu_times[idx],
                     read_keys: 0,
                     write_keys: 0,
+                    network_in_bytes: 0,
+                    network_out_bytes: 0,
+                    logical_read_bytes: 0,
+                    logical_write_bytes: 0,
                 },
             );
         }
@@ -1922,6 +1926,10 @@ mod tests {
                     cpu_time: test_case.0,
                     read_keys: 0,
                     write_keys: 0,
+                    network_in_bytes: 0,
+                    network_out_bytes: 0,
+                    logical_read_bytes: 0,
+                    logical_write_bytes: 0,
                 },
             );
             // ["c", "d"] with (test_case.1)ms CPU time.
@@ -1931,6 +1939,10 @@ mod tests {
                     cpu_time: test_case.1,
                     read_keys: 0,
                     write_keys: 0,
+                    network_in_bytes: 0,
+                    network_out_bytes: 0,
+                    logical_read_bytes: 0,
+                    logical_write_bytes: 0,
                 },
             );
             // Multiple key ranges with (test_case.2)ms CPU time.
@@ -1940,6 +1952,10 @@ mod tests {
                     cpu_time: test_case.2,
                     read_keys: 0,
                     write_keys: 0,
+                    network_in_bytes: 0,
+                    network_out_bytes: 0,
+                    logical_read_bytes: 0,
+                    logical_write_bytes: 0,
                 },
             );
             // Empty key range with (test_case.3)ms CPU time.
@@ -1949,6 +1965,10 @@ mod tests {
                     cpu_time: test_case.3,
                     read_keys: 0,
                     write_keys: 0,
+                    network_in_bytes: 0,
+                    network_out_bytes: 0,
+                    logical_read_bytes: 0,
+                    logical_write_bytes: 0,
                 },
             );
 

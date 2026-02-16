@@ -2860,6 +2860,10 @@ mod tests {
                             cpu_time: 10,
                             read_keys: 0,
                             write_keys: 0,
+                            network_in_bytes: 0,
+                            network_out_bytes: 0,
+                            logical_read_bytes: 0,
+                            logical_write_bytes: 0,
                         },
                     );
                     records
@@ -3010,6 +3014,10 @@ mod tests {
                             cpu_time: 111,
                             read_keys: 1,
                             write_keys: 0,
+                            network_in_bytes: 0,
+                            network_out_bytes: 0,
+                            logical_read_bytes: 0,
+                            logical_write_bytes: 0,
                         },
                     );
                     records
