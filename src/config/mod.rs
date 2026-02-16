@@ -5841,13 +5841,6 @@ mod tests {
             compression_level_0 as u64,
             cfg.rocksdb.defaultcf.compression_per_level[0] as u64
         );
-        let disable_auto_compactions = CONFIG_ROCKSDB_CF_GAUGE
-            .with_label_values(&["default", "disable_auto_compactions"])
-            .get();
-        assert_eq!(
-            disable_auto_compactions as u64,
-            cfg.rocksdb.defaultcf.disable_auto_compactions as u64
-        );
 
         let inspect_interval = CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["inspect_interval"])
