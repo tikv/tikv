@@ -2,7 +2,7 @@
 
 use std::{
     fmt::{self, Display, Formatter},
-    sync::Arc,
+    sync::{atomic::Ordering::Relaxed, Arc},
     time::Duration,
 };
 
@@ -15,8 +15,10 @@ use tikv_util::{
 };
 
 use self::{collector_reg::CollectorReg, sub_recorder::SubRecorder};
-use crate::{collector::Collector, Config, RawRecords, ResourceTagFactory};
-
+use crate::{
+    collector::Collector, config::ENABLE_NETWORK_IO_COLLECTION, Config, RawRecords,
+    ResourceTagFactory,
+};
 mod collector_reg;
 mod localstorage;
 mod sub_recorder;
@@ -26,7 +28,10 @@ pub use self::{
     localstorage::{LocalStorage, LocalStorageRef, STORAGE},
     sub_recorder::{
         cpu::CpuRecorder,
-        summary::{record_read_keys, record_write_keys, SummaryRecorder},
+        summary::{
+            record_logical_read_bytes, record_logical_write_bytes, record_network_in_bytes,
+            record_network_out_bytes, record_read_keys, record_write_keys, SummaryRecorder,
+        },
     },
 };
 
@@ -123,6 +128,7 @@ impl Recorder {
 
     fn handle_config_change(&mut self, config: Config) {
         self.precision_ms = config.precision.as_millis();
+        ENABLE_NETWORK_IO_COLLECTION.store(config.enable_network_io_collection, Relaxed);
     }
 
     fn tick(&mut self) {
@@ -295,12 +301,15 @@ impl ConfigChangeNotifier {
 /// This function is intended to simplify external use.
 pub fn init_recorder(
     precision_ms: u64,
+    enable_network_io_collection: bool,
 ) -> (
     ConfigChangeNotifier,
     CollectorRegHandle,
     ResourceTagFactory,
     Box<LazyWorker<Task>>,
 ) {
+    // initialize the global flag for network io collection
+    ENABLE_NETWORK_IO_COLLECTION.store(enable_network_io_collection, Relaxed);
     let recorder = RecorderBuilder::default()
         .precision_ms(precision_ms)
         .add_sub_recorder(Box::<CpuRecorder>::default())
