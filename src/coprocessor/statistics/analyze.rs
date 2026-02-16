@@ -22,6 +22,7 @@ use tikv_util::{
     metrics::{NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC, ThrottleType},
     quota_limiter::QuotaLimiter,
 };
+use engine_rocks::PerfContext;
 use tipb::{self, AnalyzeColumnsReq};
 
 use super::{cmsketch::CmSketch, fmsketch::FmSketch, histogram::Histogram};
@@ -102,6 +103,10 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             let mut sample = self.quota_limiter.new_sample(!self.is_auto_analyze);
             let mut read_size: usize = 0;
             {
+                // Track block_read_count as IOPS using perf context
+                // Capture initial state before the async operation
+                let block_read_count_before = PerfContext::get().block_read_count();
+
                 let result = {
                     let (duration, res) = sample
                         .observe_cpu_async(self.data.next_batch(BATCH_MAX_SIZE))
@@ -109,6 +114,11 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                     sample.add_cpu_time(duration);
                     res
                 };
+
+                // Capture final state and calculate delta
+                let block_read_count_after = PerfContext::get().block_read_count();
+                let block_read_count_delta = block_read_count_after.saturating_sub(block_read_count_before);
+                sample.add_iops(block_read_count_delta as usize);
                 let _guard = sample.observe_cpu();
                 is_drained = result.is_drained?.stop();
 
