@@ -6263,15 +6263,18 @@ where
         let truncated_idx = self.fsm.peer.get_store().truncated_index();
         let first_idx = self.fsm.peer.get_store().first_index();
         let last_idx = self.fsm.peer.get_store().last_index();
+        let committed_idx = self.fsm.peer.get_store().commit_index();
 
         let mut voter_replicated_idx = last_idx;
         let (mut replicated_idx, mut alive_cache_idx) = (last_idx, last_idx);
+        let mut slowest_peer_id = self.fsm.peer_id();
         for (peer_id, p) in self.fsm.peer.raft_group.raft.prs().iter() {
             let peer = find_peer_by_id(self.region(), *peer_id).unwrap();
             if !is_learner(peer) && voter_replicated_idx > p.matched {
                 voter_replicated_idx = p.matched;
             }
             if replicated_idx > p.matched {
+                slowest_peer_id = *peer_id;
                 replicated_idx = p.matched;
             }
             if let Some(last_heartbeat) = self.fsm.peer.peer_heartbeats.get(peer_id) {
@@ -6321,7 +6324,44 @@ where
             && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit())
             || (self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit().0)
         {
+            self.ctx
+                .raft_metrics
+                .raft_log_gc_skipped
+                .gc_count_limit
+                .inc();
+            // Update the last compacted slowest peer if it's not the slowest peer or the
+            // last compacted slowest peer is stale.
+            if self.fsm.peer.last_compacted_slowest_peer.0 != slowest_peer_id
+                || self.fsm.peer.last_compacted_slowest_peer.1.elapsed()
+                    > self.ctx.cfg.peer_stale_state_check_interval.0
+            {
+                self.ctx
+                    .raft_metrics
+                    .raft_log_gc_skipped
+                    .update_slowest_peer
+                    .inc();
+                info!("update slowest peer";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "slowest_peer_id" => slowest_peer_id,
+                "last_compacted_slowest_peer" => self.fsm.peer.last_compacted_slowest_peer.0,
+                );
+                self.fsm.peer.last_compacted_slowest_peer = (slowest_peer_id, Instant::now());
+            }
             std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
+        } else if self.fsm.peer.last_compacted_slowest_peer.0 != self.fsm.peer_id()
+            && self.fsm.peer.last_compacted_slowest_peer.0 == slowest_peer_id
+            && self.fsm.peer.last_compacted_slowest_peer.1.elapsed()
+                < self.ctx.cfg.peer_stale_state_check_interval.0
+        {
+            // The slowest peer is the same as the last uncompacted peer, so we can
+            // compact the log.
+            self.ctx
+                .raft_metrics
+                .raft_log_gc_skipped
+                .force_compact
+                .inc();
+            committed_idx
         } else if replicated_idx < first_idx || last_idx - first_idx < 3 {
             // In the current implementation one compaction can't delete all stale Raft
             // logs. There will be at least 3 entries left after one compaction:
@@ -6349,6 +6389,7 @@ where
         };
         // Avoid compacting unpersisted raft logs when persist is far behind apply.
         if compact_idx > self.fsm.peer.raft_group.raft.raft_log.persisted {
+            self.ctx.raft_metrics.raft_log_gc_skipped.early_apply.inc();
             compact_idx = self.fsm.peer.raft_group.raft.raft_log.persisted;
         }
         assert!(compact_idx >= first_idx);
