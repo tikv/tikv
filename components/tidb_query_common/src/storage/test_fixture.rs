@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use super::{Result, range::*};
+use super::{OwnedKvPairEntry, Result, range::*};
 
 pub type ErrorBuilder = Box<dyn Send + Sync + Fn() -> crate::error::StorageError>;
 
@@ -56,6 +56,7 @@ impl super::Storage for FixtureStorage {
         &mut self,
         is_backward_scan: bool,
         is_key_only: bool,
+        _load_commit_ts: bool,
         range: IntervalRange,
     ) -> Result<()> {
         let data_view = self
@@ -72,7 +73,7 @@ impl super::Storage for FixtureStorage {
         Ok(())
     }
 
-    fn scan_next(&mut self) -> Result<Option<super::OwnedKvPair>> {
+    fn scan_next_entry(&mut self) -> Result<Option<super::OwnedKvPairEntry>> {
         let value = if !self.is_backward_scan {
             // During the call of this function, `data` must be valid and we are only
             // returning data clones to outside, so this access is safe.
@@ -84,24 +85,45 @@ impl super::Storage for FixtureStorage {
             None => Ok(None),
             Some((k, Ok(v))) => {
                 if !self.is_key_only {
-                    Ok(Some((k.clone(), v.clone())))
+                    Ok(Some(OwnedKvPairEntry {
+                        key: k.clone(),
+                        value: v.clone(),
+                        commit_ts: None,
+                    }))
                 } else {
-                    Ok(Some((k.clone(), Vec::new())))
+                    Ok(Some(OwnedKvPairEntry {
+                        key: k.clone(),
+                        value: Vec::new(),
+                        commit_ts: None,
+                    }))
                 }
             }
             Some((_k, Err(err_producer))) => Err(err_producer()),
         }
     }
 
-    fn get(&mut self, is_key_only: bool, range: PointRange) -> Result<Option<super::OwnedKvPair>> {
+    fn get_entry(
+        &mut self,
+        is_key_only: bool,
+        _load_commit_ts: bool,
+        range: PointRange,
+    ) -> Result<Option<super::OwnedKvPairEntry>> {
         let r = self.data.get(&range.0);
         match r {
             None => Ok(None),
             Some(Ok(v)) => {
                 if !is_key_only {
-                    Ok(Some((range.0, v.clone())))
+                    Ok(Some(OwnedKvPairEntry {
+                        key: range.0,
+                        value: v.clone(),
+                        commit_ts: None,
+                    }))
                 } else {
-                    Ok(Some((range.0, Vec::new())))
+                    Ok(Some(OwnedKvPairEntry {
+                        key: range.0,
+                        value: Vec::new(),
+                        commit_ts: None,
+                    }))
                 }
             }
             Some(Err(err_producer)) => Err(err_producer()),
@@ -147,7 +169,7 @@ mod tests {
 
         // Scan Backward = false, Key only = false
         storage
-            .begin_scan(false, false, IntervalRange::from(("foo", "foo_3")))
+            .begin_scan(false, false, false, IntervalRange::from(("foo", "foo_3")))
             .unwrap();
 
         assert_eq!(
@@ -173,7 +195,7 @@ mod tests {
 
         // Scan Backward = false, Key only = false
         storage
-            .begin_scan(false, false, IntervalRange::from(("bar", "bar_2")))
+            .begin_scan(false, false, false, IntervalRange::from(("bar", "bar_2")))
             .unwrap();
 
         assert_eq!(
@@ -184,7 +206,7 @@ mod tests {
 
         // Scan Backward = false, Key only = true
         storage
-            .begin_scan(false, true, IntervalRange::from(("bar", "foo_")))
+            .begin_scan(false, true, false, IntervalRange::from(("bar", "foo_")))
             .unwrap();
 
         assert_eq!(
@@ -203,7 +225,7 @@ mod tests {
 
         // Scan Backward = true, Key only = false
         storage
-            .begin_scan(true, false, IntervalRange::from(("foo", "foo_3")))
+            .begin_scan(true, false, false, IntervalRange::from(("foo", "foo_3")))
             .unwrap();
 
         assert_eq!(
@@ -219,12 +241,12 @@ mod tests {
 
         // Scan empty range
         storage
-            .begin_scan(false, false, IntervalRange::from(("faa", "fab")))
+            .begin_scan(false, false, false, IntervalRange::from(("faa", "fab")))
             .unwrap();
         assert_eq!(storage.scan_next().unwrap(), None);
 
         storage
-            .begin_scan(false, false, IntervalRange::from(("foo", "foo")))
+            .begin_scan(false, false, false, IntervalRange::from(("foo", "foo")))
             .unwrap();
         assert_eq!(storage.scan_next().unwrap(), None);
     }

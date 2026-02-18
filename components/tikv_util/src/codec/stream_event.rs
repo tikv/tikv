@@ -228,7 +228,7 @@ mod tests {
         let count = 20;
 
         for _i in 0..count {
-            let should_rewrite = rng.gen::<bool>();
+            let should_rewrite = rng.gen_bool(0.5);
             let mut key: Vec<u8> = std::iter::once(if should_rewrite { b'k' } else { b'l' })
                 .chain((0..100).map(|_| rng.gen_range(0..255)))
                 .collect();

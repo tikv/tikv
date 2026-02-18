@@ -6,7 +6,9 @@ use std::borrow::Cow;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{IsolationLevel, WriteConflictReason};
 use tikv_kv::SEEK_BOUND;
-use txn_types::{Key, LastChange, Lock, LockType, TimeStamp, TsSet, Value, WriteRef, WriteType};
+use txn_types::{
+    Key, LastChange, Lock, LockType, TimeStamp, TsSet, Value, ValueEntry, WriteRef, WriteType,
+};
 
 use crate::storage::{
     kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics},
@@ -167,18 +169,41 @@ impl<S: Snapshot> PointGetter<S> {
     }
 
     /// Get the value of a user key.
+    #[inline]
     pub fn get(&mut self, user_key: &Key) -> Result<Option<Value>> {
-        fail_point!("point_getter_get");
+        match self.get_entry(user_key, false)? {
+            Some(entry) => Ok(Some(entry.value)),
+            None => Ok(None),
+        }
+    }
 
+    /// Get the value entry of a user key.
+    ///
+    /// If `load_commit_ts` is true, the commit timestamp will be present in
+    /// the return `ValueEntry`, otherwise `ValueEntry.CommitTS` will be `None`.
+    /// The access_locks will be skipped if `load_commit_ts` is true to ensure a
+    /// valid commit timestamp can be fetched, so, set it to false if you
+    /// don't need commit_ts to reduce unnecessary performance overhead.
+    #[inline]
+    pub fn get_entry(
+        &mut self,
+        user_key: &Key,
+        load_commit_ts: bool,
+    ) -> Result<Option<ValueEntry>> {
+        fail_point!("point_getter_get");
         if need_check_locks(self.isolation_level) {
             // Check locks that signal concurrent writes for `Si` or more recent writes for
             // `RcCheckTs`.
-            if let Some(lock) = self.load_and_check_lock(user_key)? {
-                return self.load_data_from_lock(user_key, lock);
+            if let Some(lock) = self.load_and_check_lock(user_key, !load_commit_ts)? {
+                // When commit timestamp is required, we should not load data from lock.
+                debug_assert!(!load_commit_ts);
+                return self
+                    .load_data_from_lock(user_key, lock)
+                    .map(|o| o.map(ValueEntry::from_value));
             }
         }
 
-        self.load_data(user_key)
+        self.load_data(user_key, load_commit_ts)
     }
 
     /// Get a lock of a user key in the lock CF. If lock exists, it will be
@@ -189,24 +214,41 @@ impl<S: Snapshot> PointGetter<S> {
     /// In common cases we expect to get nothing in lock cf. Using a `get_cf`
     /// instead of `seek` is fast in such cases due to no need for RocksDB
     /// to continue move and skip deleted entries until find a user key.
-    fn load_and_check_lock(&mut self, user_key: &Key) -> Result<Option<Lock>> {
+    ///
+    /// If `extract_access_lock` is true, this method will return the `Lock` if
+    /// its start_ts is in the access_locks; otherwise, all locks should be
+    /// regarded as a conflict ignoring the access_locks setting.
+    /// Sometimes we need to set `extract_access_lock` to false because we need
+    /// the commit timestamp to construct the `ValueEntry`, and the commit
+    /// timestamp is not stored in the lock.
+    /// For other cases, we can set `extract_access_lock` to true to avoid
+    /// unnecessary performance overhead.
+    fn load_and_check_lock(
+        &mut self,
+        user_key: &Key,
+        extract_access_lock: bool,
+    ) -> Result<Option<Lock>> {
         self.statistics.lock.get += 1;
         let lock_value = self.snapshot.get_cf(CF_LOCK, user_key)?;
 
         if let Some(ref lock_value) = lock_value {
-            let lock = Lock::parse(lock_value)?;
+            let lock_or_shared_locks = txn_types::parse_lock(lock_value)?;
+
             if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
                 self.met_newer_ts_data = NewerTsCheckState::Met;
             }
-            if let Err(e) = Lock::check_ts_conflict(
-                Cow::Borrowed(&lock),
+            if let Err(e) = txn_types::check_ts_conflict(
+                Cow::Borrowed(&lock_or_shared_locks),
                 user_key,
                 self.ts,
                 &self.bypass_locks,
                 self.isolation_level,
             ) {
+                let lock = lock_or_shared_locks
+                    .left()
+                    .expect("Err result only for single lock");
                 self.statistics.lock.processed_keys += 1;
-                if self.access_locks.contains(lock.ts) {
+                if extract_access_lock && self.access_locks.contains(lock.ts) {
                     return Ok(Some(lock));
                 }
                 Err(e.into())
@@ -222,7 +264,13 @@ impl<S: Snapshot> PointGetter<S> {
     ///
     /// First, a correct version info in the Write CF will be sought. Then,
     /// value will be loaded from Default CF if necessary.
-    fn load_data(&mut self, user_key: &Key) -> Result<Option<Value>> {
+    ///
+    /// If `load_commit_ts` is true, the commit timestamp will be present in
+    /// the return `ValueEntry`, otherwise it will be `None`.
+    /// The access_locks will be skipped if `load_commit_ts` is true to ensure a
+    /// valid commit timestamp can be fetched, so, set it to false if you
+    /// don't need commit_ts to reduce unnecessary performance overhead.
+    fn load_data(&mut self, user_key: &Key, load_commit_ts: bool) -> Result<Option<ValueEntry>> {
         let mut use_near_seek = false;
         let mut seek_key = user_key.clone();
 
@@ -291,23 +339,29 @@ impl<S: Snapshot> PointGetter<S> {
 
             match write.write_type {
                 WriteType::Put => {
+                    let key_commit_ts = if load_commit_ts {
+                        let cursor_key = self.write_cursor.key(&mut self.statistics.write);
+                        Some(Key::decode_ts_from(cursor_key)?)
+                    } else {
+                        None
+                    };
                     self.statistics.write.processed_keys += 1;
                     resource_metering::record_read_keys(1);
 
                     if self.omit_value {
-                        return Ok(Some(vec![]));
+                        return Ok(Some(ValueEntry::new(vec![], key_commit_ts)));
                     }
                     match write.short_value {
                         Some(value) => {
                             // Value is carried in `write`.
                             self.statistics.processed_size += user_key.len() + value.len();
-                            return Ok(Some(value.to_vec()));
+                            return Ok(Some(ValueEntry::new(value.to_vec(), key_commit_ts)));
                         }
                         None => {
                             let start_ts = write.start_ts;
                             let value = self.load_data_from_default_cf(start_ts, user_key)?;
                             self.statistics.processed_size += user_key.len() + value.len();
-                            return Ok(Some(value));
+                            return Ok(Some(ValueEntry::new(value, key_commit_ts)));
                         }
                     }
                 }
@@ -413,9 +467,9 @@ impl<S: Snapshot> PointGetter<S> {
                 }
             }
             LockType::Delete => Ok(None),
-            LockType::Lock | LockType::Pessimistic => {
-                // Only when fails to call `Lock::check_ts_conflict()`, the function is called,
-                // so it's unreachable here.
+            LockType::Lock | LockType::Pessimistic | LockType::Shared => {
+                // Only when fails to call `txn_types::check_ts_conflict()`, the function is
+                // called, so it's unreachable here.
                 unreachable!()
             }
         }
@@ -424,6 +478,7 @@ impl<S: Snapshot> PointGetter<S> {
 
 #[cfg(test)]
 mod tests {
+
     use engine_rocks::ReadPerfInstant;
     use kvproto::kvrpcpb::{Assertion, AssertionLevel, PrewriteRequestPessimisticAction::*};
     use tidb_query_datatype::{
@@ -438,6 +493,7 @@ mod tests {
     use super::*;
     use crate::storage::{
         kv::{CfStatistics, Engine, RocksEngine, TestEngineBuilder},
+        mvcc::{Error, ErrorInner},
         txn::tests::{
             must_acquire_pessimistic_lock, must_cleanup_with_gc_fence, must_commit, must_gc,
             must_pessimistic_prewrite_delete, must_prewrite_delete, must_prewrite_lock,
@@ -468,6 +524,27 @@ mod tests {
     fn must_get_value<S: Snapshot>(point_getter: &mut PointGetter<S>, key: &[u8], prefix: &[u8]) {
         let val = point_getter.get(&Key::from_raw(key)).unwrap().unwrap();
         assert!(val.starts_with(prefix));
+    }
+
+    fn must_get_entry<S: Snapshot>(
+        point_getter: &mut PointGetter<S>,
+        key: &[u8],
+        load_commit_ts: bool,
+        prefix: &[u8],
+        commit_ts_opt: Option<u64>,
+    ) {
+        let entry = point_getter
+            .get_entry(&Key::from_raw(key), load_commit_ts)
+            .unwrap()
+            .unwrap();
+        assert!(entry.value.starts_with(prefix));
+        if load_commit_ts {
+            let commit_ts = commit_ts_opt.unwrap().into();
+            assert_eq!(entry.commit_ts, Some(commit_ts));
+        } else {
+            assert!(commit_ts_opt.is_none());
+            assert!(entry.commit_ts.is_none());
+        }
     }
 
     fn must_met_newer_ts_data<E: Engine>(
@@ -509,6 +586,16 @@ mod tests {
 
     fn must_get_err<S: Snapshot>(point_getter: &mut PointGetter<S>, key: &[u8]) {
         point_getter.get(&Key::from_raw(key)).unwrap_err();
+    }
+
+    fn must_get_entry_err<S: Snapshot>(
+        point_getter: &mut PointGetter<S>,
+        key: &[u8],
+        load_commit_ts: bool,
+    ) -> Error {
+        point_getter
+            .get_entry(&Key::from_raw(key), load_commit_ts)
+            .unwrap_err()
     }
 
     fn assert_seek_next_prev(stat: &CfStatistics, seek: usize, next: usize, prev: usize) {
@@ -1326,5 +1413,40 @@ mod tests {
         assert_eq!(val, val_buf.as_slice());
         let row_slice = RowSlice::from_bytes(val.as_slice()).unwrap();
         assert!(row_slice.get_checksum().unwrap().get_checksum_val() > 0);
+    }
+
+    #[test]
+    fn test_point_get_load_commit_ts() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+
+        let (key, val) = (b"foo", b"bar");
+        let val2 = b"val2";
+        must_prewrite_put(&mut engine, key, val, key, 10);
+        must_commit(&mut engine, key, 10, 20);
+        must_prewrite_put(&mut engine, key, val2, key, 30);
+        must_commit(&mut engine, key, 30, 40);
+
+        let mut getter = new_point_getter(&mut engine, 39.into());
+        // when load_commit_ts is false, we should get a None commit_ts.
+        must_get_entry(&mut getter, key, false, val, None);
+        // when load_commit_ts is true, the right commit_ts should be returned.
+        must_get_entry(&mut getter, key, true, val, Some(20));
+
+        // Test access_locks for get_entry
+        let val = b"val3";
+        must_prewrite_put(&mut engine, key, val, key, 50);
+        let mut getter =
+            PointGetterBuilder::new(engine.snapshot(Default::default()).unwrap(), 60.into())
+                .isolation_level(IsolationLevel::Si)
+                .access_locks(TsSet::from_u64s(vec![50]))
+                .build()
+                .unwrap();
+        // When load_commit_ts is false, `access_locks` should be processed and
+        // return an entry with None commit_ts.
+        must_get_entry(&mut getter, key, false, val, None);
+        // When load_commit_ts is true, `access_locks` should be ignored and
+        // the lock should be seen as conflict
+        let err = must_get_entry_err(&mut getter, key, true);
+        assert!(matches!(err.0, box ErrorInner::KeyIsLocked { .. }));
     }
 }

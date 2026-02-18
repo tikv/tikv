@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use tikv_util::Either;
 use txn_types::{CommitRole, Key, TimeStamp, Write, WriteType};
 
 use crate::storage::{
@@ -11,6 +12,54 @@ use crate::storage::{
     },
     txn::actions::mvcc::collect_mvcc_info_for_debug,
 };
+
+/// Helper function to handle the case when the lock is not found for our
+/// transaction. This checks commit records and collects mvcc_info when
+/// appropriate.
+fn handle_lock_not_found<S: Snapshot, F>(
+    reader: &mut SnapshotReader<S>,
+    key: Key,
+    commit_ts: TimeStamp,
+    commit_role: Option<CommitRole>,
+    collect_mvcc: &F,
+) -> MvccResult<Option<ReleasedLock>>
+where
+    F: Fn(&SnapshotReader<S>) -> Option<MvccInfo>,
+{
+    match reader.get_txn_commit_record(&key)?.info() {
+        Some((_, WriteType::Rollback)) | None => {
+            // None: related Rollback has been collapsed.
+            // Rollback: rollback by concurrent transaction.
+            MVCC_CONFLICT_COUNTER.commit_lock_not_found.inc();
+            // The lock is expected to be present for secondary commits.
+            // If not, there maybe something wrong with the txn state, and we should
+            // collect more information for debugging.
+            let unexpected = matches!(commit_role, Some(CommitRole::Secondary));
+            // only collect the mvcc information if an unexpected case happens.
+            let mvcc_info = unexpected.then(|| collect_mvcc(reader)).flatten();
+            info_or_error!(
+                !unexpected;
+                "txn conflict (lock not found)";
+                "key" => %key,
+                "start_ts" => reader.start_ts,
+                "commit_ts" => commit_ts,
+                "mvcc_info" => ?mvcc_info,
+            );
+            Err(ErrorInner::TxnLockNotFound {
+                start_ts: reader.start_ts,
+                commit_ts,
+                key: key.into_raw()?,
+                mvcc_info,
+            }
+            .into())
+        }
+        // Committed by concurrent transaction.
+        Some((_, WriteType::Put)) | Some((_, WriteType::Delete)) | Some((_, WriteType::Lock)) => {
+            MVCC_DUPLICATE_CMD_COUNTER_VEC.commit.inc();
+            Ok(None)
+        }
+    }
+}
 
 pub fn commit<S: Snapshot>(
     txn: &mut MvccTxn,
@@ -33,8 +82,58 @@ pub fn commit<S: Snapshot>(
         )
     };
 
-    let (mut lock, commit) = match reader.load_lock(&key)? {
-        Some(lock) if lock.ts == reader.start_ts => {
+    // Check for pending lock modifications first. This is important when
+    // processing multiple sub-locks of the same key in a single batch (e.g.,
+    // in resolve_lock). Each operation needs to see the pending writes from
+    // previous operations in the same batch.
+    let lock_state = match txn.get_pending_lock_bytes(&key) {
+        Some(None) => {
+            // Lock was deleted by a previous operation in this batch
+            None
+        }
+        Some(Some(bytes)) => {
+            // Use pending lock state
+            Some(txn_types::parse_lock(bytes)?)
+        }
+        None => {
+            // No pending modification, read from snapshot
+            reader.load_lock(&key)?
+        }
+    };
+
+    let (mut lock, shared_locks, commit) = match lock_state {
+        Some(lock_or_shared) => {
+            let (lock, shared_locks) = match lock_or_shared {
+                Either::Left(lock) if lock.ts == reader.start_ts => (lock, None),
+                Either::Left(_) => {
+                    // Lock belongs to a different transaction - fall through to None handling
+                    // which properly checks commit records and collects mvcc_info
+                    return handle_lock_not_found(
+                        reader,
+                        key.clone(),
+                        commit_ts,
+                        commit_role,
+                        &collect_mvcc,
+                    );
+                }
+                Either::Right(mut shared_locks) => {
+                    // Remove our transaction's lock from shared locks
+                    match shared_locks.remove_lock(&reader.start_ts)? {
+                        Some(l) => (l, Some(shared_locks)),
+                        None => {
+                            // Our transaction's lock not in shared locks - fall through to None
+                            // handling
+                            return handle_lock_not_found(
+                                reader,
+                                key.clone(),
+                                commit_ts,
+                                commit_role,
+                                &collect_mvcc,
+                            );
+                        }
+                    }
+                }
+            };
             // A lock with larger min_commit_ts than current commit_ts can't be committed
             if commit_ts < lock.min_commit_ts {
                 let primary_key = Key::from_raw(&lock.primary);
@@ -82,47 +181,20 @@ pub fn commit<S: Snapshot>(
                     // info here for further debugging if needed.
                     "mvcc_info" => ?collect_mvcc(reader),
                 );
-                (lock, false)
+                // Preserve shared_locks so other transactions' sub-locks are not lost
+                (lock, shared_locks, false)
             } else {
-                (lock, true)
+                (lock, shared_locks, true)
             }
         }
-        _ => {
-            return match reader.get_txn_commit_record(&key)?.info() {
-                Some((_, WriteType::Rollback)) | None => {
-                    // None: related Rollback has been collapsed.
-                    // Rollback: rollback by concurrent transaction.
-                    MVCC_CONFLICT_COUNTER.commit_lock_not_found.inc();
-                    // The lock is expected to be present for secondary commits.
-                    // If not, there maybe something wrong with the txn state, and we should
-                    // collect more information for debugging.
-                    let unexpected = matches!(commit_role, Some(CommitRole::Secondary));
-                    // only collect the mvcc information if an unexpected case happens.
-                    let mvcc_info = unexpected.then(|| collect_mvcc(reader)).flatten();
-                    info_or_error!(
-                        !unexpected;
-                        "txn conflict (lock not found)";
-                        "key" => %key,
-                        "start_ts" => reader.start_ts,
-                        "commit_ts" => commit_ts,
-                        "mvcc_info" => ?mvcc_info,
-                    );
-                    Err(ErrorInner::TxnLockNotFound {
-                        start_ts: reader.start_ts,
-                        commit_ts,
-                        key: key.into_raw()?,
-                        mvcc_info,
-                    }
-                    .into())
-                }
-                // Committed by concurrent transaction.
-                Some((_, WriteType::Put))
-                | Some((_, WriteType::Delete))
-                | Some((_, WriteType::Lock)) => {
-                    MVCC_DUPLICATE_CMD_COUNTER_VEC.commit.inc();
-                    Ok(None)
-                }
-            };
+        None => {
+            return handle_lock_not_found(
+                reader,
+                key.clone(),
+                commit_ts,
+                commit_role,
+                &collect_mvcc,
+            );
         }
     };
 
@@ -130,7 +202,17 @@ pub fn commit<S: Snapshot>(
         // Rollback a stale pessimistic lock. This function must be called by
         // resolve-lock in this case.
         assert!(lock.is_pessimistic_lock());
-        return Ok(txn.unlock_key(key, lock.is_pessimistic_txn(), TimeStamp::zero()));
+        return match shared_locks {
+            Some(shared_locks) => {
+                if shared_locks.is_empty() {
+                    Ok(txn.unlock_key(key, true, TimeStamp::zero()))
+                } else {
+                    txn.put_shared_locks(key, &shared_locks, false);
+                    Ok(None)
+                }
+            }
+            None => Ok(txn.unlock_key(key, lock.is_pessimistic_txn(), TimeStamp::zero())),
+        };
     }
 
     let mut write = Write::new(
@@ -149,13 +231,20 @@ pub fn commit<S: Snapshot>(
     }
 
     txn.put_write(key.clone(), commit_ts, write.as_ref().to_bytes());
-    Ok(txn.unlock_key(key, lock.is_pessimistic_txn(), commit_ts))
+    match shared_locks {
+        Some(shared_locks) => {
+            if shared_locks.is_empty() {
+                Ok(txn.unlock_key(key, true, commit_ts))
+            } else {
+                txn.put_shared_locks(key, &shared_locks, false);
+                Ok(None)
+            }
+        }
+        None => Ok(txn.unlock_key(key, lock.is_pessimistic_txn(), commit_ts)),
+    }
 }
 
 pub mod tests {
-    #[cfg(test)]
-    use std::assert_matches::assert_matches;
-
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
     #[cfg(test)]
@@ -164,9 +253,11 @@ pub mod tests {
     use kvproto::kvrpcpb::{Assertion, AssertionLevel};
     use tikv_kv::SnapContext;
     #[cfg(test)]
-    use txn_types::{LastChange, TimeStamp};
+    use txn_types::{LastChange, Lock, LockType, TimeStamp};
 
     use super::*;
+    #[cfg(test)]
+    use crate::storage::mvcc::MvccReader;
     #[cfg(test)]
     use crate::storage::txn::tests::{
         must_acquire_pessimistic_lock_for_large_txn, must_find_mvcc_infos, must_prewrite_delete,
@@ -256,6 +347,39 @@ pub mod tests {
             commit_role,
         )
         .unwrap_err()
+    }
+
+    #[cfg(test)]
+    fn make_shared_sub_lock(primary: &[u8], start_ts: TimeStamp) -> Lock {
+        Lock::new(
+            LockType::Lock,
+            primary.to_vec(),
+            start_ts,
+            0,
+            None,
+            TimeStamp::zero(),
+            0,
+            TimeStamp::zero(),
+            false,
+        )
+    }
+
+    #[cfg(test)]
+    fn put_shared_lock<E: Engine>(engine: &mut E, key: &[u8], locks: Vec<Lock>) {
+        use txn_types::SharedLocks;
+        let lock_count = locks.len();
+        let mut shared_locks = SharedLocks::new();
+        for lock in locks {
+            shared_locks.insert_lock(lock).unwrap();
+        }
+        assert_eq!(shared_locks.len(), lock_count);
+        let mut txn = MvccTxn::new(
+            TimeStamp::zero(),
+            ConcurrencyManager::new_for_test(TimeStamp::zero()),
+        );
+        txn.put_shared_locks(Key::from_raw(key), &shared_locks, true);
+        let ctx = Context::default();
+        write(engine, &ctx, txn.into_modifies());
     }
 
     #[cfg(test)]
@@ -366,7 +490,7 @@ pub mod tests {
             expected_min_commit_ts: TimeStamp,
             has_mvcc: bool,
         ) {
-            assert_matches!(err, Error(box ErrorInner::CommitTsExpired {
+            assert!(matches!(err, Error(box ErrorInner::CommitTsExpired {
                 start_ts,
                 commit_ts,
                 key,
@@ -379,7 +503,7 @@ pub mod tests {
                 assert_eq!(min_commit_ts,  expected_min_commit_ts);
                 assert_eq!(has_mvcc, mvcc_info.is_some());
                 true
-            })
+            }))
         }
 
         // The min_commit_ts should be ts(20, 1)
@@ -560,7 +684,7 @@ pub mod tests {
                 None
             };
             let err = must_err(&mut engine, k, start_ts, commit_ts, role);
-            assert_matches!(
+            assert!(matches!(
                 err,
                 Error(box ErrorInner::TxnLockNotFound {
                     start_ts,
@@ -571,10 +695,10 @@ pub mod tests {
                     assert_eq!(key, k.to_vec());
                     assert_eq!(start_ts,  10.into(), "key: {}", key_str);
                     assert_eq!( commit_ts,  20.into(), "key: {}", key_str);
-                    assert_matches!(mvcc_info.clone(), None, "key: {}", key_str);
+                    assert!(mvcc_info.clone().is_none(), "key: {}", key_str);
                     true
                 }
-            );
+            ));
         }
 
         // Should collect mvcc for debugging when secondary commit returns an error
@@ -593,7 +717,7 @@ pub mod tests {
                 commit_ts,
                 Some(CommitRole::Secondary),
             );
-            assert_matches!(
+            assert!(matches!(
                 err,
                 Error(box ErrorInner::TxnLockNotFound {
                     start_ts,
@@ -613,7 +737,153 @@ pub mod tests {
                     assert_eq!(values.clone(), expected_values, "key: {}", key_str);
                     true
                 }
-            );
+            ));
         }
+    }
+
+    #[test]
+    fn test_commit_shared_lock_keeps_remaining_entries() {
+        use tikv_util::Either;
+        use txn_types::SharedLocks;
+
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+
+        let key = b"shared-lock-key";
+        let start_ts1 = TimeStamp::new(10);
+        let start_ts2 = TimeStamp::new(20);
+        let commit_ts_1 = TimeStamp::new(30);
+        let commit_ts_2 = TimeStamp::new(40);
+
+        put_shared_lock(
+            &mut engine,
+            key,
+            vec![
+                make_shared_sub_lock(key, start_ts1),
+                make_shared_sub_lock(key, start_ts2),
+            ],
+        );
+
+        fn load_shared_locks<E: Engine>(engine: &mut E, key: &[u8]) -> Option<SharedLocks> {
+            let snapshot = engine.snapshot(Default::default()).unwrap();
+            let mut reader = MvccReader::new(snapshot, None, true);
+            match reader.load_lock(&Key::from_raw(key)).unwrap()? {
+                Either::Right(shared_locks) => Some(shared_locks),
+                Either::Left(_) => None,
+            }
+        }
+
+        let mut current_locks = load_shared_locks(&mut engine, key).unwrap();
+        assert_eq!(current_locks.len(), 2);
+        assert!(current_locks.get_lock(&start_ts1).unwrap().is_some());
+        assert!(current_locks.get_lock(&start_ts2).unwrap().is_some());
+
+        let mut simulated_locks = current_locks.clone();
+        let _ = simulated_locks.remove_lock(&start_ts1).unwrap();
+        assert_eq!(simulated_locks.len(), 1);
+
+        // commit start_ts1
+        assert!(must_succeed(&mut engine, key, start_ts1, commit_ts_1).is_none());
+        must_written(&mut engine, key, start_ts1, commit_ts_1, WriteType::Lock);
+        let mut current_locks = load_shared_locks(&mut engine, key).unwrap();
+        assert_eq!(current_locks.len(), 1);
+        assert!(current_locks.get_lock(&start_ts1).unwrap().is_none());
+        assert!(current_locks.get_lock(&start_ts2).unwrap().is_some());
+
+        // commit start_ts2
+        let released_lock = must_succeed(&mut engine, key, start_ts2, commit_ts_2).unwrap();
+        assert_eq!(released_lock.key, Key::from_raw(key));
+        assert_eq!(released_lock.start_ts, start_ts2);
+        assert_eq!(released_lock.commit_ts, commit_ts_2);
+        must_written(&mut engine, key, start_ts2, commit_ts_2, WriteType::Lock);
+        // lock is removed when no shared lock entries are left.
+        assert!(load_shared_locks(&mut engine, key).is_none());
+    }
+
+    #[test]
+    fn test_commit_stale_pessimistic_lock_preserves_other_shared_locks() {
+        use tikv_util::Either;
+        use txn_types::SharedLocks;
+
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+
+        let key = b"shared-pessimistic-key";
+        let pessimistic_ts = TimeStamp::new(10);
+        let prewrite_ts = TimeStamp::new(20);
+        let commit_ts = TimeStamp::new(30);
+
+        // Create a pessimistic lock (stale - never prewritten)
+        let pessimistic_lock = Lock::new(
+            LockType::Pessimistic,
+            key.to_vec(),
+            pessimistic_ts,
+            0,                     // ttl
+            None,                  // short_value
+            pessimistic_ts.next(), // for_update_ts (non-zero makes it pessimistic txn)
+            0,                     // txn_size
+            TimeStamp::zero(),
+            false,
+        );
+
+        // Create a prewrite lock (from another transaction)
+        let prewrite_lock = make_shared_sub_lock(key, prewrite_ts);
+
+        // Put both locks into SharedLocks
+        put_shared_lock(&mut engine, key, vec![pessimistic_lock, prewrite_lock]);
+
+        fn load_shared_locks<E: Engine>(engine: &mut E, key: &[u8]) -> Option<SharedLocks> {
+            let snapshot = engine.snapshot(Default::default()).unwrap();
+            let mut reader = MvccReader::new(snapshot, None, true);
+            match reader.load_lock(&Key::from_raw(key)).unwrap()? {
+                Either::Right(shared_locks) => Some(shared_locks),
+                Either::Left(_) => None,
+            }
+        }
+
+        // Verify initial state: both locks exist
+        let mut current_locks = load_shared_locks(&mut engine, key).unwrap();
+        assert_eq!(current_locks.len(), 2);
+        assert!(current_locks.get_lock(&pessimistic_ts).unwrap().is_some());
+        assert!(current_locks.get_lock(&prewrite_ts).unwrap().is_some());
+
+        // Try to commit the pessimistic lock.
+        // Since it's a stale pessimistic lock (never prewritten), commit should
+        // roll it back but preserve the other lock.
+        assert!(must_succeed(&mut engine, key, pessimistic_ts, commit_ts).is_none());
+
+        // The pessimistic lock should be rolled back (released), not committed.
+        // Note: The current buggy behavior may return None here because unlock_key
+        // is called with the wrong parameters.
+        // After fix, this should return Some(ReleasedLock) with commit_ts = 0.
+
+        // Critical assertion: The prewrite lock (ts=20) should still exist!
+        let remaining_locks = load_shared_locks(&mut engine, key);
+        assert!(
+            remaining_locks.is_some(),
+            "BUG: SharedLocks was deleted entirely! The prewrite lock (ts=20) was lost."
+        );
+
+        let mut remaining = remaining_locks.unwrap();
+        assert_eq!(
+            remaining.len(),
+            1,
+            "Expected 1 remaining lock, got {}",
+            remaining.len()
+        );
+
+        // The pessimistic lock should be gone
+        assert!(
+            remaining.get_lock(&pessimistic_ts).unwrap().is_none(),
+            "Pessimistic lock (ts=10) should have been removed"
+        );
+
+        // The prewrite lock should still be there
+        assert!(
+            remaining.get_lock(&prewrite_ts).unwrap().is_some(),
+            "BUG: Prewrite lock (ts=20) was lost when rolling back the stale pessimistic lock"
+        );
+
+        // No commit record should be written for the pessimistic lock
+        // (it was rolled back, not committed)
+        must_not_have_write(&mut engine, key, commit_ts);
     }
 }

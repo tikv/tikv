@@ -10,6 +10,7 @@ use tikv_util::{
     time::Instant,
 };
 use tracker::{GLOBAL_TRACKERS, RequestInfo, RequestType, Tracker, TrackerToken, with_tls_tracker};
+use txn_types::ValueEntry;
 
 use crate::{
     server::{
@@ -159,11 +160,11 @@ pub struct GetCommandResponseConsumer {
     tx: Sender<MeasuredSingleResponse>,
 }
 
-impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics)> for GetCommandResponseConsumer {
+impl ResponseBatchConsumer<(Option<ValueEntry>, Statistics)> for GetCommandResponseConsumer {
     fn consume(
         &self,
         id: u64,
-        res: Result<(Option<Vec<u8>>, Statistics)>,
+        res: Result<(Option<ValueEntry>, Statistics)>,
         begin: Instant,
         request_source: String,
         resource_priority: ResourcePriority,
@@ -178,7 +179,12 @@ impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics)> for GetCommandResponse
                     statistics.write_scan_detail(scan_detail_v2);
                     with_tls_tracker(|tracker| tracker.write_scan_detail(scan_detail_v2));
                     match val {
-                        Some(val) => resp.set_value(val),
+                        Some(val) => {
+                            resp.set_value(val.value);
+                            if let Some(commit_ts) = val.commit_ts {
+                                resp.set_commit_ts(commit_ts.into_inner());
+                            }
+                        }
                         None => resp.set_not_found(true),
                     }
                 }
@@ -203,11 +209,11 @@ impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics)> for GetCommandResponse
     }
 }
 
-impl ResponseBatchConsumer<Option<Vec<u8>>> for GetCommandResponseConsumer {
+impl ResponseBatchConsumer<Option<ValueEntry>> for GetCommandResponseConsumer {
     fn consume(
         &self,
         id: u64,
-        res: Result<Option<Vec<u8>>>,
+        res: Result<Option<ValueEntry>>,
         begin: Instant,
         request_source: String,
         resource_priority: ResourcePriority,
@@ -217,7 +223,7 @@ impl ResponseBatchConsumer<Option<Vec<u8>>> for GetCommandResponseConsumer {
             resp.set_region_error(err);
         } else {
             match res {
-                Ok(Some(val)) => resp.set_value(val),
+                Ok(Some(val)) => resp.set_value(val.value),
                 Ok(None) => resp.set_not_found(true),
                 Err(e) => resp.set_error(format!("{}", e)),
             }
@@ -355,4 +361,63 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager, F: KvFormat>(
         }
     };
     poll_future_notify(f);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use tikv_util::mpsc::future::{WakePolicy, unbounded};
+    use txn_types::{TimeStamp, ValueEntry};
+
+    use super::*;
+    use crate::storage::kv::Statistics;
+
+    #[test]
+    fn test_get_command_response_consumer_sets_commit_ts() {
+        let (tx, mut rx) = unbounded(WakePolicy::Immediately);
+        let consumer = GetCommandResponseConsumer { tx };
+
+        consumer.consume(
+            7,
+            Ok((
+                Some(ValueEntry::new(b"v".to_vec(), Some(TimeStamp::new(42)))),
+                Statistics::default(),
+            )),
+            Instant::now(),
+            "".to_string(),
+            ResourcePriority::unknown,
+        );
+
+        let mut task = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(task.id, 7);
+
+        let resp = task.resp.consume();
+        let get = resp.get_get();
+        assert_eq!(get.get_value(), b"v");
+        assert_eq!(get.get_commit_ts(), 42);
+    }
+
+    #[test]
+    fn test_get_command_response_consumer_commit_ts_default_zero() {
+        let (tx, mut rx) = unbounded(WakePolicy::Immediately);
+        let consumer = GetCommandResponseConsumer { tx };
+
+        consumer.consume(
+            8,
+            Ok((
+                Some(ValueEntry::from_value(b"v".to_vec())),
+                Statistics::default(),
+            )),
+            Instant::now(),
+            "".to_string(),
+            ResourcePriority::unknown,
+        );
+
+        let mut task = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let resp = task.resp.consume();
+        let get = resp.get_get();
+        assert_eq!(get.get_value(), b"v");
+        assert_eq!(get.get_commit_ts(), 0);
+    }
 }

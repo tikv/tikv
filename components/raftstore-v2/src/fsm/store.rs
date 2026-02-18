@@ -63,29 +63,29 @@ impl<EK> StoreMeta<EK> {
             .regions
             .insert(region_id, (region.clone(), initialized));
         // `prev` only makes sense when it's initialized.
-        if let Some((prev, prev_init)) = prev
-            && prev_init
-        {
-            assert!(initialized, "{} region corrupted", SlogFormat(logger));
-            if prev.get_region_epoch().get_version() != version {
-                let prev_id = self.region_ranges.remove(&(
-                    data_end_key(prev.get_end_key()),
-                    prev.get_region_epoch().get_version(),
-                ));
-                assert_eq!(
-                    prev_id,
-                    Some(region_id),
-                    "{} region corrupted",
-                    SlogFormat(logger)
-                );
-            } else {
-                assert!(
-                    self.region_ranges
-                        .contains_key(&(data_end_key(prev.get_end_key()), version)),
-                    "{} region corrupted",
-                    SlogFormat(logger)
-                );
-                return;
+        if let Some((prev, prev_init)) = prev {
+            if prev_init {
+                assert!(initialized, "{} region corrupted", SlogFormat(logger));
+                if prev.get_region_epoch().get_version() != version {
+                    let prev_id = self.region_ranges.remove(&(
+                        data_end_key(prev.get_end_key()),
+                        prev.get_region_epoch().get_version(),
+                    ));
+                    assert_eq!(
+                        prev_id,
+                        Some(region_id),
+                        "{} region corrupted",
+                        SlogFormat(logger)
+                    );
+                } else {
+                    assert!(
+                        self.region_ranges
+                            .contains_key(&(data_end_key(prev.get_end_key()), version)),
+                        "{} region corrupted",
+                        SlogFormat(logger)
+                    );
+                    return;
+                }
             }
         }
         if initialized {

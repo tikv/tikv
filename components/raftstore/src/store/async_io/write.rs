@@ -40,6 +40,7 @@ use tikv_util::{
     debug, info, slow_log,
     sys::thread::StdThreadBuildWrapper,
     thd_name,
+    thread_name_prefix::STORE_WRITER_THREAD,
     time::{Duration, Instant, duration_to_sec, setup_for_spin_interval, spin_at_least},
     warn,
 };
@@ -241,7 +242,7 @@ where
             && self.raft_wb.as_ref().is_none_or(|wb| wb.is_empty()))
     }
 
-    /// Append continous entries.
+    /// Append continuous entries.
     ///
     /// All existing entries with same index will be overwritten. If
     /// `overwrite_to` is set to a larger value, then entries in
@@ -566,13 +567,14 @@ where
             )
             .unwrap();
 
-        if let Some(raft_state) = task.raft_state.take()
-            && self
+        if let Some(raft_state) = task.raft_state.take() {
+            if self
                 .raft_states
                 .insert(task.region_id, raft_state)
                 .is_none()
-        {
-            self.state_size += std::mem::size_of::<RaftLocalState>();
+            {
+                self.state_size += std::mem::size_of::<RaftLocalState>();
+            }
         }
         self.extra_batch_write.merge(&mut task.extra_write);
 
@@ -1170,7 +1172,7 @@ where
             .update(move |writers: &mut SharedSenders<EK, ER>| -> Result<()> {
                 let mut cached_senders = writers.get();
                 for i in current_size..size {
-                    let tag = format!("store-writer-{}", i);
+                    let tag = format!("{}-{}", STORE_WRITER_THREAD, i);
                     let (tx, rx) = bounded(
                         resource_ctl.clone(),
                         writer_meta.cfg.value().store_io_notify_capacity,

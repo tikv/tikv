@@ -6,7 +6,7 @@ use api_version::KvFormat;
 use tikv_util::time::Instant;
 use yatp::task::future::reschedule;
 
-use super::{OwnedKvPair, Storage, range::*, ranges_iter::*};
+use super::{OwnedKvPairEntry, Storage, range::*, ranges_iter::*};
 use crate::error::StorageError;
 
 const KEY_BUFFER_CAPACITY: usize = 64;
@@ -24,6 +24,7 @@ pub struct RangesScanner<T, F> {
 
     scan_backward_in_range: bool,
     is_key_only: bool,
+    load_commit_ts: bool,
 
     scanned_rows_per_range: Vec<usize>,
 
@@ -57,7 +58,7 @@ impl RescheduleChecker {
     #[inline(always)]
     async fn check_reschedule(&mut self, force_check: bool) {
         self.prev_key_count += 1;
-        if (force_check || self.prev_key_count % CHECK_KEYS == 0)
+        if (force_check || self.prev_key_count.is_multiple_of(CHECK_KEYS))
             && self.prev_start.saturating_elapsed() > MAX_TIME_SLICE
         {
             reschedule().await;
@@ -73,6 +74,7 @@ pub struct RangesScannerOptions<T> {
     pub scan_backward_in_range: bool, // TODO: This can be const generics
     pub is_key_only: bool,            // TODO: This can be const generics
     pub is_scanned_range_aware: bool, // TODO: This can be const generics
+    pub load_commit_ts: bool,
 }
 
 impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
@@ -83,6 +85,7 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
             scan_backward_in_range,
             is_key_only,
             is_scanned_range_aware,
+            load_commit_ts,
         }: RangesScannerOptions<T>,
     ) -> RangesScanner<T, F> {
         let ranges_len = ranges.len();
@@ -92,6 +95,7 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
             ranges_iter,
             scan_backward_in_range,
             is_key_only,
+            load_commit_ts,
             scanned_rows_per_range: Vec::with_capacity(ranges_len),
             is_scanned_range_aware,
             current_range: IntervalRange {
@@ -108,7 +112,7 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
     /// Fetches next row.
     // Note: This is not implemented over `Iterator` since it can fail.
     // TODO: Change to use reference to avoid allocation and copy.
-    pub async fn next(&mut self) -> Result<Option<F::KvPair>, StorageError> {
+    pub async fn next(&mut self) -> Result<Option<F::KvPairEntry>, StorageError> {
         self.next_opt(true).await
     }
 
@@ -118,7 +122,7 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
     pub async fn next_opt(
         &mut self,
         update_scanned_range: bool,
-    ) -> Result<Option<F::KvPair>, StorageError> {
+    ) -> Result<Option<F::KvPairEntry>, StorageError> {
         loop {
             let mut force_check = true;
             let range = self.ranges_iter.next();
@@ -129,20 +133,25 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
                     }
                     self.ranges_iter.notify_drained();
                     self.scanned_rows_per_range.push(0);
-                    self.storage.get(self.is_key_only, r)?
+                    self.storage
+                        .get_entry(self.is_key_only, self.load_commit_ts, r)?
                 }
                 IterStatus::NewRange(Range::Interval(r)) => {
                     if self.is_scanned_range_aware {
                         self.update_scanned_range_from_new_range(&r);
                     }
                     self.scanned_rows_per_range.push(0);
-                    self.storage
-                        .begin_scan(self.scan_backward_in_range, self.is_key_only, r)?;
-                    self.storage.scan_next()?
+                    self.storage.begin_scan(
+                        self.scan_backward_in_range,
+                        self.is_key_only,
+                        self.load_commit_ts,
+                        r,
+                    )?;
+                    self.storage.scan_next_entry()?
                 }
                 IterStatus::Continue => {
                     force_check = false;
-                    self.storage.scan_next()?
+                    self.storage.scan_next_entry()?
                 }
                 IterStatus::Drained => {
                     if self.is_scanned_range_aware {
@@ -160,7 +169,8 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
                     *r += 1;
                 }
                 self.rescheduler.check_reschedule(force_check).await;
-                let kv = F::make_kv_pair(row).map_err(|e| StorageError(anyhow::Error::from(e)))?;
+                let kv = F::make_kv_pair((row.key, row.value, row.commit_ts.map(|n| n.into())))
+                    .map_err(|e| StorageError(anyhow::Error::from(e)))?;
                 return Ok(Some(kv));
             } else {
                 // No more row in the range.
@@ -277,10 +287,10 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
         }
     }
 
-    fn update_scanned_range_from_scanned_row(&mut self, some_row: &Option<OwnedKvPair>) {
+    fn update_scanned_range_from_scanned_row(&mut self, some_row: &Option<OwnedKvPairEntry>) {
         assert!(self.is_scanned_range_aware);
 
-        if let Some((key, _)) = some_row {
+        if let Some(OwnedKvPairEntry { key, .. }) = some_row {
             self.working_range_end_key.clear();
             self.working_range_end_key.extend(key);
             if !self.scan_backward_in_range {
@@ -292,7 +302,7 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
 
 #[cfg(test)]
 mod tests {
-    use api_version::{ApiV1, keyspace::KvPair};
+    use api_version::{ApiV1, keyspace::KvPairEntry};
     use futures::executor::block_on;
 
     use super::*;
@@ -326,26 +336,27 @@ mod tests {
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: false,
+            load_commit_ts: false,
         });
         assert_eq!(
             block_on(scanner.next()).unwrap().unwrap(),
-            (b"foo".to_vec(), b"1".to_vec())
+            (b"foo".to_vec(), b"1".to_vec(), None)
         );
         assert_eq!(
             block_on(scanner.next()).unwrap().unwrap(),
-            (b"foo_2".to_vec(), b"3".to_vec())
+            (b"foo_2".to_vec(), b"3".to_vec(), None)
         );
         assert_eq!(
             block_on(scanner.next()).unwrap().unwrap(),
-            (b"foo_3".to_vec(), b"5".to_vec())
+            (b"foo_3".to_vec(), b"5".to_vec(), None)
         );
         assert_eq!(
             block_on(scanner.next()).unwrap().unwrap(),
-            (b"bar".to_vec(), b"2".to_vec())
+            (b"bar".to_vec(), b"2".to_vec(), None)
         );
         assert_eq!(
             block_on(scanner.next()).unwrap().unwrap(),
-            (b"bar_2".to_vec(), b"4".to_vec())
+            (b"bar_2".to_vec(), b"4".to_vec(), None)
         );
         assert_eq!(block_on(scanner.next()).unwrap(), None);
 
@@ -362,22 +373,23 @@ mod tests {
             scan_backward_in_range: true,
             is_key_only: false,
             is_scanned_range_aware: false,
+            load_commit_ts: false,
         });
         assert_eq!(
             block_on(scanner.next()).unwrap().unwrap(),
-            (b"foo_2".to_vec(), b"3".to_vec())
+            (b"foo_2".to_vec(), b"3".to_vec(), None)
         );
         assert_eq!(
             block_on(scanner.next()).unwrap().unwrap(),
-            (b"foo".to_vec(), b"1".to_vec())
+            (b"foo".to_vec(), b"1".to_vec(), None)
         );
         assert_eq!(
             block_on(scanner.next()).unwrap().unwrap(),
-            (b"foo_3".to_vec(), b"5".to_vec())
+            (b"foo_3".to_vec(), b"5".to_vec(), None)
         );
         assert_eq!(
             block_on(scanner.next()).unwrap().unwrap(),
-            (b"bar".to_vec(), b"2".to_vec())
+            (b"bar".to_vec(), b"2".to_vec(), None)
         );
         assert_eq!(block_on(scanner.next()).unwrap(), None);
 
@@ -393,26 +405,27 @@ mod tests {
             scan_backward_in_range: false,
             is_key_only: true,
             is_scanned_range_aware: false,
+            load_commit_ts: false,
         });
         assert_eq!(
             block_on(scanner.next()).unwrap().unwrap(),
-            (b"bar".to_vec(), Vec::new())
+            (b"bar".to_vec(), Vec::new(), None)
         );
         assert_eq!(
             block_on(scanner.next()).unwrap().unwrap(),
-            (b"bar_2".to_vec(), Vec::new())
+            (b"bar_2".to_vec(), Vec::new(), None)
         );
         assert_eq!(
             block_on(scanner.next()).unwrap().unwrap(),
-            (b"foo".to_vec(), Vec::new())
+            (b"foo".to_vec(), Vec::new(), None)
         );
         assert_eq!(
             block_on(scanner.next()).unwrap().unwrap(),
-            (b"foo_2".to_vec(), Vec::new())
+            (b"foo_2".to_vec(), Vec::new(), None)
         );
         assert_eq!(
             block_on(scanner.next()).unwrap().unwrap(),
-            (b"foo_3".to_vec(), Vec::new())
+            (b"foo_3".to_vec(), Vec::new(), None)
         );
         assert_eq!(block_on(scanner.next()).unwrap(), None);
     }
@@ -433,6 +446,7 @@ mod tests {
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: false,
+            load_commit_ts: false,
         });
         let mut scanned_rows_per_range = Vec::new();
 
@@ -488,6 +502,7 @@ mod tests {
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: true,
+            load_commit_ts: false,
         });
 
         let r = scanner.take_scanned_range();
@@ -508,6 +523,7 @@ mod tests {
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: true,
+            load_commit_ts: false,
         });
 
         assert_eq!(block_on(scanner.next()).unwrap(), None);
@@ -524,6 +540,7 @@ mod tests {
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: true,
+            load_commit_ts: false,
         });
 
         assert_eq!(block_on(scanner.next()).unwrap(), None);
@@ -540,6 +557,7 @@ mod tests {
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: true,
+            load_commit_ts: false,
         });
 
         assert_eq!(&block_on(scanner.next()).unwrap().unwrap().key(), b"foo");
@@ -578,6 +596,7 @@ mod tests {
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: true,
+            load_commit_ts: false,
         });
 
         assert_eq!(&block_on(scanner.next()).unwrap().unwrap().key(), b"foo");
@@ -623,6 +642,7 @@ mod tests {
             scan_backward_in_range: true,
             is_key_only: false,
             is_scanned_range_aware: true,
+            load_commit_ts: false,
         });
 
         let r = scanner.take_scanned_range();
@@ -643,6 +663,7 @@ mod tests {
             scan_backward_in_range: true,
             is_key_only: false,
             is_scanned_range_aware: true,
+            load_commit_ts: false,
         });
 
         assert_eq!(block_on(scanner.next()).unwrap(), None);
@@ -659,6 +680,7 @@ mod tests {
             scan_backward_in_range: true,
             is_key_only: false,
             is_scanned_range_aware: true,
+            load_commit_ts: false,
         });
 
         assert_eq!(block_on(scanner.next()).unwrap(), None);
@@ -675,6 +697,7 @@ mod tests {
             scan_backward_in_range: true,
             is_key_only: false,
             is_scanned_range_aware: true,
+            load_commit_ts: false,
         });
 
         assert_eq!(&block_on(scanner.next()).unwrap().unwrap().key(), b"foo_3");
@@ -711,6 +734,7 @@ mod tests {
             scan_backward_in_range: true,
             is_key_only: false,
             is_scanned_range_aware: true,
+            load_commit_ts: false,
         });
 
         assert_eq!(&block_on(scanner.next()).unwrap().unwrap().key(), b"bar_2");
@@ -750,6 +774,7 @@ mod tests {
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: true,
+            load_commit_ts: false,
         });
 
         // Only lower_inclusive is updated.
@@ -802,6 +827,7 @@ mod tests {
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: true,
+            load_commit_ts: false,
         });
 
         // Only lower_inclusive is updated.
@@ -857,6 +883,7 @@ mod tests {
             scan_backward_in_range: true,
             is_key_only: false,
             is_scanned_range_aware: true,
+            load_commit_ts: false,
         });
 
         // Only lower_inclusive is updated.
@@ -907,6 +934,7 @@ mod tests {
             scan_backward_in_range: true,
             is_key_only: false,
             is_scanned_range_aware: true,
+            load_commit_ts: false,
         });
 
         // Lower_inclusive is updated. Upper_exclusive is not update.

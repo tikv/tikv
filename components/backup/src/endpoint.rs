@@ -40,12 +40,13 @@ use tikv_util::{
     impl_display_as_debug, info,
     resizable_threadpool::ResizableRuntime,
     store::find_peer,
+    thread_name_prefix::{BACKUP_IO_THREAD, BACKUP_WORKER_THREAD},
     time::{Instant, Limiter},
     warn,
     worker::Runnable,
 };
 use tokio::runtime::{Handle, Runtime};
-use txn_types::{Key, Lock, TimeStamp, TsSet};
+use txn_types::{Key, TimeStamp, TsSet};
 
 use crate::{
     Error,
@@ -365,8 +366,8 @@ impl BackupRange {
                     self.start_key.as_ref(),
                     self.end_key.as_ref(),
                     |key, lock| {
-                        Lock::check_ts_conflict(
-                            Cow::Borrowed(lock),
+                        txn_types::check_ts_conflict(
+                            Cow::Owned(tikv_util::Either::Left(lock.clone())),
                             key,
                             backup_ts,
                             &Default::default(),
@@ -693,7 +694,7 @@ impl SoftLimitKeeper {
         let mut quota_val = num_threads;
         if enable_auto_tune {
             quota_val = cpu_quota
-                .get_quota(|s| s.contains("bkwkr"))
+                .get_quota(|s| s.contains(BACKUP_WORKER_THREAD))
                 .clamp(1, num_threads);
         }
 
@@ -823,8 +824,8 @@ impl<R: RegionInfoProvider> Progress<R> {
                 let mut count = 0;
                 for info in iter {
                     let region = &info.region;
-                    if end_key.is_some() {
-                        let end_slice = end_key.as_ref().unwrap().as_encoded().as_slice();
+                    if let Some(end_key) = &end_key {
+                        let end_slice = end_key.as_encoded().as_slice();
                         if end_slice <= region.get_start_key() {
                             // We have reached the end.
                             // The range is defined as [start, end) so break if
@@ -897,11 +898,11 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
     ) -> Endpoint<E, R> {
         let pool = ResizableRuntime::new(
             config.num_threads,
-            "bkwkr",
+            BACKUP_WORKER_THREAD,
             Box::new(utils::create_tokio_runtime),
             Box::new(|new_size| BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64)),
         );
-        let rt = utils::create_tokio_runtime(config.io_thread_size, "backup-io").unwrap();
+        let rt = utils::create_tokio_runtime(config.io_thread_size, BACKUP_IO_THREAD).unwrap();
         let config_manager = ConfigManager(Arc::new(RwLock::new(config)));
         let soft_limit_keeper = SoftLimitKeeper::new(config_manager.clone());
         rt.spawn(soft_limit_keeper.clone().run());
@@ -1246,15 +1247,15 @@ fn get_max_start_key(start_key: Option<&Key>, region: &Region) -> Option<Key> {
     } else {
         Some(Key::from_encoded_slice(region.get_start_key()))
     };
-    if start_key.is_none() {
-        region_start
-    } else {
-        let start_slice = start_key.as_ref().unwrap().as_encoded().as_slice();
+    if let Some(start_key_ref) = &start_key {
+        let start_slice = start_key_ref.as_encoded().as_slice();
         if start_slice < region.get_start_key() {
             region_start
         } else {
             start_key.cloned()
         }
+    } else {
+        region_start
     }
 }
 
@@ -1367,7 +1368,9 @@ pub mod tests {
             txn::tests::{must_commit, must_prewrite_put},
         },
     };
-    use tikv_util::{config::ReadableSize, info, store::new_peer};
+    use tikv_util::{
+        config::ReadableSize, info, store::new_peer, thread_name_prefix::BACKUP_WORKER_THREAD,
+    };
     use tokio::time;
     use txn_types::SHORT_VALUE_MAX_LEN;
 
@@ -1537,7 +1540,7 @@ pub mod tests {
         let counter = Arc::new(AtomicU32::new(0));
         let mut pool = ResizableRuntime::new(
             3,
-            "bkwkr",
+            BACKUP_WORKER_THREAD,
             Box::new(utils::create_tokio_runtime),
             Box::new(|new_size: usize| BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64)),
         );
@@ -2761,7 +2764,7 @@ pub mod tests {
         // threads)
         let mut pool = ResizableRuntime::new(
             1,
-            "bkwkr",
+            BACKUP_WORKER_THREAD,
             Box::new(utils::create_tokio_runtime),
             Box::new(|new_size: usize| BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64)),
         );

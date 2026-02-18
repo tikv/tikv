@@ -22,6 +22,9 @@ use tikv_util::{
     debug, info,
     metrics::ThreadInfoStatistics,
     store::{QueryStats, is_read_query},
+    thread_name_prefix::{
+        GRPC_SERVER_THREAD, UNIFIED_READ_POOL_THREAD, matches_thread_name_prefix,
+    },
     time::Instant,
     warn,
 };
@@ -29,7 +32,10 @@ use tikv_util::{
 use crate::store::{
     metrics::*,
     util::build_key_range,
-    worker::{FlowStatistics, SplitConfig, SplitConfigManager, split_config::get_sample_num},
+    worker::{
+        FlowStatistics, SplitConfig, SplitConfigManager, SplitValidator,
+        split_config::get_sample_num,
+    },
 };
 
 const DEFAULT_MAX_SAMPLE_LOOP_COUNT: usize = 10000;
@@ -458,27 +464,27 @@ impl ReadStats {
         region_info.cop_detail.add(write_cf_cop_detail);
         // the bucket of the follower only have the version info and not needs to be
         // recorded the hot bucket.
-        if let Some(buckets) = buckets
-            && !buckets.sizes.is_empty()
-        {
-            let bucket_stat = self
-                .region_buckets
-                .entry(region_id)
-                .and_modify(|current| {
-                    if current.meta < *buckets {
-                        let mut new = BucketStat::from_meta(buckets.clone());
-                        std::mem::swap(current, &mut new);
-                        current.merge(&new);
-                    }
-                })
-                .or_insert_with(|| BucketStat::from_meta(buckets.clone()));
-            let mut delta = metapb::BucketStats::default();
-            delta.set_read_bytes(vec![(write.read_bytes + data.read_bytes) as u64]);
-            delta.set_read_keys(vec![(write.read_keys + data.read_keys) as u64]);
-            bucket_stat.add_flows(
-                &[start.unwrap_or_default(), end.unwrap_or_default()],
-                &delta,
-            );
+        if let Some(buckets) = buckets {
+            if !buckets.sizes.is_empty() {
+                let bucket_stat = self
+                    .region_buckets
+                    .entry(region_id)
+                    .and_modify(|current| {
+                        if current.meta < *buckets {
+                            let mut new = BucketStat::from_meta(buckets.clone());
+                            std::mem::swap(current, &mut new);
+                            current.merge(&new);
+                        }
+                    })
+                    .or_insert_with(|| BucketStat::from_meta(buckets.clone()));
+                let mut delta = metapb::BucketStats::default();
+                delta.set_read_bytes(vec![(write.read_bytes + data.read_bytes) as u64]);
+                delta.set_read_keys(vec![(write.read_keys + data.read_keys) as u64]);
+                bucket_stat.add_flows(
+                    &[start.unwrap_or_default(), end.unwrap_or_default()],
+                    &delta,
+                );
+            }
         }
     }
 
@@ -744,7 +750,7 @@ impl AutoSplitController {
         thread_stats
             .get_cpu_usages()
             .iter()
-            .filter(|(thread_name, _)| thread_name.contains(name))
+            .filter(|(thread_name, _)| matches_thread_name_prefix(thread_name, name))
             .fold(0, |cpu_usage_sum, (_, cpu_usage)| {
                 // `cpu_usage` is in [0, 100].
                 cpu_usage_sum + cpu_usage
@@ -760,6 +766,7 @@ impl AutoSplitController {
         read_stats_receiver: &Receiver<ReadStats>,
         cpu_stats_receiver: &Receiver<Arc<RawRecords>>,
         thread_stats: &mut ThreadInfoStatistics,
+        split_validator: &SplitValidator,
     ) -> (Vec<usize>, Vec<SplitInfo>) {
         let mut top_cpu_usage = vec![];
         let mut top_qps = BinaryHeap::with_capacity(TOP_N);
@@ -768,8 +775,8 @@ impl AutoSplitController {
         // Prepare some diagnostic info.
         thread_stats.record();
         let (grpc_thread_usage, unified_read_pool_thread_usage) = (
-            Self::collect_thread_usage(thread_stats, "grpc-server"),
-            Self::collect_thread_usage(thread_stats, "unified-read-po"),
+            Self::collect_thread_usage(thread_stats, GRPC_SERVER_THREAD),
+            Self::collect_thread_usage(thread_stats, UNIFIED_READ_POOL_THREAD),
         );
         // Update first before calculating the latest average gRPC poll CPU usage.
         self.update_grpc_thread_usage(grpc_thread_usage);
@@ -791,6 +798,9 @@ impl AutoSplitController {
         // Start to record the read stats info.
         let mut split_infos = vec![];
         for (region_id, region_infos) in region_infos_map {
+            if split_validator.is_disabled(region_id) {
+                continue;
+            }
             let qps_prefix_sum = prefix_sum(region_infos.iter(), RegionInfo::get_read_qps);
             // region_infos is not empty, so it's safe to unwrap here.
             let qps = *qps_prefix_sum.last().unwrap();
@@ -892,23 +902,18 @@ impl AutoSplitController {
                 });
                 let region_id = top_cpu_usage[0];
                 let recorder = self.recorders.get_mut(&region_id).unwrap();
-                if recorder.hottest_key_range.is_some() {
+                if let Some(hottest_key_range) = recorder.hottest_key_range.as_ref() {
                     split_infos.push(SplitInfo::with_start_end_key(
                         region_id,
                         recorder.peer.clone(),
-                        recorder
-                            .hottest_key_range
-                            .as_ref()
-                            .unwrap()
-                            .start_key
-                            .clone(),
-                        recorder.hottest_key_range.as_ref().unwrap().end_key.clone(),
+                        hottest_key_range.start_key.clone(),
+                        hottest_key_range.end_key.clone(),
                     ));
                     LOAD_BASE_SPLIT_EVENT.ready_to_split_cpu_top.inc();
                     info!("load base split region";
                         "region_id" => region_id,
-                        "start_key" => log_wrappers::Value::key(&recorder.hottest_key_range.as_ref().unwrap().start_key),
-                        "end_key" => log_wrappers::Value::key(&recorder.hottest_key_range.as_ref().unwrap().end_key),
+                        "start_key" => log_wrappers::Value::key(&hottest_key_range.start_key),
+                        "end_key" => log_wrappers::Value::key(&hottest_key_range.end_key),
                         "cpu_usage" => recorder.cpu_usage,
                     );
                 } else {
@@ -1330,6 +1335,7 @@ mod tests {
                 &read_stats_receiver,
                 &cpu_stats_receiver,
                 &mut ThreadInfoStatistics::default(),
+                &SplitValidator::new(),
             );
             if (i + 1) % hub.cfg.detect_times != 0 {
                 continue;
@@ -1369,6 +1375,7 @@ mod tests {
                 &read_stats_receiver,
                 &cpu_stats_receiver,
                 &mut ThreadInfoStatistics::default(),
+                &SplitValidator::new(),
             );
             if (i + 1) % hub.cfg.detect_times != 0 {
                 continue;
@@ -1465,6 +1472,7 @@ mod tests {
                 &read_stats_receiver,
                 &cpu_stats_receiver,
                 &mut ThreadInfoStatistics::default(),
+                &SplitValidator::new(),
             );
         }
 
@@ -1486,6 +1494,7 @@ mod tests {
             &read_stats_receiver,
             &cpu_stats_receiver,
             &mut ThreadInfoStatistics::default(),
+            &SplitValidator::new(),
         );
     }
 
@@ -2060,6 +2069,7 @@ mod tests {
                 &read_stats_receiver,
                 &cpu_stats_receiver,
                 &mut threads,
+                &SplitValidator::new(),
             );
         });
     }

@@ -151,6 +151,94 @@ fn test_restart_peer_busy_on_apply() {
     thread::sleep(Duration::from_millis(base_tick_ms));
     let stats = cluster.pd_client.get_store_stats(3).unwrap();
     assert!(!stats.is_busy);
+
+    // Handler another case recorded in https://github.com/tikv/tikv/issues/18233#issuecomment-3641848931
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.must_put(b"k12", b"v12");
+    must_get_equal(&cluster.get_engine(3), b"k12", b"v12");
+    // Before restarting Peer 1003, avoids it to handle newly `MsgAppend` to skip
+    // updating its leader committed index.
+    cluster.stop_node(3);
+    fail::cfg("on_check_peer_complete_apply_1003_skip", "return").unwrap();
+    cluster.run_node(3).unwrap();
+
+    // ** Corner case 1 **: test the clearing of `busy_on_apply` after restarting
+    // and recving `ReadIndexResp` right now.
+    // Add `MsgReadIndexResp` filter to Peer 1003 to avoid it updating its leader
+    // committed index when starting this node.
+    // Also, add `ExtraMessageType::MsgHibernateRequest` filter to avoid Peer
+    // 1003 to vote for the hibernate state.
+    {
+        let filter = Box::new(
+            RegionPacketFilter::new(1, 3)
+                .direction(Direction::Recv)
+                .drop_extra_message(ExtraMessageType::MsgHibernateRequest)
+                .msg_type(MessageType::MsgAppend)
+                .msg_type(MessageType::MsgReadIndexResp),
+        );
+        cluster.add_recv_filter_on_node(3, filter);
+    }
+    // Then, add send filter to node 1 to avoid Region 1 to enter hiberate state.
+    {
+        let filter = Box::new(
+            RegionPacketFilter::new(1, 1)
+                .direction(Direction::Send)
+                .drop_extra_message(ExtraMessageType::MsgHibernateRequest),
+        );
+        cluster.add_send_filter_on_node(1, filter);
+    }
+    // Transfer leader to Peer 1002 for triggering the consequential
+    // `MsgHibernateRequest`.
+    cluster.must_transfer_leader(1, new_peer(2, 1002));
+    fail::remove("on_check_peer_complete_apply_1003_skip");
+    thread::sleep(Duration::from_millis(base_tick_ms * 10));
+    // Peer 1003 will not handle `ExtraMessageType::MsgHibernateRequest` as
+    // expected.
+    cluster.must_send_store_heartbeat(3);
+    thread::sleep(Duration::from_millis(base_tick_ms * 10));
+    let stats = cluster.pd_client.get_store_stats(3).unwrap();
+    assert!(stats.is_busy);
+    // After removing the failpoint and clear the packet filter in Peer 1003, it
+    // should successfully update its leader committed index and clear its
+    // `busy_on_apply` state.
+    cluster.clear_recv_filter_on_node(3);
+    thread::sleep(Duration::from_millis(base_tick_ms * 10));
+    cluster.must_send_store_heartbeat(3);
+    thread::sleep(Duration::from_millis(base_tick_ms * 10));
+    let stats = cluster.pd_client.get_store_stats(3).unwrap();
+    assert!(!stats.is_busy);
+
+    // ** Corner case 2 **: test the clearing of `busy_on_apply` before entering
+    // hibernate state.
+    cluster.stop_node(3);
+    assert_eq!(cluster.leader_of_region(1).unwrap(), new_peer(2, 1002));
+    fail::cfg("on_check_peer_complete_apply_1003", "return").unwrap();
+    // Then, restart node 3 and add send filter to node 3 to avoid Region 1 to enter
+    // hiberate state.
+    cluster.run_node(3).unwrap();
+    {
+        let filter = Box::new(
+            RegionPacketFilter::new(1, 3)
+                .direction(Direction::Recv)
+                .drop_extra_message(ExtraMessageType::MsgHibernateRequest),
+        );
+        cluster.add_recv_filter_on_node(3, filter);
+    }
+    thread::sleep(Duration::from_millis(base_tick_ms * 10));
+    cluster.must_send_store_heartbeat(3);
+    thread::sleep(Duration::from_millis(base_tick_ms * 10));
+    let stats = cluster.pd_client.get_store_stats(3).unwrap();
+    assert!(stats.is_busy);
+    // After removing the packet filer, Peer 1003 should successfully clear its
+    // `busy_on_apply` state when handle `MsgHibernateRequest`.
+    cluster.clear_recv_filter_on_node(3);
+    cluster.clear_send_filter_on_node(1);
+    thread::sleep(Duration::from_millis(base_tick_ms * 10));
+    cluster.must_send_store_heartbeat(3);
+    thread::sleep(Duration::from_millis(base_tick_ms * 10));
+    let stats = cluster.pd_client.get_store_stats(3).unwrap();
+    assert!(!stats.is_busy);
+    fail::remove("on_check_peer_complete_apply_1003");
 }
 
 #[test]

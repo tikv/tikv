@@ -59,6 +59,7 @@ use tikv_util::{
     GLOBAL_SERVER_READINESS,
     logger::set_log_level,
     metrics::{dump, dump_to},
+    thread_name_prefix::STATUS_SERVER_THREAD,
     timer::GLOBAL_TIMER_HANDLE,
 };
 use tokio::{
@@ -121,7 +122,7 @@ where
         let thread_pool = Builder::new_multi_thread()
             .enable_all()
             .worker_threads(status_thread_pool_size)
-            .thread_name("status-server")
+            .thread_name(STATUS_SERVER_THREAD)
             .with_sys_and_custom_hooks(
                 || debug!("Status server started"),
                 || debug!("stopping status server"),
@@ -1938,13 +1939,16 @@ mod tests {
         let resp = block_on(handle).unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body_bytes = block_on(hyper::body::to_bytes(resp.into_body())).unwrap();
+        let resolved_symbol = String::from_utf8(body_bytes.as_ref().to_owned())
+            .unwrap()
+            .split(' ')
+            .next_back()
+            .unwrap()
+            .to_owned();
         assert!(
-            String::from_utf8(body_bytes.as_ref().to_owned())
-                .unwrap()
-                .split(' ')
-                .next_back()
-                .unwrap()
-                .starts_with("backtrace::backtrace")
+            resolved_symbol.contains("test_pprof_symbol_service"),
+            "resolved symbol: {}",
+            resolved_symbol
         );
         status_server.stop();
     }

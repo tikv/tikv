@@ -363,3 +363,180 @@ fn test_gc_worker_auto_compaction_with_failpoints() {
     fail::remove(fp_k15_k20);
     fail::remove(fp_k20_k35);
 }
+
+#[test]
+fn test_mvcc_aware_compaction_prioritization() {
+    // Test that MVCC-aware compaction correctly prioritizes regions
+    // with high MVCC read activity over regions with just high redundancy
+    // First check if the auto compaction thread was started
+    let fp_compaction_start = "gc_worker_auto_compaction_start";
+    fail::cfg(fp_compaction_start, "pause").unwrap();
+
+    let fp_thread_start = "gc_worker_auto_compaction_thread_start";
+    let thread_started = Arc::new(AtomicBool::new(false));
+    let thread_started_clone = thread_started.clone();
+    fail::cfg_callback(fp_thread_start, move || {
+        thread_started_clone.store(true, Ordering::SeqCst);
+    })
+    .unwrap();
+
+    let (mut cluster, client, _ctx) = must_new_cluster_with_cfg_and_kv_client_mul(1, |cluster| {
+        cluster.cfg.rocksdb.writecf.disable_auto_compactions = true;
+        cluster.cfg.gc.auto_compaction.check_interval = ReadableDuration::secs(1);
+        cluster.cfg.gc.auto_compaction.tombstones_num_threshold = 3;
+        cluster.cfg.gc.auto_compaction.redundant_rows_threshold = 3;
+        cluster.cfg.gc.auto_compaction.tombstones_percent_threshold = 10;
+        cluster
+            .cfg
+            .gc
+            .auto_compaction
+            .redundant_rows_percent_threshold = 10;
+        // Enable compaction filter to score redundant MVCC versions
+        cluster.cfg.gc.enable_compaction_filter = true;
+        // Enable MVCC-aware compaction with low threshold for testing
+        cluster.cfg.gc.auto_compaction.mvcc_read_aware_enabled = true;
+        cluster.cfg.gc.auto_compaction.mvcc_scan_threshold = 50; // Low threshold for testing
+        cluster.cfg.gc.auto_compaction.mvcc_read_weight = 3.0;
+        cluster.cfg.gc.auto_compaction.mvcc_scan_threshold = 1000; // Disable age factor for simplicity
+    });
+
+    cluster.pd_client.disable_default_operator();
+
+    let mut timeout = 50; // 5 seconds
+    while !thread_started.load(Ordering::SeqCst) && timeout > 0 {
+        thread::sleep(Duration::from_millis(100));
+        timeout -= 1;
+    }
+    assert!(
+        thread_started.load(Ordering::SeqCst),
+        "Auto compaction thread should have started and hit the thread_start failpoint"
+    );
+
+    // Set gc_safe_point on pd_client's cluster (used by compaction runner)
+    cluster.pd_client.set_gc_safe_point(27);
+
+    // Create 3 regions with different characteristics
+    let mut region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k10");
+    region = cluster.get_region(b"k15");
+    cluster.must_split(&region, b"k20");
+
+    let region1 = cluster.get_region(b"k05"); // k0-k10
+    let region2 = cluster.get_region(b"k15"); // k10-k20
+    let region3 = cluster.get_region(b"k25"); // k20-...
+
+    let mut ctx1 = Context::new();
+    ctx1.set_region_id(region1.get_id());
+    ctx1.set_region_epoch(region1.get_region_epoch().clone());
+    ctx1.set_peer(region1.get_peers()[0].clone());
+
+    let mut ctx2 = Context::new();
+    ctx2.set_region_id(region2.get_id());
+    ctx2.set_region_epoch(region2.get_region_epoch().clone());
+    ctx2.set_peer(region2.get_peers()[0].clone());
+
+    let mut ctx3 = Context::new();
+    ctx3.set_region_id(region3.get_id());
+    ctx3.set_region_epoch(region3.get_region_epoch().clone());
+    ctx3.set_peer(region3.get_peers()[0].clone());
+
+    let large_value = vec![b'x'; 100];
+
+    // Region 1 (k0-k10): Medium redundancy, NO read activity
+    // 20 total entries, 10 redundant versions
+    for i in 0..10 {
+        let key = format!("k{:02}", i);
+        let pk = key.as_bytes().to_vec();
+
+        for commit_ts in [10, 15, 30] {
+            let start_ts = commit_ts - 3;
+            let muts = vec![new_mutation(Op::Put, &pk, &large_value)];
+            must_kv_prewrite(&client, ctx1.clone(), muts, pk.clone(), start_ts);
+            let keys = vec![pk.clone()];
+            must_kv_commit(&client, ctx1.clone(), keys, start_ts, commit_ts, commit_ts);
+        }
+    }
+    cluster.engines[&1].kv.flush_cf(CF_WRITE, true).unwrap();
+
+    // Region 2 (k10-k20): Medium redundancy, HIGH read activity
+    // 20 total entries, 10 redundant versions
+    // This should be prioritized due to MVCC read tracking
+    for i in 10..20 {
+        let key = format!("k{:02}", i);
+        let pk = key.as_bytes().to_vec();
+
+        for commit_ts in [10, 15, 30] {
+            let start_ts = commit_ts - 3;
+            let muts = vec![new_mutation(Op::Put, &pk, &large_value)];
+            must_kv_prewrite(&client, ctx2.clone(), muts, pk.clone(), start_ts);
+            let keys = vec![pk.clone()];
+            must_kv_commit(&client, ctx2.clone(), keys, start_ts, commit_ts, commit_ts);
+        }
+    }
+    cluster.engines[&1].kv.flush_cf(CF_WRITE, true).unwrap();
+
+    // Region 3 (k20-k30): HIGH redundancy, NO read activity
+    // 30 total entries, 20 redundant versions
+    // Even though this has more redundancy, it should be lower priority than Region
+    // 2
+    for i in 20..30 {
+        let key = format!("k{:02}", i);
+        let pk = key.as_bytes().to_vec();
+
+        for commit_ts in [10, 15, 25, 30] {
+            let start_ts = commit_ts - 3;
+            let muts = vec![new_mutation(Op::Put, &pk, &large_value)];
+            must_kv_prewrite(&client, ctx3.clone(), muts, pk.clone(), start_ts);
+            let keys = vec![pk.clone()];
+            must_kv_commit(&client, ctx3.clone(), keys, start_ts, commit_ts, commit_ts);
+        }
+    }
+    cluster.engines[&1].kv.flush_cf(CF_WRITE, true).unwrap();
+
+    // We record 100 requests, each scanning 20000 MVCC versions on average
+    for _ in 0..100 {
+        MVCC_READ_TRACKER
+            .get()
+            .unwrap()
+            .record_read(region2.get_id(), 20000);
+    }
+    // sleep
+    thread::sleep(Duration::from_millis(5000));
+    // start execution of auto compaction thread
+    fail::remove(fp_compaction_start);
+
+    use tikv::{
+        server::gc_worker::FIRST_COMPACTION_CANDIDATE_REGION,
+        storage::mvcc::mvcc_read_tracker::MVCC_READ_TRACKER,
+    };
+
+    // Store the expected region IDs for verification
+    let region1_id = region1.get_id();
+    let region2_id = region2.get_id();
+    let region3_id = region3.get_id();
+
+    // Wait for first candidate to be selected for compaction
+    let mut timeout: i32 = 100;
+    while FIRST_COMPACTION_CANDIDATE_REGION.load(Ordering::SeqCst) == 0 && timeout > 0 {
+        thread::sleep(Duration::from_millis(100));
+        timeout -= 1;
+    }
+
+    // Verify that Region 2 was selected as the first candidate
+    // This is the actual verification that proves MVCC-aware prioritization works
+    let first_region_id = FIRST_COMPACTION_CANDIDATE_REGION.load(Ordering::Relaxed);
+
+    let tracker = MVCC_READ_TRACKER.get().unwrap();
+    assert_eq!(
+        first_region_id,
+        region2_id,
+        "Region 2 should be selected first for compaction due to MVCC read activity. \
+         Expected region_id={}, but got region_id={}. \
+         Region 1 has {} MVCC versions/req, Region 2 has {} MVCC versions/req, Region 3 has {} MVCC versions/req",
+        region2_id,
+        first_region_id,
+        tracker.get_mvcc_versions_scanned(region1_id),
+        tracker.get_mvcc_versions_scanned(region2_id),
+        tracker.get_mvcc_versions_scanned(region3_id)
+    );
+}

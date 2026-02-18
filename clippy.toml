@@ -1,3 +1,5 @@
+avoid-breaking-exported-api = false
+
 [[disallowed-methods]]
 path = "std::thread::Builder::spawn"
 reason = """
@@ -103,6 +105,6 @@ reason = """
 When a Some(...) value was passed to the properties argument of openssl::md::Md::fetch, \
 a use-after-free would result. See RUSTSEC-2025-0022
 """
-
-avoid-breaking-exported-api = false
-upper-case-acronyms-aggressive = true
+[[await-holding-invalid-types]]
+path = "dashmap::mapref::one::Ref"
+reason = "https://github.com/tikv/tikv/issues/19238"

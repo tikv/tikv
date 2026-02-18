@@ -27,6 +27,7 @@ use tidb_query_datatype::{
     expr::{EvalConfig, EvalContext},
 };
 use tipb::{ColumnInfo, FieldType, IndexScan};
+use txn_types::TimeStamp;
 
 use super::util::scan_executor::*;
 use crate::interface::*;
@@ -153,6 +154,7 @@ impl<S: Storage, F: KvFormat> BatchIndexScanExecutor<S, F> {
             is_key_only: false,
             accept_point_range: unique,
             is_scanned_range_aware,
+            load_commit_ts: false,
         })?;
         Ok(Self(wrapper))
     }
@@ -360,6 +362,7 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
         key: &[u8],
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
+        _commit_ts: Option<TimeStamp>,
     ) -> Result<()> {
         check_index_key(key)?;
         let key_payload = &key[table::PREFIX_LEN + table::ID_LEN..];
@@ -405,15 +408,64 @@ impl IndexScanExecutorImpl {
             .map(|x| x as i64)
     }
 
+    /// Decode int handle from index key.
+    ///
+    /// # Key Format
+    ///
+    /// ## Normal format (local index or old global index):
+    /// ```text
+    /// [handle_flag][handle_data]
+    /// ```
+    ///
+    /// ## V1 Global Index (non-unique, non-clustered):
+    /// ```text
+    /// [INDEX_VALUE_PARTITION_ID_FLAG][partition_id (8 bytes)][handle_flag][handle_data]
+    /// ```
+    ///
+    /// Where `handle_flag` is `datum::INT_FLAG` or `datum::UINT_FLAG`.
+    ///
+    /// # Note for V1
+    /// In V1, partition ID appears in both KEY and VALUE:
+    /// - KEY: Contains partition ID prefix (this function skips it)
+    /// - VALUE: Still contains partition ID (extracted by `split_partition_id`)
+    ///
+    /// Future V2 will remove partition ID from VALUE.
     #[inline]
     fn decode_int_handle_from_key(&self, key: &[u8]) -> Result<i64> {
-        let flag = key[0];
-        let mut val = &key[1..];
+        let mut val = key;
+        if val.is_empty() {
+            return Err(other_err!("Key is empty, cannot decode handle"));
+        }
+        let first_flag = val[0];
+        val = &val[1..];
+
+        // Support partition handle prefix: PARTITION_ID_FLAG + partition_id(8 bytes) +
+        // inner_handle
+        let handle_flag = if first_flag == table::INDEX_VALUE_PARTITION_ID_FLAG {
+            // Ensure there are at least 8 bytes for partition id + 1 byte for handle flag
+            if val.len() < table::ID_LEN + 1 {
+                return Err(other_err!(
+                    "Insufficient data to decode partition ID and handle flag: \
+expected at least {} bytes after first flag, got {}",
+                    table::ID_LEN + 1,
+                    val.len()
+                ));
+            }
+            // Skip the partition id (8 bytes)
+            val = &val[table::ID_LEN..];
+            // Read the actual handle flag
+            let flag = val[0];
+            val = &val[1..];
+            flag
+        } else {
+            // first_flag is already the handle flag
+            first_flag
+        };
 
         // TODO: Better to use `push_datum`. This requires us to allow `push_datum`
         // receiving optional time zone first.
 
-        match flag {
+        match handle_flag {
             datum::INT_FLAG => val
                 .read_i64()
                 .map_err(|_| other_err!("Failed to decode handle in key as i64")),
@@ -421,7 +473,7 @@ impl IndexScanExecutorImpl {
                 .read_u64()
                 .map_err(|_| other_err!("Failed to decode handle in key as u64"))
                 .map(|x| x as i64),
-            _ => Err(other_err!("Unexpected handle flag {}", flag)),
+            f => Err(other_err!("Unexpected handle flag {}", f)),
         }
     }
 
@@ -970,14 +1022,14 @@ mod tests {
         // Index schema: (INT, FLOAT)
 
         // the elements in data are: [int index, float index, handle id].
-        let data = vec![
+        let data = [
             [Datum::I64(-5), Datum::F64(0.3), Datum::I64(10)],
             [Datum::I64(5), Datum::F64(5.1), Datum::I64(5)],
             [Datum::I64(5), Datum::F64(10.5), Datum::I64(2)],
         ];
 
         // The column info for each column in `data`. Used to build the executor.
-        let columns_info = vec![
+        let columns_info = [
             {
                 let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
@@ -1003,7 +1055,7 @@ mod tests {
         ];
 
         // The schema of these columns. Used to check executor output.
-        let schema = vec![
+        let schema = [
             FieldTypeTp::LongLong.into(),
             FieldTypeTp::Double.into(),
             FieldTypeTp::LongLong.into(),
@@ -2158,6 +2210,7 @@ mod tests {
                 ],
                 &[0x30],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2173,6 +2226,7 @@ mod tests {
                 ],
                 &[0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2209,6 +2263,7 @@ mod tests {
                 ],
                 &[0x30],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2224,6 +2279,7 @@ mod tests {
                 ],
                 &[0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2260,6 +2316,7 @@ mod tests {
                 ],
                 &[0x0, 0x80, 0x0, 0x1, 0x0, 0x0, 0x0, 0x3, 0x1, 0x0, 0x41],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2278,6 +2335,7 @@ mod tests {
                     0x0, 0x0, 0x0, 0x1,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2323,6 +2381,7 @@ mod tests {
                     0x0, 0x1, 0x61, 0x41,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2351,6 +2410,7 @@ mod tests {
                     0x0, 0x1, 0x61, 0x41, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2400,6 +2460,7 @@ mod tests {
                 ],
                 &[0x30],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2415,6 +2476,7 @@ mod tests {
                 ],
                 &[0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2453,6 +2515,7 @@ mod tests {
                     0x0, 0x80, 0x0, 0x1, 0x0, 0x0, 0x0, 0x2, 0x2, 0x0, 0x61, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2471,6 +2534,7 @@ mod tests {
                     0x0, 0x0, 0x0, 0x0, 0x1,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2509,6 +2573,7 @@ mod tests {
                     0x0, 0x80, 0x0, 0x1, 0x0, 0x0, 0x0, 0x3, 0x2, 0x0, 0x41, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2527,6 +2592,7 @@ mod tests {
                     0x0, 0x0, 0x0, 0x0, 0x1,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2572,6 +2638,7 @@ mod tests {
                     0x0, 0x1, 0x61, 0x20, 0x41, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2600,6 +2667,7 @@ mod tests {
                     0x0, 0x1, 0x61, 0x20, 0x41, 0x20, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2698,6 +2766,7 @@ mod tests {
                     0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2739,6 +2808,7 @@ mod tests {
                     0x0, 0x3, 0x4, 0x5, 0x1, 0x0, 0x2, 0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2816,6 +2886,7 @@ mod tests {
                     0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2856,6 +2927,7 @@ mod tests {
                     0x0, 0x3, 0x4, 0x5, 0x1, 0x0, 0x2, 0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2933,6 +3005,7 @@ mod tests {
                     0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -2973,6 +3046,7 @@ mod tests {
                     0x0, 0x3, 0x4, 0x5, 0x1, 0x0, 0x2, 0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -3050,6 +3124,7 @@ mod tests {
                     0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -3090,6 +3165,7 @@ mod tests {
                     0x0, 0x3, 0x4, 0x5, 0x1, 0x0, 0x2, 0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -3167,6 +3243,7 @@ mod tests {
                     0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -3207,6 +3284,7 @@ mod tests {
                     0x0, 0x3, 0x4, 0x5, 0x1, 0x0, 0x2, 0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -3299,6 +3377,7 @@ mod tests {
                     0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -3358,6 +3437,7 @@ mod tests {
                     0x0, 0x3, 0x4, 0x5, 0x1, 0x0, 0x2, 0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -3446,6 +3526,7 @@ mod tests {
                 ],
                 &[0x0, 0x7d, 0x1],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -3516,6 +3597,7 @@ mod tests {
                     0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, // _tidb_rowid
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -3572,6 +3654,7 @@ mod tests {
                     0x0, 0x7d, 0x1, 0x80, 0x0, 0x1, 0x0, 0x0, 0x0, 0x1, 0x1, 0x0, 0x0,
                 ],
                 &mut columns,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -3609,5 +3692,227 @@ mod tests {
             IndexScanExecutorImpl::get_index_version(&[0x30]).unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn test_decode_int_handle_from_key() {
+        let idx_exe = IndexScanExecutorImpl {
+            context: Default::default(),
+            schema: vec![],
+            columns_id_without_handle: vec![],
+            columns_id_for_common_handle: vec![],
+            decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
+            pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
+            index_version: -1,
+            fill_extra_common_handle_key: false,
+        };
+
+        // Test regular INT_FLAG (positive)
+        let mut key = vec![datum::INT_FLAG];
+        key.write_i64(123).unwrap();
+        assert_eq!(idx_exe.decode_int_handle_from_key(&key).unwrap(), 123);
+
+        // Test regular INT_FLAG (negative)
+        let mut key = vec![datum::INT_FLAG];
+        key.write_i64(-456).unwrap();
+        assert_eq!(idx_exe.decode_int_handle_from_key(&key).unwrap(), -456);
+
+        // Test regular UINT_FLAG
+        let mut key = vec![datum::UINT_FLAG];
+        key.write_u64(789).unwrap();
+        assert_eq!(idx_exe.decode_int_handle_from_key(&key).unwrap(), 789);
+
+        // Test partition handle with INT_FLAG inner handle
+        let mut key = vec![table::INDEX_VALUE_PARTITION_ID_FLAG];
+        let partition_id = 100i64;
+        key.write_i64(partition_id).unwrap(); // partition id
+        key.push(datum::INT_FLAG);
+        key.write_i64(999).unwrap(); // inner handle
+        assert_eq!(idx_exe.decode_int_handle_from_key(&key).unwrap(), 999);
+
+        // Test partition handle with UINT_FLAG inner handle
+        let mut key = vec![table::INDEX_VALUE_PARTITION_ID_FLAG];
+        key.write_i64(200).unwrap(); // partition id
+        key.push(datum::UINT_FLAG);
+        key.write_u64(888).unwrap(); // inner handle
+        assert_eq!(idx_exe.decode_int_handle_from_key(&key).unwrap(), 888);
+
+        // Test error: invalid handle flag
+        let key = vec![0x99, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
+        idx_exe.decode_int_handle_from_key(&key).unwrap_err();
+
+        // Test error: partition flag with insufficient data for partition id
+        let key = vec![table::INDEX_VALUE_PARTITION_ID_FLAG, 0x01, 0x02];
+        idx_exe.decode_int_handle_from_key(&key).unwrap_err();
+
+        // Test error: partition flag with partition id but no handle data
+        let mut key = vec![table::INDEX_VALUE_PARTITION_ID_FLAG];
+        key.write_i64(300).unwrap(); // partition id only, no handle
+        idx_exe.decode_int_handle_from_key(&key).unwrap_err();
+
+        // Test error: partition flag with partition id and invalid handle flag
+        let mut key = vec![table::INDEX_VALUE_PARTITION_ID_FLAG];
+        key.write_i64(400).unwrap(); // partition id
+        key.push(0xFF); // invalid handle flag
+        key.write_i64(111).unwrap();
+        idx_exe.decode_int_handle_from_key(&key).unwrap_err();
+
+        // Test error: empty key
+        let key = vec![];
+        idx_exe.decode_int_handle_from_key(&key).unwrap_err();
+
+        // Test error: INT_FLAG with insufficient data (only 1 byte instead of 8)
+        let key = vec![datum::INT_FLAG, 0x01];
+        idx_exe.decode_int_handle_from_key(&key).unwrap_err();
+
+        // Test error: UINT_FLAG with insufficient data (only 1 byte instead of 8)
+        let key = vec![datum::UINT_FLAG, 0x01];
+        idx_exe.decode_int_handle_from_key(&key).unwrap_err();
+
+        // Test error: partition flag with INT_FLAG but insufficient handle data
+        let mut key = vec![table::INDEX_VALUE_PARTITION_ID_FLAG];
+        key.write_i64(500).unwrap(); // partition id
+        key.push(datum::INT_FLAG);
+        key.push(0x01); // only 1 byte instead of 8
+        idx_exe.decode_int_handle_from_key(&key).unwrap_err();
+
+        // Test error: partition flag with UINT_FLAG but insufficient handle data
+        let mut key = vec![table::INDEX_VALUE_PARTITION_ID_FLAG];
+        key.write_i64(600).unwrap(); // partition id
+        key.push(datum::UINT_FLAG);
+        key.push(0x01); // only 1 byte instead of 8
+        idx_exe.decode_int_handle_from_key(&key).unwrap_err();
+    }
+
+    #[test]
+    fn test_non_unique_global_index_v1_partition_in_key_and_value() {
+        // V1 format: partition ID in both KEY and VALUE
+        // This test validates that:
+        // 1. Partition ID in key doesn't break handle decoding
+        // 2. Partition ID from value is still extracted correctly
+        // 3. All columns are output correctly
+        // 4. Edge cases: zero and negative partition IDs work correctly
+
+        const TABLE_ID: i64 = 100;
+        const INDEX_ID: i64 = 5;
+
+        // Column definitions: indexed column, handle, partition ID
+        let columns_info = vec![
+            {
+                let mut ci = ColumnInfo::default();
+                ci.set_column_id(1); // Indexed column
+                ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                ci
+            },
+            {
+                let mut ci = ColumnInfo::default();
+                ci.set_column_id(-1); // Handle column
+                ci.set_pk_handle(true);
+                ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                ci
+            },
+            {
+                let mut ci = ColumnInfo::default();
+                ci.set_column_id(table::EXTRA_PARTITION_ID_COL_ID); // -2
+                ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                ci
+            },
+        ];
+
+        let schema: Vec<FieldType> = vec![
+            FieldTypeTp::LongLong.into(), // indexed column
+            FieldTypeTp::LongLong.into(), // handle
+            FieldTypeTp::LongLong.into(), // partition id
+        ];
+
+        // Test with multiple partition IDs including edge cases
+        for (partition_id, indexed_value, handle_value, test_name) in [
+            (42i64, 999i64, 123i64, "normal partition ID"),
+            (0i64, 100i64, 1i64, "zero partition ID"),
+            (-1i64, 200i64, 2i64, "negative partition ID"),
+        ] {
+            // Build index key with V1 format:
+            // [table_prefix][index_id][indexed_col][PARTITION_ID_FLAG][partition_id][handle]
+
+            // Encode indexed column
+            let mut index_key_data =
+                datum::encode_key(&mut EvalContext::default(), &[Datum::I64(indexed_value)])
+                    .unwrap();
+            // Add partition ID prefix (V1 format - new location)
+            index_key_data.push(table::INDEX_VALUE_PARTITION_ID_FLAG);
+            index_key_data.write_i64(partition_id).unwrap();
+            // Add handle
+            let handle_data =
+                datum::encode_key(&mut EvalContext::default(), &[Datum::I64(handle_value)])
+                    .unwrap();
+            index_key_data.extend(handle_data);
+
+            let key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_key_data);
+
+            // Build index value with partition ID (V1 still has it in value too - old
+            // location)
+            let mut value = vec![0u8]; // tail_len = 0 (no tail data)
+
+            // Add partition ID to value
+            value.push(table::INDEX_VALUE_PARTITION_ID_FLAG);
+            let mut pid_bytes = vec![0u8; 8];
+            NumberCodec::encode_i64(&mut pid_bytes, partition_id);
+            value.extend(&pid_bytes);
+
+            let key_ranges = vec![{
+                let mut range = KeyRange::default();
+                range.set_start(key.clone());
+                range.set_end(key.clone());
+                convert_to_prefix_next(range.mut_end());
+                range
+            }];
+
+            let store = FixtureStorage::from(vec![(key, value)]);
+            let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
+                store,
+                Arc::new(EvalConfig::default()),
+                columns_info.clone(),
+                key_ranges,
+                0, // primary_column_ids_len = 0 (non-clustered table, int handle)
+                false,
+                false,
+                false,
+                false,
+            )
+            .unwrap();
+
+            let mut result = block_on(executor.next_batch(10));
+            assert!(result.is_drained.as_ref().unwrap().stop());
+            assert_eq!(result.physical_columns.columns_len(), 3);
+            assert_eq!(result.physical_columns.rows_len(), 1);
+
+            // Verify indexed column
+            result.physical_columns[0]
+                .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[0])
+                .unwrap();
+            assert_eq!(
+                result.physical_columns[0].decoded().to_int_vec(),
+                &[Some(indexed_value)],
+                "Indexed column value mismatch for {}",
+                test_name
+            );
+
+            // Verify handle (decoded from key, skipping partition ID)
+            assert_eq!(
+                result.physical_columns[1].decoded().to_int_vec(),
+                &[Some(handle_value)],
+                "Handle value mismatch for {} - partition ID in key should be skipped",
+                test_name
+            );
+
+            // Verify partition ID (extracted from VALUE in V1)
+            assert_eq!(
+                result.physical_columns[2].decoded().to_int_vec(),
+                &[Some(partition_id)],
+                "Partition ID mismatch for {} - should be extracted from value",
+                test_name
+            );
+        }
     }
 }

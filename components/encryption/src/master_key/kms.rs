@@ -137,10 +137,10 @@ impl KmsBackend {
 
         {
             let mut opt_state = self.state.lock().await;
-            if let Some(state) = &*opt_state {
-                if state.cached(&ciphertext_key) {
-                    return state.encryption_backend.decrypt_content(content);
-                }
+            if let Some(state) = &*opt_state
+                && state.cached(&ciphertext_key)
+            {
+                return state.encryption_backend.decrypt_content(content);
             }
             {
                 let plaintext = retry(|| {
@@ -302,7 +302,6 @@ pub mod fake {
 
 #[cfg(test)]
 mod tests {
-    use matches::assert_matches;
 
     use super::{fake::*, *};
 
@@ -341,10 +340,10 @@ mod tests {
         vendor_not_found
             .metadata
             .remove(MetadataKey::KmsVendor.as_str());
-        assert_matches!(
+        assert!(matches!(
             backend.decrypt_content(&vendor_not_found).unwrap_err(),
             Error::WrongMasterKey(_)
-        );
+        ));
 
         let mut invalid_vendor = encrypted_content.clone();
         let mut invalid_suffix = b"_invalid".to_vec();
@@ -353,21 +352,21 @@ mod tests {
             .get_mut(MetadataKey::KmsVendor.as_str())
             .unwrap()
             .append(&mut invalid_suffix);
-        assert_matches!(
+        assert!(matches!(
             backend.decrypt_content(&invalid_vendor).unwrap_err(),
             Error::Other(_)
-        );
+        ));
 
         let mut ciphertext_key_not_found = encrypted_content;
         ciphertext_key_not_found
             .metadata
             .remove(MetadataKey::KmsCiphertextKey.as_str());
-        assert_matches!(
+        assert!(matches!(
             backend
                 .decrypt_content(&ciphertext_key_not_found)
                 .unwrap_err(),
             Error::Other(_)
-        );
+        ));
     }
 
     #[test]
@@ -379,6 +378,6 @@ mod tests {
 
         backend.clear_state();
         let err = backend.decrypt_content(&encrypted_content).unwrap_err();
-        assert_matches!(err, Error::WrongMasterKey(_));
+        assert!(matches!(err, Error::WrongMasterKey(_)));
     }
 }

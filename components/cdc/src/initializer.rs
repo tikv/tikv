@@ -285,12 +285,14 @@ impl<E: KvEngine> Initializer<E> {
                 reader.scan_locks_from_storage(None, None, |_, _| true, 0)?;
             assert!(!has_remain);
             let mut locks = BTreeMap::<Key, MiniLock>::new();
-            for (key, lock) in key_locks {
-                // When `decode_lock`, only consider `Put` and `Delete`
-                if matches!(lock.lock_type, LockType::Put | LockType::Delete) {
-                    let mini_lock = MiniLock::new(lock.ts, lock.txn_source);
-                    locks.insert(key, mini_lock);
-                }
+            for (key, lock_or_shared_locks) in key_locks {
+                if let Either::Left(lock) = lock_or_shared_locks {
+                    // When `decode_lock`, only consider `Put` and `Delete`
+                    if matches!(lock.lock_type, LockType::Put | LockType::Delete) {
+                        let mini_lock = MiniLock::new(lock.ts, lock.txn_source);
+                        locks.insert(key, mini_lock);
+                    }
+                };
             }
             self.finish_scan_locks(region, locks);
         };

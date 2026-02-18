@@ -48,6 +48,11 @@ use tikv_util::{
     config::{Tracker, VersionTrack},
     log::SlogFormat,
     sys::{SysQuota, disk::get_disk_status},
+    thread_name_prefix::{
+        APPLY_WORKER_THREAD, ASYNC_READ_WORKER_THREAD, CHECKPOINT_WORKER_THREAD,
+        PURGE_WORKER_THREAD, RAFTSTORE_THREAD, RAFTSTORE_V2_THREAD, REFRESH_CONFIG_WORKER_THREAD,
+        STORE_BACKGROUND_WORKER_THREAD, TABLET_WORKER_THREAD,
+    },
     time::{Instant as TiInstant, Limiter, duration_to_sec, monotonic_raw_now},
     timer::{GLOBAL_TIMER_HANDLE, SteadyTimer},
     worker::{Builder, LazyWorker, Scheduler, Worker},
@@ -397,7 +402,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         let apply_pool = YatpPoolBuilder::new(DefaultTicker::default())
             .thread_count(1, pool_size, max_pool_size)
             .after_start(move || set_io_type(IoType::ForegroundWrite))
-            .name_prefix("apply")
+            .name_prefix(APPLY_WORKER_THREAD)
             .build_future_pool();
         let global_stat = GlobalStoreStat::default();
         StorePollerBuilder {
@@ -579,7 +584,7 @@ where
             pending_latency_inspect: vec![],
         };
         poll_ctx.update_ticks_timeout();
-        let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
+        let cfg_tracker = self.cfg.clone().tracker(RAFTSTORE_THREAD.to_string());
         StorePoller::new(poll_ctx, cfg_tracker)
     }
 }
@@ -633,20 +638,22 @@ impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
         purge: Option<Worker>,
         resource_control: Option<Arc<ResourceController>>,
     ) -> Self {
-        let checkpoint = Builder::new("checkpoint-worker").thread_count(2).create();
+        let checkpoint = Builder::new(CHECKPOINT_WORKER_THREAD)
+            .thread_count(2)
+            .create();
         Self {
-            async_read: Worker::new("async-read-worker"),
+            async_read: Worker::new(ASYNC_READ_WORKER_THREAD),
             pd,
-            tablet: Worker::new("tablet-worker"),
+            tablet: Worker::new(TABLET_WORKER_THREAD),
             checkpoint,
             async_write: StoreWriters::new(resource_control),
             purge,
-            refresh_config_worker: LazyWorker::new("refreash-config-worker"),
+            refresh_config_worker: LazyWorker::new(REFRESH_CONFIG_WORKER_THREAD),
             background,
             high_priority_pool: YatpPoolBuilder::new(DefaultTicker::default())
                 .thread_count(1, 1, 1)
                 .after_start(move || set_io_type(IoType::ForegroundWrite))
-                .name_prefix("store-bg")
+                .name_prefix(STORE_BACKGROUND_WORKER_THREAD)
                 .build_future_pool(),
         }
     }
@@ -714,7 +721,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         let purge_worker = if raft_engine.need_manual_purge()
             && !cfg.value().raft_engine_purge_interval.0.is_zero()
         {
-            let worker = Worker::new("purge-worker");
+            let worker = Worker::new(PURGE_WORKER_THREAD);
             let raft_clone = raft_engine.clone();
             let logger = self.logger.clone();
             let router = router.clone();
@@ -768,18 +775,20 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
                         if to_flush == 0 {
                             break;
                         }
-                        if let Some(mut t) = registry.get(r)
-                            && let Some(t) = t.latest()
-                        {
-                            match t.flush_oldest_cf(true, Some(threshold)) {
-                                Err(e) => warn!(logger, "failed to flush oldest cf"; "err" => %e),
-                                Ok(true) => {
-                                    to_flush -= 1;
-                                    let time =
-                                        std::time::Instant::now() + limiter.consume_duration(1);
-                                    let _ = GLOBAL_TIMER_HANDLE.delay(time).compat().await;
+                        if let Some(mut t) = registry.get(r) {
+                            if let Some(t) = t.latest() {
+                                match t.flush_oldest_cf(true, Some(threshold)) {
+                                    Err(e) => {
+                                        warn!(logger, "failed to flush oldest cf"; "err" => %e)
+                                    }
+                                    Ok(true) => {
+                                        to_flush -= 1;
+                                        let time =
+                                            std::time::Instant::now() + limiter.consume_duration(1);
+                                        let _ = GLOBAL_TIMER_HANDLE.delay(time).compat().await;
+                                    }
+                                    _ => (),
                                 }
-                                _ => (),
                             }
                         }
                     }
@@ -797,7 +806,9 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
 
         let mut read_runner = ReadRunner::new(router.clone(), raft_engine.clone());
         read_runner.set_snap_mgr(snap_mgr.clone());
-        let read_scheduler = workers.async_read.start("async-read-worker", read_runner);
+        let read_scheduler = workers
+            .async_read
+            .start(ASYNC_READ_WORKER_THREAD, read_runner);
 
         workers.pd.start(pd::Runner::new(
             store_id,
@@ -830,7 +841,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         );
 
         let tablet_scheduler = workers.tablet.start_with_timer(
-            "tablet-worker",
+            TABLET_WORKER_THREAD,
             tablet::Runner::new(
                 tablet_registry.clone(),
                 sst_importer.clone(),
@@ -873,7 +884,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         let peers = builder.init()?;
         // Choose a different name so we know what version is actually used. rs stands
         // for raft store.
-        let tag = format!("rs-{}", store_id);
+        let tag = format!("{}-{}", RAFTSTORE_V2_THREAD, store_id);
         self.system.spawn(tag, builder.clone());
 
         let writer_control = WriterContoller::new(

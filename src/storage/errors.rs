@@ -13,7 +13,7 @@ use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, kvrpcpb, kvrpcpb::ApiVersion};
 use thiserror::Error;
 use tikv_util::deadline::{DeadlineError, set_deadline_exceeded_busy_error};
-use txn_types::{KvPair, TimeStamp};
+use txn_types::{KvPair, KvPairEntry, TimeStamp, ValueEntry};
 
 use crate::storage::{
     CommandKind, Result,
@@ -554,20 +554,32 @@ pub fn extract_kv_pairs(res: Result<Vec<Result<KvPair>>>) -> Vec<kvrpcpb::KvPair
 
 pub fn map_kv_pairs(r: Vec<Result<KvPair>>) -> Vec<kvrpcpb::KvPair> {
     r.into_iter()
-        .map(|r| match r {
-            Ok((key, value)) => {
-                let mut pair = kvrpcpb::KvPair::default();
-                pair.set_key(key);
-                pair.set_value(value);
-                pair
-            }
-            Err(e) => {
-                let mut pair = kvrpcpb::KvPair::default();
-                pair.set_error(extract_key_error(&e));
-                pair
-            }
-        })
+        .map(|r| r.map(|(k, v)| (k, ValueEntry::from_value(v))))
+        .map(entry_result_to_kv_pair)
         .collect()
+}
+
+pub fn map_kv_pair_entries(r: Vec<Result<KvPairEntry>>) -> Vec<kvrpcpb::KvPair> {
+    r.into_iter().map(entry_result_to_kv_pair).collect()
+}
+
+fn entry_result_to_kv_pair(result: Result<KvPairEntry>) -> kvrpcpb::KvPair {
+    match result {
+        Ok((key, value)) => {
+            let mut pair = kvrpcpb::KvPair::default();
+            pair.set_key(key);
+            pair.set_value(value.value);
+            if let Some(commit_ts) = value.commit_ts {
+                pair.set_commit_ts(commit_ts.into_inner());
+            }
+            pair
+        }
+        Err(e) => {
+            let mut pair = kvrpcpb::KvPair::default();
+            pair.set_error(extract_key_error(&e));
+            pair
+        }
+    }
 }
 
 pub fn extract_key_errors(res: Result<Vec<Result<()>>>) -> Vec<kvrpcpb::KeyError> {
@@ -702,7 +714,7 @@ mod test {
                     start_ts: TimeStamp::new(123),
                     commit_ts: TimeStamp::new(456),
                     key: b"key".to_vec(),
-                    mvcc_info: has_mvcc.then(|| mock_mvcc_info()),
+                    mvcc_info: has_mvcc.then(mock_mvcc_info),
                 },
             ))))
         }
@@ -747,7 +759,7 @@ mod test {
                     commit_ts: TimeStamp::new(456),
                     key: b"key".to_vec(),
                     min_commit_ts: TimeStamp::new(789),
-                    mvcc_info: has_mvcc.then(|| mock_mvcc_info()),
+                    mvcc_info: has_mvcc.then(mock_mvcc_info),
                 },
             ))))
         }

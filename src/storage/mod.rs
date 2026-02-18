@@ -61,7 +61,6 @@ mod read_pool;
 mod types;
 
 use std::{
-    assert_matches::assert_matches,
     borrow::Cow,
     iter,
     marker::PhantomData,
@@ -80,7 +79,7 @@ use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{
     CF_DEFAULT, CF_LOCK, CF_WRITE, CfName, DATA_CFS, DATA_CFS_LEN, raw_ttl::ttl_to_expire_ts,
 };
-use futures::{future::Either, prelude::*};
+use futures::{future::Either as FuturesEither, prelude::*};
 use kvproto::{
     kvrpcpb,
     kvrpcpb::{
@@ -100,6 +99,7 @@ use resource_metering::{
 };
 use tikv_kv::{OnAppliedCb, SnapshotExt};
 use tikv_util::{
+    Either,
     deadline::Deadline,
     future::try_poll,
     quota_limiter::QuotaLimiter,
@@ -109,7 +109,7 @@ use tracker::{
     TlsTrackedFuture, TrackerToken, clear_tls_tracker_token, set_tls_tracker_token,
     with_tls_tracker,
 };
-use txn_types::{Key, KvPair, Lock, LockType, TimeStamp, TsSet, Value};
+use txn_types::{Key, KvPair, KvPairEntry, Lock, LockType, TimeStamp, TsSet, Value, ValueEntry};
 
 use self::kv::SnapContext;
 pub use self::{
@@ -606,12 +606,29 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     /// Get value of the given key from a snapshot.
     ///
     /// Only writes that are committed before `start_ts` are visible.
+    #[inline]
     pub fn get(
+        &self,
+        ctx: Context,
+        key: Key,
+        start_ts: TimeStamp,
+    ) -> impl Future<Output = Result<(Option<Value>, KvGetStatistics)>> {
+        self.get_entry(ctx, key, start_ts, false).map(|result| {
+            let (entry, stats) = result?;
+            Ok((entry.map(|e| e.value), stats))
+        })
+    }
+
+    /// Get value entry of the given key from a snapshot.
+    ///
+    /// Only writes that are committed before `start_ts` are visible.
+    pub fn get_entry(
         &self,
         mut ctx: Context,
         key: Key,
         start_ts: TimeStamp,
-    ) -> impl Future<Output = Result<(Option<Value>, KvGetStatistics)>> {
+        load_commit_ts: bool,
+    ) -> impl Future<Output = Result<(Option<ValueEntry>, KvGetStatistics)>> {
         let deadline = Self::get_deadline(&ctx);
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
@@ -703,7 +720,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             false,
                         );
                         snap_store
-                            .get(&key, &mut statistics)
+                            .get_entry(&key, load_commit_ts, &mut statistics)
                             // map storage::txn::Error -> storage::Error
                             .map_err(Error::from)
                             .inspect(|_r| {
@@ -743,7 +760,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         .as_ref()
                         .unwrap_or(&None)
                         .as_ref()
-                        .map_or(0, |v| v.len());
+                        .map_or(0, |v| v.value.len());
                     record_network_out_bytes(result_len as u64);
                     let read_bytes = key.len() + result_len;
                     sample.add_read_bytes(read_bytes);
@@ -796,7 +813,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ///
     /// Only writes that are committed before their respective `start_ts` are
     /// visible.
-    pub fn batch_get_command<P: 'static + ResponseBatchConsumer<(Option<Vec<u8>>, Statistics)>>(
+    pub fn batch_get_command<
+        P: 'static + ResponseBatchConsumer<(Option<ValueEntry>, Statistics)>,
+    >(
         &self,
         requests: Vec<GetRequest>,
         ids: Vec<u64>,
@@ -856,6 +875,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 for ((mut req, id), tracker) in requests.into_iter().zip(ids).zip(trackers) {
                     set_tls_tracker_token(tracker);
+                    let need_commit_ts = req.get_need_commit_ts();
                     let mut ctx = req.take_context();
                     let deadline = Self::get_deadline(&ctx);
                     let source = ctx.take_request_source();
@@ -913,6 +933,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         fill_cache,
                         bypass_locks,
                         access_locks,
+                        need_commit_ts,
                         region_id,
                         id,
                         source,
@@ -930,6 +951,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         fill_cache,
                         bypass_locks,
                         access_locks,
+                        need_commit_ts,
                         region_id,
                         id,
                         source,
@@ -960,7 +982,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                 .build()
                             {
                                 Ok(mut point_getter) => {
-                                    let v = point_getter.get(&key);
+                                    let v = point_getter.get_entry(&key, need_commit_ts);
                                     let stat = point_getter.take_statistics();
                                     metrics::tls_collect_read_flow(
                                         region_id,
@@ -970,9 +992,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         buckets.as_ref(),
                                     );
                                     statistics.add(&stat);
-                                    let value_size = v
-                                        .as_ref()
-                                        .map_or(0, |v| v.as_ref().map_or(0, |v1| v1.len()) as u64);
+                                    let value_size = v.as_ref().map_or(0, |v| {
+                                        v.as_ref().map_or(0, |v1| v1.value.len()) as u64
+                                    });
                                     record_network_out_bytes(value_size);
                                     record_logical_read_bytes(statistics.processed_size as u64);
                                     consumer.consume(
@@ -1118,7 +1140,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                 let pair: Option<std::result::Result<KvPair, _>> =
                                     match reader.load_lock(&k) {
                                         Ok(None) => None,
-                                        Ok(Some(lock)) => {
+                                        Ok(Some(Either::Right(_))) => None,
+                                        Ok(Some(Either::Left(lock))) => {
                                             if matches!(lock.lock_type, LockType::Pessimistic) {
                                                 assert_ne!(lock.ts, start_ts);
                                             }
@@ -1132,6 +1155,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                                     LockType::Delete => Some(Ok((k.into_raw().unwrap(), vec![]))),
                                                     LockType::Lock => unreachable!("Unexpected LockType::Lock. pipelined-dml only supports optimistic transactions"),
                                                     LockType::Pessimistic => unreachable!("Unexpected LockType::Pessimistic. pipelined-dml only supports optimistic transactions"),
+                                                    LockType::Shared => unreachable!("Unexpected LockType::Shared. pipelined-dml only supports optimistic transactions"),
                                                     LockType::Put => {
                                                         match lock.short_value {
                                                             Some(v) => Some(Ok((k.into_raw().unwrap(), v))),
@@ -1225,7 +1249,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         mut ctx: Context,
         keys: Vec<Key>,
         start_ts: TimeStamp,
-    ) -> impl Future<Output = Result<(Vec<Result<KvPair>>, KvGetStatistics)>> {
+        load_commit_ts: bool,
+    ) -> impl Future<Output = Result<(Vec<Result<KvPairEntry>>, KvGetStatistics)>> {
         let deadline = Self::get_deadline(&ctx);
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
@@ -1322,7 +1347,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         );
                         let mut stats = Statistics::default();
                         let result = snap_store
-                            .batch_get(&keys, &mut statistics)
+                            .batch_get(&keys, load_commit_ts, &mut statistics)
                             .map_err(Error::from)
                             .map(|v| {
                                 let kv_pairs: Vec<_> = v
@@ -1350,7 +1375,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                     .get(CMD)
                                     .observe(kv_pairs.len() as f64);
                                 record_network_out_bytes(kv_pairs.iter().fold(0u64, |acc, r| {
-                                    acc + r.as_ref().map_or(0, |(k, v)| k.len() + v.len()) as u64
+                                    acc + r.as_ref().map_or(0, |(k, v)| k.len() + v.value.len())
+                                        as u64
                                 }));
                                 kv_pairs
                             });
@@ -1522,8 +1548,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let begin_instant = Instant::now();
                     concurrency_manager
                         .read_range_check(start_key.as_ref(), end_key.as_ref(), |key, lock| {
-                            Lock::check_ts_conflict(
-                                Cow::Borrowed(lock),
+                            txn_types::check_ts_conflict(
+                                Cow::Owned(tikv_util::Either::Left(lock.clone())),
                                 key,
                                 start_ts,
                                 &bypass_locks,
@@ -1575,8 +1601,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         false,
                     );
 
-                    let mut scanner =
-                        snap_store.scanner(reverse_scan, key_only, false, start_key, end_key)?;
+                    let mut scanner = snap_store.scanner(
+                        reverse_scan,
+                        key_only,
+                        false,
+                        false,
+                        start_key,
+                        end_key,
+                    )?;
                     let res = scanner.scan(limit, sample_step);
 
                     let statistics = scanner.take_statistics();
@@ -1699,7 +1731,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     start_key.as_ref(),
                     end_key.as_ref(),
                     |key, lock| {
-                        // `Lock::check_ts_conflict` can't be used here, because LockType::Lock
+                        // `txn_types::check_ts_conflict` can't be used here, because LockType::Lock
                         // can't be ignored in this case.
                         if lock.ts <= max_ts {
                             CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
@@ -1747,9 +1779,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     statistics.add(&reader.statistics);
                     let (read_locks, _) = read_res?;
                     let mut locks = Vec::with_capacity(read_locks.len());
-                    for (key, lock) in read_locks.into_iter() {
-                        let lock_info =
-                            lock.into_lock_info(key.into_raw().map_err(txn::Error::from)?);
+                    for (key, lock_or_shared_locks) in read_locks.into_iter() {
+                        let lock_info = match lock_or_shared_locks {
+                            Either::Left(lock) => {
+                                lock.into_lock_info(key.into_raw().map_err(txn::Error::from)?)
+                            }
+                            Either::Right(shared_locks) => shared_locks
+                                .into_lock_info(key.into_raw().map_err(txn::Error::from)?),
+                        };
                         locks.push(lock_info);
                     }
 
@@ -2050,7 +2087,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     }
 
     /// Get the values of a set of raw keys, return a list of `Result`s.
-    pub fn raw_batch_get_command<P: 'static + ResponseBatchConsumer<Option<Vec<u8>>>>(
+    pub fn raw_batch_get_command<P: 'static + ResponseBatchConsumer<Option<ValueEntry>>>(
         &self,
         gets: Vec<RawGetRequest>,
         ids: Vec<u64>,
@@ -2151,6 +2188,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         id,
                                         store
                                             .raw_get_key_value(cf, &key, &mut stats)
+                                            .map(|v| v.map(ValueEntry::from_value))
                                             .map_err(Error::from),
                                         begin_instant,
                                         ctx.take_request_source(),
@@ -3126,7 +3164,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         self.sched_raw_command(metadata, priority, CMD, async move {
             let key = F::encode_raw_key_owned(key, None);
             let cmd = RawCompareAndSwap::new(cf, key, previous_value, value, ttl, api_version, ctx);
-            Self::sched_raw_atomic_command(sched, cmd, Box::new(|res| callback(res)));
+            Self::sched_raw_atomic_command(sched, cmd, Box::new(callback));
         })
     }
 
@@ -3155,7 +3193,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         self.sched_raw_command(metadata, priority, CMD, async move {
             let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls, None);
             let cmd = RawAtomicStore::new(cf, modifies, ctx);
-            Self::sched_raw_atomic_command(sched, cmd, Box::new(|res| callback(res)));
+            Self::sched_raw_atomic_command(sched, cmd, Box::new(callback));
         })
     }
 
@@ -3180,7 +3218,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 .map(|k| Self::raw_delete_request_to_modify(cf, k, None))
                 .collect();
             let cmd = RawAtomicStore::new(cf, modifies, ctx);
-            Self::sched_raw_atomic_command(sched, cmd, Box::new(|res| callback(res)));
+            Self::sched_raw_atomic_command(sched, cmd, Box::new(callback));
         })
     }
 
@@ -3303,13 +3341,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         if let Err(busy_err) = self.read_pool.check_busy_threshold(busy_threshold) {
             let mut err = kvproto::errorpb::Error::default();
             err.set_server_is_busy(busy_err);
-            return Either::Left(future::err(Error::from(ErrorInner::Kv(err.into()))));
+            return FuturesEither::Left(future::err(Error::from(ErrorInner::Kv(err.into()))));
         }
-        Either::Right(
+        FuturesEither::Right(
             self.read_pool
                 .spawn_handle(future, priority, task_id, metadata, resource_limiter)
                 .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-                .and_then(|res| future::ready(res)),
+                .and_then(future::ready),
         )
     }
 
@@ -3335,7 +3373,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 if txn_status.is_completed {
                     // large_txn_cache is only for **ongoing** large txns, so remove it when
                     // completed.
-                    assert_matches!(txn_state, TxnState::Committed { .. } | TxnState::RolledBack);
+                    assert!(matches!(
+                        txn_state,
+                        TxnState::Committed { .. } | TxnState::RolledBack
+                    ));
                     cache.remove_large_txn(txn_status.start_ts.into());
                 }
                 cache.upsert(txn_status.start_ts.into(), txn_state, now);
@@ -3426,8 +3467,8 @@ fn prepare_snap_ctx<'a>(
                 .read_key_check(key, |lock| {
                     // No need to check access_locks because they are committed which means they
                     // can't be in memory lock table.
-                    Lock::check_ts_conflict(
-                        Cow::Borrowed(lock),
+                    txn_types::check_ts_conflict(
+                        Cow::Owned(tikv_util::Either::Left(lock.clone())),
                         key,
                         start_ts,
                         bypass_locks,
@@ -3831,7 +3872,7 @@ pub mod test_util {
         types::{PessimisticLockKeyResult, PessimisticLockResults},
     };
 
-    pub fn expect_none(x: Option<Value>) {
+    pub fn expect_none<T: PartialEq + Debug>(x: Option<T>) {
         assert_eq!(x, None);
     }
 
@@ -3841,6 +3882,11 @@ pub mod test_util {
 
     pub fn expect_multi_values(v: Vec<Option<KvPair>>, x: Vec<Result<KvPair>>) {
         let x: Vec<Option<KvPair>> = x.into_iter().map(Result::ok).collect();
+        assert_eq!(x, v);
+    }
+
+    pub fn expect_multi_value_entries(v: Vec<Option<KvPairEntry>>, x: Vec<Result<KvPairEntry>>) {
+        let x: Vec<Option<KvPairEntry>> = x.into_iter().map(Result::ok).collect();
         assert_eq!(x, v);
     }
 
@@ -4029,6 +4075,28 @@ pub mod test_util {
         return_values: bool,
         check_existence: bool,
     ) -> PessimisticLockCommand {
+        let keys = keys
+            .into_iter()
+            .map(|(k, b)| (k, b, false))
+            .collect::<Vec<_>>();
+        new_acquire_pessimistic_lock_command_with_pk_with_shared(
+            keys,
+            pk,
+            start_ts,
+            for_update_ts,
+            return_values,
+            check_existence,
+        )
+    }
+
+    pub fn new_acquire_pessimistic_lock_command_with_pk_with_shared(
+        keys: Vec<(Key, bool, bool)>,
+        pk: Option<&[u8]>,
+        start_ts: impl Into<TimeStamp>,
+        for_update_ts: impl Into<TimeStamp>,
+        return_values: bool,
+        check_existence: bool,
+    ) -> PessimisticLockCommand {
         let primary = pk
             .map(|k| k.to_vec())
             .unwrap_or_else(|| keys[0].0.clone().to_raw().unwrap());
@@ -4167,7 +4235,7 @@ pub mod test_util {
 
     pub struct GetResult {
         id: u64,
-        res: Result<Option<Vec<u8>>>,
+        res: Result<Option<ValueEntry>>,
     }
 
     #[derive(Clone)]
@@ -4182,11 +4250,18 @@ pub mod test_util {
             }
         }
 
-        pub fn take_data(self) -> Vec<Result<Option<Vec<u8>>>> {
+        pub fn take_data(self) -> Vec<Result<Option<ValueEntry>>> {
             let mut data = self.data.lock().unwrap();
             let mut results = std::mem::take(&mut *data);
             results.sort_by_key(|k| k.id);
             results.into_iter().map(|v| v.res).collect()
+        }
+
+        pub fn take_values(self) -> Vec<Result<Option<Vec<u8>>>> {
+            self.take_data()
+                .into_iter()
+                .map(|r| r.map(|opt| opt.map(|entry| entry.value)))
+                .collect()
         }
     }
 
@@ -4196,11 +4271,11 @@ pub mod test_util {
         }
     }
 
-    impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics)> for GetConsumer {
+    impl ResponseBatchConsumer<(Option<ValueEntry>, Statistics)> for GetConsumer {
         fn consume(
             &self,
             id: u64,
-            res: Result<(Option<Vec<u8>>, Statistics)>,
+            res: Result<(Option<ValueEntry>, Statistics)>,
             _: Instant,
             _source: String,
             _resource_priority: ResourcePriority,
@@ -4212,11 +4287,11 @@ pub mod test_util {
         }
     }
 
-    impl ResponseBatchConsumer<Option<Vec<u8>>> for GetConsumer {
+    impl ResponseBatchConsumer<Option<ValueEntry>> for GetConsumer {
         fn consume(
             &self,
             id: u64,
-            res: Result<Option<Vec<u8>>>,
+            res: Result<Option<ValueEntry>>,
             _: Instant,
             _source: String,
             _resource_priority: ResourcePriority,
@@ -4507,6 +4582,7 @@ mod tests {
                 Context::default(),
                 vec![Key::from_raw(b"c"), Key::from_raw(b"d")],
                 1.into(),
+                false,
             )),
         );
         let consumer = GetConsumer::new();
@@ -5136,12 +5212,13 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        expect_multi_values(
+        expect_multi_value_entries(
             vec![None],
             block_on(storage.batch_get(
                 Context::default(),
                 vec![Key::from_raw(b"c"), Key::from_raw(b"d")],
                 2.into(),
+                false,
             ))
             .unwrap()
             .0,
@@ -5163,11 +5240,11 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        expect_multi_values(
+        expect_multi_value_entries(
             vec![
-                Some((b"c".to_vec(), b"cc".to_vec())),
-                Some((b"a".to_vec(), b"aa".to_vec())),
-                Some((b"b".to_vec(), b"bb".to_vec())),
+                Some((b"c".to_vec(), ValueEntry::from_value(b"cc".to_vec()))),
+                Some((b"a".to_vec(), ValueEntry::from_value(b"aa".to_vec()))),
+                Some((b"b".to_vec(), ValueEntry::from_value(b"bb".to_vec()))),
             ],
             block_on(storage.batch_get(
                 Context::default(),
@@ -5178,6 +5255,7 @@ mod tests {
                     Key::from_raw(b"b"),
                 ],
                 5.into(),
+                false,
             ))
             .unwrap()
             .0,
@@ -5221,7 +5299,7 @@ mod tests {
             Instant::now(),
         ))
         .unwrap();
-        let mut x = consumer.take_data();
+        let mut x = consumer.take_values();
         expect_error(
             |e| match e {
                 Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
@@ -5265,7 +5343,7 @@ mod tests {
         .unwrap();
 
         let x: Vec<Option<Vec<u8>>> = consumer
-            .take_data()
+            .take_values()
             .into_iter()
             .map(|x| x.unwrap())
             .collect();
@@ -5277,6 +5355,112 @@ mod tests {
                 Some(b"aa".to_vec()),
                 Some(b"bb".to_vec()),
             ]
+        );
+    }
+
+    fn create_get_request_with_need_commit_ts(
+        key: &[u8],
+        start_ts: u64,
+        need_commit_ts: bool,
+    ) -> GetRequest {
+        let mut req = create_get_request(key, start_ts);
+        req.set_need_commit_ts(need_commit_ts);
+        req
+    }
+
+    #[test]
+    fn test_batch_get_command_need_commit_ts() {
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+        // Commit one key so that we can verify commit_ts is returned when requested.
+        storage
+            .sched_txn_command(
+                commands::Prewrite::with_defaults(
+                    vec![Mutation::make_put(Key::from_raw(b"c"), b"cc".to_vec())],
+                    b"c".to_vec(),
+                    10.into(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .sched_txn_command(
+                commands::Commit::new(
+                    vec![Key::from_raw(b"c")],
+                    10.into(),
+                    20.into(),
+                    None,
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 1),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Leave one key locked so that we can verify committed_locks is ignored when
+        // need_commit_ts is true.
+        storage
+            .sched_txn_command(
+                commands::Prewrite::with_defaults(
+                    vec![Mutation::make_put(Key::from_raw(b"l"), b"ll".to_vec())],
+                    b"l".to_vec(),
+                    50.into(),
+                ),
+                expect_ok_callback(tx, 2),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        let mut ctx_with_committed_lock = Context::default();
+        ctx_with_committed_lock.set_committed_locks(vec![50]);
+
+        let mut read_through_lock = create_get_request_with_need_commit_ts(b"l", 60, false);
+        read_through_lock.set_context(ctx_with_committed_lock.clone());
+
+        let mut lock_conflict = create_get_request_with_need_commit_ts(b"l", 60, true);
+        lock_conflict.set_context(ctx_with_committed_lock);
+
+        let consumer = GetConsumer::new();
+        block_on(storage.batch_get_command(
+            vec![
+                create_get_request_with_need_commit_ts(b"c", 100, true),
+                read_through_lock,
+                lock_conflict,
+            ],
+            vec![1, 2, 3],
+            vec![INVALID_TRACKER_TOKEN; 3],
+            consumer.clone(),
+            Instant::now(),
+        ))
+        .unwrap();
+
+        let mut results = consumer.take_data().into_iter();
+
+        // Committed key: should return commit_ts.
+        let committed = results.next().unwrap().unwrap().unwrap();
+        assert_eq!(committed.value, b"cc".to_vec());
+        assert_eq!(committed.commit_ts.unwrap().into_inner(), 20);
+
+        // Locked key with need_commit_ts = false: should read through committed_locks
+        // and return value with no commit_ts.
+        let locked = results.next().unwrap().unwrap().unwrap();
+        assert_eq!(locked.value, b"ll".to_vec());
+        assert!(locked.commit_ts.is_none());
+
+        // Locked key with need_commit_ts = true: committed_locks should be ignored and
+        // return lock error.
+        let res = results.next().unwrap();
+        expect_error(
+            |e| match e {
+                Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+                    box mvcc::ErrorInner::KeyIsLocked(..),
+                ))))) => {}
+                e => panic!("unexpected error chain: {:?}", e),
+            },
+            res.map(|_| ()),
         );
     }
 
@@ -6819,7 +7003,7 @@ mod tests {
         let consumer = GetConsumer::new();
         block_on(storage.raw_batch_get_command(cmds, ids, consumer.clone())).unwrap();
         let x: Vec<Option<Vec<u8>>> = consumer
-            .take_data()
+            .take_values()
             .into_iter()
             .map(|x| x.unwrap())
             .collect();
@@ -7263,30 +7447,21 @@ mod tests {
             (b"c".to_vec(), b"c3".to_vec()),
         ]);
         // TODO: refactor to use `Api` parameter.
-        assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false),
-            true
-        );
+        assert!(<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false));
 
         let ranges = make_ranges(vec![
             (b"a".to_vec(), vec![]),
             (b"b".to_vec(), vec![]),
             (b"c".to_vec(), vec![]),
         ]);
-        assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false),
-            true
-        );
+        assert!(<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false));
 
         let ranges = make_ranges(vec![
             (b"a3".to_vec(), b"a".to_vec()),
             (b"b3".to_vec(), b"b".to_vec()),
             (b"c3".to_vec(), b"c".to_vec()),
         ]);
-        assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false),
-            false
-        );
+        assert!(!<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false));
 
         // if end_key is omitted, the next start_key is used instead. so, false is
         // returned.
@@ -7295,50 +7470,35 @@ mod tests {
             (b"b".to_vec(), vec![]),
             (b"a".to_vec(), vec![]),
         ]);
-        assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false),
-            false
-        );
+        assert!(!<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false));
 
         let ranges = make_ranges(vec![
             (b"a3".to_vec(), b"a".to_vec()),
             (b"b3".to_vec(), b"b".to_vec()),
             (b"c3".to_vec(), b"c".to_vec()),
         ]);
-        assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true),
-            true
-        );
+        assert!(<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true));
 
         let ranges = make_ranges(vec![
             (b"c3".to_vec(), vec![]),
             (b"b3".to_vec(), vec![]),
             (b"a3".to_vec(), vec![]),
         ]);
-        assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true),
-            true
-        );
+        assert!(<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true));
 
         let ranges = make_ranges(vec![
             (b"a".to_vec(), b"a3".to_vec()),
             (b"b".to_vec(), b"b3".to_vec()),
             (b"c".to_vec(), b"c3".to_vec()),
         ]);
-        assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true),
-            false
-        );
+        assert!(!<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true));
 
         let ranges = make_ranges(vec![
             (b"a3".to_vec(), vec![]),
             (b"b3".to_vec(), vec![]),
             (b"c3".to_vec(), vec![]),
         ]);
-        assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true),
-            false
-        );
+        assert!(!<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true));
     }
 
     #[test]
@@ -7859,7 +8019,10 @@ mod tests {
             storage
                 .sched_txn_command(
                     commands::AcquirePessimisticLock::new(
-                        vec![(Key::from_raw(b"a"), false), (Key::from_raw(b"b"), false)],
+                        vec![
+                            (Key::from_raw(b"a"), false, false),
+                            (Key::from_raw(b"b"), false, false),
+                        ],
                         b"a".to_vec(),
                         20.into(),
                         3000,
@@ -8932,14 +9095,14 @@ mod tests {
         let results_values = |res: Vec<Option<Value>>| {
             PessimisticLockResults(
                 res.into_iter()
-                    .map(|v| PessimisticLockKeyResult::Value(v))
+                    .map(PessimisticLockKeyResult::Value)
                     .collect::<Vec<_>>(),
             )
         };
         let results_existence = |res: Vec<bool>| {
             PessimisticLockResults(
                 res.into_iter()
-                    .map(|v| PessimisticLockKeyResult::Existence(v))
+                    .map(PessimisticLockKeyResult::Existence)
                     .collect::<Vec<_>>(),
             )
         };
@@ -9803,7 +9966,10 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::AcquirePessimisticLock::new(
-                    vec![(Key::from_raw(b"foo"), false), (Key::from_raw(&k), false)],
+                    vec![
+                        (Key::from_raw(b"foo"), false, false),
+                        (Key::from_raw(&k), false, false),
+                    ],
                     k.clone(),
                     20.into(),
                     3000,
@@ -9841,7 +10007,7 @@ mod tests {
                         hash: Key::from_raw(&k).gen_hash(),
                     }
                 );
-                assert_eq!(is_first_lock, true);
+                assert!(is_first_lock);
                 assert_eq!(timeout, Some(WaitTimeout::Millis(100)));
             }
 
@@ -9895,7 +10061,7 @@ mod tests {
                 storage
                     .sched_txn_command(
                         commands::AcquirePessimisticLock::new(
-                            vec![(k.clone(), false)],
+                            vec![(k.clone(), false, false)],
                             k.to_raw().unwrap(),
                             lock_ts.into(),
                             3000,
@@ -10120,7 +10286,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
 
-        let mut h = lock_blocked(&[key.clone()], 105, start_ts.into_inner(), 0);
+        let mut h = lock_blocked(std::slice::from_ref(&key), 105, start_ts.into_inner(), 0);
 
         // Not expire
         storage
@@ -10222,6 +10388,7 @@ mod tests {
                 ctx,
                 vec![Key::from_raw(b"a"), Key::from_raw(b"key")],
                 100.into(),
+                false,
             ))
         };
         let key_error = extract_key_error(&batch_get(ctx.clone()).unwrap_err());
@@ -10321,15 +10488,16 @@ mod tests {
             ctx.clone(),
             vec![Key::from_raw(&k1), Key::from_raw(&k2)],
             110.into(),
+            false,
         ))
         .unwrap()
         .0;
         if res[0].as_ref().unwrap().0 == k1 {
-            assert_eq!(&res[0].as_ref().unwrap().1, &v1);
-            assert_eq!(&res[1].as_ref().unwrap().1, &v2);
+            assert_eq!(&res[0].as_ref().unwrap().1.value, &v1);
+            assert_eq!(&res[1].as_ref().unwrap().1.value, &v2);
         } else {
-            assert_eq!(&res[0].as_ref().unwrap().1, &v2);
-            assert_eq!(&res[1].as_ref().unwrap().1, &v1);
+            assert_eq!(&res[0].as_ref().unwrap().1.value, &v2);
+            assert_eq!(&res[1].as_ref().unwrap().1.value, &v1);
         }
         // batch get commands
         let mut req = GetRequest::default();
@@ -10345,7 +10513,7 @@ mod tests {
             Instant::now(),
         ))
         .unwrap();
-        let res = consumer.take_data();
+        let res = consumer.take_values();
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].as_ref().unwrap(), &Some(v1.clone()));
         // scan
@@ -10486,7 +10654,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::AcquirePessimisticLock::new(
-                    vec![(key1.clone(), false)],
+                    vec![(key1.clone(), false, false)],
                     k1.to_vec(),
                     1.into(),
                     0,
@@ -10509,7 +10677,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::AcquirePessimisticLock::new(
-                    vec![(key2.clone(), false)],
+                    vec![(key2.clone(), false, false)],
                     k2.to_vec(),
                     10.into(),
                     0,
@@ -10743,7 +10911,9 @@ mod tests {
             ],
 
             command: AcquirePessimisticLock::new(
-                keys.iter().map(|&it| (Key::from_raw(it), true)).collect(),
+                keys.iter()
+                    .map(|&it| (Key::from_raw(it), true, false))
+                    .collect(),
                 keys[0].to_vec(),
                 TimeStamp::new(10),
                 0,
@@ -10769,7 +10939,9 @@ mod tests {
             ],
 
             command: AcquirePessimisticLock::new(
-                keys.iter().map(|&it| (Key::from_raw(it), true)).collect(),
+                keys.iter()
+                    .map(|&it| (Key::from_raw(it), true, false))
+                    .collect(),
                 keys[0].to_vec(),
                 TimeStamp::new(10),
                 0,
@@ -12124,6 +12296,72 @@ mod tests {
                     must_locked(&mut storage.engine, key.as_slice(), start_ts);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_scan_lock_with_shared_lock() {
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+        let key = Key::from_raw(b"shared-lock");
+        let pk1 = b"shared-pk-1".to_vec();
+        let pk2 = b"shared-pk-2".to_vec();
+
+        for (start_ts, primary) in [(10, pk1.clone()), (20, pk2.clone())] {
+            storage
+                .sched_txn_command(
+                    new_acquire_pessimistic_lock_command_with_pk_with_shared(
+                        vec![(key.clone(), false, true)],
+                        Some(primary.as_slice()),
+                        start_ts,
+                        start_ts + 1,
+                        false,
+                        false,
+                    ),
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+        }
+        storage
+            .sched_txn_command(
+                commands::PrewritePessimistic::with_defaults(
+                    vec![(
+                        txn_types::Mutation::make_shared_lock(key),
+                        DoPessimisticCheck,
+                    )],
+                    pk2.clone(),
+                    20.into(),
+                    21.into(),
+                ),
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        let locks =
+            block_on(storage.scan_lock(Context::default(), 30.into(), None, None, 10)).unwrap();
+        assert_eq!(locks.len(), 1);
+        let lock = &locks[0];
+        assert_eq!(lock.get_key(), b"shared-lock");
+        assert_eq!(lock.get_lock_type(), Op::SharedLock);
+
+        let mut shared_locks = HashMap::default();
+        for lock in lock.get_shared_lock_infos() {
+            shared_locks.insert(lock.get_lock_version(), lock);
+        }
+        assert_eq!(shared_locks.len(), 2);
+
+        for (ts, for_update_ts, primary, op) in
+            [(10, 11, pk1, Op::PessimisticLock), (20, 21, pk2, Op::Lock)]
+        {
+            let shared_lock = shared_locks.get(&ts).expect("shared lock missing");
+            assert_eq!(shared_lock.get_key(), b"shared-lock");
+            assert_eq!(shared_lock.get_primary_lock(), primary.as_slice());
+            assert_eq!(shared_lock.get_lock_type(), op);
+            assert_eq!(shared_lock.get_lock_for_update_ts(), for_update_ts);
         }
     }
 }

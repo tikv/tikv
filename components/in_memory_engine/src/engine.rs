@@ -470,8 +470,8 @@ impl RegionCacheMemoryEngine {
         get_tikv_safe_point: Box<dyn Fn() -> Option<u64> + Send>,
     ) {
         let cross_check_interval = self.config.value().cross_check_interval;
-        if !cross_check_interval.is_zero() {
-            if let Err(e) =
+        if !cross_check_interval.is_zero()
+            && let Err(e) =
                 self.bg_worker_manager()
                     .schedule_task(BackgroundTask::TurnOnCrossCheck((
                         self.clone(),
@@ -480,13 +480,12 @@ impl RegionCacheMemoryEngine {
                         cross_check_interval.0,
                         get_tikv_safe_point,
                     )))
-            {
-                error!(
-                    "schedule TurnOnCrossCheck failed";
-                    "err" => ?e,
-                );
-                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
-            }
+        {
+            error!(
+                "schedule TurnOnCrossCheck failed";
+                "err" => ?e,
+            );
+            assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
         }
     }
 }

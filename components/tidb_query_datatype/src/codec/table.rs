@@ -52,6 +52,10 @@ pub const EXTRA_PARTITION_ID_COL_ID: i64 = -2;
 /// If it's a global index, it will return partition id, see <https://github.com/tikv/tikv/issues/17138>
 pub const EXTRA_PHYSICAL_TABLE_ID_COL_ID: i64 = -3;
 
+// EXTRA_COMMIT_TS_COL_ID is the column ID of column which holds the commit
+// timestamp.
+pub const EXTRA_COMMIT_TS_COL_ID: i64 = -5;
+
 /// `TableEncoder` encodes the table record/index prefix.
 trait TableEncoder: NumberEncoder {
     fn append_table_record_prefix(&mut self, table_id: i64) -> Result<()> {
@@ -539,7 +543,8 @@ pub fn generate_index_data_for_test(
         .map(|(cid, value)| {
             expect_row.insert(
                 *cid,
-                datum::encode_key(&mut EvalContext::default(), &[value.clone()]).unwrap(),
+                datum::encode_key(&mut EvalContext::default(), std::slice::from_ref(value))
+                    .unwrap(),
             );
             value.clone()
         })
@@ -680,6 +685,9 @@ impl RowHandle for CommonHandle {
         _handle_offsets: &[usize],
         _handle_types: &[FieldType],
     ) -> Result<Vec<Self>> {
+        if rows.is_empty() {
+            return Ok(vec![]);
+        }
         if let Some(mut keys) = vec.take_extra_common_handle_keys() {
             let keys_len = keys.len();
             let mut handles = Vec::with_capacity(keys_len);
@@ -1206,7 +1214,7 @@ mod tests {
             vec![Some(123), None, Some(234), Some(567)].into(),
         )]);
 
-        // valid case
+        // normal case
         vec.mut_extra_common_handle_keys().append(&mut vec![
             vec![1u8, 2u8, 3u8],
             vec![11u8, 12u8, 13u8],
@@ -1223,6 +1231,11 @@ mod tests {
                 CommonHandle(vec![11u8, 12u8, 13u8]),
             ]
         );
+
+        // normal case, None extra_common_handle_keys is allowed when rows is empty
+        assert!(vec.take_extra_common_handle_keys().is_none());
+        let handles = CommonHandle::from_lazy_batch_column_vec(&mut vec, &[], &[], &[]).unwrap();
+        assert_eq!(handles, vec![]);
 
         // invalid case, row offset out of bounds
         vec.mut_extra_common_handle_keys().append(&mut vec![

@@ -130,6 +130,7 @@ impl InMemoryEngineConfig {
             );
         }
 
+        #[allow(clippy::unnecessary_unwrap)]
         if self.evict_threshold.is_none() {
             let capacity = self.capacity.unwrap().0;
             let delta = std::cmp::min(
@@ -146,6 +147,7 @@ impl InMemoryEngineConfig {
             .into());
         }
 
+        #[allow(clippy::unnecessary_unwrap)]
         if self.stop_load_threshold.is_none() {
             let delta = std::cmp::min(
                 self.capacity.unwrap().0 * 15 / 100,

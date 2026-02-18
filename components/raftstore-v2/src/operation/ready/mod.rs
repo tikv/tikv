@@ -637,32 +637,33 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         msg: RaftMessage,
     ) {
         let message = msg.get_message();
-        if message.get_msg_type() == MessageType::MsgAppend
-            && let Some(fe) = message.get_entries().first()
-            && let Some(le) = message.get_entries().last()
-        {
-            let last = (le.get_term(), le.get_index());
-            let first = (fe.get_term(), fe.get_index());
-            let now = Instant::now();
-            let queue = self.proposals_mut().queue_mut();
-            // Proposals are batched up, so it will liely hit after one or two steps.
-            for p in queue.iter_mut().rev() {
-                if p.sent {
-                    break;
+        if message.get_msg_type() == MessageType::MsgAppend {
+            if let (Some(fe), Some(le)) =
+                (message.get_entries().first(), message.get_entries().last())
+            {
+                let last = (le.get_term(), le.get_index());
+                let first = (fe.get_term(), fe.get_index());
+                let now = Instant::now();
+                let queue = self.proposals_mut().queue_mut();
+                // Proposals are batched up, so it will liely hit after one or two steps.
+                for p in queue.iter_mut().rev() {
+                    if p.sent {
+                        break;
+                    }
+                    let cur = (p.term, p.index);
+                    if cur > last {
+                        continue;
+                    }
+                    if cur < first {
+                        break;
+                    }
+                    for tracker in p.cb.write_trackers() {
+                        tracker.observe(now, &ctx.raft_metrics.wf_send_proposal, |t| {
+                            &mut t.metrics.wf_send_proposal_nanos
+                        });
+                    }
+                    p.sent = true;
                 }
-                let cur = (p.term, p.index);
-                if cur > last {
-                    continue;
-                }
-                if cur < first {
-                    break;
-                }
-                for tracker in p.cb.write_trackers() {
-                    tracker.observe(now, &ctx.raft_metrics.wf_send_proposal, |t| {
-                        &mut t.metrics.wf_send_proposal_nanos
-                    });
-                }
-                p.sent = true;
             }
         }
         if message.get_msg_type() == MessageType::MsgTimeoutNow {

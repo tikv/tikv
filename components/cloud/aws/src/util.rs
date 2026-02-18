@@ -74,6 +74,10 @@ pub fn is_retryable<T>(error: &SdkError<T>) -> bool {
             let code = resp_err.raw().status();
             code.is_server_error() || code.as_u16() == http::StatusCode::REQUEST_TIMEOUT.as_u16()
         }
+        SdkError::ServiceError(service_err) => {
+            let code = service_err.raw().status();
+            code.is_server_error() || code.as_u16() == http::StatusCode::REQUEST_TIMEOUT.as_u16()
+        }
         _ => false,
     }
 }
@@ -199,8 +203,90 @@ impl ProvideCredentials for DefaultCredentialsProvider {
 
 #[cfg(test)]
 mod tests {
+    use aws_smithy_runtime_api::http::StatusCode;
+    use aws_smithy_types::body::SdkBody;
+
     #[allow(unused_imports)]
     use super::*;
+
+    #[test]
+    fn test_is_retryable_response_error_5xx() {
+        // Test that ResponseError with 5xx status codes are retryable
+        let response = HttpResponse::new(StatusCode::try_from(503).unwrap(), SdkBody::empty());
+        let err = SdkError::<(), _>::response_error("service unavailable", response);
+        assert!(is_retryable(&err));
+
+        let response = HttpResponse::new(StatusCode::try_from(500).unwrap(), SdkBody::empty());
+        let err = SdkError::<(), _>::response_error("internal server error", response);
+        assert!(is_retryable(&err));
+    }
+
+    #[test]
+    fn test_is_retryable_response_error_4xx() {
+        // Test that ResponseError with 4xx status codes are not retryable
+        let response = HttpResponse::new(StatusCode::try_from(404).unwrap(), SdkBody::empty());
+        let err = SdkError::<(), _>::response_error("not found", response);
+        assert!(!is_retryable(&err));
+
+        let response = HttpResponse::new(StatusCode::try_from(400).unwrap(), SdkBody::empty());
+        let err = SdkError::<(), _>::response_error("bad request", response);
+        assert!(!is_retryable(&err));
+    }
+
+    #[test]
+    fn test_is_retryable_response_error_408() {
+        // Test that ResponseError with 408 Request Timeout is retryable
+        let response = HttpResponse::new(StatusCode::try_from(408).unwrap(), SdkBody::empty());
+        let err = SdkError::<(), _>::response_error("request timeout", response);
+        assert!(is_retryable(&err));
+    }
+
+    #[test]
+    fn test_is_retryable_service_error_5xx() {
+        // Test that ServiceError with 5xx status codes are retryable (e.g., S3
+        // SlowDown)
+        let response = HttpResponse::new(StatusCode::try_from(503).unwrap(), SdkBody::empty());
+        let err = SdkError::<(), _>::service_error((), response);
+        assert!(is_retryable(&err));
+
+        let response = HttpResponse::new(StatusCode::try_from(500).unwrap(), SdkBody::empty());
+        let err = SdkError::<(), _>::service_error((), response);
+        assert!(is_retryable(&err));
+    }
+
+    #[test]
+    fn test_is_retryable_service_error_4xx() {
+        // Test that ServiceError with 4xx status codes are not retryable
+        let response = HttpResponse::new(StatusCode::try_from(404).unwrap(), SdkBody::empty());
+        let err = SdkError::<(), _>::service_error((), response);
+        assert!(!is_retryable(&err));
+
+        let response = HttpResponse::new(StatusCode::try_from(403).unwrap(), SdkBody::empty());
+        let err = SdkError::<(), _>::service_error((), response);
+        assert!(!is_retryable(&err));
+    }
+
+    #[test]
+    fn test_is_retryable_service_error_408() {
+        // Test that ServiceError with 408 Request Timeout is retryable
+        let response = HttpResponse::new(StatusCode::try_from(408).unwrap(), SdkBody::empty());
+        let err = SdkError::<(), _>::service_error((), response);
+        assert!(is_retryable(&err));
+    }
+
+    #[test]
+    fn test_is_retryable_timeout_error() {
+        // Test that TimeoutError is retryable
+        let err = SdkError::<(), HttpResponse>::timeout_error("operation timed out");
+        assert!(is_retryable(&err));
+    }
+
+    #[test]
+    fn test_is_retryable_construction_failure() {
+        // Test that ConstructionFailure is not retryable
+        let err = SdkError::<(), HttpResponse>::construction_failure("failed to build request");
+        assert!(!is_retryable(&err));
+    }
 
     #[cfg(feature = "failpoints")]
     #[tokio::test]

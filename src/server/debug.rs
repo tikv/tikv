@@ -41,7 +41,7 @@ use raftstore::{
 use thiserror::Error;
 use tikv_kv::Engine;
 use tikv_util::{
-    config::ReadableSize, keybuilder::KeyBuilder, store::find_peer,
+    Either, config::ReadableSize, keybuilder::KeyBuilder, store::find_peer,
     sys::thread::StdThreadBuildWrapper, worker::Worker,
 };
 use txn_types::Key;
@@ -963,20 +963,20 @@ where
 
     fn dump_kv_stats(&self) -> Result<String> {
         let mut kv_str = box_try!(MiscExt::dump_stats(&self.engines.kv));
-        if let Some(s) = self.kv_statistics.as_ref()
-            && let Some(s) = s.to_string()
-        {
-            kv_str.push_str(&s);
+        if let Some(s) = self.kv_statistics.as_ref() {
+            if let Some(s) = s.to_string() {
+                kv_str.push_str(&s);
+            }
         }
         Ok(kv_str)
     }
 
     fn dump_raft_stats(&self) -> Result<String> {
         let mut raft_str = box_try!(RaftEngine::dump_stats(&self.engines.raft));
-        if let Some(s) = self.raft_statistics.as_ref()
-            && let Some(s) = s.to_string()
-        {
-            raft_str.push_str(&s);
+        if let Some(s) = self.raft_statistics.as_ref() {
+            if let Some(s) = s.to_string() {
+                raft_str.push_str(&s);
+            }
         }
         Ok(raft_str)
     }
@@ -1369,7 +1369,7 @@ impl MvccChecker {
 
     fn check_mvcc_key(&mut self, wb: &mut RocksWriteBatchVec, key: &[u8]) -> Result<()> {
         self.scan_count += 1;
-        if self.scan_count % 1_000_000 == 0 {
+        if self.scan_count.is_multiple_of(1_000_000) {
             info!(
                 "thread {}: scan {} rows",
                 self.thread_index, self.scan_count
@@ -1497,7 +1497,14 @@ impl MvccChecker {
 
     fn next_lock(&mut self, key: &[u8]) -> Result<Option<Lock>> {
         if self.lock_iter.valid().unwrap() && keys::origin_key(self.lock_iter.key()) == key {
-            let lock = box_try!(Lock::parse(self.lock_iter.value()));
+            let lock = match box_try!(txn_types::parse_lock(self.lock_iter.value())) {
+                Either::Left(lock) => lock,
+                Either::Right(_shared_locks) => {
+                    unimplemented!(
+                        "SharedLocks returned from txn_types::parse_lock is not supported here"
+                    )
+                }
+            };
             self.lock_iter.next().unwrap();
             return Ok(Some(lock));
         }

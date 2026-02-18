@@ -7,7 +7,7 @@ use std::{
     io::{self, BufReader, ErrorKind, Read},
     ops::Bound,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, SystemTime},
 };
 
@@ -43,6 +43,7 @@ use tikv_util::{
     memory::{MemoryQuota, OwnedAllocated},
     resizable_threadpool::DeamonRuntimeHandle,
     sys::{SysQuota, thread::ThreadBuildWrapper},
+    thread_name_prefix::SST_IMPORT_MISC_THREAD,
     time::{Instant, Limiter},
 };
 use tokio::{runtime::Runtime, sync::OnceCell};
@@ -191,7 +192,7 @@ impl<E: KvEngine> SstImporter<E> {
         // enough.
         let download_rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
-            .thread_name("sst_import_misc")
+            .thread_name(SST_IMPORT_MISC_THREAD)
             .with_sys_and_custom_hooks(
                 || {
                     file_system::set_io_type(IoType::Import);
@@ -460,7 +461,12 @@ impl<E: KvEngine> SstImporter<E> {
             "speed_limit" => speed_limiter.speed_limit(),
         );
         let mut sst_readers = Vec::new();
-        let mut clean_paths = Vec::new();
+        let clean_paths = Mutex::new(Vec::new());
+        defer! {
+            for path in clean_paths.lock().unwrap().iter() {
+                self.remove_file_no_throw(path)
+            }
+        };
         for (name, meta) in metas {
             let path = self.dir.join_for_write(meta)?;
             let dst_file_name = self
@@ -481,12 +487,19 @@ impl<E: KvEngine> SstImporter<E> {
             sst_reader.verify_checksum()?;
 
             sst_readers.push(sst_reader);
-            clean_paths.push(path.temp);
+            clean_paths.lock().unwrap().push(path.temp);
         }
 
+        fail::fail_point!("download_files_ext_after_download", |msg| {
+            let msg = msg.unwrap_or_else(|| "download files ext injected error".to_string());
+            Err(Error::ErrorWrapper(msg))
+        });
+
+        let mut iter_option = IterOptions::default();
+        iter_option.set_fill_cache(false);
         let mut sst_iters = Vec::with_capacity(sst_readers.len());
         for sst_reader in &sst_readers {
-            let sst_iter = sst_reader.iter(IterOptions::default())?;
+            let sst_iter = sst_reader.iter(iter_option.clone())?;
             sst_iters.push(sst_iter);
         }
         let mut sst_iter = BinaryIterator::new(sst_iters);
@@ -504,11 +517,6 @@ impl<E: KvEngine> SstImporter<E> {
                 engine,
                 ext.req_type,
                 Instant::now(),
-                || {
-                    for path in clean_paths {
-                        let _ = file_system::remove_file(path);
-                    }
-                },
             )
             .await;
 
@@ -1993,7 +2001,7 @@ impl<E: KvEngine> SstImporter<E> {
         Ok((range_start, range_end))
     }
 
-    async fn do_rewrite_keys<'a, Iter: Iterator, F>(
+    async fn do_rewrite_keys<'a, Iter: Iterator>(
         &'a self,
         dst_file_name: PathBuf,
         rewrite_rule: &'a RewriteRule,
@@ -2004,16 +2012,12 @@ impl<E: KvEngine> SstImporter<E> {
         engine: E,
         req_type: DownloadRequestType,
         start_rewrite: Instant,
-        clean_files: F,
     ) -> Result<
         Option<(
             Range,
             <<E as SstExt>::SstWriter as SstWriter>::ExternalSstFileInfo,
         )>,
-    >
-    where
-        F: FnOnce(),
-    {
+    > {
         let old_prefix = rewrite_rule.get_old_key_prefix();
         let new_prefix = rewrite_rule.get_new_key_prefix();
         // perform iteration and key rewrite.
@@ -2137,8 +2141,6 @@ impl<E: KvEngine> SstImporter<E> {
                 first_key = Some(keys::origin_key(&data_key).to_vec());
             }
         }
-
-        clean_files();
 
         IMPORTER_DOWNLOAD_DURATION
             .with_label_values(&["rewrite"])
@@ -3716,7 +3718,9 @@ mod tests {
             meta.set_length(0); // disable validation.
             meta.set_crc32(0);
             let meta_info = importer.validate(&meta).unwrap();
-            importer.ingest(&[meta_info.clone()], &db).unwrap();
+            importer
+                .ingest(std::slice::from_ref(&meta_info), &db)
+                .unwrap();
             // key1 = "zt9102_r01", value1 = "abc", len = 13
             // key2 = "zt9102_r04", value2 = "xyz", len = 13
             // key3 = "zt9102_r07", value3 = "pqrst", len = 15
@@ -4838,6 +4842,54 @@ mod tests {
 
         // Should fail due to invalid SST file
         result.unwrap_err();
+    }
+
+    #[test]
+    #[cfg(feature = "failpoints")]
+    fn test_download_files_ext_cleanup_temp_files_on_error() {
+        let (_ext_sst_dir, backend, file_metas) = create_multiple_external_sst_files(2).unwrap();
+
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
+        let db = create_sst_test_engine().unwrap();
+
+        let metas: HashMap<String, SstMeta> = file_metas
+            .iter()
+            .map(|(name, meta)| (name.clone(), meta.clone()))
+            .collect();
+        let temp_paths: Vec<_> = metas
+            .values()
+            .map(|meta| importer.dir.join_for_write(meta).unwrap().temp)
+            .collect();
+
+        let _fp = fail::FailScenario::setup();
+        fail::cfg("download_files_ext_after_download", "return(injected)").unwrap();
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let result = runtime.block_on(importer.download_files_ext(
+            &file_metas[0].1,
+            &metas,
+            &backend,
+            &RewriteRule::default(),
+            None,
+            Limiter::new(f64::INFINITY),
+            db,
+            DownloadExt::default(),
+        ));
+
+        fail::remove("download_files_ext_after_download");
+        result.unwrap_err();
+
+        for path in temp_paths {
+            assert!(
+                !path.exists(),
+                "temporary download file {:?} should be cleaned up",
+                path
+            );
+        }
     }
 
     #[test]

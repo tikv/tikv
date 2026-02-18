@@ -17,6 +17,10 @@ use resource_control::{
 };
 use tikv_util::{
     sys::SysQuota,
+    thread_name_prefix::{
+        SCHEDULE_WORKER_HIGH_PRI_THREAD, SCHEDULE_WORKER_POOL_THREAD,
+        SCHEDULE_WORKER_PRIORITY_THREAD,
+    },
     yatp_pool::{Full, FuturePool, PoolTicker, YatpPoolBuilder},
 };
 use yatp::queue::Extras;
@@ -192,12 +196,15 @@ impl SchedPool {
                 .enable_task_exec_metrics(true)
         };
         let vanilla = VanillaQueue {
-            worker_pool: builder(pool_size, "sched-worker-pool").build_future_pool(),
-            high_worker_pool: builder(std::cmp::max(1, pool_size / 2), "sched-worker-high")
-                .build_future_pool(),
+            worker_pool: builder(pool_size, SCHEDULE_WORKER_POOL_THREAD).build_future_pool(),
+            high_worker_pool: builder(
+                std::cmp::max(1, pool_size / 2),
+                SCHEDULE_WORKER_HIGH_PRI_THREAD,
+            )
+            .build_future_pool(),
         };
         let priority = resource_ctl.as_ref().map(|r| PriorityQueue {
-            worker_pool: builder(pool_size, "sched-worker-priority")
+            worker_pool: builder(pool_size, SCHEDULE_WORKER_PRIORITY_THREAD)
                 .build_priority_future_pool(r.clone()),
             resource_ctl: r.clone(),
             resource_mgr: resource_mgr.unwrap(),

@@ -68,9 +68,10 @@ impl Default for DownstreamId {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum DownstreamState {
     /// It's just created and rejects change events and resolved timestamps.
+    #[default]
     Uninitialized,
     /// It has got a snapshot for incremental scan, and change events will be
     /// accepted. However, it still rejects resolved timestamps.
@@ -79,12 +80,6 @@ pub enum DownstreamState {
     /// now.
     Normal,
     Stopped,
-}
-
-impl Default for DownstreamState {
-    fn default() -> Self {
-        Self::Uninitialized
-    }
 }
 
 /// Should only be called when it's uninitialized or stopped. Return false if
@@ -773,7 +768,16 @@ impl Delegate {
                     if !observed_range.contains_encoded_key(&lock.0) {
                         continue;
                     }
-                    let l = Lock::parse(&lock.1).unwrap();
+                    let lock_type = txn_types::decode_lock_type(&lock.1).unwrap();
+                    if !matches!(lock_type, LockType::Put | LockType::Delete) {
+                        // We only send locks with data changes to downstream.
+                        debug!("cdc skip lock record"; "lock" => ?lock_type, "key" => %Key::from_encoded(lock.0));
+                        continue;
+                    }
+                    let l = txn_types::parse_lock(&lock.1)
+                        .unwrap()
+                        .left()
+                        .expect("only put/delete lock should be here");
                     if decode_lock(lock.0, l, &mut row, &mut _has_value) {
                         continue;
                     }
@@ -953,6 +957,7 @@ impl Delegate {
                 }
                 // lock_heap initialized and there is lock_modified_counts, update the lock_heap
                 // to avoid the resolved-ts stuck.
+                #[allow(clippy::unnecessary_unwrap)]
                 if !lock_modified_counts.is_empty() && downstream.lock_heap.is_some() {
                     let lock_heap = downstream.lock_heap.as_mut().unwrap();
                     lock_modified_counts.iter().for_each(|modified| {
@@ -1039,14 +1044,23 @@ impl Delegate {
                 }
             }
             "lock" => {
-                let lock = Lock::parse(put.get_value()).unwrap();
+                let lock_type = txn_types::decode_lock_type(put.get_value()).unwrap();
+                if !matches!(lock_type, LockType::Put | LockType::Delete) {
+                    // We only send locks with data changes to downstream.
+                    debug!("cdc skip lock record"; "lock" => ?lock_type, "key" => %Key::from_encoded(put.take_key()));
+                    return Ok(());
+                }
+                let lock = txn_types::parse_lock(put.get_value())
+                    .unwrap()
+                    .left()
+                    .expect("only put/delete lock should be here");
                 let for_update_ts = lock.for_update_ts;
                 let txn_source = lock.txn_source;
 
                 let key = Key::from_encoded_slice(&put.key);
                 let row = rows.txns_by_key.entry(key.clone()).or_default();
                 if decode_lock(put.take_key(), lock, &mut row.v, &mut row.has_value) {
-                    return Ok(());
+                    unreachable!("non put/delete lock has been filtered");
                 }
 
                 let mini_lock = MiniLock::new(row.v.start_ts, txn_source);
@@ -1632,7 +1646,7 @@ mod tests {
 
     #[test]
     fn test_observed_range() {
-        for case in vec![
+        for case in [
             (b"".as_slice(), b"".as_slice(), false),
             (b"a", b"", false),
             (b"", b"b", false),

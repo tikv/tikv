@@ -2,9 +2,12 @@
 
 use std::{borrow::Cow, mem::size_of};
 
+use bitflags::bitflags;
 use byteorder::ReadBytesExt;
+use collections::HashMap;
 use kvproto::kvrpcpb::{IsolationLevel, LockInfo, Op, WriteConflictReason};
 use tikv_util::{
+    Either,
     codec::{
         bytes::{self, BytesEncoder},
         number::{self, MAX_VAR_I64_LEN, MAX_VAR_U64_LEN, NumberEncoder},
@@ -24,12 +27,14 @@ pub enum LockType {
     Delete,
     Lock,
     Pessimistic,
+    Shared,
 }
 
 const FLAG_PUT: u8 = b'P';
 const FLAG_DELETE: u8 = b'D';
 const FLAG_LOCK: u8 = b'L';
 const FLAG_PESSIMISTIC: u8 = b'S';
+const FLAG_SHARED: u8 = b'H';
 
 const FOR_UPDATE_TS_PREFIX: u8 = b'f';
 const TXN_SIZE_PREFIX: u8 = b't';
@@ -41,13 +46,15 @@ const TXN_SOURCE_PREFIX: u8 = b's';
 const _RESERVED_PREFIX: u8 = b'T'; // Reserved for future use.
 const PESSIMISTIC_LOCK_WITH_CONFLICT_PREFIX: u8 = b'F';
 const GENERATION_PREFIX: u8 = b'g';
+const SHARED_LOCK_TXNS_INFO_PREFIX: u8 = b'h';
+const SHARED_LOCK_FLAGS_PREFIX: u8 = b'i';
 
 impl LockType {
     pub fn from_mutation(mutation: &Mutation) -> Option<LockType> {
         match *mutation {
             Mutation::Put(..) | Mutation::Insert(..) => Some(LockType::Put),
             Mutation::Delete(..) => Some(LockType::Delete),
-            Mutation::Lock(..) => Some(LockType::Lock),
+            Mutation::Lock(..) | Mutation::SharedLock(..) => Some(LockType::Lock),
             Mutation::CheckNotExists(..) => None,
         }
     }
@@ -58,6 +65,7 @@ impl LockType {
             FLAG_DELETE => Some(LockType::Delete),
             FLAG_LOCK => Some(LockType::Lock),
             FLAG_PESSIMISTIC => Some(LockType::Pessimistic),
+            FLAG_SHARED => Some(LockType::Shared),
             _ => None,
         }
     }
@@ -68,9 +76,12 @@ impl LockType {
             LockType::Delete => FLAG_DELETE,
             LockType::Lock => FLAG_LOCK,
             LockType::Pessimistic => FLAG_PESSIMISTIC,
+            LockType::Shared => FLAG_SHARED,
         }
     }
 }
+
+pub type LockOrSharedLocks = Either<Lock, SharedLocks>;
 
 #[derive(PartialEq, Clone)]
 pub struct Lock {
@@ -219,6 +230,10 @@ impl Lock {
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
+        assert!(
+            self.lock_type != LockType::Shared,
+            "use SharedLocks to encode shared locks"
+        );
         let mut b = Vec::with_capacity(self.pre_allocate_size());
         b.push(self.lock_type.to_u8());
         b.encode_compact_bytes(&self.primary).unwrap();
@@ -321,12 +336,178 @@ impl Lock {
         }
         size
     }
+}
 
+pub fn decode_lock_type(b: &[u8]) -> Result<LockType> {
+    if b.is_empty() {
+        return Err(Error::from(ErrorInner::BadFormatLock));
+    }
+    let lock_type = LockType::from_u8(b[0]).ok_or(ErrorInner::BadFormatLock)?;
+    Ok(lock_type)
+}
+
+pub fn decode_lock_start_ts(b: &[u8]) -> Result<TimeStamp> {
+    match decode_lock_type(b)? {
+        LockType::Shared => Err(Error::from(ErrorInner::BadFormatLock)),
+        _ => {
+            let mut b = &b[1..];
+            let _ = bytes::decode_compact_bytes(&mut b)?;
+            let ts = number::decode_var_u64(&mut b)?.into();
+            Ok(ts)
+        }
+    }
+}
+
+/// Checks whether the lock conflicts with the given `ts`. If `ts ==
+/// TimeStamp::max()`, the primary lock will be ignored.
+fn check_ts_conflict_si(
+    lock_or_shared_locks: Cow<'_, LockOrSharedLocks>,
+    key: &Key,
+    ts: TimeStamp,
+    bypass_locks: &TsSet,
+    is_replica_read: bool,
+) -> Result<()> {
+    let lock = match lock_or_shared_locks.as_ref() {
+        Either::Left(lock) => lock,
+        Either::Right(_) => return Ok(()), // Ignore SharedLocks
+    };
+
+    if lock.ts > ts || lock.lock_type == LockType::Lock || lock.is_pessimistic_lock() {
+        // Ignore lock when lock.ts > ts or lock's type is Lock, Shared, or Pessimistic
+        return Ok(());
+    }
+
+    if lock.min_commit_ts > ts {
+        // Ignore lock when min_commit_ts > ts
+        return Ok(());
+    }
+
+    if bypass_locks.contains(lock.ts) {
+        return Ok(());
+    }
+
+    let raw_key = key.to_raw()?;
+
+    // Disable replica read for autocommit max ts read, to avoid breaking
+    // linearizability. See https://github.com/pingcap/tidb/issues/43583 for details.
+    if ts == TimeStamp::max() && is_replica_read {
+        return Err(Error::from(ErrorInner::KeyIsLocked(
+            lock_or_shared_locks
+                .into_owned()
+                .left()
+                .unwrap()
+                .into_lock_info(raw_key),
+        )));
+    }
+
+    if ts == TimeStamp::max()
+        && raw_key == lock.primary
+        && !lock.use_async_commit
+        && !lock.use_one_pc
+    {
+        // When `ts == TimeStamp::max()` (which means to get latest committed version
+        // for primary key), and current key is the primary key, we ignore
+        // this lock.
+        return Ok(());
+    }
+
+    // There is a pending lock. Client should wait or clean it.
+    Err(Error::from(ErrorInner::KeyIsLocked(
+        lock_or_shared_locks
+            .into_owned()
+            .left()
+            .unwrap()
+            .into_lock_info(raw_key),
+    )))
+}
+
+// Check if lock could be bypassed for isolation level `RcCheckTs`.
+fn check_ts_conflict_rc_check_ts(
+    lock_or_shared_locks: Cow<'_, LockOrSharedLocks>,
+    key: &Key,
+    ts: TimeStamp,
+    bypass_locks: &TsSet,
+) -> Result<()> {
+    let lock = match lock_or_shared_locks.as_ref() {
+        Either::Left(lock) => lock,
+        Either::Right(_) => return Ok(()), // Ignore SharedLocks
+    };
+
+    if lock.lock_type == LockType::Lock || lock.is_pessimistic_lock() {
+        // Ignore lock when the lock's type is Lock, Shared or Pessimistic.
+        return Ok(());
+    }
+
+    // The lock is resolved already.
+    if bypass_locks.contains(lock.ts) {
+        return Ok(());
+    }
+
+    // Return conflict error.
+    Err(Error::from(ErrorInner::WriteConflict {
+        start_ts: ts,
+        conflict_start_ts: lock.ts,
+        conflict_commit_ts: Default::default(),
+        key: key.to_raw()?,
+        primary: lock.primary.to_vec(),
+        reason: WriteConflictReason::RcCheckTs,
+    }))
+}
+
+pub fn check_ts_conflict(
+    lock_or_shared_locks: Cow<'_, LockOrSharedLocks>,
+    key: &Key,
+    ts: TimeStamp,
+    bypass_locks: &TsSet,
+    iso_level: IsolationLevel,
+) -> Result<()> {
+    match iso_level {
+        IsolationLevel::Si => {
+            check_ts_conflict_si(lock_or_shared_locks, key, ts, bypass_locks, false)
+        }
+        IsolationLevel::RcCheckTs => {
+            check_ts_conflict_rc_check_ts(lock_or_shared_locks, key, ts, bypass_locks)
+        }
+        _ => {
+            let _ = lock_or_shared_locks;
+            Ok(())
+        }
+    }
+}
+
+pub fn check_ts_conflict_for_replica_read(
+    lock_or_shared_locks: Cow<'_, LockOrSharedLocks>,
+    key: &Key,
+    ts: TimeStamp,
+    bypass_locks: &TsSet,
+    iso_level: IsolationLevel,
+) -> Result<()> {
+    match iso_level {
+        IsolationLevel::Si => {
+            check_ts_conflict_si(lock_or_shared_locks, key, ts, bypass_locks, true)
+        }
+        IsolationLevel::RcCheckTs => unreachable!(),
+        _ => {
+            let _ = lock_or_shared_locks;
+            Ok(())
+        }
+    }
+}
+
+pub fn parse_lock(b: &[u8]) -> Result<LockOrSharedLocks> {
+    match decode_lock_type(b)? {
+        LockType::Shared => Ok(Either::Right(SharedLocks::parse(b)?)),
+        _ => Ok(Either::Left(Lock::parse(b)?)),
+    }
+}
+
+impl Lock {
     pub fn parse(mut b: &[u8]) -> Result<Lock> {
         if b.is_empty() {
             return Err(Error::from(ErrorInner::BadFormatLock));
         }
         let lock_type = LockType::from_u8(b.read_u8()?).ok_or(ErrorInner::BadFormatLock)?;
+        assert!(lock_type != LockType::Shared);
         let primary = bytes::decode_compact_bytes(&mut b)?;
         let ts = number::decode_var_u64(&mut b)?.into();
         let ttl = if b.is_empty() {
@@ -450,6 +631,8 @@ impl Lock {
             LockType::Delete => Op::Del,
             LockType::Lock => Op::Lock,
             LockType::Pessimistic => Op::PessimisticLock,
+            // Lock struct should not have LockType::Shared; use SharedLocks instead.
+            LockType::Shared => unreachable!("use SharedLocks::into_lock_info for shared locks"),
         };
         info.set_lock_type(lock_type);
         info.set_lock_for_update_ts(self.for_update_ts.into_inner());
@@ -459,116 +642,6 @@ impl Lock {
         // The client does not care about last_change_ts, versions_to_last_version and
         // txn_source.
         info
-    }
-
-    /// Checks whether the lock conflicts with the given `ts`. If `ts ==
-    /// TimeStamp::max()`, the primary lock will be ignored.
-    fn check_ts_conflict_si(
-        lock: Cow<'_, Self>,
-        key: &Key,
-        ts: TimeStamp,
-        bypass_locks: &TsSet,
-        is_replica_read: bool,
-    ) -> Result<()> {
-        if lock.ts > ts || lock.lock_type == LockType::Lock || lock.is_pessimistic_lock() {
-            // Ignore lock when lock.ts > ts or lock's type is Lock or Pessimistic
-            return Ok(());
-        }
-
-        if lock.min_commit_ts > ts {
-            // Ignore lock when min_commit_ts > ts
-            return Ok(());
-        }
-
-        if bypass_locks.contains(lock.ts) {
-            return Ok(());
-        }
-
-        let raw_key = key.to_raw()?;
-
-        // Disable replica read for autocommit max ts read, to avoid breaking
-        // linearizability. See https://github.com/pingcap/tidb/issues/43583 for details.
-        if ts == TimeStamp::max() && is_replica_read {
-            return Err(Error::from(ErrorInner::KeyIsLocked(
-                lock.into_owned().into_lock_info(raw_key),
-            )));
-        }
-
-        if ts == TimeStamp::max()
-            && raw_key == lock.primary
-            && !lock.use_async_commit
-            && !lock.use_one_pc
-        {
-            // When `ts == TimeStamp::max()` (which means to get latest committed version
-            // for primary key), and current key is the primary key, we ignore
-            // this lock.
-            return Ok(());
-        }
-
-        // There is a pending lock. Client should wait or clean it.
-        Err(Error::from(ErrorInner::KeyIsLocked(
-            lock.into_owned().into_lock_info(raw_key),
-        )))
-    }
-
-    // Check if lock could be bypassed for isolation level `RcCheckTs`.
-    fn check_ts_conflict_rc_check_ts(
-        lock: Cow<'_, Self>,
-        key: &Key,
-        ts: TimeStamp,
-        bypass_locks: &TsSet,
-    ) -> Result<()> {
-        if lock.lock_type == LockType::Lock || lock.is_pessimistic_lock() {
-            // Ignore lock when the lock's type is Lock or Pessimistic.
-            return Ok(());
-        }
-
-        // The lock is resolved already.
-        if bypass_locks.contains(lock.ts) {
-            return Ok(());
-        }
-
-        // Return conflict error.
-        Err(Error::from(ErrorInner::WriteConflict {
-            start_ts: ts,
-            conflict_start_ts: lock.ts,
-            conflict_commit_ts: Default::default(),
-            key: key.to_raw()?,
-            primary: lock.primary.to_vec(),
-            reason: WriteConflictReason::RcCheckTs,
-        }))
-    }
-
-    pub fn check_ts_conflict(
-        lock: Cow<'_, Self>,
-        key: &Key,
-        ts: TimeStamp,
-        bypass_locks: &TsSet,
-        iso_level: IsolationLevel,
-    ) -> Result<()> {
-        match iso_level {
-            IsolationLevel::Si => Lock::check_ts_conflict_si(lock, key, ts, bypass_locks, false),
-            IsolationLevel::RcCheckTs => {
-                Lock::check_ts_conflict_rc_check_ts(lock, key, ts, bypass_locks)
-            }
-            _ => Ok(()),
-        }
-    }
-
-    pub fn check_ts_conflict_for_replica_read(
-        lock: Cow<'_, Self>,
-        key: &Key,
-        ts: TimeStamp,
-        bypass_locks: &TsSet,
-        iso_level: IsolationLevel,
-    ) -> Result<()> {
-        match iso_level {
-            IsolationLevel::Si => Lock::check_ts_conflict_si(lock, key, ts, bypass_locks, true),
-            IsolationLevel::RcCheckTs => {
-                unreachable!()
-            }
-            _ => Ok(()),
-        }
     }
 
     pub fn is_pessimistic_txn(&self) -> bool {
@@ -581,6 +654,284 @@ impl Lock {
 
     pub fn is_pessimistic_lock_with_conflict(&self) -> bool {
         self.is_pessimistic_lock() && self.is_locked_with_conflict
+    }
+}
+
+bitflags! {
+    #[derive(Default)]
+    struct SharedLocksFlags: u8 {
+        // Indicates whether the shared locks are shrink-only, which means no
+        // new shared lock can be added. In other words, a shrink-only
+        // `SharedLocks` also blocks new incoming shared locks. This is a
+        // one-way change, a shrink-only `SharedLocks` cannot be changed back to
+        // a non-shrink-only one.
+        const SHRINK_ONLY = 0b0000_0001;
+    }
+}
+
+#[derive(PartialEq, Clone, Debug, Default)]
+pub struct SharedLocks {
+    flags: SharedLocksFlags,
+    txn_info_segments: HashMap<TimeStamp, Either<Vec<u8>, Lock>>,
+}
+
+impl SharedLocks {
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    fn with_txn_infos(
+        mut self,
+        txn_info_segments: HashMap<TimeStamp, Either<Vec<u8>, Lock>>,
+    ) -> Self {
+        self.txn_info_segments = txn_info_segments;
+        self
+    }
+
+    fn with_flags(mut self, flags: SharedLocksFlags) -> Self {
+        self.flags = flags;
+        self
+    }
+
+    pub fn parse(mut b: &[u8]) -> Result<Self> {
+        if b.is_empty() {
+            return Err(Error::from(ErrorInner::BadFormatLock));
+        }
+        let lock_type = LockType::from_u8(b.read_u8()?).ok_or(ErrorInner::BadFormatLock)?;
+        assert!(lock_type == LockType::Shared);
+        if b.is_empty() {
+            return Ok(Self::new());
+        }
+
+        let mut flags = SharedLocksFlags::empty();
+        let mut segments = HashMap::default();
+        while !b.is_empty() {
+            match b.read_u8()? {
+                SHARED_LOCK_FLAGS_PREFIX => {
+                    let flags_byte = b.read_u8()?;
+                    flags =
+                        SharedLocksFlags::from_bits(flags_byte).ok_or(ErrorInner::BadFormatLock)?;
+                }
+                SHARED_LOCK_TXNS_INFO_PREFIX => {
+                    let len = number::decode_var_u64(&mut b)? as usize;
+                    segments.reserve(len + 1); // some schedulers may append a new lock, reserve for it.
+                    for _ in 0..len {
+                        let lock_bytes = bytes::decode_compact_bytes(&mut b)?;
+                        let lock_ts = decode_lock_start_ts(&lock_bytes)?;
+                        segments.insert(lock_ts, Either::Left(lock_bytes));
+                    }
+                }
+                _ => {
+                    // To support forward compatibility, all fields should be serialized in order
+                    // and stop parsing if meets an unknown byte.
+                    break;
+                }
+            }
+        }
+
+        Ok(Self::new().with_flags(flags).with_txn_infos(segments))
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.txn_info_segments.len()
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.txn_info_segments.is_empty()
+    }
+
+    // Decode all shared-lock segments so tests can rely on parsed locks.
+    #[cfg(test)]
+    pub fn parse_all(&mut self) {
+        for (_ts, either) in self.txn_info_segments.iter_mut() {
+            if let Either::Left(encoded) = either {
+                let lock = Lock::parse(encoded).expect("failed to parse shared lock txn info");
+                *either = Either::Right(lock);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn is_shrink_only(&self) -> bool {
+        self.flags.contains(SharedLocksFlags::SHRINK_ONLY)
+    }
+
+    #[inline]
+    pub fn set_shrink_only(&mut self) {
+        self.flags.insert(SharedLocksFlags::SHRINK_ONLY);
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn contains_start_ts(&self, start_ts: TimeStamp) -> bool {
+        self.txn_info_segments.contains_key(&start_ts)
+    }
+
+    #[inline]
+    pub fn iter_ts(&self) -> impl Iterator<Item = &TimeStamp> {
+        self.txn_info_segments.keys()
+    }
+
+    /// Returns the shared lock for `ts`, if any.
+    ///
+    /// When decoding a shared lock, each txn-info segment is kept as raw bytes
+    /// (`Either::Left`) to avoid eagerly parsing all segments. This method
+    /// performs lazy parsing: the first time a `ts` is accessed, it parses
+    /// the bytes into a `Lock` and caches it in-place by replacing
+    /// the entry with `Either::Right(Lock)`. Subsequent calls return the cached
+    /// `Lock` without reparsing.
+    pub fn get_lock(&mut self, ts: &TimeStamp) -> Result<Option<&Lock>> {
+        if let Some(either) = self.txn_info_segments.get_mut(ts) {
+            if let Either::Left(encoded) = either {
+                let lock = Lock::parse(encoded)?;
+                *either = Either::Right(lock);
+            }
+            match either {
+                Either::Right(lock) => Ok(Some(lock)),
+                Either::Left(_) => unreachable!(),
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn remove_lock(&mut self, ts: &TimeStamp) -> Result<Option<Lock>> {
+        if let Some(either) = self.txn_info_segments.remove(ts) {
+            match either {
+                Either::Left(encoded) => Ok(Some(Lock::parse(&encoded)?)),
+                Either::Right(lock) => Ok(Some(lock)),
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn insert_lock(&mut self, lock: Lock) -> Result<()> {
+        let lock_type = lock.lock_type;
+        assert!(matches!(lock_type, LockType::Lock | LockType::Pessimistic));
+        if self.is_shrink_only() {
+            return Err(ErrorInner::InvalidOperation(format!(
+                "cannot insert new lock #{} into shrink-only SharedLocks",
+                lock.ts.into_inner()
+            ))
+            .into());
+        } else if self.contains_start_ts(lock.ts) {
+            return Err(ErrorInner::InvalidOperation(format!(
+                "lock #{} already exists in SharedLocks",
+                lock.ts.into_inner()
+            ))
+            .into());
+        }
+        self.txn_info_segments.insert(lock.ts, Either::Right(lock));
+        Ok(())
+    }
+
+    pub fn update_lock(&mut self, lock: Lock) -> Result<()> {
+        let lock_type = lock.lock_type;
+        assert!(matches!(lock_type, LockType::Lock | LockType::Pessimistic));
+        if !self.contains_start_ts(lock.ts) {
+            return Err(ErrorInner::InvalidOperation(format!(
+                "lock #{} does not exist in SharedLocks",
+                lock.ts.into_inner()
+            ))
+            .into());
+        }
+        self.txn_info_segments.insert(lock.ts, Either::Right(lock));
+        Ok(())
+    }
+
+    /// Filters shared locks, keeping only those for which `f` returns true.
+    pub fn filter_shared_locks<F>(&mut self, mut f: F) -> Result<()>
+    where
+        F: FnMut(&Lock) -> bool,
+    {
+        let mut to_remove = Vec::new();
+
+        for (ts, either) in self.txn_info_segments.iter_mut() {
+            let keep = match either {
+                Either::Right(lock) => f(lock),
+                Either::Left(encoded) => {
+                    let lock = Lock::parse(encoded)?;
+                    let keep = f(&lock);
+                    *either = Either::Right(lock);
+                    keep
+                }
+            };
+
+            if !keep {
+                to_remove.push(*ts);
+            }
+        }
+
+        for ts in to_remove {
+            self.txn_info_segments.remove(&ts);
+        }
+        Ok(())
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut b = Vec::with_capacity(self.pre_allocate_size());
+        b.push(LockType::Shared.to_u8());
+        if !self.flags.is_empty() {
+            b.push(SHARED_LOCK_FLAGS_PREFIX);
+            b.push(self.flags.bits());
+        }
+        b.push(SHARED_LOCK_TXNS_INFO_PREFIX);
+        b.encode_var_u64(self.len() as u64).unwrap();
+        for seg in self.txn_info_segments.values() {
+            match seg {
+                Either::Left(v) => b.encode_compact_bytes(v).unwrap(),
+                Either::Right(l) => b.encode_compact_bytes(&l.to_bytes()).unwrap(),
+            };
+        }
+        b
+    }
+
+    fn pre_allocate_size(&self) -> usize {
+        1 // lock type
+            + if !self.flags.is_empty() {
+                2 // SHARED_LOCK_FLAGS_PREFIX + flags byte
+            } else {
+                0
+            }
+            + 1 // SHARED_LOCK_TXNS_INFO_PREFIX
+            + MAX_VAR_U64_LEN // the size of shared locks
+            + self
+                .txn_info_segments
+                .values()
+                .map(|lock| {
+                    MAX_VAR_I64_LEN
+                        + match lock {
+                            Either::Left(v) => v.len(),
+                            Either::Right(l) => l.pre_allocate_size(),
+                        }
+                })
+                .sum::<usize>()
+    }
+
+    pub fn into_lock_info(self, raw_key: Vec<u8>) -> LockInfo {
+        let mut info = LockInfo::default();
+        info.lock_type = Op::SharedLock;
+        let shared_locks: Vec<_> = self
+            .txn_info_segments
+            .values()
+            .map(|lock| match lock {
+                Either::Left(encoded) => Lock::parse(encoded).unwrap(),
+                Either::Right(lock) => lock.clone(),
+            })
+            .map(|lock| lock.into_lock_info(raw_key.clone()))
+            .collect();
+        info.set_shared_lock_infos(shared_locks.into());
+        info.set_key(raw_key);
+        info
+    }
+}
+
+impl HeapSize for SharedLocks {
+    fn approximate_heap_size(&self) -> usize {
+        self.txn_info_segments.approximate_heap_size()
     }
 }
 
@@ -699,6 +1050,25 @@ impl<'a> From<&'a Lock> for TxnLockRef<'a> {
     }
 }
 
+pub trait LockInfoExt {
+    fn is_shared_lock(&self) -> bool;
+    fn iter_locks(&self) -> impl Iterator<Item = &LockInfo>;
+}
+
+impl LockInfoExt for LockInfo {
+    fn is_shared_lock(&self) -> bool {
+        self.lock_type == Op::SharedLock
+    }
+
+    fn iter_locks(&self) -> impl Iterator<Item = &LockInfo> {
+        if self.is_shared_lock() {
+            Either::Left(self.get_shared_lock_infos().iter())
+        } else {
+            Either::Right(std::iter::once(self))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -719,6 +1089,11 @@ mod tests {
             ),
             (
                 Mutation::make_lock(Key::from_raw(key)),
+                LockType::Lock,
+                FLAG_LOCK,
+            ),
+            (
+                Mutation::make_shared_lock(Key::from_raw(key)),
                 LockType::Lock,
                 FLAG_LOCK,
             ),
@@ -743,13 +1118,19 @@ mod tests {
                 i, flag, lock_type, lt
             );
         }
+
+        let lock_type = LockType::Shared;
+        let f = lock_type.to_u8();
+        assert_eq!(f, FLAG_SHARED);
+        let lt = LockType::from_u8(f).unwrap();
+        assert_eq!(lt, lock_type);
     }
 
     #[test]
     fn test_lock() {
-        // Test `Lock::to_bytes()` and `Lock::parse()` works as a pair.
-        let mut locks = vec![
-            Lock::new(
+        // Test `Lock::to_bytes()` and `parse_lock()` works as a pair.
+        let mut locks: Vec<Either<Lock, SharedLocks>> = vec![
+            Either::Left(Lock::new(
                 LockType::Put,
                 b"pk".to_vec(),
                 1.into(),
@@ -759,8 +1140,8 @@ mod tests {
                 0,
                 TimeStamp::zero(),
                 false,
-            ),
-            Lock::new(
+            )),
+            Either::Left(Lock::new(
                 LockType::Delete,
                 b"pk".to_vec(),
                 1.into(),
@@ -770,8 +1151,8 @@ mod tests {
                 0,
                 TimeStamp::zero(),
                 false,
-            ),
-            Lock::new(
+            )),
+            Either::Left(Lock::new(
                 LockType::Put,
                 b"pk".to_vec(),
                 1.into(),
@@ -781,8 +1162,8 @@ mod tests {
                 0,
                 TimeStamp::zero(),
                 false,
-            ),
-            Lock::new(
+            )),
+            Either::Left(Lock::new(
                 LockType::Delete,
                 b"pk".to_vec(),
                 1.into(),
@@ -792,8 +1173,8 @@ mod tests {
                 0,
                 TimeStamp::zero(),
                 false,
-            ),
-            Lock::new(
+            )),
+            Either::Left(Lock::new(
                 LockType::Put,
                 b"pk".to_vec(),
                 1.into(),
@@ -803,8 +1184,8 @@ mod tests {
                 16,
                 TimeStamp::zero(),
                 false,
-            ),
-            Lock::new(
+            )),
+            Either::Left(Lock::new(
                 LockType::Delete,
                 b"pk".to_vec(),
                 1.into(),
@@ -814,8 +1195,8 @@ mod tests {
                 16,
                 TimeStamp::zero(),
                 false,
-            ),
-            Lock::new(
+            )),
+            Either::Left(Lock::new(
                 LockType::Put,
                 b"pk".to_vec(),
                 1.into(),
@@ -825,8 +1206,8 @@ mod tests {
                 16,
                 TimeStamp::zero(),
                 false,
-            ),
-            Lock::new(
+            )),
+            Either::Left(Lock::new(
                 LockType::Delete,
                 b"pk".to_vec(),
                 1.into(),
@@ -836,8 +1217,8 @@ mod tests {
                 0,
                 TimeStamp::zero(),
                 false,
-            ),
-            Lock::new(
+            )),
+            Either::Left(Lock::new(
                 LockType::Put,
                 b"pkpkpk".to_vec(),
                 111.into(),
@@ -847,114 +1228,174 @@ mod tests {
                 444,
                 555.into(),
                 false,
+            )),
+            Either::Left(
+                Lock::new(
+                    LockType::Put,
+                    b"pk".to_vec(),
+                    111.into(),
+                    222,
+                    Some(b"short_value".to_vec()),
+                    333.into(),
+                    444,
+                    555.into(),
+                    false,
+                )
+                .use_async_commit(vec![]),
             ),
-            Lock::new(
-                LockType::Put,
-                b"pk".to_vec(),
-                111.into(),
-                222,
-                Some(b"short_value".to_vec()),
-                333.into(),
-                444,
-                555.into(),
-                false,
-            )
-            .use_async_commit(vec![]),
-            Lock::new(
-                LockType::Put,
-                b"pk".to_vec(),
-                111.into(),
-                222,
-                Some(b"short_value".to_vec()),
-                333.into(),
-                444,
-                555.into(),
-                false,
-            )
-            .use_async_commit(vec![b"k".to_vec()]),
-            Lock::new(
-                LockType::Put,
-                b"pk".to_vec(),
-                111.into(),
-                222,
-                Some(b"short_value".to_vec()),
-                333.into(),
-                444,
-                555.into(),
-                false,
-            )
-            .use_async_commit(vec![
-                b"k1".to_vec(),
-                b"kkkkk2".to_vec(),
-                b"k3k3k3k3k3k3".to_vec(),
-                b"k".to_vec(),
-            ]),
-            Lock::new(
-                LockType::Put,
-                b"pk".to_vec(),
-                111.into(),
-                222,
-                Some(b"short_value".to_vec()),
-                333.into(),
-                444,
-                555.into(),
-                false,
-            )
-            .use_async_commit(vec![
-                b"k1".to_vec(),
-                b"kkkkk2".to_vec(),
-                b"k3k3k3k3k3k3".to_vec(),
-                b"k".to_vec(),
-            ])
-            .with_rollback_ts(vec![12.into(), 24.into(), 13.into()]),
-            Lock::new(
-                LockType::Put,
-                b"pk".to_vec(),
-                111.into(),
-                222,
-                Some(b"short_value".to_vec()),
-                333.into(),
-                444,
-                555.into(),
-                false,
-            )
-            .with_rollback_ts(vec![12.into(), 24.into(), 13.into()]),
-            Lock::new(
-                LockType::Lock,
-                b"pk".to_vec(),
-                1.into(),
-                10,
-                None,
-                6.into(),
-                16,
-                8.into(),
-                false,
-            )
-            .set_last_change(LastChange::NotExist),
-            Lock::new(
-                LockType::Lock,
-                b"pk".to_vec(),
-                1.into(),
-                10,
-                None,
-                6.into(),
-                16,
-                8.into(),
-                false,
-            )
-            .set_last_change(LastChange::make_exist(4.into(), 2))
-            .set_txn_source(1)
-            .with_generation(10),
+            Either::Left(
+                Lock::new(
+                    LockType::Put,
+                    b"pk".to_vec(),
+                    111.into(),
+                    222,
+                    Some(b"short_value".to_vec()),
+                    333.into(),
+                    444,
+                    555.into(),
+                    false,
+                )
+                .use_async_commit(vec![b"k".to_vec()]),
+            ),
+            Either::Left(
+                Lock::new(
+                    LockType::Put,
+                    b"pk".to_vec(),
+                    111.into(),
+                    222,
+                    Some(b"short_value".to_vec()),
+                    333.into(),
+                    444,
+                    555.into(),
+                    false,
+                )
+                .use_async_commit(vec![
+                    b"k1".to_vec(),
+                    b"kkkkk2".to_vec(),
+                    b"k3k3k3k3k3k3".to_vec(),
+                    b"k".to_vec(),
+                ]),
+            ),
+            Either::Left(
+                Lock::new(
+                    LockType::Put,
+                    b"pk".to_vec(),
+                    111.into(),
+                    222,
+                    Some(b"short_value".to_vec()),
+                    333.into(),
+                    444,
+                    555.into(),
+                    false,
+                )
+                .use_async_commit(vec![
+                    b"k1".to_vec(),
+                    b"kkkkk2".to_vec(),
+                    b"k3k3k3k3k3k3".to_vec(),
+                    b"k".to_vec(),
+                ])
+                .with_rollback_ts(vec![12.into(), 24.into(), 13.into()]),
+            ),
+            Either::Left(
+                Lock::new(
+                    LockType::Put,
+                    b"pk".to_vec(),
+                    111.into(),
+                    222,
+                    Some(b"short_value".to_vec()),
+                    333.into(),
+                    444,
+                    555.into(),
+                    false,
+                )
+                .with_rollback_ts(vec![12.into(), 24.into(), 13.into()]),
+            ),
+            Either::Left(
+                Lock::new(
+                    LockType::Lock,
+                    b"pk".to_vec(),
+                    1.into(),
+                    10,
+                    None,
+                    6.into(),
+                    16,
+                    8.into(),
+                    false,
+                )
+                .set_last_change(LastChange::NotExist),
+            ),
+            Either::Left(
+                Lock::new(
+                    LockType::Lock,
+                    b"pk".to_vec(),
+                    1.into(),
+                    10,
+                    None,
+                    6.into(),
+                    16,
+                    8.into(),
+                    false,
+                )
+                .set_last_change(LastChange::make_exist(4.into(), 2))
+                .set_txn_source(1)
+                .with_generation(10),
+            ),
+            Either::Right(SharedLocks::new().with_txn_infos({
+                let mut segments = HashMap::default();
+                let seg1_ts: TimeStamp = 11.into();
+                let seg1 = Lock::new(
+                    LockType::Pessimistic,
+                    b"seg1".to_vec(),
+                    seg1_ts,
+                    22,
+                    None,
+                    TimeStamp::zero(),
+                    0,
+                    TimeStamp::zero(),
+                    false,
+                );
+                segments.insert(seg1_ts, Either::Right(seg1));
+                let seg2_ts: TimeStamp = 33.into();
+                let seg2 = Lock::new(
+                    LockType::Pessimistic,
+                    b"seg2".to_vec(),
+                    seg2_ts,
+                    44,
+                    Some(b"v".to_vec()),
+                    TimeStamp::zero(),
+                    0,
+                    TimeStamp::zero(),
+                    false,
+                );
+                segments.insert(seg2_ts, Either::Right(seg2));
+                segments
+            })),
         ];
         for (i, lock) in locks.drain(..).enumerate() {
-            let v = lock.to_bytes();
-            let l = Lock::parse(&v[..]).unwrap_or_else(|e| panic!("#{} parse() err: {:?}", i, e));
-            assert_eq!(l, lock, "#{} expect {:?}, but got {:?}", i, lock, l);
-            assert!(lock.pre_allocate_size() >= v.len());
+            let v = match &lock {
+                Either::Left(lock) => lock.to_bytes(),
+                Either::Right(shared_locks) => shared_locks.to_bytes(),
+            };
+
+            let l =
+                parse_lock(&v[..]).unwrap_or_else(|e| panic!("#{} parse_lock() err: {:?}", i, e));
+
+            match (l, lock) {
+                (Either::Left(l), Either::Left(lock)) => {
+                    assert_eq!(l, lock, "#{} expect {:?}, but got {:?}", i, lock, l);
+                    assert!(lock.pre_allocate_size() >= v.len());
+                }
+                (Either::Right(mut l), Either::Right(lock)) => {
+                    l.parse_all();
+                    assert_eq!(l, lock, "#{} expect {:?}, but got {:?}", i, lock, l);
+                    assert!(lock.pre_allocate_size() >= v.len());
+                }
+                (l, lock) => panic!("#{} mismatch: parsed={:?}, expected={:?}", i, l, lock),
+            }
         }
 
-        // Test `Lock::parse()` handles incorrect input.
-        Lock::parse(b"").unwrap_err();
+        // Test `parse_lock()` handles incorrect input.
+        parse_lock(b"").unwrap_err();
 
         let lock = Lock::new(
             LockType::Lock,
@@ -968,11 +1409,11 @@ mod tests {
             false,
         );
         let mut v = lock.to_bytes();
-        Lock::parse(&v[..4]).unwrap_err();
-        // Test `Lock::parse()` ignores unknown bytes.
+        parse_lock(&v[..4]).unwrap_err();
+        // Test `parse_lock()` ignores unknown bytes.
         v.extend(b"unknown");
-        let l = Lock::parse(&v).unwrap();
-        assert_eq!(l, lock);
+        let l = parse_lock(&v).unwrap();
+        assert_eq!(l, Either::Left(lock));
     }
 
     #[test]
@@ -993,8 +1434,8 @@ mod tests {
         let empty = Default::default();
 
         // Ignore the lock if read ts is less than the lock version
-        Lock::check_ts_conflict(
-            Cow::Borrowed(&lock),
+        check_ts_conflict(
+            Cow::Owned(Either::Left(lock.clone())),
             &key,
             50.into(),
             &empty,
@@ -1003,8 +1444,8 @@ mod tests {
         .unwrap();
 
         // Returns the lock if read ts >= lock version
-        Lock::check_ts_conflict(
-            Cow::Borrowed(&lock),
+        check_ts_conflict(
+            Cow::Owned(Either::Left(lock.clone())),
             &key,
             110.into(),
             &empty,
@@ -1013,32 +1454,32 @@ mod tests {
         .unwrap_err();
 
         // Ignore locks that occurs in the `bypass_locks` set.
-        Lock::check_ts_conflict(
-            Cow::Borrowed(&lock),
+        check_ts_conflict(
+            Cow::Owned(Either::Left(lock.clone())),
             &key,
             110.into(),
             &TsSet::from_u64s(vec![109]),
             IsolationLevel::Si,
         )
         .unwrap_err();
-        Lock::check_ts_conflict(
-            Cow::Borrowed(&lock),
+        check_ts_conflict(
+            Cow::Owned(Either::Left(lock.clone())),
             &key,
             110.into(),
             &TsSet::from_u64s(vec![110]),
             IsolationLevel::Si,
         )
         .unwrap_err();
-        Lock::check_ts_conflict(
-            Cow::Borrowed(&lock),
+        check_ts_conflict(
+            Cow::Owned(Either::Left(lock.clone())),
             &key,
             110.into(),
             &TsSet::from_u64s(vec![100]),
             IsolationLevel::Si,
         )
         .unwrap();
-        Lock::check_ts_conflict(
-            Cow::Borrowed(&lock),
+        check_ts_conflict(
+            Cow::Owned(Either::Left(lock.clone())),
             &key,
             110.into(),
             &TsSet::from_u64s(vec![99, 101, 102, 100, 80]),
@@ -1048,8 +1489,8 @@ mod tests {
 
         // Ignore the lock if it is Lock or Pessimistic.
         lock.lock_type = LockType::Lock;
-        Lock::check_ts_conflict(
-            Cow::Borrowed(&lock),
+        check_ts_conflict(
+            Cow::Owned(Either::Left(lock.clone())),
             &key,
             110.into(),
             &empty,
@@ -1057,8 +1498,8 @@ mod tests {
         )
         .unwrap();
         lock.lock_type = LockType::Pessimistic;
-        Lock::check_ts_conflict(
-            Cow::Borrowed(&lock),
+        check_ts_conflict(
+            Cow::Owned(Either::Left(lock.clone())),
             &key,
             110.into(),
             &empty,
@@ -1070,8 +1511,8 @@ mod tests {
         // u64::MAX as ts
         lock.lock_type = LockType::Put;
         lock.primary = b"foo".to_vec();
-        Lock::check_ts_conflict(
-            Cow::Borrowed(&lock),
+        check_ts_conflict(
+            Cow::Owned(Either::Left(lock.clone())),
             &key,
             TimeStamp::max(),
             &empty,
@@ -1082,8 +1523,8 @@ mod tests {
         // Should not ignore the primary lock of an async commit transaction even if
         // setting u64::MAX as ts
         let async_commit_lock = lock.clone().use_async_commit(vec![]);
-        Lock::check_ts_conflict(
-            Cow::Borrowed(&async_commit_lock),
+        check_ts_conflict(
+            Cow::Owned(Either::Left(async_commit_lock)),
             &key,
             TimeStamp::max(),
             &empty,
@@ -1093,8 +1534,8 @@ mod tests {
 
         // Should not ignore the secondary lock even though reading the latest version
         lock.primary = b"bar".to_vec();
-        Lock::check_ts_conflict(
-            Cow::Borrowed(&lock),
+        check_ts_conflict(
+            Cow::Owned(Either::Left(lock.clone())),
             &key,
             TimeStamp::max(),
             &empty,
@@ -1104,30 +1545,39 @@ mod tests {
 
         // Ignore the lock if read ts is less than min_commit_ts
         lock.min_commit_ts = 150.into();
-        Lock::check_ts_conflict(
-            Cow::Borrowed(&lock),
+        check_ts_conflict(
+            Cow::Owned(Either::Left(lock.clone())),
             &key,
             140.into(),
             &empty,
             IsolationLevel::Si,
         )
         .unwrap();
-        Lock::check_ts_conflict(
-            Cow::Borrowed(&lock),
+        check_ts_conflict(
+            Cow::Owned(Either::Left(lock.clone())),
             &key,
             150.into(),
             &empty,
             IsolationLevel::Si,
         )
         .unwrap_err();
-        Lock::check_ts_conflict(
-            Cow::Borrowed(&lock),
+        check_ts_conflict(
+            Cow::Owned(Either::Left(lock.clone())),
             &key,
             160.into(),
             &empty,
             IsolationLevel::Si,
         )
         .unwrap_err();
+
+        check_ts_conflict(
+            Cow::Owned(Either::Right(SharedLocks::new())),
+            &key,
+            160.into(),
+            &empty,
+            IsolationLevel::Si,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1148,8 +1598,8 @@ mod tests {
         let empty = Default::default();
 
         // Ignore locks that occurs in the `bypass_locks` set.
-        Lock::check_ts_conflict_rc_check_ts(
-            Cow::Borrowed(&lock),
+        check_ts_conflict_rc_check_ts(
+            Cow::Owned(Either::Left(lock.clone())),
             &k1,
             50.into(),
             &TsSet::from_u64s(vec![100]),
@@ -1158,20 +1608,42 @@ mod tests {
 
         // Ignore locks if the lock type are Pessimistic or Lock.
         lock.lock_type = LockType::Pessimistic;
-        Lock::check_ts_conflict_rc_check_ts(Cow::Borrowed(&lock), &k1, 50.into(), &empty).unwrap();
+        check_ts_conflict_rc_check_ts(
+            Cow::Owned(Either::Left(lock.clone())),
+            &k1,
+            50.into(),
+            &empty,
+        )
+        .unwrap();
         lock.lock_type = LockType::Lock;
-        Lock::check_ts_conflict_rc_check_ts(Cow::Borrowed(&lock), &k1, 50.into(), &empty).unwrap();
+        check_ts_conflict_rc_check_ts(
+            Cow::Owned(Either::Left(lock.clone())),
+            &k1,
+            50.into(),
+            &empty,
+        )
+        .unwrap();
 
         // Report error even if read ts is less than the lock version.
         lock.lock_type = LockType::Put;
-        Lock::check_ts_conflict_rc_check_ts(Cow::Borrowed(&lock), &k1, 50.into(), &empty)
-            .unwrap_err();
-        Lock::check_ts_conflict_rc_check_ts(Cow::Borrowed(&lock), &k1, 110.into(), &empty)
-            .unwrap_err();
+        check_ts_conflict_rc_check_ts(
+            Cow::Owned(Either::Left(lock.clone())),
+            &k1,
+            50.into(),
+            &empty,
+        )
+        .unwrap_err();
+        check_ts_conflict_rc_check_ts(
+            Cow::Owned(Either::Left(lock.clone())),
+            &k1,
+            110.into(),
+            &empty,
+        )
+        .unwrap_err();
 
         // Report error if for other lock types.
         lock.lock_type = LockType::Delete;
-        Lock::check_ts_conflict_rc_check_ts(Cow::Borrowed(&lock), &k1, 50.into(), &empty)
+        check_ts_conflict_rc_check_ts(Cow::Owned(Either::Left(lock)), &k1, 50.into(), &empty)
             .unwrap_err();
     }
 
@@ -1391,5 +1863,320 @@ mod tests {
         // 7 bytes for primary key, 16 bytes for Box<[u8]>, 4 x 8-byte integers, 1
         // enum (8 + 2 * 8) and a bool.
         assert_eq!(lock.memory_size(), 7 + 16 + 5 * 8 + 24);
+    }
+
+    #[test]
+    fn test_decode_lock_type() {
+        fn lock_bytes(lock_type: LockType) -> Vec<u8> {
+            Lock::new(
+                lock_type,
+                b"primary".to_vec(),
+                42.into(),
+                3600,
+                None,
+                TimeStamp::zero(),
+                0,
+                TimeStamp::zero(),
+                false,
+            )
+            .to_bytes()
+        }
+
+        let shared_bytes = SharedLocks::new().to_bytes();
+
+        assert!(matches!(
+            decode_lock_type(&lock_bytes(LockType::Put)),
+            Ok(LockType::Put)
+        ));
+        assert!(matches!(
+            decode_lock_type(&lock_bytes(LockType::Delete)),
+            Ok(LockType::Delete)
+        ));
+        assert!(matches!(
+            decode_lock_type(&lock_bytes(LockType::Lock)),
+            Ok(LockType::Lock)
+        ));
+        assert!(matches!(
+            decode_lock_type(&lock_bytes(LockType::Pessimistic)),
+            Ok(LockType::Pessimistic)
+        ));
+        assert!(matches!(
+            decode_lock_type(&shared_bytes),
+            Ok(LockType::Shared)
+        ));
+        decode_lock_type(&[]).unwrap_err();
+    }
+
+    #[test]
+    fn test_decode_lock_start_ts() {
+        let ts: TimeStamp = 123.into();
+        let lock = Lock::new(
+            LockType::Put,
+            b"primary_key".to_vec(),
+            ts,
+            10,
+            None,
+            TimeStamp::zero(),
+            0,
+            TimeStamp::zero(),
+            false,
+        );
+        let bytes = lock.to_bytes();
+
+        assert_eq!(decode_lock_start_ts(&bytes).unwrap(), ts);
+
+        let incomplete = vec![LockType::Put.to_u8()];
+        decode_lock_start_ts(&incomplete).unwrap_err();
+        decode_lock_start_ts(&[]).unwrap_err();
+    }
+
+    #[test]
+    fn test_new_in_shared_mode_initial_state() {
+        let shared_locks = SharedLocks::new();
+
+        assert_eq!(shared_locks.len(), 0);
+        let bytes = shared_locks.to_bytes();
+        assert!(matches!(decode_lock_type(&bytes), Ok(LockType::Shared)));
+        decode_lock_start_ts(&bytes).unwrap_err();
+        assert!(matches!(parse_lock(&bytes).unwrap(), Either::Right(_)));
+    }
+
+    #[test]
+    fn test_put_and_get_shared_lock_txn() {
+        let mut shared_locks = SharedLocks::new();
+
+        let txn1_ts: TimeStamp = 5.into();
+        let txn1_lock = Lock::new(
+            LockType::Pessimistic,
+            b"txn1".to_vec(),
+            txn1_ts,
+            0,
+            None,
+            TimeStamp::zero(),
+            0,
+            TimeStamp::zero(),
+            false,
+        );
+
+        let txn2_ts: TimeStamp = 7.into();
+        let txn2_pessimistic_lock = Lock::new(
+            LockType::Pessimistic,
+            b"txn2".to_vec(),
+            txn2_ts,
+            0,
+            None,
+            TimeStamp::zero(),
+            0,
+            TimeStamp::zero(),
+            false,
+        );
+        let txn2_prewrite_lock = Lock::new(
+            LockType::Lock,
+            b"txn2".to_vec(),
+            txn2_ts,
+            0,
+            None,
+            TimeStamp::zero(),
+            0,
+            TimeStamp::zero(),
+            false,
+        );
+
+        shared_locks.insert_lock(txn1_lock).unwrap();
+        shared_locks.insert_lock(txn2_pessimistic_lock).unwrap();
+        shared_locks.update_lock(txn2_prewrite_lock).unwrap();
+
+        assert_eq!(shared_locks.len(), 2);
+        assert_eq!(
+            shared_locks.get_lock(&txn1_ts).unwrap().unwrap().ts,
+            txn1_ts
+        );
+        assert_eq!(
+            shared_locks.get_lock(&txn1_ts).unwrap().unwrap().lock_type,
+            LockType::Pessimistic
+        );
+        assert_eq!(
+            shared_locks.get_lock(&txn2_ts).unwrap().unwrap().ts,
+            txn2_ts
+        );
+        assert_eq!(
+            shared_locks.get_lock(&txn2_ts).unwrap().unwrap().lock_type,
+            LockType::Lock
+        );
+
+        let found = shared_locks.get_lock(&txn1_ts).unwrap().unwrap();
+        assert_eq!(found.primary, b"txn1".to_vec());
+        assert_eq!(found.ts, txn1_ts);
+        assert_eq!(found.lock_type, LockType::Pessimistic);
+
+        let missing_ts: TimeStamp = 42.into();
+        assert!(shared_locks.get_lock(&missing_ts).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_shared_locks_shrink_only_flag_basic() {
+        let mut shared_locks = SharedLocks::new();
+
+        assert!(!shared_locks.is_shrink_only());
+
+        let lock_ts: TimeStamp = 10.into();
+        let lock = Lock::new(
+            LockType::Pessimistic,
+            b"primary".to_vec(),
+            lock_ts,
+            100,
+            None,
+            TimeStamp::zero(),
+            0,
+            TimeStamp::zero(),
+            false,
+        );
+        shared_locks.insert_lock(lock).unwrap();
+
+        shared_locks.set_shrink_only();
+        assert!(shared_locks.is_shrink_only());
+
+        let bytes = shared_locks.to_bytes();
+
+        let parsed = parse_lock(&bytes).unwrap();
+        match parsed {
+            Either::Right(parsed_shared_locks) => {
+                assert!(parsed_shared_locks.is_shrink_only());
+                assert_eq!(parsed_shared_locks.len(), 1);
+            }
+            _ => panic!("expected SharedLocks"),
+        }
+    }
+
+    #[test]
+    fn test_insert_lock_to_shrink_only_fails() {
+        let mut shared_locks = SharedLocks::new();
+
+        let lock = Lock::new(
+            LockType::Pessimistic,
+            b"txn1".to_vec(),
+            5.into(),
+            100,
+            None,
+            TimeStamp::zero(),
+            0,
+            TimeStamp::zero(),
+            false,
+        );
+
+        // Add a lock before setting shrink_only
+        shared_locks.insert_lock(lock).unwrap();
+
+        // Set shrink_only and try to add another lock
+        shared_locks.set_shrink_only();
+        let new_lock = Lock::new(
+            LockType::Pessimistic,
+            b"txn2".to_vec(),
+            7.into(),
+            100,
+            None,
+            TimeStamp::zero(),
+            0,
+            TimeStamp::zero(),
+            false,
+        );
+        let result = shared_locks.insert_lock(new_lock);
+        assert!(result.is_err());
+        assert_eq!(
+            format!("{}", result.unwrap_err()),
+            "invalid operation: cannot insert new lock #7 into shrink-only SharedLocks"
+        );
+    }
+
+    #[test]
+    fn test_insert_lock_duplicate_fails() {
+        let mut shared_locks = SharedLocks::new();
+        let lock_ts: TimeStamp = 10.into();
+
+        let lock = Lock::new(
+            LockType::Pessimistic,
+            b"primary".to_vec(),
+            lock_ts,
+            100,
+            None,
+            TimeStamp::zero(),
+            0,
+            TimeStamp::zero(),
+            false,
+        );
+
+        // First insert should succeed
+        shared_locks.insert_lock(lock.clone()).unwrap();
+
+        // Second insert with same ts should fail
+        let result = shared_locks.insert_lock(lock);
+        assert!(result.is_err());
+        assert_eq!(
+            format!("{}", result.unwrap_err()),
+            "invalid operation: lock #10 already exists in SharedLocks"
+        );
+    }
+
+    #[test]
+    fn test_update_lock_success() {
+        let mut shared_locks = SharedLocks::new();
+        let lock_ts: TimeStamp = 10.into();
+
+        let pessimistic_lock = Lock::new(
+            LockType::Pessimistic,
+            b"primary".to_vec(),
+            lock_ts,
+            100,
+            None,
+            TimeStamp::zero(),
+            0,
+            TimeStamp::zero(),
+            false,
+        );
+
+        shared_locks.insert_lock(pessimistic_lock.clone()).unwrap();
+
+        let prewrite_lock = Lock::new(
+            LockType::Lock,
+            b"primary".to_vec(),
+            lock_ts,
+            100,
+            None,
+            TimeStamp::zero(),
+            0,
+            TimeStamp::zero(),
+            false,
+        );
+        shared_locks.update_lock(prewrite_lock).unwrap();
+
+        // Verify the lock type
+        let found = shared_locks.get_lock(&lock_ts).unwrap().unwrap();
+        assert_eq!(found.lock_type, LockType::Lock);
+    }
+
+    #[test]
+    fn test_update_lock_nonexistent_fails() {
+        let mut shared_locks = SharedLocks::new();
+        let lock_ts: TimeStamp = 10.into();
+
+        let lock = Lock::new(
+            LockType::Pessimistic,
+            b"primary".to_vec(),
+            lock_ts,
+            100,
+            None,
+            TimeStamp::zero(),
+            0,
+            TimeStamp::zero(),
+            false,
+        );
+
+        // Try to update non-existent lock
+        let result = shared_locks.update_lock(lock);
+        assert!(result.is_err());
+        assert_eq!(
+            format!("{}", result.unwrap_err()),
+            "invalid operation: lock #10 does not exist in SharedLocks"
+        );
     }
 }

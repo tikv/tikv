@@ -54,7 +54,8 @@ pub struct Tracker<E: Engine> {
 
     // Intermediate results
     current_stage: TrackerState,
-    wait_time: Duration,          // Total wait time
+    wait_time: Duration, /* Total wait time, including schedule_wait_time, snapshot_wait_time,
+                          * and total_suspend_time. */
     schedule_wait_time: Duration, // Wait time spent on waiting for scheduling
     snapshot_wait_time: Duration, // Wait time spent on waiting for a snapshot
     handler_build_time: Duration, /* Time spent on building the handler (not included in total
@@ -161,6 +162,7 @@ impl<E: Engine> Tracker<E> {
             TrackerState::ItemFinished(at) => {
                 self.item_suspend_time = now - at;
                 self.total_suspend_time += self.item_suspend_time;
+                self.wait_time += self.item_suspend_time;
             }
             _ => unreachable!(),
         }
@@ -298,9 +300,9 @@ impl<E: Engine> Tracker<E> {
                     "wait_time" => ?self.wait_time,
                     "wait_time.schedule" => ?self.schedule_wait_time,
                     "wait_time.snapshot" => ?self.snapshot_wait_time,
+                    "wait_time.suspend" => ?self.total_suspend_time,
                     "handler_build_time" => ?self.handler_build_time,
                     "total_process_time" => ?self.total_process_time,
-                    "total_suspend_time" => ?self.total_suspend_time,
                     "txn_start_ts" => self.req_ctx.txn_start_ts,
                     "table_id" => some_table_id,
                     "tag" => self.req_tag.get_str(),
@@ -326,7 +328,7 @@ impl<E: Engine> Tracker<E> {
             .get(self.req_tag)
             .observe(time::duration_to_sec(self.req_lifetime));
 
-        // wait time
+        // total wait time
         COPR_REQ_WAIT_TIME_STATIC
             .get(self.req_tag)
             .all
@@ -343,6 +345,12 @@ impl<E: Engine> Tracker<E> {
             .get(self.req_tag)
             .snapshot
             .observe(time::duration_to_sec(self.snapshot_wait_time));
+
+        // suspend wait time
+        COPR_REQ_WAIT_TIME_STATIC
+            .get(self.req_tag)
+            .suspend
+            .observe(time::duration_to_sec(self.total_suspend_time));
 
         // handler build time
         COPR_REQ_HANDLER_BUILD_TIME_STATIC
@@ -394,6 +402,21 @@ impl<E: Engine> Tracker<E> {
                 self.buckets.as_ref(),
             );
         }
+
+        // Track MVCC read activity for compaction prioritization
+        // Use internal_key_skipped_count + internal_delete_skipped_count as proxy for
+        // MVCC versions scanned
+        with_tls_tracker(|tracker| {
+            let versions_scanned = tracker.metrics.internal_key_skipped_count
+                + tracker.metrics.deleted_key_skipped_count;
+            if versions_scanned > 0 {
+                use crate::storage::mvcc::mvcc_read_tracker::MVCC_READ_TRACKER;
+                if let Some(tracker) = MVCC_READ_TRACKER.get() {
+                    tracker.record_read(region_id, versions_scanned);
+                }
+            }
+        });
+
         self.current_stage = TrackerState::Tracked;
     }
 
@@ -493,9 +516,9 @@ impl<E: Engine> Drop for Tracker<E> {
                 "wait_time" => ?self.wait_time,
                 "wait_time.schedule" => ?self.schedule_wait_time,
                 "wait_time.snapshot" => ?self.snapshot_wait_time,
+                "wait_time.suspend" => ?self.total_suspend_time,
                 "handler_build_time" => ?self.handler_build_time,
                 "total_process_time" => ?self.total_process_time,
-                "total_suspend_time" => ?self.total_suspend_time,
                 "txn_start_ts" => self.req_ctx.txn_start_ts,
                 "table_id" => some_table_id,
                 "tag" => self.req_tag.get_str(),

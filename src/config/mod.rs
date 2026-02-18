@@ -1557,10 +1557,10 @@ impl DbConfig {
         let rate_limiter = if self.rate_bytes_per_sec.0 > 0 {
             // for raft-v2, we use a longer window to make the compaction io smoother
             let (tune_per_secs, window_size, recent_size) = match engine {
-                // 1s tune duraion, long term window is 5m, short term window is 30s.
+                // 1s tune duration, long term window is 5m, short term window is 30s.
                 // this is the default settings.
                 EngineType::RaftKv => (1, 300, 30),
-                // 5s tune duraion, long term window is 1h, short term window is 5m
+                // 5s tune duration, long term window is 1h, short term window is 5m
                 EngineType::RaftKv2 => (5, 720, 60),
             };
             Some(Arc::new(RateLimiter::new_writeampbased_with_auto_tuned(
@@ -1659,26 +1659,27 @@ impl DbConfig {
         force_partition_range_mgr: ForcePartitionRangeManager,
     ) -> CfResources {
         let mut compaction_thread_limiters = HashMap::new();
-        if let Some(n) = self.defaultcf.max_compactions
-            && n > 0
-        {
-            compaction_thread_limiters
-                .insert(CF_DEFAULT, ConcurrentTaskLimiter::new(CF_DEFAULT, n));
+        if let Some(n) = self.defaultcf.max_compactions {
+            if n > 0 {
+                compaction_thread_limiters
+                    .insert(CF_DEFAULT, ConcurrentTaskLimiter::new(CF_DEFAULT, n));
+            }
         }
-        if let Some(n) = self.writecf.max_compactions
-            && n > 0
-        {
-            compaction_thread_limiters.insert(CF_WRITE, ConcurrentTaskLimiter::new(CF_WRITE, n));
+        if let Some(n) = self.writecf.max_compactions {
+            if n > 0 {
+                compaction_thread_limiters
+                    .insert(CF_WRITE, ConcurrentTaskLimiter::new(CF_WRITE, n));
+            }
         }
-        if let Some(n) = self.lockcf.max_compactions
-            && n > 0
-        {
-            compaction_thread_limiters.insert(CF_LOCK, ConcurrentTaskLimiter::new(CF_LOCK, n));
+        if let Some(n) = self.lockcf.max_compactions {
+            if n > 0 {
+                compaction_thread_limiters.insert(CF_LOCK, ConcurrentTaskLimiter::new(CF_LOCK, n));
+            }
         }
-        if let Some(n) = self.raftcf.max_compactions
-            && n > 0
-        {
-            compaction_thread_limiters.insert(CF_RAFT, ConcurrentTaskLimiter::new(CF_RAFT, n));
+        if let Some(n) = self.raftcf.max_compactions {
+            if n > 0 {
+                compaction_thread_limiters.insert(CF_RAFT, ConcurrentTaskLimiter::new(CF_RAFT, n));
+            }
         }
         let mut write_buffer_managers = HashMap::default();
         self.lockcf.write_buffer_limit.map(|limit| {
@@ -1956,10 +1957,12 @@ impl Default for RaftDefaultCfConfig {
 
 impl RaftDefaultCfConfig {
     pub fn build_opt(&self, cache: &Cache) -> RocksCfOptions {
-        let limiter = if let Some(n) = self.max_compactions
-            && n > 0
-        {
-            Some(ConcurrentTaskLimiter::new(CF_DEFAULT, n))
+        let limiter = if let Some(n) = self.max_compactions {
+            if n > 0 {
+                Some(ConcurrentTaskLimiter::new(CF_DEFAULT, n))
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -2732,6 +2735,7 @@ macro_rules! readpool_config {
         mod $test_mod_name {
             use super::*;
 
+            #[allow(unused_assignments)]
             #[test]
             fn test_validate() {
                 let cfg = $struct_name::default();
@@ -3347,6 +3351,11 @@ pub struct ResolvedTsConfig {
     pub scan_lock_pool_size: usize,
     pub memory_quota: ReadableSize,
     pub incremental_scan_concurrency: usize,
+    pub memory_quota_active_check_interval: ReadableDuration,
+    // Re-register regions backoff duration when memory quota is exceeded.
+    // The actual backoff duration will be in the range
+    // [configured_duration, 2 * configured_duration)
+    pub memory_quota_exceeded_backoff_duration: ReadableDuration,
 }
 
 impl ResolvedTsConfig {
@@ -3369,6 +3378,8 @@ impl Default for ResolvedTsConfig {
             scan_lock_pool_size: 2,
             memory_quota: ReadableSize::mb(256),
             incremental_scan_concurrency: 6,
+            memory_quota_active_check_interval: ReadableDuration::secs(10),
+            memory_quota_exceeded_backoff_duration: ReadableDuration::secs(30),
         }
     }
 }
@@ -4488,18 +4499,19 @@ impl TikvConfig {
         // When shared block cache is enabled, if its capacity is set, it overrides
         // individual block cache sizes. Otherwise use the sum of block cache
         // size of all column families as the shared cache size.
-        if let Some(a) = self.rocksdb.defaultcf.block_cache_size
-            && let Some(b) = self.rocksdb.writecf.block_cache_size
-            && let Some(c) = self.rocksdb.lockcf.block_cache_size
-        {
-            let d = self
-                .raftdb
-                .defaultcf
-                .block_cache_size
-                .map(|s| s.0)
-                .unwrap_or_default();
-            let sum = a.0 + b.0 + c.0 + d;
-            self.storage.block_cache.capacity = Some(ReadableSize(sum));
+        if let Some(a) = self.rocksdb.defaultcf.block_cache_size {
+            if let Some(b) = self.rocksdb.writecf.block_cache_size {
+                if let Some(c) = self.rocksdb.lockcf.block_cache_size {
+                    let d = self
+                        .raftdb
+                        .defaultcf
+                        .block_cache_size
+                        .map(|s| s.0)
+                        .unwrap_or_default();
+                    let sum = a.0 + b.0 + c.0 + d;
+                    self.storage.block_cache.capacity = Some(ReadableSize(sum));
+                }
+            }
         }
         if self.backup.sst_max_size.0 < default_coprocessor.region_max_size().0 / 10 {
             warn!(
@@ -6211,7 +6223,7 @@ mod tests {
 
         // update some configs on default cf
         let cf_opts = db.get_options_cf(CF_DEFAULT).unwrap();
-        assert_eq!(cf_opts.get_disable_auto_compactions(), false);
+        assert!(!cf_opts.get_disable_auto_compactions());
         assert_eq!(cf_opts.get_target_file_size_base(), ReadableSize::mb(64).0);
 
         let mut change = HashMap::new();
@@ -6226,7 +6238,7 @@ mod tests {
         cfg_controller.update(change).unwrap();
 
         let cf_opts = db.get_options_cf(CF_DEFAULT).unwrap();
-        assert_eq!(cf_opts.get_disable_auto_compactions(), true);
+        assert!(cf_opts.get_disable_auto_compactions());
         assert_eq!(cf_opts.get_target_file_size_base(), ReadableSize::mb(32).0);
     }
 
@@ -6240,18 +6252,12 @@ mod tests {
         let db = storage.get_engine().get_rocksdb();
 
         // update rate_limiter_auto_tuned
-        assert_eq!(
-            db.get_db_options().get_rate_limiter_auto_tuned().unwrap(),
-            true
-        );
+        assert!(db.get_db_options().get_rate_limiter_auto_tuned().unwrap());
 
         cfg_controller
             .update_config("rocksdb.rate_limiter_auto_tuned", "false")
             .unwrap();
-        assert_eq!(
-            db.get_db_options().get_rate_limiter_auto_tuned().unwrap(),
-            false
-        );
+        assert!(!db.get_db_options().get_rate_limiter_auto_tuned().unwrap());
     }
 
     #[test]
@@ -6717,7 +6723,7 @@ mod tests {
         let should_delay = block_on(quota_limiter.consume_sample(sample, false));
         assert_eq!(should_delay, Duration::from_millis(50));
 
-        assert_eq!(cfg.quota.enable_auto_tune, false);
+        assert!(!cfg.quota.enable_auto_tune);
         cfg_controller
             .update_config("quota.enable-auto-tune", "true")
             .unwrap();
@@ -7960,33 +7966,30 @@ mod tests {
             50
         );
 
-        assert_eq!(
+        assert!(
             db.get_options_cf(CF_DEFAULT)
                 .unwrap()
-                .get_disable_write_stall(),
-            true
+                .get_disable_write_stall()
         );
-        assert_eq!(flow_controller.enabled(), true);
+        assert!(flow_controller.enabled());
         cfg_controller
             .update_config("storage.flow-control.enable", "false")
             .unwrap();
-        assert_eq!(
-            db.get_options_cf(CF_DEFAULT)
+        assert!(
+            !db.get_options_cf(CF_DEFAULT)
                 .unwrap()
-                .get_disable_write_stall(),
-            false
+                .get_disable_write_stall()
         );
-        assert_eq!(flow_controller.enabled(), false);
+        assert!(!flow_controller.enabled());
         cfg_controller
             .update_config("storage.flow-control.enable", "true")
             .unwrap();
-        assert_eq!(
+        assert!(
             db.get_options_cf(CF_DEFAULT)
                 .unwrap()
-                .get_disable_write_stall(),
-            true
+                .get_disable_write_stall()
         );
-        assert_eq!(flow_controller.enabled(), true);
+        assert!(flow_controller.enabled());
     }
 
     #[test]

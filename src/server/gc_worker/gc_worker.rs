@@ -31,6 +31,7 @@ use tikv_util::{
     config::{Tracker, VersionTrack},
     set_panic_context,
     store::find_peer,
+    thread_name_prefix::GC_WORKER_THREAD,
     time::{Instant, Limiter, SlowTimer, duration_to_sec},
     worker::{Builder as WorkerBuilder, LazyWorker, Runnable, ScheduleError, Scheduler},
 };
@@ -278,8 +279,7 @@ fn get_regions_for_range_of_keys(
 fn get_keys_in_region(keys: &mut Peekable<IntoIter<Key>>, region: &Region) -> Vec<Key> {
     let mut keys_in_region = Vec::new();
 
-    loop {
-        let Some(key) = keys.peek() else { break };
+    while let Some(key) = keys.peek() {
         let key = key.as_encoded().as_slice();
 
         if key < region.get_start_key() {
@@ -442,11 +442,7 @@ impl<E: Engine> GcRunnerCore<E> {
         let count = keys.len();
         let range_start_key = keys.first().unwrap().clone();
         let range_end_key = {
-            let mut k = keys
-                .last()
-                .unwrap()
-                .to_raw()
-                .map_err(|e| EngineError::Codec(e))?;
+            let mut k = keys.last().unwrap().to_raw().map_err(EngineError::Codec)?;
             k.push(0);
             Key::from_raw(&k)
         };
@@ -563,11 +559,7 @@ impl<E: Engine> GcRunnerCore<E> {
     ) -> Result<(usize, usize)> {
         let range_start_key = keys.first().unwrap().clone();
         let range_end_key = {
-            let mut k = keys
-                .last()
-                .unwrap()
-                .to_raw()
-                .map_err(|e| EngineError::Codec(e))?;
+            let mut k = keys.last().unwrap().to_raw().map_err(EngineError::Codec)?;
             k.push(0);
             Key::from_raw(&k)
         };
@@ -1311,6 +1303,10 @@ where
             }
         };
 
+        // Initialize the global MVCC read tracker with config manager
+        use crate::storage::mvcc::mvcc_read_tracker::init_mvcc_read_tracker;
+        init_mvcc_read_tracker(self.config_manager.clone());
+
         let compaction_runner = CompactionRunner::new(
             safe_point_provider,
             region_info_provider,
@@ -1340,10 +1336,10 @@ impl<E: Engine> GcWorker<E> {
         feature_gate: FeatureGate,
         region_info_provider: Arc<dyn RegionInfoProvider>,
     ) -> Self {
-        let worker_builder = WorkerBuilder::new("gc-worker")
+        let worker_builder = WorkerBuilder::new(GC_WORKER_THREAD)
             .pending_capacity(GC_MAX_PENDING_TASKS)
             .thread_count(cfg.num_threads);
-        let worker = worker_builder.create().lazy_build("gc-worker");
+        let worker = worker_builder.create().lazy_build(GC_WORKER_THREAD);
         let worker_scheduler = worker.scheduler();
         GcWorker {
             engine,
@@ -1375,7 +1371,7 @@ impl<E: Engine> GcWorker<E> {
             self.config_manager
                 .0
                 .clone()
-                .tracker("gc-worker".to_owned()),
+                .tracker(GC_WORKER_THREAD.to_owned()),
             self.config_manager.value().clone(),
             worker.remote(),
             coprocessor_host,
@@ -1578,6 +1574,7 @@ pub mod test_gc_worker {
         }
     }
 
+    #[allow(dead_code)]
     #[derive(Clone, Default)]
     pub struct MultiRocksEngine {
         pub engines: Arc<Mutex<HashMap<u64, PrefixedEngine>>>,
@@ -2084,7 +2081,7 @@ mod tests {
             tx,
             GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())), None)
                 .0
-                .tracker("gc-worker".to_owned()),
+                .tracker(GC_WORKER_THREAD.to_owned()),
             cfg,
             coprocessor_host,
         );
@@ -2150,7 +2147,7 @@ mod tests {
             tx,
             GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())), None)
                 .0
-                .tracker("gc-worker".to_owned()),
+                .tracker(GC_WORKER_THREAD.to_owned()),
             cfg,
             coprocessor_host,
         );
@@ -2257,7 +2254,7 @@ mod tests {
             tx,
             GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())), None)
                 .0
-                .tracker("gc-worker".to_owned()),
+                .tracker(GC_WORKER_THREAD.to_owned()),
             cfg,
             coprocessor_host,
         );
@@ -2584,7 +2581,7 @@ mod tests {
             tx,
             GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())), None)
                 .0
-                .tracker("gc-worker".to_owned()),
+                .tracker(GC_WORKER_THREAD.to_owned()),
             cfg,
             coprocessor_host,
         );
@@ -2764,7 +2761,7 @@ mod tests {
             tx,
             GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())), None)
                 .0
-                .tracker("gc-worker".to_owned()),
+                .tracker(GC_WORKER_THREAD.to_owned()),
             cfg,
             coprocessor_host,
         );
@@ -2997,7 +2994,7 @@ mod tests {
             tx,
             GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())), None)
                 .0
-                .tracker("gc-worker".to_owned()),
+                .tracker(GC_WORKER_THREAD.to_owned()),
             cfg,
             coprocessor_host,
         );
@@ -3056,7 +3053,7 @@ mod tests {
             tx,
             GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())), None)
                 .0
-                .tracker("gc-worker".to_owned()),
+                .tracker(GC_WORKER_THREAD.to_owned()),
             cfg,
             coprocessor_host,
         );

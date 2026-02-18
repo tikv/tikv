@@ -1,7 +1,7 @@
 [package]
 name = "in_memory_engine"
 version = "0.0.1"
-edition = "2021"
+edition = "2024"
 publish = false
 license = "Apache-2.0"
 
@@ -20,7 +20,7 @@ path = "benches/load_region.rs"
 harness = false
 
 [dependencies]
-bytes = "1.0"
+bytes = { workspace = true }
 collections = { workspace = true }
 crossbeam = { workspace = true }
 crossbeam-skiplist = { workspace = true }

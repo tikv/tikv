@@ -569,7 +569,7 @@ impl Snapshot {
         s.mgr.limiter = Limiter::new(f64::INFINITY);
 
         if !s.exists() {
-            // Skip the initialization below if it doesn't exists.
+            // Skip the initialization below if it doesn't exist.
             return Ok(s);
         }
         for cf_file in &mut s.cf_files {
@@ -1386,10 +1386,8 @@ impl Write for Snapshot {
             written_bytes += write_len;
 
             let file = &mut file_for_recving.file;
-            let encrypt_buffer = if file_for_recving.encrypter.is_none() {
-                Cow::Borrowed(&next_buf[0..write_len])
-            } else {
-                let (cipher, crypter) = file_for_recving.encrypter.as_mut().unwrap();
+            let encrypt_buffer = if let Some(encrypter) = &mut file_for_recving.encrypter {
+                let (cipher, crypter) = encrypter;
                 let mut encrypt_buffer = vec![0; write_len + cipher.block_size()];
                 let mut bytes = crypter.update(&next_buf[0..write_len], &mut encrypt_buffer)?;
                 if switch {
@@ -1397,6 +1395,8 @@ impl Write for Snapshot {
                 }
                 encrypt_buffer.truncate(bytes);
                 Cow::Owned(encrypt_buffer)
+            } else {
+                Cow::Borrowed(&next_buf[0..write_len])
             };
             let encrypt_len = encrypt_buffer.len();
 
@@ -1981,7 +1981,7 @@ impl SnapManagerCore {
         Ok(total_size)
     }
 
-    // Return true if it successfully delete the specified snapshot.
+    // Return true if it successfully deletes the specified snapshot.
     fn delete_snapshot(&self, key: &SnapKey, snap: &Snapshot, check_entry: bool) -> bool {
         let registry = self.registry.rl();
         if check_entry {
@@ -3017,8 +3017,7 @@ pub mod tests {
         let mut res = Vec::new();
         let read_dir = file_system::read_dir(dir_path).unwrap();
         for p in read_dir {
-            if p.is_ok() {
-                let e = p.as_ref().unwrap();
+            if let Ok(e) = &p {
                 if e.file_name()
                     .into_string()
                     .unwrap()
@@ -3063,8 +3062,7 @@ pub mod tests {
         let dir_path = dir.into();
         let read_dir = file_system::read_dir(dir_path).unwrap();
         for p in read_dir {
-            if p.is_ok() {
-                let e = p.as_ref().unwrap();
+            if let Ok(e) = &p {
                 if e.file_name()
                     .into_string()
                     .unwrap()

@@ -2355,22 +2355,23 @@ def RaftPropose() -> RowPanel:
                     target(
                         expr=expr_histogram_quantile(
                             0.99,
-                            "tikv_raftstore_store_perf_context_time_duration_secs",
-                            by_labels=["type"],
-                            is_optional_quantile=True,
-                        ),
-                        legend_format="store-{{type}}-" + OPTIONAL_QUANTILE_INPUT,
-                        additional_groupby=True,
-                    ),
-                    target(
-                        expr=expr_histogram_quantile(
-                            0.99,
                             "tikv_raftstore_apply_perf_context_time_duration_secs",
                             by_labels=["type"],
                             is_optional_quantile=True,
                         ),
                         legend_format="apply-{{type}}-" + OPTIONAL_QUANTILE_INPUT,
                         additional_groupby=True,
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_raftstore_store_perf_context_time_duration_secs",
+                            by_labels=["type"],
+                            is_optional_quantile=True,
+                        ),
+                        legend_format="store-{{type}}-" + OPTIONAL_QUANTILE_INPUT,
+                        additional_groupby=True,
+                        hide=True,
                     ),
                 ],
             ),
@@ -4193,6 +4194,42 @@ def GC() -> RowPanel:
             ),
         ]
     )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Auto Compaction Num Tombstones",
+                description="Histogram of number of tombstones in compaction candidates",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                metric="tikv_auto_compaction_num_tombstones",
+                hide_count=True,
+            ),
+            graph_panel_histogram_quantiles(
+                title="Auto Compaction Num Discardable",
+                description="Histogram of number of discardable MVCC versions in compaction candidates",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                metric="tikv_auto_compaction_num_discardable",
+                hide_count=True,
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Auto Compaction MVCC Versions Scanned",
+                description="Histogram of average MVCC versions scanned per request for compaction candidates",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                metric="tikv_auto_compaction_mvcc_versions_scanned",
+                hide_count=True,
+            ),
+            graph_panel_histogram_quantiles(
+                title="Auto Compaction Score",
+                description="Histogram of compaction scores for candidates",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                metric="tikv_auto_compaction_score",
+                hide_count=True,
+            ),
+        ]
+    )
 
     return layout.row_panel
 
@@ -4752,6 +4789,34 @@ def CoprocessorDetail() -> RowPanel:
             yaxis_format=UNITS.SECONDS,
             metric="tikv_coprocessor_mem_lock_check_duration_seconds",
         ),
+    )
+    layout.row(
+        heatmap_panel_graph_panel_histogram_quantile_pairs(
+            heatmap_title="Semaphore waiting duration",
+            heatmap_description="The time consumed on waiting for semaphore permits for heavy coprocessor requests",
+            graph_title="Semaphore waiting duration",
+            graph_description="The time consumed on waiting for semaphore permits for heavy coprocessor requests",
+            yaxis_format=UNITS.SECONDS,
+            metric="tikv_coprocessor_semaphore_wait_time_duration_seconds",
+        ),
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Semaphore waiting tasks count",
+                description="The number of cop tasks waiting for semaphore permits.",
+                targets=[
+                    target(
+                        expr=expr_sum_aggr_over_time(
+                            "tikv_coprocessor_waiting_for_semaphore",
+                            "avg",
+                            "30s",
+                        ),
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+        ]
     )
     return layout.row_panel
 

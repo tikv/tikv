@@ -868,6 +868,9 @@ fn test_serde_custom_tikv_config() {
             redundant_rows_threshold: 50000,
             redundant_rows_percent_threshold: 20,
             bottommost_level_force: false,
+            mvcc_read_aware_enabled: true,
+            mvcc_scan_threshold: 10000,
+            mvcc_read_weight: 3.0,
         },
     };
     value.pessimistic_txn = PessimisticTxnConfig {
@@ -898,6 +901,8 @@ fn test_serde_custom_tikv_config() {
         scan_lock_pool_size: 1,
         memory_quota: ReadableSize::mb(1),
         incremental_scan_concurrency: 7,
+        memory_quota_active_check_interval: ReadableDuration::secs(2),
+        memory_quota_exceeded_backoff_duration: ReadableDuration::secs(1),
     };
     value.causal_ts = CausalTsConfig {
         renew_interval: ReadableDuration::millis(100),

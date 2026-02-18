@@ -21,7 +21,10 @@ use slog_async::{Async, AsyncGuard, OverflowStrategy};
 use slog_term::{Decorator, PlainDecorator, RecordDecorator};
 
 use self::file_log::{RotateBySize, RotatingFileLogger, RotatingFileLoggerBuilder};
-use crate::config::{ReadableDuration, ReadableSize};
+use crate::{
+    config::{ReadableDuration, ReadableSize},
+    thread_name_prefix::SLOGGER_THREAD,
+};
 
 // Default is 128.
 // Extended since blocking is set, and we don't want to block very often.
@@ -94,7 +97,7 @@ where
         let (async_log, guard) = Async::new(LogAndFuse(drain))
             .chan_size(SLOG_CHANNEL_SIZE)
             .overflow_strategy(SLOG_CHANNEL_OVERFLOW_STRATEGY)
-            .thread_name(thd_name!("slogger"))
+            .thread_name(thd_name!(SLOGGER_THREAD))
             .build_with_guard();
         let drain = async_log.fuse();
         let drain = build_log_drain(drain, slow_threshold, filter);
@@ -450,11 +453,11 @@ where
             let mut s = SlowCostSerializer { cost: None };
             let kv = record.kv();
             let _ = kv.serialize(record, &mut s);
-            if let Some(cost) = s.cost {
-                if cost <= self.threshold {
-                    // Filter slow logs which are actually not that slow
-                    return Ok(());
-                }
+            if let Some(cost) = s.cost
+                && cost <= self.threshold
+            {
+                // Filter slow logs which are actually not that slow
+                return Ok(());
             }
         }
         self.inner.log(record, values)
@@ -554,8 +557,10 @@ where
 
     fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
         let tag = record.tag();
-        if self.slow.is_some() && tag.starts_with("slow_log") {
-            self.slow.as_ref().unwrap().log(record, values)
+        if let Some(slow) = self.slow.as_ref()
+            && tag.starts_with("slow_log")
+        {
+            slow.log(record, values)
         } else if tag.starts_with("rocksdb_log") {
             self.rocksdb.log(record, values)
         } else if tag.starts_with("raftdb_log") {
@@ -1065,13 +1070,13 @@ mod tests {
         .fuse();
         let logger = slog::Logger::root_typed(drain, slog_o!());
         slog_info!(logger, "Hello World");
-        slog_info!(logger, #"slow_log", "nothing");
-        slog_info!(logger, #"slow_log", "🆗"; "takes" => LogCost(30));
-        slog_info!(logger, #"slow_log", "🐢"; "takes" => LogCost(200));
-        slog_info!(logger, #"slow_log", "🐢🐢"; "takes" => LogCost(201));
-        slog_info!(logger, #"slow_log", "without cost"; "a" => "b");
-        slog_info!(logger, #"slow_log_by_timer", "⏰");
-        slog_info!(logger, #"slow_log_by_timer", "⏰"; "takes" => LogCost(1000));
+        slog_info!(logger, # "slow_log", "nothing");
+        slog_info!(logger, # "slow_log", "🆗"; "takes" => LogCost(30));
+        slog_info!(logger, # "slow_log", "🐢"; "takes" => LogCost(200));
+        slog_info!(logger, # "slow_log", "🐢🐢"; "takes" => LogCost(201));
+        slog_info!(logger, # "slow_log", "without cost"; "a" => "b");
+        slog_info!(logger, # "slow_log_by_timer", "⏰");
+        slog_info!(logger, # "slow_log_by_timer", "⏰"; "takes" => LogCost(1000));
         let re = Regex::new(r"(?P<datetime>\[.*?\])\s(?P<level>\[.*?\])\s(?P<source_file>\[.*?\])\s(?P<msg>\[.*?\])\s?(?P<kvs>\[.*\])?").unwrap();
         NORMAL_BUFFER.with(|buffer| {
             let buffer = buffer.borrow_mut();

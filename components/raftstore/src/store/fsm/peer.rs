@@ -31,7 +31,7 @@ use kvproto::{
     import_sstpb::SwitchMode,
     kvrpcpb::DiskFullOpt,
     metapb::{self, Region, RegionEpoch},
-    pdpb::{self, CheckPolicy},
+    pdpb::{self, CheckPolicy, SplitReason},
     raft_cmdpb::{
         AdminCmdType, AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request,
         StatusCmdType, StatusResponse,
@@ -415,9 +415,16 @@ where
         }
     }
 
-    pub fn maybe_hibernate(&mut self) -> bool {
-        self.hibernate_state
-            .maybe_hibernate(self.peer.peer_id(), self.peer.region())
+    /// The condition for leader hibernation includes:
+    /// - all alive peers have voted for hibernate request
+    /// - enough hibernate votes to form a quorum
+    pub fn maybe_hibernate(&mut self, down_peer_ids: &[u64]) -> (bool, Vec<u64>) {
+        self.hibernate_state.maybe_hibernate(
+            |vote_ids| self.peer.raft_group.raft.prs().has_quorum(vote_ids),
+            self.peer.peer_id(),
+            self.peer.region(),
+            down_peer_ids,
+        )
     }
 
     pub fn update_memory_trace(&mut self, event: &mut TraceEvent) {
@@ -680,11 +687,11 @@ where
         };
 
         for m in msgs.drain(..) {
-            // skip handling remain messages if fsm is destroyed. This can aviod handling
-            // arbitary messages(e.g. CasualMessage::ForceCompactRaftLogs) that may need
+            // skip handling remain messages if fsm is destroyed. This can avoid handling
+            // arbitrary messages(e.g. CasualMessage::ForceCompactRaftLogs) that may need
             // to read raft logs which maybe lead to panic.
-            // We do not skip RaftCommand because raft commond callback should always be
-            // handled or it will cause panic.
+            // We do not skip RaftCommand because raft command callback should always be
+            // handled, otherwise it will cause panic.
             if self.fsm.stopped && !matches!(&m, PeerMsg::RaftCommand(_)) {
                 continue;
             }
@@ -840,20 +847,21 @@ where
         } else {
             if self.fsm.batch_req_builder.has_proposed_cb
                 && self.fsm.batch_req_builder.propose_checked.is_none()
-                && let Some(cmd) = self.fsm.batch_req_builder.request.take()
             {
-                // We are delaying these requests to next loop. Try to fulfill their
-                // proposed callback early.
-                self.fsm.batch_req_builder.propose_checked = Some(false);
-                if let Ok(None) = self.pre_propose_raft_command(&cmd) {
-                    if self.fsm.peer.will_likely_propose(&cmd) {
-                        self.fsm.batch_req_builder.propose_checked = Some(true);
-                        for cb in &mut self.fsm.batch_req_builder.callbacks {
-                            cb.invoke_proposed();
+                if let Some(cmd) = self.fsm.batch_req_builder.request.take() {
+                    // We are delaying these requests to next loop. Try to fulfill their
+                    // proposed callback early.
+                    self.fsm.batch_req_builder.propose_checked = Some(false);
+                    if let Ok(None) = self.pre_propose_raft_command(&cmd) {
+                        if self.fsm.peer.will_likely_propose(&cmd) {
+                            self.fsm.batch_req_builder.propose_checked = Some(true);
+                            for cb in &mut self.fsm.batch_req_builder.callbacks {
+                                cb.invoke_proposed();
+                            }
                         }
                     }
+                    self.fsm.batch_req_builder.request = Some(cmd);
                 }
-                self.fsm.batch_req_builder.request = Some(cmd);
             }
             if self.fsm.batch_req_builder.request.is_some() {
                 self.ctx.raft_metrics.ready.propose_delay.inc();
@@ -893,17 +901,17 @@ where
         syncer: UnsafeRecoveryExecutePlanSyncer,
         failed_voters: Vec<metapb::Peer>,
     ) {
-        if let Some(state) = &self.fsm.peer.unsafe_recovery_state
-            && !state.is_abort()
-        {
-            warn!(
-                "Unsafe recovery, demote failed voters has already been initiated";
-                "region_id" => self.region().get_id(),
-                "peer_id" => self.fsm.peer.peer.get_id(),
-                "state" => ?state,
-            );
-            syncer.abort();
-            return;
+        if let Some(state) = &self.fsm.peer.unsafe_recovery_state {
+            if !state.is_abort() {
+                warn!(
+                    "Unsafe recovery, demote failed voters has already been initiated";
+                    "region_id" => self.region().get_id(),
+                    "peer_id" => self.fsm.peer.peer.get_id(),
+                    "state" => ?state,
+                );
+                syncer.abort();
+                return;
+            }
         }
 
         if !self.fsm.peer.is_in_force_leader() {
@@ -1001,17 +1009,17 @@ where
     }
 
     fn on_unsafe_recovery_destroy(&mut self, syncer: UnsafeRecoveryExecutePlanSyncer) {
-        if let Some(state) = &self.fsm.peer.unsafe_recovery_state
-            && !state.is_abort()
-        {
-            warn!(
-                "Unsafe recovery, can't destroy, another plan is executing in progress";
-                "region_id" => self.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "state" => ?state,
-            );
-            syncer.abort();
-            return;
+        if let Some(state) = &self.fsm.peer.unsafe_recovery_state {
+            if !state.is_abort() {
+                warn!(
+                    "Unsafe recovery, can't destroy, another plan is executing in progress";
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "state" => ?state,
+                );
+                syncer.abort();
+                return;
+            }
         }
         self.fsm.peer.unsafe_recovery_state = Some(UnsafeRecoveryState::Destroy(syncer));
         self.handle_destroy_peer(DestroyPeerJob {
@@ -1022,17 +1030,17 @@ where
     }
 
     fn on_unsafe_recovery_wait_apply(&mut self, syncer: UnsafeRecoveryWaitApplySyncer) {
-        if let Some(state) = &self.fsm.peer.unsafe_recovery_state
-            && !state.is_abort()
-        {
-            warn!(
-                "Unsafe recovery, can't wait apply, another plan is executing in progress";
-                "region_id" => self.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "state" => ?state,
-            );
-            syncer.abort();
-            return;
+        if let Some(state) = &self.fsm.peer.unsafe_recovery_state {
+            if !state.is_abort() {
+                warn!(
+                    "Unsafe recovery, can't wait apply, another plan is executing in progress";
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "state" => ?state,
+                );
+                syncer.abort();
+                return;
+            }
         }
         let target_index = if self.fsm.peer.force_leader.is_some() {
             // For regions that lose quorum (or regions have force leader), whatever has
@@ -1962,17 +1970,17 @@ where
         if self.fsm.peer.force_leader.is_none() {
             return;
         }
-        if let Some(UnsafeRecoveryState::Failed) = self.fsm.peer.unsafe_recovery_state
-            && !force
-        {
-            // Skip force leader if the plan failed, so wait for the next retry of plan with
-            // force leader state holding
-            info!(
-                "skip exiting force leader state";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-            );
-            return;
+        if !force {
+            if let Some(UnsafeRecoveryState::Failed) = self.fsm.peer.unsafe_recovery_state {
+                // Skip force leader if the plan failed, so wait for the next retry of plan with
+                // force leader state holding
+                info!(
+                    "skip exiting force leader state";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                );
+                return;
+            }
         }
 
         info!(
@@ -2257,6 +2265,9 @@ where
         if let Some(r) = role {
             if StateRole::Leader == r {
                 self.fsm.missing_ticks = 0;
+                // reset region approximate size/keys stats to avoid region
+                // heartbeat with outdated stats.
+                self.fsm.peer.split_check_trigger.on_clear_region_size();
                 self.register_split_region_check_tick();
                 self.fsm.peer.heartbeat_pd(self.ctx);
                 self.register_pd_heartbeat_tick();
@@ -2367,7 +2378,7 @@ where
         let peer_id = self.fsm.peer.peer_id();
         let cb = Box::new(move || {
             // This can happen only when the peer is about to be destroyed
-            // or the node is shutting down. So it's OK to not to clean up
+            // or the node is shutting down. So it's OK to not clean up
             // registry.
             if let Err(e) = mb.force_send(PeerMsg::Tick(tick)) {
                 debug!(
@@ -2407,6 +2418,11 @@ where
 
         // Update the state whether the peer is pending on applying raft
         // logs if necesssary.
+        fail_point!(
+            "on_check_peer_complete_apply_1003",
+            self.fsm.region_id() == 1 && self.fsm.peer_id() == 1003,
+            |_| {}
+        );
         self.on_check_peer_complete_apply_logs();
 
         // If the peer is busy on apply and missing the last leader committed index,
@@ -2431,6 +2447,7 @@ where
         self.check_force_leader();
 
         let mut res = None;
+        let down_peer_ids = self.fsm.peer.get_down_peer_ids();
         if self.ctx.cfg.hibernate_regions {
             if self.fsm.hibernate_state.group_state() == GroupState::Idle {
                 // missing_ticks should be less than election timeout ticks otherwise
@@ -2463,7 +2480,11 @@ where
                 }
                 return;
             }
-            res = Some(self.fsm.peer.check_before_tick(&self.ctx.cfg));
+            res = Some(
+                self.fsm
+                    .peer
+                    .check_before_tick(&self.ctx.cfg, &down_peer_ids),
+            );
             if self.fsm.missing_ticks > 0 {
                 for _ in 0..self.fsm.missing_ticks {
                     if self.fsm.peer.raft_group.tick() {
@@ -2486,7 +2507,7 @@ where
         // hibernate timeout.
         if res.is_none() /* hibernate_region is false */ ||
             !self.fsm.peer.check_after_tick(self.fsm.hibernate_state.group_state(), res.unwrap()) ||
-            (self.fsm.peer.is_leader() && !self.all_agree_to_hibernate())
+            (self.fsm.peer.is_leader() && !self.quorum_agree_to_hibernate(&down_peer_ids))
         {
             self.register_raft_base_tick();
             // We need pd heartbeat tick to collect down peers and pending peers.
@@ -2882,6 +2903,11 @@ where
         if self.fsm.peer.needs_update_last_leader_committed_idx()
             && (MessageType::MsgAppend == msg_type || MessageType::MsgReadIndexResp == msg_type)
         {
+            fail_point!(
+                "on_check_peer_complete_apply_1003_skip",
+                self.store_id() == 3 && self.fsm.peer_id() == 1003,
+                |_| Ok(())
+            );
             let committed_index = cmp::max(
                 msg.get_message().get_commit(), // from MsgAppend
                 msg.get_message().get_index(),  // from MsgReadIndexResp
@@ -2889,6 +2915,14 @@ where
             self.fsm
                 .peer
                 .update_last_leader_committed_idx(committed_index);
+            // If the peer is already hibernating, run the `busy_on_apply` check now to
+            // avoid missing updates after refreshing the leader committed index.
+            fail_point!(
+                "on_check_peer_complete_apply_1003",
+                self.fsm.region_id() == 1 && self.fsm.peer_id() == 1003,
+                |_| Ok(())
+            );
+            self.on_check_peer_complete_apply_logs();
         }
 
         if msg.has_extra_msg() {
@@ -2990,8 +3024,9 @@ where
         Ok(())
     }
 
-    fn all_agree_to_hibernate(&mut self) -> bool {
-        if self.fsm.maybe_hibernate() {
+    fn quorum_agree_to_hibernate(&mut self, down_peer_ids: &[u64]) -> bool {
+        let (result, hibernate_vote_peer_ids) = self.fsm.maybe_hibernate(down_peer_ids);
+        if result {
             return true;
         }
         if !self
@@ -3001,6 +3036,21 @@ where
         {
             return false;
         }
+        // If non hibernate vote peers are all unreachable, leader can skip
+        // broadcasting hibernate request. Because non hibernate vote peers may
+        // be down, and they have not been detected as down peers. Down peers
+        // are expected to encounter heartbeat timeout and be in probe state.
+        // Using 3 times of raft_heartbeat_interval as heartbeat_timeout_duration to
+        // determine whether a peer is unreachable.
+        let heartbeat_timeout_duration = self.ctx.cfg.raft_heartbeat_interval() * 3;
+        if self.fsm.peer.all_non_hibernate_vote_peers_unreachable(
+            &hibernate_vote_peer_ids,
+            heartbeat_timeout_duration,
+        ) {
+            // Skip broadcast hibernate request.
+            return false;
+        }
+        // Broadcast hibernate request to all peers.
         for peer in self.fsm.peer.region().get_peers() {
             if peer.get_id() == self.fsm.peer.peer_id() {
                 continue;
@@ -3024,6 +3074,10 @@ where
             // Ignore the message means rejecting implicitly.
             return;
         }
+        // At this point the peer has caught up with the leader's raft logs.
+        // Before entering hibernation, ensure any pending "busy_on_apply" check
+        // has completed.
+        self.on_check_peer_complete_apply_logs();
         let mut extra = ExtraMessage::default();
         extra.set_type(ExtraMessageType::MsgHibernateResponse);
         self.fsm
@@ -6395,7 +6449,7 @@ where
                 );
             }
         } else {
-            // If a leader change occurs after switch to non-witness, it should be
+            // If a leader change occurs after switch to non-witness, it should
             // continue processing `MsgAppend` until `last_term == term`, then retry
             // to request snapshot.
             self.fsm.peer.should_reject_msgappend = false;
@@ -6572,6 +6626,11 @@ where
             return;
         }
         let region = self.fsm.peer.region();
+        let split_reason = match source {
+            "split_checker_by_size" => SplitReason::Size,
+            "split_checker_by_load" => SplitReason::Load,
+            _ => SplitReason::Admin,
+        };
         let task = PdTask::AskBatchSplit {
             region: region.clone(),
             split_keys,
@@ -6579,6 +6638,7 @@ where
             right_derive: self.ctx.cfg.right_derive_when_split,
             share_source_region_size,
             callback: cb,
+            split_reason,
         };
         if let Err(ScheduleError::Stopped(t)) = self.ctx.pd_scheduler.schedule(task) {
             warn!(
@@ -6841,11 +6901,16 @@ where
         if source == "bucket" {
             return;
         }
+        let reason = if source == "auto_split" {
+            SplitReason::Load
+        } else {
+            SplitReason::Admin
+        };
         let task = SplitCheckTask::split_check_key_range(
             region.clone(),
             start_key,
             end_key,
-            false,
+            reason,
             policy,
             split_check_bucket_ranges,
         );

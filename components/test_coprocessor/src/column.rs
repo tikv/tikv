@@ -28,7 +28,7 @@ impl Column {
         c_info.set_pk_handle(self.index == 0);
         if let Some(ref dv) = self.default_val {
             c_info.set_default_val(
-                datum::encode_value(&mut EvalContext::default(), &[dv.clone()]).unwrap(),
+                datum::encode_value(&mut EvalContext::default(), std::slice::from_ref(dv)).unwrap(),
             )
         }
         c_info

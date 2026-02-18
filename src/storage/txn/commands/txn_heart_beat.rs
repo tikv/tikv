@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use tikv_util::Either;
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
@@ -72,7 +73,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
         ));
 
         let lock = match reader.load_lock(&self.primary_key)? {
-            Some(mut lock) if lock.ts == self.start_ts => {
+            Some(Either::Left(mut lock)) if lock.ts == self.start_ts => {
                 let mut updated = false;
 
                 if lock.ttl < self.advise_ttl {
@@ -96,6 +97,43 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
                 }
 
                 lock
+            }
+            Some(Either::Right(mut shared_locks))
+                if shared_locks.contains_start_ts(self.start_ts) =>
+            {
+                let lock = shared_locks
+                    .get_lock(&self.start_ts)
+                    .map_err(MvccError::from)?
+                    .expect("lock should exist since contains_start_ts returned true")
+                    .clone();
+                let mut updated_lock = lock.clone();
+                let mut updated = false;
+
+                if updated_lock.ttl < self.advise_ttl {
+                    updated_lock.ttl = self.advise_ttl;
+                    updated = true;
+                }
+
+                // only for non-async-commit pipelined transactions, we can update the
+                // min_commit_ts
+                if !updated_lock.use_async_commit
+                    && updated_lock.generation > 0
+                    && self.min_commit_ts > 0
+                    && updated_lock.min_commit_ts < self.min_commit_ts.into()
+                {
+                    return Err(box_err!(
+                        "pipelined transaction should not hold shared locks"
+                    ));
+                }
+
+                if updated {
+                    shared_locks
+                        .update_lock(updated_lock.clone())
+                        .map_err(MvccError::from)?;
+                    txn.put_shared_locks(self.primary_key.clone(), &shared_locks, false);
+                }
+
+                updated_lock
             }
             _ => {
                 return Err(MvccError::from(MvccErrorInner::TxnNotFound {

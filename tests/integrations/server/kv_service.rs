@@ -2685,11 +2685,11 @@ fn test_commands_write_detail() {
     pessimistic_lock_req.set_primary_lock(k.clone());
     pessimistic_lock_req.set_lock_ttl(3000);
     let pessimistic_lock_resp = client.kv_pessimistic_lock(&pessimistic_lock_req).unwrap();
-    check_scan_detail(
-        pessimistic_lock_resp
-            .get_exec_details_v2()
-            .get_scan_detail_v2(),
-    );
+    let pessimistic_lock_scan_detail = pessimistic_lock_resp
+        .get_exec_details_v2()
+        .get_scan_detail_v2();
+    check_scan_detail(pessimistic_lock_scan_detail);
+    assert!(pessimistic_lock_scan_detail.get_total_versions() > 0);
     check_write_detail(
         pessimistic_lock_resp
             .get_exec_details_v2()
@@ -2739,8 +2739,8 @@ fn test_commands_write_detail() {
     );
 
     let mut check_txn_status_req = CheckTxnStatusRequest::default();
-    check_txn_status_req.set_context(ctx);
-    check_txn_status_req.set_primary_key(k);
+    check_txn_status_req.set_context(ctx.clone());
+    check_txn_status_req.set_primary_key(k.clone());
     check_txn_status_req.set_lock_ts(20);
     check_txn_status_req.set_rollback_if_not_exist(true);
     let check_txn_status_resp = client.kv_check_txn_status(&check_txn_status_req).unwrap();
@@ -2756,6 +2756,26 @@ fn test_commands_write_detail() {
             .get_process_nanos()
             > 0
     );
+
+    // Verify MVCC scan stats are carried into exec details for txn write RPCs.
+    // Use an optimistic prewrite (for_update_ts == 0) after the key has a committed
+    // version, so it will check write CF and produce non-zero `total_versions`.
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k.clone());
+    mutation.set_value(b"value2".to_vec());
+    let mut optimistic_prewrite_req = PrewriteRequest::default();
+    optimistic_prewrite_req.set_mutations(vec![mutation].into());
+    optimistic_prewrite_req.set_context(ctx);
+    optimistic_prewrite_req.set_primary_lock(k);
+    optimistic_prewrite_req.set_start_version(40);
+    optimistic_prewrite_req.set_lock_ttl(3000);
+    let optimistic_prewrite_resp = client.kv_prewrite(&optimistic_prewrite_req).unwrap();
+    let optimistic_prewrite_scan_detail = optimistic_prewrite_resp
+        .get_exec_details_v2()
+        .get_scan_detail_v2();
+    check_scan_detail(optimistic_prewrite_scan_detail);
+    assert!(optimistic_prewrite_scan_detail.get_total_versions() > 0);
 }
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
@@ -3665,4 +3685,125 @@ fn test_prewrite_future_execution_time() {
         "{:?}",
         resp
     );
+}
+
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
+fn test_get_with_need_commit_ts() {
+    let (_cluster, client, ctx) = new_cluster();
+
+    let mut ts = 100;
+    let k = b"k1".to_vec();
+    write_and_read_key(&client, &ctx, &mut ts, k.clone(), b"v1".to_vec());
+    {
+        // GetRequest with need_commit_ts = true
+        let mut req = GetRequest::default();
+        req.set_context(ctx.clone());
+        req.set_version(ts);
+        req.set_key(k.clone());
+        req.set_need_commit_ts(true);
+
+        let resp = client.kv_get(&req).unwrap();
+        assert!(resp.region_error.is_none());
+        assert!(resp.error.is_none());
+        assert_eq!(resp.get_value(), b"v1");
+        assert_eq!(resp.get_commit_ts(), 102);
+    }
+
+    {
+        // GetRequest with need_commit_ts should ignore committed_locks
+        ts = 1000;
+        let mut mutation = Mutation::default();
+        mutation.set_op(Op::Put);
+        mutation.set_key(k.clone());
+        mutation.set_value(b"v1".to_vec());
+        must_kv_prewrite(&client, ctx.clone(), vec![mutation], b"k1".to_vec(), ts);
+
+        let mut req = GetRequest::default();
+        let mut ctx = ctx.clone();
+        ctx.set_committed_locks(vec![ts]);
+        req.set_context(ctx);
+        req.set_version(ts + 10);
+        req.set_key(k.clone());
+        req.set_need_commit_ts(true);
+
+        let resp = client.kv_get(&req).unwrap();
+        let lock_info = resp.error.unwrap().locked.unwrap();
+        assert_eq!(lock_info.key, k.clone());
+        assert_eq!(lock_info.lock_version, 1000);
+    }
+}
+
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
+fn test_batch_get_with_need_commit_ts() {
+    let (_cluster, client, ctx) = new_cluster();
+
+    let k1 = b"k1".to_vec();
+    let k2 = b"k2".to_vec();
+    let k3 = b"k3".to_vec();
+    let k4 = b"k4".to_vec();
+    for (i, k) in vec![k1.clone(), k2.clone(), k3.clone()]
+        .into_iter()
+        .enumerate()
+    {
+        let mut ts = 100 * (i as u64 + 1);
+        let val = format!("v{}", i + 1).into_bytes();
+        write_and_read_key(&client, &ctx, &mut ts, k, val);
+    }
+
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k3.clone());
+    mutation.set_value(b"v33".to_vec());
+    must_kv_prewrite(&client, ctx.clone(), vec![mutation], k3.clone(), 1000);
+
+    let mut req = BatchGetRequest::default();
+    let mut ctx = ctx.clone();
+    ctx.set_committed_locks(vec![1000]);
+    req.set_context(ctx.clone());
+    req.set_version(5000);
+    req.set_keys(vec![k1.clone(), k2.clone(), k3.clone(), k4.clone()].into());
+    req.set_need_commit_ts(true);
+    let resp = client.kv_batch_get(&req).unwrap();
+
+    assert!(resp.region_error.is_none());
+    assert!(resp.error.is_none());
+    assert_eq!(resp.pairs.len(), 3);
+    let pair1 = &resp.pairs[0];
+    assert_eq!(pair1.key, b"k1");
+    assert_eq!(pair1.value, b"v1");
+    assert_eq!(pair1.commit_ts, 102);
+    let pair2 = &resp.pairs[1];
+    assert_eq!(pair2.key, b"k2");
+    assert_eq!(pair2.value, b"v2");
+    assert_eq!(pair2.commit_ts, 202);
+    // If `need_commit_ts` is set to true, committed_locks should be ignored,
+    // and it should always return an error when met a lock.
+    let pair3 = &resp.pairs[2];
+    let lock_info = pair3.clone().error.unwrap().locked.unwrap();
+    assert_eq!(lock_info.key, k3.clone());
+    assert_eq!(lock_info.lock_version, 1000);
+
+    // If `need_commit_ts` is false, the return commit_ts should be 0
+    let mut req = BatchGetRequest::default();
+    req.set_context(ctx.clone());
+    req.set_version(5000);
+    req.set_keys(vec![k1.clone(), k2.clone(), k3.clone()].into());
+    let resp = client.kv_batch_get(&req).unwrap();
+    assert_eq!(resp.pairs.len(), 3);
+    let pair1 = &resp.pairs[0];
+    assert_eq!(pair1.key, b"k1");
+    assert_eq!(pair1.value, b"v1");
+    assert_eq!(pair1.commit_ts, 0);
+    let pair2 = &resp.pairs[1];
+    assert_eq!(pair2.key, b"k2");
+    assert_eq!(pair2.value, b"v2");
+    assert_eq!(pair2.commit_ts, 0);
+    let pair3 = &resp.pairs[2];
+    assert_eq!(pair3.key, b"k3");
+    // without `need_commit_ts` set, it can read the value of the lock in
+    // committed_locks
+    assert_eq!(pair3.value, b"v33");
+    assert_eq!(pair3.commit_ts, 0);
 }

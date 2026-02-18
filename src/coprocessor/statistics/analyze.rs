@@ -949,7 +949,7 @@ mod tests {
         for loop_i in 0..loop_cnt {
             let mut collector = ReservoirRowSampleCollector::new(sample_num, 1000, 1);
             for row in &nums {
-                collector.sampling(&[row.clone()]);
+                collector.sampling(std::slice::from_ref(row));
             }
             assert_eq!(collector.samples.len(), sample_num);
             for sample in &collector.samples {
@@ -997,7 +997,7 @@ mod tests {
             let mut collector =
                 BernoulliRowSampleCollector::new(sample_num as f64 / row_num as f64, 1000, 1);
             for row in &nums {
-                collector.sampling(&[row.clone()]);
+                collector.sampling(std::slice::from_ref(row));
             }
             for sample in &collector.samples {
                 *item_cnt.entry(sample[0].clone()).or_insert(0) += 1;
@@ -1042,7 +1042,7 @@ mod tests {
             // Test for ReservoirRowSampleCollector
             let mut collector = ReservoirRowSampleCollector::new(sample_num, 1000, 1);
             for row in &nums {
-                collector.sampling(&[row.clone()]);
+                collector.sampling(std::slice::from_ref(row));
             }
             assert_eq!(collector.samples.len(), 0);
         }
@@ -1051,7 +1051,7 @@ mod tests {
             let mut collector =
                 BernoulliRowSampleCollector::new(sample_num as f64 / row_num as f64, 1000, 1);
             for row in &nums {
-                collector.sampling(&[row.clone()]);
+                collector.sampling(std::slice::from_ref(row));
             }
             assert_eq!(collector.samples.len(), 0);
         }

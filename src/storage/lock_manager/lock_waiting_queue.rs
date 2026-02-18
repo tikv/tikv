@@ -94,6 +94,8 @@ pub struct LockWaitEntry {
     // `parameters` provides parameter for a request, but `should_not_exist` is specified key-wise.
     // Put it in a separated field.
     pub should_not_exist: bool,
+    /// Whether the lock currently blocking this entry is a shared lock.
+    pub is_shared_lock: bool,
     pub lock_wait_token: LockWaitToken,
     pub req_states: Arc<LockWaitContextSharedState>,
     pub legacy_wake_up_index: Option<usize>,
@@ -320,17 +322,19 @@ impl<L: LockManager> LockWaitQueues<L> {
     /// will be returned and the caller will be responsible for executing it.
     /// The future waits until `wake_up_delay_duration` is elapsed since the
     /// most recent waking-up, and then wakes up all lock waiting entries that
-    /// exists at the time when the latest waking-up happens. The future
-    /// will return a `LockWaitEntry` if a resumable entry is popped out
-    /// from the queue while executing, and in this case the caller will be
-    /// responsible to wake it up.
+    /// exists at the time when the latest waking-up happens. The future will
+    /// return a `LockWaitEntry` if a resumable entry is popped out from the
+    /// queue while executing, and in this case the caller will be responsible
+    /// to wake it up. When the head of the queue is a shared lock wait, all
+    /// consecutive shared lock waits are returned together in the vector.
+    #[allow(clippy::vec_box)]
     pub fn pop_for_waking_up(
         &self,
         key: &Key,
         conflicting_start_ts: TimeStamp,
         conflicting_commit_ts: TimeStamp,
         wake_up_delay_duration_ms: u64,
-    ) -> Option<(Box<LockWaitEntry>, Option<DelayedNotifyAllFuture>)> {
+    ) -> (Vec<Box<LockWaitEntry>>, Option<DelayedNotifyAllFuture>) {
         self.pop_for_waking_up_impl(
             key,
             conflicting_start_ts,
@@ -339,14 +343,16 @@ impl<L: LockManager> LockWaitQueues<L> {
         )
     }
 
+    #[allow(clippy::vec_box)]
     fn pop_for_waking_up_impl(
         &self,
         key: &Key,
         conflicting_start_ts: TimeStamp,
         conflicting_commit_ts: TimeStamp,
         wake_up_delay_duration_ms: Option<u64>,
-    ) -> Option<(Box<LockWaitEntry>, Option<DelayedNotifyAllFuture>)> {
-        let mut result = None;
+    ) -> (Vec<Box<LockWaitEntry>>, Option<DelayedNotifyAllFuture>) {
+        let mut popped_entries: Vec<Box<LockWaitEntry>> = Vec::new();
+        let mut popped_future: Option<DelayedNotifyAllFuture> = None;
         // For statistics.
         let mut removed_waiters = 0usize;
 
@@ -361,20 +367,45 @@ impl<L: LockManager> LockWaitQueues<L> {
             if let Some((_, lock_wait_entry)) = v.queue.pop() {
                 removed_waiters += 1;
 
+                let mut group_entries = Vec::with_capacity(4);
+                let mut schedule_delayed_wake_up = false;
+
                 if !lock_wait_entry.parameters.allow_lock_with_conflict {
-                    // If a pessimistic lock request in legacy mode is woken up, increase the
-                    // counter.
                     v.legacy_wake_up_index += 1;
-                    let notify_all_future = match wake_up_delay_duration_ms {
+                    schedule_delayed_wake_up = true;
+                }
+
+                let shared_group = lock_wait_entry.is_shared_lock;
+                group_entries.push(lock_wait_entry);
+
+                if shared_group {
+                    while let Some((_, front)) = v.queue.peek() {
+                        if !front.is_shared_lock {
+                            break;
+                        }
+                        let (_, shared_entry) = v.queue.pop().unwrap();
+                        removed_waiters += 1;
+                        if !shared_entry.parameters.allow_lock_with_conflict {
+                            v.legacy_wake_up_index += 1;
+                            schedule_delayed_wake_up = true;
+                        }
+                        group_entries.push(shared_entry);
+                    }
+                }
+
+                let notify_all_future = if schedule_delayed_wake_up {
+                    match wake_up_delay_duration_ms {
                         Some(delay) if !v.queue.is_empty() => {
                             self.handle_delayed_wake_up(v, key, delay)
                         }
                         _ => None,
-                    };
-                    result = Some((lock_wait_entry, notify_all_future));
+                    }
                 } else {
-                    result = Some((lock_wait_entry, None));
-                }
+                    None
+                };
+
+                popped_future = notify_all_future;
+                popped_entries = group_entries;
             }
 
             self.inner
@@ -394,7 +425,7 @@ impl<L: LockManager> LockWaitQueues<L> {
             LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.keys.dec();
         }
 
-        result
+        (popped_entries, popped_future)
     }
 
     /// Schedule delayed waking up on the specified key.
@@ -772,6 +803,7 @@ mod tests {
                 lock_hash,
                 parameters,
                 should_not_exist: false,
+                is_shared_lock: false,
                 lock_wait_token: token,
                 req_states: dummy_ctx.get_shared_states().clone(),
                 legacy_wake_up_index: None,
@@ -804,10 +836,25 @@ mod tests {
             encountered_lock_ts: impl Into<TimeStamp>,
             resumable: bool,
         ) -> TestLockWaitEntryHandle {
-            let lock_info_pb = self.make_lock_info_pb(key, encountered_lock_ts);
+            self.mock_lock_wait_with_shared(key, start_ts, encountered_lock_ts, resumable, false)
+        }
+
+        fn mock_lock_wait_with_shared(
+            &self,
+            key: &[u8],
+            start_ts: impl Into<TimeStamp>,
+            encountered_lock_ts: impl Into<TimeStamp>,
+            resumable: bool,
+            shared: bool,
+        ) -> TestLockWaitEntryHandle {
+            let mut lock_info_pb = self.make_lock_info_pb(key, encountered_lock_ts);
+            if shared {
+                lock_info_pb.set_lock_type(kvrpcpb::Op::SharedPessimisticLock);
+            }
             let (mut entry, handle) =
                 self.make_mock_lock_wait_entry(key, start_ts, lock_info_pb.clone());
             entry.parameters.allow_lock_with_conflict = resumable;
+            entry.is_shared_lock = shared;
             self.push_lock_wait(entry, lock_info_pb);
             handle
         }
@@ -821,16 +868,15 @@ mod tests {
             conflicting_start_ts: impl Into<TimeStamp>,
             conflicting_commit_ts: impl Into<TimeStamp>,
         ) -> Box<LockWaitEntry> {
-            let (entry, f) = self
-                .pop_for_waking_up_impl(
-                    &Key::from_raw(key),
-                    conflicting_start_ts.into(),
-                    conflicting_commit_ts.into(),
-                    None,
-                )
-                .unwrap();
-            assert!(f.is_none());
-            entry
+            let (mut entries, future) = self.pop_for_waking_up_impl(
+                &Key::from_raw(key),
+                conflicting_start_ts.into(),
+                conflicting_commit_ts.into(),
+                None,
+            );
+            assert_eq!(entries.len(), 1);
+            assert!(future.is_none());
+            entries.pop().unwrap()
         }
 
         fn must_pop_none(
@@ -839,13 +885,14 @@ mod tests {
             conflicting_start_ts: impl Into<TimeStamp>,
             conflicting_commit_ts: impl Into<TimeStamp>,
         ) {
-            let res = self.pop_for_waking_up_impl(
+            let (entries, future) = self.pop_for_waking_up_impl(
                 &Key::from_raw(key),
                 conflicting_start_ts.into(),
                 conflicting_commit_ts.into(),
                 Some(1),
             );
-            assert!(res.is_none());
+            assert!(entries.is_empty());
+            assert!(future.is_none());
         }
 
         fn must_pop_with_delayed_notify(
@@ -854,15 +901,14 @@ mod tests {
             conflicting_start_ts: impl Into<TimeStamp>,
             conflicting_commit_ts: impl Into<TimeStamp>,
         ) -> (Box<LockWaitEntry>, DelayedNotifyAllFuture) {
-            let (res, f) = self
-                .pop_for_waking_up_impl(
-                    &Key::from_raw(key),
-                    conflicting_start_ts.into(),
-                    conflicting_commit_ts.into(),
-                    Some(50),
-                )
-                .unwrap();
-            (res, f.unwrap())
+            let (mut entries, future) = self.pop_for_waking_up_impl(
+                &Key::from_raw(key),
+                conflicting_start_ts.into(),
+                conflicting_commit_ts.into(),
+                Some(50),
+            );
+            assert_eq!(entries.len(), 1);
+            (entries.pop().unwrap(), future.unwrap())
         }
 
         fn must_pop_with_no_delayed_notify(
@@ -871,16 +917,15 @@ mod tests {
             conflicting_start_ts: impl Into<TimeStamp>,
             conflicting_commit_ts: impl Into<TimeStamp>,
         ) -> Box<LockWaitEntry> {
-            let (res, f) = self
-                .pop_for_waking_up_impl(
-                    &Key::from_raw(key),
-                    conflicting_start_ts.into(),
-                    conflicting_commit_ts.into(),
-                    Some(50),
-                )
-                .unwrap();
-            assert!(f.is_none());
-            res
+            let (mut entries, future) = self.pop_for_waking_up_impl(
+                &Key::from_raw(key),
+                conflicting_start_ts.into(),
+                conflicting_commit_ts.into(),
+                Some(50),
+            );
+            assert_eq!(entries.len(), 1);
+            assert!(future.is_none());
+            entries.pop().unwrap()
         }
 
         fn get_delayed_notify_id(&self, key: &[u8]) -> Option<u64> {
@@ -904,6 +949,11 @@ mod tests {
     impl LockWaitEntry {
         fn check_key(&self, expected_key: &[u8]) -> &Self {
             assert_eq!(self.key, Key::from_raw(expected_key));
+            self
+        }
+
+        fn check_shared(&self, expected: bool) -> &Self {
+            assert_eq!(self.is_shared_lock, expected);
             self
         }
 
@@ -937,12 +987,12 @@ mod tests {
     fn test_simple_push_pop() {
         let queues = LockWaitQueues::new(MockLockManager::new());
         assert_eq!(queues.entry_count(), 0);
-        assert_eq!(queues.is_empty(), true);
+        assert!(queues.is_empty());
 
         queues.mock_lock_wait(b"k1", 10, 5, false);
         queues.mock_lock_wait(b"k2", 11, 5, false);
         assert_eq!(queues.entry_count(), 2);
-        assert_eq!(queues.is_empty(), false);
+        assert!(!queues.is_empty());
 
         queues
             .must_pop(b"k1", 5, 6)
@@ -951,7 +1001,7 @@ mod tests {
         queues.must_pop_none(b"k1", 5, 6);
         queues.must_not_contain_key(b"k1");
         assert_eq!(queues.entry_count(), 1);
-        assert_eq!(queues.is_empty(), false);
+        assert!(!queues.is_empty());
 
         queues
             .must_pop(b"k2", 5, 6)
@@ -960,7 +1010,7 @@ mod tests {
         queues.must_pop_none(b"k2", 5, 6);
         queues.must_not_contain_key(b"k2");
         assert_eq!(queues.entry_count(), 0);
-        assert_eq!(queues.is_empty(), true);
+        assert!(queues.is_empty());
     }
 
     #[test]
@@ -1233,6 +1283,39 @@ mod tests {
                 .delayed_notify_all(&Key::from_raw(b"k1"), 1)
                 .is_none()
         );
+        queues.must_not_contain_key(b"k1");
+        assert_eq!(queues.entry_count(), 0);
+    }
+
+    #[test]
+    fn test_pop_shared_group() {
+        let queues = LockWaitQueues::new(MockLockManager::new());
+        assert_eq!(queues.entry_count(), 0);
+
+        queues.mock_lock_wait_with_shared(b"k1", 10, 5, false, true);
+        queues.mock_lock_wait_with_shared(b"k1", 11, 5, false, true);
+        queues.mock_lock_wait_with_shared(b"k1", 12, 5, false, true);
+        queues.mock_lock_wait_with_shared(b"k1", 20, 5, false, false);
+        assert_eq!(queues.entry_count(), 4);
+
+        let (entries, future) =
+            queues.pop_for_waking_up_impl(&Key::from_raw(b"k1"), 5.into(), 6.into(), Some(50));
+        assert_eq!(entries.len(), 3);
+        let mut start_ts_set = vec![];
+        for entry in &entries {
+            entry.check_shared(true);
+            start_ts_set.push(entry.parameters.start_ts.into_inner());
+        }
+        start_ts_set.sort();
+        assert_eq!(start_ts_set, vec![10, 11, 12]);
+        assert!(future.is_some());
+
+        let (next_entries, next_future) =
+            queues.pop_for_waking_up_impl(&Key::from_raw(b"k1"), 7.into(), 8.into(), Some(50));
+        assert_eq!(next_entries.len(), 1);
+        next_entries[0].check_shared(false).check_start_ts(20);
+        assert!(next_future.is_none());
+
         queues.must_not_contain_key(b"k1");
         assert_eq!(queues.entry_count(), 0);
     }

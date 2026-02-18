@@ -120,3 +120,4 @@ wake-up-delay-duration = "100ms"
 enable = false
 advance-ts-interval = "10ms"
 scan-lock-pool-size = 1
+memory-quota-exceeded-backoff-duration = "1ms"

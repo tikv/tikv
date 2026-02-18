@@ -648,6 +648,10 @@ enable-compaction-filter = false
 compaction-filter-skip-version-check = true
 num-threads = 2
 
+[gc.auto-compaction]
+mvcc-read-aware-enabled = true
+mvcc-scan-threshold = 10000
+
 [pessimistic-txn]
 enabled = false                # test backward compatibility
 wait-for-lock-timeout = "10ms"
@@ -675,6 +679,8 @@ advance-ts-interval = "5s"
 scan-lock-pool-size = 1
 memory-quota = "1MB"
 incremental-scan-concurrency = 7
+memory-quota-active-check-interval = "2s"
+memory-quota-exceeded-backoff-duration = "1s"
 
 [split]
 detect-times = 10

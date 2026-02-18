@@ -17,6 +17,7 @@ mod snap_gen;
 mod split_check;
 mod split_config;
 mod split_controller;
+mod split_validator;
 
 pub use self::{
     check_leader::{Runner as CheckLeaderRunner, Task as CheckLeaderTask},
@@ -53,4 +54,5 @@ pub use self::{
         REGION_CPU_OVERLOAD_THRESHOLD_RATIO, SplitConfig, SplitConfigManager,
     },
     split_controller::{AutoSplitController, ReadStats, SplitConfigChange, SplitInfo, WriteStats},
+    split_validator::SplitValidator,
 };

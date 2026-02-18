@@ -2156,7 +2156,7 @@ fn test_batch_request() {
     // 2. The expected output results.
     // 3. Should the coprocessor request contain invalid region epoch.
     // 4. Should the scanned key be locked.
-    let cases = vec![
+    let cases = [
         // Basic valid case.
         (
             vec![
@@ -2534,4 +2534,81 @@ fn test_index_lookup_select() {
         ],
         intermediate_rows
     );
+}
+
+#[test]
+fn test_select_with_commit_ts() {
+    use futures::executor::block_on;
+    use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
+
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+    ];
+
+    let product = ProductTable::new();
+    let (store, endpoint, _) = init_with_data_ext(&product, &data);
+    let storage = store.get_storage().get_storage();
+
+    for commit_ts_at_first in [true, false] {
+        let mut commit_ts_col = tipb::ColumnInfo::default();
+        commit_ts_col.set_column_id(tidb_query_datatype::codec::table::EXTRA_COMMIT_TS_COL_ID);
+        commit_ts_col
+            .as_mut_accessor()
+            .set_tp(FieldTypeTp::LongLong);
+
+        let mut select = DagSelect::from(&product);
+        let columns = select
+            .execs
+            .get_mut(0)
+            .unwrap()
+            .mut_tbl_scan()
+            .mut_columns();
+        if commit_ts_at_first {
+            // To test the issue https://github.com/tikv/tikv/issues/19299
+            // when _tidb_commit_ts column is placed before PK handle should not panic.
+            columns.insert(0, commit_ts_col);
+        } else {
+            columns.push(commit_ts_col);
+        }
+        select.output_offsets = Some(vec![0, 1, 2, 3]);
+
+        let req = select.build();
+        let mut resp = handle_select(&endpoint, req);
+        let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 4);
+        for (row, (id, name, cnt)) in spliter.zip(data.iter().copied()) {
+            let key = encode_row_key(product.table_id(), id);
+            let (entry, _) = block_on(storage.get_entry(
+                Context::default(),
+                Key::from_raw(&key),
+                TimeStamp::max(),
+                true,
+            ))
+            .unwrap();
+            let commit_ts = entry.unwrap().commit_ts.unwrap().into_inner() as i64;
+
+            let name_datum = name.map(|s| s.as_bytes()).into();
+            let expected = if commit_ts_at_first {
+                vec![
+                    Datum::I64(commit_ts),
+                    Datum::I64(id),
+                    name_datum,
+                    cnt.into(),
+                ]
+            } else {
+                vec![
+                    Datum::I64(id),
+                    name_datum,
+                    cnt.into(),
+                    Datum::I64(commit_ts),
+                ]
+            };
+            let expected_encoded =
+                datum::encode_value(&mut EvalContext::default(), &expected).unwrap();
+            let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+            assert_eq!(result_encoded, &*expected_encoded);
+        }
+    }
 }
