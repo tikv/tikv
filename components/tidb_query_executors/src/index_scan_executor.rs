@@ -73,13 +73,9 @@ impl<S: Storage, F: KvFormat> BatchIndexScanExecutor<S, F> {
         // last one is real). We accept this kind of request for compatibility
         // considerations, but will be forbidden soon.
         //
-        // Deprecated, now only `table::EXTRA_PHYSICAL_TABLE_ID_COL_ID` is used by
-        // TiDB. See https://github.com/pingcap/tidb/pull/53974 and
-        // https://github.com/tikv/tikv/pull/17141.
         // Note 4: When process global indexes, an extra partition ID
-        // column with column ID `table::EXTRA_PARTITION_ID_COL_ID` will append
-        // to column info to indicate which partiton handles belong to.
-        // See https://github.com/pingcap/parser/pull/1010 for more information.
+        // column with column ID `table::EXTRA_PHYSICAL_TABLE_ID_COL_ID` will
+        // append to column info to indicate which partition id handles belong to.
         //
         // Note 5: When process a partitioned table's index under
         // tidb_partition_prune_mode = 'dynamic' and with either an active transaction
@@ -530,6 +526,11 @@ impl IndexScanExecutorImpl {
 
         match self.decode_handle_strategy {
             NoDecode => {
+                // Note: V2 key-only partition ID only exists for IntHandle
+                // global indexes, when !PKIsHandle, and TiDB always sends
+                // the handle column for those, so this path is only reached
+                // for local indexes where decode_table_id correctly returns
+                // the partition's table ID.
                 if self.physical_table_id_column_cnt > 0 {
                     self.process_physical_table_id_column(key, columns)?;
                 }
@@ -799,6 +800,10 @@ impl IndexScanExecutorImpl {
             }
 
             let dispatcher = match self.decode_handle_strategy {
+                // V2 key-only partition ID only exists for IntHandle global
+                // indexes && !PKIsHandle, and TiDB always sends the handle
+                // column for those, so NoDecode never needs to parse
+                // partition ID from the key.
                 NoDecode => DecodeHandleOp::Nop,
                 DecodeIntHandle if tail_len < 8 => {
                     // This is a non-unique index, we should extract the int handle from the key.
