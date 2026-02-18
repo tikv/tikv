@@ -1939,13 +1939,16 @@ mod tests {
         let resp = block_on(handle).unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body_bytes = block_on(hyper::body::to_bytes(resp.into_body())).unwrap();
+        let resolved_symbol = String::from_utf8(body_bytes.as_ref().to_owned())
+            .unwrap()
+            .split(' ')
+            .next_back()
+            .unwrap()
+            .to_owned();
         assert!(
-            String::from_utf8(body_bytes.as_ref().to_owned())
-                .unwrap()
-                .split(' ')
-                .next_back()
-                .unwrap()
-                .starts_with("backtrace::backtrace")
+            resolved_symbol.contains("test_pprof_symbol_service"),
+            "resolved symbol: {}",
+            resolved_symbol
         );
         status_server.stop();
     }

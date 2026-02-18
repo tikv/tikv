@@ -775,18 +775,20 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
                         if to_flush == 0 {
                             break;
                         }
-                        if let Some(mut t) = registry.get(r)
-                            && let Some(t) = t.latest()
-                        {
-                            match t.flush_oldest_cf(true, Some(threshold)) {
-                                Err(e) => warn!(logger, "failed to flush oldest cf"; "err" => %e),
-                                Ok(true) => {
-                                    to_flush -= 1;
-                                    let time =
-                                        std::time::Instant::now() + limiter.consume_duration(1);
-                                    let _ = GLOBAL_TIMER_HANDLE.delay(time).compat().await;
+                        if let Some(mut t) = registry.get(r) {
+                            if let Some(t) = t.latest() {
+                                match t.flush_oldest_cf(true, Some(threshold)) {
+                                    Err(e) => {
+                                        warn!(logger, "failed to flush oldest cf"; "err" => %e)
+                                    }
+                                    Ok(true) => {
+                                        to_flush -= 1;
+                                        let time =
+                                            std::time::Instant::now() + limiter.consume_duration(1);
+                                        let _ = GLOBAL_TIMER_HANDLE.delay(time).compat().await;
+                                    }
+                                    _ => (),
                                 }
-                                _ => (),
                             }
                         }
                     }

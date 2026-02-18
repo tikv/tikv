@@ -487,16 +487,17 @@ impl<E: Engine> Endpoint<E> {
 
         // Check if the buckets version is latest.
         // skip if request don't carry this bucket version.
-        if let Some(ref buckets) = latest_buckets
-            && buckets.version > tracker.req_ctx.context.buckets_version
-            && tracker.req_ctx.context.buckets_version != 0
-        {
-            let mut bucket_not_match = errorpb::BucketVersionNotMatch::default();
-            bucket_not_match.set_version(buckets.version);
-            bucket_not_match.set_keys(buckets.keys.clone().into());
-            let mut err = errorpb::Error::default();
-            err.set_bucket_version_not_match(bucket_not_match);
-            return Err(Error::Region(err));
+        if let Some(ref buckets) = latest_buckets {
+            if buckets.version > tracker.req_ctx.context.buckets_version
+                && tracker.req_ctx.context.buckets_version != 0
+            {
+                let mut bucket_not_match = errorpb::BucketVersionNotMatch::default();
+                bucket_not_match.set_version(buckets.version);
+                bucket_not_match.set_keys(buckets.keys.clone().into());
+                let mut err = errorpb::Error::default();
+                err.set_bucket_version_not_match(bucket_not_match);
+                return Err(Error::Region(err));
+            }
         }
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
@@ -1228,7 +1229,6 @@ impl<E: Engine> RegionStorageAccessor for ExtraSnapStoreAccessor<E> {
 #[cfg(test)]
 mod tests {
     use std::{
-        assert_matches::assert_matches,
         sync::{Mutex, atomic, mpsc},
         thread, vec,
     };
@@ -2445,7 +2445,7 @@ mod tests {
             let result =
                 block_on(unsafe { Endpoint::<RocksEngine>::get_snapshot_with_timeout(&req_ctx) });
             assert!(result.is_err());
-            assert_matches!(result, Err(Error::DeadlineExceeded));
+            assert!(matches!(result, Err(Error::DeadlineExceeded)));
         }
 
         // Test case 2: Snapshot retrieval delayed by failpoint, causing timeout
@@ -2488,7 +2488,7 @@ mod tests {
                     // In production yatp FuturePool environment, this would
                     // timeout correctly
                 } else {
-                    assert_matches!(result, Err(Error::DeadlineExceeded));
+                    assert!(matches!(result, Err(Error::DeadlineExceeded)));
                     // Verify that timeout happened before the full sleep duration
                     // The timeout should trigger around 100ms, not wait for the full 5000ms sleep
                     assert!(
@@ -3056,9 +3056,9 @@ mod tests {
         .map_err(Error::from)
         .err()
         .unwrap();
-        assert_matches!(err, Error::Locked(LockInfo { key, .. }) if {
+        assert!(matches!(err, Error::Locked(LockInfo { key, .. }) if {
             assert_eq!(key, b"key".to_vec());
             true
-        });
+        }));
     }
 }

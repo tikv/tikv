@@ -289,15 +289,13 @@ impl ApplyTrace {
                 }
             })
             .max();
-        if let Some(m) = last_modified
-            && m >= self.admin.flushed + 4096000
-            && m >= self.last_flush_trigger + 4096000
-        {
-            self.last_flush_trigger = m;
-            true
-        } else {
-            false
+        if let Some(m) = last_modified {
+            if m >= self.admin.flushed + 4096000 && m >= self.last_flush_trigger + 4096000 {
+                self.last_flush_trigger = m;
+                return true;
+            }
         }
+        false
     }
 
     // All events before `mem_index` must be consumed before calling this function.

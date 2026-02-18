@@ -361,10 +361,10 @@ pub fn check_flashback_state(
     skip_not_prepared: bool,
 ) -> Result<()> {
     // The admin flashback cmd could be proposed/applied under any state.
-    if let Some(ty) = admin_type
-        && (ty == AdminCmdType::PrepareFlashback || ty == AdminCmdType::FinishFlashback)
-    {
-        return Ok(());
+    if let Some(ty) = admin_type {
+        if ty == AdminCmdType::PrepareFlashback || ty == AdminCmdType::FinishFlashback {
+            return Ok(());
+        }
     }
     // TODO: only use `flashback_start_ts` to check flashback state.
     let is_in_flashback = is_in_flashback || flashback_start_ts > 0;
@@ -1298,8 +1298,8 @@ impl RegionReadProgressRegistry {
         self.registry
             .lock()
             .unwrap()
-            .iter()
-            .map(|(_, rrp)| rrp.resolved_ts())
+            .values()
+            .map(| rrp| rrp.resolved_ts())
             //TODO: the uninitialized peer should be taken into consideration instead of skipping it(https://github.com/tikv/tikv/issues/15506).
             .filter(|ts| *ts != 0) // ts == 0 means the peer is uninitialized,
             .min()
@@ -1404,10 +1404,10 @@ impl RegionReadProgress {
     }
 
     pub fn notify_advance_resolved_ts(&self) {
-        if let Ok(core) = self.core.try_lock()
-            && let Some(advance_notify) = &core.advance_notify
-        {
-            advance_notify.notify_waiters();
+        if let Ok(core) = self.core.try_lock() {
+            if let Some(advance_notify) = &core.advance_notify {
+                advance_notify.notify_waiters();
+            }
         }
     }
 

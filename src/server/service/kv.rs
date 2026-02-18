@@ -2757,10 +2757,10 @@ impl HealthFeedbackAttacher {
 
         let now = Instant::now_coarse();
 
-        if let Some(last_feedback_time) = self.last_feedback_time
-            && now - last_feedback_time < feedback_interval
-        {
-            return;
+        if let Some(last_feedback_time) = self.last_feedback_time {
+            if now - last_feedback_time < feedback_interval {
+                return;
+            }
         }
 
         self.attach(resp, now);

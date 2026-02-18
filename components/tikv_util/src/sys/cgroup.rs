@@ -189,16 +189,16 @@ fn parse_proc_cgroup_v1(lines: &str) -> HashMap<String, String> {
     let mut subsystems = HashMap::new();
     for line in lines.lines().map(|s| s.trim()).filter(|s| !s.is_empty()) {
         let mut iter = line.split(':');
-        if let Some(_id) = iter.next() {
-            if let Some(systems) = iter.next() {
-                // If the path itself contains ":", we need to concat them
-                let path = iter.collect::<Vec<_>>().join(":");
-                if !path.is_empty() {
-                    for system in systems.split(',') {
-                        subsystems.insert(system.to_owned(), path.clone());
-                    }
-                    continue;
+        if let Some(_id) = iter.next()
+            && let Some(systems) = iter.next()
+        {
+            // If the path itself contains ":", we need to concat them
+            let path = iter.collect::<Vec<_>>().join(":");
+            if !path.is_empty() {
+                for system in systems.split(',') {
+                    subsystems.insert(system.to_owned(), path.clone());
                 }
+                continue;
             }
         }
         warn!("fail to parse cgroup v1: {}", line);
@@ -280,12 +280,13 @@ fn parse_mountinfos_v2(infos: Vec<MountInfo>) -> HashMap<String, (String, PathBu
 fn build_path(path: &str, root: &str, mount_point: &Path) -> Option<PathBuf> {
     let abs_root = super::super::config::normalize_path(Path::new(root));
     let root = abs_root.to_str().unwrap();
-    if path.starts_with('/') && root.starts_with('/') {
-        if let Some(relative) = path.strip_prefix(root) {
-            let mut absolute = mount_point.to_owned();
-            absolute.push(relative);
-            return Some(absolute);
-        }
+    if path.starts_with('/')
+        && root.starts_with('/')
+        && let Some(relative) = path.strip_prefix(root)
+    {
+        let mut absolute = mount_point.to_owned();
+        absolute.push(relative);
+        return Some(absolute);
     }
     warn!(
         "fail to build cgroup path";
@@ -315,17 +316,15 @@ fn parse_cpu_cores(value: &str) -> HashSet<usize> {
     for v in value.split(',') {
         if v.contains('-') {
             let mut v = v.split('-');
-            if let Some(s) = v.next() {
-                if let Ok(s) = capping_parse_int::<usize>(s) {
-                    if let Some(e) = v.next() {
-                        if let Ok(e) = capping_parse_int::<usize>(e) {
-                            for x in s..=e {
-                                cores.insert(x);
-                            }
-                            continue;
-                        }
-                    }
+            if let Some(s) = v.next()
+                && let Ok(s) = capping_parse_int::<usize>(s)
+                && let Some(e) = v.next()
+                && let Ok(e) = capping_parse_int::<usize>(e)
+            {
+                for x in s..=e {
+                    cores.insert(x);
                 }
+                continue;
             }
         } else if let Ok(s) = capping_parse_int::<usize>(v) {
             cores.insert(s);
@@ -338,19 +337,17 @@ fn parse_cpu_cores(value: &str) -> HashSet<usize> {
 
 fn parse_cpu_quota_v2(line: &str) -> Option<f64> {
     let mut iter = line.split(' ');
-    if let Some(max) = iter.next() {
-        if max != "max" {
-            if let Ok(max) = max.parse::<f64>() {
-                if let Some(period) = iter.next() {
-                    if let Ok(period) = period.parse::<f64>() {
-                        if period > 0.0 {
-                            return Some(max / period);
-                        }
-                    }
-                }
-            }
-            warn!("fail to parse cpu quota v2: {}", line);
+    if let Some(max) = iter.next()
+        && max != "max"
+    {
+        if let Ok(max) = max.parse::<f64>()
+            && let Some(period) = iter.next()
+            && let Ok(period) = period.parse::<f64>()
+            && period > 0.0
+        {
+            return Some(max / period);
         }
+        warn!("fail to parse cpu quota v2: {}", line);
     }
     None
 }
@@ -358,10 +355,10 @@ fn parse_cpu_quota_v2(line: &str) -> Option<f64> {
 fn parse_cpu_quota_v1(line1: &str, line2: &str) -> Option<f64> {
     if let Ok(max) = line1.parse::<f64>() {
         if max > 0.0 {
-            if let Ok(period) = line2.parse::<f64>() {
-                if period > 0.0 {
-                    return Some(max / period);
-                }
+            if let Ok(period) = line2.parse::<f64>()
+                && period > 0.0
+            {
+                return Some(max / period);
             }
         } else {
             return None;

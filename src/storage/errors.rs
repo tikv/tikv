@@ -714,7 +714,7 @@ mod test {
                     start_ts: TimeStamp::new(123),
                     commit_ts: TimeStamp::new(456),
                     key: b"key".to_vec(),
-                    mvcc_info: has_mvcc.then(|| mock_mvcc_info()),
+                    mvcc_info: has_mvcc.then(mock_mvcc_info),
                 },
             ))))
         }
@@ -759,7 +759,7 @@ mod test {
                     commit_ts: TimeStamp::new(456),
                     key: b"key".to_vec(),
                     min_commit_ts: TimeStamp::new(789),
-                    mvcc_info: has_mvcc.then(|| mock_mvcc_info()),
+                    mvcc_info: has_mvcc.then(mock_mvcc_info),
                 },
             ))))
         }

@@ -343,20 +343,22 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         assert!(!self.storage().has_dirty_data());
         let (ch, res) = CmdResChannel::pair();
         self.on_admin_command(store_ctx, req, ch);
-        if let Some(res) = res.take_result()
-            && res.get_header().has_error()
-        {
-            error!(
-                self.logger,
-                "failed to propose commit merge";
-                "source" => source_id,
-                "res" => ?res,
-            );
-            fail::fail_point!(
-                "on_propose_commit_merge_fail_store_1",
-                store_ctx.store_id == 1,
-                |_| {}
-            );
+        if let Some(res) = res.take_result() {
+            if res.get_header().has_error() {
+                error!(
+                    self.logger,
+                    "failed to propose commit merge";
+                    "source" => source_id,
+                    "res" => ?res,
+                );
+                fail::fail_point!(
+                    "on_propose_commit_merge_fail_store_1",
+                    store_ctx.store_id == 1,
+                    |_| {}
+                );
+            } else {
+                fail::fail_point!("on_propose_commit_merge_success");
+            }
         } else {
             fail::fail_point!("on_propose_commit_merge_success");
         }
@@ -612,30 +614,29 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "current" => ?cul.merge,
             );
         }
-        if let Some(state) = self.applied_merge_state()
-            && state.get_commit() == commit_of_merge(&catch_up_logs.merge)
-        {
-            assert_eq!(state.get_target().get_id(), catch_up_logs.target_region_id);
-            self.finish_catch_up_logs(store_ctx, catch_up_logs);
-        } else {
-            // Directly append these logs to raft log and then commit them.
-            match self.maybe_append_merge_entries(&catch_up_logs.merge) {
-                Some(last_index) => {
-                    info!(
-                        self.logger,
-                        "append and commit entries to source region";
-                        "last_index" => last_index,
-                    );
-                    self.set_has_ready();
-                }
-                None => {
-                    info!(self.logger, "no need to catch up logs");
-                }
+        if let Some(state) = self.applied_merge_state() {
+            if state.get_commit() == commit_of_merge(&catch_up_logs.merge) {
+                assert_eq!(state.get_target().get_id(), catch_up_logs.target_region_id);
+                self.finish_catch_up_logs(store_ctx, catch_up_logs);
+                return;
             }
-            catch_up_logs.merge.clear_entries();
-            self.merge_context_mut().prepare_status =
-                Some(PrepareStatus::CatchUpLogs(catch_up_logs));
         }
+        // Directly append these logs to raft log and then commit them.
+        match self.maybe_append_merge_entries(&catch_up_logs.merge) {
+            Some(last_index) => {
+                info!(
+                    self.logger,
+                    "append and commit entries to source region";
+                    "last_index" => last_index,
+                );
+                self.set_has_ready();
+            }
+            None => {
+                info!(self.logger, "no need to catch up logs");
+            }
+        }
+        catch_up_logs.merge.clear_entries();
+        self.merge_context_mut().prepare_status = Some(PrepareStatus::CatchUpLogs(catch_up_logs));
     }
 
     fn maybe_append_merge_entries(&mut self, merge: &CommitMergeRequest) -> Option<u64> {

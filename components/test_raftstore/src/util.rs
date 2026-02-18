@@ -440,6 +440,8 @@ pub fn make_cb_rocks(
     make_cb(cmd)
 }
 
+#[allow(unused_assignments)]
+#[allow(unused_variables)]
 pub fn make_cb(
     cmd: &RaftCmdRequest,
 ) -> (Callback<RocksSnapshot>, future::Receiver<RaftCmdResponse>) {
@@ -462,7 +464,7 @@ pub fn make_cb(
     (cb, rx)
 }
 
-pub fn make_cb_ext<EK: KvEngine>(
+pub fn make_cb_ext(
     cmd: &RaftCmdRequest,
     proposed: Option<ExtCallback>,
     committed: Option<ExtCallback>,

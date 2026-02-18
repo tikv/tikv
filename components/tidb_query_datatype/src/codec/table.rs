@@ -543,7 +543,8 @@ pub fn generate_index_data_for_test(
         .map(|(cid, value)| {
             expect_row.insert(
                 *cid,
-                datum::encode_key(&mut EvalContext::default(), &[value.clone()]).unwrap(),
+                datum::encode_key(&mut EvalContext::default(), std::slice::from_ref(value))
+                    .unwrap(),
             );
             value.clone()
         })

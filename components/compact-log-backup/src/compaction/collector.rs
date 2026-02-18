@@ -293,7 +293,7 @@ mod test {
         };
         let t = with_ts;
 
-        let items = vec![
+        let items = [
             // should be filtered out.
             t(log_file("1", 999, r(1)), 40, 49),
             t(log_file("11", 456, r(1)), 201, 288),

@@ -100,7 +100,7 @@ impl RawClient {
                     });
                 }
                 Err(e) => {
-                    if i as usize % ctx.cfg.retry_log_every == 0 {
+                    if (i as usize).is_multiple_of(ctx.cfg.retry_log_every) {
                         warn!("validate PD endpoints failed"; "err" => ?e);
                     }
                     let _ = GLOBAL_TIMER_HANDLE

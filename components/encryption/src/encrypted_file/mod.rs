@@ -108,8 +108,6 @@ impl<'a> EncryptedFile<'a> {
 mod tests {
     use std::io::ErrorKind;
 
-    use matches::assert_matches;
-
     use super::*;
     use crate::Error;
 
@@ -120,7 +118,7 @@ mod tests {
         assert_eq!(file.base, tmp.path());
         assert_eq!(file.name, "encrypted");
         let ret = file.read(&PlaintextBackend::default());
-        assert_matches!(ret, Err(Error::Io(_)));
+        assert!(matches!(ret, Err(Error::Io(_))));
         if let Err(Error::Io(e)) = file.read(&PlaintextBackend::default()) {
             assert_eq!(ErrorKind::NotFound, e.kind());
         }

@@ -1383,7 +1383,7 @@ pub(crate) mod tests {
             .left()
             .unwrap();
         assert_eq!(lock.ts, TimeStamp::new(2));
-        assert_eq!(lock.use_async_commit, true);
+        assert!(lock.use_async_commit);
         assert_eq!(
             lock.secondaries,
             vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]
@@ -1447,7 +1447,7 @@ pub(crate) mod tests {
             .left()
             .unwrap();
         assert_eq!(lock.ts, TimeStamp::new(2));
-        assert_eq!(lock.use_async_commit, true);
+        assert!(lock.use_async_commit);
         assert_eq!(
             lock.secondaries,
             vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]

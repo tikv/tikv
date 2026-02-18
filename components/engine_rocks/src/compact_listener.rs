@@ -234,10 +234,10 @@ impl rocksdb::EventListener for CompactionListener {
             return;
         }
 
-        if let Some(ref f) = self.filter {
-            if !f(info) {
-                return;
-            }
+        if let Some(ref f) = self.filter
+            && !f(info)
+        {
+            return;
         }
 
         let mut input_files = hash_set_with_capacity(info.input_file_count());

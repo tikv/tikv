@@ -878,7 +878,7 @@ impl TempFileKey {
     fn format_date_time(ts: u64, t: FormatType) -> impl Display {
         use chrono::prelude::*;
         let millis = TimeStamp::physical(ts.into());
-        let dt = Utc.timestamp_millis(millis as _);
+        let dt = Utc.timestamp_millis_opt(millis as _).unwrap();
         match t {
             FormatType::Date => dt.format("%Y%m%d"),
             FormatType::Hour => dt.format("%H"),
@@ -2891,7 +2891,7 @@ mod tests {
         let kv_event = build_kv_event(1, 1);
         let tmp_key = TempFileKey::of(&kv_event.events[0], 1);
         data_file.inner.done().await?;
-        let mut files = vec![(tmp_key, data_file, info)];
+        let mut files = [(tmp_key, data_file, info)];
 
         let stream_task = StreamTask {
             info: StreamBackupTaskInfo::default(),

@@ -58,7 +58,7 @@ fn test_raft_storage() {
     ctx.set_region_id(region_id + 1);
     storage.get(ctx.clone(), &key, 20).unwrap_err();
     storage
-        .batch_get(ctx.clone(), &[key.clone()], 20)
+        .batch_get(ctx.clone(), std::slice::from_ref(&key), 20)
         .unwrap_err();
     storage
         .scan(ctx.clone(), key, None, 1, false, 20)
@@ -162,7 +162,7 @@ fn test_raft_storage_store_not_match() {
         panic!("expect store_not_match, but got {:?}", res);
     }
     storage
-        .batch_get(ctx.clone(), &[key.clone()], 20)
+        .batch_get(ctx.clone(), std::slice::from_ref(&key), 20)
         .unwrap_err();
     storage
         .scan(ctx.clone(), key, None, 1, false, 20)

@@ -567,13 +567,13 @@ impl WaiterManager {
                 continue;
             }
 
-            if let Some((previous_wait_info, diag_ctx)) = previous_wait_info
-                && previous_wait_info.allow_lock_with_conflict
-            {
-                self.detector_scheduler
-                    .clean_up_wait_for(event.start_ts, previous_wait_info);
-                self.detector_scheduler
-                    .detect(event.start_ts, event.wait_info, diag_ctx);
+            if let Some((previous_wait_info, diag_ctx)) = previous_wait_info {
+                if previous_wait_info.allow_lock_with_conflict {
+                    self.detector_scheduler
+                        .clean_up_wait_for(event.start_ts, previous_wait_info);
+                    self.detector_scheduler
+                        .detect(event.start_ts, event.wait_info, diag_ctx);
+                }
             }
         }
     }

@@ -50,7 +50,7 @@ pub fn convert_gbmb(mut bytes: u64) -> String {
     if bytes < MIB {
         return format!("{}B", bytes);
     }
-    let mb = if bytes % GIB == 0 {
+    let mb = if bytes.is_multiple_of(GIB) {
         String::from("")
     } else {
         format!("{:.3}MiB", (bytes % GIB) as f64 / MIB as f64)

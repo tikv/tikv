@@ -74,8 +74,8 @@ where
             // Fast path to get the min `safe_ts` of all regions in this store
             self.region_read_progress.with(|registry| {
                 registry
-                .iter()
-                .map(|(_, rrp)| rrp.safe_ts())
+                .values()
+                .map(|rrp| rrp.safe_ts())
                 .filter(|ts| *ts != 0) // ts == 0 means the peer is uninitialized
                 .min()
                 .unwrap_or(0)

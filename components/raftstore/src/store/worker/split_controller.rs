@@ -22,7 +22,9 @@ use tikv_util::{
     debug, info,
     metrics::ThreadInfoStatistics,
     store::{QueryStats, is_read_query},
-    thread_name_prefix::{GRPC_SERVER_THREAD, UNIFIED_READ_POOL_THREAD},
+    thread_name_prefix::{
+        GRPC_SERVER_THREAD, UNIFIED_READ_POOL_THREAD, matches_thread_name_prefix,
+    },
     time::Instant,
     warn,
 };
@@ -462,27 +464,27 @@ impl ReadStats {
         region_info.cop_detail.add(write_cf_cop_detail);
         // the bucket of the follower only have the version info and not needs to be
         // recorded the hot bucket.
-        if let Some(buckets) = buckets
-            && !buckets.sizes.is_empty()
-        {
-            let bucket_stat = self
-                .region_buckets
-                .entry(region_id)
-                .and_modify(|current| {
-                    if current.meta < *buckets {
-                        let mut new = BucketStat::from_meta(buckets.clone());
-                        std::mem::swap(current, &mut new);
-                        current.merge(&new);
-                    }
-                })
-                .or_insert_with(|| BucketStat::from_meta(buckets.clone()));
-            let mut delta = metapb::BucketStats::default();
-            delta.set_read_bytes(vec![(write.read_bytes + data.read_bytes) as u64]);
-            delta.set_read_keys(vec![(write.read_keys + data.read_keys) as u64]);
-            bucket_stat.add_flows(
-                &[start.unwrap_or_default(), end.unwrap_or_default()],
-                &delta,
-            );
+        if let Some(buckets) = buckets {
+            if !buckets.sizes.is_empty() {
+                let bucket_stat = self
+                    .region_buckets
+                    .entry(region_id)
+                    .and_modify(|current| {
+                        if current.meta < *buckets {
+                            let mut new = BucketStat::from_meta(buckets.clone());
+                            std::mem::swap(current, &mut new);
+                            current.merge(&new);
+                        }
+                    })
+                    .or_insert_with(|| BucketStat::from_meta(buckets.clone()));
+                let mut delta = metapb::BucketStats::default();
+                delta.set_read_bytes(vec![(write.read_bytes + data.read_bytes) as u64]);
+                delta.set_read_keys(vec![(write.read_keys + data.read_keys) as u64]);
+                bucket_stat.add_flows(
+                    &[start.unwrap_or_default(), end.unwrap_or_default()],
+                    &delta,
+                );
+            }
         }
     }
 
@@ -748,7 +750,7 @@ impl AutoSplitController {
         thread_stats
             .get_cpu_usages()
             .iter()
-            .filter(|(thread_name, _)| thread_name.contains(name))
+            .filter(|(thread_name, _)| matches_thread_name_prefix(thread_name, name))
             .fold(0, |cpu_usage_sum, (_, cpu_usage)| {
                 // `cpu_usage` is in [0, 100].
                 cpu_usage_sum + cpu_usage
@@ -900,23 +902,18 @@ impl AutoSplitController {
                 });
                 let region_id = top_cpu_usage[0];
                 let recorder = self.recorders.get_mut(&region_id).unwrap();
-                if recorder.hottest_key_range.is_some() {
+                if let Some(hottest_key_range) = recorder.hottest_key_range.as_ref() {
                     split_infos.push(SplitInfo::with_start_end_key(
                         region_id,
                         recorder.peer.clone(),
-                        recorder
-                            .hottest_key_range
-                            .as_ref()
-                            .unwrap()
-                            .start_key
-                            .clone(),
-                        recorder.hottest_key_range.as_ref().unwrap().end_key.clone(),
+                        hottest_key_range.start_key.clone(),
+                        hottest_key_range.end_key.clone(),
                     ));
                     LOAD_BASE_SPLIT_EVENT.ready_to_split_cpu_top.inc();
                     info!("load base split region";
                         "region_id" => region_id,
-                        "start_key" => log_wrappers::Value::key(&recorder.hottest_key_range.as_ref().unwrap().start_key),
-                        "end_key" => log_wrappers::Value::key(&recorder.hottest_key_range.as_ref().unwrap().end_key),
+                        "start_key" => log_wrappers::Value::key(&hottest_key_range.start_key),
+                        "end_key" => log_wrappers::Value::key(&hottest_key_range.end_key),
                         "cpu_usage" => recorder.cpu_usage,
                     );
                 } else {

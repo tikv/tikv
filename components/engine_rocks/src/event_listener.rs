@@ -125,25 +125,24 @@ impl rocksdb::EventListener for RocksEventListener {
                 DBBackgroundErrorReason::ManifestWriteNoWAL => "manifest_write_no_wal",
             };
 
-            if err.starts_with("Corruption") || err.starts_with("IO error") {
-                if let Some(scheduler) = self.sst_recovery_scheduler.as_ref() {
-                    if let Some(path) = resolve_sst_filename_from_err(&err) {
-                        warn!(
-                            "detected rocksdb background error";
-                            "reason" => r,
-                            "sst" => &path,
-                            "err" => &err
-                        );
-                        match scheduler.schedule(path) {
-                            Ok(()) => {
-                                status.reset();
-                                CRITICAL_ERROR.with_label_values(&["sst_corruption"]).inc();
-                                return;
-                            }
-                            Err(e) => {
-                                error!("rocksdb sst recovery job schedule failed, error: {:?}", e);
-                            }
-                        }
+            if (err.starts_with("Corruption") || err.starts_with("IO error"))
+                && let Some(scheduler) = self.sst_recovery_scheduler.as_ref()
+                && let Some(path) = resolve_sst_filename_from_err(&err)
+            {
+                warn!(
+                    "detected rocksdb background error";
+                    "reason" => r,
+                    "sst" => &path,
+                    "err" => &err
+                );
+                match scheduler.schedule(path) {
+                    Ok(()) => {
+                        status.reset();
+                        CRITICAL_ERROR.with_label_values(&["sst_corruption"]).inc();
+                        return;
+                    }
+                    Err(e) => {
+                        error!("rocksdb sst recovery job schedule failed, error: {:?}", e);
                     }
                 }
             }

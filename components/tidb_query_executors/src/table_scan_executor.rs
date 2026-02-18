@@ -359,6 +359,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         LazyBatchColumnVec::from(columns)
     }
 
+    #[allow(unused_assignments)]
     fn process_kv_pair(
         &mut self,
         key: &[u8],
@@ -900,7 +901,7 @@ mod tests {
                 ci
             },
         ];
-        let schema = vec![
+        let schema = [
             FieldTypeTp::LongLong.into(),
             FieldTypeTp::LongLong.into(),
             FieldTypeTp::LongLong.into(),

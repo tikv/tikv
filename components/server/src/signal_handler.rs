@@ -42,27 +42,27 @@ mod imp {
                 SIGTERM => {
                     if enable_graceful_shutdown {
                         info!("receive signal {}, starting graceful shutdown...", signal);
-                        if let Some(tx) = service_event_tx {
-                            if let Err(e) = tx.send(ServiceEvent::GracefulShutdown) {
-                                warn!("failed to notify graceful shutdown, {:?}", e);
-                            }
+                        if let Some(tx) = service_event_tx
+                            && let Err(e) = tx.send(ServiceEvent::GracefulShutdown)
+                        {
+                            warn!("failed to notify graceful shutdown, {:?}", e);
                         }
                     } else {
                         info!("receive signal {}, stopping server...", signal);
-                        if let Some(tx) = service_event_tx {
-                            if let Err(e) = tx.send(ServiceEvent::Exit) {
-                                warn!("failed to notify grpc server exit, {:?}", e);
-                            }
+                        if let Some(tx) = service_event_tx
+                            && let Err(e) = tx.send(ServiceEvent::Exit)
+                        {
+                            warn!("failed to notify grpc server exit, {:?}", e);
                         }
                     }
                     break;
                 }
                 SIGINT | SIGHUP => {
                     info!("receive signal {}, stopping server...", signal);
-                    if let Some(tx) = service_event_tx {
-                        if let Err(e) = tx.send(ServiceEvent::Exit) {
-                            warn!("failed to notify grpc server exit, {:?}", e);
-                        }
+                    if let Some(tx) = service_event_tx
+                        && let Err(e) = tx.send(ServiceEvent::Exit)
+                    {
+                        warn!("failed to notify grpc server exit, {:?}", e);
                     }
                     break;
                 }

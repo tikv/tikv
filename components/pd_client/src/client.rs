@@ -164,7 +164,7 @@ impl RpcClient {
                     return Ok(rpc_client);
                 }
                 Err(e) => {
-                    if i as usize % cfg.retry_log_every == 0 {
+                    if (i as usize).is_multiple_of(cfg.retry_log_every) {
                         warn!("validate PD endpoints failed"; "err" => ?e);
                     }
                     let _ = GLOBAL_TIMER_HANDLE
@@ -606,6 +606,7 @@ impl PdClient for RpcClient {
         req.set_approximate_size(region_stat.approximate_size);
         req.set_approximate_keys(region_stat.approximate_keys);
         req.set_cpu_usage(region_stat.cpu_usage);
+        req.set_cpu_stats(region_stat.cpu_stats);
         if let Some(s) = replication_status {
             req.set_replication_status(s);
         }

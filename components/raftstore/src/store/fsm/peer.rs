@@ -847,20 +847,21 @@ where
         } else {
             if self.fsm.batch_req_builder.has_proposed_cb
                 && self.fsm.batch_req_builder.propose_checked.is_none()
-                && let Some(cmd) = self.fsm.batch_req_builder.request.take()
             {
-                // We are delaying these requests to next loop. Try to fulfill their
-                // proposed callback early.
-                self.fsm.batch_req_builder.propose_checked = Some(false);
-                if let Ok(None) = self.pre_propose_raft_command(&cmd) {
-                    if self.fsm.peer.will_likely_propose(&cmd) {
-                        self.fsm.batch_req_builder.propose_checked = Some(true);
-                        for cb in &mut self.fsm.batch_req_builder.callbacks {
-                            cb.invoke_proposed();
+                if let Some(cmd) = self.fsm.batch_req_builder.request.take() {
+                    // We are delaying these requests to next loop. Try to fulfill their
+                    // proposed callback early.
+                    self.fsm.batch_req_builder.propose_checked = Some(false);
+                    if let Ok(None) = self.pre_propose_raft_command(&cmd) {
+                        if self.fsm.peer.will_likely_propose(&cmd) {
+                            self.fsm.batch_req_builder.propose_checked = Some(true);
+                            for cb in &mut self.fsm.batch_req_builder.callbacks {
+                                cb.invoke_proposed();
+                            }
                         }
                     }
+                    self.fsm.batch_req_builder.request = Some(cmd);
                 }
-                self.fsm.batch_req_builder.request = Some(cmd);
             }
             if self.fsm.batch_req_builder.request.is_some() {
                 self.ctx.raft_metrics.ready.propose_delay.inc();
@@ -900,17 +901,17 @@ where
         syncer: UnsafeRecoveryExecutePlanSyncer,
         failed_voters: Vec<metapb::Peer>,
     ) {
-        if let Some(state) = &self.fsm.peer.unsafe_recovery_state
-            && !state.is_abort()
-        {
-            warn!(
-                "Unsafe recovery, demote failed voters has already been initiated";
-                "region_id" => self.region().get_id(),
-                "peer_id" => self.fsm.peer.peer.get_id(),
-                "state" => ?state,
-            );
-            syncer.abort();
-            return;
+        if let Some(state) = &self.fsm.peer.unsafe_recovery_state {
+            if !state.is_abort() {
+                warn!(
+                    "Unsafe recovery, demote failed voters has already been initiated";
+                    "region_id" => self.region().get_id(),
+                    "peer_id" => self.fsm.peer.peer.get_id(),
+                    "state" => ?state,
+                );
+                syncer.abort();
+                return;
+            }
         }
 
         if !self.fsm.peer.is_in_force_leader() {
@@ -1008,17 +1009,17 @@ where
     }
 
     fn on_unsafe_recovery_destroy(&mut self, syncer: UnsafeRecoveryExecutePlanSyncer) {
-        if let Some(state) = &self.fsm.peer.unsafe_recovery_state
-            && !state.is_abort()
-        {
-            warn!(
-                "Unsafe recovery, can't destroy, another plan is executing in progress";
-                "region_id" => self.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "state" => ?state,
-            );
-            syncer.abort();
-            return;
+        if let Some(state) = &self.fsm.peer.unsafe_recovery_state {
+            if !state.is_abort() {
+                warn!(
+                    "Unsafe recovery, can't destroy, another plan is executing in progress";
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "state" => ?state,
+                );
+                syncer.abort();
+                return;
+            }
         }
         self.fsm.peer.unsafe_recovery_state = Some(UnsafeRecoveryState::Destroy(syncer));
         self.handle_destroy_peer(DestroyPeerJob {
@@ -1029,17 +1030,17 @@ where
     }
 
     fn on_unsafe_recovery_wait_apply(&mut self, syncer: UnsafeRecoveryWaitApplySyncer) {
-        if let Some(state) = &self.fsm.peer.unsafe_recovery_state
-            && !state.is_abort()
-        {
-            warn!(
-                "Unsafe recovery, can't wait apply, another plan is executing in progress";
-                "region_id" => self.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "state" => ?state,
-            );
-            syncer.abort();
-            return;
+        if let Some(state) = &self.fsm.peer.unsafe_recovery_state {
+            if !state.is_abort() {
+                warn!(
+                    "Unsafe recovery, can't wait apply, another plan is executing in progress";
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "state" => ?state,
+                );
+                syncer.abort();
+                return;
+            }
         }
         let target_index = if self.fsm.peer.force_leader.is_some() {
             // For regions that lose quorum (or regions have force leader), whatever has
@@ -1969,17 +1970,17 @@ where
         if self.fsm.peer.force_leader.is_none() {
             return;
         }
-        if let Some(UnsafeRecoveryState::Failed) = self.fsm.peer.unsafe_recovery_state
-            && !force
-        {
-            // Skip force leader if the plan failed, so wait for the next retry of plan with
-            // force leader state holding
-            info!(
-                "skip exiting force leader state";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-            );
-            return;
+        if !force {
+            if let Some(UnsafeRecoveryState::Failed) = self.fsm.peer.unsafe_recovery_state {
+                // Skip force leader if the plan failed, so wait for the next retry of plan with
+                // force leader state holding
+                info!(
+                    "skip exiting force leader state";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                );
+                return;
+            }
         }
 
         info!(

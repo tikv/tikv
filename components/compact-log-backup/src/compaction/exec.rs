@@ -259,7 +259,6 @@ where
         let items = super::util::execute_all_ext(
             c.inputs
                 .iter()
-                .cloned()
                 .map(|f| {
                     let source = &self.source;
                     Box::pin(async move {
@@ -267,7 +266,7 @@ where
                         let mut out = vec![];
                         let mut stat = LoadStatistic::default();
                         source
-                            .load(f, Some(&mut stat), |k, v| {
+                            .load(f.clone(), Some(&mut stat), |k, v| {
                                 fail::fail_point!("compact_log_backup_omit_key", |_| {});
                                 out.push(Record {
                                     key: k.to_owned(),
@@ -398,6 +397,7 @@ where
         Ok(meta)
     }
 
+    #[allow(unused_assignments)]
     #[tracing::instrument(skip_all, fields(c=%c))]
     pub async fn run(
         mut self,
