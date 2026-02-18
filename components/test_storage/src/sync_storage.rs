@@ -490,6 +490,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
         previous_value: Option<Vec<u8>>,
         value: Vec<u8>,
         ttl: u64,
+        delete: bool,
     ) -> Result<(Option<Vec<u8>>, bool)> {
         wait_op!(|cb| self.store.raw_compare_and_swap_atomic(
             ctx,
@@ -498,7 +499,8 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
             previous_value,
             value,
             ttl,
-            cb
+            cb,
+            delete
         ))
         .unwrap()
     }

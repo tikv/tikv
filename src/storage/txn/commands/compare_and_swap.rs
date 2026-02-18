@@ -27,6 +27,8 @@ command! {
     /// RawCompareAndSwap checks whether the previous value of the key equals to the given value.
     /// If they are equal, write the new value. The bool indicates whether they are equal.
     /// The previous value is always returned regardless of whether the new value is set.
+    ///
+    /// If `delete` is true and the comparison succeeds, then we'll delete the key.
     RawCompareAndSwap:
         cmd_ty => (Option<Value>, bool),
         display => { "kv::command::raw_compare_and_swap {:?}", (ctx), }
@@ -37,6 +39,7 @@ command! {
             value: Value,
             ttl: u64,
             api_version: ApiVersion,
+            delete: bool,
         }
         in_heap => {
             key,
@@ -57,13 +60,14 @@ impl CommandExt for RawCompareAndSwap {
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
     fn process_write(self, snapshot: S, wctx: WriteContext<'_, L>) -> Result<WriteResult> {
-        let (cf, mut key, value, previous_value, ctx, raw_ext) = (
+        let (cf, mut key, value, previous_value, ctx, raw_ext, delete) = (
             self.cf,
             self.key,
             self.value,
             self.previous_value,
             self.ctx,
             wctx.raw_ext,
+            self.delete,
         );
 
         let mut data = vec![];
@@ -74,31 +78,72 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
         )?;
 
         let (pr, lock_guards) = if old_value == previous_value {
-            let raw_value = RawValue {
-                user_value: value,
-                expire_ts: ttl_to_expire_ts(self.ttl),
-                is_delete: false,
-            };
-            let encoded_raw_value = match_template_api_version!(
-                API,
-                match self.api_version {
-                    ApiVersion::API => API::encode_raw_value_owned(raw_value),
+            if delete {
+                // Delete case: only delete if there's actually a value to delete
+                if previous_value.is_some() {
+                    if let Some(ref raw_ext) = raw_ext {
+                        key = key.append_ts(raw_ext.ts);
+                    }
+
+                    let m = match self.api_version {
+                        ApiVersion::V1ttl | ApiVersion::V1 => {
+                            // API V1: Physical deletion
+                            Modify::Delete(cf, key)
+                        }
+                        ApiVersion::V2 => {
+                            // API V2: Logical deletion using tombstone
+                            let raw_value = RawValue {
+                                user_value: value,
+                                expire_ts: ttl_to_expire_ts(self.ttl),
+                                is_delete: true,
+                            };
+                            let encoded_raw_value = match_template_api_version!(
+                                API,
+                                match self.api_version {
+                                    ApiVersion::API => API::encode_raw_value_owned(raw_value),
+                                }
+                            );
+                            Modify::Put(cf, key, encoded_raw_value)
+                        }
+                    };
+                    data.push(m);
                 }
-            );
+                // Succeed regardless - if there's nothing to delete, comparison still succeeded
+                (
+                    ProcessResult::RawCompareAndSwapRes {
+                        previous_value: old_value,
+                        succeed: true,
+                    },
+                    raw_ext.into_iter().map(|r| r.key_guard).collect(),
+                )
+            } else {
+                // Put case: write the new value
+                let raw_value = RawValue {
+                    user_value: value,
+                    expire_ts: ttl_to_expire_ts(self.ttl),
+                    is_delete: false,
+                };
+                let encoded_raw_value = match_template_api_version!(
+                    API,
+                    match self.api_version {
+                        ApiVersion::API => API::encode_raw_value_owned(raw_value),
+                    }
+                );
 
-            if let Some(ref raw_ext) = raw_ext {
-                key = key.append_ts(raw_ext.ts);
+                if let Some(ref raw_ext) = raw_ext {
+                    key = key.append_ts(raw_ext.ts);
+                }
+
+                let m = Modify::Put(cf, key, encoded_raw_value);
+                data.push(m);
+                (
+                    ProcessResult::RawCompareAndSwapRes {
+                        previous_value: old_value,
+                        succeed: true,
+                    },
+                    raw_ext.into_iter().map(|r| r.key_guard).collect(),
+                )
             }
-
-            let m = Modify::Put(cf, key, encoded_raw_value);
-            data.push(m);
-            (
-                ProcessResult::RawCompareAndSwapRes {
-                    previous_value: old_value,
-                    succeed: true,
-                },
-                raw_ext.into_iter().map(|r| r.key_guard).collect(),
-            )
         } else {
             (
                 ProcessResult::RawCompareAndSwapRes {
@@ -169,6 +214,7 @@ mod tests {
             b"v1".to_vec(),
             0,
             F::TAG,
+            false,
             Context::default(),
         );
         let (prev_val, succeed) =
@@ -183,6 +229,7 @@ mod tests {
             b"v2".to_vec(),
             1,
             F::TAG,
+            false,
             Context::default(),
         );
         let (prev_val, succeed) =
@@ -192,16 +239,134 @@ mod tests {
 
         let cmd = RawCompareAndSwap::new(
             CF_DEFAULT,
-            encoded_key,
+            encoded_key.clone(),
             Some(b"v1".to_vec()),
             b"v3".to_vec(),
             2,
             F::TAG,
+            false,
+            Context::default(),
+        );
+        let (prev_val, succeed) =
+            sched_command(&mut engine, cm.clone(), cmd, ts_provider.clone()).unwrap();
+        assert_eq!(prev_val, Some(b"v1".to_vec()));
+        assert!(succeed);
+
+        // Test CAS delete operations
+
+        // Test 1: CAS delete with existing_val=v3, expected_val=v3 (should succeed)
+        let cmd = RawCompareAndSwap::new(
+            CF_DEFAULT,
+            encoded_key.clone(),
+            Some(b"v3".to_vec()),
+            b"dummy".to_vec(), // value ignored for deletes
+            0,
+            F::TAG,
+            true,
+            Context::default(),
+        );
+        let (prev_val, succeed) =
+            sched_command(&mut engine, cm.clone(), cmd, ts_provider.clone()).unwrap();
+        assert_eq!(prev_val, Some(b"v3".to_vec()));
+        assert!(succeed);
+
+        // Test 2: CAS delete with existing_val=v2, expected_val=v1 (should fail)
+        // Setup: put a new value first
+        let cmd = RawCompareAndSwap::new(
+            CF_DEFAULT,
+            encoded_key.clone(),
+            None,
+            b"v2".to_vec(),
+            0,
+            F::TAG,
+            false,
+            Context::default(),
+        );
+        let (prev_val, succeed) =
+            sched_command(&mut engine, cm.clone(), cmd, ts_provider.clone()).unwrap();
+        assert!(prev_val.is_none());
+        assert!(succeed);
+
+        // Test: CAS delete should fail because expected_val doesn't match
+        let cmd = RawCompareAndSwap::new(
+            CF_DEFAULT,
+            encoded_key.clone(),
+            Some(b"v1".to_vec()),
+            b"dummy".to_vec(),
+            0,
+            F::TAG,
+            true,
+            Context::default(),
+        );
+        let (prev_val, succeed) =
+            sched_command(&mut engine, cm.clone(), cmd, ts_provider.clone()).unwrap();
+        assert_eq!(prev_val, Some(b"v2".to_vec()));
+        assert!(!succeed);
+
+        // Test 3: CAS delete with existing_val=nil, expected_val=nil (should succeed as
+        // noop) Setup: delete the key first
+        let cmd = RawCompareAndSwap::new(
+            CF_DEFAULT,
+            encoded_key.clone(),
+            Some(b"v2".to_vec()),
+            b"dummy".to_vec(),
+            0,
+            F::TAG,
+            true,
+            Context::default(),
+        );
+        let (prev_val, succeed) =
+            sched_command(&mut engine, cm.clone(), cmd, ts_provider.clone()).unwrap();
+        assert_eq!(prev_val, Some(b"v2".to_vec()));
+        assert!(succeed);
+
+        // Test: CAS delete on nil key should succeed as noop
+        let cmd = RawCompareAndSwap::new(
+            CF_DEFAULT,
+            encoded_key.clone(),
+            None,
+            b"dummy".to_vec(),
+            0,
+            F::TAG,
+            true,
+            Context::default(),
+        );
+        let (prev_val, succeed) =
+            sched_command(&mut engine, cm.clone(), cmd, ts_provider.clone()).unwrap();
+        assert!(prev_val.is_none());
+        assert!(succeed);
+
+        // Test 4: CAS delete with existing_val=v1, expected_val=nil (should fail)
+        // Setup: put a value first
+        let cmd = RawCompareAndSwap::new(
+            CF_DEFAULT,
+            encoded_key.clone(),
+            None,
+            b"v1".to_vec(),
+            0,
+            F::TAG,
+            false,
+            Context::default(),
+        );
+        let (prev_val, succeed) =
+            sched_command(&mut engine, cm.clone(), cmd, ts_provider.clone()).unwrap();
+        assert!(prev_val.is_none());
+        assert!(succeed);
+
+        // Test: CAS delete should fail because expected_val doesn't match
+        let cmd = RawCompareAndSwap::new(
+            CF_DEFAULT,
+            encoded_key,
+            None,
+            b"dummy".to_vec(),
+            0,
+            F::TAG,
+            true,
             Context::default(),
         );
         let (prev_val, succeed) = sched_command(&mut engine, cm, cmd, ts_provider).unwrap();
         assert_eq!(prev_val, Some(b"v1".to_vec()));
-        assert!(succeed);
+        assert!(!succeed);
     }
 
     pub fn sched_command<E: Engine>(
@@ -230,7 +395,7 @@ mod tests {
                 previous_value,
                 succeed,
             } => {
-                if succeed {
+                if succeed && !ret.to_be_write.modifies.is_empty() {
                     let ctx = Context::default();
                     engine.write(&ctx, ret.to_be_write).unwrap();
                 }
@@ -265,6 +430,7 @@ mod tests {
             raw_value.to_vec(),
             ttl,
             F::TAG,
+            false,
             Context::default(),
         );
         let mut statistic = Statistics::default();
