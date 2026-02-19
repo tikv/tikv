@@ -2724,6 +2724,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         // Start from last checked key.
         let mut ranges_need_check =
             Vec::with_capacity(self.ctx.cfg.region_compact_check_step() as usize + 1);
+        let mut region_ids = Vec::with_capacity(self.ctx.cfg.region_compact_check_step() as usize);
         ranges_need_check.push(self.fsm.store.last_compact_checked_key.clone());
 
         let largest_key = {
@@ -2736,16 +2737,17 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 return;
             }
 
-            // Collect continuous ranges.
+            // Collect continuous ranges and their region IDs.
             let left_ranges = meta.region_ranges.range((
                 Excluded(self.fsm.store.last_compact_checked_key.clone()),
                 Unbounded::<Key>,
             ));
-            ranges_need_check.extend(
-                left_ranges
-                    .take(self.ctx.cfg.region_compact_check_step() as usize)
-                    .map(|(k, _)| k.to_owned()),
-            );
+            for (end_key, region_id) in
+                left_ranges.take(self.ctx.cfg.region_compact_check_step() as usize)
+            {
+                ranges_need_check.push(end_key.to_owned());
+                region_ids.push(*region_id);
+            }
 
             // Update last_compact_checked_key.
             meta.region_ranges.keys().last().unwrap().to_vec()
@@ -2769,6 +2771,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             CompactTask::CheckAndCompact {
                 cf_names,
                 ranges: ranges_need_check,
+                region_ids,
                 compact_threshold: CompactThreshold::new(
                     self.ctx.cfg.region_compact_min_tombstones,
                     self.ctx.cfg.region_compact_tombstones_percent,

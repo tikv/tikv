@@ -176,7 +176,7 @@ fn collect_regions_to_compact<E: KvEngine>(
                 "num_rows" => range_stats.num_rows,
                 "region_id" => id,
             );
-            if need_compact(&range_stats, &compact_threshold) {
+            if need_compact(&range_stats, &compact_threshold, Some(id)) {
                 regions_to_compact.push(id);
             }
         }

@@ -855,6 +855,9 @@ fn test_serde_custom_tikv_config() {
         enable_compaction_filter: false,
         compaction_filter_skip_version_check: true,
         num_threads: 2,
+        mvcc_read_aware_enabled: false,
+        mvcc_read_weight: 3.0,
+        mvcc_scan_threshold: 1000,
     };
     value.pessimistic_txn = PessimisticTxnConfig {
         wait_for_lock_timeout: ReadableDuration::millis(10),

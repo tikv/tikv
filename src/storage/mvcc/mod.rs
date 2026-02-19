@@ -5,6 +5,8 @@
 
 mod consistency_check;
 pub(super) mod metrics;
+// Re-export from tikv_util to avoid circular dependencies
+pub use tikv_util::mvcc_read_tracker;
 pub(crate) mod reader;
 pub(super) mod txn;
 

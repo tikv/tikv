@@ -21,6 +21,7 @@ collections = { workspace = true }
 cpu-time = "1.0.0"
 crossbeam = { workspace = true }
 crossbeam-skiplist = { workspace = true }
+dashmap = "5"
 derive_more = "0.99.3"
 error_code = { workspace = true }
 fail = "0.5"

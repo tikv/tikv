@@ -55,6 +55,7 @@ pub mod math;
 pub mod memory;
 pub mod metrics;
 pub mod mpsc;
+pub mod mvcc_read_tracker;
 pub mod quota_limiter;
 pub mod resizable_threadpool;
 pub mod resource_control;
