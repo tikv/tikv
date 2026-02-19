@@ -30,6 +30,8 @@ use crate::{
     storage::{Snapshot, SnapshotStore},
 };
 
+const NDV_SCAN_SAMPLE_RATE: f64 = 0.05;
+
 pub(crate) struct RowSampleBuilder<S: Snapshot, F: KvFormat> {
     pub(crate) data: BatchTableScanExecutor<TikvStorage<SnapshotStore<S>>, F>,
 
@@ -40,6 +42,7 @@ pub(crate) struct RowSampleBuilder<S: Snapshot, F: KvFormat> {
     column_groups: Vec<tipb::AnalyzeColumnGroup>,
     quota_limiter: Arc<QuotaLimiter>,
     is_auto_analyze: bool,
+    use_scan_sampling_for_ndv: bool,
 }
 
 impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
@@ -54,8 +57,10 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
         if columns_info.is_empty() {
             return Err(box_err!("empty columns_info"));
         }
+        let max_sample_size = req.get_sample_size() as usize;
+        let sample_rate = req.get_sample_rate();
         let common_handle_ids = req.take_primary_column_ids();
-        let table_scanner = BatchTableScanExecutor::new(
+        let mut table_scanner = BatchTableScanExecutor::new(
             storage,
             Arc::new(EvalConfig::default()),
             columns_info.clone(),
@@ -65,15 +70,24 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             false, // Streaming mode is not supported in Analyze request, always false here
             req.take_primary_prefix_column_ids(),
         )?;
+        let use_scan_sampling_for_ndv = max_sample_size == 0;
+        if use_scan_sampling_for_ndv {
+            assert!(
+                sample_rate < NDV_SCAN_SAMPLE_RATE,
+                "prototype assumption violated: original sample rate ({sample_rate}) must be smaller than NDV sample rate ({NDV_SCAN_SAMPLE_RATE})"
+            );
+            table_scanner.set_row_sample_rate(NDV_SCAN_SAMPLE_RATE);
+        }
         Ok(Self {
             data: table_scanner,
-            max_sample_size: req.get_sample_size() as usize,
+            max_sample_size,
             max_fm_sketch_size: req.get_sketch_size() as usize,
-            sample_rate: req.get_sample_rate(),
+            sample_rate,
             columns_info,
             column_groups: req.take_column_groups().into(),
             quota_limiter,
             is_auto_analyze,
+            use_scan_sampling_for_ndv,
         })
     }
 
@@ -85,8 +99,17 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                 self.columns_info.len() + self.column_groups.len(),
             ));
         }
+        let sample_rate = if self.use_scan_sampling_for_ndv {
+            // Two-stage Bernoulli:
+            // 1) scan-level NDV sampling at NDV_SCAN_SAMPLE_RATE,
+            // 2) collector sampling at adjusted rate.
+            // Combined rate remains the original `self.sample_rate`.
+            self.sample_rate / NDV_SCAN_SAMPLE_RATE
+        } else {
+            self.sample_rate
+        };
         Box::new(BernoulliRowSampleCollector::new(
-            self.sample_rate,
+            sample_rate,
             self.max_fm_sketch_size,
             self.columns_info.len() + self.column_groups.len(),
         ))
