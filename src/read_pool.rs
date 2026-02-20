@@ -170,8 +170,8 @@ impl ReadPoolHandle {
                     // important tasks can preempt less important queued tasks
                     // when the pool is full.
                     if let Some(ref ctl) = resource_ctl {
-                        let approx = ctl.peek_priority_of(&metadata, priority);
-                        if let Some(mut evicted) = remote.try_evict_lowest(approx) {
+                        let estimated_priority = ctl.peek_priority_of(&metadata, priority);
+                        if let Some(mut evicted) = remote.try_evict_lowest(estimated_priority) {
                             // Decrement the running_tasks counter for the
                             // evicted task's priority level. The evicted task's
                             // future (which contains the running_tasks.dec()

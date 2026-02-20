@@ -690,6 +690,10 @@ struct GroupPriorityTracker {
 }
 
 impl GroupPriorityTracker {
+    /// Computes the scheduling priority for a task at the given level.
+    /// When `advance_vt` is true, atomically increments the virtual time
+    /// (used when actually scheduling a task). When false, reads virtual
+    /// time without advancing it (used for priority comparison only).
     fn get_priority(&self, level: usize, override_priority: Option<u32>, advance_vt: bool) -> u64 {
         let task_extra_priority = TASK_EXTRA_FACTOR_BY_LEVEL[level] * 1000 * self.weight;
         let vt = (if advance_vt && self.vt_delta_for_get > 0 {
