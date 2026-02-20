@@ -1389,6 +1389,8 @@ mod tests {
         }
     }
 
+    // Duplicated from resource_control::resource_group::tests which is
+    // #[cfg(test)] pub(crate) and not accessible from this crate.
     fn new_resource_group_ru(
         name: String,
         ru: u64,
