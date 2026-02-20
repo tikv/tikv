@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use api_version::{KvFormat, RawValue, match_template_api_version};
+use api_version::{ApiV2, KvFormat, RawValue, match_template_api_version};
 use engine_traits::{CfName, raw_ttl::ttl_to_expire_ts};
 use kvproto::kvrpcpb::ApiVersion;
 use raw::RawStore;
@@ -86,25 +86,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
                     }
 
                     let m = match self.api_version {
-                        ApiVersion::V1ttl | ApiVersion::V1 => {
-                            // API V1: Physical deletion
-                            Modify::Delete(cf, key)
-                        }
                         ApiVersion::V2 => {
-                            // API V2: Logical deletion using tombstone
-                            let raw_value = RawValue {
-                                user_value: value,
-                                expire_ts: ttl_to_expire_ts(self.ttl),
-                                is_delete: true,
-                            };
-                            let encoded_raw_value = match_template_api_version!(
-                                API,
-                                match self.api_version {
-                                    ApiVersion::API => API::encode_raw_value_owned(raw_value),
-                                }
-                            );
-                            Modify::Put(cf, key, encoded_raw_value)
+                            Modify::Put(cf, key, ApiV2::ENCODED_LOGICAL_DELETE.to_vec())
                         }
+                        _ => Modify::Delete(cf, key),
                     };
                     data.push(m);
                 }

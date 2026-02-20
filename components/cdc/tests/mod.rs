@@ -367,6 +367,62 @@ impl TestSuite {
         assert!(rawkv_resp.error.is_empty(), "{:?}", rawkv_resp.get_error());
     }
 
+    pub fn must_kv_compare_and_swap(
+        &mut self,
+        region_id: u64,
+        key: Vec<u8>,
+        expect: Vec<u8>,
+        value: Vec<u8>,
+    ) {
+        let mut cas_req = RawCasRequest::default();
+        cas_req.set_context(self.get_context(region_id));
+        cas_req.set_key(key);
+        cas_req.set_value(value);
+        cas_req.set_previous_value(expect.clone());
+        cas_req.set_ttl(u64::MAX);
+
+        let cas_resp = self
+            .get_tikv_client(region_id)
+            .raw_compare_and_swap(&cas_req)
+            .unwrap();
+        assert!(
+            !cas_resp.has_region_error(),
+            "{:?}",
+            cas_resp.get_region_error()
+        );
+        assert!(cas_resp.error.is_empty(), "{:?}", cas_resp.get_error());
+        assert!(
+            cas_resp.get_previous_value() == expect,
+            "previous value mismatch"
+        );
+        assert!(cas_resp.get_succeed(), "compare and swap failed");
+    }
+
+    pub fn must_kv_compare_and_delete(&mut self, region_id: u64, key: Vec<u8>, expect: Vec<u8>) {
+        let mut cas_req = RawCasRequest::default();
+        cas_req.set_context(self.get_context(region_id));
+        cas_req.set_key(key);
+        cas_req.set_previous_value(expect.clone());
+        cas_req.set_delete(true);
+        cas_req.set_ttl(u64::MAX);
+
+        let cas_resp = self
+            .get_tikv_client(region_id)
+            .raw_compare_and_swap(&cas_req)
+            .unwrap();
+        assert!(
+            !cas_resp.has_region_error(),
+            "{:?}",
+            cas_resp.get_region_error()
+        );
+        assert!(cas_resp.error.is_empty(), "{:?}", cas_resp.get_error());
+        assert!(
+            cas_resp.get_previous_value() == expect,
+            "previous value mismatch"
+        );
+        assert!(cas_resp.get_succeed(), "compare and delete failed");
+    }
+
     pub fn must_kv_commit(
         &mut self,
         region_id: u64,

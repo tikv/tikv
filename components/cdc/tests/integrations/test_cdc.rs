@@ -247,6 +247,34 @@ fn test_cdc_rawkv_basic() {
         }
         other => panic!("unknown event {:?}", other),
     }
+
+    // Do a compare and swap
+    let (k, v) = (b"rkey1".to_vec(), b"value".to_vec());
+    suite.must_kv_compare_and_swap(1, k, v, b"new_value".to_vec());
+    let mut events = receive_event(false).events.to_vec();
+    assert_eq!(events.len(), 1, "{:?}", events);
+
+    match events.pop().unwrap().event.unwrap() {
+        Event_oneof_event::Entries(entries) => {
+            assert_eq!(entries.entries.len(), 1);
+            assert_eq!(entries.entries[0].get_type(), EventLogType::Committed);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+
+    // Do a compare and delete
+    let (k, v) = (b"rkey1".to_vec(), b"new_value".to_vec());
+    suite.must_kv_compare_and_delete(1, k, v);
+    let mut events = receive_event(false).events.to_vec();
+    assert_eq!(events.len(), 1, "{:?}", events);
+
+    match events.pop().unwrap().event.unwrap() {
+        Event_oneof_event::Entries(entries) => {
+            assert_eq!(entries.entries.len(), 1);
+            assert_eq!(entries.entries[0].get_type(), EventLogType::Committed);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
 }
 
 #[test]
