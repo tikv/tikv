@@ -29,6 +29,7 @@ command! {
     /// The previous value is always returned regardless of whether the new value is set.
     ///
     /// If `delete` is true and the comparison succeeds, then we'll delete the key.
+    /// The `value` field is ignored for deletes.
     RawCompareAndSwap:
         cmd_ty => (Option<Value>, bool),
         display => { "kv::command::raw_compare_and_swap {:?}", (ctx), }
@@ -54,7 +55,8 @@ impl CommandExt for RawCompareAndSwap {
     gen_lock!(key);
 
     fn write_bytes(&self) -> usize {
-        self.key.as_encoded().len() + self.value.len()
+        let value_len = if self.delete { 0 } else { self.value.len() };
+        self.key.len() + value_len
     }
 }
 

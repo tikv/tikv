@@ -404,7 +404,6 @@ impl TestSuite {
         cas_req.set_key(key);
         cas_req.set_previous_value(expect.clone());
         cas_req.set_delete(true);
-        cas_req.set_ttl(u64::MAX);
 
         let cas_resp = self
             .get_tikv_client(region_id)

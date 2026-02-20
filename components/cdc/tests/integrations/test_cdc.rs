@@ -258,6 +258,7 @@ fn test_cdc_rawkv_basic() {
         Event_oneof_event::Entries(entries) => {
             assert_eq!(entries.entries.len(), 1);
             assert_eq!(entries.entries[0].get_type(), EventLogType::Committed);
+            assert_eq!(entries.entries[0].get_op_type(), EventRowOpType::Put);
         }
         other => panic!("unknown event {:?}", other),
     }
@@ -272,6 +273,7 @@ fn test_cdc_rawkv_basic() {
         Event_oneof_event::Entries(entries) => {
             assert_eq!(entries.entries.len(), 1);
             assert_eq!(entries.entries[0].get_type(), EventLogType::Committed);
+            assert_eq!(entries.entries[0].get_op_type(), EventRowOpType::Delete);
         }
         other => panic!("unknown event {:?}", other),
     }
