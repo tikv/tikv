@@ -158,12 +158,12 @@ impl ReadPoolHandle {
                 ..
             } => {
                 let task_priority = TaskPriority::from(metadata.override_priority());
-                let task_gauge = running_tasks[task_priority as usize].clone();
+                let running_task_gauge = running_tasks[task_priority as usize].clone();
                 // Note that the running task number limit is not strict.
                 // If several tasks are spawned at the same time while the running task number
                 // is close to the limit, they may all pass this check and the number of running
                 // tasks may exceed the limit.
-                if task_gauge.get() as usize >= *max_tasks {
+                if running_task_gauge.get() as usize >= *max_tasks {
                     // When resource control is enabled, attempt to evict the
                     // lowest-priority queued task if the incoming task has
                     // strictly higher priority. This implements queue fairness:
@@ -196,7 +196,7 @@ impl ReadPoolHandle {
                         return Err(ReadPoolError::UnifiedReadPoolFull);
                     }
                 }
-                task_gauge.inc();
+                running_task_gauge.inc();
                 let fixed_level = match priority {
                     CommandPri::High => Some(0),
                     CommandPri::Normal => None,
@@ -210,7 +210,7 @@ impl ReadPoolHandle {
                         TlsTrackedFuture::new(with_resource_limiter(
                             ControlledFuture::new(
                                 f.map(move |_| {
-                                    running_tasks.dec();
+                                    running_task_gauge.dec();
                                 }),
                                 resource_ctl.clone(),
                                 group_name,
@@ -222,7 +222,7 @@ impl ReadPoolHandle {
                 } else {
                     TaskCell::new(
                         TlsTrackedFuture::new(f.map(move |_| {
-                            running_tasks.dec();
+                            running_task_gauge.dec();
                         })),
                         extras,
                     )
