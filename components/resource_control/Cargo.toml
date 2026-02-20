@@ -30,7 +30,7 @@ slog-global = { workspace = true }
 strum = { version = "0.20", features = ["derive"] }
 tikv_util = { workspace = true }
 tokio-timer = { workspace = true }
-yatp = { path = "/tmp/yatp-src" }
+yatp = { git = "https://github.com/mittalrishabh/yatp.git", branch = "master" }
 
 [dev-dependencies]
 file_system = { workspace = true, features = ["testexport"] }

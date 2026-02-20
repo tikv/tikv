@@ -629,12 +629,29 @@ impl ResourceController {
     }
 
     pub fn get_priority(&self, name: &[u8], pri: CommandPri) -> u64 {
-        let level = match pri {
-            CommandPri::Low => 2,
-            CommandPri::Normal => 1,
-            CommandPri::High => 0,
+        let level = Self::command_pri_to_level(pri);
+        self.resource_group(name).get_priority(level, None, true)
+    }
+
+    /// Returns the priority for the given task metadata without incrementing
+    /// virtual time. Used for pre-spawn eviction comparison.
+    pub fn peek_priority_of(&self, metadata: &TaskMetadata<'_>, pri: CommandPri) -> u64 {
+        let level = Self::command_pri_to_level(pri);
+        let group = self.resource_group(metadata.group_name());
+        let override_priority = if metadata.override_priority() == 0 {
+            None
+        } else {
+            Some(metadata.override_priority())
         };
-        self.resource_group(name).get_priority(level, None)
+        group.get_priority(level, override_priority, false)
+    }
+
+    fn command_pri_to_level(pri: CommandPri) -> usize {
+        match pri {
+            CommandPri::High => 0,
+            CommandPri::Normal => 1,
+            CommandPri::Low => 2,
+        }
     }
 }
 
@@ -648,21 +665,8 @@ impl TaskPriorityProvider for ResourceController {
             } else {
                 Some(metadata.override_priority())
             },
+            true,
         )
-    }
-}
-
-impl ResourceController {
-    /// Returns an approximate priority for the given task metadata without
-    /// incrementing virtual time. Used for pre-spawn eviction comparison.
-    pub fn approximate_priority_of(&self, metadata: &TaskMetadata<'_>, level: u8) -> u64 {
-        let group = self.resource_group(metadata.group_name());
-        let override_priority = if metadata.override_priority() == 0 {
-            None
-        } else {
-            Some(metadata.override_priority())
-        };
-        group.approximate_priority(level as usize, override_priority)
     }
 }
 
@@ -686,27 +690,21 @@ struct GroupPriorityTracker {
 }
 
 impl GroupPriorityTracker {
-    fn get_priority(&self, level: usize, override_priority: Option<u32>) -> u64 {
+    fn get_priority(
+        &self,
+        level: usize,
+        override_priority: Option<u32>,
+        advance_vt: bool,
+    ) -> u64 {
         let task_extra_priority = TASK_EXTRA_FACTOR_BY_LEVEL[level] * 1000 * self.weight;
-        let vt = (if self.vt_delta_for_get > 0 {
+        let vt = (if advance_vt && self.vt_delta_for_get > 0 {
             self.virtual_time
                 .fetch_add(self.vt_delta_for_get, Ordering::Relaxed)
                 + self.vt_delta_for_get
         } else {
             self.virtual_time.load(Ordering::Relaxed)
+                + self.vt_delta_for_get
         }) + task_extra_priority;
-        let priority = override_priority.unwrap_or(self.group_priority);
-        concat_priority_vt(priority, vt)
-    }
-
-    /// Like `get_priority()` but reads virtual time without incrementing it.
-    /// Used for pre-spawn eviction comparison where we need an approximate
-    /// priority without the side effect of advancing the virtual clock.
-    fn approximate_priority(&self, level: usize, override_priority: Option<u32>) -> u64 {
-        let task_extra_priority = TASK_EXTRA_FACTOR_BY_LEVEL[level] * 1000 * self.weight;
-        let vt = self.virtual_time.load(Ordering::Relaxed)
-            + self.vt_delta_for_get
-            + task_extra_priority;
         let priority = override_priority.unwrap_or(self.group_priority);
         concat_priority_vt(priority, vt)
     }
@@ -1293,65 +1291,4 @@ pub(crate) mod tests {
         ));
     }
 
-    #[test]
-    fn test_approximate_priority_of() {
-        let resource_manager = ResourceGroupManager::default();
-        let group1 = new_resource_group_ru("test1".into(), 200, LOW_PRIORITY);
-        resource_manager.add_resource_group(group1);
-        let group2 = new_resource_group_ru("test2".into(), 400, HIGH_PRIORITY);
-        resource_manager.add_resource_group(group2);
-
-        let resource_ctl = resource_manager.derive_controller("test_approx".into(), true);
-
-        // Build metadata for test1 (low priority group)
-        let ctx1 = ResourceControlContext {
-            resource_group_name: "test1".to_string(),
-            override_priority: 0,
-            ..Default::default()
-        };
-        let metadata1 = TaskMetadata::from_ctx(&ctx1);
-
-        // Build metadata for test2 (high priority group)
-        let ctx2 = ResourceControlContext {
-            resource_group_name: "test2".to_string(),
-            override_priority: 0,
-            ..Default::default()
-        };
-        let metadata2 = TaskMetadata::from_ctx(&ctx2);
-
-        let approx1 = resource_ctl.approximate_priority_of(&metadata1, 0);
-        let approx2 = resource_ctl.approximate_priority_of(&metadata2, 0);
-
-        // High priority group (test2, priority=16) should have a lower numeric
-        // value (scheduled earlier) than low priority group (test1, priority=1).
-        assert!(
-            approx2 < approx1,
-            "high priority group ({}) should sort before low priority group ({})",
-            approx2,
-            approx1
-        );
-
-        // approximate_priority_of should NOT increment virtual time
-        let approx1_again = resource_ctl.approximate_priority_of(&metadata1, 0);
-        assert_eq!(
-            approx1, approx1_again,
-            "approximate_priority_of should be idempotent"
-        );
-
-        // Compare with actual priority_of: approximate should be close
-        // (within one vt_delta_for_get of the actual value).
-        let mut extras1 = Extras::single_level();
-        extras1.set_metadata(
-            TaskMetadata::from_ctx(&ctx1).to_vec(),
-        );
-        let actual1 = resource_ctl.priority_of(&extras1);
-        // The actual priority increments VT, so it may differ by at most
-        // vt_delta_for_get. Just verify the group priority bits match.
-        let approx_group_bits = approx1 >> 60;
-        let actual_group_bits = actual1 >> 60;
-        assert_eq!(
-            approx_group_bits, actual_group_bits,
-            "group priority bits should match"
-        );
-    }
 }
