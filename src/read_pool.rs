@@ -936,12 +936,11 @@ mod metrics {
             &["name"]
         )
         .unwrap();
-        pub static ref UNIFIED_READ_POOL_EVICTED_TASKS: IntCounter =
-            register_int_counter!(
-                "tikv_unified_read_pool_evicted_tasks",
-                "Number of tasks evicted from the unified read pool by higher-priority tasks"
-            )
-            .unwrap();
+        pub static ref UNIFIED_READ_POOL_EVICTED_TASKS: IntCounter = register_int_counter!(
+            "tikv_unified_read_pool_evicted_tasks",
+            "Number of tasks evicted from the unified read pool by higher-priority tasks"
+        )
+        .unwrap();
     }
 }
 
@@ -1408,13 +1407,13 @@ mod tests {
         // the queued low-priority tasks.
         //
         // Note on the two priority systems:
-        // - `override_priority` (in ResourceControlContext) determines the
-        //   TaskPriority bucket (High/Medium/Low) used for running_tasks
-        //   counters. Both groups use 0 here, so all tasks are "medium".
-        // - Resource group priority (1 vs 16) is what peek_priority_of uses
-        //   for the eviction comparison. "high_group" (priority=16) produces
-        //   a numerically smaller value than "low_group" (priority=1),
-        //   meaning it is scheduled first and can evict low_group tasks.
+        // - `override_priority` (in ResourceControlContext) determines the TaskPriority
+        //   bucket (High/Medium/Low) used for running_tasks counters. Both groups use 0
+        //   here, so all tasks are "medium".
+        // - Resource group priority (1 vs 16) is what peek_priority_of uses for the
+        //   eviction comparison. "high_group" (priority=16) produces a numerically
+        //   smaller value than "low_group" (priority=1), meaning it is scheduled first
+        //   and can evict low_group tasks.
         let resource_manager = ResourceGroupManager::default();
         let low_group = new_resource_group_ru("low_group".into(), 5000, 1);
         resource_manager.add_resource_group(low_group);

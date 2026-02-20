@@ -690,20 +690,14 @@ struct GroupPriorityTracker {
 }
 
 impl GroupPriorityTracker {
-    fn get_priority(
-        &self,
-        level: usize,
-        override_priority: Option<u32>,
-        advance_vt: bool,
-    ) -> u64 {
+    fn get_priority(&self, level: usize, override_priority: Option<u32>, advance_vt: bool) -> u64 {
         let task_extra_priority = TASK_EXTRA_FACTOR_BY_LEVEL[level] * 1000 * self.weight;
         let vt = (if advance_vt && self.vt_delta_for_get > 0 {
             self.virtual_time
                 .fetch_add(self.vt_delta_for_get, Ordering::Relaxed)
                 + self.vt_delta_for_get
         } else {
-            self.virtual_time.load(Ordering::Relaxed)
-                + self.vt_delta_for_get
+            self.virtual_time.load(Ordering::Relaxed) + self.vt_delta_for_get
         }) + task_extra_priority;
         let priority = override_priority.unwrap_or(self.group_priority);
         concat_priority_vt(priority, vt)
@@ -1290,5 +1284,4 @@ pub(crate) mod tests {
             &default_limiter
         ));
     }
-
 }
