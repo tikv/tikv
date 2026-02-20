@@ -158,12 +158,12 @@ impl ReadPoolHandle {
                 ..
             } => {
                 let task_priority = TaskPriority::from(metadata.override_priority());
-                let running_tasks = running_tasks[task_priority as usize].clone();
+                let task_gauge = running_tasks[task_priority as usize].clone();
                 // Note that the running task number limit is not strict.
                 // If several tasks are spawned at the same time while the running task number
                 // is close to the limit, they may all pass this check and the number of running
                 // tasks may exceed the limit.
-                if running_tasks.get() as usize >= *max_tasks {
+                if task_gauge.get() as usize >= *max_tasks {
                     // When resource control is enabled, attempt to evict the
                     // lowest-priority queued task if the incoming task has
                     // strictly higher priority. This implements queue fairness:
@@ -178,18 +178,8 @@ impl ReadPoolHandle {
                             // closure) will be dropped without executing.
                             let evicted_prio =
                                 priority_from_task_meta(evicted.mut_extras().metadata());
-                            UNIFIED_READ_POOL_RUNNING_TASKS
-                                .with_label_values(&[
-                                    &get_unified_read_pool_name(),
-                                    evicted_prio.as_str(),
-                                ])
-                                .dec();
-                            UNIFIED_READ_POOL_EVICTED_TASKS
-                                .with_label_values(&[
-                                    &get_unified_read_pool_name(),
-                                    evicted_prio.as_str(),
-                                ])
-                                .inc();
+                            running_tasks[evicted_prio as usize].dec();
+                            UNIFIED_READ_POOL_EVICTED_TASKS.inc();
                             // Dropping the evicted TaskCell destroys the future
                             // inside it. That future holds the oneshot::Sender
                             // used by spawn_handle (or by coprocessor's manual
@@ -206,7 +196,7 @@ impl ReadPoolHandle {
                         return Err(ReadPoolError::UnifiedReadPoolFull);
                     }
                 }
-                running_tasks.inc();
+                task_gauge.inc();
                 let fixed_level = match priority {
                     CommandPri::High => Some(0),
                     CommandPri::Normal => None,
@@ -946,11 +936,10 @@ mod metrics {
             &["name"]
         )
         .unwrap();
-        pub static ref UNIFIED_READ_POOL_EVICTED_TASKS: IntCounterVec =
-            register_int_counter_vec!(
+        pub static ref UNIFIED_READ_POOL_EVICTED_TASKS: IntCounter =
+            register_int_counter!(
                 "tikv_unified_read_pool_evicted_tasks",
-                "Number of tasks evicted from the unified read pool by higher-priority tasks",
-                &["name", "priority"]
+                "Number of tasks evicted from the unified read pool by higher-priority tasks"
             )
             .unwrap();
     }
@@ -1554,10 +1543,7 @@ mod tests {
 
         // The eviction metric should have been incremented.
         assert!(
-            UNIFIED_READ_POOL_EVICTED_TASKS
-                .with_label_values(&[name, "medium"])
-                .get()
-                >= 1,
+            UNIFIED_READ_POOL_EVICTED_TASKS.get() >= 1,
             "eviction counter should be incremented"
         );
 
