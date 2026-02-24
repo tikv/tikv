@@ -295,6 +295,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "failpoints")]
     fn test_retry() {
         use tikv_util::defer;
 

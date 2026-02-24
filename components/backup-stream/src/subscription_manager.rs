@@ -1033,9 +1033,13 @@ mod test {
             );
             let memory_manager = Arc::new(MemoryQuota::new(1024));
             let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+            let tmp = std::env::temp_dir().join(format!("br-stream-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&tmp).unwrap();
+            let mut bs_cfg = BackupStreamConfig::default();
+            bs_cfg.temp_path = tmp.to_string_lossy().into_owned();
             let router = RouterInner::new(
                 scheduler.clone(),
-                BackupStreamConfig::default().into(),
+                crate::router::Config::from_backup_stream_config(bs_cfg, false),
                 BackupEncryptionManager::default(),
             );
             let mut task = StreamBackupTaskInfo::new();

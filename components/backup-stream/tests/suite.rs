@@ -402,6 +402,7 @@ impl Suite {
             id,
             self.meta_store.clone(),
             cfg,
+            false,
             ResolvedTsConfig::default(),
             worker.scheduler(),
             ob,
