@@ -61,7 +61,7 @@ pub use resolve_lock::{ResolveLock, RESOLVE_LOCK_BATCH_SIZE};
 pub use resolve_lock_lite::ResolveLockLite;
 pub use resolve_lock_readphase::ResolveLockReadPhase;
 pub use rollback::Rollback;
-use tikv_util::{deadline::Deadline, memory::HeapSize};
+use tikv_util::{Either, deadline::Deadline, memory::HeapSize};
 use tracker::RequestType;
 pub use txn_heart_beat::TxnHeartBeat;
 use txn_types::{Key, TimeStamp, Value, Write};
@@ -574,7 +574,12 @@ fn find_mvcc_infos_by_key<S: Snapshot>(
 ) -> Result<LockWritesVals> {
     let mut writes = vec![];
     let mut values = vec![];
-    let lock = reader.load_lock(key)?;
+    let lock = reader.load_lock(key)?.map(|lock| match lock {
+        Either::Left(lock) => lock,
+        Either::Right(_shared_locks) => {
+            unimplemented!("SharedLocks returned from load_lock is not supported here")
+        }
+    });
     loop {
         let opt = reader.seek_write(key, ts)?;
         match opt {
