@@ -184,6 +184,43 @@ struct GcsStorageInner {
 }
 
 impl GcsStorageInner {
+    fn build_auth_credentials(
+        creds_json: &str,
+    ) -> io::Result<google_cloud_auth::credentials::Credentials> {
+        if creds_json == "anonymous" {
+            return Ok(google_cloud_auth::credentials::anonymous::Builder::new().build());
+        }
+
+        let creds_value: serde_json::Value = serde_json::from_str(creds_json)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        let creds_type = creds_value
+            .get("type")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "missing `type` in credentials_blob")
+            })?;
+
+        match creds_type {
+            "service_account" => google_cloud_auth::credentials::service_account::Builder::new(
+                creds_value,
+            )
+            .build()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e)),
+            // Workload Identity Federation / external_account credentials.
+            "external_account" => google_cloud_auth::credentials::external_account::Builder::new(
+                creds_value,
+            )
+            .build()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e)),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "unsupported credentials_blob type `{creds_type}`, supported: service_account, external_account"
+                ),
+            )),
+        }
+    }
+
     async fn get_data_client(&self) -> io::Result<Storage> {
         let client = self
             .data_client
@@ -198,19 +235,8 @@ impl GcsStorageInner {
                 
                 // Build credentials in async context to avoid tokio::spawn in sync context
                 if let Some(creds_json) = &self.data_credentials_json {
-                    if creds_json == "anonymous" {
-                        // Anonymous credentials
-                        let creds = google_cloud_auth::credentials::anonymous::Builder::new().build();
-                        builder = builder.with_credentials(creds);
-                    } else {
-                        // Service account credentials
-                        let creds_value: serde_json::Value = serde_json::from_str(creds_json)
-                            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-                        let creds = google_cloud_auth::credentials::service_account::Builder::new(creds_value)
-                            .build()
-                            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-                        builder = builder.with_credentials(creds);
-                    }
+                    let creds = Self::build_auth_credentials(creds_json)?;
+                    builder = builder.with_credentials(creds);
                 }
 
                 let result = builder
@@ -253,19 +279,8 @@ impl GcsStorageInner {
                 
                 // Build credentials in async context to avoid tokio::spawn in sync context
                 if let Some(creds_json) = &self.control_credentials_json {
-                    if creds_json == "anonymous" {
-                        // Anonymous credentials
-                        let creds = google_cloud_auth::credentials::anonymous::Builder::new().build();
-                        builder = builder.with_credentials(creds);
-                    } else {
-                        // Service account credentials
-                        let creds_value: serde_json::Value = serde_json::from_str(creds_json)
-                            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-                        let creds = google_cloud_auth::credentials::service_account::Builder::new(creds_value)
-                            .build()
-                            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-                        builder = builder.with_credentials(creds);
-                    }
+                    let creds = Self::build_auth_credentials(creds_json)?;
+                    builder = builder.with_credentials(creds);
                 }
                 
                 let result = builder
