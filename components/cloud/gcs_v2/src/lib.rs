@@ -386,22 +386,7 @@ impl GcsStorage {
     async fn get_control_client(&self) -> io::Result<StorageControl> {
         self.inner.get_control_client().await
     }
-    
-    /// Warm up the storage by initializing clients eagerly.
-    /// This should be called right after from_input() to avoid lazy initialization delays
-    /// during critical operations like backup.
-    pub async fn warmup(&self) -> io::Result<()> {
-        info!("warming up GCS storage clients");
-        let start = Instant::now();
-        
-        // Initialize both clients
-        self.get_data_client().await?;
-        self.get_control_client().await?;
-        
-        info!("GCS storage clients warmed up"; "duration" => ?start.saturating_elapsed());
-        Ok(())
-    }
-    
+
     fn full_path(&self, name: &str) -> String {
         if self.inner.config.prefix.is_empty() {
             name.to_owned()
