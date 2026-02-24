@@ -224,7 +224,7 @@ impl QuotaLimiter {
             foreground_cpu_quota,
             foreground_write_bandwidth,
             foreground_read_bandwidth,
-            0, // foreground doesn't use IOPS limiter
+            0, // foreground doesn't use IOPS limiter currently
         );
         let background_limiters = LimiterItems::new(
             background_cpu_quota,
@@ -646,13 +646,17 @@ mod tests {
         let should_delay = block_on(quota_limiter.consume_sample(sample, false));
         check_duration(should_delay, Duration::from_millis(125));
 
-        // Test IOPS limiter
-        // Set IOPS limit to 1000 ops/sec (1 ops/ms)
-        quota_limiter.set_iops_limit(1000, false);
+        // Standalone IOPS-only test.
+        // async-speed-limit starts with a full bucket and default refill/min_wait =
+        // 100ms. For 100 ops/sec, bucket capacity is 10 ops. Consume 11 ops to
+        // force throttling: expected delay = 100ms (min_wait) + 10ms (1 extra
+        // op) = 110ms.
+        quota_limiter.set_iops_limit(100, false);
+        quota_limiter.set_read_bandwidth_limit(ReadableSize::kb(0), false);
         let mut sample = quota_limiter.new_sample(false);
-        sample.add_iops(1);
+        sample.add_iops(11);
         let should_delay = block_on(quota_limiter.consume_sample(sample, false));
-        check_duration(should_delay, Duration::from_millis(1));
+        check_duration(should_delay, Duration::from_millis(110));
 
         // Test that IOPS = 0 means unlimited
         quota_limiter.set_iops_limit(0, false);

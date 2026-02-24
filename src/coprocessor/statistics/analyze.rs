@@ -3,7 +3,6 @@
 use std::{cmp::Reverse, collections::BinaryHeap, hash::Hasher, mem, sync::Arc};
 
 use api_version::KvFormat;
-use engine_rocks::PerfContext;
 use kvproto::coprocessor::KeyRange;
 use mur3::Hasher128;
 use rand::{Rng, rngs::StdRng};
@@ -28,11 +27,15 @@ use tipb::{self, AnalyzeColumnsReq};
 use super::{cmsketch::CmSketch, fmsketch::FmSketch, histogram::Histogram};
 use crate::{
     coprocessor::{MEMTRACE_ANALYZE, dag::TikvStorage, metrics, *},
-    storage::{Snapshot, SnapshotStore},
+    storage::{Snapshot, SnapshotStore, Statistics},
 };
 
 pub(crate) struct RowSampleBuilder<S: Snapshot, F: KvFormat> {
     pub(crate) data: BatchTableScanExecutor<TikvStorage<SnapshotStore<S>>, F>,
+    /// Accumulated storage statistics for this request. Filled per batch so
+    /// that collect_scan_statistics can report request-scoped stats (see
+    /// merge_storage_stats_into).
+    accumulated_storage_stats: Statistics,
 
     max_sample_size: usize,
     max_fm_sketch_size: usize,
@@ -40,6 +43,7 @@ pub(crate) struct RowSampleBuilder<S: Snapshot, F: KvFormat> {
     columns_info: Vec<tipb::ColumnInfo>,
     column_groups: Vec<tipb::AnalyzeColumnGroup>,
     quota_limiter: Arc<QuotaLimiter>,
+    #[allow(dead_code)] // kept for future use (e.g. priority or reporting)
     is_auto_analyze: bool,
 }
 
@@ -68,6 +72,7 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
         )?;
         Ok(Self {
             data: table_scanner,
+            accumulated_storage_stats: Statistics::default(),
             max_sample_size: req.get_sample_size() as usize,
             max_fm_sketch_size: req.get_sketch_size() as usize,
             sample_rate: req.get_sample_rate(),
@@ -93,6 +98,13 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
         ))
     }
 
+    /// Merges accumulated storage statistics into `dest`. Used by the context
+    /// so that collect_scan_statistics gets request-scoped stats (from the
+    /// Scanner), consistent with other handlers (e.g. DAG / checksum).
+    pub(crate) fn merge_storage_stats_into(&mut self, dest: &mut Statistics) {
+        dest.add(&self.accumulated_storage_stats);
+    }
+
     pub(crate) async fn collect_column_stats(&mut self) -> Result<AnalyzeSamplingResult> {
         use tidb_query_datatype::{codec::collation::Collator, match_template_collator};
 
@@ -100,13 +112,11 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
         let mut collector = self.new_collector();
         let mut ctx = EvalContext::default();
         while !is_drained {
-            let mut sample = self.quota_limiter.new_sample(!self.is_auto_analyze);
+            // Use background limiters for both manual and auto analyze so that iops_limiter
+            // (and other background quotas) apply to manual analyze as well.
+            let mut sample = self.quota_limiter.new_sample(false);
             let mut read_size: usize = 0;
             {
-                // Track block_read_count as IOPS using perf context
-                // Capture initial state before the async operation
-                let block_read_count_before = PerfContext::get().block_read_count();
-
                 let result = {
                     let (duration, res) = sample
                         .observe_cpu_async(self.data.next_batch(BATCH_MAX_SIZE))
@@ -115,14 +125,23 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                     res
                 };
 
-                // Capture final state and calculate delta
-                let block_read_count_after = PerfContext::get().block_read_count();
-                let block_read_count_delta =
-                    block_read_count_after.saturating_sub(block_read_count_before);
-                sample.add_iops(block_read_count_delta as usize);
-                // Record metrics
-                metrics::ANALYZE_BLOCK_READ_COUNT_TOTAL.inc_by(block_read_count_delta);
-                metrics::ANALYZE_NEXT_BATCH_COUNT_TOTAL.inc();
+                // Use request-scoped storage stats for IOPS (like collect_scan_statistics).
+                // PerfContext is thread-local; across an await other tasks can run on the same
+                // thread and pollute it, so we use the Scanner's statistics instead.
+                let mut batch_stats = Statistics::default();
+                self.data.collect_storage_stats(&mut batch_stats);
+                let batch_iops = batch_stats.data.total_op_count()
+                    + batch_stats.lock.total_op_count()
+                    + batch_stats.write.total_op_count();
+                sample.add_iops(batch_iops);
+                self.accumulated_storage_stats.add(&batch_stats);
+
+                metrics::ANALYZE_METRICS_STATIC
+                    .get(metrics::AnalyzeMetricKind::read_iops)
+                    .inc_by(batch_iops as u64);
+                metrics::ANALYZE_METRICS_STATIC
+                    .get(metrics::AnalyzeMetricKind::next_batch_count)
+                    .inc();
                 let _guard = sample.observe_cpu();
                 is_drained = result.is_drained?.stop();
 
@@ -173,11 +192,9 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             // Don't let analyze bandwidth limit the quota limiter, this is already limited
             // in rate limiter.
             let quota_delay = {
-                if !self.is_auto_analyze {
-                    self.quota_limiter.consume_sample(sample, true).await
-                } else {
-                    self.quota_limiter.consume_sample(sample, false).await
-                }
+                // Use background limiters for both manual and auto analyze so that iops_limiter
+                // applies to manual analyze as well.
+                self.quota_limiter.consume_sample(sample, false).await
             };
 
             if !quota_delay.is_zero() {
@@ -626,8 +643,6 @@ impl<S: Snapshot, F: KvFormat> SampleBuilder<S, F> {
         let mut ctx = EvalContext::default();
         while !is_drained {
             let result = self.data.next_batch(BATCH_MAX_SIZE).await;
-            // Record next_batch call count
-            metrics::ANALYZE_NEXT_BATCH_COUNT_TOTAL.inc();
             is_drained = result.is_drained?.stop();
 
             let mut columns_slice = result.physical_columns.as_slice();

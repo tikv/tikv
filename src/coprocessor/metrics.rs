@@ -91,6 +91,15 @@ make_auto_flush_static_metric! {
         "tag" => ScanKind,
     }
 
+    pub label_enum AnalyzeMetricKind {
+        read_iops,
+        next_batch_count,
+    }
+
+    pub struct AnalyzeLocalCounters: LocalIntCounter {
+        "metric" => AnalyzeMetricKind,
+    }
+
     pub struct MemLockCheckHistogramVec: LocalHistogram {
         "result" => MemLockCheckResult,
     }
@@ -195,16 +204,14 @@ lazy_static! {
         .unwrap();
     pub static ref MEM_LOCK_CHECK_HISTOGRAM_VEC_STATIC: MemLockCheckHistogramVec =
         auto_flush_from!(MEM_LOCK_CHECK_HISTOGRAM_VEC, MemLockCheckHistogramVec);
-    pub static ref ANALYZE_BLOCK_READ_COUNT_TOTAL: IntCounter = register_int_counter!(
-        "tikv_analyze_block_read_count_total",
-        "Total accumulated block_read_count during analyze execution"
+    pub static ref ANALYZE_METRICS_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_analyze_metrics_total",
+        "Analyze execution metrics (read_iops, next_batch_count)",
+        &["metric"]
     )
     .unwrap();
-    pub static ref ANALYZE_NEXT_BATCH_COUNT_TOTAL: IntCounter = register_int_counter!(
-        "tikv_analyze_next_batch_count_total",
-        "Total number of next_batch calls during analyze execution"
-    )
-    .unwrap();
+    pub static ref ANALYZE_METRICS_STATIC: AnalyzeLocalCounters =
+        auto_flush_from!(ANALYZE_METRICS_VEC, AnalyzeLocalCounters);
 }
 
 make_static_metric! {

@@ -968,8 +968,12 @@ def Server() -> RowPanel:
                     ),
                 ],
             ),
+        ]
+    )
+    layout.row(
+        [
             graph_panel(
-                title="Disk IO count per second",
+                title="Rocksdb block read count per second",
                 yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
                 lines=False,
                 stack=True,
@@ -994,25 +998,31 @@ def Server() -> RowPanel:
                 ],
             ),
             graph_panel(
-                title="Analyze block read count per second",
+                title="Analyze read ops per second",
                 yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
                 targets=[
                     target(
                         expr=expr_sum_rate(
-                            "tikv_analyze_block_read_count_total",
+                            "tikv_analyze_metrics_total",
+                            label_selectors=['metric="read_iops"'],
                             by_labels=["instance"],
                         ),
                         legend_format="{{instance}}",
                     ),
                 ],
             ),
+        ]
+    )
+    layout.row(
+        [
             graph_panel(
                 title="Analyze next batch count per second",
                 yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
                 targets=[
                     target(
                         expr=expr_sum_rate(
-                            "tikv_analyze_next_batch_count_total",
+                            "tikv_analyze_metrics_total",
+                            label_selectors=['metric="next_batch_count"'],
                             by_labels=["instance"],
                         ),
                         legend_format="{{instance}}",
