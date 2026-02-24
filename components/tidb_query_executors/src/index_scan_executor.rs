@@ -73,8 +73,9 @@ impl<S: Storage, F: KvFormat> BatchIndexScanExecutor<S, F> {
         // last one is real). We accept this kind of request for compatibility
         // considerations, but will be forbidden soon.
         //
-        // Note 4: When process global indexes, an extra partition ID column with column
-        // ID `table::EXTRA_PARTITION_ID_COL_ID` will append to column info to indicate which partiton handles belong to. See https://github.com/pingcap/parser/pull/1010 for more information.
+        // Note 4: When process global indexes, an extra partition ID
+        // column with column ID `table::EXTRA_PHYSICAL_TABLE_ID_COL_ID` will
+        // append to column info to indicate which partition id handles belong to.
         //
         // Note 5: When process a partitioned table's index under
         // tidb_partition_prune_mode = 'dynamic' and with either an active transaction
@@ -408,8 +409,52 @@ impl IndexScanExecutorImpl {
             .map(|x| x as i64)
     }
 
+<<<<<<< HEAD
     #[inline]
     fn decode_int_handle_from_key(&self, key: &[u8]) -> Result<i64> {
+=======
+    /// ## V1/V2 Global Index Version (non-unique, non-clustered):
+    /// ```text
+    /// [INDEX_VALUE_PARTITION_ID_FLAG][partition_id (8 bytes)][handle_flag][handle_data]
+    /// ```
+    ///
+    /// Where `handle_flag` is `datum::INT_FLAG` or `datum::UINT_FLAG`.
+    ///
+    /// # Note for V1
+    /// In V1, partition ID appears in both KEY and VALUE:
+    /// - KEY: Contains partition ID prefix
+    /// - VALUE: Still contains partition ID (extracted by `split_partition_id`)
+    ///
+    /// # Note for V2
+    /// In V2, partition ID appears ONLY in KEY, not in the VALUE.
+    /// TODO: Add support for PartitionHandle / index pushdown for Global
+    /// Indexes.
+    #[inline]
+    fn decode_int_handle_and_partition_from_key(&self, key: &[u8]) -> Result<(i64, Option<i64>)> {
+        let (pid_bytes, val) = Self::split_partition_id(key)?;
+        let partition_id = if !pid_bytes.is_empty() {
+            Some(NumberCodec::decode_i64(pid_bytes))
+        } else {
+            None
+        };
+        let handle = self.decode_int_handle_from_key(val)?;
+        Ok((handle, partition_id))
+    }
+
+    /// Decode int handle from index key.
+    ///
+    /// # Key Format
+    ///
+    /// ## Normal format (local index or old global index):
+    /// ```text
+    /// [handle_flag][handle_data]
+    /// ```
+    #[inline]
+    fn decode_int_handle_from_key(&self, key: &[u8]) -> Result<i64> {
+        if key.is_empty() {
+            return Err(other_err!("Key is empty, cannot decode handle"));
+        }
+>>>>>>> 188d9fd96c (copr: support new global index key value format V2 (#19276))
         let flag = key[0];
         let mut val = &key[1..];
 
@@ -476,32 +521,59 @@ impl IndexScanExecutorImpl {
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
-        if self.physical_table_id_column_cnt > 0 {
-            self.process_physical_table_id_column(key, columns)?;
-        }
-
         Self::extract_columns_from_datum_format(
             &mut key_payload,
             &mut columns[..self.columns_id_without_handle.len()],
         )?;
 
+        // Track partition ID extracted from key (for pid_column_cnt handling below).
+        let mut partition_id: Option<i64> = None;
+
         match self.decode_handle_strategy {
-            NoDecode => {}
-            // For normal index, it is placed at the end and any columns prior to it are
-            // ensured to be interested. For unique index, it is placed in the value.
+            NoDecode => {
+                // Note: V2 key-only partition ID only exists for IntHandle
+                // global indexes, when !PKIsHandle, and TiDB always sends
+                // the handle column for those, so this path is only reached
+                // for local indexes where decode_table_id correctly returns
+                // the partition's table ID.
+                if self.physical_table_id_column_cnt > 0 {
+                    self.process_physical_table_id_column(key, columns)?;
+                }
+            }
+            // For non-unique index, it is placed at the end of the key and any columns prior to it
+            // are ensured to be interested. For unique index, it is placed in the
+            // value.
             DecodeIntHandle if key_payload.is_empty() => {
                 // This is a unique index, and we should look up PK int handle in the value.
                 let handle_val = self.decode_int_handle_from_value(value)?;
                 columns[self.columns_id_without_handle.len()]
                     .mut_decoded()
                     .push_int(Some(handle_val));
+                if self.physical_table_id_column_cnt > 0 {
+                    self.process_physical_table_id_column(key, columns)?;
+                }
             }
             DecodeIntHandle => {
-                // This is a normal index, and we should look up PK handle in the key.
-                let handle_val = self.decode_int_handle_from_key(key_payload)?;
+                // This is a non-unique index, and we should look up PK handle in the key.
+                // For non-unique, non-clustered tables, Global Index Version V1+
+                // the key also includes the partition id, to allow duplicate _tidb_rowid
+                // across partitions.
+                let (handle_val, pid) =
+                    self.decode_int_handle_and_partition_from_key(key_payload)?;
+                partition_id = pid;
                 columns[self.columns_id_without_handle.len()]
                     .mut_decoded()
                     .push_int(Some(handle_val));
+                // For global indexes, use the partition ID as physical table ID
+                // instead of the index table ID from the key prefix.
+                if self.physical_table_id_column_cnt > 0 {
+                    if let Some(pid) = partition_id {
+                        let col_index = columns.columns_len() - 1;
+                        columns[col_index].mut_decoded().push_int(Some(pid));
+                    } else {
+                        self.process_physical_table_id_column(key, columns)?;
+                    }
+                }
             }
             DecodeCommonHandle => {
                 // Otherwise, if the handle is common handle, we extract it from the key.
@@ -516,6 +588,24 @@ impl IndexScanExecutorImpl {
                     &mut key_payload,
                     &mut columns[self.columns_id_without_handle.len()..end_index],
                 )?;
+                if self.physical_table_id_column_cnt > 0 {
+                    self.process_physical_table_id_column(key, columns)?;
+                }
+            }
+        }
+
+        // Deprecated: Keep this for old tidb version during upgrade.
+        // If need partition id, append partition id to the last column before physical
+        // table id column if exists.
+        if self.pid_column_cnt > 0 {
+            let pid_col_idx = columns.columns_len() - self.physical_table_id_column_cnt - 1;
+            if let Some(pid) = partition_id {
+                columns[pid_col_idx].mut_decoded().push_int(Some(pid));
+            } else {
+                // No partition ID found in key. Fall back to table ID from key prefix
+                // (local index on a partition has the partition's table ID in the key).
+                let table_id = table::decode_table_id(key)?;
+                columns[pid_col_idx].mut_decoded().push_int(Some(table_id));
             }
         }
 
@@ -665,11 +755,19 @@ impl IndexScanExecutorImpl {
         // If need partition id, append partition id to the last column before physical
         // table id column if exists.
         if self.pid_column_cnt > 0 {
-            self.decode_pid_columns(
-                columns,
-                columns.columns_len() - self.physical_table_id_column_cnt - 1,
-                decode_pid,
-            )?;
+            let pid_col_idx = columns.columns_len() - self.physical_table_id_column_cnt - 1;
+            match decode_pid {
+                DecodePartitionIdOp::Nop => {
+                    // No partition ID found in key or value. Fall back to table ID
+                    // from key prefix (local index on a partition has the partition's
+                    // table ID encoded in the key).
+                    let table_id = table::decode_table_id(key)?;
+                    columns[pid_col_idx].mut_decoded().push_int(Some(table_id));
+                }
+                DecodePartitionIdOp::Pid(_) => {
+                    self.decode_pid_columns(columns, pid_col_idx, decode_pid)?;
+                }
+            }
         }
 
         Ok(())
@@ -694,6 +792,10 @@ impl IndexScanExecutorImpl {
         };
 
         let (common_handle_bytes, remaining) = Self::split_common_handle(remaining)?;
+
+        // partition ID from key for V1/V2 format
+        let mut partition_id_from_key: Option<&'a [u8]> = None;
+
         let (decode_handle_op, remaining) = {
             if !common_handle_bytes.is_empty() && self.decode_handle_strategy != DecodeCommonHandle
             {
@@ -703,10 +805,22 @@ impl IndexScanExecutorImpl {
             }
 
             let dispatcher = match self.decode_handle_strategy {
+                // V2 key-only partition ID only exists for IntHandle global
+                // indexes && !PKIsHandle, and TiDB always sends the handle
+                // column for those, so NoDecode never needs to parse
+                // partition ID from the key.
                 NoDecode => DecodeHandleOp::Nop,
                 DecodeIntHandle if tail_len < 8 => {
                     // This is a non-unique index, we should extract the int handle from the key.
                     datum::skip_n(&mut key_payload, self.columns_id_without_handle.len())?;
+
+                    // V1/V2: Check for partition ID in key (after indexed columns, before handle)
+                    let (pid_from_key, remaining_key) = Self::split_partition_id(key_payload)?;
+                    if !pid_from_key.is_empty() {
+                        partition_id_from_key = Some(pid_from_key);
+                    }
+                    key_payload = remaining_key;
+
                     DecodeHandleOp::IntFromKey(key_payload)
                 }
                 DecodeIntHandle => {
@@ -727,17 +841,19 @@ impl IndexScanExecutorImpl {
             (dispatcher, remaining)
         };
 
-        let (partition_id_bytes, remaining) = Self::split_partition_id(remaining)?;
-        let decode_pid_op = {
-            if self.pid_column_cnt > 0 && partition_id_bytes.is_empty() {
-                return Err(other_err!(
-                    "Expect to decode partition id but payload is empty"
-                ));
-            } else if partition_id_bytes.is_empty() {
-                DecodePartitionIdOp::Nop
-            } else {
-                DecodePartitionIdOp::Pid(partition_id_bytes)
-            }
+        // Always try to split partition ID from value (for compatibility where it's
+        // in the value, V0 - Only in value, V1 both in key and value)
+        let (partition_id_from_value, remaining) = Self::split_partition_id(remaining)?;
+
+        // Prefer partition ID from value if available, for backward compatibility
+        let decode_pid_op = if !partition_id_from_value.is_empty() {
+            // normal/legacy/V1, partition id in value
+            DecodePartitionIdOp::Pid(partition_id_from_value)
+        } else if let Some(pid_from_key) = partition_id_from_key {
+            // V2: partition ID in key ONLY
+            DecodePartitionIdOp::Pid(pid_from_key)
+        } else {
+            DecodePartitionIdOp::Nop
         };
 
         let (restore_data, remaining) = Self::split_restore_data(remaining)?;
@@ -3643,4 +3759,508 @@ mod tests {
             0
         );
     }
+<<<<<<< HEAD
+=======
+
+    #[test]
+    fn test_decode_int_handle_and_partition_from_key() {
+        let idx_exe = IndexScanExecutorImpl {
+            context: Default::default(),
+            schema: vec![],
+            columns_id_without_handle: vec![],
+            columns_id_for_common_handle: vec![],
+            decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
+            pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
+            index_version: -1,
+            fill_extra_common_handle_key: false,
+        };
+
+        // Helper to build key with optional partition prefix
+        fn build_key(partition_id: Option<i64>, handle_flag: u8, handle_value: i64) -> Vec<u8> {
+            let mut key = Vec::new();
+            if let Some(pid) = partition_id {
+                key.push(table::INDEX_VALUE_PARTITION_ID_FLAG);
+                key.write_i64(pid).unwrap();
+            }
+            key.push(handle_flag);
+            if handle_flag == datum::UINT_FLAG {
+                key.write_u64(handle_value as u64).unwrap();
+            } else {
+                key.write_i64(handle_value).unwrap();
+            }
+            key
+        }
+
+        // Test all combinations of partition IDs and handle values
+        let partition_ids: Vec<Option<i64>> = vec![None, Some(-100), Some(0), Some(100)];
+        let handle_values: Vec<i64> = vec![-999, 0, 999];
+
+        for &partition_id in &partition_ids {
+            for &handle_value in &handle_values {
+                // Determine which flags to test based on handle value
+                let flags: Vec<u8> = if handle_value >= 0 {
+                    vec![datum::INT_FLAG, datum::UINT_FLAG]
+                } else {
+                    vec![datum::INT_FLAG] // negative values only work with INT_FLAG
+                };
+
+                for &handle_flag in &flags {
+                    let key = build_key(partition_id, handle_flag, handle_value);
+                    let result = idx_exe.decode_int_handle_and_partition_from_key(&key);
+
+                    assert_eq!(
+                        result.unwrap(),
+                        (handle_value, partition_id),
+                        "Failed for partition_id={:?}, handle_flag={}, handle_value={}",
+                        partition_id,
+                        if handle_flag == datum::INT_FLAG {
+                            "INT"
+                        } else {
+                            "UINT"
+                        },
+                        handle_value
+                    );
+                }
+            }
+        }
+
+        // Error cases: malformed keys
+        let error_cases: Vec<(Vec<u8>, &str)> = vec![
+            (vec![], "empty key"),
+            (
+                vec![0x99, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08],
+                "invalid handle flag",
+            ),
+            (
+                vec![table::INDEX_VALUE_PARTITION_ID_FLAG, 0x01, 0x02],
+                "partition flag with insufficient partition data",
+            ),
+            (
+                vec![datum::INT_FLAG, 0x01],
+                "INT_FLAG with insufficient data",
+            ),
+            (
+                vec![datum::UINT_FLAG, 0x01],
+                "UINT_FLAG with insufficient data",
+            ),
+        ];
+
+        for (key, desc) in error_cases {
+            assert!(
+                idx_exe
+                    .decode_int_handle_and_partition_from_key(&key)
+                    .is_err(),
+                "Expected error for: {}",
+                desc
+            );
+        }
+
+        // Error cases with partition prefix but malformed handle
+        let malformed_handles: Vec<(Vec<u8>, &str)> = vec![
+            (vec![], "no handle data"),
+            (
+                vec![0xFF, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08],
+                "invalid handle flag",
+            ),
+            (vec![datum::INT_FLAG, 0x01], "INT_FLAG insufficient data"),
+            (vec![datum::UINT_FLAG, 0x01], "UINT_FLAG insufficient data"),
+        ];
+
+        for partition_id in [-100i64, 0, 100] {
+            for (extra_bytes, handle_desc) in &malformed_handles {
+                let mut key = vec![table::INDEX_VALUE_PARTITION_ID_FLAG];
+                key.write_i64(partition_id).unwrap();
+                key.extend(extra_bytes);
+                assert!(
+                    idx_exe
+                        .decode_int_handle_and_partition_from_key(&key)
+                        .is_err(),
+                    "Expected error for partition_id={}, handle={}",
+                    partition_id,
+                    handle_desc
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_global_index_formats() {
+        // Tests V1 and V2 global index formats with partition ID handling.
+        //
+        // V1: partition ID in both KEY and VALUE
+        // V2: partition ID ONLY in KEY (reduces storage overhead)
+        //
+        // Key format: [indexed_cols][PARTITION_ID_FLAG][partition_id][handle]
+        // V1 value: [tail_len][PARTITION_ID_FLAG][partition_id]
+        // V2 value: [tail_len] (no partition ID)
+
+        const TABLE_ID: i64 = 100;
+        const INDEX_ID: i64 = 5;
+
+        // Helper to create column info
+        fn make_column(col_id: i64, is_pk_handle: bool) -> ColumnInfo {
+            let mut ci = ColumnInfo::default();
+            ci.set_column_id(col_id);
+            if is_pk_handle {
+                ci.set_pk_handle(true);
+            }
+            ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+            ci
+        }
+
+        // Test value ranges
+        let partition_ids: Vec<i64> = vec![-100, 0, 100];
+        let indexed_values: Vec<i64> = vec![-50, 0, 50];
+        let handle_values: Vec<i64> = vec![-999, 0, 999];
+        let pid_in_value_options = [true, false]; // V1 vs V2
+        let request_pid_column_options = [true, false];
+        let request_phys_table_id_column_options = [true, false];
+
+        for &partition_id in &partition_ids {
+            for &indexed_value in &indexed_values {
+                for &handle_value in &handle_values {
+                    for &pid_in_value in &pid_in_value_options {
+                        for &request_pid_column in &request_pid_column_options {
+                            for &request_phys_table_id_column in
+                                &request_phys_table_id_column_options
+                            {
+                                let version = if pid_in_value { "V1" } else { "V2" };
+                                let pid_col = if request_pid_column {
+                                    "with_pid_col"
+                                } else {
+                                    "no_pid_col"
+                                };
+                                let phys_col = if request_phys_table_id_column {
+                                    "with_phys_col"
+                                } else {
+                                    "no_phys_col"
+                                };
+
+                                // Build columns based on test configuration
+                                // Order: [indexed_col, handle, pid(-2), phys_table_id(-3)]
+                                let mut columns_info = vec![
+                                    make_column(1, false), // indexed column
+                                    make_column(-1, true), // handle column
+                                ];
+                                let mut schema: Vec<FieldType> = vec![
+                                    FieldTypeTp::LongLong.into(),
+                                    FieldTypeTp::LongLong.into(),
+                                ];
+                                if request_pid_column {
+                                    columns_info
+                                        .push(make_column(table::EXTRA_PARTITION_ID_COL_ID, false));
+                                    schema.push(FieldTypeTp::LongLong.into());
+                                }
+                                if request_phys_table_id_column {
+                                    columns_info.push(make_column(
+                                        table::EXTRA_PHYSICAL_TABLE_ID_COL_ID,
+                                        false,
+                                    ));
+                                    schema.push(FieldTypeTp::LongLong.into());
+                                }
+
+                                // Build index key:
+                                // [indexed_col][PARTITION_ID_FLAG][partition_id][handle]
+                                let mut index_key_data = datum::encode_key(
+                                    &mut EvalContext::default(),
+                                    &[Datum::I64(indexed_value)],
+                                )
+                                .unwrap();
+                                index_key_data.push(table::INDEX_VALUE_PARTITION_ID_FLAG);
+                                index_key_data.write_i64(partition_id).unwrap();
+                                let handle_data = datum::encode_key(
+                                    &mut EvalContext::default(),
+                                    &[Datum::I64(handle_value)],
+                                )
+                                .unwrap();
+                                index_key_data.extend(handle_data);
+                                let key = table::encode_index_seek_key(
+                                    TABLE_ID,
+                                    INDEX_ID,
+                                    &index_key_data,
+                                );
+
+                                // Build index value (with or without partition ID based on
+                                // version)
+                                let value = if pid_in_value {
+                                    let mut v = vec![0u8]; // tail_len = 0
+                                    v.push(table::INDEX_VALUE_PARTITION_ID_FLAG);
+                                    let mut pid_bytes = vec![0u8; 8];
+                                    NumberCodec::encode_i64(&mut pid_bytes, partition_id);
+                                    v.extend(&pid_bytes);
+                                    v
+                                } else {
+                                    vec![0u8] // V2: no partition ID in value
+                                };
+
+                                let key_ranges = vec![{
+                                    let mut range = KeyRange::default();
+                                    range.set_start(key.clone());
+                                    range.set_end(key.clone());
+                                    convert_to_prefix_next(range.mut_end());
+                                    range
+                                }];
+
+                                let store = FixtureStorage::from(vec![(key, value)]);
+                                let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
+                                    store,
+                                    Arc::new(EvalConfig::default()),
+                                    columns_info,
+                                    key_ranges,
+                                    0,
+                                    false,
+                                    false,
+                                    false,
+                                    false,
+                                )
+                                .unwrap();
+
+                                let mut result = block_on(executor.next_batch(10));
+                                let expected_cols = 2
+                                    + request_pid_column as usize
+                                    + request_phys_table_id_column as usize;
+
+                                assert!(
+                                    result.is_drained.as_ref().unwrap().stop(),
+                                    "{} {} {} pid={} idx={} handle={}",
+                                    version,
+                                    pid_col,
+                                    phys_col,
+                                    partition_id,
+                                    indexed_value,
+                                    handle_value
+                                );
+                                assert_eq!(
+                                    result.physical_columns.columns_len(),
+                                    expected_cols,
+                                    "{} {} {} pid={} idx={} handle={}",
+                                    version,
+                                    pid_col,
+                                    phys_col,
+                                    partition_id,
+                                    indexed_value,
+                                    handle_value
+                                );
+                                assert_eq!(
+                                    result.physical_columns.rows_len(),
+                                    1,
+                                    "{} {} {} pid={} idx={} handle={}",
+                                    version,
+                                    pid_col,
+                                    phys_col,
+                                    partition_id,
+                                    indexed_value,
+                                    handle_value
+                                );
+
+                                // Verify indexed column
+                                result.physical_columns[0]
+                                    .ensure_all_decoded_for_test(
+                                        &mut EvalContext::default(),
+                                        &schema[0],
+                                    )
+                                    .unwrap();
+                                assert_eq!(
+                                    result.physical_columns[0].decoded().to_int_vec(),
+                                    &[Some(indexed_value)],
+                                    "{} {} {} pid={} idx={} handle={}: indexed column mismatch",
+                                    version,
+                                    pid_col,
+                                    phys_col,
+                                    partition_id,
+                                    indexed_value,
+                                    handle_value
+                                );
+
+                                // Verify handle
+                                assert_eq!(
+                                    result.physical_columns[1].decoded().to_int_vec(),
+                                    &[Some(handle_value)],
+                                    "{} {} {} pid={} idx={} handle={}: handle mismatch",
+                                    version,
+                                    pid_col,
+                                    phys_col,
+                                    partition_id,
+                                    indexed_value,
+                                    handle_value
+                                );
+
+                                // Verify partition ID if requested
+                                let mut next_col = 2;
+                                if request_pid_column {
+                                    assert_eq!(
+                                        result.physical_columns[next_col].decoded().to_int_vec(),
+                                        &[Some(partition_id)],
+                                        "{} {} {} pid={} idx={} handle={}: partition ID mismatch",
+                                        version,
+                                        pid_col,
+                                        phys_col,
+                                        partition_id,
+                                        indexed_value,
+                                        handle_value
+                                    );
+                                    next_col += 1;
+                                }
+
+                                // Verify physical_table_id column if requested.
+                                // For global indexes, it should return the partition ID
+                                // (not the index table ID).
+                                if request_phys_table_id_column {
+                                    assert_eq!(
+                                        result.physical_columns[next_col].decoded().to_int_vec(),
+                                        &[Some(partition_id)],
+                                        "{} {} {} pid={} idx={} handle={}: \
+                                         physical_table_id should equal partition_id",
+                                        version,
+                                        pid_col,
+                                        phys_col,
+                                        partition_id,
+                                        indexed_value,
+                                        handle_value
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Exercises the V2 global index path through `process_kv_general` →
+    /// `build_operations`, where partition ID comes from the KEY only (the
+    /// `else if partition_id_from_key` fallback). The base
+    /// `test_global_index_formats` V2 case uses a 1-byte value which routes
+    /// through `process_old_collation_kv` instead.
+    #[test]
+    fn test_v2_global_index_new_encoding_path() {
+        const TABLE_ID: i64 = 100;
+        const INDEX_ID: i64 = 5;
+
+        fn make_column(col_id: i64, is_pk_handle: bool) -> ColumnInfo {
+            let mut ci = ColumnInfo::default();
+            ci.set_column_id(col_id);
+            if is_pk_handle {
+                ci.set_pk_handle(true);
+            }
+            ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+            ci
+        }
+
+        let partition_id: i64 = 42;
+        let indexed_value: i64 = 7;
+        let handle_value: i64 = 123;
+
+        for request_phys_table_id_column in [true, false] {
+            // Build columns: [indexed_col, handle, phys_table_id?]
+            let mut columns_info = vec![
+                make_column(1, false), // indexed column
+                make_column(-1, true), // handle column
+            ];
+            let mut schema: Vec<FieldType> =
+                vec![FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()];
+            if request_phys_table_id_column {
+                columns_info.push(make_column(table::EXTRA_PHYSICAL_TABLE_ID_COL_ID, false));
+                schema.push(FieldTypeTp::LongLong.into());
+            }
+
+            // Build index key:
+            // [indexed_col][PARTITION_ID_FLAG][partition_id][handle]
+            let mut index_key_data =
+                datum::encode_key(&mut EvalContext::default(), &[Datum::I64(indexed_value)])
+                    .unwrap();
+            index_key_data.push(table::INDEX_VALUE_PARTITION_ID_FLAG);
+            index_key_data.write_i64(partition_id).unwrap();
+            let handle_data =
+                datum::encode_key(&mut EvalContext::default(), &[Datum::I64(handle_value)])
+                    .unwrap();
+            index_key_data.extend(handle_data);
+            let key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_key_data);
+
+            // Build V2 new-encoding value (index_version=1, no partition ID in
+            // value). Include a minimal v2 row as restore data so that
+            // value.len() > MAX_OLD_ENCODED_VALUE_LEN (9), routing to
+            // process_kv_general instead of process_old_collation_kv.
+            let mut value = Vec::new();
+            value.push(0x00); // tail_len = 0 (non-unique, handle in key)
+            value.push(INDEX_VALUE_VERSION_FLAG); // version segment marker
+            value.push(0x01); // version = 1
+            // Minimal valid v2 row (empty row with one null column_id=1):
+            //   [CODEC_VERSION=0x80][flags=0x00][non_null_cnt=0][null_cnt=1][null_id=1]
+            value.extend_from_slice(&[0x80, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01]);
+            assert!(value.len() > MAX_OLD_ENCODED_VALUE_LEN);
+
+            let key_ranges = vec![{
+                let mut range = KeyRange::default();
+                range.set_start(key.clone());
+                range.set_end(key.clone());
+                convert_to_prefix_next(range.mut_end());
+                range
+            }];
+
+            let store = FixtureStorage::from(vec![(key, value)]);
+            let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
+                store,
+                Arc::new(EvalConfig::default()),
+                columns_info,
+                key_ranges,
+                0,
+                false,
+                false,
+                false,
+                false,
+            )
+            .unwrap();
+
+            let mut result = block_on(executor.next_batch(10));
+
+            let phys_label = if request_phys_table_id_column {
+                "with_phys_col"
+            } else {
+                "no_phys_col"
+            };
+
+            assert!(
+                result.is_drained.as_ref().unwrap().stop(),
+                "V2 new-encoding {}",
+                phys_label
+            );
+            assert_eq!(
+                result.physical_columns.rows_len(),
+                1,
+                "V2 new-encoding {}",
+                phys_label
+            );
+
+            // Verify indexed column
+            result.physical_columns[0]
+                .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[0])
+                .unwrap();
+            assert_eq!(
+                result.physical_columns[0].decoded().to_int_vec(),
+                &[Some(indexed_value)],
+                "V2 new-encoding {}: indexed column mismatch",
+                phys_label
+            );
+
+            // Verify handle
+            assert_eq!(
+                result.physical_columns[1].decoded().to_int_vec(),
+                &[Some(handle_value)],
+                "V2 new-encoding {}: handle mismatch",
+                phys_label
+            );
+
+            // Verify physical_table_id column uses the partition ID from the key
+            if request_phys_table_id_column {
+                assert_eq!(
+                    result.physical_columns[2].decoded().to_int_vec(),
+                    &[Some(partition_id)],
+                    "V2 new-encoding: physical_table_id should equal partition_id"
+                );
+            }
+        }
+    }
+>>>>>>> 188d9fd96c (copr: support new global index key value format V2 (#19276))
 }
