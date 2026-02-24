@@ -250,7 +250,6 @@ exclude = [
   # `test_coprocessor_plugin` itself isn't a valid crate, so we exclude it to avoiding match it by `components/*`.
   # What is a valid crate is the subdir in `test_coprocessor_plugin`, like `example_plugin`.
   "components/test_coprocessor_plugin",
-  "google-cloud-rust",
 ]
 default-members = ["cmd/tikv-server", "cmd/tikv-ctl"]
 
