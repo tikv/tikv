@@ -30,7 +30,7 @@ use crate::{
     storage::{Snapshot, SnapshotStore},
 };
 
-const NDV_SCAN_SAMPLE_RATE: f64 = 0.05;
+const NDV_SCAN_SAMPLE_RATE: f64 = 0.01;
 
 pub(crate) struct RowSampleBuilder<S: Snapshot, F: KvFormat> {
     pub(crate) data: BatchTableScanExecutor<TikvStorage<SnapshotStore<S>>, F>,
