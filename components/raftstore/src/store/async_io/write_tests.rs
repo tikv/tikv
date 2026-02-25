@@ -280,6 +280,12 @@ impl TestWriters {
 #[test]
 fn test_write_task_batch_recorder() {
     let mut recorder = WriteTaskBatchRecorder::new(1024, Duration::from_nanos(50)); // 1kb, 50 nanoseconds
+    assert_eq!(recorder.wait_duration_adaptive, Duration::from_nanos(50));
+    let capped = WriteTaskBatchRecorder::new(1024, Duration::from_micros(80));
+    assert_eq!(
+        capped.wait_duration_adaptive,
+        Duration::from_nanos(RAFT_WB_WAIT_DURATION_DEFAULT_NS)
+    );
     assert_eq!(recorder.get_avg(), 0);
     assert_eq!(recorder.get_trend(), 1.0);
     assert!(!recorder.should_wait(4096));
@@ -291,9 +297,13 @@ fn test_write_task_batch_recorder() {
     assert_eq!(recorder.get_avg(), 512);
     assert_eq!(recorder.get_trend(), 0.5);
     assert!(recorder.should_wait(128));
+    let expected_wait = Duration::from_nanos(80_000);
+    recorder.update_wait_duration_adaptive(expected_wait);
     let start = Instant::now();
-    recorder.wait_for_a_while();
-    assert!(start.saturating_elapsed() >= Duration::from_nanos(100));
+    recorder.wait_for_a_while(true);
+    assert_eq!(recorder.wait_duration, expected_wait);
+    assert_eq!(recorder.get_trend(), 1.0);
+    assert!(start.saturating_elapsed() >= expected_wait);
     // [4096 ...]
     for _ in 0..30 {
         recorder.record(4096);
@@ -303,9 +313,105 @@ fn test_write_task_batch_recorder() {
     assert!(!recorder.should_wait(128));
     recorder.reset_wait_count();
     assert!(recorder.should_wait(128));
+    let expected_wait = Duration::from_nanos(60_000);
+    recorder.update_wait_duration_adaptive(expected_wait);
     let start = Instant::now();
-    recorder.wait_for_a_while();
-    assert!(start.saturating_elapsed() >= Duration::from_nanos(20));
+    recorder.wait_for_a_while(true);
+    assert_eq!(recorder.wait_duration, expected_wait);
+    assert_eq!(recorder.get_trend(), 1.0);
+    assert!(start.saturating_elapsed() >= expected_wait);
+}
+
+#[test]
+fn test_calculate_adaptive_wait_duration_clamps_to_bounds() {
+    let path = Builder::new()
+        .prefix("async-io-adaptive-clamp")
+        .tempdir()
+        .unwrap();
+    let engines = new_temp_engine(&path);
+    let mut cfg = Config::default();
+    cfg.adaptive_batch_enabled = true;
+    let mut t = TestWorker::new(&cfg, &engines);
+
+    // Low QPS + high batch ratio pushes below 10us and should clamp to lower bound.
+    t.worker.batch.recorder.wait_duration_hint = Duration::from_nanos(20_000);
+    t.worker.batch.recorder.wait_duration_adaptive =
+        Duration::from_nanos(RAFT_WB_WAIT_DURATION_LOWER_BOUND_NS);
+    t.worker.batch.recorder.batch_size_hint = 100;
+    t.worker.batch.recorder.avg = 100;
+    t.worker.consecutive_low_batch_ratio_count = 0;
+    let lower = t.worker.calculate_adaptive_wait_duration(1_000);
+    assert_eq!(
+        lower,
+        Duration::from_nanos(RAFT_WB_WAIT_DURATION_LOWER_BOUND_NS)
+    );
+
+    // High QPS + poor batching pushes above 1ms and should clamp to upper bound.
+    t.worker.batch.recorder.wait_duration_adaptive =
+        Duration::from_nanos(RAFT_WB_WAIT_DURATION_UPPER_BOUND_NS);
+    t.worker.batch.recorder.batch_size_hint = 1_000;
+    t.worker.batch.recorder.avg = 100;
+    t.worker.consecutive_low_batch_ratio_count = 0;
+    let upper = t
+        .worker
+        .calculate_adaptive_wait_duration(ADAPTIVE_MIN_HIGH_CONCURRENCY_QPS * 2);
+    assert_eq!(
+        upper,
+        Duration::from_nanos(RAFT_WB_WAIT_DURATION_UPPER_BOUND_NS)
+    );
+}
+
+#[test]
+fn test_calculate_adaptive_wait_duration_high_and_low_qps_paths() {
+    let path = Builder::new()
+        .prefix("async-io-adaptive-qps")
+        .tempdir()
+        .unwrap();
+    let engines = new_temp_engine(&path);
+    let mut cfg = Config::default();
+    cfg.adaptive_batch_enabled = true;
+    let mut t = TestWorker::new(&cfg, &engines);
+
+    // Keep batch ratio high (0.9) and only vary QPS pressure.
+    t.worker.batch.recorder.wait_duration_hint = Duration::from_nanos(20_000);
+    t.worker.batch.recorder.wait_duration_adaptive = Duration::from_nanos(15_000);
+    t.worker.batch.recorder.batch_size_hint = 1_000;
+    t.worker.batch.recorder.avg = 900;
+    t.worker.consecutive_low_batch_ratio_count = 0;
+    let low_qps = t.worker.calculate_adaptive_wait_duration(1_000);
+    assert_eq!(low_qps, Duration::from_nanos(14_550));
+
+    t.worker.batch.recorder.wait_duration_adaptive = Duration::from_nanos(15_000);
+    t.worker.consecutive_low_batch_ratio_count = 0;
+    let high_qps = t
+        .worker
+        .calculate_adaptive_wait_duration(ADAPTIVE_MIN_HIGH_CONCURRENCY_QPS);
+    assert_eq!(high_qps, Duration::from_nanos(15_150));
+    assert!(high_qps > low_qps);
+}
+
+#[test]
+fn test_calculate_adaptive_wait_duration_futile_wait_reduction() {
+    let path = Builder::new()
+        .prefix("async-io-adaptive-futile")
+        .tempdir()
+        .unwrap();
+    let engines = new_temp_engine(&path);
+    let mut cfg = Config::default();
+    cfg.adaptive_batch_enabled = true;
+    let mut t = TestWorker::new(&cfg, &engines);
+
+    // Force two consecutive low-batch periods and a long wait to trigger futile
+    // waiting.
+    t.worker.batch.recorder.wait_duration_hint = Duration::from_nanos(20_000);
+    t.worker.batch.recorder.wait_duration_adaptive = Duration::from_nanos(100_000);
+    t.worker.batch.recorder.batch_size_hint = 1_000;
+    t.worker.batch.recorder.avg = 100;
+    t.worker.consecutive_low_batch_ratio_count = 1;
+    let new_wait = t.worker.calculate_adaptive_wait_duration(5_000);
+    assert_eq!(t.worker.consecutive_low_batch_ratio_count, 2);
+    assert_eq!(new_wait, Duration::from_nanos(92_000));
+    assert!(new_wait < Duration::from_nanos(100_000));
 }
 
 #[test]
