@@ -96,7 +96,6 @@ pub struct GroupQuotaAdjustWorker<R> {
     prev_stats_by_group: [HashMap<String, GroupStatistics>; ResourceType::COUNT],
     last_adjust_time: Instant,
     resource_ctl: Arc<ResourceGroupManager>,
-    is_last_time_low_load: [bool; ResourceType::COUNT],
     resource_quota_getter: R,
 }
 
@@ -123,7 +122,6 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             last_adjust_time: Instant::now_coarse(),
             resource_ctl,
             resource_quota_getter,
-            is_last_time_low_load: array::from_fn(|_| false),
         }
     }
 
@@ -162,8 +160,6 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
                     name: g.group.name.clone(),
                     ru_quota: g.get_ru_quota() as f64,
                     limiter: limiter.clone(),
-                    stats_per_sec: GroupStatistics::default(),
-                    expect_cost_rate: 0.0,
                 })
             })
             .collect();
@@ -218,17 +214,15 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             return;
         }
 
+        // Collect statistics for metrics.
         let mut total_ru_quota = 0.0;
         let mut background_consumed_total = 0.0;
-        let mut has_wait = false;
         for g in bg_group_stats.iter_mut() {
             total_ru_quota += g.ru_quota;
             let total_stats = g.limiter.get_limit_statistics(resource_type);
             let last_stats = self.prev_stats_by_group[resource_type as usize]
                 .insert(g.name.clone(), total_stats)
                 .unwrap_or_default();
-            // version changes means this is a brand new limiter, so no need to sub the old
-            // statistics.
             let stats_delta = if total_stats.version == last_stats.version {
                 total_stats - last_stats
             } else {
@@ -242,13 +236,8 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
                     .with_label_values(&[&g.name])
                     .inc_by(stats_delta.total_wait_dur_us);
             }
-
             let stats_per_sec = stats_delta / dur_secs;
             background_consumed_total += stats_per_sec.total_consumed as f64;
-            g.stats_per_sec = stats_per_sec;
-            if stats_per_sec.total_wait_dur_us > 0 {
-                has_wait = true;
-            }
         }
 
         let background_util =
@@ -257,80 +246,45 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             .with_label_values(&[resource_type.as_str()])
             .set(background_util as i64);
 
-        // fast path if process cpu is low
-        let is_low_load = resource_stats.current_used <= (resource_stats.total_quota * 0.1);
-        if is_low_load && !has_wait && self.is_last_time_low_load[resource_type as usize] {
+        if total_ru_quota <= f64::EPSILON {
             return;
         }
-        self.is_last_time_low_load[resource_type as usize] = is_low_load;
 
         let util_limit_percent = (utilization_limit as f64 / 100.0).min(1.0);
-        // the available resource for background tasks is defined as:
-        // (total_resource_quota - foreground_task_used). foreground_task_used
-        // resource is calculated by: (resource_current_total_used -
-        // background_consumed_total). We reserve 20% of the free resources for
-        // foreground tasks in case the fore ground traffics increases.
-        let mut available_resource_rate = ((resource_stats.total_quota
-            - resource_stats.current_used
-            + background_consumed_total)
-            * 0.8)
-            .min(resource_stats.total_quota * util_limit_percent)
-            .max(resource_stats.total_quota * 0.1);
-        let mut total_expected_cost = 0.0;
-        for g in bg_group_stats.iter_mut() {
-            let mut rate_limit = g.limiter.get_limiter(resource_type).get_rate_limit();
-            if rate_limit.is_infinite() {
-                rate_limit = 0.0;
-            }
-            let group_expected_cost = g.stats_per_sec.total_consumed as f64
-                + g.stats_per_sec.total_wait_dur_us as f64 / MICROS_PER_SEC * rate_limit;
-            g.expect_cost_rate = group_expected_cost;
-            total_expected_cost += group_expected_cost;
-        }
-        // sort groups by the expect_cost_rate per ru
-        bg_group_stats.sort_by(|g1, g2| {
-            (g1.expect_cost_rate / g1.ru_quota)
-                .partial_cmp(&(g2.expect_cost_rate / g2.ru_quota))
-                .unwrap()
-        });
+        let target = resource_stats.total_quota * util_limit_percent;
+        let headroom = target - resource_stats.current_used;
 
-        // quota is enough, group is allowed to got more resource then its share by ru.
-        // e.g. Given a totol resource of 10000, and ("name", ru_quota, expected_rate)
-        // of:  (rg1, 2000, 3000), (rg2, 3000, 1000), (rg3, 5000, 5000)
-        // then after the previous sort, the order is rg2, rg3, rg1 and the handle order
-        // is rg1, rg3, rg2 so the final rate limit assigned is: (rg1, 3000),
-        // (rg3, 5833(7000/6*5)), (rg2, 1166(7000/6*1))
-        if total_expected_cost <= available_resource_rate {
-            for g in bg_group_stats.iter().rev() {
-                let limit = g
-                    .expect_cost_rate
-                    .max(available_resource_rate / total_ru_quota * g.ru_quota);
-                g.limiter.get_limiter(resource_type).set_rate_limit(limit);
-                BACKGROUND_QUOTA_LIMIT_VEC
-                    .with_label_values(&[&g.name, resource_type.as_str()])
-                    .set(limit as i64);
-                available_resource_rate -= limit;
-                total_ru_quota -= g.ru_quota;
-            }
-            return;
-        }
+        // Sum current background limits; treat infinity as an equal share of
+        // the target (initial state before first adjustment).
+        let current_total_bg_limit: f64 = bg_group_stats
+            .iter()
+            .map(|g| {
+                let limit = g.limiter.get_limiter(resource_type).get_rate_limit();
+                if limit.is_infinite() {
+                    target / bg_group_stats.len() as f64
+                } else {
+                    limit
+                }
+            })
+            .sum();
 
-        // quota is not enough, assign by share
-        // e.g. Given a totol resource of 10000, and ("name", ru_quota, expected_rate)
-        // of:  (rg1, 2000, 1000), (rg2, 3000, 5000), (rg3, 5000, 7000)
-        // then after the previous sort, the order is rg1, rg3, rg2, and handle order is
-        // rg1, rg3, rg2 so the final rate limit assigned is: (rg1, 1000), (rg3,
-        // 5250(9000/12*7)), (rg2, 3750(9000/12*5))
-        for g in bg_group_stats {
-            let limit = g
-                .expect_cost_rate
-                .min(available_resource_rate / total_ru_quota * g.ru_quota);
+        // Minimum: 1 CPU core for CPU, 10% of total for IO.
+        let min_floor = match resource_type {
+            ResourceType::Cpu => MICROS_PER_SEC,
+            ResourceType::Io => resource_stats.total_quota * 0.1,
+        };
+
+        // If resources are available (positive headroom), increase the limit.
+        // If over target (negative headroom), reduce proportionally.
+        let new_total_bg_budget = (current_total_bg_limit + headroom).clamp(min_floor, target);
+
+        // Distribute proportionally by RU quota.
+        for g in bg_group_stats.iter() {
+            let limit = new_total_bg_budget * (g.ru_quota / total_ru_quota);
             g.limiter.get_limiter(resource_type).set_rate_limit(limit);
             BACKGROUND_QUOTA_LIMIT_VEC
                 .with_label_values(&[&g.name, resource_type.as_str()])
                 .set(limit as i64);
-            available_resource_rate -= limit;
-            total_ru_quota -= g.ru_quota;
         }
     }
 }
@@ -339,8 +293,6 @@ struct GroupStats {
     name: String,
     limiter: Arc<ResourceLimiter>,
     ru_quota: f64,
-    stats_per_sec: GroupStatistics,
-    expect_cost_rate: f64,
 }
 
 /// PriorityLimiterAdjustWorker automically adjust the quota of each priority
