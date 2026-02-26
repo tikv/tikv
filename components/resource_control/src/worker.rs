@@ -116,7 +116,11 @@ impl GroupQuotaAdjustWorker<SysQuotaGetter> {
             prev_io_ts: Instant::now_coarse(),
             io_bandwidth: io_bandwidth as f64,
         };
-        Self::with_quota_getter(resource_ctl, resource_quota_getter, compaction_pending_bytes_ratio)
+        Self::with_quota_getter(
+            resource_ctl,
+            resource_quota_getter,
+            compaction_pending_bytes_ratio,
+        )
     }
 }
 
@@ -311,7 +315,9 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
 
         if pressure < 70.0 {
             for g in bg_group_stats {
-                g.limiter.get_write_io_limiter().set_rate_limit(f64::INFINITY);
+                g.limiter
+                    .get_write_io_limiter()
+                    .set_rate_limit(f64::INFINITY);
             }
             return;
         }
@@ -327,7 +333,9 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             let base = if io_limit.is_infinite() {
                 // If combined IO is unlimited, use proportional share of a
                 // reasonable default; the write limiter stays unlimited too.
-                g.limiter.get_write_io_limiter().set_rate_limit(f64::INFINITY);
+                g.limiter
+                    .get_write_io_limiter()
+                    .set_rate_limit(f64::INFINITY);
                 continue;
             } else {
                 io_limit
@@ -753,7 +761,8 @@ mod tests {
 
         // Load drops: budget recovers.
         // CPU: headroom = 6.4 - 4.0 = 2.4, budget = clamp(3.7 + 2.4, 1.0, 6.4) = 6.1
-        // IO: headroom = 8000 - 2000 = 6000, budget = clamp(5000 + 6000, 1000, 8000) = 8000
+        // IO: headroom = 8000 - 2000 = 6000, budget = clamp(5000 + 6000, 1000, 8000) =
+        // 8000
         reset_quota(&mut worker, 4.0, 2000.0, Duration::from_secs(1));
         worker.adjust_quota();
         check_limiter_rates(&limiter, 6.1, 8000.0);
@@ -1009,13 +1018,23 @@ mod tests {
         check(io_limit, 8000.0);
 
         // Pressure = 0: write IO limiter should be unlimited.
-        assert!(limiter.get_write_io_limiter().get_rate_limit().is_infinite());
+        assert!(
+            limiter
+                .get_write_io_limiter()
+                .get_rate_limit()
+                .is_infinite()
+        );
 
         // Pressure = 50 (< 70): write IO should still be unlimited.
         compaction_pressure.store(50, Ordering::Relaxed);
         reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
         worker.adjust_quota();
-        assert!(limiter.get_write_io_limiter().get_rate_limit().is_infinite());
+        assert!(
+            limiter
+                .get_write_io_limiter()
+                .get_rate_limit()
+                .is_infinite()
+        );
 
         // Verify CPU and IO limits are unchanged at target.
         check(
@@ -1082,6 +1101,11 @@ mod tests {
         compaction_pressure.store(0, Ordering::Relaxed);
         reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
         worker.adjust_quota();
-        assert!(limiter.get_write_io_limiter().get_rate_limit().is_infinite());
+        assert!(
+            limiter
+                .get_write_io_limiter()
+                .get_rate_limit()
+                .is_infinite()
+        );
     }
 }

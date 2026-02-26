@@ -1,10 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 #![feature(test)]
 
-use std::sync::{
-    Arc,
-    atomic::AtomicU32,
-};
+use std::sync::{Arc, atomic::AtomicU32};
 
 use pd_client::RpcClient;
 
@@ -57,7 +54,8 @@ pub fn start_periodic_tasks(
     });
     // spawn a task to auto adjust background quota limiter and priority quota
     // limiter.
-    let mut worker = GroupQuotaAdjustWorker::new(mgr.clone(), io_bandwidth, compaction_pending_bytes_ratio);
+    let mut worker =
+        GroupQuotaAdjustWorker::new(mgr.clone(), io_bandwidth, compaction_pending_bytes_ratio);
     // We disable the priority worker by default because the current adjust
     // algorithm is buggy. We may reenable it only we find a better algorithm.
     // let mut priority_worker = PriorityLimiterAdjustWorker::new(mgr.clone());

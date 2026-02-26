@@ -16,7 +16,11 @@ use std::{
     convert::TryFrom,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{Arc, Mutex, atomic::{AtomicU32, AtomicU64}, mpsc},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU32, AtomicU64},
+        mpsc,
+    },
     time::Duration,
 };
 
