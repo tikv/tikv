@@ -40,6 +40,10 @@ pub struct ResourceLimiter {
     _name: String,
     version: u64,
     limiters: [QuotaLimiter; ResourceType::COUNT],
+    // Dedicated write-only IO limiter for compaction pressure throttling.
+    // Independent from the combined IO limiter; rate is set by do_adjust
+    // based on compaction pressure. Defaults to f64::INFINITY (no throttle).
+    write_io_limiter: QuotaLimiter,
     // whether the resource limiter is a background limiter or priority limiter.
     is_background: bool,
     // the wait duration histogram for prioitry limiter.
@@ -77,6 +81,7 @@ impl ResourceLimiter {
             _name: name,
             version,
             limiters: [cpu_limiter, io_limiter],
+            write_io_limiter: QuotaLimiter::new(f64::INFINITY),
             is_background,
             wait_histogram,
         }
@@ -90,7 +95,8 @@ impl ResourceLimiter {
         let cpu_dur =
             self.limiters[ResourceType::Cpu as usize].consume(cpu_time.as_micros() as u64, wait);
         let io_dur = self.limiters[ResourceType::Io as usize].consume_io(io_bytes, wait);
-        let wait_dur = cpu_dur.max(io_dur);
+        let write_io_dur = self.write_io_limiter.consume(io_bytes.write, wait);
+        let wait_dur = cpu_dur.max(io_dur).max(write_io_dur);
         if !wait_dur.is_zero()
             && let Some(h) = &self.wait_histogram
         {
@@ -113,6 +119,11 @@ impl ResourceLimiter {
     #[inline]
     pub(crate) fn get_limiter(&self, ty: ResourceType) -> &QuotaLimiter {
         &self.limiters[ty as usize]
+    }
+
+    #[inline]
+    pub(crate) fn get_write_io_limiter(&self) -> &QuotaLimiter {
+        &self.write_io_limiter
     }
 
     pub(crate) fn get_limit_statistics(&self, ty: ResourceType) -> GroupStatistics {
