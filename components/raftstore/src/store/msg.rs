@@ -23,16 +23,17 @@ use kvproto::{
 use pd_client::BucketMeta;
 use raft::SnapshotStatus;
 use resource_control::ResourceMetered;
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 use strum::{EnumCount, EnumVariantNames};
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
-use tracker::{get_tls_tracker_token, TrackerToken};
+use tracker::{TrackerToken, get_tls_tracker_token};
 
 use super::{
-    local_metrics::TimeTracker, region_meta::RegionMeta,
-    snapshot_backup::SnapshotBrWaitApplyRequest, FetchedLogs, RegionSnapshot,
+    FetchedLogs, RegionSnapshot, local_metrics::TimeTracker, region_meta::RegionMeta,
+    snapshot_backup::SnapshotBrWaitApplyRequest,
 };
 use crate::store::{
+    SnapKey,
     fsm::apply::{CatchUpLogs, ChangeObserver, TaskRes as ApplyTaskRes},
     metrics::RaftEventDurationType,
     unsafe_recovery::{
@@ -41,7 +42,6 @@ use crate::store::{
     },
     util::KeysInfoFormatter,
     worker::{Bucket, BucketRange},
-    SnapKey,
 };
 
 #[derive(Debug)]
@@ -674,7 +674,7 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             CasualMessage::ComputeHashResult {
                 index,
                 context,
-                ref hash,
+                hash,
             } => write!(
                 fmt,
                 "ComputeHashResult [index: {}, context: {}, hash: {}]",
@@ -683,9 +683,7 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
                 escape(hash)
             ),
             CasualMessage::SplitRegion {
-                ref split_keys,
-                source,
-                ..
+                split_keys, source, ..
             } => write!(
                 fmt,
                 "Split region with {} from {}",
@@ -712,7 +710,7 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             CasualMessage::HalfSplitRegion { source, .. } => {
                 write!(fmt, "Half Split from {}", source)
             }
-            CasualMessage::GcSnap { ref snaps } => write! {
+            CasualMessage::GcSnap { snaps } => write! {
                 fmt,
                 "gc snaps {:?}",
                 snaps

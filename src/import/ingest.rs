@@ -5,20 +5,20 @@ use std::{
     future::Future,
     path::PathBuf,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
     },
     time::Duration,
 };
 
-use engine_traits::{KvEngine, CF_WRITE};
+use engine_traits::{CF_WRITE, KvEngine};
 use kvproto::{
     errorpb,
     import_sstpb::{Error as ImportPbError, SstMeta, SwitchMode, *},
     kvrpcpb::Context,
 };
 use raftstore_v2::StoreMeta;
-use sst_importer::{metrics::*, sst_meta_to_path, Error, Result, SstImporter};
+use sst_importer::{Error, Result, SstImporter, metrics::*, sst_meta_to_path};
 use tikv_kv::{
     Engine, LocalTablets, Modify, SnapContext, Snapshot, SnapshotExt, WriteData, WriteEvent,
 };
@@ -127,7 +127,7 @@ fn check_write_stall<E: KvEngine>(
     };
 
     // store_meta being Some means it is v2
-    if let Some(ref store_meta) = store_meta {
+    if let Some(store_meta) = store_meta {
         if let Some((region, _)) = store_meta.lock().unwrap().regions.get(&region_id) {
             if !importer.region_in_import_mode(region)
                 && tablet
@@ -160,7 +160,7 @@ fn check_write_stall<E: KvEngine>(
 pub(super) fn async_snapshot<E: Engine>(
     engine: &mut E,
     context: &Context,
-) -> impl Future<Output = std::result::Result<E::Snap, errorpb::Error>> {
+) -> impl Future<Output = std::result::Result<E::Snap, errorpb::Error>> + use<E> {
     let res = engine.async_snapshot(SnapContext {
         pb_ctx: context,
         ..Default::default()

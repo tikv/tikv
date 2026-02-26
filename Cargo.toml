@@ -8,7 +8,7 @@ keywords = ["KV", "distributed-systems", "raft"]
 homepage = "https://tikv.org"
 repository = "https://github.com/tikv/tikv/"
 readme = "README.md"
-edition = "2021"
+edition = "2024"
 publish = false
 
 [features]
@@ -420,7 +420,7 @@ raft = { version = "0.7.0", default-features = false, features = [
 raft-engine = { git = "https://github.com/tikv/raft-engine.git", branch = "tikv-8.5", features = [
   "swap",
 ] }
-raft-engine-ctl = { git = "https://github.com/tikv/raft-engine.git", branch = "tikv-8.5" }
+raft-engine-ctl = { git = "https://github.com/tikv/raft-engine.git", branch = "tikv-8.5", package = "raft-engine-ctl" }
 grpcio = { version = "0.10.4", default-features = false, features = [
   "openssl",
   "protobuf-codec",

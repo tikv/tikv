@@ -10,7 +10,7 @@ use std::{
 use futures::{Future, Stream, StreamExt};
 use kvproto::kvrpcpb::Context;
 use sst_importer::metrics::{APPLIER_ENGINE_REQUEST_DURATION, APPLIER_EVENT, IMPORTER_APPLY_BYTES};
-use tikv_kv::{with_tls_engine, Engine, WriteData, WriteEvent};
+use tikv_kv::{Engine, WriteData, WriteEvent, with_tls_engine};
 use tikv_util::time::Instant;
 use tokio::sync::{Semaphore, SemaphorePermit};
 
@@ -57,48 +57,50 @@ impl ThrottledTlsEngineWriter {
         wd: WriteData,
         ctx: Context,
     ) -> impl Future<Output = storage::Result<()>> + Send + 'static {
-        let mut this = self.0.lock().unwrap();
-        let max_permit = this.max_permit;
-        let start = Instant::now_coarse();
-        let sem = this
-            .sems
-            .entry(ctx.get_region_id())
-            .or_insert_with(|| {
-                APPLIER_EVENT.with_label_values(&["new-writer"]).inc();
-                Arc::new(Semaphore::new(max_permit))
-            })
-            .clone();
-        async move {
-            APPLIER_ENGINE_REQUEST_DURATION
-                .with_label_values(&["queuing"])
-                .observe(start.saturating_elapsed_secs());
+        unsafe {
+            let mut this = self.0.lock().unwrap();
+            let max_permit = this.max_permit;
             let start = Instant::now_coarse();
-            let _prm = match acquire_semaphore(&sem).await {
-                Some(prm) => prm,
-                // When the permit has been closed. (Maybe tikv is shutting down?)
-                None => {
-                    return Err(box_err!(
-                        "the semaphore bind to region {} has been closed",
-                        ctx.get_region_id()
-                    ));
-                }
-            };
+            let sem = this
+                .sems
+                .entry(ctx.get_region_id())
+                .or_insert_with(|| {
+                    APPLIER_EVENT.with_label_values(&["new-writer"]).inc();
+                    Arc::new(Semaphore::new(max_permit))
+                })
+                .clone();
+            async move {
+                APPLIER_ENGINE_REQUEST_DURATION
+                    .with_label_values(&["queuing"])
+                    .observe(start.saturating_elapsed_secs());
+                let start = Instant::now_coarse();
+                let _prm = match acquire_semaphore(&sem).await {
+                    Some(prm) => prm,
+                    // When the permit has been closed. (Maybe tikv is shutting down?)
+                    None => {
+                        return Err(box_err!(
+                            "the semaphore bind to region {} has been closed",
+                            ctx.get_region_id()
+                        ));
+                    }
+                };
 
-            APPLIER_ENGINE_REQUEST_DURATION
-                .with_label_values(&["get_permit"])
-                .observe(start.saturating_elapsed_secs());
-            let start = Instant::now_coarse();
-            let size = wd.size();
-            let fut = with_tls_engine::<E, _, _>(move |engine| {
-                engine.async_write(&ctx, wd, WriteEvent::BASIC_EVENT, None)
-            });
-            let res = wait_write(fut).await;
+                APPLIER_ENGINE_REQUEST_DURATION
+                    .with_label_values(&["get_permit"])
+                    .observe(start.saturating_elapsed_secs());
+                let start = Instant::now_coarse();
+                let size = wd.size();
+                let fut = with_tls_engine::<E, _, _>(move |engine| {
+                    engine.async_write(&ctx, wd, WriteEvent::BASIC_EVENT, None)
+                });
+                let res = wait_write(fut).await;
 
-            APPLIER_ENGINE_REQUEST_DURATION
-                .with_label_values(&["apply"])
-                .observe(start.saturating_elapsed_secs());
-            IMPORTER_APPLY_BYTES.observe(size as _);
-            res
+                APPLIER_ENGINE_REQUEST_DURATION
+                    .with_label_values(&["apply"])
+                    .observe(start.saturating_elapsed_secs());
+                IMPORTER_APPLY_BYTES.observe(size as _);
+                res
+            }
         }
     }
 
@@ -168,8 +170,8 @@ mod test {
     use std::{convert::identity, iter::IntoIterator, sync::Mutex, time::Duration};
 
     use engine_rocks::RocksEngineIterator;
-    use engine_traits::{Iterator, ALL_CFS, CF_DEFAULT, CF_WRITE};
-    use futures::{future::join_all, Future};
+    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE, Iterator};
+    use futures::{Future, future::join_all};
     use kvproto::kvrpcpb::Context;
     use tempfile::TempDir;
     use tikv_kv::{Engine, Modify, RocksEngine, SnapContext, Snapshot, WriteData, WriteEvent};

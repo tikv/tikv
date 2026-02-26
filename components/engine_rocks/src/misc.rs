@@ -10,12 +10,13 @@ use rocksdb::{FlushOptions, Range as RocksRange};
 use tikv_util::{box_try, keybuilder::KeyBuilder};
 
 use crate::{
+    RocksSstWriter,
     engine::RocksEngine,
     r2e,
     rocks_metrics::{RocksStatisticsReporter, STORE_ENGINE_EVENT_COUNTER_VEC},
     rocks_metrics_defs::*,
     sst::RocksSstWriterBuilder,
-    util, RocksSstWriter,
+    util,
 };
 
 pub const MAX_DELETE_COUNT_BY_KEY: usize = 2048;
@@ -502,15 +503,15 @@ impl MiscExt for RocksEngine {
 #[cfg(test)]
 mod tests {
     use engine_traits::{
-        DeleteStrategy, Iterable, Iterator, Mutable, SyncMutable, WriteBatchExt, ALL_CFS,
+        ALL_CFS, DeleteStrategy, Iterable, Iterator, Mutable, SyncMutable, WriteBatchExt,
     };
     use tempfile::Builder;
 
     use super::*;
     use crate::{
+        RocksCfOptions, RocksDbOptions,
         engine::RocksEngine,
         util::{new_engine, new_engine_opt},
-        RocksCfOptions, RocksDbOptions,
     };
 
     fn check_data(db: &RocksEngine, cfs: &[&str], expected: &[(&[u8], &[u8])]) {

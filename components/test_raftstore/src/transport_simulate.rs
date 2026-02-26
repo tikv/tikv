@@ -3,7 +3,7 @@
 use std::{
     marker::PhantomData,
     mem,
-    sync::{atomic::*, mpsc::Sender, Arc, Mutex, RwLock},
+    sync::{Arc, Mutex, RwLock, atomic::*, mpsc::Sender},
     thread, time,
     time::Duration,
     usize,
@@ -18,12 +18,12 @@ use kvproto::{
 };
 use raft::eraftpb::MessageType;
 use raftstore::{
+    DiscardReason, Error, Result as RaftStoreResult, Result,
     router::{LocalReadRouter, RaftStoreRouter, ReadContext},
     store::{
         Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter, RaftCommand,
         SignificantMsg, SignificantRouter, StoreMsg, StoreRouter, Transport,
     },
-    DiscardReason, Error, Result as RaftStoreResult, Result,
 };
 use tikv_util::{Either, HandyRwLock};
 

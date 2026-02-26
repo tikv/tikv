@@ -6,7 +6,7 @@ use engine_traits::KvEngine;
 use kvproto::metapb::Region;
 use raft::StateRole;
 use raftstore::coprocessor::*;
-use tikv_util::{worker::Scheduler, HandyRwLock};
+use tikv_util::{HandyRwLock, worker::Scheduler};
 
 use crate::{
     debug,
@@ -198,7 +198,7 @@ mod tests {
         RegionChangeEvent, RegionChangeObserver, RegionChangeReason, RoleChange, RoleObserver,
     };
     use tikv::storage::txn::txn_status_cache::TxnStatusCache;
-    use tikv_util::{worker::dummy_scheduler, HandyRwLock};
+    use tikv_util::{HandyRwLock, worker::dummy_scheduler};
 
     use super::BackupStreamObserver;
     use crate::{

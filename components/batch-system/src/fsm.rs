@@ -4,8 +4,8 @@ use std::{
     borrow::Cow,
     ptr,
     sync::{
-        atomic::{AtomicPtr, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicPtr, AtomicUsize, Ordering},
     },
     usize,
 };

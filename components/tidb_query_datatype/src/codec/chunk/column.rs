@@ -9,14 +9,16 @@ use tipb::FieldType;
 
 use super::{Error, Result};
 use crate::{
+    EvalType, FieldTypeFlag, FieldTypeTp,
     codec::{
+        Datum,
         data_type::{ChunkRef, VectorFloat32Ref, VectorValue},
         datum,
         datum_codec::DatumPayloadDecoder,
         mysql::{
             decimal::{
-                Decimal, DecimalDatumPayloadChunkEncoder, DecimalDecoder, DecimalEncoder,
-                DECIMAL_STRUCT_SIZE,
+                DECIMAL_STRUCT_SIZE, Decimal, DecimalDatumPayloadChunkEncoder, DecimalDecoder,
+                DecimalEncoder,
             },
             duration::{
                 Duration, DurationDatumPayloadChunkEncoder, DurationDecoder, DurationEncoder,
@@ -29,11 +31,9 @@ use crate::{
                 VectorFloat32Encoder,
             },
         },
-        Datum,
     },
     expr::EvalContext,
     prelude::*,
-    EvalType, FieldTypeFlag, FieldTypeTp,
 };
 
 /// `Column` stores the same column data of multi rows in one chunk.
@@ -371,11 +371,11 @@ impl Column {
                     self.append_f64(*v)
                 }
             }
-            Datum::Bytes(ref v) => self.append_bytes(v),
-            Datum::Dec(ref v) => self.append_decimal(v),
+            Datum::Bytes(v) => self.append_bytes(v),
+            Datum::Dec(v) => self.append_decimal(v),
             Datum::Dur(v) => self.append_duration(*v),
             Datum::Time(v) => self.append_time(*v),
-            Datum::Json(ref v) => self.append_json(v.as_ref()),
+            Datum::Json(v) => self.append_json(v.as_ref()),
             _ => Err(box_err!("unsupported datum {:?}", data)),
         }
     }

@@ -17,8 +17,8 @@ pub use utf8::*;
 
 use super::Encoding;
 use crate::codec::{
-    data_type::{Bytes, BytesRef},
     Error, Result,
+    data_type::{Bytes, BytesRef},
 };
 
 fn format_invalid_char(data: BytesRef<'_>) -> String {

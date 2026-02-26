@@ -200,7 +200,7 @@
 //! ```
 use heck::CamelCase;
 use proc_macro2::{Span, TokenStream};
-use quote::{quote, ToTokens};
+use quote::{ToTokens, quote};
 use syn::{punctuated::Punctuated, *};
 
 /// Entry point for the `rpn_fn` attribute.
@@ -1792,7 +1792,7 @@ mod tests_normal {
 
     #[test]
     fn test_no_generic_generate_fn_trait() {
-        let gen = no_generic_fn();
+        let generator = no_generic_fn();
         let expected: TokenStream = quote! {
             trait Foo_Fn {
                 fn eval(
@@ -1805,12 +1805,15 @@ mod tests_normal {
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue>;
             }
         };
-        assert_eq!(expected.to_string(), gen.generate_fn_trait().to_string());
+        assert_eq!(
+            expected.to_string(),
+            generator.generate_fn_trait().to_string()
+        );
     }
 
     #[test]
     fn test_no_generic_generate_dummy_fn_trait_impl() {
-        let gen = no_generic_fn();
+        let generator = no_generic_fn();
         let expected: TokenStream = quote! {
             impl<D_: crate::function::ArgDef> Foo_Fn for D_ {
                 default fn eval(
@@ -1827,13 +1830,13 @@ mod tests_normal {
         };
         assert_eq!(
             expected.to_string(),
-            gen.generate_dummy_fn_trait_impl().to_string()
+            generator.generate_dummy_fn_trait_impl().to_string()
         );
     }
 
     #[test]
     fn test_no_generic_generate_real_fn_trait_impl() {
-        let gen = no_generic_fn();
+        let generator = no_generic_fn();
         let expected: TokenStream = quote! {
             impl<
                 'arg_,
@@ -1862,13 +1865,13 @@ mod tests_normal {
         };
         assert_eq!(
             expected.to_string(),
-            gen.generate_real_fn_trait_impl().to_string()
+            generator.generate_real_fn_trait_impl().to_string()
         );
     }
 
     #[test]
     fn test_no_generic_generate_evaluator() {
-        let gen = no_generic_fn();
+        let generator = no_generic_fn();
         let expected: TokenStream = quote! {
             pub struct Foo_Evaluator(std::marker::PhantomData<()>);
             impl<'arg_> crate::function::Evaluator<'arg_> for Foo_Evaluator {
@@ -1886,12 +1889,15 @@ mod tests_normal {
                 }
             }
         };
-        assert_eq!(expected.to_string(), gen.generate_evaluator().to_string());
+        assert_eq!(
+            expected.to_string(),
+            generator.generate_evaluator().to_string()
+        );
     }
 
     #[test]
     fn test_no_generic_generate_constructor() {
-        let gen = no_generic_fn();
+        let generator = no_generic_fn();
         let expected: TokenStream = quote! {
             pub const fn foo_fn_meta() -> crate::RpnFnMeta {
                 #[inline]
@@ -1936,7 +1942,10 @@ mod tests_normal {
                 }
             }
         };
-        assert_eq!(expected.to_string(), gen.generate_constructor().to_string());
+        assert_eq!(
+            expected.to_string(),
+            generator.generate_constructor().to_string()
+        );
     }
 
     fn generic_fn() -> NormalRpnFn {
@@ -1954,7 +1963,7 @@ mod tests_normal {
 
     #[test]
     fn test_generic_generate_fn_trait() {
-        let gen = generic_fn();
+        let generator = generic_fn();
         let expected: TokenStream = quote! {
             trait Foo_Fn<A: M, B>
             where
@@ -1970,12 +1979,15 @@ mod tests_normal {
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue>;
             }
         };
-        assert_eq!(expected.to_string(), gen.generate_fn_trait().to_string());
+        assert_eq!(
+            expected.to_string(),
+            generator.generate_fn_trait().to_string()
+        );
     }
 
     #[test]
     fn test_generic_generate_dummy_fn_trait_impl() {
-        let gen = generic_fn();
+        let generator = generic_fn();
         let expected: TokenStream = quote! {
             impl<A: M, B, D_: crate::function::ArgDef> Foo_Fn<A, B> for D_
             where
@@ -1995,13 +2007,13 @@ mod tests_normal {
         };
         assert_eq!(
             expected.to_string(),
-            gen.generate_dummy_fn_trait_impl().to_string()
+            generator.generate_dummy_fn_trait_impl().to_string()
         );
     }
 
     #[test]
     fn test_generic_generate_real_fn_trait_impl() {
-        let gen = generic_fn();
+        let generator = generic_fn();
         let expected: TokenStream = quote! {
             impl<'arg_, A: M, B, Arg0_: crate::function::RpnFnArg<Type = Option<&'arg_ A::X> > > Foo_Fn<A, B>
                 for crate::function::Arg<Arg0_, crate::function::Null>
@@ -2028,13 +2040,13 @@ mod tests_normal {
         };
         assert_eq!(
             expected.to_string(),
-            gen.generate_real_fn_trait_impl().to_string()
+            generator.generate_real_fn_trait_impl().to_string()
         );
     }
 
     #[test]
     fn test_generic_generate_evaluator() {
-        let gen = generic_fn();
+        let generator = generic_fn();
         let expected: TokenStream = quote! {
             pub struct Foo_Evaluator<A: M, B>(std::marker::PhantomData<(A, B)>)
             where
@@ -2057,12 +2069,15 @@ mod tests_normal {
                 }
             }
         };
-        assert_eq!(expected.to_string(), gen.generate_evaluator().to_string());
+        assert_eq!(
+            expected.to_string(),
+            generator.generate_evaluator().to_string()
+        );
     }
 
     #[test]
     fn test_generic_generate_constructor() {
-        let gen = generic_fn();
+        let generator = generic_fn();
         let expected: TokenStream = quote! {
             pub const fn foo_fn_meta<A: M, B>() -> crate::RpnFnMeta
             where
@@ -2112,7 +2127,10 @@ mod tests_normal {
                 }
             }
         };
-        assert_eq!(expected.to_string(), gen.generate_constructor().to_string());
+        assert_eq!(
+            expected.to_string(),
+            generator.generate_constructor().to_string()
+        );
     }
 
     fn no_generic_fn_with_extras() -> NormalRpnFn {
@@ -2145,7 +2163,7 @@ mod tests_normal {
 
     #[test]
     fn test_no_generic_with_extras_generate_real_fn_trait_impl() {
-        let gen = no_generic_fn_with_extras();
+        let generator = no_generic_fn_with_extras();
         let expected: TokenStream = quote! {
             impl<
                     'arg_,
@@ -2180,7 +2198,7 @@ mod tests_normal {
         };
         assert_eq!(
             expected.to_string(),
-            gen.generate_real_fn_trait_impl().to_string()
+            generator.generate_real_fn_trait_impl().to_string()
         );
     }
 
@@ -2214,7 +2232,7 @@ mod tests_normal {
 
     #[test]
     fn test_enum_fn_generate_real_fn_trait_impl() {
-        let gen = enum_fn();
+        let generator = enum_fn();
         let expected: TokenStream = quote! {
             impl<'arg_, Arg0_: crate::function::RpnFnArg<Type = Option<EnumRef<'arg_>>>> Foo_Fn
                 for crate::function::Arg<Arg0_, crate::function::Null>
@@ -2287,7 +2305,7 @@ mod tests_normal {
             }
         };
 
-        assert_token_stream_equal(expected, gen.generate_real_fn_trait_impl());
+        assert_token_stream_equal(expected, generator.generate_real_fn_trait_impl());
     }
 
     #[test]

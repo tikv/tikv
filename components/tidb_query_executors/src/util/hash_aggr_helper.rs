@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tidb_query_aggr::{update, AggrFunctionState};
+use tidb_query_aggr::{AggrFunctionState, update};
 use tidb_query_common::Result;
 use tidb_query_datatype::{
     codec::{batch::LazyBatchColumnVec, data_type::*},

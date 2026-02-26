@@ -6,7 +6,7 @@ use tipb::FieldType;
 
 use super::LazyBatchColumn;
 use crate::{
-    codec::{data_type::VectorValue, Result},
+    codec::{Result, data_type::VectorValue},
     expr::EvalContext,
 };
 

@@ -2,7 +2,7 @@
 
 use std::{sync::Arc, thread, time::Duration};
 
-use api_version::{test_kv_format_impl, KvFormat};
+use api_version::{KvFormat, test_kv_format_impl};
 use engine_traits::CF_LOCK;
 use raft::eraftpb::MessageType;
 use raftstore::store::LocksStatus;

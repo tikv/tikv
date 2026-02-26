@@ -5,6 +5,7 @@ use tikv_util::Either;
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
+    ProcessResult, Snapshot, TxnStatus,
     kv::WriteData,
     lock_manager::LockManager,
     mvcc::{ErrorInner, MvccTxn, SnapshotReader},
@@ -16,7 +17,6 @@ use crate::storage::{
         },
         Error, Result,
     },
-    ProcessResult, Snapshot, TxnStatus,
 };
 
 command! {
@@ -199,20 +199,20 @@ pub mod tests {
 
     use super::{TxnStatus::*, *};
     use crate::storage::{
+        ProcessResult, TestEngineBuilder,
         kv::Engine,
         lock_manager::MockLockManager,
         mvcc,
-        mvcc::{tests::*, ErrorInner},
+        mvcc::{ErrorInner, tests::*},
         txn::{
             self,
             actions::acquire_pessimistic_lock::tests::acquire_pessimistic_lock_allow_lock_with_conflict,
-            commands::{pessimistic_rollback, WriteCommand, WriteContext},
+            commands::{WriteCommand, WriteContext, pessimistic_rollback},
             scheduler::DEFAULT_EXECUTION_DURATION_LIMIT,
             tests::*,
             txn_status_cache::TxnStatusCache,
         },
         types::TxnStatus,
-        ProcessResult, TestEngineBuilder,
     };
 
     pub fn must_success<E: Engine>(

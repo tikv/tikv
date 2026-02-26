@@ -152,7 +152,7 @@ mod imp {
 
     // Sadly the std lib does not have any support for setting `errno`, so we
     // have to implement this ourselves.
-    extern "C" {
+    unsafe extern "C" {
         #[link_name = "__errno_location"]
         fn errno_location() -> *mut c_int;
     }
@@ -203,7 +203,7 @@ mod imp {
     type thread_act_t = mach_port_t;
     type thread_act_array_t = *mut thread_act_t;
 
-    extern "C" {
+    unsafe extern "C" {
         fn task_threads(
             target_task: task_inspect_t,
             act_list: *mut thread_act_array_t,

@@ -13,9 +13,9 @@ use std::{
     mem,
     ops::{Deref, DerefMut, Range as StdRange},
     sync::{
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc::SyncSender,
-        Arc, Mutex,
     },
     time::Duration,
     usize,
@@ -29,9 +29,9 @@ use batch_system::{
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
-    util::SequenceNumber, DeleteStrategy, KvEngine, Mutable, PerfContext, PerfContextKind,
-    RaftEngine, RaftEngineReadOnly, Range as EngineRange, Snapshot, SstMetaInfo, WriteBatch,
-    WriteOptions, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DeleteStrategy, KvEngine, Mutable,
+    PerfContext, PerfContextKind, RaftEngine, RaftEngineReadOnly, Range as EngineRange, Snapshot,
+    SstMetaInfo, WriteBatch, WriteOptions, util::SequenceNumber,
 };
 use fail::fail_point;
 use health_controller::types::LatencyInspector;
@@ -47,42 +47,41 @@ use kvproto::{
 };
 use pd_client::{BucketMeta, BucketStat};
 use prometheus::local::LocalHistogram;
-use protobuf::{wire_format::WireType, CodedInputStream, Message};
+use protobuf::{CodedInputStream, Message, wire_format::WireType};
 use raft::eraftpb::{
     ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType, Snapshot as RaftSnapshot,
 };
 use raft_proto::ConfChangeI;
 use resource_control::{ResourceConsumeType, ResourceController, ResourceMetered};
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
-    box_err, box_try,
+    Either, MustConsumeVec, box_err, box_try,
     config::{Tracker, VersionTrack},
     debug, error, info,
     memory::HeapSize,
-    mpsc::{loose_bounded, LooseBoundedSender, Receiver},
+    mpsc::{LooseBoundedSender, Receiver, loose_bounded},
     safe_panic, slow_log,
     store::{find_peer, find_peer_by_id, find_peer_mut, is_learner, remove_peer},
-    time::{duration_to_sec, Instant},
+    time::{Instant, duration_to_sec},
     warn,
     worker::Scheduler,
-    Either, MustConsumeVec,
 };
 use time::Timespec;
-use tracker::{TrackerToken, TrackerTokenArray, GLOBAL_TRACKERS};
+use tracker::{GLOBAL_TRACKERS, TrackerToken, TrackerTokenArray};
 use uuid::Builder as UuidBuilder;
 
 use self::memtrace::*;
 use super::metrics::*;
 use crate::{
-    bytes_capacity,
+    Error, Result, bytes_capacity,
     coprocessor::{
         ApplyCtxInfo, Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel,
         RegionState, WriteBatchWrapper,
     },
     store::{
-        cmd_resp,
+        Config, RegionSnapshot, SnapGenTask, WriteCallback, cmd_resp,
         entry_storage::{self, CachedEntries},
         fsm::RaftPollerBuilder,
         local_metrics::RaftMetrics,
@@ -92,12 +91,10 @@ use crate::{
         peer::Peer,
         peer_storage::{write_initial_apply_state, write_peer_state},
         util::{
-            self, admin_cmd_epoch_lookup, check_flashback_state, check_req_region_epoch,
-            compare_region_epoch, ChangePeerI, ConfChangeKind, KeysInfoFormatter,
+            self, ChangePeerI, ConfChangeKind, KeysInfoFormatter, admin_cmd_epoch_lookup,
+            check_flashback_state, check_req_region_epoch, compare_region_epoch,
         },
-        Config, RegionSnapshot, SnapGenTask, WriteCallback,
     },
-    Error, Result,
 };
 
 // These consts are shared in both v1 and v2.
@@ -3905,12 +3902,12 @@ where
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Msg::Apply { apply, .. } => write!(f, "[region {}] async apply", apply.region_id),
-            Msg::Registration(ref r) => {
+            Msg::Registration(r) => {
                 write!(f, "[region {}] Reg {:?}", r.region.get_id(), r.apply_state)
             }
             Msg::LogsUpToDate(_) => write!(f, "logs are updated"),
             Msg::Noop => write!(f, "noop"),
-            Msg::Destroy(ref d) => write!(f, "[region {}] destroy", d.region_id),
+            Msg::Destroy(d) => write!(f, "[region {}] destroy", d.region_id),
             Msg::Snapshot(GenSnapTask { region_id, .. }) => {
                 write!(f, "[region {}] requests a snapshot", region_id)
             }
@@ -5176,7 +5173,7 @@ mod tests {
 
     use bytes::Bytes;
     use engine_panic::PanicEngine;
-    use engine_test::kv::{new_engine, KvTestEngine, KvTestSnapshot};
+    use engine_test::kv::{KvTestEngine, KvTestSnapshot, new_engine};
     use engine_traits::{Peekable as PeekableTrait, SyncMutable, WriteBatchExt};
     use kvproto::{
         kvrpcpb::ApiVersion,
@@ -5200,10 +5197,10 @@ mod tests {
     use crate::{
         coprocessor::*,
         store::{
+            Config, SnapGenTask,
             msg::WriteResponse,
             peer_storage::RAFT_INIT_LOG_INDEX,
             simple_write::{SimpleWriteEncoder, SimpleWriteReqEncoder},
-            Config, SnapGenTask,
         },
     };
 
@@ -5996,7 +5993,7 @@ mod tests {
             );
             self.last_pending_handle_sst_count.store(
                 match apply_info.pending_handle_ssts {
-                    Some(ref v) => v.len() as u64,
+                    Some(v) => v.len() as u64,
                     None => 0,
                 },
                 Ordering::SeqCst,

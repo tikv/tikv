@@ -8,8 +8,8 @@ use std::{
     fmt::{Debug, Display},
     option::Option,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
         Arc, Mutex, MutexGuard,
+        atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
     },
     u64,
 };
@@ -26,27 +26,26 @@ use kvproto::{
 };
 use protobuf::{self, CodedInputStream, Message};
 use raft::{
+    Changer, INVALID_INDEX, RawNode,
     eraftpb::{self, ConfChangeType, ConfState, Entry, EntryType, MessageType, Snapshot},
-    Changer, RawNode, INVALID_INDEX,
 };
 use raft_proto::ConfChangeI;
 use tikv_util::{
-    box_err,
-    codec::number::{decode_u64, NumberEncoder},
+    Either, box_err,
+    codec::number::{NumberEncoder, decode_u64},
     debug, info,
     store::{find_peer_by_id, region},
-    time::{monotonic_raw_now, Instant},
-    Either,
+    time::{Instant, monotonic_raw_now},
 };
 use time::{Duration, Timespec};
 use tokio::sync::Notify;
 use txn_types::WriteBatchFlags;
 
-use super::{metrics::PEER_ADMIN_CMD_COUNTER_VEC, peer_storage, Config};
+use super::{Config, metrics::PEER_ADMIN_CMD_COUNTER_VEC, peer_storage};
 use crate::{
+    Error, Result,
     coprocessor::CoprocessorHost,
     store::{simple_write::SimpleWriteReqDecoder, snap::SNAPSHOT_VERSION},
-    Error, Result,
 };
 
 const INVALID_TIMESTAMP: u64 = u64::MAX;

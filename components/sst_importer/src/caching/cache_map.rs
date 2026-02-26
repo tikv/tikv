@@ -2,13 +2,13 @@
 
 use std::{
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
 };
 
-use dashmap::{mapref::entry::Entry, DashMap};
+use dashmap::{DashMap, mapref::entry::Entry};
 use futures::Future;
 
 use crate::metrics::EXT_STORAGE_CACHE_COUNT;

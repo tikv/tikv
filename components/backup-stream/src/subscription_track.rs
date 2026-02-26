@@ -3,8 +3,8 @@
 use std::{collections::HashSet, result::Result, sync::Arc};
 
 use dashmap::{
-    mapref::{entry::Entry, one::RefMut as DashRefMut},
     DashMap,
+    mapref::{entry::Entry, one::RefMut as DashRefMut},
 };
 use kvproto::metapb::Region;
 use raftstore::coprocessor::*;

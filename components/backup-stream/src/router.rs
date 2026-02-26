@@ -7,8 +7,8 @@ use std::{
     path::{Path, PathBuf},
     result,
     sync::{
-        atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering},
         Arc, RwLock as SyncRwLock,
+        atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -16,8 +16,8 @@ use std::{
 use dashmap::DashMap;
 use encryption::{BackupEncryptionManager, EncrypterReader, Iv, MultiMasterKeyBackend};
 use encryption_export::create_async_backend;
-use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use external_storage::{create_storage, BackendConfig, ExternalStorage, UnpinReader};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE, CfName};
+use external_storage::{BackendConfig, ExternalStorage, UnpinReader, create_storage};
 use file_system::Sha256Reader;
 use futures::io::Cursor;
 use kvproto::{
@@ -36,14 +36,13 @@ use slog_global::debug;
 use tidb_query_datatype::codec::table::decode_table_id;
 use tikv::config::BackupStreamConfig;
 use tikv_util::{
-    box_err,
+    Either, HandyRwLock, box_err,
     codec::stream_event::EventEncoder,
     config::ReadableSize,
     error, info,
     time::{Instant, Limiter},
     warn,
     worker::Scheduler,
-    Either, HandyRwLock,
 };
 use tokio::{
     io::AsyncWriteExt,
@@ -1973,7 +1972,7 @@ mod tests {
     use async_compression::tokio::bufread::ZstdDecoder;
     use encryption::{DecrypterReader, FileConfig, MasterKeyConfig, MultiMasterKeyBackend};
     use external_storage::{BlobObject, ExternalData, NoopStorage};
-    use futures::{future::LocalBoxFuture, stream::LocalBoxStream, AsyncReadExt};
+    use futures::{AsyncReadExt, future::LocalBoxFuture, stream::LocalBoxStream};
     use kvproto::{
         brpb::{CipherInfo, Noop, StorageBackend, StreamBackupTaskInfo},
         encryptionpb::EncryptionMethod,
@@ -1987,7 +1986,7 @@ mod tests {
             stream_event::{EventIterator, Iterator},
         },
         config::ReadableDuration,
-        worker::{dummy_scheduler, ReceiverWrapper},
+        worker::{ReceiverWrapper, dummy_scheduler},
     };
     use tokio::{fs::File, io::BufReader};
     use txn_types::{Write, WriteType};
@@ -3067,7 +3066,7 @@ mod tests {
     async fn test_encryption_plaintext_data_key() -> Result<()> {
         // set up plaintext data key
         //
-        let data_key: [u8; 32] = rand::thread_rng().gen();
+        let data_key: [u8; 32] = rand::thread_rng().r#gen();
         let mut cipher = CipherInfo::new();
         cipher.set_cipher_key(data_key.to_vec());
         cipher.set_cipher_type(EncryptionMethod::Aes256Ctr);

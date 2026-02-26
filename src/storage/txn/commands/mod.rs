@@ -46,8 +46,8 @@ pub use compare_and_swap::RawCompareAndSwap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 pub use flashback_to_version::FlashbackToVersion;
 pub use flashback_to_version_read_phase::{
-    new_flashback_rollback_lock_cmd, new_flashback_write_cmd, FlashbackToVersionReadPhase,
-    FlashbackToVersionState,
+    FlashbackToVersionReadPhase, FlashbackToVersionState, new_flashback_rollback_lock_cmd,
+    new_flashback_write_cmd,
 };
 pub use flush::Flush;
 use kvproto::kvrpcpb::*;
@@ -56,8 +56,8 @@ pub use mvcc_by_start_ts::MvccByStartTs;
 pub use pause::Pause;
 pub use pessimistic_rollback::PessimisticRollback;
 pub use pessimistic_rollback_read_phase::PessimisticRollbackReadPhase;
-pub use prewrite::{one_pc_commit, Prewrite, PrewritePessimistic};
-pub use resolve_lock::{ResolveLock, RESOLVE_LOCK_BATCH_SIZE};
+pub use prewrite::{Prewrite, PrewritePessimistic, one_pc_commit};
+pub use resolve_lock::{RESOLVE_LOCK_BATCH_SIZE, ResolveLock};
 pub use resolve_lock_lite::ResolveLockLite;
 pub use resolve_lock_readphase::ResolveLockReadPhase;
 pub use rollback::Rollback;
@@ -67,19 +67,19 @@ pub use txn_heart_beat::TxnHeartBeat;
 use txn_types::{Key, TimeStamp, Value, Write};
 
 use crate::storage::{
+    Result as StorageResult, Snapshot, Statistics,
     kv::WriteData,
     lock_manager::{
-        self, lock_wait_context::LockWaitContextSharedState, LockManager, LockWaitToken,
-        WaitTimeout,
+        self, LockManager, LockWaitToken, WaitTimeout,
+        lock_wait_context::LockWaitContextSharedState,
     },
     metrics,
     mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotReader},
-    txn::{latch, txn_status_cache::TxnStatusCache, ProcessResult, Result},
+    txn::{ProcessResult, Result, latch, txn_status_cache::TxnStatusCache},
     types::{
         MvccInfo, PessimisticLockParameters, PessimisticLockResults, PrewriteResult,
         SecondaryLocksStatus, StorageCallbackType, TxnStatus,
     },
-    Result as StorageResult, Snapshot, Statistics,
 };
 
 /// Store Transaction scheduler commands.
@@ -923,9 +923,9 @@ pub mod test_util {
 
     use super::*;
     use crate::storage::{
+        Engine, MockLockManager,
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{Error, ErrorInner, Result},
-        Engine, MockLockManager,
     };
 
     // Some utils for tests that may be used in multiple source code files.

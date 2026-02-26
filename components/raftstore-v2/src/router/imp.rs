@@ -19,18 +19,19 @@ use kvproto::{
 use raftstore::{
     router::CdcHandle,
     store::{
-        fsm::ChangeObserver, AsyncReadNotifier, Callback, FetchedLogs, GenSnapRes, RegionSnapshot,
+        AsyncReadNotifier, Callback, FetchedLogs, GenSnapRes, RegionSnapshot,
         UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
         UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle, UnsafeRecoveryWaitApplySyncer,
+        fsm::ChangeObserver,
     },
 };
 use slog::warn;
 use tikv_util::box_err;
 
 use super::{
-    build_any_channel, message::CaptureChange, PeerMsg, QueryResChannel, QueryResult, StoreMsg,
+    PeerMsg, QueryResChannel, QueryResult, StoreMsg, build_any_channel, message::CaptureChange,
 };
-use crate::{batch::StoreRouter, operation::LocalReader, StoreMeta};
+use crate::{StoreMeta, batch::StoreRouter, operation::LocalReader};
 
 impl<EK: KvEngine, ER: RaftEngine> AsyncReadNotifier for StoreRouter<EK, ER> {
     fn notify_logs_fetched(&self, region_id: u64, fetched_logs: FetchedLogs) {
@@ -178,7 +179,8 @@ impl<EK: KvEngine, ER: RaftEngine> RaftRouter<EK, ER> {
         req: RaftCmdRequest,
     ) -> impl Future<Output = std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>>
     + Send
-    + 'static {
+    + 'static
+    + use<EK, ER> {
         self.local_reader.snapshot(req)
     }
 

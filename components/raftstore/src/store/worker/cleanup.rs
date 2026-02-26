@@ -20,9 +20,9 @@ pub enum Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Task::Compact(ref t) => t.fmt(f),
-            Task::CleanupSst(ref t) => t.fmt(f),
-            Task::GcSnapshot(ref t) => t.fmt(f),
+            Task::Compact(t) => t.fmt(f),
+            Task::CleanupSst(t) => t.fmt(f),
+            Task::GcSnapshot(t) => t.fmt(f),
         }
     }
 }

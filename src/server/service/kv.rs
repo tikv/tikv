@@ -4,8 +4,8 @@
 use std::{
     mem,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -27,26 +27,25 @@ use kvproto::{coprocessor::*, kvrpcpb::*, mpp::*, raft_serverpb::*, tikvpb::*};
 use protobuf::{Message, RepeatedField};
 use raft::eraftpb::MessageType;
 use raftstore::{
+    Error as RaftStoreError, Result as RaftStoreResult,
     store::{
-        get_memory_usage_entry_cache,
+        CheckLeaderTask, get_memory_usage_entry_cache,
         memory::{MEMTRACE_APPLYS, MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES},
         metrics::MESSAGE_RECV_BY_STORE,
-        CheckLeaderTask,
     },
-    Error as RaftStoreError, Result as RaftStoreResult,
 };
 use resource_control::ResourceGroupManager;
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::{RaftExtension, StageLatencyStats};
 use tikv_util::{
     future::{paired_future_callback, poll_future_notify},
-    mpsc::future::{unbounded, BatchReceiver, Sender, WakePolicy},
+    mpsc::future::{BatchReceiver, Sender, WakePolicy, unbounded},
     sys::memory_usage_reaches_high_water,
     time::Instant,
     worker::Scheduler,
 };
 use tracker::{
-    set_tls_tracker_token, with_tls_tracker, RequestInfo, RequestType, Tracker, GLOBAL_TRACKERS,
+    GLOBAL_TRACKERS, RequestInfo, RequestType, Tracker, set_tls_tracker_token, with_tls_tracker,
 };
 use txn_types::{self, Key};
 
@@ -55,11 +54,11 @@ use crate::{
     coprocessor::Endpoint,
     coprocessor_v2, forward_duplex, forward_unary, log_net_error,
     server::{
-        gc_worker::GcWorker, load_statistics::ThreadLoadPool, metrics::*, snap::Task as SnapTask,
-        Error, MetadataSourceStoreId, Proxy, Result as ServerResult,
+        Error, MetadataSourceStoreId, Proxy, Result as ServerResult, gc_worker::GcWorker,
+        load_statistics::ThreadLoadPool, metrics::*, snap::Task as SnapTask,
     },
     storage::{
-        self,
+        self, SecondaryLocksStatus, Storage, TxnStatus,
         errors::{
             extract_committed, extract_key_error, extract_key_errors, extract_kv_pairs,
             extract_region_error, extract_region_error_from_error, map_kv_pair_entries,
@@ -67,7 +66,6 @@ use crate::{
         },
         kv::Engine,
         lock_manager::LockManager,
-        SecondaryLocksStatus, Storage, TxnStatus,
     },
 };
 
@@ -253,9 +251,9 @@ macro_rules! handle_request {
             GRPC_RESOURCE_GROUP_COUNTER_VEC
                     .with_label_values(&[resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
                     .inc();
-            let resp = $future_name(&self.storage, req);
+            let storage = self.storage.clone();
             let task = async move {
-                let resp = resp.await?;
+                let resp = $future_name(storage, req).await?;
                 let elapsed = begin_instant.saturating_elapsed();
                 set_total_time!(resp, elapsed, $time_detail);
                 sink.success(resp).await?;
@@ -566,9 +564,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             .inc();
 
         let begin_instant = Instant::now();
-        let future = future_copr(&self.copr, Some(ctx.peer()), req);
+        let copr = self.copr.clone();
+        let peer = ctx.peer();
         let task = async move {
-            let resp = future.await?.consume();
+            let resp = future_copr(copr, Some(peer), req).await?.consume();
             let elapsed = begin_instant.saturating_elapsed();
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
@@ -612,9 +611,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             .inc();
 
         let begin_instant = Instant::now();
-        let future = future_raw_coprocessor(&self.copr_v2, &self.storage, req);
+        let copr_v2 = self.copr_v2.clone();
+        let storage = self.storage.clone();
         let task = async move {
-            let resp = future.await?;
+            let resp = future_raw_coprocessor(copr_v2, storage, req).await?;
             let elapsed = begin_instant.saturating_elapsed();
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
@@ -709,8 +709,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             ])
             .inc();
 
-        let mut stream = self
-            .copr
+        let copr = self.copr.clone();
+        let mut stream = copr
             .parse_and_handle_stream_request(req, Some(ctx.peer()))
             .map(|resp| {
                 GrpcResult::<(Response, WriteFlags)>::Ok((
@@ -1012,7 +1012,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                     handle_batch_commands_request(
                         cluster_id,
                         &mut batcher,
-                        &storage,
+                        storage.clone(),
                         &copr,
                         &copr_v2,
                         &peer,
@@ -1284,7 +1284,7 @@ fn response_batch_commands_request<F, T>(
 fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
     cluster_id: u64,
     batcher: &mut Option<ReqBatcher>,
-    storage: &Storage<E, L, F>,
+    storage: Storage<E, L, F>,
     copr: &Endpoint<E>,
     copr_v2: &coprocessor_v2::Endpoint,
     peer: &str,
@@ -1390,7 +1390,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     .inc();
                     let begin_instant = Instant::now();
                     let source = req.get_context().get_request_source().to_owned();
-                    let resp = future_copr(copr, Some(peer.to_string()), req)
+                    let resp = future_copr(copr.clone(), Some(peer.to_string()), req)
                         .map_ok(|resp| {
                             resp.map(oneof!(batch_commands_response::response::Cmd::Coprocessor))
                         })
@@ -1473,7 +1473,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
         RawScan, future_raw_scan(storage), raw_scan;
         RawDeleteRange, future_raw_delete_range(storage), raw_delete_range;
         RawBatchScan, future_raw_batch_scan(storage), raw_batch_scan;
-        RawCoprocessor, future_raw_coprocessor(copr_v2, storage), coprocessor;
+        RawCoprocessor, future_raw_coprocessor(copr_v2.clone(), storage.clone()), coprocessor;
         PessimisticLock, future_acquire_pessimistic_lock(storage), kv_pessimistic_lock;
         PessimisticRollback, future_pessimistic_rollback(storage), kv_pessimistic_rollback;
         BroadcastTxnStatus, future_broadcast_txn_status(storage), broadcast_txn_status;
@@ -1553,9 +1553,9 @@ async fn future_handle_empty(
 }
 
 fn future_get<E: Engine, L: LockManager, F: KvFormat>(
-    storage: &Storage<E, L, F>,
+    storage: Storage<E, L, F>,
     mut req: GetRequest,
-) -> impl Future<Output = ServerResult<GetResponse>> {
+) -> impl Future<Output = ServerResult<GetResponse>> + use<E, L, F> {
     let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
         req.get_context(),
         RequestType::KvGet,
@@ -1566,15 +1566,15 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
         tracker.metrics.grpc_req_size = req.compute_size() as u64;
     });
     let start = Instant::now();
-    let v = storage.get_entry(
-        req.take_context(),
-        Key::from_raw(req.get_key()),
-        req.get_version().into(),
-        req.get_need_commit_ts(),
-    );
-
     async move {
-        let v = v.await;
+        let v = storage
+            .get_entry(
+                req.take_context(),
+                Key::from_raw(req.get_key()),
+                req.get_version().into(),
+                req.get_need_commit_ts(),
+            )
+            .await;
         let duration = start.saturating_elapsed();
         let mut resp = GetResponse::default();
         if let Some(err) = extract_region_error(&v) {
@@ -1633,9 +1633,9 @@ fn set_time_detail(
 }
 
 fn future_scan<E: Engine, L: LockManager, F: KvFormat>(
-    storage: &Storage<E, L, F>,
+    storage: Storage<E, L, F>,
     mut req: ScanRequest,
-) -> impl Future<Output = ServerResult<ScanResponse>> {
+) -> impl Future<Output = ServerResult<ScanResponse>> + use<E, L, F> {
     let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
         req.get_context(),
         RequestType::KvScan,
@@ -1647,19 +1647,19 @@ fn future_scan<E: Engine, L: LockManager, F: KvFormat>(
     });
     let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
 
-    let v = storage.scan(
-        req.take_context(),
-        Key::from_raw(req.get_start_key()),
-        end_key,
-        req.get_limit() as usize,
-        req.get_sample_step() as usize,
-        req.get_version().into(),
-        req.get_key_only(),
-        req.get_reverse(),
-    );
-
     async move {
-        let v = v.await;
+        let v = storage
+            .scan(
+                req.take_context(),
+                Key::from_raw(req.get_start_key()),
+                end_key,
+                req.get_limit() as usize,
+                req.get_sample_step() as usize,
+                req.get_version().into(),
+                req.get_key_only(),
+                req.get_reverse(),
+            )
+            .await;
         let mut resp = ScanResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
@@ -1684,9 +1684,9 @@ fn future_scan<E: Engine, L: LockManager, F: KvFormat>(
 }
 
 fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
-    storage: &Storage<E, L, F>,
+    storage: Storage<E, L, F>,
     mut req: BatchGetRequest,
-) -> impl Future<Output = ServerResult<BatchGetResponse>> {
+) -> impl Future<Output = ServerResult<BatchGetResponse>> + use<E, L, F> {
     let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
         req.get_context(),
         RequestType::KvBatchGet,
@@ -1698,15 +1698,15 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
         tracker.metrics.grpc_req_size = req.compute_size() as u64;
     });
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
-    let v = storage.batch_get(
-        req.take_context(),
-        keys,
-        req.get_version().into(),
-        req.get_need_commit_ts(),
-    );
-
     async move {
-        let v = v.await;
+        let v = storage
+            .batch_get(
+                req.take_context(),
+                keys,
+                req.get_version().into(),
+                req.get_need_commit_ts(),
+            )
+            .await;
         let duration = start.saturating_elapsed();
         let mut resp = BatchGetResponse::default();
         if let Some(err) = extract_region_error(&v) {
@@ -1742,9 +1742,9 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
 }
 
 fn future_buffer_batch_get<E: Engine, L: LockManager, F: KvFormat>(
-    storage: &Storage<E, L, F>,
+    storage: Storage<E, L, F>,
     mut req: BufferBatchGetRequest,
-) -> impl Future<Output = ServerResult<BufferBatchGetResponse>> {
+) -> impl Future<Output = ServerResult<BufferBatchGetResponse>> + use<E, L, F> {
     let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
         req.get_context(),
         RequestType::KvBufferBatchGet,
@@ -1756,10 +1756,10 @@ fn future_buffer_batch_get<E: Engine, L: LockManager, F: KvFormat>(
     });
     let start = Instant::now();
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
-    let v = storage.buffer_batch_get(req.take_context(), keys, req.get_version().into());
-
     async move {
-        let v = v.await;
+        let v = storage
+            .buffer_batch_get(req.take_context(), keys, req.get_version().into())
+            .await;
         let duration = start.saturating_elapsed();
         let mut resp = BufferBatchGetResponse::default();
         if let Some(err) = extract_region_error(&v) {
@@ -1789,9 +1789,9 @@ fn future_buffer_batch_get<E: Engine, L: LockManager, F: KvFormat>(
 }
 
 fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat>(
-    storage: &Storage<E, L, F>,
+    storage: Storage<E, L, F>,
     mut req: ScanLockRequest,
-) -> impl Future<Output = ServerResult<ScanLockResponse>> {
+) -> impl Future<Output = ServerResult<ScanLockResponse>> + use<E, L, F> {
     let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
         req.get_context(),
         RequestType::KvScanLock,
@@ -1804,16 +1804,16 @@ fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat>(
     let start_key = Key::from_raw_maybe_unbounded(req.get_start_key());
     let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
 
-    let v = storage.scan_lock(
-        req.take_context(),
-        req.get_max_version().into(),
-        start_key,
-        end_key,
-        req.get_limit() as usize,
-    );
-
     async move {
-        let v = v.await;
+        let v = storage
+            .scan_lock(
+                req.take_context(),
+                req.get_max_version().into(),
+                start_key,
+                end_key,
+                req.get_limit() as usize,
+            )
+            .await;
         let mut resp = ScanLockResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
@@ -1828,16 +1828,16 @@ fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat>(
     }
 }
 
-async fn future_gc(_: GcRequest) -> ServerResult<GcResponse> {
-    Err(Error::Grpc(GrpcError::RpcFailure(RpcStatus::new(
+fn future_gc(_: GcRequest) -> impl Future<Output = ServerResult<GcResponse>> {
+    future::err(Error::Grpc(GrpcError::RpcFailure(RpcStatus::new(
         RpcStatusCode::UNIMPLEMENTED,
     ))))
 }
 
 fn future_delete_range<E: Engine, L: LockManager, F: KvFormat>(
-    storage: &Storage<E, L, F>,
+    storage: Storage<E, L, F>,
     mut req: DeleteRangeRequest,
-) -> impl Future<Output = ServerResult<DeleteRangeResponse>> {
+) -> impl Future<Output = ServerResult<DeleteRangeResponse>> + use<E, L, F> {
     let (cb, f) = paired_future_callback();
     let res = storage.delete_range(
         req.take_context(),
@@ -1922,37 +1922,35 @@ pub async fn future_flashback_to_version<E: Engine, L: LockManager, F: KvFormat>
     Ok(resp)
 }
 
-fn future_raw_get<E: Engine, L: LockManager, F: KvFormat>(
-    storage: &Storage<E, L, F>,
+async fn future_raw_get<E: Engine, L: LockManager, F: KvFormat>(
+    storage: Storage<E, L, F>,
     mut req: RawGetRequest,
-) -> impl Future<Output = ServerResult<RawGetResponse>> {
-    let v = storage.raw_get(req.take_context(), req.take_cf(), req.take_key());
-
-    async move {
-        let v = v.await;
-        let mut resp = RawGetResponse::default();
-        if let Some(err) = extract_region_error(&v) {
-            resp.set_region_error(err);
-        } else {
-            match v {
-                Ok(Some(val)) => resp.set_value(val),
-                Ok(None) => resp.set_not_found(true),
-                Err(e) => resp.set_error(format!("{}", e)),
-            }
+) -> ServerResult<RawGetResponse> {
+    let v = storage
+        .raw_get(req.take_context(), req.take_cf(), req.take_key())
+        .await;
+    let mut resp = RawGetResponse::default();
+    if let Some(err) = extract_region_error(&v) {
+        resp.set_region_error(err);
+    } else {
+        match v {
+            Ok(Some(val)) => resp.set_value(val),
+            Ok(None) => resp.set_not_found(true),
+            Err(e) => resp.set_error(format!("{}", e)),
         }
-        Ok(resp)
     }
+    Ok(resp)
 }
 
 fn future_raw_batch_get<E: Engine, L: LockManager, F: KvFormat>(
-    storage: &Storage<E, L, F>,
+    storage: Storage<E, L, F>,
     mut req: RawBatchGetRequest,
-) -> impl Future<Output = ServerResult<RawBatchGetResponse>> {
+) -> impl Future<Output = ServerResult<RawBatchGetResponse>> + use<E, L, F> {
     let keys = req.take_keys().into();
-    let v = storage.raw_batch_get(req.take_context(), req.take_cf(), keys);
-
     async move {
-        let v = v.await;
+        let v = storage
+            .raw_batch_get(req.take_context(), req.take_cf(), keys)
+            .await;
         let mut resp = RawBatchGetResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
@@ -1964,9 +1962,9 @@ fn future_raw_batch_get<E: Engine, L: LockManager, F: KvFormat>(
 }
 
 fn future_raw_put<E: Engine, L: LockManager, F: KvFormat>(
-    storage: &Storage<E, L, F>,
+    storage: Storage<E, L, F>,
     mut req: RawPutRequest,
-) -> impl Future<Output = ServerResult<RawPutResponse>> {
+) -> impl Future<Output = ServerResult<RawPutResponse>> + use<E, L, F> {
     let (cb, f) = paired_future_callback();
     let for_atomic = req.get_for_cas();
     let res = if for_atomic {
@@ -2004,9 +2002,9 @@ fn future_raw_put<E: Engine, L: LockManager, F: KvFormat>(
 }
 
 fn future_raw_batch_put<E: Engine, L: LockManager, F: KvFormat>(
-    storage: &Storage<E, L, F>,
+    storage: Storage<E, L, F>,
     mut req: RawBatchPutRequest,
-) -> impl Future<Output = ServerResult<RawBatchPutResponse>> {
+) -> impl Future<Output = ServerResult<RawBatchPutResponse>> + use<E, L, F> {
     let cf = req.take_cf();
     let pairs_len = req.get_pairs().len();
     // The TTL for each key in seconds.
@@ -2053,9 +2051,9 @@ fn future_raw_batch_put<E: Engine, L: LockManager, F: KvFormat>(
 }
 
 fn future_raw_delete<E: Engine, L: LockManager, F: KvFormat>(
-    storage: &Storage<E, L, F>,
+    storage: Storage<E, L, F>,
     mut req: RawDeleteRequest,
-) -> impl Future<Output = ServerResult<RawDeleteResponse>> {
+) -> impl Future<Output = ServerResult<RawDeleteResponse>> + use<E, L, F> {
     let (cb, f) = paired_future_callback();
     let for_atomic = req.get_for_cas();
     let res = if for_atomic {
@@ -2080,9 +2078,9 @@ fn future_raw_delete<E: Engine, L: LockManager, F: KvFormat>(
 }
 
 fn future_raw_batch_delete<E: Engine, L: LockManager, F: KvFormat>(
-    storage: &Storage<E, L, F>,
+    storage: Storage<E, L, F>,
     mut req: RawBatchDeleteRequest,
-) -> impl Future<Output = ServerResult<RawBatchDeleteResponse>> {
+) -> impl Future<Output = ServerResult<RawBatchDeleteResponse>> + use<E, L, F> {
     let cf = req.take_cf();
     let keys = req.take_keys().into();
     let (cb, f) = paired_future_callback();
@@ -2109,26 +2107,26 @@ fn future_raw_batch_delete<E: Engine, L: LockManager, F: KvFormat>(
 }
 
 fn future_raw_scan<E: Engine, L: LockManager, F: KvFormat>(
-    storage: &Storage<E, L, F>,
+    storage: Storage<E, L, F>,
     mut req: RawScanRequest,
-) -> impl Future<Output = ServerResult<RawScanResponse>> {
+) -> impl Future<Output = ServerResult<RawScanResponse>> + use<E, L, F> {
     let end_key = if req.get_end_key().is_empty() {
         None
     } else {
         Some(req.take_end_key())
     };
-    let v = storage.raw_scan(
-        req.take_context(),
-        req.take_cf(),
-        req.take_start_key(),
-        end_key,
-        req.get_limit() as usize,
-        req.get_key_only(),
-        req.get_reverse(),
-    );
-
     async move {
-        let v = v.await;
+        let v = storage
+            .raw_scan(
+                req.take_context(),
+                req.take_cf(),
+                req.take_start_key(),
+                end_key,
+                req.get_limit() as usize,
+                req.get_key_only(),
+                req.get_reverse(),
+            )
+            .await;
         let mut resp = RawScanResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
@@ -2139,35 +2137,33 @@ fn future_raw_scan<E: Engine, L: LockManager, F: KvFormat>(
     }
 }
 
-fn future_raw_batch_scan<E: Engine, L: LockManager, F: KvFormat>(
-    storage: &Storage<E, L, F>,
+async fn future_raw_batch_scan<E: Engine, L: LockManager, F: KvFormat>(
+    storage: Storage<E, L, F>,
     mut req: RawBatchScanRequest,
-) -> impl Future<Output = ServerResult<RawBatchScanResponse>> {
-    let v = storage.raw_batch_scan(
-        req.take_context(),
-        req.take_cf(),
-        req.take_ranges().into(),
-        req.get_each_limit() as usize,
-        req.get_key_only(),
-        req.get_reverse(),
-    );
-
-    async move {
-        let v = v.await;
-        let mut resp = RawBatchScanResponse::default();
-        if let Some(err) = extract_region_error(&v) {
-            resp.set_region_error(err);
-        } else {
-            resp.set_kvs(extract_kv_pairs(v).into());
-        }
-        Ok(resp)
+) -> ServerResult<RawBatchScanResponse> {
+    let v = storage
+        .raw_batch_scan(
+            req.take_context(),
+            req.take_cf(),
+            req.take_ranges().into(),
+            req.get_each_limit() as usize,
+            req.get_key_only(),
+            req.get_reverse(),
+        )
+        .await;
+    let mut resp = RawBatchScanResponse::default();
+    if let Some(err) = extract_region_error(&v) {
+        resp.set_region_error(err);
+    } else {
+        resp.set_kvs(extract_kv_pairs(v).into());
     }
+    Ok(resp)
 }
 
 fn future_raw_delete_range<E: Engine, L: LockManager, F: KvFormat>(
-    storage: &Storage<E, L, F>,
+    storage: Storage<E, L, F>,
     mut req: RawDeleteRangeRequest,
-) -> impl Future<Output = ServerResult<RawDeleteRangeResponse>> {
+) -> impl Future<Output = ServerResult<RawDeleteRangeResponse>> + use<E, L, F> {
     let (cb, f) = paired_future_callback();
     let res = storage.raw_delete_range(
         req.take_context(),
@@ -2192,32 +2188,30 @@ fn future_raw_delete_range<E: Engine, L: LockManager, F: KvFormat>(
     }
 }
 
-fn future_raw_get_key_ttl<E: Engine, L: LockManager, F: KvFormat>(
-    storage: &Storage<E, L, F>,
+async fn future_raw_get_key_ttl<E: Engine, L: LockManager, F: KvFormat>(
+    storage: Storage<E, L, F>,
     mut req: RawGetKeyTtlRequest,
-) -> impl Future<Output = ServerResult<RawGetKeyTtlResponse>> {
-    let v = storage.raw_get_key_ttl(req.take_context(), req.take_cf(), req.take_key());
-
-    async move {
-        let v = v.await;
-        let mut resp = RawGetKeyTtlResponse::default();
-        if let Some(err) = extract_region_error(&v) {
-            resp.set_region_error(err);
-        } else {
-            match v {
-                Ok(Some(ttl)) => resp.set_ttl(ttl),
-                Ok(None) => resp.set_not_found(true),
-                Err(e) => resp.set_error(format!("{}", e)),
-            }
+) -> ServerResult<RawGetKeyTtlResponse> {
+    let v = storage
+        .raw_get_key_ttl(req.take_context(), req.take_cf(), req.take_key())
+        .await;
+    let mut resp = RawGetKeyTtlResponse::default();
+    if let Some(err) = extract_region_error(&v) {
+        resp.set_region_error(err);
+    } else {
+        match v {
+            Ok(Some(ttl)) => resp.set_ttl(ttl),
+            Ok(None) => resp.set_not_found(true),
+            Err(e) => resp.set_error(format!("{}", e)),
         }
-        Ok(resp)
     }
+    Ok(resp)
 }
 
 fn future_raw_compare_and_swap<E: Engine, L: LockManager, F: KvFormat>(
-    storage: &Storage<E, L, F>,
+    storage: Storage<E, L, F>,
     mut req: RawCasRequest,
-) -> impl Future<Output = ServerResult<RawCasResponse>> {
+) -> impl Future<Output = ServerResult<RawCasResponse>> + use<E, L, F> {
     let (cb, f) = paired_future_callback();
     let previous_value = if req.get_previous_not_exist() {
         None
@@ -2258,56 +2252,53 @@ fn future_raw_compare_and_swap<E: Engine, L: LockManager, F: KvFormat>(
     }
 }
 
-fn future_raw_checksum<E: Engine, L: LockManager, F: KvFormat>(
-    storage: &Storage<E, L, F>,
+async fn future_raw_checksum<E: Engine, L: LockManager, F: KvFormat>(
+    storage: Storage<E, L, F>,
     mut req: RawChecksumRequest,
-) -> impl Future<Output = ServerResult<RawChecksumResponse>> {
-    let f = storage.raw_checksum(
-        req.take_context(),
-        req.get_algorithm(),
-        req.take_ranges().into(),
-    );
-    async move {
-        let v = f.await;
-        let mut resp = RawChecksumResponse::default();
-        if let Some(err) = extract_region_error(&v) {
-            resp.set_region_error(err);
-        } else {
-            match v {
-                Ok((checksum, kvs, bytes)) => {
-                    resp.set_checksum(checksum);
-                    resp.set_total_kvs(kvs);
-                    resp.set_total_bytes(bytes);
-                }
-                Err(e) => resp.set_error(format!("{}", e)),
+) -> ServerResult<RawChecksumResponse> {
+    let v = storage
+        .raw_checksum(
+            req.take_context(),
+            req.get_algorithm(),
+            req.take_ranges().into(),
+        )
+        .await;
+    let mut resp = RawChecksumResponse::default();
+    if let Some(err) = extract_region_error(&v) {
+        resp.set_region_error(err);
+    } else {
+        match v {
+            Ok((checksum, kvs, bytes)) => {
+                resp.set_checksum(checksum);
+                resp.set_total_kvs(kvs);
+                resp.set_total_bytes(bytes);
             }
+            Err(e) => resp.set_error(format!("{}", e)),
         }
-        Ok(resp)
     }
+    Ok(resp)
 }
 
-fn future_copr<E: Engine>(
-    copr: &Endpoint<E>,
+async fn future_copr<E: Engine>(
+    copr: Endpoint<E>,
     peer: Option<String>,
     req: Request,
-) -> impl Future<Output = ServerResult<MemoryTraceGuard<Response>>> {
-    let ret = copr.parse_and_handle_unary_request(req, peer);
-    async move { Ok(ret.await) }
+) -> ServerResult<MemoryTraceGuard<Response>> {
+    Ok(copr.parse_and_handle_unary_request(req, peer).await)
 }
 
-fn future_raw_coprocessor<E: Engine, L: LockManager, F: KvFormat>(
-    copr_v2: &coprocessor_v2::Endpoint,
-    storage: &Storage<E, L, F>,
+async fn future_raw_coprocessor<E: Engine, L: LockManager, F: KvFormat>(
+    copr_v2: coprocessor_v2::Endpoint,
+    storage: Storage<E, L, F>,
     req: RawCoprocessorRequest,
-) -> impl Future<Output = ServerResult<RawCoprocessorResponse>> {
-    let ret = copr_v2.handle_request(storage, req);
-    async move { Ok(ret.await) }
+) -> ServerResult<RawCoprocessorResponse> {
+    Ok(copr_v2.handle_request(&storage, req).await)
 }
 
 fn future_broadcast_txn_status<E: Engine, L: LockManager, F: KvFormat>(
-    storage: &Storage<E, L, F>,
+    storage: Storage<E, L, F>,
     mut req: BroadcastTxnStatusRequest,
-) -> impl Future<Output = ServerResult<BroadcastTxnStatusResponse>> {
+) -> impl Future<Output = ServerResult<BroadcastTxnStatusResponse>> + use<E, L, F> {
     let (cb, f) = paired_future_callback();
     let res = storage.update_txn_status_cache(
         req.take_context(),
@@ -2353,9 +2344,9 @@ macro_rules! txn_command_future {
 
     (inner $fn_name: ident, $req_ty: ident, $resp_ty: ident, ($req: ident) {$($prelude: stmt)*}; ($v: ident, $resp: ident, $tracker: ident) $else_branch: block) => {
         fn $fn_name<E: Engine, L: LockManager, F: KvFormat>(
-            storage: &Storage<E, L, F>,
+            storage: Storage<E, L, F>,
             $req: $req_ty,
-        ) -> impl Future<Output = ServerResult<$resp_ty>> {
+        ) -> impl Future<Output = ServerResult<$resp_ty>> + use<E, L, F> {
             $($prelude)*
             let $tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
                 $req.get_context(),

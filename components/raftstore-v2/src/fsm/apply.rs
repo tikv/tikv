@@ -9,7 +9,7 @@ use batch_system::{Fsm, FsmScheduler, Mailbox};
 use crossbeam::channel::TryRecvError;
 use engine_traits::{FlushState, KvEngine, SstApplyState, TabletRegistry};
 use fail::fail_point;
-use futures::{compat::Future01CompatExt, FutureExt, StreamExt};
+use futures::{FutureExt, StreamExt, compat::Future01CompatExt};
 use kvproto::{metapb, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
 use raftstore::{
@@ -26,10 +26,10 @@ use tikv_util::{
 };
 
 use crate::{
+    TabletTask,
     operation::{CatchUpLogs, DataTrace},
     raft::Apply,
     router::{ApplyRes, ApplyTask, PeerMsg},
-    TabletTask,
 };
 
 /// A trait for reporting apply result.

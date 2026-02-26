@@ -3,8 +3,8 @@
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::metapb;
 use raftstore::store::{
-    demote_failed_voters_request, exit_joint_request, Transport, UnsafeRecoveryExecutePlanSyncer,
-    UnsafeRecoveryState,
+    Transport, UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryState, demote_failed_voters_request,
+    exit_joint_request,
 };
 use slog::{error, info, warn};
 

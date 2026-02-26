@@ -7,8 +7,8 @@ use std::{
         Bound::{Excluded, Unbounded},
     },
     sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, RwLock,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -19,7 +19,7 @@ use futures::{
     channel::mpsc::{self, UnboundedReceiver, UnboundedSender},
     compat::Future01CompatExt,
     executor::block_on,
-    future::{err, ok, ready, BoxFuture, FutureExt},
+    future::{BoxFuture, FutureExt, err, ok, ready},
     stream,
     stream::StreamExt,
 };
@@ -40,13 +40,13 @@ use pd_client::{
 };
 use raft::eraftpb::ConfChangeType;
 use tikv_util::{
-    store::{check_key_in_region, find_peer, find_peer_by_id, is_learner, new_peer, QueryStats},
+    Either, HandyRwLock,
+    store::{QueryStats, check_key_in_region, find_peer, find_peer_by_id, is_learner, new_peer},
     time::{Instant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
-    Either, HandyRwLock,
 };
 use tokio_timer::timer::Handle;
-use txn_types::{TimeStamp, TSO_PHYSICAL_SHIFT_BITS};
+use txn_types::{TSO_PHYSICAL_SHIFT_BITS, TimeStamp};
 
 use super::*;
 

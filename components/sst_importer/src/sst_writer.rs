@@ -2,14 +2,14 @@
 
 use std::sync::Arc;
 
-use api_version::{dispatch_api_version, match_template_api_version, KeyMode, KvFormat, RawValue};
+use api_version::{KeyMode, KvFormat, RawValue, dispatch_api_version, match_template_api_version};
 use encryption::DataKeyManager;
-use engine_traits::{raw_ttl::ttl_to_expire_ts, KvEngine, SstWriter};
+use engine_traits::{KvEngine, SstWriter, raw_ttl::ttl_to_expire_ts};
 use kvproto::{import_sstpb::*, kvrpcpb::ApiVersion};
 use tikv_util::time::Instant;
-use txn_types::{is_short_value, Key, TimeStamp, Write as KvWrite, WriteType};
+use txn_types::{Key, TimeStamp, Write as KvWrite, WriteType, is_short_value};
 
-use crate::{import_file::ImportPath, metrics::*, Error, Result};
+use crate::{Error, Result, import_file::ImportPath, metrics::*};
 
 #[derive(Debug)]
 pub enum SstWriterType {

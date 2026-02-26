@@ -38,7 +38,7 @@ impl DetectGenerator {
                 wait_for_txn = self.rng.gen_range(low..high);
             }
             entry.set_wait_for_txn(wait_for_txn);
-            entry.set_key_hash(self.rng.gen());
+            entry.set_key_hash(self.rng.r#gen());
             entries.push(entry);
         });
         self.timestamp += 1;

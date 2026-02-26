@@ -27,7 +27,7 @@ use tikv_util::{box_err, info, sys::thread::StdThreadBuildWrapper};
 use tokio::sync::{mpsc, oneshot, watch};
 use txn_types::TimeStamp;
 
-use crate::{metrics::PD_PENDING_TSO_REQUEST_GAUGE, Error, Result};
+use crate::{Error, Result, metrics::PD_PENDING_TSO_REQUEST_GAUGE};
 
 /// It is an empirical value.
 const MAX_BATCH_SIZE: usize = 64;
@@ -101,7 +101,7 @@ impl TimestampOracle {
         }
     }
 
-    pub(crate) fn closed(&self) -> impl Future<Output = ()> {
+    pub(crate) fn closed(&self) -> impl Future<Output = ()> + use<> {
         let mut close_rx = self.close_rx.clone();
         async move {
             let _ = close_rx.changed().await;

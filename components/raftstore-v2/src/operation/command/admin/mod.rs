@@ -17,28 +17,28 @@ use kvproto::{
     raft_cmdpb::{AdminCmdType, RaftCmdRequest},
     raft_serverpb::{ExtraMessageType, FlushMemtable, RaftMessage},
 };
+pub use merge::{
+    MERGE_SOURCE_PREFIX, MergeContext,
+    commit::{CatchUpLogs, MERGE_IN_PROGRESS_PREFIX},
+    merge_source_path,
+};
 use merge::{
     commit::CommitMergeResult, prepare::PrepareMergeResult, rollback::RollbackMergeResult,
 };
-pub use merge::{
-    commit::{CatchUpLogs, MERGE_IN_PROGRESS_PREFIX},
-    merge_source_path, MergeContext, MERGE_SOURCE_PREFIX,
-};
 use protobuf::Message;
 use raftstore::{
+    Error,
     store::{
-        cmd_resp,
+        ProposalContext, Transport, cmd_resp,
         fsm::{apply, apply::validate_batch_split},
         msg::ErrorCallback,
-        ProposalContext, Transport,
     },
-    Error,
 };
 use slog::{debug, error, info};
 use split::SplitResult;
 pub use split::{
-    report_split_init_finish, temp_split_path, RequestHalfSplit, RequestSplit, SplitFlowControl,
-    SplitInit, SplitPendingAppend, SPLIT_PREFIX,
+    RequestHalfSplit, RequestSplit, SPLIT_PREFIX, SplitFlowControl, SplitInit, SplitPendingAppend,
+    report_split_init_finish, temp_split_path,
 };
 use tikv_util::{box_err, log::SlogFormat, slog_panic, sys::disk::DiskUsage};
 use txn_types::WriteBatchFlags;

@@ -4,7 +4,7 @@
 
 use std::{
     mem,
-    sync::{atomic::*, mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, atomic::*, mpsc},
     thread,
     time::Duration,
 };
@@ -16,7 +16,7 @@ use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::Callback;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use tikv_util::{config::*, future::block_on_timeout, time::Instant, HandyRwLock};
+use tikv_util::{HandyRwLock, config::*, future::block_on_timeout, time::Instant};
 
 // A helper function for testing the lease reads and lease renewing.
 // The leader keeps a record of its leader lease, and uses the system's

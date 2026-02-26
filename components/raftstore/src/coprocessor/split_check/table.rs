@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering;
 
-use engine_traits::{IterOptions, Iterator, KvEngine, CF_WRITE};
+use engine_traits::{CF_WRITE, IterOptions, Iterator, KvEngine};
 use error_code::ErrorCodeExt;
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use tidb_query_datatype::codec::table as table_codec;
@@ -229,7 +229,7 @@ mod tests {
     use std::{io::Write, sync::mpsc};
 
     use engine_test::kv::new_engine;
-    use engine_traits::{SyncMutable, ALL_CFS};
+    use engine_traits::{ALL_CFS, SyncMutable};
     use kvproto::{metapb::Peer, pdpb::CheckPolicy};
     use tempfile::Builder;
     use tidb_query_datatype::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
@@ -238,7 +238,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        coprocessor::{dispatcher::SchedTask, Config, CoprocessorHost},
+        coprocessor::{Config, CoprocessorHost, dispatcher::SchedTask},
         store::{SplitCheckRunner, SplitCheckTask},
     };
 

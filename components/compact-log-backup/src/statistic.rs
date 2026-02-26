@@ -119,7 +119,7 @@ pub struct CollectSubcompactionStatistic {
 
 pub mod prom {
     use prometheus::*;
-    use serde::{ser::SerializeMap, Serialize};
+    use serde::{Serialize, ser::SerializeMap};
 
     struct ShowPromHist<'a>(&'a Histogram);
 

@@ -9,7 +9,7 @@ use std::{
 use kvproto::metapb;
 use lazy_static::lazy_static;
 use parking_lot::RwLock;
-use prometheus::{register_int_gauge, IntGauge};
+use prometheus::{IntGauge, register_int_gauge};
 use txn_types::{Key, Lock, PessimisticLock};
 
 /// Transaction extensions related to a peer.

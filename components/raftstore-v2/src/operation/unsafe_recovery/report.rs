@@ -2,7 +2,7 @@
 
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{pdpb, raft_serverpb::RegionLocalState};
-use raft::{GetEntriesContext, Storage, NO_LIMIT};
+use raft::{GetEntriesContext, NO_LIMIT, Storage};
 use raftstore::store::{
     ProposalContext, Transport, UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryState,
     UnsafeRecoveryWaitApplySyncer,

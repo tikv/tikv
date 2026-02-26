@@ -11,16 +11,15 @@ use tikv_util::codec::BytesSlice;
 use tipb::{ColumnInfo, FieldType};
 
 use super::{
-    datum,
+    Datum, Error, Result, datum,
     datum::DatumDecoder,
     mysql::{Duration, Time},
-    Datum, Error, Result,
 };
 use crate::{
+    FieldTypeTp,
     codec::{batch::LazyBatchColumnVec, data_type::ScalarValueRef},
     expr::EvalContext,
     prelude::*,
-    FieldTypeTp,
 };
 
 // handle or index id

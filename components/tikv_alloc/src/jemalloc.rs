@@ -6,12 +6,15 @@ use std::{
     collections::HashMap,
     ptr::{self, NonNull},
     slice,
-    sync::Mutex,
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     thread,
 };
 
 use libc::{self, c_char, c_void};
-use tikv_jemalloc_ctl::{epoch, stats, Error};
+use tikv_jemalloc_ctl::{Error, epoch, stats};
 use tikv_jemalloc_sys::malloc_stats_print;
 
 use super::error::{ProfError, ProfResult};
@@ -34,16 +37,16 @@ lazy_static! {
 /// structure is just "peeking" it -- with out modifying.
 // It should be covariant so we wrap it with `NonNull`.
 #[repr(transparent)]
-struct PeekableRemoteStat<T>(Option<NonNull<T>>);
+struct PeekableRemoteStat(Option<NonNull<u64>>);
 
 // SAFETY: all constructors of `PeekableRemoteStat` returns pointer points to a
 // thread local variable. Once this be sent, a reasonable life time of this
 // variable should be as long as the thread holding the underlying thread local
 // variable. But it is impossible to express such lifetime in current Rust.
 // Then it is the user's responsibility to trace that lifetime.
-unsafe impl<T: Send> Send for PeekableRemoteStat<T> {}
+unsafe impl Send for PeekableRemoteStat {}
 
-impl<T: Copy> PeekableRemoteStat<T> {
+impl PeekableRemoteStat {
     /// Try access the underlying data. When the pointer is `nullptr`, returns
     /// `None`.
     ///
@@ -51,17 +54,15 @@ impl<T: Copy> PeekableRemoteStat<T> {
     ///
     /// The pointer should not be dangling. (i.e. the thread to be traced should
     /// be accessible.)
-    unsafe fn peek(&self) -> Option<T> {
+    unsafe fn peek(&self) -> Option<u64> {
         self.0
-            .map(|nlp| unsafe { core::intrinsics::atomic_load_seqcst(nlp.as_ptr()) })
+            .map(|nlp| unsafe { (&*(nlp.as_ptr() as *const AtomicU64)).load(Ordering::SeqCst) })
     }
 
-    fn from_raw(ptr: *mut T) -> Self {
+    fn from_raw(ptr: *mut u64) -> Self {
         Self(NonNull::new(ptr))
     }
-}
 
-impl PeekableRemoteStat<u64> {
     fn allocated() -> Self {
         // SAFETY: it is transparent.
         // NOTE: perhaps we'd better add something like `as_raw()` for `ThreadLocal`...
@@ -83,8 +84,8 @@ impl PeekableRemoteStat<u64> {
 }
 
 struct MemoryStatsAccessor {
-    allocated: PeekableRemoteStat<u64>,
-    deallocated: PeekableRemoteStat<u64>,
+    allocated: PeekableRemoteStat,
+    deallocated: PeekableRemoteStat,
     thread_name: String,
 }
 

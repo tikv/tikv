@@ -12,7 +12,7 @@ mod logical_rows;
 mod scalar;
 mod vector;
 
-pub use logical_rows::{LogicalRows, BATCH_MAX_SIZE, IDENTICAL_LOGICAL_ROWS};
+pub use logical_rows::{BATCH_MAX_SIZE, IDENTICAL_LOGICAL_ROWS, LogicalRows};
 
 #[macro_export]
 macro_rules! match_template_evaltype {
@@ -48,10 +48,10 @@ pub use self::{
 };
 use super::Result;
 pub use crate::codec::mysql::{
-    json::JsonRef, Decimal, Duration, Enum, EnumRef, Json, JsonType, Set, SetRef, Time as DateTime,
-    VectorFloat32, VectorFloat32Ref,
+    Decimal, Duration, Enum, EnumRef, Json, JsonType, Set, SetRef, Time as DateTime, VectorFloat32,
+    VectorFloat32Ref, json::JsonRef,
 };
-use crate::{codec::convert::ConvertTo, expr::EvalContext, EvalType};
+use crate::{EvalType, codec::convert::ConvertTo, expr::EvalContext};
 
 /// A trait of evaluating current concrete eval type into a MySQL logic value,
 /// represented by Rust's `bool` type.
@@ -102,7 +102,7 @@ where
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             None => Ok(false),
-            Some(ref v) => v.as_mysql_bool(context),
+            Some(v) => v.as_mysql_bool(context),
         }
     }
 }
@@ -141,7 +141,7 @@ impl<'a> AsMySqlBool for Option<BytesRef<'a>> {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             None => Ok(false),
-            Some(ref v) => v.as_mysql_bool(context),
+            Some(v) => v.as_mysql_bool(context),
         }
     }
 }
@@ -150,7 +150,7 @@ impl<'a> AsMySqlBool for Option<JsonRef<'a>> {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             None => Ok(false),
-            Some(ref v) => v.as_mysql_bool(context),
+            Some(v) => v.as_mysql_bool(context),
         }
     }
 }
@@ -159,7 +159,7 @@ impl<'a> AsMySqlBool for Option<VectorFloat32Ref<'a>> {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             None => Ok(false),
-            Some(ref v) => v.as_mysql_bool(context),
+            Some(v) => v.as_mysql_bool(context),
         }
     }
 }
@@ -168,7 +168,7 @@ impl<'a> AsMySqlBool for Option<EnumRef<'a>> {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             None => Ok(false),
-            Some(ref v) => v.as_mysql_bool(context),
+            Some(v) => v.as_mysql_bool(context),
         }
     }
 }
@@ -177,7 +177,7 @@ impl<'a> AsMySqlBool for Option<SetRef<'a>> {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             None => Ok(false),
-            Some(ref v) => v.as_mysql_bool(context),
+            Some(v) => v.as_mysql_bool(context),
         }
     }
 }

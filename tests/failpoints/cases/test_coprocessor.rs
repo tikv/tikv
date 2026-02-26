@@ -16,7 +16,7 @@ use test_coprocessor::*;
 use test_raftstore_macro::test_case;
 use test_storage::*;
 use tidb_query_datatype::{
-    codec::{datum, Datum},
+    codec::{Datum, datum},
     expr::EvalContext,
 };
 use tikv_util::HandyRwLock;

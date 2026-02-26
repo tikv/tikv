@@ -4,12 +4,12 @@ use collections::HashMap;
 use tikv_util::sys::thread::{self, Pid};
 
 use crate::{
+    RawRecords,
     metrics::STAT_TASK_COUNT,
     recorder::{
-        localstorage::{LocalStorage, SharedTagInfos},
         SubRecorder,
+        localstorage::{LocalStorage, SharedTagInfos},
     },
-    RawRecords,
 };
 
 /// An implementation of [SubRecorder] for collecting cpu statistics.

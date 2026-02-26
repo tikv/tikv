@@ -8,11 +8,11 @@ use kvproto::kvrpcpb;
 use txn_types::{Key, LastChange, Value};
 
 use crate::storage::{
+    Callback, Result,
     errors::SharedError,
     lock_manager::WaitTimeout,
     mvcc::{Lock, LockType, TimeStamp, Write, WriteType},
     txn::ProcessResult,
-    Callback, Result,
 };
 
 /// `MvccInfo` stores all mvcc information of given key.

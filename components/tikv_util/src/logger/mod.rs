@@ -8,14 +8,14 @@ use std::{
     io::{self, BufWriter},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Mutex,
+        atomic::{AtomicUsize, Ordering},
     },
     thread,
 };
 
 use log::{self, SetLoggerError};
-use slog::{self, slog_o, Drain, FnValue, Key, OwnedKVList, PushFnValue, Record, KV};
+use slog::{self, Drain, FnValue, KV, Key, OwnedKVList, PushFnValue, Record, slog_o};
 pub use slog::{FilterFn, Level};
 use slog_async::{Async, AsyncGuard, OverflowStrategy};
 use slog_term::{Decorator, PlainDecorator, RecordDecorator};
@@ -838,7 +838,7 @@ mod tests {
 
     #[test]
     fn test_log_format_json() {
-        use serde_json::{from_str, Value};
+        use serde_json::{Value, from_str};
         let buffer: Arc<Mutex<Vec<u8>>> = Arc::default();
         let drain = Mutex::new(json_format(TestWriter(buffer.clone()), true)).map(slog::Fuse);
         let drain = ThreadIDrain(drain);
@@ -1069,13 +1069,13 @@ mod tests {
         .fuse();
         let logger = slog::Logger::root_typed(drain, slog_o!());
         slog_info!(logger, "Hello World");
-        slog_info!(logger, #"slow_log", "nothing");
-        slog_info!(logger, #"slow_log", "🆗"; "takes" => LogCost(30));
-        slog_info!(logger, #"slow_log", "🐢"; "takes" => LogCost(200));
-        slog_info!(logger, #"slow_log", "🐢🐢"; "takes" => LogCost(201));
-        slog_info!(logger, #"slow_log", "without cost"; "a" => "b");
-        slog_info!(logger, #"slow_log_by_timer", "⏰");
-        slog_info!(logger, #"slow_log_by_timer", "⏰"; "takes" => LogCost(1000));
+        slog_info!(logger, # "slow_log", "nothing");
+        slog_info!(logger, # "slow_log", "🆗"; "takes" => LogCost(30));
+        slog_info!(logger, # "slow_log", "🐢"; "takes" => LogCost(200));
+        slog_info!(logger, # "slow_log", "🐢🐢"; "takes" => LogCost(201));
+        slog_info!(logger, # "slow_log", "without cost"; "a" => "b");
+        slog_info!(logger, # "slow_log_by_timer", "⏰");
+        slog_info!(logger, # "slow_log_by_timer", "⏰"; "takes" => LogCost(1000));
         let re = Regex::new(r"(?P<datetime>\[.*?\])\s(?P<level>\[.*?\])\s(?P<source_file>\[.*?\])\s(?P<msg>\[.*?\])\s?(?P<kvs>\[.*\])?").unwrap();
         NORMAL_BUFFER.with(|buffer| {
             let buffer = buffer.borrow_mut();

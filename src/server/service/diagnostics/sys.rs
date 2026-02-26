@@ -3,7 +3,7 @@
 use std::{collections::HashMap, string::ToString};
 
 use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
-use tikv_util::sys::{cpu_time::LinuxStyleCpuTime, ioload, SysQuota, *};
+use tikv_util::sys::{SysQuota, cpu_time::LinuxStyleCpuTime, ioload, *};
 use walkdir::WalkDir;
 
 use crate::server::service::diagnostics::SYS_INFO;
@@ -198,7 +198,7 @@ fn nic_load_info(prev_nic: HashMap<String, NicSnapshot>, collector: &mut Vec<Ser
 
 fn io_load_info(prev_io: HashMap<String, ioload::IoLoad>, collector: &mut Vec<ServerInfoItem>) {
     let current = ioload::IoLoad::snapshot();
-    let rate = |cur, prev| (cur - prev);
+    let rate = |cur, prev| cur - prev;
     for (name, cur) in current.into_iter() {
         let prev = match prev_io.get(&name) {
             Some(p) => p,

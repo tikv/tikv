@@ -2,10 +2,10 @@
 
 use std::{path::Path, time::Duration};
 
-use engine_traits::{DbOptionsExt, MiscExt, Peekable, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS, DbOptionsExt, MiscExt, Peekable};
 use futures::executor::block_on;
 use raftstore::store::RAFT_INIT_LOG_INDEX;
-use raftstore_v2::{router::PeerMsg, SimpleWriteEncoder};
+use raftstore_v2::{SimpleWriteEncoder, router::PeerMsg};
 
 use crate::cluster::Cluster;
 

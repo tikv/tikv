@@ -1,31 +1,31 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{atomic::Ordering, Arc},
+    sync::{Arc, atomic::Ordering},
     time::Duration,
 };
 
 use bytes::Bytes;
 use crossbeam::epoch;
 use engine_traits::{
-    CacheRegion, EvictReason, MiscExt, Mutable, RegionCacheEngine, Result, WriteBatch,
-    WriteBatchExt, WriteOptions, CF_DEFAULT,
+    CF_DEFAULT, CacheRegion, EvictReason, MiscExt, Mutable, RegionCacheEngine, Result, WriteBatch,
+    WriteBatchExt, WriteOptions,
 };
 use kvproto::metapb;
 use smallvec::SmallVec;
 use tikv_util::{box_err, config::ReadableSize, error, info, time::Instant, warn};
 
 use crate::{
+    RegionCacheMemoryEngine,
     background::BackgroundTask,
-    engine::{cf_to_id, id_to_cf, is_lock_cf, SkiplistEngine},
-    keys::{encode_key, InternalBytes, ValueType, ENC_KEY_SEQ_LENGTH},
+    engine::{SkiplistEngine, cf_to_id, id_to_cf, is_lock_cf},
+    keys::{ENC_KEY_SEQ_LENGTH, InternalBytes, ValueType, encode_key},
     memory_controller::{MemoryController, MemoryUsage},
     metrics::{
-        count_operations_for_cfs, IN_MEMORY_ENGINE_PREPARE_FOR_WRITE_DURATION_HISTOGRAM,
-        IN_MEMORY_ENGINE_WRITE_DURATION_HISTOGRAM,
+        IN_MEMORY_ENGINE_PREPARE_FOR_WRITE_DURATION_HISTOGRAM,
+        IN_MEMORY_ENGINE_WRITE_DURATION_HISTOGRAM, count_operations_for_cfs,
     },
     region_manager::RegionCacheStatus,
-    RegionCacheMemoryEngine,
 };
 
 // This is a bit of a hack. It's the overhead of a node in the skiplist with
@@ -592,7 +592,7 @@ mod tests {
     use crossbeam_skiplist::SkipList;
     use engine_rocks::util::new_engine;
     use engine_traits::{
-        CacheRegion, FailedReason, Peekable, RegionCacheEngine, WriteBatch, DATA_CFS,
+        CacheRegion, DATA_CFS, FailedReason, Peekable, RegionCacheEngine, WriteBatch,
     };
     use kvproto::metapb::{Region, RegionEpoch};
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
@@ -601,8 +601,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        background::flush_epoch, config::InMemoryEngineConfigManager, region_manager::RegionState,
-        test_util::new_region, InMemoryEngineConfig, InMemoryEngineContext,
+        InMemoryEngineConfig, InMemoryEngineContext, background::flush_epoch,
+        config::InMemoryEngineConfigManager, region_manager::RegionState, test_util::new_region,
     };
 
     // We should not use skiplist.get directly as we only cares keys without

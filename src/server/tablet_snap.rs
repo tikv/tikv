@@ -28,7 +28,7 @@ use std::{
     fs::{self, File},
     io::{self, BorrowedBuf, Read, Seek, SeekFrom, Write},
     path::Path,
-    sync::{atomic::Ordering, Arc},
+    sync::{Arc, atomic::Ordering},
     time::Duration,
 };
 
@@ -55,23 +55,23 @@ use kvproto::{
 };
 use protobuf::Message;
 use raftstore::store::{
-    snap::{ReceivingGuard, TabletSnapKey, TabletSnapManager},
     SnapManager,
+    snap::{ReceivingGuard, TabletSnapKey, TabletSnapManager},
 };
 use security::SecurityManager;
 use tikv_kv::RaftExtension;
 use tikv_util::{
+    DeferContext, Either,
     config::{ReadableSize, Tracker, VersionTrack},
     time::Instant,
     worker::Runnable,
-    DeferContext, Either,
 };
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
 use super::{
-    metrics::*,
-    snap::{Task, DEFAULT_POOL_SIZE},
     Config, Error, Result,
+    metrics::*,
+    snap::{DEFAULT_POOL_SIZE, Task},
 };
 use crate::tikv_util::{sys::thread::ThreadBuildWrapper, time::Limiter};
 

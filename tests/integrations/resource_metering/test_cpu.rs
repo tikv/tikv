@@ -3,21 +3,21 @@
 use std::{
     future::Future,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
 
 use concurrency_manager::ConcurrencyManager;
-use futures::{executor::block_on, StreamExt};
+use futures::{StreamExt, executor::block_on};
 use kvproto::kvrpcpb::Context;
 use resource_control::ResourceGroupManager;
 use test_coprocessor::{DagSelect, Insert, ProductTable, Store};
 use tidb_query_datatype::codec::Datum;
 use tikv::{
     config::CoprReadPoolConfig,
-    coprocessor::{readpool_impl, Endpoint},
+    coprocessor::{Endpoint, readpool_impl},
     read_pool::ReadPool,
     storage::RocksEngine,
 };
@@ -253,7 +253,7 @@ fn prepare_insert<'a>(
 fn require_cpu_time_not_zero(
     test_suite: &TestSuite,
     tag: &'static str,
-) -> impl Future<Output = bool> {
+) -> impl Future<Output = bool> + use<> {
     let (client, stream) = test_suite.subscribe();
     async move {
         let _client = client;

@@ -4,14 +4,15 @@ use tikv_util::buffer_vec::BufferVec;
 use tipb::FieldType;
 
 use crate::{
+    EvalType, FieldTypeAccessor,
     codec::{
+        Result,
         chunk::{ChunkColumnEncoder, Column},
         data_type::{ChunkedVec, LogicalRows, VectorValue},
         datum_codec::RawDatumDecoder,
-        Result,
     },
     expr::EvalContext,
-    match_template_evaltype, EvalType, FieldTypeAccessor,
+    match_template_evaltype,
 };
 
 /// A container stores an array of datums, which can be either raw (not
@@ -250,7 +251,7 @@ impl LazyBatchColumn {
                 output.extend_from_slice(&v[row_index]);
                 Ok(())
             }
-            LazyBatchColumn::Decoded(ref v) => v.encode(row_index, field_type, ctx, output),
+            LazyBatchColumn::Decoded(v) => v.encode(row_index, field_type, ctx, output),
         }
     }
 
@@ -265,9 +266,7 @@ impl LazyBatchColumn {
     ) -> Result<()> {
         let column = match self {
             LazyBatchColumn::Raw(v) => Column::from_raw_datums(field_type, v, logical_rows, ctx)?,
-            LazyBatchColumn::Decoded(ref v) => {
-                Column::from_vector_value(field_type, v, logical_rows)?
-            }
+            LazyBatchColumn::Decoded(v) => Column::from_vector_value(field_type, v, logical_rows)?,
         };
         output.write_chunk_column(&column)
     }
@@ -412,8 +411,8 @@ mod benches {
     #[bench]
     fn bench_lazy_batch_column_clone_decoded(b: &mut test::Bencher) {
         use crate::{
-            codec::datum::{Datum, DatumEncoder},
             FieldTypeTp,
+            codec::datum::{Datum, DatumEncoder},
         };
 
         let mut column = LazyBatchColumn::raw_with_capacity(1000);
@@ -445,8 +444,8 @@ mod benches {
     #[bench]
     fn bench_lazy_batch_column_clone_and_decode(b: &mut test::Bencher) {
         use crate::{
-            codec::datum::{Datum, DatumEncoder},
             FieldTypeTp,
+            codec::datum::{Datum, DatumEncoder},
         };
 
         let mut ctx = EvalContext::default();
@@ -482,8 +481,8 @@ mod benches {
     #[bench]
     fn bench_lazy_batch_column_clone_and_decode_decoded(b: &mut test::Bencher) {
         use crate::{
-            codec::datum::{Datum, DatumEncoder},
             FieldTypeTp,
+            codec::datum::{Datum, DatumEncoder},
         };
 
         let mut column = LazyBatchColumn::raw_with_capacity(1000);

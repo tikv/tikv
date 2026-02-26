@@ -7,4 +7,4 @@
 
 mod store;
 
-pub use store::{create_store_batch_system, StoreContext, StoreRouter, StoreSystem};
+pub use store::{StoreContext, StoreRouter, StoreSystem, create_store_batch_system};

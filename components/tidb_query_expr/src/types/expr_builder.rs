@@ -5,12 +5,13 @@ use std::convert::{TryFrom, TryInto};
 use codec::prelude::NumberDecoder;
 use tidb_query_common::Result;
 use tidb_query_datatype::{
+    EvalType, FieldTypeAccessor,
     codec::{
         data_type::*,
-        mysql::{EnumDecoder, JsonDecoder, VectorFloat32Decoder, MAX_FSP},
+        mysql::{EnumDecoder, JsonDecoder, MAX_FSP, VectorFloat32Decoder},
     },
     expr::EvalContext,
-    match_template_evaltype, EvalType, FieldTypeAccessor,
+    match_template_evaltype,
 };
 use tipb::{Expr, ExprType, FieldType};
 

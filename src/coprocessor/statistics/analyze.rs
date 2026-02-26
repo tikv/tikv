@@ -5,28 +5,28 @@ use std::{cmp::Reverse, collections::BinaryHeap, hash::Hasher, mem, sync::Arc};
 use api_version::KvFormat;
 use kvproto::coprocessor::KeyRange;
 use mur3::Hasher128;
-use rand::{rngs::StdRng, Rng};
+use rand::{Rng, rngs::StdRng};
 use tidb_query_datatype::{
+    FieldTypeAccessor,
     codec::{
-        datum::{encode_value, Datum, DatumDecoder, DURATION_FLAG, INT_FLAG, NIL_FLAG, UINT_FLAG},
+        datum::{DURATION_FLAG, Datum, DatumDecoder, INT_FLAG, NIL_FLAG, UINT_FLAG, encode_value},
         table,
     },
     def::Collation,
     expr::{EvalConfig, EvalContext},
-    FieldTypeAccessor,
 };
-use tidb_query_executors::{interface::BatchExecutor, BatchTableScanExecutor};
+use tidb_query_executors::{BatchTableScanExecutor, interface::BatchExecutor};
 use tidb_query_expr::BATCH_MAX_SIZE;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
-    metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC},
+    metrics::{NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC, ThrottleType},
     quota_limiter::QuotaLimiter,
 };
 use tipb::{self, AnalyzeColumnsReq};
 
 use super::{cmsketch::CmSketch, fmsketch::FmSketch, histogram::Histogram};
 use crate::{
-    coprocessor::{dag::TikvStorage, MEMTRACE_ANALYZE, *},
+    coprocessor::{MEMTRACE_ANALYZE, dag::TikvStorage, *},
     storage::{Snapshot, SnapshotStore},
 };
 
@@ -1059,11 +1059,11 @@ mod tests {
 #[cfg(test)]
 mod benches {
     use tidb_query_datatype::{
+        EvalType, FieldTypeTp,
         codec::{
             batch::LazyBatchColumn,
-            collation::{collator::CollatorUtf8Mb4Bin, Collator},
+            collation::{Collator, collator::CollatorUtf8Mb4Bin},
         },
-        EvalType, FieldTypeTp,
     };
 
     use super::*;

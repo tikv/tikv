@@ -42,15 +42,15 @@ impl<T: FileSystemInspector> DBFileSystemInspector for WrappedFileSystemInspecto
 mod tests {
     use std::sync::Arc;
 
-    use engine_traits::{CompactExt, ManualCompactionOptions, MiscExt, SyncMutable, CF_DEFAULT};
+    use engine_traits::{CF_DEFAULT, CompactExt, ManualCompactionOptions, MiscExt, SyncMutable};
     use file_system::{IoOp, IoRateLimiter, IoRateLimiterStatistics, IoType};
     use keys::data_key;
     use tempfile::Builder;
 
     use super::*;
     use crate::{
-        event_listener::RocksEventListener, raw::DBCompressionType, util::new_engine_opt,
-        RocksCfOptions, RocksDbOptions, RocksEngine,
+        RocksCfOptions, RocksDbOptions, RocksEngine, event_listener::RocksEventListener,
+        raw::DBCompressionType, util::new_engine_opt,
     };
 
     fn new_test_db(dir: &str) -> (RocksEngine, Arc<IoRateLimiterStatistics>) {

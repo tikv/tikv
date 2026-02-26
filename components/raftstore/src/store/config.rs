@@ -3,7 +3,7 @@
 use std::{cmp::min, collections::HashMap, sync::Arc, time::Duration, u64};
 
 use batch_system::Config as BatchSystemConfig;
-use engine_traits::{perf_level_serde, PerfLevel};
+use engine_traits::{PerfLevel, perf_level_serde};
 use lazy_static::lazy_static;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig};
 use prometheus::register_gauge_vec;
@@ -20,7 +20,7 @@ use tikv_util::{
 use time::Duration as TimeDuration;
 
 use super::worker::{RaftStoreBatchComponent, RefreshConfigTask};
-use crate::{coprocessor::config::RAFTSTORE_V2_SPLIT_SIZE, Result};
+use crate::{Result, coprocessor::config::RAFTSTORE_V2_SPLIT_SIZE};
 
 lazy_static! {
     pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec!(

@@ -2,7 +2,7 @@
 
 use std::{
     marker::PhantomData,
-    sync::{atomic::AtomicU64, Arc},
+    sync::{Arc, atomic::AtomicU64},
 };
 
 use api_version::{ApiV1, KvFormat};
@@ -14,14 +14,14 @@ use kvproto::{
     metapb,
 };
 use raftstore::coprocessor::{
-    region_info_accessor::MockRegionInfoProvider, CoprocessorHost, RegionInfoProvider,
+    CoprocessorHost, RegionInfoProvider, region_info_accessor::MockRegionInfoProvider,
 };
 use tikv::{
     server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker},
     storage::{
-        config::Config, kv::RocksEngine, lock_manager::MockLockManager, test_util::GetConsumer,
-        txn::commands, Engine, KvGetStatistics, PrewriteResult, Result, Storage, TestEngineBuilder,
-        TestStorageBuilder, TxnStatus,
+        Engine, KvGetStatistics, PrewriteResult, Result, Storage, TestEngineBuilder,
+        TestStorageBuilder, TxnStatus, config::Config, kv::RocksEngine,
+        lock_manager::MockLockManager, test_util::GetConsumer, txn::commands,
     },
 };
 use tikv_util::time::Instant;

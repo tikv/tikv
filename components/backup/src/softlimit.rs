@@ -3,8 +3,8 @@
 use std::{
     cmp::Ordering as CmpOrder,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -181,8 +181,8 @@ impl SoftLimitByCpu<ThreadInfoStatistics> {
 mod softlimit_test {
     use std::{
         sync::{
-            atomic::{AtomicU8, Ordering},
             Arc,
+            atomic::{AtomicU8, Ordering},
         },
         time::Duration,
     };

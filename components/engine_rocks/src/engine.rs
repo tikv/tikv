@@ -3,12 +3,12 @@
 use std::{any::Any, sync::Arc};
 
 use engine_traits::{IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable};
-use rocksdb::{DBIterator, Writable, DB};
+use rocksdb::{DB, DBIterator, Writable};
 use tikv_util::range_latch::RangeLatch;
 
 use crate::{
-    db_vector::RocksDbVector, options::RocksReadOptions, r2e, util::get_cf_handle,
-    RocksEngineIterator, RocksSnapshot,
+    RocksEngineIterator, RocksSnapshot, db_vector::RocksDbVector, options::RocksReadOptions, r2e,
+    util::get_cf_handle,
 };
 
 #[cfg(feature = "trace-lifetime")]
@@ -30,8 +30,8 @@ mod trace {
         collections::BTreeMap,
         ops::Bound::Included,
         sync::{
-            atomic::{AtomicU64, Ordering},
             Mutex,
+            atomic::{AtomicU64, Ordering},
         },
     };
 
@@ -278,14 +278,14 @@ impl SyncMutable for RocksEngine {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::{Iterable, KvEngine, Peekable, SyncMutable, CF_DEFAULT};
+    use engine_traits::{CF_DEFAULT, Iterable, KvEngine, Peekable, SyncMutable};
     use kvproto::metapb::Region;
     use proptest::prelude::*;
-    use rocksdb::{DBOptions, FlushOptions, SeekKey, TitanDBOptions, Writable, DB};
+    use rocksdb::{DB, DBOptions, FlushOptions, SeekKey, TitanDBOptions, Writable};
     use tempfile::Builder;
     use tikv_util::config::ReadableSize;
 
-    use crate::{util, RocksSnapshot};
+    use crate::{RocksSnapshot, util};
 
     #[test]
     fn test_base() {

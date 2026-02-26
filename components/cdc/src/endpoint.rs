@@ -5,8 +5,8 @@ use std::{
     collections::{BTreeMap, BinaryHeap},
     fmt,
     sync::{
-        atomic::{AtomicBool, AtomicIsize, Ordering},
         Arc, Mutex as StdMutex,
+        atomic::{AtomicBool, AtomicIsize, Ordering},
     },
     time::Duration,
 };
@@ -35,11 +35,11 @@ use raftstore::{
     router::CdcHandle,
     store::fsm::store::StoreRegionMeta,
 };
-use resolved_ts::{resolve_by_raft, LeadershipResolver};
+use resolved_ts::{LeadershipResolver, resolve_by_raft};
 use security::SecurityManager;
 use tikv::{
     config::{CdcConfig, ResolvedTsConfig},
-    storage::{kv::LocalTablets, Statistics},
+    storage::{Statistics, kv::LocalTablets},
 };
 use tikv_util::{
     debug, defer, error, impl_display_as_debug, info,
@@ -59,13 +59,13 @@ use tokio::{
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler};
 
 use crate::{
+    CdcObserver, Error,
     channel::{CdcEvent, SendError},
-    delegate::{on_init_downstream, Delegate, Downstream, DownstreamId, DownstreamState, MiniLock},
+    delegate::{Delegate, Downstream, DownstreamId, DownstreamState, MiniLock, on_init_downstream},
     initializer::Initializer,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
-    service::{validate_kv_api, Conn, ConnId, FeatureGate, RequestId},
-    CdcObserver, Error,
+    service::{Conn, ConnId, FeatureGate, RequestId, validate_kv_api},
 };
 
 const FEATURE_RESOLVED_TS_STORE: Feature = Feature::require(5, 0, 0);
@@ -102,22 +102,22 @@ impl fmt::Debug for Deregister {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut de = f.debug_struct("Deregister");
         match self {
-            Deregister::Conn(ref conn_id) => de
+            Deregister::Conn(conn_id) => de
                 .field("deregister", &"conn")
                 .field("conn_id", conn_id)
                 .finish(),
             Deregister::Request {
-                ref conn_id,
-                ref request_id,
+                conn_id,
+                request_id,
             } => de
                 .field("deregister", &"request")
                 .field("conn_id", conn_id)
                 .field("request_id", request_id)
                 .finish(),
             Deregister::Region {
-                ref conn_id,
-                ref request_id,
-                ref region_id,
+                conn_id,
+                request_id,
+                region_id,
             } => de
                 .field("deregister", &"region")
                 .field("conn_id", conn_id)
@@ -125,11 +125,11 @@ impl fmt::Debug for Deregister {
                 .field("region_id", region_id)
                 .finish(),
             Deregister::Downstream {
-                ref conn_id,
-                ref request_id,
-                ref region_id,
-                ref downstream_id,
-                ref err,
+                conn_id,
+                request_id,
+                region_id,
+                downstream_id,
+                err,
             } => de
                 .field("deregister", &"downstream")
                 .field("conn_id", conn_id)
@@ -139,9 +139,9 @@ impl fmt::Debug for Deregister {
                 .field("err", err)
                 .finish(),
             Deregister::Delegate {
-                ref region_id,
-                ref observe_id,
-                ref err,
+                region_id,
+                observe_id,
+                err,
             } => de
                 .field("deregister", &"delegate")
                 .field("region_id", region_id)
@@ -219,8 +219,8 @@ impl fmt::Debug for Task {
         let mut de = f.debug_struct("CdcTask");
         match self {
             Task::Register {
-                ref request,
-                ref downstream,
+                request,
+                downstream,
                 ..
             } => de
                 .field("type", &"register")
@@ -233,14 +233,14 @@ impl fmt::Debug for Task {
                 .field("type", &"deregister")
                 .field("deregister", deregister)
                 .finish(),
-            Task::OpenConn { ref conn } => de
+            Task::OpenConn { conn } => de
                 .field("type", &"open_conn")
                 .field("conn_id", &conn.get_id())
                 .finish(),
             Task::SetConnVersion {
-                ref conn_id,
-                ref version,
-                ref explicit_features,
+                conn_id,
+                version,
+                explicit_features,
             } => de
                 .field("type", &"set_conn_version")
                 .field("conn_id", conn_id)
@@ -252,30 +252,26 @@ impl fmt::Debug for Task {
                 .field("multi_batch", &multi.len())
                 .finish(),
             Task::MinTs {
-                ref min_ts,
-                ref current_ts,
-                ..
+                min_ts, current_ts, ..
             } => de
                 .field("type", &"mit_ts")
                 .field("current_ts", current_ts)
                 .field("min_ts", min_ts)
                 .finish(),
             Task::FinishScanLocks {
-                ref observe_id,
-                ref region,
-                ..
+                observe_id, region, ..
             } => de
                 .field("type", &"finish_scan_locks")
                 .field("observe_id", &observe_id)
                 .field("region_id", &region.get_id())
                 .finish(),
-            Task::RegisterMinTsEvent { ref event_time, .. } => {
+            Task::RegisterMinTsEvent { event_time, .. } => {
                 de.field("event_time", &event_time).finish()
             }
             Task::InitDownstream {
-                ref region_id,
-                ref observe_id,
-                ref downstream_id,
+                region_id,
+                observe_id,
+                downstream_id,
                 ..
             } => de
                 .field("type", &"init_downstream")
@@ -1386,23 +1382,23 @@ mod tests {
     use raftstore::{
         errors::{DiscardReason, Error as RaftStoreError},
         router::{CdcRaftRouter, RaftStoreRouter},
-        store::{fsm::StoreMeta, msg::CasualMessage, PeerMsg, ReadDelegate},
+        store::{PeerMsg, ReadDelegate, fsm::StoreMeta, msg::CasualMessage},
     };
     use test_pd_client::TestPdClient;
     use test_raftstore::MockRaftStoreRouter;
     use tikv::{
         server::DEFAULT_CLUSTER_ID,
-        storage::{kv::Engine, TestEngineBuilder},
+        storage::{TestEngineBuilder, kv::Engine},
     };
     use tikv_util::{
         config::{ReadableDuration, ReadableSize},
-        worker::{dummy_scheduler, ReceiverWrapper},
+        worker::{ReceiverWrapper, dummy_scheduler},
     };
 
     use super::*;
     use crate::{
         channel,
-        delegate::{post_init_downstream, ObservedRange},
+        delegate::{ObservedRange, post_init_downstream},
         recv_timeout,
     };
 

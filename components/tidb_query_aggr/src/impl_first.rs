@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 
 use tidb_query_codegen::AggrFunction;
 use tidb_query_common::Result;
-use tidb_query_datatype::{codec::data_type::*, expr::EvalContext, EvalType};
+use tidb_query_datatype::{EvalType, codec::data_type::*, expr::EvalContext};
 use tidb_query_expr::RpnExpression;
 use tipb::{Expr, ExprType, FieldType};
 

@@ -9,8 +9,8 @@ use std::{
 };
 
 use engine_traits::{
-    CfName, CompactedEvent, IterOptions, Iterable, Iterator, KvEngine, TabletRegistry, CF_WRITE,
-    LARGE_CFS,
+    CF_WRITE, CfName, CompactedEvent, IterOptions, Iterable, Iterator, KvEngine, LARGE_CFS,
+    TabletRegistry,
 };
 use file_system::{IoType, WithIoType};
 use itertools::Itertools;
@@ -21,20 +21,20 @@ use kvproto::{
 use online_config::{ConfigChange, OnlineConfig};
 use pd_client::{BucketMeta, BucketStat};
 use tikv_util::{
-    box_err, debug, error, info, keybuilder::KeyBuilder, warn, worker::Runnable, Either,
+    Either, box_err, debug, error, info, keybuilder::KeyBuilder, warn, worker::Runnable,
 };
 use txn_types::Key;
 
 use super::metrics::*;
 use crate::{
+    Result,
     coprocessor::{
+        Config, CoprocessorHost, SplitCheckerHost,
         dispatcher::StoreHandle,
         region_info_accessor::RegionInfoProvider,
         split_observer::{is_valid_split_key, strip_timestamp_if_exists},
-        Config, CoprocessorHost, SplitCheckerHost,
     },
     store::metrics::{COMPACTION_DECLINED_BYTES, COMPACTION_RELATED_REGION_COUNT},
-    Result,
 };
 
 #[derive(PartialEq, Eq)]

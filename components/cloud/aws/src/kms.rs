@@ -4,12 +4,12 @@ use std::ops::Deref;
 
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
-use aws_credential_types::provider::{error::CredentialsError, ProvideCredentials};
+use aws_credential_types::provider::{ProvideCredentials, error::CredentialsError};
 use aws_sdk_kms::{
+    Client,
     operation::{decrypt::DecryptError, generate_data_key::GenerateDataKeyError},
     primitives::Blob,
     types::DataKeySpec,
-    Client,
 };
 use aws_sdk_s3::config::HttpClient;
 use cloud::{
@@ -18,7 +18,7 @@ use cloud::{
 };
 use futures::executor::block_on;
 
-use crate::util::{self, is_retryable, SdkError};
+use crate::util::{self, SdkError, is_retryable};
 
 const AWS_KMS_DATA_KEY_SPEC: DataKeySpec = DataKeySpec::Aes256;
 

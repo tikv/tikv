@@ -11,8 +11,8 @@ use std::{
 };
 
 use collections::HashSet;
-use engine_traits::{KvEngine, RaftEngine, CF_LOCK};
-use futures::{future::BoxFuture, Future, Stream, StreamExt, TryFutureExt};
+use engine_traits::{CF_LOCK, KvEngine, RaftEngine};
+use futures::{Future, Stream, StreamExt, TryFutureExt, future::BoxFuture};
 use kvproto::{
     kvrpcpb::Context,
     raft_cmdpb::{AdminCmdType, CmdType, RaftCmdRequest, Request},
@@ -20,21 +20,21 @@ use kvproto::{
 pub use node::NodeV2;
 pub use raft_extension::Extension;
 use raftstore::{
-    store::{
-        cmd_resp, msg::ErrorCallback, util::encode_start_ts_into_flag_data, RaftCmdExtraOpts,
-        RegionSnapshot,
-    },
     Error,
+    store::{
+        RaftCmdExtraOpts, RegionSnapshot, cmd_resp, msg::ErrorCallback,
+        util::encode_start_ts_into_flag_data,
+    },
 };
 use raftstore_v2::{
-    router::{
-        message::SimpleWrite, CmdResChannelBuilder, CmdResEvent, CmdResStream, PeerMsg, RaftRouter,
-    },
     SimpleWriteBinary, SimpleWriteEncoder,
+    router::{
+        CmdResChannelBuilder, CmdResEvent, CmdResStream, PeerMsg, RaftRouter, message::SimpleWrite,
+    },
 };
 use tikv_kv::{Modify, WriteEvent};
 use tikv_util::time::Instant;
-use tracker::{get_tls_tracker_token, GLOBAL_TRACKERS};
+use tracker::{GLOBAL_TRACKERS, get_tls_tracker_token};
 use txn_types::{TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
 use super::{
@@ -211,7 +211,8 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
         let f = if res.is_err() {
             None
         } else {
-            Some(self.router.snapshot(cmd))
+            let mut router = self.router.clone();
+            Some(router.snapshot(cmd))
         };
 
         async move {
@@ -276,9 +277,15 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
     }
 
     type IMSnap = Self::Snap;
-    type IMSnapshotRes = Self::SnapshotRes;
+    type IMSnapshotRes = impl Future<Output = tikv_kv::Result<Self::IMSnap>> + Send + 'static;
     fn async_in_memory_snapshot(&mut self, ctx: tikv_kv::SnapContext<'_>) -> Self::IMSnapshotRes {
-        self.async_snapshot(ctx)
+        let f = self.async_snapshot(ctx);
+        async move {
+            match f.await {
+                Ok(snap) => Ok(snap),
+                Err(e) => Err(e),
+            }
+        }
     }
 
     type WriteRes = impl Stream<Item = WriteEvent> + Send + Unpin;

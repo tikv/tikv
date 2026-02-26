@@ -3,7 +3,7 @@
 use std::{marker::PhantomData, time::Duration};
 
 use api_version::{ApiV1, ApiV1Ttl, ApiV2, KvFormat};
-use engine_traits::{CfName, IterOptions, DATA_KEY_PREFIX_LEN};
+use engine_traits::{CfName, DATA_KEY_PREFIX_LEN, IterOptions};
 use kvproto::kvrpcpb::{ApiVersion, KeyRange};
 use tikv_util::time::Instant;
 use txn_types::{Key, KvPair};
@@ -13,8 +13,8 @@ use super::{encoded::RawEncodeSnapshot, raw_mvcc::RawMvccSnapshot};
 use crate::{
     coprocessor::checksum_crc64_xor,
     storage::{
-        kv::{Cursor, Result, ScanMode, Snapshot},
         Statistics,
+        kv::{Cursor, Result, ScanMode, Snapshot},
     },
 };
 

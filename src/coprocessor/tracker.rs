@@ -290,7 +290,7 @@ impl<E: Engine> Tracker<E> {
                 req_tag
                     .merge_from_bytes(&tracker.req_info.resource_group_tag)
                     .unwrap_or_default();
-                info!(#"slow_log", "slow-query";
+                info!(# "slow_log", "slow-query";
                     "connection_id" => source_stmt.get_connection_id(),
                     "session_alias" => source_stmt.get_session_alias(),
                     "query_digest" => hex::encode(req_tag.get_sql_digest()),
@@ -539,7 +539,7 @@ mod tests {
     use pd_client::BucketMeta;
     use tikv_kv::RocksEngine;
 
-    use super::{PerfLevel, ReqTag, TimeStamp, Tracker, TLS_COP_METRICS};
+    use super::{PerfLevel, ReqTag, TLS_COP_METRICS, TimeStamp, Tracker};
     use crate::{coprocessor::ReqContextInner, storage::Statistics};
 
     #[test]

@@ -5,9 +5,9 @@ use std::{
     fs,
     path::PathBuf,
     sync::{
+        Arc, Mutex, RwLock,
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Sender},
-        Arc, Mutex, RwLock,
     },
     time::Duration,
 };
@@ -27,9 +27,9 @@ use pd_client::PdClient;
 use protobuf::Message as M1;
 use raft::eraftpb::{Message, MessageType, Snapshot};
 use raftstore::{
+    Result,
     coprocessor::{ApplySnapshotObserver, BoxApplySnapshotObserver, Coprocessor, CoprocessorHost},
     store::{snap::TABLET_SNAPSHOT_VERSION, *},
-    Result,
 };
 use rand::Rng;
 use security::SecurityManager;
@@ -41,9 +41,9 @@ use tikv_kv::{
     Engine, Error, ErrorInner, ExtraRegionOverride, SnapContext, Snapshot as _, SnapshotExt,
 };
 use tikv_util::{
+    HandyRwLock,
     config::*,
     time::{Instant, Limiter, UnixSecs},
-    HandyRwLock,
 };
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>, max_snapshot_file_size: u64) {
@@ -715,7 +715,7 @@ fn send_a_large_snapshot(
 fn random_long_vec(length: usize) -> Vec<u8> {
     let mut rng = rand::thread_rng();
     let mut value = Vec::with_capacity(1024);
-    (0..length).for_each(|_| value.push(rng.gen::<u8>()));
+    (0..length).for_each(|_| value.push(rng.r#gen::<u8>()));
     value
 }
 

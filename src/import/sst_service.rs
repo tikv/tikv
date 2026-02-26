@@ -7,9 +7,9 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::{CompactExt, ManualCompactionOptions, CF_DEFAULT, CF_WRITE};
-use file_system::{set_io_type, IoType};
-use futures::{sink::SinkExt, stream::TryStreamExt, FutureExt, TryFutureExt};
+use engine_traits::{CF_DEFAULT, CF_WRITE, CompactExt, ManualCompactionOptions};
+use file_system::{IoType, set_io_type};
+use futures::{FutureExt, TryFutureExt, sink::SinkExt, stream::TryStreamExt};
 use grpcio::{
     ClientStreamingSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink,
     UnarySink, WriteFlags,
@@ -24,36 +24,36 @@ use kvproto::{
     metapb::RegionEpoch,
 };
 use raftstore::{
-    coprocessor::{RegionInfo, RegionInfoProvider},
-    store::{util::is_epoch_stale, ForcePartitionRangeManager},
     RegionInfoAccessor,
+    coprocessor::{RegionInfo, RegionInfoProvider},
+    store::{ForcePartitionRangeManager, util::is_epoch_stale},
 };
 use raftstore_v2::StoreMeta;
 use rand::Rng;
-use resource_control::{with_resource_limiter, ResourceGroupManager};
+use resource_control::{ResourceGroupManager, with_resource_limiter};
 use sst_importer::{
-    error_inc, metrics::*, sst_importer::DownloadExt, Config, ConfigManager, Error, Result,
-    SstImporter,
+    Config, ConfigManager, Error, Result, SstImporter, error_inc, metrics::*,
+    sst_importer::DownloadExt,
 };
 use tikv_kv::{Engine, LocalTablets, Modify, WriteData};
 use tikv_util::{
+    HandyRwLock,
     config::ReadableSize,
     future::{create_stream_with_buffer, paired_future_callback},
     resizable_threadpool::{DeamonRuntimeHandle, ResizableRuntime},
     sys::{
-        disk::{get_disk_status, DiskUsage},
+        SysQuota,
+        disk::{DiskUsage, get_disk_status},
         get_global_memory_usage,
         thread::ThreadBuildWrapper,
-        SysQuota,
     },
     time::{Instant, Limiter},
-    HandyRwLock,
 };
 use tokio::time::sleep;
 use txn_types::{Key, WriteRef, WriteType};
 
 use super::{
-    ingest::{async_snapshot, ingest, IngestLatch, SuspendDeadline},
+    ingest::{IngestLatch, SuspendDeadline, async_snapshot, ingest},
     make_rpc_error, pb_error_inc, raft_writer,
 };
 use crate::{
@@ -1687,7 +1687,7 @@ mod test {
     use txn_types::{Key, TimeStamp, Write, WriteBatchFlags, WriteType};
 
     use crate::{
-        import::sst_service::{check_local_region_stale, RequestCollector},
+        import::sst_service::{RequestCollector, check_local_region_stale},
         server::raftkv,
     };
 

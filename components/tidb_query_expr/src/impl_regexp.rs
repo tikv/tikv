@@ -5,7 +5,7 @@ use std::{borrow::Cow, collections::HashSet};
 use regex::Regex;
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::{collation::Collator, data_type::*, Error};
+use tidb_query_datatype::codec::{Error, collation::Collator, data_type::*};
 use tipb::{Expr, ExprType};
 
 const PATTERN_IDX: usize = 1;
@@ -442,9 +442,9 @@ pub fn regexp_replace<C: Collator>(
 #[cfg(test)]
 mod tests {
     use tidb_query_datatype::{
+        EvalType, FieldTypeTp,
         codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
         expr::EvalContext,
-        EvalType, FieldTypeTp,
     };
     use tipb::ScalarFuncSig;
     use tipb_helper::ExprDefBuilder;
