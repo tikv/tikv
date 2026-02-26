@@ -970,99 +970,6 @@ def Server() -> RowPanel:
             ),
         ]
     )
-    layout.row(
-        [
-            graph_panel(
-                title="Rocksdb block read count per second",
-                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
-                lines=False,
-                stack=True,
-                targets=[
-                    target(
-                        expr=expr_sum_rate(
-                            "tikv_storage_rocksdb_perf",
-                            label_selectors=['metric="block_read_count"'],
-                            by_labels=["req"],
-                        ),
-                        additional_groupby=True,
-                    ),
-                    target(
-                        expr=expr_sum_rate(
-                            "tikv_coprocessor_rocksdb_perf",
-                            label_selectors=['metric="block_read_count"'],
-                            by_labels=["req"],
-                        ),
-                        legend_format="copr-{{req}}",
-                        additional_groupby=True,
-                    ),
-                ],
-            ),
-            graph_panel(
-                title="Analyze read ops per second (total vs block read)",
-                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
-                targets=[
-                    target(
-                        expr=expr_sum_rate(
-                            "tikv_analyze_metrics_total",
-                            label_selectors=['metric="read_total_op_count"'],
-                            by_labels=["instance"],
-                        ),
-                        legend_format="total-op/{{instance}}",
-                    ),
-                    target(
-                        expr=expr_sum_rate(
-                            "tikv_analyze_metrics_total",
-                            label_selectors=['metric="read_iops"'],
-                            by_labels=["instance"],
-                        ),
-                        legend_format="block-read/{{instance}}",
-                    ),
-                    target(
-                        expr=expr_sum_rate(
-                            "tikv_coprocessor_rocksdb_perf",
-                            label_selectors=[
-                                'req="analyze_full_sampling"',
-                                'metric="block_read_count"',
-                            ],
-                            by_labels=["instance"],
-                        ),
-                        legend_format="copr-block-read/{{instance}}",
-                    ),
-                ],
-            ),
-        ]
-    )
-    layout.row(
-        [
-            graph_panel(
-                title="Analyze next batch count per second",
-                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
-                targets=[
-                    target(
-                        expr=expr_sum_rate(
-                            "tikv_analyze_metrics_total",
-                            label_selectors=['metric="next_batch_count"'],
-                            by_labels=["instance"],
-                        ),
-                        legend_format="{{instance}}",
-                    ),
-                ],
-            ),
-            graph_panel(
-                title="Analyze block-read / total-op ratio",
-                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
-                targets=[
-                    target(
-                        expr=expr_histogram_avg(
-                            "tikv_analyze_iops_per_total_op",
-                            by_labels=["instance"],
-                        ),
-                        legend_format="{{instance}}",
-                    ),
-                ],
-            ),
-        ]
-    )
     return layout.row_panel
 
 
@@ -7106,6 +7013,31 @@ def RocksDB() -> RowPanel:
                     ),
                 ],
             ),
+            graph_panel(
+                title="Rocksdb block read count per second",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                lines=False,
+                stack=True,
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_storage_rocksdb_perf",
+                            label_selectors=['metric="block_read_count"'],
+                            by_labels=["req"],
+                        ),
+                        additional_groupby=True,
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_coprocessor_rocksdb_perf",
+                            label_selectors=['metric="block_read_count"'],
+                            by_labels=["req"],
+                        ),
+                        legend_format="copr-{{req}}",
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
         ]
     )
     layout.row(
@@ -10613,6 +10545,57 @@ def ResourceControl() -> RowPanel:
                             "tikv_resource_control_priority_quota_limit",
                             by_labels=["instance", "priority"],
                         ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Analyze read ops per second (total vs block read)",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_analyze_metrics_total",
+                            label_selectors=['metric="read_total_op_count"'],
+                            by_labels=["instance"],
+                        ),
+                        legend_format="total-op/{{instance}}",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_analyze_metrics_total",
+                            label_selectors=['metric="read_iops"'],
+                            by_labels=["instance"],
+                        ),
+                        legend_format="block-read/{{instance}}",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_coprocessor_rocksdb_perf",
+                            label_selectors=[
+                                'req="analyze_full_sampling"',
+                                'metric="block_read_count"',
+                            ],
+                            by_labels=["instance"],
+                        ),
+                        legend_format="copr-block-read/{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Analyze next batch count per second",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_analyze_metrics_total",
+                            label_selectors=['metric="next_batch_count"'],
+                            by_labels=["instance"],
+                        ),
+                        legend_format="{{instance}}",
                     ),
                 ],
             ),
