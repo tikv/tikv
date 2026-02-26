@@ -63,8 +63,21 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockLite {
         let mut released_locks = ReleasedLocks::new();
         for key in self.resolve_keys {
             released_locks.push(if !self.commit_ts.is_zero() {
+                info!(
+                    "resolve_lock_lite committing transaction";
+                    "key" => %key,
+                    "start_ts" => self.start_ts,
+                    "commit_ts" => self.commit_ts,
+                    "request_source" => %self.ctx.get_request_source(),
+                );
                 commit(&mut txn, &mut reader, key, self.commit_ts, None)?
             } else {
+                info!(
+                    "resolve_lock_lite rolling back transaction";
+                    "key" => %key,
+                    "start_ts" => self.start_ts,
+                    "request_source" => %self.ctx.get_request_source(),
+                );
                 cleanup(&mut txn, &mut reader, key, TimeStamp::zero(), false)?
             });
         }

@@ -57,9 +57,23 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Rollback {
         let rows = self.keys.len();
         let mut released_locks = ReleasedLocks::new();
         for k in self.keys {
+            let key = k.clone();
+            let modifies_before = txn.modifies.len();
             // Rollback is called only if the transaction is known to fail. Under the
             // circumstances, the rollback record needn't be protected.
             let released_lock = cleanup(&mut txn, &mut reader, k, TimeStamp::zero(), false)?;
+            let wrote_rollback = txn.modifies.len() > modifies_before;
+            if released_lock.is_some() || wrote_rollback {
+                info!(
+                    "rollback rolled back lock";
+                    "key" => %key,
+                    "start_ts" => self.start_ts,
+                    "protect_rollback" => false,
+                    "released_lock" => ?released_lock,
+                    "wrote_rollback" => wrote_rollback,
+                    "request_source" => %self.ctx.get_request_source(),
+                );
+            }
             released_locks.push(released_lock);
         }
 
