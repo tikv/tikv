@@ -998,16 +998,35 @@ def Server() -> RowPanel:
                 ],
             ),
             graph_panel(
-                title="Analyze read ops per second",
+                title="Analyze read ops per second (total vs block read)",
                 yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
                 targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_analyze_metrics_total",
+                            label_selectors=['metric="read_total_op_count"'],
+                            by_labels=["instance"],
+                        ),
+                        legend_format="total-op/{{instance}}",
+                    ),
                     target(
                         expr=expr_sum_rate(
                             "tikv_analyze_metrics_total",
                             label_selectors=['metric="read_iops"'],
                             by_labels=["instance"],
                         ),
-                        legend_format="{{instance}}",
+                        legend_format="block-read/{{instance}}",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_coprocessor_rocksdb_perf",
+                            label_selectors=[
+                                'req="analyze_full_sampling"',
+                                'metric="block_read_count"',
+                            ],
+                            by_labels=["instance"],
+                        ),
+                        legend_format="copr-block-read/{{instance}}",
                     ),
                 ],
             ),
@@ -1023,6 +1042,19 @@ def Server() -> RowPanel:
                         expr=expr_sum_rate(
                             "tikv_analyze_metrics_total",
                             label_selectors=['metric="next_batch_count"'],
+                            by_labels=["instance"],
+                        ),
+                        legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Analyze block-read / total-op ratio",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_histogram_avg(
+                            "tikv_analyze_iops_per_total_op",
                             by_labels=["instance"],
                         ),
                         legend_format="{{instance}}",
