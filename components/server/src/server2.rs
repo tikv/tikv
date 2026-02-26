@@ -18,7 +18,7 @@ use std::{
     str::FromStr,
     sync::{
         Arc,
-        atomic::AtomicU64,
+        atomic::{AtomicU32, AtomicU64},
         mpsc::{self, sync_channel},
     },
     time::Duration,
@@ -264,6 +264,7 @@ struct TikvServer<ER: RaftEngine> {
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
+    compaction_pressure: Arc<AtomicU32>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
     resolved_ts_scheduler: Option<Scheduler<Task>>,
@@ -362,6 +363,7 @@ where
             config.quota.enable_auto_tune,
         ));
 
+        let compaction_pressure = Arc::new(AtomicU32::new(0));
         let resource_manager = if config.resource_control.enabled {
             let mgr = Arc::new(ResourceGroupManager::new(config.resource_control.clone()));
             let io_bandwidth = config.storage.io_rate_limit.max_bytes_per_sec.0;
@@ -370,6 +372,7 @@ where
                 pd_client.clone(),
                 &background_worker,
                 io_bandwidth,
+                compaction_pressure.clone(),
             );
             Some(mgr)
         } else {
@@ -426,6 +429,7 @@ where
             sst_worker: None,
             quota_limiter,
             resource_manager,
+            compaction_pressure,
             causal_ts_provider,
             tablet_registry: None,
             resolved_ts_scheduler: None,
@@ -1665,6 +1669,7 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
             registry,
             raft_engine.as_rocks_engine().cloned(),
             180, // max_samples_to_preserve
+            self.compaction_pressure.clone(),
         ));
 
         let router = RaftRouter::new(node.id(), router);
@@ -1740,7 +1745,10 @@ fn pre_start() {
 
 #[cfg(test)]
 mod test {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{
+        collections::HashMap,
+        sync::{Arc, atomic::AtomicU32},
+    };
 
     use engine_rocks::raw::Env;
     use engine_traits::{
@@ -1804,7 +1812,13 @@ mod test {
 
         assert!(old_pending_compaction_bytes > new_pending_compaction_bytes);
 
-        let engines_info = Arc::new(EnginesResourceInfo::new(&config, reg, None, 10));
+        let engines_info = Arc::new(EnginesResourceInfo::new(
+            &config,
+            reg,
+            None,
+            10,
+            Arc::new(AtomicU32::new(0)),
+        ));
 
         let mut cached_latest_tablets = HashMap::default();
         engines_info.update(Instant::now(), &mut cached_latest_tablets);

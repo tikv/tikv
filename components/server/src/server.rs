@@ -16,7 +16,7 @@ use std::{
     convert::TryFrom,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{Arc, Mutex, atomic::AtomicU64, mpsc},
+    sync::{Arc, Mutex, atomic::{AtomicU32, AtomicU64}, mpsc},
     time::Duration,
 };
 
@@ -288,6 +288,7 @@ where
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
+    compaction_pressure: Arc<AtomicU32>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
     br_snap_recovery_mode: bool, // use for br snapshot recovery
@@ -395,6 +396,7 @@ where
             .thread_count(thread_count)
             .create();
 
+        let compaction_pressure = Arc::new(AtomicU32::new(0));
         let resource_manager = if config.resource_control.enabled {
             let mgr = Arc::new(ResourceGroupManager::new(config.resource_control.clone()));
             let io_bandwidth = config.storage.io_rate_limit.max_bytes_per_sec.0;
@@ -403,6 +405,7 @@ where
                 pd_client.clone(),
                 &background_worker,
                 io_bandwidth,
+                compaction_pressure.clone(),
             );
             Some(mgr)
         } else {
@@ -498,6 +501,7 @@ where
             sst_worker: None,
             quota_limiter,
             resource_manager,
+            compaction_pressure,
             causal_ts_provider,
             tablet_registry: None,
             br_snap_recovery_mode: is_recovering_marked,
@@ -1894,6 +1898,7 @@ where
             reg,
             engines.raft.as_rocks_engine().cloned(),
             180, // max_samples_to_preserve
+            self.compaction_pressure.clone(),
         ));
 
         (engines, engines_info, ime_engine)
@@ -1931,7 +1936,10 @@ fn pre_start() {
 
 #[cfg(test)]
 mod test {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{
+        collections::HashMap,
+        sync::{Arc, atomic::AtomicU32},
+    };
 
     use engine_rocks::raw::Env;
     use engine_traits::{
@@ -1996,7 +2004,13 @@ mod test {
 
         assert!(old_pending_compaction_bytes > new_pending_compaction_bytes);
 
-        let engines_info = Arc::new(EnginesResourceInfo::new(&config, reg, None, 10));
+        let engines_info = Arc::new(EnginesResourceInfo::new(
+            &config,
+            reg,
+            None,
+            10,
+            Arc::new(AtomicU32::new(0)),
+        ));
 
         let mut cached_latest_tablets = HashMap::default();
         engines_info.update(Instant::now(), &mut cached_latest_tablets);
