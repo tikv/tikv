@@ -125,12 +125,16 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                     res
                 };
 
-                // Use request-scoped storage stats for IOPS (like collect_scan_statistics).
+                // Use request-scoped storage stats for IOPS (like collect_scan_statistics),
+                // and count only RocksDB block reads as an approximation of disk IOPS.
                 // PerfContext is thread-local; across an await other tasks can run on the same
                 // thread and pollute it, so we use the Scanner's statistics instead.
                 let mut batch_stats = Statistics::default();
                 self.data.collect_storage_stats(&mut batch_stats);
-                let batch_iops = batch_stats.data.total_op_count()
+                let batch_iops = batch_stats.data.block_read_count
+                    + batch_stats.lock.block_read_count
+                    + batch_stats.write.block_read_count;
+                let batch_total_ops = batch_stats.data.total_op_count()
                     + batch_stats.lock.total_op_count()
                     + batch_stats.write.total_op_count();
                 sample.add_iops(batch_iops);
@@ -139,6 +143,13 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                 metrics::ANALYZE_METRICS_STATIC
                     .get(metrics::AnalyzeMetricKind::read_iops)
                     .inc_by(batch_iops as u64);
+                metrics::ANALYZE_METRICS_STATIC
+                    .get(metrics::AnalyzeMetricKind::read_total_op_count)
+                    .inc_by(batch_total_ops as u64);
+                if batch_total_ops > 0 {
+                    metrics::ANALYZE_IOPS_PER_TOTAL_OP_HISTOGRAM
+                        .observe(batch_iops as f64 / batch_total_ops as f64);
+                }
                 metrics::ANALYZE_METRICS_STATIC
                     .get(metrics::AnalyzeMetricKind::next_batch_count)
                     .inc();
