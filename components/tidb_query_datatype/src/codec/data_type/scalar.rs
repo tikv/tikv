@@ -7,8 +7,8 @@ use tipb::FieldType;
 
 use super::*;
 use crate::{
-    codec::collation::Collator, match_template_collator, match_template_evaltype, Collation,
-    EvalType, FieldTypeAccessor,
+    Collation, EvalType, FieldTypeAccessor, codec::collation::Collator, match_template_collator,
+    match_template_evaltype,
 };
 
 /// A scalar value container, a.k.a. datum, for all concrete eval types.
@@ -318,7 +318,7 @@ impl<'a> ScalarValueRef<'a> {
                     None => {
                         output.write_evaluable_datum_null()?;
                     }
-                    Some(ref val) => {
+                    Some(val) => {
                         output.write_evaluable_datum_json(*val)?;
                     }
                 }

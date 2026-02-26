@@ -15,8 +15,8 @@ use raft::SnapshotStatus;
 use raftstore::{
     router::RaftStoreRouter,
     store::{
-        region_meta::{RaftStateRole, RegionMeta},
         CasualMessage,
+        region_meta::{RaftStateRole, RegionMeta},
     },
 };
 use tikv_util::future::paired_future_callback;

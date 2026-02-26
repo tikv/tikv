@@ -6,8 +6,8 @@
 use std::{
     future::Future,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -18,7 +18,7 @@ use prometheus::{IntCounter, IntGauge};
 use tracker::TrackedFuture;
 use yatp::{queue::Extras, task::future};
 
-use crate::resource_control::{priority_from_task_meta, TaskPriority};
+use crate::resource_control::{TaskPriority, priority_from_task_meta};
 
 pub type ThreadPool = yatp::ThreadPool<future::TaskCell>;
 
@@ -115,7 +115,7 @@ impl FuturePool {
     pub fn spawn_handle<F>(
         &self,
         future: F,
-    ) -> Result<impl Future<Output = Result<F::Output, Canceled>>, Full>
+    ) -> Result<impl Future<Output = Result<F::Output, Canceled>> + use<F>, Full>
     where
         F: Future + Send + 'static,
         F::Output: Send,
@@ -236,7 +236,7 @@ impl PoolInner {
     fn spawn_handle<F>(
         &self,
         future: F,
-    ) -> Result<impl Future<Output = Result<F::Output, Canceled>>, Full>
+    ) -> Result<impl Future<Output = Result<F::Output, Canceled>> + use<F>, Full>
     where
         F: Future + Send + 'static,
         F::Output: Send,
@@ -283,8 +283,9 @@ impl std::error::Error for Full {
 mod tests {
     use std::{
         sync::{
+            Mutex,
             atomic::{AtomicUsize, Ordering},
-            mpsc, Mutex,
+            mpsc,
         },
         thread,
         time::Duration,
@@ -293,7 +294,7 @@ mod tests {
     use futures::executor::block_on;
 
     use super::{
-        super::{DefaultTicker, PoolTicker, YatpPoolBuilder as Builder, TICK_INTERVAL},
+        super::{DefaultTicker, PoolTicker, TICK_INTERVAL, YatpPoolBuilder as Builder},
         *,
     };
 
@@ -476,7 +477,7 @@ mod tests {
     }
 
     fn spawn_long_time_future(
-        pool: &FuturePool,
+        pool: FuturePool,
         id: u64,
         future_duration_ms: u64,
     ) -> Result<impl Future<Output = Result<u64, Canceled>>, Full> {
@@ -509,44 +510,44 @@ mod tests {
 
         wait_on_new_thread(
             tx.clone(),
-            spawn_long_time_future(&read_pool, 0, 5).unwrap(),
+            spawn_long_time_future(read_pool.clone(), 0, 5).unwrap(),
         );
         // not full
         assert_eq!(rx.recv().unwrap(), Ok(0));
 
         wait_on_new_thread(
             tx.clone(),
-            spawn_long_time_future(&read_pool, 1, 100).unwrap(),
+            spawn_long_time_future(read_pool.clone(), 1, 100).unwrap(),
         );
         wait_on_new_thread(
             tx.clone(),
-            spawn_long_time_future(&read_pool, 2, 200).unwrap(),
+            spawn_long_time_future(read_pool.clone(), 2, 200).unwrap(),
         );
         wait_on_new_thread(
             tx.clone(),
-            spawn_long_time_future(&read_pool, 3, 300).unwrap(),
+            spawn_long_time_future(read_pool.clone(), 3, 300).unwrap(),
         );
         wait_on_new_thread(
             tx.clone(),
-            spawn_long_time_future(&read_pool, 4, 400).unwrap(),
+            spawn_long_time_future(read_pool.clone(), 4, 400).unwrap(),
         );
         // no available results (running = 4)
         rx.recv_timeout(Duration::from_millis(50)).unwrap_err();
 
         // full
-        assert!(spawn_long_time_future(&read_pool, 5, 100).is_err());
+        assert!(spawn_long_time_future(read_pool.clone(), 5, 100).is_err());
 
         // full
-        assert!(spawn_long_time_future(&read_pool, 6, 100).is_err());
+        assert!(spawn_long_time_future(read_pool.clone(), 6, 100).is_err());
 
         // wait a future completes (running = 3)
         assert_eq!(rx.recv().unwrap(), Ok(1));
 
         // add new (running = 4)
-        wait_on_new_thread(tx, spawn_long_time_future(&read_pool, 7, 5).unwrap());
+        wait_on_new_thread(tx, spawn_long_time_future(read_pool.clone(), 7, 5).unwrap());
 
         // full
-        assert!(spawn_long_time_future(&read_pool, 8, 100).is_err());
+        assert!(spawn_long_time_future(read_pool, 8, 100).is_err());
 
         rx.recv().unwrap().unwrap();
         rx.recv().unwrap().unwrap();

@@ -3,7 +3,7 @@
 use std::sync::atomic::Ordering;
 
 use collections::HashMap;
-use engine_traits::{StatisticsReporter, CF_DEFAULT};
+use engine_traits::{CF_DEFAULT, StatisticsReporter};
 use lazy_static::lazy_static;
 use prometheus::*;
 use prometheus_static_metric::*;
@@ -12,8 +12,9 @@ use rocksdb::{
 };
 
 use crate::{
-    engine::RocksEngine, rocks_metrics_defs::*, RocksStatistics, TITAN_COMPRESSION_FACTOR,
-    TITAN_COMPRESSION_FACTOR_SMOOTHER, TITAN_MAX_BLOB_SIZE_SEEN, TITAN_MAX_COMPACTION_FACTOR,
+    RocksStatistics, TITAN_COMPRESSION_FACTOR, TITAN_COMPRESSION_FACTOR_SMOOTHER,
+    TITAN_MAX_BLOB_SIZE_SEEN, TITAN_MAX_COMPACTION_FACTOR, engine::RocksEngine,
+    rocks_metrics_defs::*,
 };
 
 make_auto_flush_static_metric! {

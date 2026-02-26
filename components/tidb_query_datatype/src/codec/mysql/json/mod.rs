@@ -83,24 +83,24 @@ use std::{
     str,
 };
 
-use codec::number::{NumberCodec, F64_SIZE, I64_SIZE};
+use codec::number::{F64_SIZE, I64_SIZE, NumberCodec};
 use constants::{JSON_LITERAL_FALSE, JSON_LITERAL_NIL, JSON_LITERAL_TRUE};
 use tikv_util::is_even;
 
 pub use self::{
     jcodec::{JsonDatumPayloadChunkEncoder, JsonDecoder, JsonEncoder},
     json_modify::ModifyType,
-    path_expr::{parse_json_path_expr, PathExpression},
+    path_expr::{PathExpression, parse_json_path_expr},
 };
-use super::super::{datum::Datum, Error, Result};
+use super::super::{Error, Result, datum::Datum};
 use crate::{
+    FieldTypeTp,
     codec::{
         convert::ConvertTo,
         data_type::{BytesRef, Decimal, Real},
         mysql::{Duration, Time, TimeType},
     },
     expr::EvalContext,
-    FieldTypeTp,
 };
 
 const ERR_CONVERT_FAILED: &str = "Can not covert from ";

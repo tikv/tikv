@@ -5,11 +5,11 @@ use tikv_util::Either;
 use txn_types::{Key, TimeStamp, Write, WriteType};
 
 use crate::storage::{
-    mvcc::{
-        metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
-        ErrorInner, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader,
-    },
     Snapshot,
+    mvcc::{
+        ErrorInner, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader,
+        metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
+    },
 };
 
 /// Helper function to handle the case when the lock is not found for our
@@ -197,16 +197,16 @@ pub mod tests {
         must_prewrite_put, must_prewrite_put_for_large_txn, must_prewrite_put_impl,
         must_prewrite_put_with_txn_soucre, must_rollback,
     };
+    use crate::storage::{
+        Engine,
+        mvcc::{MvccTxn, tests::*},
+    };
     #[cfg(test)]
     use crate::storage::{
+        TestEngineBuilder, TxnStatus,
         mvcc::SHORT_VALUE_MAX_LEN,
         txn::commands::check_txn_status,
         txn::tests::{must_acquire_pessimistic_lock, must_pessimistic_prewrite_put},
-        TestEngineBuilder, TxnStatus,
-    };
-    use crate::storage::{
-        mvcc::{tests::*, MvccTxn},
-        Engine,
     };
 
     pub fn must_succeed<E: Engine>(

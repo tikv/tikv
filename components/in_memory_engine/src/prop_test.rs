@@ -3,9 +3,9 @@
 use std::sync::Arc;
 
 use crossbeam::epoch;
-use engine_rocks::{util::new_engine, RocksEngine};
+use engine_rocks::{RocksEngine, util::new_engine};
 use engine_traits::{
-    CacheRegion, CfName, Iterable, Iterator, Peekable, SyncMutable, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    CF_DEFAULT, CF_LOCK, CF_WRITE, CacheRegion, CfName, Iterable, Iterator, Peekable, SyncMutable,
 };
 use proptest::prelude::*;
 use tikv_util::config::{ReadableSize, VersionTrack};
@@ -13,8 +13,8 @@ use txn_types::{Key, TimeStamp};
 
 use super::engine::SkiplistHandle;
 use crate::{
-    decode_key, engine::SkiplistEngine, keys::encode_key, memory_controller::MemoryController,
-    InMemoryEngineConfig, InternalBytes,
+    InMemoryEngineConfig, InternalBytes, decode_key, engine::SkiplistEngine, keys::encode_key,
+    memory_controller::MemoryController,
 };
 
 // This fixed mvcc suffix is used for CF_WRITE and CF_DEFAULT in prop test.

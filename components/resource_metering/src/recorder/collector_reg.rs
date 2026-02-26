@@ -7,7 +7,7 @@ use tikv_util::{
     worker::{Scheduler, Worker},
 };
 
-use crate::{recorder::Task, Collector};
+use crate::{Collector, recorder::Task};
 
 /// `CollectorRegHandle` accepts registrations of [Collector].
 ///

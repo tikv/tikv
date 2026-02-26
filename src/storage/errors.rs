@@ -12,14 +12,14 @@ use std::{
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, kvrpcpb, kvrpcpb::ApiVersion};
 use thiserror::Error;
-use tikv_util::deadline::{set_deadline_exceeded_busy_error, DeadlineError};
+use tikv_util::deadline::{DeadlineError, set_deadline_exceeded_busy_error};
 use txn_types::{KvPair, KvPairEntry, TimeStamp, ValueEntry};
 
 use crate::storage::{
+    CommandKind, Result,
     kv::{self, Error as KvError, ErrorInner as KvErrorInner},
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     txn::{self, Error as TxnError, ErrorInner as TxnErrorInner},
-    CommandKind, Result,
 };
 
 #[derive(Debug, Error)]
@@ -272,12 +272,12 @@ pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
 pub fn extract_region_error_from_error(e: &Error) -> Option<errorpb::Error> {
     match e {
         // TODO: use `Error::cause` instead.
-        Error(box ErrorInner::Kv(KvError(box KvErrorInner::Request(ref e))))
+        Error(box ErrorInner::Kv(KvError(box KvErrorInner::Request(e))))
         | Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Engine(KvError(
-            box KvErrorInner::Request(ref e),
+            box KvErrorInner::Request(e),
         )))))
         | Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::Kv(KvError(box KvErrorInner::Request(ref e))),
+            box MvccErrorInner::Kv(KvError(box KvErrorInner::Request(e))),
         ))))) => Some(e.to_owned()),
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::MaxTimestampNotSynced {
             ..

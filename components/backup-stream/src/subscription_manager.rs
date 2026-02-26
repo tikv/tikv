@@ -17,24 +17,23 @@ use tikv_util::{
     box_err, debug, info, memory::MemoryQuota, sys::thread::ThreadBuildWrapper, time::Instant,
     warn, worker::Scheduler,
 };
-use tokio::sync::mpsc::{channel, error::SendError, Receiver, Sender, WeakSender};
+use tokio::sync::mpsc::{Receiver, Sender, WeakSender, channel, error::SendError};
 use tracing::instrument;
 use tracing_active_tree::root;
 use txn_types::TimeStamp;
 
 use crate::{
-    annotate,
+    Task, annotate,
     endpoint::{BackupStreamResolver, ObserveOp},
     errors::{Error, ReportableResult, Result},
     event_loader::InitialDataLoader,
     future,
-    metadata::{store::MetaStore, CheckpointProvider, MetadataClient},
+    metadata::{CheckpointProvider, MetadataClient, store::MetaStore},
     metrics,
     router::{Router, TaskSelector},
     subscription_track::{CheckpointType, Ref, RefMut, ResolveResult, SubscriptionTracer},
     try_send,
     utils::{self, FutureWaitGroup, Work},
-    Task,
 };
 
 type ScanPool = tokio::runtime::Runtime;
@@ -819,8 +818,8 @@ mod test {
     use std::{
         collections::HashMap,
         sync::{
-            atomic::{AtomicBool, Ordering},
             Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
         },
         time::Duration,
     };
@@ -833,27 +832,27 @@ mod test {
         metapb::{Region, RegionEpoch},
     };
     use raftstore::{
+        RegionInfo,
         coprocessor::{ObserveHandle, RegionInfoCallback, RegionInfoProvider},
         router::{CdcRaftRouter, ServerRaftStoreRouter},
-        RegionInfo,
     };
     use tikv::{
         config::BackupStreamConfig,
-        storage::{txn::txn_status_cache::TxnStatusCache, Statistics},
+        storage::{Statistics, txn::txn_status_cache::TxnStatusCache},
     };
     use tikv_util::{box_err, info, memory::MemoryQuota, worker::dummy_scheduler};
     use tokio::{sync::mpsc::Sender, task::JoinHandle};
     use txn_types::TimeStamp;
 
-    use super::{spawn_executors_to, InitialScan, RegionSubscriptionManager};
+    use super::{InitialScan, RegionSubscriptionManager, spawn_executors_to};
     use crate::{
+        BackupStreamResolver, ObserveOp, Task,
         errors::Error,
-        metadata::{store::SlashEtcStore, MetadataClient, StreamTask},
+        metadata::{MetadataClient, StreamTask, store::SlashEtcStore},
         router::{Router, RouterInner},
         subscription_manager::{OOM_BACKOFF_BASE, OOM_BACKOFF_JITTER_SECS},
         subscription_track::{CheckpointType, SubscriptionTracer},
         utils::FutureWaitGroup,
-        BackupStreamResolver, ObserveOp, Task,
     };
 
     #[derive(Clone, Copy)]

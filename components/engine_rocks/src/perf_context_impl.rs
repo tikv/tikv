@@ -7,11 +7,11 @@ use engine_traits::{PerfContextKind, PerfLevel};
 use lazy_static::lazy_static;
 use slog_derive::KV;
 use tikv_util::time::Instant;
-use tracker::{Tracker, TrackerToken, GLOBAL_TRACKERS};
+use tracker::{GLOBAL_TRACKERS, Tracker, TrackerToken};
 
 use crate::{
-    perf_context_metrics::*, set_perf_flags, set_perf_level, util, PerfContext as RawPerfContext,
-    PerfFlag, PerfFlags,
+    PerfContext as RawPerfContext, PerfFlag, PerfFlags, perf_context_metrics::*, set_perf_flags,
+    set_perf_level, util,
 };
 
 macro_rules! report_write_perf_context {

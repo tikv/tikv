@@ -6,10 +6,10 @@ use std::{
 };
 
 use ::tracker::{
-    set_tls_tracker_token, with_tls_tracker, RequestInfo, RequestType, GLOBAL_TRACKERS,
+    GLOBAL_TRACKERS, RequestInfo, RequestType, set_tls_tracker_token, with_tls_tracker,
 };
 use anyhow::anyhow;
-use api_version::{dispatch_api_version, KvFormat};
+use api_version::{KvFormat, dispatch_api_version};
 use async_stream::try_stream;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::PerfLevel;
@@ -23,8 +23,8 @@ use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
 use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
 use resource_metering::{
-    record_logical_read_bytes, record_network_in_bytes, record_network_out_bytes, FutureExt,
-    ResourceTagFactory, StreamExt,
+    FutureExt, ResourceTagFactory, StreamExt, record_logical_read_bytes, record_network_in_bytes,
+    record_network_out_bytes,
 };
 use tidb_query_common::{
     error::StorageError,
@@ -53,10 +53,10 @@ use crate::{
     read_pool::ReadPoolHandle,
     server::Config,
     storage::{
-        self,
-        kv::{self, with_tls_engine, SnapContext},
+        self, Engine, Snapshot, SnapshotStore,
+        kv::{self, SnapContext, with_tls_engine},
         mvcc::Error as MvccError,
-        need_check_locks, need_check_locks_in_replica_read, Engine, Snapshot, SnapshotStore,
+        need_check_locks, need_check_locks_in_replica_read,
     },
 };
 
@@ -404,7 +404,7 @@ impl<E: Engine> Endpoint<E> {
     fn async_in_memory_snapshot(
         engine: &mut E,
         ctx: &ReqContext,
-    ) -> impl std::future::Future<Output = Result<E::IMSnap>> {
+    ) -> impl std::future::Future<Output = Result<E::IMSnap>> + use<E> {
         let mut snap_ctx = SnapContext {
             pb_ctx: &ctx.context,
             start_ts: Some(ctx.txn_start_ts),
@@ -558,7 +558,7 @@ impl<E: Engine> Endpoint<E> {
     fn handle_unary_request(
         &self,
         r: ParseCopRequestResult<E::IMSnap>,
-    ) -> impl Future<Output = Result<MemoryTraceGuard<coppb::Response>>> {
+    ) -> impl Future<Output = Result<MemoryTraceGuard<coppb::Response>>> + use<E> {
         let req_ctx = r.req_ctx;
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
@@ -619,7 +619,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         mut req: coppb::Request,
         peer: Option<String>,
-    ) -> impl Future<Output = MemoryTraceGuard<coppb::Response>> {
+    ) -> impl Future<Output = MemoryTraceGuard<coppb::Response>> + use<'_, E> {
         let now = Instant::now();
         // Check the load of the read pool. If it's too busy, generate and return
         // error in the gRPC thread to avoid waiting in the queue of the read pool.
@@ -637,7 +637,7 @@ impl<E: Engine> Endpoint<E> {
             RequestType::Unknown,
             req.start_ts,
         )));
-        let result_of_batch = self.process_batch_tasks(&mut req, &peer);
+        let result_of_batch = self.process_batch_tasks(&mut req, &peer.clone());
         set_tls_tracker_token(tracker);
         with_tls_tracker(|tracker| {
             tracker.metrics.grpc_req_size = req.compute_size() as u64;
@@ -682,7 +682,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req: &mut coppb::Request,
         peer: &Option<String>,
-    ) -> impl Future<Output = Vec<coppb::StoreBatchTaskResponse>> {
+    ) -> impl Future<Output = Vec<coppb::StoreBatchTaskResponse>> + use<'_, E> {
         let mut batch_futs = Vec::with_capacity(req.tasks.len());
         let batch_reqs: Vec<(coppb::Request, u64)> = req
             .take_tasks()
@@ -838,7 +838,7 @@ impl<E: Engine> Endpoint<E> {
     fn handle_stream_request(
         &self,
         r: ParseCopRequestResult<E::IMSnap>,
-    ) -> Result<impl futures::stream::Stream<Item = Result<coppb::Response>>> {
+    ) -> Result<impl futures::stream::Stream<Item = Result<coppb::Response>> + use<E>> {
         let req_ctx = r.req_ctx;
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
@@ -899,7 +899,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req: coppb::Request,
         peer: Option<String>,
-    ) -> impl futures::stream::Stream<Item = coppb::Response> {
+    ) -> impl futures::stream::Stream<Item = coppb::Response> + use<E> {
         let tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
             req.get_context(),
             RequestType::Unknown,
@@ -1216,7 +1216,7 @@ impl<E: Engine> RegionStorageAccessor for ExtraSnapStoreAccessor<E> {
 mod tests {
     use std::{
         assert_matches::assert_matches,
-        sync::{atomic, mpsc, Mutex},
+        sync::{Mutex, atomic, mpsc},
         thread, vec,
     };
 
@@ -1226,7 +1226,7 @@ mod tests {
     use raft::StateRole;
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use tidb_query_common::storage::Storage;
-    use tikv_kv::{destroy_tls_engine, set_tls_engine, MockEngine, MockEngineBuilder};
+    use tikv_kv::{MockEngine, MockEngineBuilder, destroy_tls_engine, set_tls_engine};
     use tipb::{Executor, Expr};
     use txn_types::{Key, LockType};
 
@@ -1235,7 +1235,7 @@ mod tests {
         config::CoprReadPoolConfig,
         coprocessor::readpool_impl::build_read_pool_for_test,
         read_pool::ReadPool,
-        storage::{kv::RocksEngine, Store, TestEngineBuilder},
+        storage::{Store, TestEngineBuilder, kv::RocksEngine},
     };
 
     /// A unary `RequestHandler` that always produces a fixture.

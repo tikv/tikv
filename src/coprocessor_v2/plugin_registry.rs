@@ -5,7 +5,7 @@ use std::{
     ffi::{OsStr, OsString},
     ops::Range,
     path::{Path, PathBuf},
-    sync::{mpsc, Arc, RwLock},
+    sync::{Arc, RwLock, mpsc},
     thread,
     time::Duration,
 };
@@ -32,9 +32,7 @@ pub enum PluginLoadingError {
         tikv_rustc: String,
     },
 
-    #[error(
-        "target mismatch: plugin was compiled for {plugin_target}, but TiKV for {tikv_target}"
-    )]
+    #[error("target mismatch: plugin was compiled for {plugin_target}, but TiKV for {tikv_target}")]
     TargetMismatch {
         plugin_target: String,
         tikv_target: String,
@@ -399,40 +397,42 @@ impl LoadedPlugin {
     /// See also [`libloading::Library::get()`] for more information on what
     /// restrictions apply to [`PLUGIN_CONSTRUCTOR_SYMBOL`].
     pub unsafe fn new<P: AsRef<OsStr>>(file_path: P) -> Result<Self, PluginLoadingError> {
-        let lib = Library::new(&file_path)?;
+        unsafe {
+            let lib = Library::new(&file_path)?;
 
-        let get_build_info: Symbol<'_, PluginGetBuildInfoSignature> =
-            lib.get(PLUGIN_GET_BUILD_INFO_SYMBOL)?;
-        let get_plugin_info: Symbol<'_, PluginGetPluginInfoSignature> =
-            lib.get(PLUGIN_GET_PLUGIN_INFO_SYMBOL)?;
-        let plugin_constructor: Symbol<'_, PluginConstructorSignature> =
-            lib.get(PLUGIN_CONSTRUCTOR_SYMBOL)?;
+            let get_build_info: Symbol<'_, PluginGetBuildInfoSignature> =
+                lib.get(PLUGIN_GET_BUILD_INFO_SYMBOL)?;
+            let get_plugin_info: Symbol<'_, PluginGetPluginInfoSignature> =
+                lib.get(PLUGIN_GET_PLUGIN_INFO_SYMBOL)?;
+            let plugin_constructor: Symbol<'_, PluginConstructorSignature> =
+                lib.get(PLUGIN_CONSTRUCTOR_SYMBOL)?;
 
-        // It's important to check the ABI before calling the constructor.
-        let plugin_build_info = get_build_info();
-        let tikv_build_info = BuildInfo::get();
-        err_on_mismatch(&plugin_build_info, &tikv_build_info)?;
+            // It's important to check the ABI before calling the constructor.
+            let plugin_build_info = get_build_info();
+            let tikv_build_info = BuildInfo::get();
+            err_on_mismatch(&plugin_build_info, &tikv_build_info)?;
 
-        let info = get_plugin_info();
-        let name = info.name.to_string();
-        let version = Version::parse(info.version)?;
+            let info = get_plugin_info();
+            let name = info.name.to_string();
+            let version = Version::parse(info.version)?;
 
-        let host_allocator = HostAllocatorPtr {
-            alloc_fn: std::alloc::alloc,
-            dealloc_fn: std::alloc::dealloc,
-        };
+            let host_allocator = HostAllocatorPtr {
+                alloc_fn: std::alloc::alloc,
+                dealloc_fn: std::alloc::dealloc,
+            };
 
-        let boxed_raw_plugin = plugin_constructor(host_allocator);
-        let plugin = Box::from_raw(boxed_raw_plugin);
+            let boxed_raw_plugin = plugin_constructor(host_allocator);
+            let plugin = Box::from_raw(boxed_raw_plugin);
 
-        // Leak library so that we will never drop it
-        std::mem::forget(lib);
+            // Leak library so that we will never drop it
+            std::mem::forget(lib);
 
-        Ok(LoadedPlugin {
-            name,
-            version,
-            plugin,
-        })
+            Ok(LoadedPlugin {
+                name,
+                version,
+                plugin,
+            })
+        }
     }
 
     /// Returns the name of the plugin.

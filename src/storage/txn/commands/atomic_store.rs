@@ -4,16 +4,16 @@
 use engine_traits::CfName;
 
 use crate::storage::{
+    ProcessResult, Snapshot,
     kv::{Modify, WriteData},
     lock_manager::LockManager,
     txn::{
+        Result,
         commands::{
             Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand,
             WriteContext, WriteResult,
         },
-        Result,
     },
-    ProcessResult, Snapshot,
 };
 
 command! {
@@ -46,7 +46,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
 
         if let Some(ref raw_ext) = raw_ext {
             for mutation in &mut mutations {
-                if let Modify::Put(_, ref mut key, _) = mutation {
+                if let Modify::Put(_, key, _) = mutation {
                     key.append_ts_inplace(raw_ext.ts);
                 }
             }
@@ -73,7 +73,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
 mod tests {
     use std::sync::Arc;
 
-    use api_version::{test_kv_format_impl, ApiV2, KvFormat, RawValue};
+    use api_version::{ApiV2, KvFormat, RawValue, test_kv_format_impl};
     use engine_traits::CF_DEFAULT;
     use futures::executor::block_on;
     use kvproto::kvrpcpb::{ApiVersion, Context};
@@ -81,9 +81,9 @@ mod tests {
 
     use super::*;
     use crate::storage::{
+        Statistics, TestEngineBuilder,
         lock_manager::MockLockManager,
         txn::{scheduler::get_raw_ext, txn_status_cache::TxnStatusCache},
-        Statistics, TestEngineBuilder,
     };
 
     #[test]

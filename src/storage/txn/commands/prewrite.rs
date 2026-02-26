@@ -15,30 +15,30 @@ use kvproto::kvrpcpb::{
 };
 use tikv_kv::SnapshotExt;
 use txn_types::{
-    insert_old_value_if_resolved, Key, Mutation, OldValues, TimeStamp, TxnExtra, Write, WriteType,
+    Key, Mutation, OldValues, TimeStamp, TxnExtra, Write, WriteType, insert_old_value_if_resolved,
 };
 
 use super::ReaderWithStats;
 use crate::storage::{
+    Context, Error as StorageError, ProcessResult, Snapshot,
     kv::WriteData,
     lock_manager::LockManager,
     mvcc::{
-        has_data_in_range, metrics::*, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn,
-        SnapshotReader,
+        Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader,
+        has_data_in_range, metrics::*,
     },
     txn::{
+        Error, ErrorInner, Result,
         actions::{
             common::check_committed_record_on_err,
-            prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties},
+            prewrite::{CommitKind, TransactionKind, TransactionProperties, prewrite},
         },
         commands::{
             Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand,
             WriteContext, WriteResult,
         },
-        Error, ErrorInner, Result,
     },
     types::PrewriteResult,
-    Context, Error as StorageError, ProcessResult, Snapshot,
 };
 
 pub(crate) const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
@@ -238,9 +238,7 @@ impl CommandExt for Prewrite {
                     bytes += key.as_encoded().len();
                     bytes += value.len();
                 }
-                Mutation::Delete(ref key, _)
-                | Mutation::Lock(ref key, _)
-                | Mutation::SharedLock(ref key, _) => {
+                Mutation::Delete(ref key, _) | Mutation::Lock(ref key, _) => {
                     bytes += key.as_encoded().len();
                 }
                 Mutation::CheckNotExists(..) => (),
@@ -452,14 +450,11 @@ impl CommandExt for PrewritePessimistic {
         let mut bytes = 0;
         for (m, _) in &self.mutations {
             match m {
-                Mutation::Put((ref key, ref value), _)
-                | Mutation::Insert((ref key, ref value), _) => {
+                Mutation::Put((key, value), _) | Mutation::Insert((key, value), _) => {
                     bytes += key.as_encoded().len();
                     bytes += value.len();
                 }
-                Mutation::Delete(ref key, _)
-                | Mutation::Lock(ref key, _)
-                | Mutation::SharedLock(ref key, _) => {
+                Mutation::Delete(key, _) | Mutation::Lock(key, _) => {
                     bytes += key.as_encoded().len();
                 }
                 Mutation::CheckNotExists(..) => (),
@@ -1011,8 +1006,10 @@ mod tests {
 
     use super::*;
     use crate::storage::{
-        mvcc::{tests::*, Error as MvccError, ErrorInner as MvccErrorInner},
+        Engine, MockLockManager, Snapshot, Statistics, TestEngineBuilder,
+        mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, tests::*},
         txn::{
+            Error, ErrorInner,
             actions::{
                 acquire_pessimistic_lock::tests::{
                     must_acquire_shared_pessimistic_lock, must_pessimistic_locked,
@@ -1034,10 +1031,8 @@ mod tests {
                 must_prewrite_put_err_impl, must_prewrite_put_impl, must_rollback,
             },
             txn_status_cache::TxnStatusCache,
-            Error, ErrorInner,
         },
         types::TxnStatus,
-        Engine, MockLockManager, Snapshot, Statistics, TestEngineBuilder,
     };
 
     fn inner_test_prewrite_skip_constraint_check(pri_key_number: u8, write_num: usize) {
@@ -1160,7 +1155,7 @@ mod tests {
 
     #[test]
     fn test_prewrite_skip_too_many_tombstone() {
-        use engine_rocks::{set_perf_level, PerfLevel};
+        use engine_rocks::{PerfLevel, set_perf_level};
 
         use crate::server::gc_worker::gc_by_compact;
         let mut mutations = Vec::default();
@@ -1637,7 +1632,7 @@ mod tests {
         use engine_traits::{IterOptions, ReadOptions};
         use kvproto::kvrpcpb::ExtraOp;
 
-        use crate::storage::{kv::Result, CfName, ConcurrencyManager, MockLockManager, Value};
+        use crate::storage::{CfName, ConcurrencyManager, MockLockManager, Value, kv::Result};
         #[derive(Clone)]
         struct MockSnapshot;
 

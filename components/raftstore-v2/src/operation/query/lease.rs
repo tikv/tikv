@@ -5,21 +5,20 @@ use std::sync::Mutex;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftRequestHeader};
 use raft::{
-    eraftpb::{self, MessageType},
     Storage,
+    eraftpb::{self, MessageType},
 };
 use raftstore::{
+    Error, Result,
     store::{
-        can_amend_read, cmd_resp,
+        ReadDelegate, ReadIndexRequest, ReadProgress, Transport, can_amend_read, cmd_resp,
         fsm::{apply::notify_stale_req, new_read_index_request},
         metrics::RAFT_READ_INDEX_PENDING_COUNT,
         msg::{ErrorCallback, ReadCallback},
         propose_read_index, should_renew_lease,
         simple_write::SimpleWriteEncoder,
-        util::{check_req_region_epoch, LeaseState},
-        ReadDelegate, ReadIndexRequest, ReadProgress, Transport,
+        util::{LeaseState, check_req_region_epoch},
     },
-    Error, Result,
 };
 use slog::debug;
 use tikv_util::time::monotonic_raw_now;

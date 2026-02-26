@@ -4,8 +4,8 @@ use std::convert::TryInto;
 
 use codec::number::NumberCodec;
 
-use super::{constants::*, JsonRef, JsonType, ERR_CONVERT_FAILED};
-use crate::codec::{mysql::json::path_expr::ArrayIndex, Result};
+use super::{ERR_CONVERT_FAILED, JsonRef, JsonType, constants::*};
+use crate::codec::{Result, mysql::json::path_expr::ArrayIndex};
 
 impl<'a> JsonRef<'a> {
     /// Gets the index from the ArrayIndex

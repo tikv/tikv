@@ -24,7 +24,7 @@ mod all {
     use walkdir::WalkDir;
 
     use super::suite::{
-        make_record_key, make_split_key_at_record, mutation, run_async_test, SuiteBuilder,
+        SuiteBuilder, make_record_key, make_split_key_at_record, mutation, run_async_test,
     };
 
     #[test]
@@ -232,12 +232,14 @@ mod all {
     #[test]
     fn upload_checkpoint_exits_in_time() {
         defer! {{
-            std::env::remove_var("LOG_BACKUP_UGC_SLEEP_AND_RETURN");
+            unsafe { std::env::remove_var("LOG_BACKUP_UGC_SLEEP_AND_RETURN"); }
         }}
         let suite = SuiteBuilder::new_named("upload_checkpoint_exits_in_time")
             .nodes(1)
             .build();
-        std::env::set_var("LOG_BACKUP_UGC_SLEEP_AND_RETURN", "meow");
+        unsafe {
+            std::env::set_var("LOG_BACKUP_UGC_SLEEP_AND_RETURN", "meow");
+        }
         let (_, victim) = suite.endpoints.iter().next().unwrap();
         let sched = victim.scheduler();
         sched
@@ -452,16 +454,10 @@ mod all {
         let mut basic_config = BackupStreamConfig::default();
         basic_config.initial_scan_concurrency = 4;
         suite.run(|| Task::ChangeConfig(basic_config.clone()));
-        suite.wait_with(|e| {
-            assert_eq!(e.initial_scan_semaphore.available_permits(), 4,);
-            true
-        });
+        suite.wait_with(|e| e.initial_scan_semaphore.available_permits() == 4);
 
         basic_config.initial_scan_concurrency = 16;
         suite.run(|| Task::ChangeConfig(basic_config.clone()));
-        suite.wait_with(|e| {
-            assert_eq!(e.initial_scan_semaphore.available_permits(), 16,);
-            true
-        });
+        suite.wait_with(|e| e.initial_scan_semaphore.available_permits() == 16);
     }
 }

@@ -5,12 +5,12 @@ use std::io::Read;
 use byteorder::{ByteOrder, LittleEndian};
 use crypto::rand;
 use flate2::{
-    read::{ZlibDecoder, ZlibEncoder},
     Compression,
+    read::{ZlibDecoder, ZlibEncoder},
 };
 use openssl::hash::{self, MessageDigest};
 use tidb_query_codegen::rpn_fn;
-use tidb_query_common::{error::EvaluateError, Result};
+use tidb_query_common::{Result, error::EvaluateError};
 use tidb_query_datatype::{
     codec::data_type::*,
     expr::{Error, EvalContext},

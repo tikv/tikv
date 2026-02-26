@@ -5,7 +5,7 @@ use std::{
     f64,
 };
 
-use super::{super::Result, constants::*, Json, JsonRef, JsonType, ERR_CONVERT_FAILED};
+use super::{super::Result, ERR_CONVERT_FAILED, Json, JsonRef, JsonType, constants::*};
 
 fn compare<T: Ord>(x: T, y: T) -> Ordering {
     x.cmp(&y)

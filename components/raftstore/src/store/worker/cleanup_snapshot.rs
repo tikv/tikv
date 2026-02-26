@@ -8,10 +8,10 @@ use fail::fail_point;
 use tikv_util::{debug, error, info, warn, worker::Runnable};
 
 use crate::{
+    Result,
     store::{
         CasualMessage, PeerMsg, RaftRouter, SnapKey, SnapManager, Snapshot, StoreMsg, StoreRouter,
     },
-    Result,
 };
 
 pub enum Task {

@@ -22,16 +22,16 @@ use std::{
     ops::{Deref, DerefMut},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, RwLock, RwLockReadGuard, RwLockWriteGuard,
+        atomic::{AtomicBool, Ordering},
     },
     thread,
     time::Duration,
 };
 
 use nix::{
-    sys::wait::{wait, WaitStatus},
-    unistd::{fork, ForkResult},
+    sys::wait::{WaitStatus, wait},
+    unistd::{ForkResult, fork},
 };
 
 use crate::sys::thread::StdThreadBuildWrapper;
@@ -524,7 +524,9 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
 /// Checks environment variables that affect TiKV.
 pub fn check_environment_variables() {
     if cfg!(unix) && env::var("TZ").is_err() {
-        env::set_var("TZ", ":/etc/localtime");
+        unsafe {
+            env::set_var("TZ", ":/etc/localtime");
+        }
         warn!("environment variable `TZ` is missing, using `/etc/localtime`");
     }
 

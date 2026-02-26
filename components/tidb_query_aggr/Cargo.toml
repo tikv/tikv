@@ -1,7 +1,7 @@
 [package]
 name = "tidb_query_aggr"
 version = "0.0.1"
-edition = "2021"
+edition = "2024"
 publish = false
 description = "Vector aggr functions of query engine to run TiDB pushed down executors"
 license = "Apache-2.0"

@@ -4,14 +4,14 @@
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
-    mvcc::{metrics::ScanLockReadTimeSource::pessimistic_rollback, MvccReader},
+    ScanMode, Snapshot, Statistics,
+    mvcc::{MvccReader, metrics::ScanLockReadTimeSource::pessimistic_rollback},
     txn,
     txn::{
+        ProcessResult, RESOLVE_LOCK_BATCH_SIZE, Result, StorageResult,
         commands::{Command, CommandExt, PessimisticRollback, ReadCommand, TypedCommand},
         sched_pool::tls_collect_keyread_histogram_vec,
-        ProcessResult, Result, StorageResult, RESOLVE_LOCK_BATCH_SIZE,
     },
-    ScanMode, Snapshot, Statistics,
 };
 command! {
     PessimisticRollbackReadPhase:

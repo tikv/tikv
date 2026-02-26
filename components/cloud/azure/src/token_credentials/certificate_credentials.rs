@@ -3,14 +3,15 @@
 use std::{str, sync::Arc, time::Duration};
 
 use azure_core::{
+    HttpClient, Method, Request,
     auth::{AccessToken, TokenCredential},
     base64, content_type,
     error::{Error, ErrorKind},
-    headers, new_http_client, HttpClient, Method, Request,
+    headers, new_http_client,
 };
 use openssl::{
     error::ErrorStack,
-    hash::{hash, DigestBytes, MessageDigest},
+    hash::{DigestBytes, MessageDigest, hash},
     pkcs12::Pkcs12,
     pkey::{PKey, Private},
     sign::Signer,
@@ -18,7 +19,7 @@ use openssl::{
 };
 use serde::Deserialize;
 use time::OffsetDateTime;
-use url::{form_urlencoded, Url};
+use url::{Url, form_urlencoded};
 
 /// Refresh time to use in seconds
 const DEFAULT_REFRESH_TIME: i64 = 300;

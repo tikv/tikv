@@ -9,11 +9,11 @@ use engine_traits::{
     self, CfNamesExt, IterOptions, Iterable, Peekable, ReadOptions, Result, Snapshot,
     SnapshotMiscExt,
 };
-use rocksdb::{rocksdb_options::UnsafeSnap, DBIterator, DB};
+use rocksdb::{DB, DBIterator, rocksdb_options::UnsafeSnap};
 
 use crate::{
-    db_vector::RocksDbVector, options::RocksReadOptions, r2e, util::get_cf_handle,
-    RocksEngineIterator,
+    RocksEngineIterator, db_vector::RocksDbVector, options::RocksReadOptions, r2e,
+    util::get_cf_handle,
 };
 
 pub struct RocksSnapshot {

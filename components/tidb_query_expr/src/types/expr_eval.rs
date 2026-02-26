@@ -2,7 +2,7 @@
 
 use tidb_query_common::Result;
 pub use tidb_query_datatype::codec::data_type::{
-    LogicalRows, BATCH_MAX_SIZE, IDENTICAL_LOGICAL_ROWS,
+    BATCH_MAX_SIZE, IDENTICAL_LOGICAL_ROWS, LogicalRows,
 };
 use tidb_query_datatype::{
     codec::{batch::LazyBatchColumnVec, data_type::*},
@@ -11,8 +11,8 @@ use tidb_query_datatype::{
 use tipb::FieldType;
 
 use super::{
-    expr::{RpnExpression, RpnExpressionNode},
     RpnFnCallExtra,
+    expr::{RpnExpression, RpnExpressionNode},
 };
 
 /// Represents a vector value node in the RPN stack.
@@ -332,23 +332,23 @@ impl RpnExpression {
 mod tests {
     #![allow(clippy::float_cmp)]
 
-    use test::{black_box, Bencher};
+    use test::{Bencher, black_box};
     use tidb_query_codegen::rpn_fn;
     use tidb_query_common::Result;
     use tidb_query_datatype::{
+        EvalType, FieldTypeAccessor, FieldTypeTp,
         codec::{
             batch::LazyBatchColumn,
             data_type::*,
             datum::{Datum, DatumEncoder},
         },
         expr::EvalContext,
-        EvalType, FieldTypeAccessor, FieldTypeTp,
     };
     use tipb::FieldType;
     use tipb_helper::ExprDefBuilder;
 
     use super::*;
-    use crate::{impl_arithmetic::*, impl_compare::*, RpnExpressionBuilder, RpnFnMeta};
+    use crate::{RpnExpressionBuilder, RpnFnMeta, impl_arithmetic::*, impl_compare::*};
 
     /// Single constant node
     #[test]
@@ -1436,9 +1436,9 @@ mod benches {
     use tidb_query_codegen::rpn_fn;
     use tidb_query_common::Result;
     use tidb_query_datatype::{
+        EvalType, FieldTypeTp,
         codec::{batch::LazyBatchColumn, data_type::*},
         expr::EvalContext,
-        EvalType, FieldTypeTp,
     };
 
     use super::*;

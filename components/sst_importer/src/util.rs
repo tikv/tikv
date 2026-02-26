@@ -123,12 +123,12 @@ mod tests {
 
     use encryption::DataKeyManager;
     use engine_rocks::{
-        util::new_engine_opt, RocksCfOptions, RocksDbOptions, RocksEngine, RocksSstWriterBuilder,
-        RocksTitanDbOptions,
+        RocksCfOptions, RocksDbOptions, RocksEngine, RocksSstWriterBuilder, RocksTitanDbOptions,
+        util::new_engine_opt,
     };
     use engine_traits::{
-        CfName, CfOptions, DbOptions, ImportExt, Peekable, SstWriter, SstWriterBuilder,
-        TitanCfOptions, CF_DEFAULT,
+        CF_DEFAULT, CfName, CfOptions, DbOptions, ImportExt, Peekable, SstWriter, SstWriterBuilder,
+        TitanCfOptions,
     };
     use tempfile::Builder;
     use test_util::encryption::new_test_key_manager;

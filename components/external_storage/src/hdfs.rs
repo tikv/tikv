@@ -170,10 +170,14 @@ mod tests {
     #[test]
     fn test_get_hdfs_bin() {
         let backend = HdfsStorage::new("hdfs://", HdfsConfig::default()).unwrap();
-        std::env::remove_var("HADOOP_HOME");
+        unsafe {
+            std::env::remove_var("HADOOP_HOME");
+        }
         assert!(backend.get_hdfs_bin().is_none());
 
-        std::env::set_var("HADOOP_HOME", "/opt/hadoop");
+        unsafe {
+            std::env::set_var("HADOOP_HOME", "/opt/hadoop");
+        }
         assert_eq!(
             backend.get_hdfs_bin().as_deref(),
             Some("/opt/hadoop/bin/hdfs")

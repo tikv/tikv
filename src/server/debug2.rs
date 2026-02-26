@@ -3,13 +3,13 @@
 use std::{sync::Arc, thread::JoinHandle};
 
 use engine_rocks::{
-    raw::CompactOptions, util::get_cf_handle, RocksEngine, RocksEngineIterator, RocksStatistics,
+    RocksEngine, RocksEngineIterator, RocksStatistics, raw::CompactOptions, util::get_cf_handle,
 };
 use engine_traits::{
-    CachedTablet, Iterable, MiscExt, Peekable, RaftEngine, RaftLogBatch, TabletContext,
-    TabletRegistry, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, CachedTablet, Iterable, MiscExt, Peekable, RaftEngine,
+    RaftLogBatch, TabletContext, TabletRegistry,
 };
-use keys::{data_key, enc_end_key, enc_start_key, DATA_MAX_KEY, DATA_PREFIX_KEY};
+use keys::{DATA_MAX_KEY, DATA_PREFIX_KEY, data_key, enc_end_key, enc_start_key};
 use kvproto::{
     debugpb::Db as DbType,
     kvrpcpb::MvccInfo,
@@ -17,7 +17,7 @@ use kvproto::{
     raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
 };
 use nom::AsBytes;
-use raft::{prelude::Entry, RawNode};
+use raft::{RawNode, prelude::Entry};
 use raftstore::{
     coprocessor::{get_region_approximate_middle, get_region_approximate_size},
     store::util::check_key_in_region,
@@ -28,10 +28,10 @@ use tikv_util::{
     config::ReadableSize, store::find_peer, sys::thread::StdThreadBuildWrapper, worker::Worker,
 };
 
-use super::debug::{recover_mvcc_for_range, BottommostLevelCompaction, Debugger, RegionInfo};
+use super::debug::{BottommostLevelCompaction, Debugger, RegionInfo, recover_mvcc_for_range};
 use crate::{
     config::ConfigController,
-    server::debug::{dump_default_cf_properties, dump_write_cf_properties, Error, Result},
+    server::debug::{Error, Result, dump_default_cf_properties, dump_write_cf_properties},
     storage::mvcc::{MvccInfoCollector, MvccInfoScanner},
 };
 
@@ -931,7 +931,7 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
             let talbet = tablet_cache.latest().unwrap();
             let mut prop = dump_write_cf_properties(
                 talbet,
-                start_key.as_ref().map(|k| (k.as_bytes())).unwrap_or(start),
+                start_key.as_ref().map(|k| k.as_bytes()).unwrap_or(start),
                 end_key.as_ref().map(|k| k.as_bytes()).unwrap_or(end),
             )
             .unwrap();
@@ -1226,8 +1226,8 @@ pub fn new_debugger(path: &std::path::Path) -> DebuggerImplV2<raft_log_engine::R
 mod tests {
     use collections::HashMap;
     use engine_traits::{
-        RaftEngineReadOnly, RaftLogBatch, SyncMutable, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE,
-        DATA_CFS,
+        ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS, RaftEngineReadOnly, RaftLogBatch,
+        SyncMutable,
     };
     use kvproto::{
         metapb::{self, Peer, PeerRole},

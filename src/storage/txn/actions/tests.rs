@@ -9,20 +9,20 @@ use kvproto::kvrpcpb::{
     Assertion, AssertionLevel, Context, ExtraOp,
     PrewriteRequestPessimisticAction::{self, *},
 };
-use prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties};
+use prewrite::{CommitKind, TransactionKind, TransactionProperties, prewrite};
 use tikv_kv::{SnapContext, Statistics};
 
 use super::*;
 use crate::storage::{
+    Engine,
     kv::WriteData,
     lock_manager::MockLockManager,
-    mvcc::{tests::write, Error, Key, Mutation, MvccTxn, SnapshotReader, TimeStamp},
+    mvcc::{Error, Key, Mutation, MvccTxn, SnapshotReader, TimeStamp, tests::write},
     txn,
     txn::{
         commands::{Flush, WriteContext, WriteResult},
         txn_status_cache::TxnStatusCache,
     },
-    Engine,
 };
 
 pub fn must_prewrite_put_impl<E: Engine>(

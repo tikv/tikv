@@ -25,8 +25,8 @@ use std::{
     collections::BTreeMap,
     error, result,
     sync::{
-        atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering},
     },
 };
 
@@ -47,9 +47,9 @@ use tokio::sync::{
 use txn_types::TimeStamp;
 
 use crate::{
+    CausalTsProvider,
     errors::{Error, Result},
     metrics::*,
-    CausalTsProvider,
 };
 
 /// Renew on every 100ms, to adjust batch size rapidly enough.

@@ -1,7 +1,7 @@
 // Copyright 2025 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp::{min, Ordering},
+    cmp::{Ordering, min},
     collections::HashSet,
     mem,
     sync::Arc,
@@ -11,31 +11,32 @@ use api_version::{ApiV1, KvFormat};
 use async_trait::async_trait;
 use kvproto::{coprocessor::KeyRange, metapb};
 use tidb_query_common::{
+    Error,
     error::Result,
     execute_stats::{ExecSummary, ExecSummaryCollector, ExecSummaryCollectorEnabled, ExecuteStats},
     metrics::EXECUTOR_COUNT_METRICS,
     storage::{FindRegionResult, IntervalRange, RegionStorageAccessor, StateRole, Storage},
-    Error,
 };
 use tidb_query_datatype::{
     codec::{
         batch::LazyBatchColumnVec,
-        data_type::{LogicalRows, BATCH_MAX_SIZE},
+        data_type::{BATCH_MAX_SIZE, LogicalRows},
         table::RowHandle,
     },
     expr::{EvalConfig, EvalContext, EvalWarnings},
 };
 use tikv_util::{
-    error, Either,
+    Either,
     Either::{Left, Right},
+    error,
 };
 use tipb::{ColumnInfo, FieldType, IndexLookUp, TableScan};
 use txn_types::Key;
 
 use crate::{
+    BatchTableScanExecutor,
     interface::{BatchExecIsDrain, BatchExecuteResult, BatchExecutor, WithSummaryCollector},
     util::scan_executor::field_type_from_column_info,
-    BatchTableScanExecutor,
 };
 
 #[derive(Default)]
@@ -65,14 +66,14 @@ impl<Iter, S: Storage, F: KvFormat> Default for IndexLookUpPhase<Iter, S, F> {
 impl<Iter, S: Storage, F: KvFormat> IndexLookUpPhase<Iter, S, F> {
     fn mut_index_scan_or_err(&mut self) -> Result<&mut IndexScanState> {
         match self {
-            IndexLookUpPhase::IndexScan(ref mut s) => Ok(s),
+            IndexLookUpPhase::IndexScan(s) => Ok(s),
             _ => Err(other_err!("The current phase is not IndexScan")),
         }
     }
 
     fn mut_table_lookup_or_err(&mut self) -> Result<&mut TableLookUpState<Iter, S, F>> {
         match self {
-            IndexLookUpPhase::TableLookUp(ref mut s) => Ok(s),
+            IndexLookUpPhase::TableLookUp(s) => Ok(s),
             _ => Err(other_err!("The current phase is not TableLookUp")),
         }
     }
@@ -1053,20 +1054,20 @@ pub mod tests {
     use tidb_query_common::{
         error::StorageError,
         storage::{
-            test_fixture::{ErrorBuilder, FixtureStorage},
             StateRole,
+            test_fixture::{ErrorBuilder, FixtureStorage},
         },
     };
     use tidb_query_datatype::{
+        Collation, FieldTypeAccessor, FieldTypeTp,
         codec::{
+            Datum,
             batch::{LazyBatchColumn, LazyBatchColumnVec},
             data_type::VectorValue,
             datum::DatumEncoder,
-            table::{encode_row, encode_row_key, IntHandle},
-            Datum,
+            table::{IntHandle, encode_row, encode_row_key},
         },
         expr::{EvalContext, EvalWarnings, Flag},
-        Collation, FieldTypeAccessor, FieldTypeTp,
     };
 
     use super::*;

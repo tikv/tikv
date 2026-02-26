@@ -3,8 +3,9 @@
 use std::{
     cmp::Ordering,
     sync::{
+        Arc, Condvar, Mutex,
         atomic::{AtomicU64, Ordering as AtomicOrdering},
-        mpsc, Arc, Condvar, Mutex,
+        mpsc,
     },
     thread::{self, Builder as ThreadBuilder, JoinHandle},
     time::Duration,
@@ -18,10 +19,10 @@ use tikv_util::{store::find_peer, time::Instant, worker::Scheduler};
 use txn_types::{Key, TimeStamp};
 
 use super::{
+    Error, ErrorInner, Result,
     compaction_filter::is_compaction_filter_allowed,
     config::GcWorkerConfigManager,
-    gc_worker::{schedule_gc, GcSafePointProvider, GcTask},
-    Error, ErrorInner, Result,
+    gc_worker::{GcSafePointProvider, GcTask, schedule_gc},
 };
 use crate::{server::metrics::*, storage::Callback, tikv_util::sys::thread::StdThreadBuildWrapper};
 
@@ -675,7 +676,7 @@ mod tests {
     use std::{
         collections::BTreeMap,
         mem,
-        sync::mpsc::{channel, Receiver, Sender},
+        sync::mpsc::{Receiver, Sender, channel},
     };
 
     use engine_rocks::RocksEngine;
@@ -693,12 +694,8 @@ mod tests {
 
     fn take_callback(t: &mut GcTask<RocksEngine>) -> Callback<()> {
         let callback = match t {
-            GcTask::Gc {
-                ref mut callback, ..
-            } => callback,
-            GcTask::UnsafeDestroyRange {
-                ref mut callback, ..
-            } => callback,
+            GcTask::Gc { callback, .. } => callback,
+            GcTask::UnsafeDestroyRange { callback, .. } => callback,
             GcTask::GcKeys { .. } => unreachable!(),
             GcTask::RawGcKeys { .. } => unreachable!(),
             GcTask::OrphanVersions { .. } => unreachable!(),

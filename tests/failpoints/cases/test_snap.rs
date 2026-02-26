@@ -6,7 +6,7 @@ use std::{
     io,
     io::prelude::*,
     path::PathBuf,
-    sync::{atomic::Ordering, mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, atomic::Ordering, mpsc},
     thread,
     time::Duration,
 };
@@ -16,7 +16,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use tikv_util::{config::*, time::Instant, HandyRwLock};
+use tikv_util::{HandyRwLock, config::*, time::Instant};
 
 #[test]
 fn test_overlap_cleanup() {

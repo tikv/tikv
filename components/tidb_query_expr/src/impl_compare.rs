@@ -1,14 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp::{max, min, Ordering},
+    cmp::{Ordering, max, min},
     str,
 };
 
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::{
-    codec::{collation::Collator, data_type::*, mysql::Time, Error},
+    codec::{Error, collation::Collator, data_type::*, mysql::Time},
     expr::EvalContext,
 };
 
@@ -552,7 +552,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use tidb_query_datatype::{builder::FieldTypeBuilder, Collation, FieldTypeFlag, FieldTypeTp};
+    use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp, builder::FieldTypeBuilder};
     use tipb::ScalarFuncSig;
 
     use super::*;

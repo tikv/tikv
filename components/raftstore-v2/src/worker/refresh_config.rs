@@ -3,16 +3,16 @@
 use std::{sync::Arc, thread};
 
 use batch_system::{BatchRouter, Fsm, FsmTypes, HandlerBuilder, Poller, PoolState, Priority};
-use file_system::{set_io_type, IoType};
+use file_system::{IoType, set_io_type};
 use raftstore::store::{BatchComponent, RefreshConfigTask, Transport, WriterContoller};
-use slog::{error, info, warn, Logger};
+use slog::{Logger, error, info, warn};
 use tikv_util::{
     sys::thread::StdThreadBuildWrapper, thd_name, worker::Runnable, yatp_pool::FuturePool,
 };
 
 use crate::{
-    fsm::{PeerFsm, StoreFsm},
     StoreRouter,
+    fsm::{PeerFsm, StoreFsm},
 };
 
 pub struct PoolController<N: Fsm, C: Fsm, H: HandlerBuilder<N, C>> {

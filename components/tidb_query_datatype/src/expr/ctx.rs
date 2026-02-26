@@ -6,7 +6,7 @@ use bitflags::bitflags;
 use tipb::DagRequest;
 
 use super::{Error, Result};
-use crate::codec::mysql::{Tz, DEFAULT_DIV_FRAC_INCR};
+use crate::codec::mysql::{DEFAULT_DIV_FRAC_INCR, Tz};
 
 bitflags! {
     /// Please refer to SQLMode in `mysql/const.go` in repo `pingcap/parser` for details.

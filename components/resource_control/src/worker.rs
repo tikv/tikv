@@ -8,13 +8,13 @@ use std::{
     time::Duration,
 };
 
-use file_system::{fetch_io_bytes, IoBytes, IoType};
+use file_system::{IoBytes, IoType, fetch_io_bytes};
 use prometheus::Histogram;
 use strum::EnumCount;
 use tikv_util::{
     debug,
-    resource_control::{TaskPriority, DEFAULT_RESOURCE_GROUP_NAME},
-    sys::{cpu_time::ProcessStat, SysQuota},
+    resource_control::{DEFAULT_RESOURCE_GROUP_NAME, TaskPriority},
+    sys::{SysQuota, cpu_time::ProcessStat},
     time::Instant,
     warn,
     yatp_pool::metrics::YATP_POOL_SCHEDULE_WAIT_DURATION_VEC,

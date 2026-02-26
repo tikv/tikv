@@ -1,21 +1,24 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::*, time::Duration};
+use std::{
+    sync::*,
+    time::{Duration, Instant},
+};
 
-use api_version::{test_kv_format_impl, KvFormat};
-use cdc::{metrics::CDC_RESOLVED_TS_ADVANCE_METHOD, Task, Validate};
+use api_version::{KvFormat, test_kv_format_impl};
+use cdc::{Task, Validate, metrics::CDC_RESOLVED_TS_ADVANCE_METHOD};
 use concurrency_manager::ConcurrencyManager;
-use futures::{executor::block_on, SinkExt};
+use futures::{SinkExt, executor::block_on};
 use grpcio::WriteFlags;
 use kvproto::{cdcpb::*, kvrpcpb::*};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use tikv::server::DEFAULT_CLUSTER_ID;
-use tikv_util::{config::ReadableDuration, debug, error, HandyRwLock};
+use tikv_util::{HandyRwLock, config::ReadableDuration, debug, error};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
-use crate::{new_event_feed, new_event_feed_v2, TestSuite, TestSuiteBuilder};
+use crate::{TestSuite, TestSuiteBuilder, new_event_feed, new_event_feed_v2};
 
 #[test]
 fn test_cdc_basic() {
@@ -701,12 +704,18 @@ fn test_cdc_tso_failure_impl<F: KvFormat>() {
     suite.cluster.pd_client.trigger_tso_failure();
 
     // Make sure resolved ts can be advanced normally even with few tso failures.
+    let mut event_feed = event_feed_wrap.replace(None).unwrap();
     let mut counter = 0;
     let mut previous_ts = 0;
-    loop {
-        // Even if there is no write,
-        // resolved ts should be advanced regularly.
-        let event = receive_event(true);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        // TSO failures are injected intentionally. Poll with short timeout and
+        // verify resolved ts keeps moving once TSO recovers.
+        let event = match cdc::recv_timeout(&mut event_feed, Duration::from_secs(1)) {
+            Ok(Some(e)) => e.unwrap_or_default(),
+            Ok(None) => break,
+            Err(_) => continue,
+        };
         if let Some(resolved_ts) = event.resolved_ts.as_ref() {
             assert!(resolved_ts.ts >= previous_ts);
             assert_eq!(resolved_ts.regions, vec![1]);
@@ -717,7 +726,12 @@ fn test_cdc_tso_failure_impl<F: KvFormat>() {
             break;
         }
     }
+    assert!(
+        counter > 5,
+        "resolved ts doesn't advance after injected tso failures"
+    );
 
+    event_feed_wrap.replace(Some(event_feed));
     event_feed_wrap.replace(None);
     suite.stop();
 }

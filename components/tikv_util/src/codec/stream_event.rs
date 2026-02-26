@@ -1,10 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
-use std::io::{prelude::*, Cursor};
+use std::io::{Cursor, prelude::*};
 
 use byteorder::ByteOrder;
 use bytes::{Buf, Bytes};
 
-use crate::{codec::Result, Either};
+use crate::{Either, codec::Result};
 
 // Note: maybe allow them to be different lifetime.
 // But not necessary for now, so keep it simple...?
@@ -228,7 +228,7 @@ mod tests {
         let count = 20;
 
         for _i in 0..count {
-            let should_rewrite = rng.gen::<bool>();
+            let should_rewrite = rng.r#gen::<bool>();
             let mut key: Vec<u8> = std::iter::once(if should_rewrite { b'k' } else { b'l' })
                 .chain((0..100).map(|_| rng.gen_range(0..255)))
                 .collect();

@@ -7,10 +7,10 @@ use tikv_util::{box_try, debug, info, warn};
 
 use super::{
     super::{
-        error::Result, metrics::*, Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver,
-        SplitChecker,
+        Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker, error::Result,
+        metrics::*,
     },
-    calc_split_keys_count, Host,
+    Host, calc_split_keys_count,
 };
 use crate::coprocessor::dispatcher::StoreHandle;
 
@@ -242,7 +242,7 @@ pub mod tests {
         kv::KvTestEngine,
     };
     use engine_traits::{
-        CfName, MiscExt, SyncMutable, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, LARGE_CFS,
+        ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, CfName, LARGE_CFS, MiscExt, SyncMutable,
     };
     use kvproto::{
         metapb::{Peer, Region},
@@ -255,7 +255,7 @@ pub mod tests {
     use super::{Checker, *};
     use crate::{
         coprocessor::{
-            dispatcher::SchedTask, Config, CoprocessorHost, ObserverContext, SplitChecker,
+            Config, CoprocessorHost, ObserverContext, SplitChecker, dispatcher::SchedTask,
         },
         store::{BucketRange, KeyEntry, SplitCheckRunner, SplitCheckTask},
     };

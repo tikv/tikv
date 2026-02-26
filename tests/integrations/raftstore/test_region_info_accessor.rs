@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{mpsc::channel, Arc},
+    sync::{Arc, mpsc::channel},
     thread,
     time::Duration,
 };
@@ -10,12 +10,12 @@ use kvproto::metapb::Region;
 use pd_client::PdClient;
 use raft::StateRole;
 use raftstore::coprocessor::{RangeKey, RegionInfo, RegionInfoAccessor};
-use test_raftstore::{configure_for_merge, new_node_cluster, Cluster, NodeCluster};
+use test_raftstore::{Cluster, NodeCluster, configure_for_merge, new_node_cluster};
 use test_raftstore_macro::test_case;
 use tikv_kv::Engine;
 use tikv_util::{
-    store::{find_peer, new_peer},
     HandyRwLock,
+    store::{find_peer, new_peer},
 };
 
 fn dump(c: &RegionInfoAccessor) -> Vec<(Region, StateRole)> {
@@ -25,15 +25,13 @@ fn dump(c: &RegionInfoAccessor) -> Vec<(Region, StateRole)> {
 
     let mut res = Vec::new();
     for (end_key, id) in region_ranges {
-        let RegionInfo {
-            ref region, role, ..
-        } = regions[&id];
+        let RegionInfo { region, role, .. } = &regions[&id];
         assert_eq!(
             end_key,
             RangeKey::from_end_key(region.get_end_key().to_vec())
         );
         assert_eq!(id, region.get_id());
-        res.push((region.clone(), role));
+        res.push((region.clone(), *role));
     }
 
     res
@@ -86,7 +84,7 @@ fn test_region_info_accessor_impl(cluster: &mut Cluster<NodeCluster>, c: &Region
             (b"k4", b""),
         ],
     );
-    for (ref region, _) in &split_regions {
+    for (region, _) in &split_regions {
         if region.get_id() == init_regions[0].0.get_id() {
             assert_ne!(
                 region.get_region_epoch(),

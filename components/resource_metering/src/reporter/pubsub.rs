@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use futures::{
-    channel::mpsc::{channel, Sender},
     SinkExt, StreamExt,
+    channel::mpsc::{Sender, channel},
 };
 use grpcio::{RpcContext, ServerStreamingSink, WriteFlags};
 use kvproto::{
@@ -15,9 +15,9 @@ use tikv_util::{info, warn};
 
 use super::DataSinkRegHandle;
 use crate::{
+    DataSink,
     error::Result,
     metrics::{IGNORED_DATA_COUNTER, REPORT_DATA_COUNTER, REPORT_DURATION_HISTOGRAM},
-    DataSink,
 };
 
 /// `PubSubService` implements [ResourceMeteringPubSub].

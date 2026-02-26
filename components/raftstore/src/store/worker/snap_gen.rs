@@ -3,9 +3,9 @@
 use std::{
     fmt::{self, Display, Formatter},
     sync::{
+        Arc,
         atomic::{AtomicBool, Ordering},
         mpsc::SyncSender,
-        Arc,
     },
     u64,
 };
@@ -25,7 +25,7 @@ use tikv_util::{
 };
 
 use super::metrics::*;
-use crate::store::{self, snap::Result, transport::CasualRouter, CasualMessage, SnapManager};
+use crate::store::{self, CasualMessage, SnapManager, snap::Result, transport::CasualRouter};
 
 pub const SNAP_GENERATOR_MAX_POOL_SIZE: usize = 16;
 

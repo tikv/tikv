@@ -9,16 +9,15 @@ use tipb::FieldType;
 
 use super::data_type::*;
 use crate::{
+    FieldTypeAccessor, FieldTypeTp,
     codec::{
-        datum,
+        Error, Result, datum,
         mysql::{
             DecimalDecoder, DecimalEncoder, DurationDecoder, EnumDecoder, EnumEncoder, JsonDecoder,
             JsonEncoder, TimeDecoder, VectorFloat32Decoder, VectorFloat32Encoder,
         },
-        Error, Result,
     },
     expr::EvalContext,
-    FieldTypeAccessor, FieldTypeTp,
 };
 
 /// A decoder to decode the payload part of a datum.

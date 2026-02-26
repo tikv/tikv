@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::{bit_vec::BitVec, ChunkRef, ChunkedVec, Evaluable, EvaluableRet, UnsafeRefInto};
+use super::{ChunkRef, ChunkedVec, Evaluable, EvaluableRet, UnsafeRefInto, bit_vec::BitVec};
 use crate::impl_chunked_vec_common;
 
 /// A vector storing `Option<T>` with a compact layout.

@@ -7,9 +7,9 @@ use regex::Regex;
 
 use crate::{
     codec::{
-        data_type::{BytesRef, Decimal, Real},
-        mysql::{duration::*, RoundMode, DEFAULT_FSP, MAX_FSP, MIN_FSP},
         Error, Result,
+        data_type::{BytesRef, Decimal, Real},
+        mysql::{DEFAULT_FSP, MAX_FSP, MIN_FSP, RoundMode, duration::*},
     },
     expr::EvalContext,
 };

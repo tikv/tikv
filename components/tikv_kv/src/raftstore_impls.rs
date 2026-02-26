@@ -6,8 +6,8 @@ use engine_traits::{CfName, IterOptions, Peekable, ReadOptions, Snapshot};
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use pd_client::BucketMeta;
 use raftstore::{
-    store::{RegionIterator, RegionSnapshot, TxnExt},
     Error as RaftServerError,
+    store::{RegionIterator, RegionSnapshot, TxnExt},
 };
 use txn_types::{Key, Value};
 

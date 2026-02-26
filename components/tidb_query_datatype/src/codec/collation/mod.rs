@@ -15,8 +15,8 @@ use codec::prelude::*;
 use num::Unsigned;
 
 use crate::codec::{
-    data_type::{Bytes, BytesGuard, BytesRef, BytesWriter},
     Result,
+    data_type::{Bytes, BytesGuard, BytesRef, BytesWriter},
 };
 
 #[macro_export]

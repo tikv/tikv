@@ -16,20 +16,20 @@ use mysql::VectorFloat32;
 use tikv_util::{codec::BytesSlice, escape};
 
 use super::{
-    mysql::{
-        self, parse_json_path_expr, Decimal, DecimalDecoder, DecimalEncoder, Duration, Enum, Json,
-        JsonDecoder, JsonEncoder, PathExpression, Set, Time, VectorFloat32Decoder,
-        VectorFloat32Encoder, DEFAULT_FSP, MAX_FSP,
-    },
     Result,
+    mysql::{
+        self, DEFAULT_FSP, Decimal, DecimalDecoder, DecimalEncoder, Duration, Enum, Json,
+        JsonDecoder, JsonEncoder, MAX_FSP, PathExpression, Set, Time, VectorFloat32Decoder,
+        VectorFloat32Encoder, parse_json_path_expr,
+    },
 };
 use crate::{
+    FieldTypeTp,
     codec::{
         convert::{ConvertTo, ToInt},
         data_type::AsMySqlBool,
     },
     expr::EvalContext,
-    FieldTypeTp,
 };
 
 pub const NIL_FLAG: u8 = 0;
@@ -1177,13 +1177,13 @@ pub fn skip_n(buf: &mut &[u8], n: usize) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use std::{
-        cmp::Ordering, i16, i32, i64, i8, slice::from_ref, str::FromStr, sync::Arc, u16, u32, u64,
-        u8,
+        cmp::Ordering, i8, i16, i32, i64, slice::from_ref, str::FromStr, sync::Arc, u8, u16, u32,
+        u64,
     };
 
     use super::*;
     use crate::{
-        codec::mysql::{Decimal, Duration, Time, MAX_FSP},
+        codec::mysql::{Decimal, Duration, MAX_FSP, Time},
         expr::{EvalConfig, EvalContext},
     };
 

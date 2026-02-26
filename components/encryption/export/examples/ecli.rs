@@ -5,13 +5,13 @@ use std::io::{Read, Write};
 use azure::STORAGE_VENDOR_NAME_AZURE;
 pub use cloud::kms::Config as CloudConfig;
 use encryption::{GcpConfig, KmsBackend};
-use encryption_export::{create_cloud_backend, AzureConfig, Backend, Error, KmsConfig, Result};
+use encryption_export::{AzureConfig, Backend, Error, KmsConfig, Result, create_cloud_backend};
 use file_system::{File, OpenOptions};
 use gcp::STORAGE_VENDOR_NAME_GCP;
 use ini::ini::Ini;
 use kvproto::encryptionpb::EncryptedContent;
 use protobuf::Message;
-use structopt::{clap::arg_enum, StructOpt};
+use structopt::{StructOpt, clap::arg_enum};
 use tikv_util::box_err;
 
 arg_enum! {

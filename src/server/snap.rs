@@ -5,8 +5,8 @@ use std::{
     io::{Error as IoError, ErrorKind, Read, Write},
     pin::Pin,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant as StdInstant},
 };
@@ -14,7 +14,7 @@ use std::{
 use file_system::{IoType, WithIoType};
 use futures::{
     compat::Future01CompatExt,
-    future::{select, Either, Future, TryFutureExt},
+    future::{Either, Future, TryFutureExt, select},
     pin_mut,
     sink::SinkExt,
     stream::{Stream, StreamExt, TryStreamExt},
@@ -38,16 +38,15 @@ use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
 use security::SecurityManager;
 use tikv_kv::RaftExtension;
 use tikv_util::{
-    box_err,
-    config::{Tracker, VersionTrack, MIB},
+    DeferContext, box_err,
+    config::{MIB, Tracker, VersionTrack},
     time::{Instant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
     worker::Runnable,
-    DeferContext,
 };
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
-use super::{metrics::*, Config, Error, Result};
+use super::{Config, Error, Result, metrics::*};
 use crate::{server::tablet_snap::NoSnapshotCache, tikv_util::sys::thread::ThreadBuildWrapper};
 
 pub type Callback = Box<dyn FnOnce(Result<()>) + Send>;
@@ -160,7 +159,7 @@ pub fn send_snap(
     cfg: &Config,
     addr: &str,
     msg: RaftMessage,
-) -> Result<impl Future<Output = Result<SendStat>>> {
+) -> Result<impl Future<Output = Result<SendStat>> + use<>> {
     assert!(msg.get_message().has_snapshot());
     let timer = Instant::now();
 
@@ -597,7 +596,14 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
                 let security_mgr = Arc::clone(&self.security_mgr);
                 let sending_count = Arc::clone(&self.sending_count);
                 sending_count.fetch_add(1, Ordering::SeqCst);
-                let send_task = send_snap(env, mgr, security_mgr, &self.cfg.clone(), &addr, msg);
+                let send_task = send_snap(
+                    env,
+                    mgr,
+                    security_mgr,
+                    &self.cfg.clone(),
+                    &addr.clone(),
+                    msg,
+                );
                 let task = async move {
                     let res = match send_task {
                         Err(e) => Err(e),

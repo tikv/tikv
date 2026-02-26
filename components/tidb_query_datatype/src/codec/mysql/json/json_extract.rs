@@ -4,8 +4,8 @@ use collections::HashSet;
 
 use super::{
     super::Result,
-    path_expr::{PathExpression, PathLeg},
     Json, JsonRef, JsonType,
+    path_expr::{PathExpression, PathLeg},
 };
 use crate::codec::mysql::json::path_expr::{ArrayIndex, ArraySelection, KeySelection};
 
@@ -200,8 +200,8 @@ mod tests {
 
     use super::{
         super::path_expr::{
-            PathExpressionFlag, PATH_EXPRESSION_CONTAINS_ASTERISK,
-            PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
+            PATH_EXPRESSION_CONTAINS_ASTERISK, PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
+            PathExpressionFlag,
         },
         *,
     };

@@ -45,7 +45,7 @@ impl LocalStorage {
     }
 
     fn tmp_path(&self, path: &Path) -> PathBuf {
-        let uid: u64 = rand::thread_rng().gen();
+        let uid: u64 = rand::thread_rng().r#gen();
         let tmp_suffix = format!("{}{:016x}", LOCAL_STORAGE_TMP_FILE_SUFFIX, uid);
         // Save tmp files in base directory.
         self.base.join(path).with_extension(tmp_suffix)

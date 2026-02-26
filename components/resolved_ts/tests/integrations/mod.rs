@@ -9,7 +9,7 @@ use kvproto::{kvrpcpb::*, metapb::RegionEpoch};
 use pd_client::PdClient;
 use resolved_ts::Task;
 use tempfile::Builder;
-use test_raftstore::{sleep_ms, IsolationFilterFactory};
+use test_raftstore::{IsolationFilterFactory, sleep_ms};
 use test_sst_importer::*;
 pub use testsuite::*;
 use tikv_util::store::new_peer;

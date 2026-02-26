@@ -7,8 +7,8 @@ use std::{
     result::Result as StdResult,
     string::String,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -18,19 +18,19 @@ use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
 use kvproto::{
     cdcpb::{
-        ChangeDataRequestKvApi, Error as EventError, Event, EventEntries, EventLogType, EventRow,
-        EventRowOpType, Event_oneof_event,
+        ChangeDataRequestKvApi, Error as EventError, Event, Event_oneof_event, EventEntries,
+        EventLogType, EventRow, EventRowOpType,
     },
     kvrpcpb::ExtraOp as TxnExtraOp,
     metapb::{Region, RegionEpoch},
     raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, PutRequest, Request},
 };
 use raftstore::{
+    Error as RaftStoreError,
     coprocessor::{Cmd, CmdBatch, ObserveHandle},
     store::util::compare_region_epoch,
-    Error as RaftStoreError,
 };
-use tikv::storage::{txn::TxnEntry, Statistics};
+use tikv::storage::{Statistics, txn::TxnEntry};
 use tikv_util::{
     debug, info,
     memory::{HeapSize, MemoryQuota},
@@ -40,14 +40,14 @@ use tikv_util::{
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
 
 use crate::{
-    channel::{CdcEvent, SendError, Sink, CDC_EVENT_MAX_BYTES},
+    Error, Result,
+    channel::{CDC_EVENT_MAX_BYTES, CdcEvent, SendError, Sink},
     endpoint::Advance,
     initializer::KvEntry,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
     service::{Conn, ConnId, FeatureGate, RequestId},
     txn_source::TxnSource,
-    Error, Result,
 };
 
 static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
@@ -273,7 +273,7 @@ impl fmt::Debug for LockTracker {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LockTracker::Pending => write!(f, "LockTracker::Pending"),
-            LockTracker::Preparing(ref locks) => {
+            LockTracker::Preparing(locks) => {
                 write!(f, "LockTracker::Preparing({})", locks.len())
             }
             LockTracker::Prepared { locks, .. } => {
@@ -518,7 +518,7 @@ impl Delegate {
     /// Let downstream subscribe the delegate.
     /// Return error if subscribe fails and the `Delegate` won't be changed.
     pub fn subscribe(&mut self, downstream: Downstream) -> StdResult<(), (Error, Downstream)> {
-        if let LockTracker::Prepared { ref region, .. } = &self.lock_tracker {
+        if let LockTracker::Prepared { region, .. } = &self.lock_tracker {
             // Check if the downstream is outdated.
             if let Err(e) = Self::check_epoch_on_ready(&downstream, region) {
                 return Err((e, downstream));

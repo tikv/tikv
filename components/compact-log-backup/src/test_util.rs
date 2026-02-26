@@ -20,7 +20,7 @@ use futures::{
 };
 use keys::origin_key;
 use kvproto::brpb;
-use protobuf::{parse_from_bytes, Chars, Message};
+use protobuf::{Chars, Message, parse_from_bytes};
 use tempdir::TempDir;
 use tidb_query_datatype::codec::table::encode_row_key;
 use tikv_util::codec::stream_event::EventEncoder;
@@ -28,11 +28,11 @@ use txn_types::Key;
 
 use crate::{
     compaction::{
-        exec::{SubcompactExt, SubcompactionExec},
         Subcompaction, SubcompactionResult,
+        exec::{SubcompactExt, SubcompactionExec},
     },
     errors::{OtherErrExt, Result},
-    storage::{id_of_migration, Epoch, LogFile, LogFileId, MetaFile},
+    storage::{Epoch, LogFile, LogFileId, MetaFile, id_of_migration},
 };
 
 #[derive(Debug, PartialEq, Eq)]

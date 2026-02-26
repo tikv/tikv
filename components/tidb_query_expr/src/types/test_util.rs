@@ -12,7 +12,7 @@ use tidb_query_datatype::{
 };
 use tipb::{Expr, ExprType, FieldType, ScalarFuncSig};
 
-use crate::{types::function::RpnFnMeta, RpnExpressionBuilder};
+use crate::{RpnExpressionBuilder, types::function::RpnFnMeta};
 
 /// Helper utility to evaluate RPN function over scalar inputs.
 ///

@@ -1,8 +1,8 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
     Mutex,
+    atomic::{AtomicU64, Ordering},
 };
 
 use crossbeam::utils::CachePadded;

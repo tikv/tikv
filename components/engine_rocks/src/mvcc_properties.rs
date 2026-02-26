@@ -3,7 +3,7 @@
 use engine_traits::{MvccProperties, MvccPropertiesExt, Result};
 use txn_types::TimeStamp;
 
-use crate::{decode_properties::DecodeProperties, RocksEngine, RocksTtlProperties, UserProperties};
+use crate::{RocksEngine, RocksTtlProperties, UserProperties, decode_properties::DecodeProperties};
 
 pub const PROP_NUM_ERRORS: &str = "tikv.num_errors";
 pub const PROP_MIN_TS: &str = "tikv.min_ts";

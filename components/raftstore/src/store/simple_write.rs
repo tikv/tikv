@@ -11,7 +11,7 @@ use protobuf::{CodedInputStream, Message};
 use slog::Logger;
 use tikv_util::slog_panic;
 
-use crate::store::{msg::ErrorCallback, WriteCallback};
+use crate::store::{WriteCallback, msg::ErrorCallback};
 
 // MAGIC number to hint simple write codec is used. If it's a protobuf message,
 // the first one or several bytes are for field tag, which can't be zero.

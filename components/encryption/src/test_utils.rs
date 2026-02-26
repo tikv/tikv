@@ -13,6 +13,6 @@ pub fn create_master_key_file_test_only(val: &str) -> (PathBuf, TempDir) {
 }
 
 pub fn generate_random_master_key() -> String {
-    let master_key: [u8; 32] = rand::thread_rng().gen();
+    let master_key: [u8; 32] = rand::thread_rng().r#gen();
     hex::encode(master_key)
 }

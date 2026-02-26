@@ -3,19 +3,20 @@
 use std::{
     fmt,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
 
 use futures::{
+    SinkExt, Stream, StreamExt,
     channel::mpsc::{
-        channel as bounded, unbounded, Receiver, SendError as FuturesSendError, Sender,
-        TrySendError, UnboundedReceiver, UnboundedSender,
+        Receiver, SendError as FuturesSendError, Sender, TrySendError, UnboundedReceiver,
+        UnboundedSender, channel as bounded, unbounded,
     },
     executor::block_on,
-    stream, SinkExt, Stream, StreamExt,
+    stream,
 };
 use grpcio::WriteFlags;
 use kvproto::cdcpb::{ChangeDataEvent, Event, ResolvedTs};
@@ -67,7 +68,7 @@ impl CdcEvent {
             .map(|s| s.parse::<u32>().unwrap())
             .unwrap_or(0));
         match self {
-            CdcEvent::ResolvedTs(ref r) => {
+            CdcEvent::ResolvedTs(r) => {
                 // For region id, it is unlikely to exceed 100,000,000 which is
                 // encoded into 4 bytes.
                 // For TSO, it is likely to be encoded into 9 bytes,
@@ -85,7 +86,7 @@ impl CdcEvent {
                 // Bytes of a TSO.
                 + (tag_bytes + approximate_tso_bytes)
             }
-            CdcEvent::Event(ref e) => e.compute_size(),
+            CdcEvent::Event(e) => e.compute_size(),
             CdcEvent::Barrier(_) => 0,
         }
     }
@@ -93,13 +94,13 @@ impl CdcEvent {
     pub fn event(&self) -> &Event {
         match self {
             CdcEvent::ResolvedTs(_) | CdcEvent::Barrier(_) => unreachable!(),
-            CdcEvent::Event(ref e) => e,
+            CdcEvent::Event(e) => e,
         }
     }
 
     pub fn resolved_ts(&self) -> &ResolvedTs {
         match self {
-            CdcEvent::ResolvedTs(ref r) => r,
+            CdcEvent::ResolvedTs(r) => r,
             CdcEvent::Event(_) | CdcEvent::Barrier(_) => unreachable!(),
         }
     }
@@ -112,7 +113,7 @@ impl fmt::Debug for CdcEvent {
                 let mut d = f.debug_tuple("Barrier");
                 d.finish()
             }
-            CdcEvent::ResolvedTs(ref r) => {
+            CdcEvent::ResolvedTs(r) => {
                 let mut d = f.debug_struct("ResolvedTs");
                 d.field("resolved ts", &r.ts);
                 d.field("region count", &r.regions.len());
@@ -485,13 +486,13 @@ where
 mod tests {
     use std::{
         assert_matches::assert_matches,
-        sync::{mpsc, Arc},
+        sync::{Arc, mpsc},
         time::Duration,
     };
 
     use futures::executor::block_on;
     use kvproto::cdcpb::{
-        ChangeDataEvent, Event, EventEntries, EventRow, Event_oneof_event, ResolvedTs,
+        ChangeDataEvent, Event, Event_oneof_event, EventEntries, EventRow, ResolvedTs,
     };
 
     use super::*;

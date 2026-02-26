@@ -2,7 +2,7 @@
 
 use std::{self, time::Duration};
 
-use engine_traits::{Peekable, RaftEngineReadOnly, CF_DEFAULT};
+use engine_traits::{CF_DEFAULT, Peekable, RaftEngineReadOnly};
 use futures::executor::block_on;
 use kvproto::{
     raft_cmdpb::{AdminCmdType, RaftCmdRequest},
@@ -10,12 +10,12 @@ use kvproto::{
 };
 use raft::prelude::{ConfChangeType, MessageType};
 use raftstore_v2::{
-    router::{PeerMsg, PeerTick},
     SimpleWriteEncoder,
+    router::{PeerMsg, PeerTick},
 };
 use tikv_util::store::{new_learner_peer, new_peer};
 
-use crate::cluster::{check_skip_wal, Cluster};
+use crate::cluster::{Cluster, check_skip_wal};
 
 #[test]
 fn test_simple_change() {

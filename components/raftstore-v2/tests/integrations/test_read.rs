@@ -3,11 +3,11 @@
 use engine_traits::CF_DEFAULT;
 use futures::executor::block_on;
 use kvproto::raft_cmdpb::{CmdType, Request};
-use raftstore_v2::{router::PeerMsg, SimpleWriteEncoder};
+use raftstore_v2::{SimpleWriteEncoder, router::PeerMsg};
 use tikv_util::{config::ReadableDuration, store::new_peer};
 use txn_types::WriteBatchFlags;
 
-use crate::cluster::{v2_default_config, Cluster};
+use crate::cluster::{Cluster, v2_default_config};
 
 #[test]
 fn test_read_index() {

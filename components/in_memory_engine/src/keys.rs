@@ -305,7 +305,7 @@ mod tests {
     use bytes::BufMut;
 
     use super::*;
-    use crate::keys::{encode_key, ValueType};
+    use crate::keys::{ValueType, encode_key};
 
     fn construct_key(i: u64, mvcc: u64) -> Vec<u8> {
         let k = format!("zk{:08}", i);

@@ -1,12 +1,12 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
-    collections::{hash_map::Entry, BTreeSet, HashMap, HashSet, VecDeque},
+    collections::{BTreeSet, HashMap, HashSet, VecDeque, hash_map::Entry},
     future::Future,
     ops::{Deref, Not},
     path::Path,
     pin::Pin,
     sync::Arc,
-    task::{ready, Context, Poll},
+    task::{Context, Poll, ready},
 };
 
 use cloud::blob::read_to_end;
@@ -29,14 +29,14 @@ use tikv_util::{
 };
 use tokio::time::Instant;
 use tokio_stream::Stream;
-use tracing::{span::Entered, Span};
+use tracing::{Span, span::Entered};
 use tracing_active_tree::frame;
 
 use super::{
     errors::{Error, Result},
     statistic::LoadMetaStatistic,
 };
-use crate::{compaction::EpochHint, errors::ErrorKind, util, OtherErrExt};
+use crate::{OtherErrExt, compaction::EpochHint, errors::ErrorKind, util};
 
 pub const METADATA_PREFIX: &str = "v1/backupmeta";
 pub const DEFAULT_COMPACTION_OUT_PREFIX: &str = "v1/compaction_out";
@@ -761,11 +761,12 @@ impl<'a> MigrationStorageWrapper<'a> {
         // Note: perhaps we need to verify that there isn't concurrency writing in the
         // future.
         let name = name_of_migration(id + 1, &migration);
+        let full_name = format!("{}/{}", self.migrations_prefix, name);
         let bytes = migration.write_to_bytes()?;
         retry_expr!(
             self.storage
                 .write(
-                    &format!("{}/{}", self.migrations_prefix, name),
+                    &full_name,
                     UnpinReader(Box::new(Cursor::new(&bytes))),
                     bytes.len() as u64
                 )
@@ -854,7 +855,7 @@ mod test {
     use super::{LoadFromExt, MetaFile, StreamMetaStorage};
     use crate::{
         storage::{LogFileId, MetaEditFilters, MigrationStorageWrapper},
-        test_util::{gen_step, KvGen, LogFileBuilder, TmpStorage},
+        test_util::{KvGen, LogFileBuilder, TmpStorage, gen_step},
     };
 
     async fn construct_storage(

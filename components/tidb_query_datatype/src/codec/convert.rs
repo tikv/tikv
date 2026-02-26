@@ -5,18 +5,18 @@ use std::{borrow::Cow, fmt::Display};
 use tipb::FieldType;
 
 use super::{
-    mysql::{charset::MULTI_BYTES_CHARSETS, RoundMode, DEFAULT_FSP},
     Error, Result,
+    mysql::{DEFAULT_FSP, RoundMode, charset::MULTI_BYTES_CHARSETS},
 };
 // use crate::{self, FieldTypeTp, UNSPECIFIED_LENGTH};
 use crate::{
+    Collation, FieldTypeAccessor, FieldTypeTp, UNSPECIFIED_LENGTH,
     codec::{
         data_type::*,
         error::ERR_DATA_OUT_OF_RANGE,
-        mysql::{decimal::max_or_min_dec, Res},
+        mysql::{Res, decimal::max_or_min_dec},
     },
     expr::{EvalContext, Flag},
-    Collation, FieldTypeAccessor, FieldTypeTp, UNSPECIFIED_LENGTH,
 };
 
 /// A trait for converting a value to an `Int`.
@@ -1138,15 +1138,15 @@ mod tests {
 
     use super::*;
     use crate::{
+        Collation, FieldTypeFlag,
         codec::{
             error::{
                 ERR_DATA_OUT_OF_RANGE, ERR_M_BIGGER_THAN_D, ERR_TRUNCATE_WRONG_VALUE,
                 WARN_DATA_TRUNCATED,
             },
-            mysql::{charset, Res, UNSPECIFIED_FSP},
+            mysql::{Res, UNSPECIFIED_FSP, charset},
         },
         expr::{EvalConfig, EvalContext, Flag},
-        Collation, FieldTypeFlag,
     };
 
     #[test]

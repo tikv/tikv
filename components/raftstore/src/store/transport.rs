@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::sync::{mpsc, Mutex};
+use std::sync::{Mutex, mpsc};
 
 use crossbeam::channel::{SendError, TrySendError};
 use engine_traits::{KvEngine, RaftEngine, Snapshot};
@@ -10,8 +10,8 @@ use tikv_util::{error, warn};
 
 use super::{AsyncReadNotifier, FetchedLogs, GenSnapRes};
 use crate::{
-    store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg, StoreMsg},
     DiscardReason, Error, Result,
+    store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg, StoreMsg},
 };
 
 /// Transports messages between different Raft peers.

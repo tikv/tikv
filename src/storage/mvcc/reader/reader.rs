@@ -21,10 +21,9 @@ use crate::storage::{
         Cursor, CursorBuilder, Error as KvError, ScanMode, Snapshot as EngineSnapshot, Statistics,
     },
     mvcc::{
-        default_not_found_error,
-        metrics::{ScanLockReadTimeSource, SCAN_LOCK_READ_TIME_VEC},
+        Result, default_not_found_error,
+        metrics::{SCAN_LOCK_READ_TIME_VEC, ScanLockReadTimeSource},
         reader::{OverlappedWrite, TxnCommitRecord},
-        Result,
     },
 };
 
@@ -987,12 +986,12 @@ pub mod tests {
 
     use concurrency_manager::ConcurrencyManager;
     use engine_rocks::{
-        properties::MvccPropertiesCollectorFactory, RocksCfOptions, RocksDbOptions, RocksEngine,
-        RocksSnapshot,
+        RocksCfOptions, RocksDbOptions, RocksEngine, RocksSnapshot,
+        properties::MvccPropertiesCollectorFactory,
     };
     use engine_traits::{
-        CompactExt, IterOptions, ManualCompactionOptions, MiscExt, Mutable, SyncMutable,
-        WriteBatch, WriteBatchExt, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+        ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, CompactExt, IterOptions,
+        ManualCompactionOptions, MiscExt, Mutable, SyncMutable, WriteBatch, WriteBatchExt,
     };
     use kvproto::{
         kvrpcpb::{AssertionLevel, Context, PrewriteRequestPessimisticAction::*},
@@ -1004,13 +1003,13 @@ pub mod tests {
 
     use super::*;
     use crate::storage::{
-        kv::Modify,
-        mvcc::{tests::write, MvccReader, MvccTxn},
-        txn::{
-            acquire_pessimistic_lock, cleanup, commit, gc, prewrite,
-            sched_pool::set_tls_feature_gate, CommitKind, TransactionKind, TransactionProperties,
-        },
         Engine, TestEngineBuilder,
+        kv::Modify,
+        mvcc::{MvccReader, MvccTxn, tests::write},
+        txn::{
+            CommitKind, TransactionKind, TransactionProperties, acquire_pessimistic_lock, cleanup,
+            commit, gc, prewrite, sched_pool::set_tls_feature_gate,
+        },
     };
 
     pub struct RegionEngine {

@@ -12,16 +12,15 @@ use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::{
     codec::{
+        Error,
         collation::Encoding,
         convert::*,
         data_type::*,
         error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE},
         mysql::{
-            binary_literal,
+            Time, binary_literal,
             time::{MAX_YEAR, MIN_YEAR},
-            Time,
         },
-        Error,
     },
     expr::EvalContext,
     *,
@@ -29,7 +28,7 @@ use tidb_query_datatype::{
 use tipb::{Expr, FieldType};
 
 use crate::{
-    types::RpnExpressionBuilder, RpnExpressionNode, RpnFnCallExtra, RpnFnMeta, RpnStackNode,
+    RpnExpressionNode, RpnFnCallExtra, RpnFnMeta, RpnStackNode, types::RpnExpressionBuilder,
 };
 
 fn get_cast_fn_rpn_meta(
@@ -1620,6 +1619,7 @@ mod tests {
     };
 
     use tidb_query_datatype::{
+        Collation, FieldTypeFlag, FieldTypeTp, UNSPECIFIED_LENGTH,
         builder::FieldTypeBuilder,
         codec::{
             convert::produce_dec_with_specified_tp,
@@ -1629,19 +1629,18 @@ mod tests {
                 WARN_DATA_TRUNCATED,
             },
             mysql::{
+                Decimal, Duration, Json, MAX_FSP, MIN_FSP, RoundMode, Time, TimeType, Tz,
                 charset::*,
                 decimal::{max_decimal, max_or_min_dec},
-                Decimal, Duration, Json, RoundMode, Time, TimeType, Tz, MAX_FSP, MIN_FSP,
             },
         },
         expr::{EvalConfig, EvalContext, Flag},
-        Collation, FieldTypeFlag, FieldTypeTp, UNSPECIFIED_LENGTH,
     };
     use tikv_util::buffer_vec::BufferVec;
     use tipb::ScalarFuncSig;
 
     use super::Result;
-    use crate::{impl_cast::*, types::test_util::RpnFnScalarEvaluator, RpnFnCallExtra};
+    use crate::{RpnFnCallExtra, impl_cast::*, types::test_util::RpnFnScalarEvaluator};
 
     fn test_none_with_ctx_and_extra<F, Input, Ret>(func: F)
     where
