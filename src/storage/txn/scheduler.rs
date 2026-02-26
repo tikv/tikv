@@ -48,7 +48,10 @@ use parking_lot::{Mutex, MutexGuard, RwLockWriteGuard};
 use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
 use resource_control::{ResourceController, ResourceGroupManager, TaskMetadata};
-use resource_metering::{FutureExt, ResourceTagFactory};
+use resource_metering::{
+    record_logical_read_bytes, record_logical_write_bytes, record_network_in_bytes, FutureExt,
+    ResourceTagFactory,
+};
 use smallvec::{smallvec, SmallVec};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};
 use tikv_util::{
@@ -321,7 +324,6 @@ impl<L: LockManager> TxnSchedulerInner<L> {
 
     fn dequeue_task_context(&self, cid: u64) -> TaskContext {
         let tctx = self.get_task_slot(cid).remove(&cid).unwrap();
-
         let running_write_bytes = self
             .running_write_bytes
             .fetch_sub(tctx.write_bytes, Ordering::AcqRel) as i64;
@@ -1229,9 +1231,15 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             }
 
             fail_point!("scheduler_process");
+            GLOBAL_TRACKERS.with_tracker(task.tracker_token(), |tracker| {
+                record_network_in_bytes(tracker.metrics.grpc_req_size);
+            });
+
             if task.cmd().readonly() {
                 self.process_read(snapshot, task, &mut sched_details);
+                record_logical_read_bytes(sched_details.stat.processed_size as u64);
             } else {
+                record_logical_write_bytes(task.cmd().write_bytes() as u64);
                 self.process_write(snapshot, task, &mut sched_details).await;
             };
             tls_collect_scan_details(tag.get_str(), &sched_details.stat);
