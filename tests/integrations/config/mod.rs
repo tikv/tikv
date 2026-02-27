@@ -916,6 +916,7 @@ fn test_serde_custom_tikv_config() {
     value.resource_control = ResourceControlConfig {
         enabled: false,
         priority_ctl_strategy: PriorityCtlStrategy::Aggressive,
+        compaction_pressure_threshold: 70.0,
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");

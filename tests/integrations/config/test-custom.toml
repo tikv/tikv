@@ -694,3 +694,4 @@ split.split-contained-score = 0.5
 [resource-control]
 enabled = false
 priority-ctl-strategy = "aggressive"
+compaction-pressure-threshold = 70.0
