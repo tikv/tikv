@@ -76,6 +76,7 @@ pub fn create_compaction(st: StorageBackend) -> Execution {
         },
         max_concurrent_subcompaction: 3,
         external_storage: st,
+        gcs_v2_enable: false,
         db: None,
         out_prefix: "test-output".to_owned(),
     }

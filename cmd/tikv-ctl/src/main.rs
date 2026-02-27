@@ -442,6 +442,7 @@ fn main() {
                 cfg: ccfg,
                 max_concurrent_subcompaction: max_compaction_num,
                 external_storage,
+                gcs_v2_enable: cfg.backup.gcs_v2_enable,
                 db: Some(tmp_engine.rocks),
             };
 

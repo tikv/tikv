@@ -1,6 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::io;
+use std::{future::Future, io};
 use std::pin::Pin;
 
 use async_trait::async_trait;
@@ -225,41 +225,14 @@ impl GcsStorageInner {
         let client = self
             .data_client
             .get_or_try_init(|| async {
-                info!("initializing GCS data client");
-                let start = Instant::now();
-                
-                let mut builder = Storage::builder();
-                if let Some(ep) = &self.data_endpoint {
-                    builder = builder.with_endpoint(ep);
-                }
-                
-                // Build credentials in async context to avoid tokio::spawn in sync context
-                if let Some(creds_json) = &self.data_credentials_json {
-                    let creds = Self::build_auth_credentials(creds_json)?;
-                    builder = builder.with_credentials(creds);
-                }
-
-                let result = builder
-                    .build()
-                    .await
-                    .map_err(|e: google_cloud_gax::client_builder::Error| {
-                        let kind = if e.is_transport() {
-                            io::ErrorKind::Interrupted
-                        } else if e.is_default_credentials() {
-                            io::ErrorKind::PermissionDenied
-                        } else {
-                            io::ErrorKind::Other
-                        };
-                        io::Error::new(kind, e)
-                    });
-                
-                if let Ok(_) = &result {
-                    info!("GCS data client initialized successfully"; "duration" => ?start.saturating_elapsed());
-                } else if let Err(e) = &result {
-                    error!("GCS data client initialization failed"; "err" => ?e, "duration" => ?start.saturating_elapsed());
-                }
-                
-                result
+                let builder = Self::apply_common_client_options(
+                    Storage::builder(),
+                    self.data_endpoint.as_deref(),
+                    self.data_credentials_json.as_deref(),
+                    |b, ep| b.with_endpoint(ep),
+                    |b, creds| b.with_credentials(creds),
+                )?;
+                Self::build_client("data", builder, |b| async move { b.build().await }).await
             })
             .await?;
         Ok(client.clone())
@@ -269,44 +242,66 @@ impl GcsStorageInner {
         let client = self
             .control_client
             .get_or_try_init(|| async {
-                info!("initializing GCS control client");
-                let start = Instant::now();
-                
-                let mut builder = StorageControl::builder();
-                if let Some(ep) = &self.control_endpoint {
-                    builder = builder.with_endpoint(ep);
-                }
-                
-                // Build credentials in async context to avoid tokio::spawn in sync context
-                if let Some(creds_json) = &self.control_credentials_json {
-                    let creds = Self::build_auth_credentials(creds_json)?;
-                    builder = builder.with_credentials(creds);
-                }
-                
-                let result = builder
-                    .build()
-                    .await
-                    .map_err(|e: google_cloud_gax::client_builder::Error| {
-                        let kind = if e.is_transport() {
-                            io::ErrorKind::Interrupted
-                        } else if e.is_default_credentials() {
-                            io::ErrorKind::PermissionDenied
-                        } else {
-                            io::ErrorKind::Other
-                        };
-                        io::Error::new(kind, e)
-                    });
-                
-                if let Ok(_) = &result {
-                    info!("GCS control client initialized successfully"; "duration" => ?start.saturating_elapsed());
-                } else if let Err(e) = &result {
-                    error!("GCS control client initialization failed"; "err" => ?e, "duration" => ?start.saturating_elapsed());
-                }
-                
-                result
+                let builder = Self::apply_common_client_options(
+                    StorageControl::builder(),
+                    self.control_endpoint.as_deref(),
+                    self.control_credentials_json.as_deref(),
+                    |b, ep| b.with_endpoint(ep),
+                    |b, creds| b.with_credentials(creds),
+                )?;
+                Self::build_client("control", builder, |b| async move { b.build().await }).await
             })
             .await?;
         Ok(client.clone())
+    }
+
+    fn apply_common_client_options<B, FE, FC>(
+        mut builder: B,
+        endpoint: Option<&str>,
+        creds_json: Option<&str>,
+        set_endpoint: FE,
+        set_credentials: FC,
+    ) -> io::Result<B>
+    where
+        FE: Fn(B, &str) -> B,
+        FC: Fn(B, google_cloud_auth::credentials::Credentials) -> B,
+    {
+        if let Some(ep) = endpoint {
+            builder = set_endpoint(builder, ep);
+        }
+        if let Some(creds_json) = creds_json {
+            // Build credentials in async context to avoid tokio::spawn in sync context.
+            let creds = Self::build_auth_credentials(creds_json)?;
+            builder = set_credentials(builder, creds);
+        }
+        Ok(builder)
+    }
+
+    async fn build_client<T, B, F, Fut>(kind: &'static str, builder: B, build: F) -> io::Result<T>
+    where
+        F: FnOnce(B) -> Fut,
+        Fut: Future<Output = Result<T, google_cloud_gax::client_builder::Error>>,
+    {
+        info!("initializing GCS client"; "kind" => kind);
+        let start = Instant::now();
+        let result = build(builder).await.map_err(Self::map_client_builder_error);
+        if result.is_ok() {
+            info!("GCS client initialized successfully"; "kind" => kind, "duration" => ?start.saturating_elapsed());
+        } else if let Err(e) = &result {
+            error!("GCS client initialization failed"; "kind" => kind, "err" => ?e, "duration" => ?start.saturating_elapsed());
+        }
+        result
+    }
+
+    fn map_client_builder_error(e: google_cloud_gax::client_builder::Error) -> io::Error {
+        let kind = if e.is_transport() {
+            io::ErrorKind::Interrupted
+        } else if e.is_default_credentials() {
+            io::ErrorKind::PermissionDenied
+        } else {
+            io::ErrorKind::Other
+        };
+        io::Error::new(kind, e)
     }
 }
 
