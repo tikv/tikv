@@ -23,7 +23,7 @@ harness = false
 engine_traits = { workspace = true }
 collections = { workspace = true }
 crossbeam-skiplist = { workspace = true }
-bytes = "1.0"
+bytes = { workspace = true }
 crossbeam = { workspace = true }
 futures = { version = "0.3", features = ["compat"] }
 tikv_util = { workspace = true }
