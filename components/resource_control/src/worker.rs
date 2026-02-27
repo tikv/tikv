@@ -349,6 +349,8 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             .clamp(1.0, 99.0);
 
         // Compute consumed deltas once for all groups and update tracking.
+        // If curr < prev (limiter recreated, counter reset), use curr as the
+        // delta to avoid a spurious INFINITY cycle under high pressure.
         let deltas: Vec<u64> = bg_group_stats
             .iter()
             .map(|g| {
@@ -357,7 +359,11 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
                     .prev_write_io_consumed
                     .insert(g.name.clone(), curr)
                     .unwrap_or(0);
-                curr.saturating_sub(prev)
+                if curr >= prev {
+                    curr - prev
+                } else {
+                    curr
+                }
             })
             .collect();
 
