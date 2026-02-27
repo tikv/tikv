@@ -100,11 +100,11 @@ use resource_metering::{
 };
 use tikv_kv::{OnAppliedCb, SnapshotExt};
 use tikv_util::{
-    Either,
     deadline::Deadline,
     future::try_poll,
     quota_limiter::QuotaLimiter,
     time::{duration_to_ms, duration_to_sec, Instant, ThreadReadId},
+    Either,
 };
 use tracker::{
     clear_tls_tracker_token, set_tls_tracker_token, with_tls_tracker, TrackedFuture, TrackerToken,

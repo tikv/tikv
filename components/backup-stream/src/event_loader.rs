@@ -16,10 +16,11 @@ use tikv::storage::{
     Snapshot, Statistics,
 };
 use tikv_util::{
-    Either, box_err,
+    box_err,
     memory::{MemoryQuota, OwnedAllocated},
     time::{Instant, Limiter},
     worker::Scheduler,
+    Either,
 };
 use tokio::sync::Semaphore;
 use tracing::instrument;

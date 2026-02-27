@@ -6,12 +6,12 @@ use byteorder::ReadBytesExt;
 use collections::HashMap;
 use kvproto::kvrpcpb::{IsolationLevel, LockInfo, Op, WriteConflictReason};
 use tikv_util::{
-    Either,
     codec::{
         bytes::{self, BytesEncoder},
         number::{self, NumberEncoder, MAX_VAR_I64_LEN, MAX_VAR_U64_LEN},
     },
     memory::HeapSize,
+    Either,
 };
 
 use crate::{
