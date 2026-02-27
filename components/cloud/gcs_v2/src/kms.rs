@@ -34,6 +34,61 @@ impl std::fmt::Debug for GcpKms {
 }
 
 impl GcpKms {
+    fn build_auth_credentials(
+        creds_json: &str,
+    ) -> Result<google_cloud_auth::credentials::Credentials> {
+        if creds_json == "anonymous" {
+            return Ok(google_cloud_auth::credentials::anonymous::Builder::new().build());
+        }
+
+        let creds_value: serde_json::Value = serde_json::from_str(creds_json).map_err(|e| {
+            CloudError::KmsError(KmsError::Other(cloud::error::OtherError::from_box(box_err!(
+                "parse credential json: {}",
+                e
+            ))))
+        })?;
+
+        let creds_type = creds_value
+            .get("type")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                CloudError::KmsError(KmsError::Other(cloud::error::OtherError::from_box(
+                    box_err!("missing `type` in credentials"),
+                )))
+            })?;
+
+        let creds = match creds_type {
+            "service_account" => google_cloud_auth::credentials::service_account::Builder::new(
+                creds_value,
+            )
+            .build()
+            .map_err(|e| {
+                CloudError::KmsError(KmsError::Other(cloud::error::OtherError::from_box(
+                    box_err!("build service account credentials: {}", e),
+                )))
+            })?,
+            "external_account" => google_cloud_auth::credentials::external_account::Builder::new(
+                creds_value,
+            )
+            .build()
+            .map_err(|e| {
+                CloudError::KmsError(KmsError::Other(cloud::error::OtherError::from_box(
+                    box_err!("build external account credentials: {}", e),
+                )))
+            })?,
+            _ => {
+                return Err(CloudError::KmsError(KmsError::Other(
+                    cloud::error::OtherError::from_box(box_err!(
+                        "unsupported credentials type `{}`, supported: service_account, external_account",
+                        creds_type
+                    )),
+                )));
+            }
+        };
+
+        Ok(creds)
+    }
+
     pub fn new(mut config: Config) -> Result<Self> {
         if config.gcp.is_none() {
             return Err(CloudError::KmsError(KmsError::Other(
@@ -97,33 +152,8 @@ impl GcpKms {
                     builder = builder.with_endpoint(ep);
                 }
                 if let Some(creds_json) = self.credentials_json.as_ref() {
-                    if creds_json == "anonymous" {
-                        let creds = google_cloud_auth::credentials::anonymous::Builder::new().build();
-                        builder = builder.with_credentials(creds);
-                    } else {
-                        let creds_value: serde_json::Value =
-                            serde_json::from_str(creds_json).map_err(|e| {
-                                CloudError::KmsError(KmsError::Other(
-                                    cloud::error::OtherError::from_box(box_err!(
-                                        "parse credential json: {}",
-                                        e
-                                    )),
-                                ))
-                            })?;
-                        let creds = google_cloud_auth::credentials::service_account::Builder::new(
-                            creds_value,
-                        )
-                        .build()
-                        .map_err(|e| {
-                            CloudError::KmsError(KmsError::Other(
-                                cloud::error::OtherError::from_box(box_err!(
-                                    "build service account credentials: {}",
-                                    e
-                                )),
-                            ))
-                        })?;
-                        builder = builder.with_credentials(creds);
-                    }
+                    let creds = Self::build_auth_credentials(creds_json)?;
+                    builder = builder.with_credentials(creds);
                 }
                 builder
                     .build()
@@ -577,5 +607,18 @@ mod tests {
         assert!(matches!(err, CloudError::KmsError(KmsError::WrongMasterKey(_))), "err={err:?}");
         let _ = shutdown.send(());
         Ok(())
+    }
+
+    #[test]
+    fn external_account_credentials_are_recognized() {
+        let creds = serde_json::json!({
+            "type": "external_account",
+        });
+        let err = GcpKms::build_auth_credentials(&creds.to_string()).unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("build external account credentials"),
+            "unexpected error message: {msg}"
+        );
     }
 }
