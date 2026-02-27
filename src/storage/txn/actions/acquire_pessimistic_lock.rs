@@ -2,6 +2,7 @@
 
 use kvproto::kvrpcpb::WriteConflictReason;
 // #[PerformanceCriticalPath]
+use tikv_util::Either;
 use txn_types::{Key, LastChange, OldValue, PessimisticLock, TimeStamp, Value, Write, WriteType};
 
 use crate::storage::{
@@ -108,6 +109,12 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
 
     let mut val = None;
     if let Some(lock) = reader.load_lock(&key)? {
+        let lock = match lock {
+            Either::Left(lock) => lock,
+            Either::Right(_shared_locks) => {
+                unimplemented!("SharedLocks returned from load_lock is not supported here")
+            }
+        };
         if lock.ts != reader.start_ts {
             return Err(ErrorInner::KeyIsLocked(lock.into_lock_info(key.into_raw()?)).into());
         }
@@ -750,7 +757,12 @@ pub mod tests {
     ) -> Lock {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true);
-        let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
+        let lock = match reader.load_lock(&Key::from_raw(key)).unwrap().unwrap() {
+            Either::Left(lock) => lock,
+            Either::Right(_shared_locks) => {
+                unimplemented!("SharedLocks returned from load_lock is not supported here")
+            }
+        };
         assert_eq!(lock.ts, start_ts.into());
         assert_eq!(lock.for_update_ts, for_update_ts.into());
         assert!(lock.is_pessimistic_lock());
