@@ -191,7 +191,9 @@ mod tests {
         TestEngineBuilder,
         kv::Engine,
         lock_manager::MockLockManager,
-        mvcc::tests::{must_get_rollback_ts, must_unlocked, write},
+        mvcc::tests::{
+            must_get_commit_ts, must_get_rollback_ts, must_load_shared_lock, must_unlocked, write,
+        },
         txn::{
             commands::{WriteCommand, WriteContext},
             scheduler::DEFAULT_EXECUTION_DURATION_LIMIT,
@@ -292,6 +294,53 @@ mod tests {
 
         // After resolving both locks, the key should be unlocked (no locks
         // remaining).
+        must_unlocked(&mut engine, key);
+    }
+
+    #[test]
+    fn test_resolve_shared_locks_same_key_mixed_commit_and_rollback() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"shared-resolve-mixed";
+        let pk1 = b"pk1";
+        let pk2 = b"pk2";
+        let pk3 = b"pk3";
+
+        // Construct one key with three shared sub-locks.
+        must_acquire_shared_pessimistic_lock(&mut engine, key, pk1, 10, 15, 3000);
+        must_shared_prewrite_lock(&mut engine, key, pk1, 10, 15);
+        must_acquire_shared_pessimistic_lock(&mut engine, key, pk2, 20, 25, 3000);
+        must_shared_prewrite_lock(&mut engine, key, pk2, 20, 25);
+        must_acquire_shared_pessimistic_lock(&mut engine, key, pk3, 30, 35, 3000);
+        must_shared_prewrite_lock(&mut engine, key, pk3, 30, 35);
+
+        let mut shared_locks = must_load_shared_lock(&mut engine, key);
+        assert_eq!(shared_locks.len(), 3);
+        let lock10 = shared_locks.get_lock(&10.into()).unwrap().unwrap().clone();
+        let lock20 = shared_locks.get_lock(&20.into()).unwrap().unwrap().clone();
+
+        // Resolve mixed statuses in one batch on the same key.
+        let mut txn_status = HashMap::default();
+        txn_status.insert(10.into(), 0.into()); // rollback
+        txn_status.insert(20.into(), 25.into()); // commit
+        let key_locks = vec![(Key::from_raw(key), lock10), (Key::from_raw(key), lock20)];
+        run_resolve_lock(&mut engine, txn_status, key_locks);
+
+        must_get_rollback_ts(&mut engine, key, 10);
+        must_get_commit_ts(&mut engine, key, 20, 25);
+
+        // The unresolved sibling sub-lock must remain after the mixed batch.
+        shared_locks = must_load_shared_lock(&mut engine, key);
+        assert_eq!(shared_locks.len(), 1);
+        assert!(shared_locks.get_lock(&10.into()).unwrap().is_none());
+        assert!(shared_locks.get_lock(&20.into()).unwrap().is_none());
+        let lock30 = shared_locks.get_lock(&30.into()).unwrap().unwrap().clone();
+
+        // Resolve the final sub-lock and ensure key is fully unlocked.
+        let mut txn_status = HashMap::default();
+        txn_status.insert(30.into(), 0.into());
+        run_resolve_lock(&mut engine, txn_status, vec![(Key::from_raw(key), lock30)]);
+
+        must_get_rollback_ts(&mut engine, key, 30);
         must_unlocked(&mut engine, key);
     }
 }
