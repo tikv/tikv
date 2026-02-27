@@ -9,7 +9,7 @@ failpoints = ["fail/failpoints"]
 
 [dependencies]
 async-compression = { version = "0.4.12", features = ["tokio", "futures-io", "zstd"] }
-bytes = "1"
+bytes = { workspace = true }
 chrono = { workspace = true }
 cloud = { workspace = true }
 codec = { workspace = true }
