@@ -33,6 +33,10 @@ use crate::{
 pub const BACKGROUND_LIMIT_ADJUST_DURATION: Duration = Duration::from_secs(10);
 
 const MICROS_PER_SEC: f64 = 1_000_000.0;
+/// CPU utilization threshold (percentage) above which background traffic is
+/// throttled. Also used as the cap for the background utilization limit and
+/// the compaction-pressure write-IO throttle onset.
+const BG_RESOURCE_THRESHOLD: f64 = 70.0;
 // the minimal schedule wait duration due to the overhead of queue.
 // We should exclude this cause when calculate the estimated total wait
 // duration.
@@ -97,6 +101,7 @@ impl ResourceStatsProvider for SysQuotaGetter {
 
 pub struct GroupQuotaAdjustWorker<R> {
     prev_stats_by_group: [HashMap<String, GroupStatistics>; ResourceType::COUNT],
+    prev_write_io_consumed: HashMap<String, u64>,
     last_adjust_time: Instant,
     resource_ctl: Arc<ResourceGroupManager>,
     resource_quota_getter: R,
@@ -133,6 +138,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         let prev_stats_by_group = array::from_fn(|_| HashMap::default());
         Self {
             prev_stats_by_group,
+            prev_write_io_consumed: HashMap::default(),
             last_adjust_time: Instant::now_coarse(),
             resource_ctl,
             resource_quota_getter,
@@ -151,19 +157,24 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         }
         self.last_adjust_time = now;
 
-        let mut background_util_limit = self
+        let mut bg_util_limit = self
             .resource_ctl
             .get_resource_group(DEFAULT_RESOURCE_GROUP_NAME)
             .map_or(0, |r| {
                 r.group.get_background_settings().get_utilization_limit()
             });
-        if background_util_limit == 0 {
-            background_util_limit = 100;
+        if bg_util_limit == 0 {
+            bg_util_limit = 100;
         }
+        // Cap utilization limit to BG_RESOURCE_THRESHOLD. Background
+        // tasks should never consume more than this fraction of total resources.
+        // When CPU utilization exceeds the threshold, the headroom goes negative
+        // and the background rate limit is reduced.
+        bg_util_limit = bg_util_limit.min(BG_RESOURCE_THRESHOLD as u64);
 
         BACKGROUND_TASK_RESOURCE_UTILIZATION_VEC
             .with_label_values(&["limit"])
-            .set(background_util_limit as i64);
+            .set(bg_util_limit as i64);
 
         let mut background_groups: Vec<_> = self
             .resource_ctl
@@ -185,18 +196,18 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         self.do_adjust(
             ResourceType::Cpu,
             dur_secs,
-            background_util_limit,
+            bg_util_limit,
             &mut background_groups,
         );
         self.do_adjust(
             ResourceType::Io,
             dur_secs,
-            background_util_limit,
+            bg_util_limit,
             &mut background_groups,
         );
 
         // Adjust write IO limiter based on compaction pressure.
-        self.adjust_write_io_by_compaction_pressure(&background_groups);
+        self.adjust_write_io_by_compaction_pressure(&background_groups, dur_secs);
 
         // clean up deleted group stats
         if self.prev_stats_by_group[0].len() != background_groups.len() {
@@ -260,6 +271,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
 
         let background_util =
             (background_consumed_total / resource_stats.total_quota * 100.0) as u64;
+        let resource_util = resource_stats.current_used / resource_stats.total_quota * 100.0;
         BACKGROUND_TASK_RESOURCE_UTILIZATION_VEC
             .with_label_values(&[resource_type.as_str()])
             .set(background_util as i64);
@@ -270,7 +282,6 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
 
         let util_limit_percent = (utilization_limit as f64 / 100.0).min(1.0);
         let target = resource_stats.total_quota * util_limit_percent;
-        let headroom = target - resource_stats.current_used;
 
         // Sum current background limits; treat infinity as an equal share of
         // the target (initial state before first adjustment).
@@ -286,15 +297,29 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             })
             .sum();
 
+        let mut new_total_bg_budget = target;
+        if resource_util > BG_RESOURCE_THRESHOLD {
+            // Give more resources to online traffic by reducing background budget
+            // proportionally to how far over the threshold we are.
+            new_total_bg_budget =
+                current_total_bg_limit * (resource_util - BG_RESOURCE_THRESHOLD) / 100.0;
+        } else if current_total_bg_limit > target {
+            // Background tasks exceed their utilization limit; reset to target.
+            new_total_bg_budget = target;
+        } else if current_total_bg_limit < 0.9 * target
+            && resource_util < 0.9 * BG_RESOURCE_THRESHOLD
+        {
+            // Increase it incrementally since we don't want to impact the online traffic.
+            new_total_bg_budget = current_total_bg_limit + 0.1 * current_total_bg_limit;
+        }
+
         // Minimum: 1 CPU core for CPU, 10% of total for IO.
         let min_floor = match resource_type {
             ResourceType::Cpu => MICROS_PER_SEC,
             ResourceType::Io => resource_stats.total_quota * 0.1,
         };
 
-        // If resources are available (positive headroom), increase the limit.
-        // If over target (negative headroom), reduce proportionally.
-        let new_total_bg_budget = (current_total_bg_limit + headroom).clamp(min_floor, target);
+        let new_total_bg_budget = new_total_bg_budget.clamp(min_floor, target);
 
         // Distribute proportionally by RU quota.
         for g in bg_group_stats.iter() {
@@ -307,39 +332,63 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
     }
 
     /// Adjust the write-only IO limiter based on compaction pressure.
-    /// When compaction pressure >= 70%, progressively throttle write IO down to
-    /// 10% of the current combined IO limit at 100% pressure.
-    /// When pressure < 70%, set write IO to unlimited.
-    fn adjust_write_io_by_compaction_pressure(&self, bg_group_stats: &[GroupStats]) {
+    /// When compaction pressure >= compaction_pressure_threshold,
+    /// progressively throttle write IO based on the actual write IO
+    /// consumption rate. Below the threshold, write IO is unlimited.
+    fn adjust_write_io_by_compaction_pressure(
+        &mut self,
+        bg_group_stats: &[GroupStats],
+        dur_secs: f64,
+    ) {
         let pressure = self.compaction_pending_bytes_ratio.load(Ordering::Relaxed) as f64;
+        let threshold = self
+            .resource_ctl
+            .get_config()
+            .value()
+            .compaction_pressure_threshold;
 
-        if pressure < 70.0 {
+        // Compute consumed deltas once for all groups and update tracking.
+        let deltas: Vec<u64> = bg_group_stats
+            .iter()
+            .map(|g| {
+                let curr = g.limiter.get_write_io_limiter().total_consumed();
+                let prev = self
+                    .prev_write_io_consumed
+                    .insert(g.name.clone(), curr)
+                    .unwrap_or(0);
+                curr.saturating_sub(prev)
+            })
+            .collect();
+
+        if pressure < 0.9 * threshold {
+            // Low pressure: ramp up write IO limit by 10%.
             for g in bg_group_stats {
-                g.limiter
-                    .get_write_io_limiter()
-                    .set_rate_limit(f64::INFINITY);
+                let current = g.limiter.get_write_io_limiter().get_rate_limit();
+                if !current.is_infinite() {
+                    g.limiter
+                        .get_write_io_limiter()
+                        .set_rate_limit(current * 1.1);
+                }
             }
+            return;
+        } else if pressure < threshold {
+            // Moderate pressure: hold current limits.
             return;
         }
 
-        // pressure_ratio: 0.0 at 70%, 1.0 at 100%+
-        let pressure_ratio = ((pressure - 70.0) / 30.0).clamp(0.0, 1.0);
-        // throttle_factor: 1.0 at 70%, 0.1 at 100%
+        // pressure_ratio: 0.0 at threshold, 1.0 at 100%+
+        let pressure_ratio = ((pressure - threshold) / (100.0 - threshold)).clamp(0.0, 1.0);
+        // throttle_factor: 1.0 at threshold, 0.1 at 100%
         let throttle_factor = 1.0 - 0.9 * pressure_ratio;
 
-        for g in bg_group_stats {
-            // Use the current combined IO limit as the base for the write budget.
-            let io_limit = g.limiter.get_limiter(ResourceType::Io).get_rate_limit();
-            let base = if io_limit.is_infinite() {
-                // If combined IO is unlimited, use proportional share of a
-                // reasonable default; the write limiter stays unlimited too.
+        for (g, delta) in bg_group_stats.iter().zip(deltas) {
+            let base = delta as f64 / dur_secs;
+            if base <= f64::EPSILON {
                 g.limiter
                     .get_write_io_limiter()
                     .set_rate_limit(f64::INFINITY);
                 continue;
-            } else {
-                io_limit
-            };
+            }
             let write_io_budget = base * throttle_factor;
             g.limiter
                 .get_write_io_limiter()
@@ -722,55 +771,56 @@ mod tests {
             check(limiter.get_limiter(ResourceType::Io).get_rate_limit(), io);
         }
 
-        // CPU target = 8 * 0.8 = 6.4 cores, IO target = 10000 * 0.8 = 8000
+        // util_limit configured at 80% but capped to 70%.
+        // CPU target = 8 * 0.7 = 5.6 cores, IO target = 10000 * 0.7 = 7000
         // CPU min_floor = 1 core, IO min_floor = 1000
 
-        // No load: initial infinity → budget = target.
+        // No load: initial infinity → treated as target → budget = target.
         reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter_rates(&limiter, 6.4, 8000.0);
+        check_limiter_rates(&limiter, 5.6, 7000.0);
 
         // Short duration (< 1s): adjustment skipped, limits unchanged.
         reset_quota(&mut worker, 4.0, 2000.0, Duration::from_millis(500));
         worker.adjust_quota();
-        check_limiter_rates(&limiter, 6.4, 8000.0);
+        check_limiter_rates(&limiter, 5.6, 7000.0);
 
-        // Under target (50% CPU): headroom positive, budget stays at target.
+        // Under target (50% CPU): resource_util < 70%, current == target,
+        // so none of the branches fire → budget = target.
         reset_quota(&mut worker, 4.0, 2000.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter_rates(&limiter, 6.4, 8000.0);
+        check_limiter_rates(&limiter, 5.6, 7000.0);
 
-        // At target (80% CPU, 80% IO): headroom = 0, budget unchanged.
+        // Above 70% (80% CPU, 80% IO): resource_util > 70 branch fires.
+        // CPU: budget = 5.6M * (80-70)/100 = 0.56M → clamped to floor 1.0
+        // IO: budget = 7000 * (80-70)/100 = 700 → clamped to floor 1000
         reset_quota(&mut worker, 6.4, 8000.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter_rates(&limiter, 6.4, 8000.0);
+        check_limiter_rates(&limiter, 1.0, 1000.0);
 
-        // Over target (100% CPU): throttle.
-        // CPU: headroom = 6.4 - 8.0 = -1.6, budget = 6.4 - 1.6 = 4.8
-        // IO: headroom = 8000 - 9500 = -1500, budget = 8000 - 1500 = 6500
+        // Still over 70% (100% CPU): stays at floor.
+        // CPU: budget = 1.0M * 30/100 = 0.3M → clamped to floor 1.0
+        // IO: budget = 1000 * 25/100 = 250 → clamped to floor 1000
         reset_quota(&mut worker, 8.0, 9500.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter_rates(&limiter, 4.8, 6500.0);
+        check_limiter_rates(&limiter, 1.0, 1000.0);
 
-        // Still over target: further reduction.
-        // CPU: headroom = 6.4 - 7.5 = -1.1, budget = 4.8 - 1.1 = 3.7
-        // IO: headroom = 8000 - 9500 = -1500, budget = 6500 - 1500 = 5000
+        // Still over 70% (93.75% CPU): stays at floor.
         reset_quota(&mut worker, 7.5, 9500.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter_rates(&limiter, 3.7, 5000.0);
+        check_limiter_rates(&limiter, 1.0, 1000.0);
 
-        // Load drops: budget recovers.
-        // CPU: headroom = 6.4 - 4.0 = 2.4, budget = clamp(3.7 + 2.4, 1.0, 6.4) = 6.1
-        // IO: headroom = 8000 - 2000 = 6000, budget = clamp(5000 + 6000, 1000, 8000) =
-        // 8000
+        // Load drops (50% CPU): resource_util < 70%, current < 0.9 * target,
+        // so incremental increase: budget = current * 1.1
+        // CPU: budget = 1.0M * 1.1 = 1.1M → 1.1 cores
+        // IO: budget = 1000 * 1.1 = 1100
         reset_quota(&mut worker, 4.0, 2000.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter_rates(&limiter, 6.1, 8000.0);
+        check_limiter_rates(&limiter, 1.1, 1100.0);
 
-        // Sustained overload drives budget to min_floor.
-        // Each cycle: CPU headroom = -1.6, IO headroom = -1500
-        // CPU: 6.1 → 4.5 → 2.9 → 1.3 → 1.0 → 1.0
-        // IO: 8000 → 6500 → 5000 → 3500 → 2000 → 1000
+        // Sustained overload drives budget back to min_floor.
+        // Iter 1: CPU 1.1M * 0.3 = 0.33M → floor 1.0M; IO 1100*0.25=275 → floor 1000
+        // Iter 2+: stays at floor.
         for _ in 0..5 {
             reset_quota(&mut worker, 8.0, 9500.0, Duration::from_secs(1));
             worker.adjust_quota();
@@ -795,21 +845,24 @@ mod tests {
             .unwrap();
 
         // default ru=2000, bg ru=1000 → shares: 2/3, 1/3
-        // Under target: budget = target = 6.4 CPU, 8000 IO
+        // No load: default at floor 1.0M, bg at infinity → target/2 = 2.8M
+        // current_total = 1.0M + 2.8M = 3.8M < 0.9 * 5.6M = 5.04M
+        // budget = 3.8M * 1.1 = 4.18M
+        // default: 4.18 * 2/3 ≈ 2.787, bg: 4.18/3 ≈ 1.393
         reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
         worker.adjust_quota();
-        // default: 6.4*2/3 ≈ 4.27, bg: 6.4/3 ≈ 2.13
-        check_limiter_rates(&limiter, 4.27, 5333.0);
-        check_limiter_rates(&bg_limiter, 2.13, 2667.0);
+        check_limiter_rates(&limiter, 2.787, 3300.0);
+        check_limiter_rates(&bg_limiter, 1.393, 1650.0);
 
-        // Over target: budget shrinks, still distributed proportionally.
-        // CPU: budget = clamp(6.4 - 1.6, 1.0, 6.4) = 4.8
-        // IO: budget = clamp(8000 - 1500, 1000, 8000) = 6500
+        // Over 70% (100% CPU, 95% IO): budget shrinks.
+        // CPU: current_total = 4.18M, budget = 4.18M * 30/100 = 1.254M
+        // default: 1.254 * 2/3 ≈ 0.836, bg: 1.254/3 ≈ 0.418
+        // IO: current_total = 4950, budget = 4950 * 25/100 = 1237.5
+        // default: 1237.5 * 2/3 = 825, bg: 1237.5/3 ≈ 412.5
         reset_quota(&mut worker, 8.0, 9500.0, Duration::from_secs(1));
         worker.adjust_quota();
-        // default: 4.8*2/3 = 3.2, bg: 4.8/3 = 1.6
-        check_limiter_rates(&limiter, 3.2, 4333.0);
-        check_limiter_rates(&bg_limiter, 1.6, 2167.0);
+        check_limiter_rates(&limiter, 0.836, 825.0);
+        check_limiter_rates(&bg_limiter, 0.418, 412.5);
 
         // --- Limiter version change ---
         let bg = new_resource_group_ru(BACKGROUND_WORKER_THREAD.into(), 1000, 15);
@@ -839,12 +892,109 @@ mod tests {
         assert_eq!(io_stats.total_consumed, 0);
         assert_eq!(io_stats.total_wait_dur_us, 0);
 
-        // New bg limiter starts at infinity → treated as target/2.
-        // Under no load: budget = target, distributed by RU quota.
+        // New bg limiter at infinity → target/2 = 2.8M.
+        // default at 0.836M. current_total = 0.836M + 2.8M = 3.636M
+        // 3.636M < 5.04M → incremental: budget = 3.636 * 1.1 = 4.0M
+        // default: 4.0 * 2/3 ≈ 2.667, new_bg: 4.0/3 ≈ 1.333
+        // IO: default 825, bg inf→3500, total=4325 < 6300 → 4325*1.1=4757.5
+        // default: 4757.5 * 2/3 ≈ 3171.7, new_bg: 4757.5/3 ≈ 1585.8
         reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter_rates(&limiter, 4.27, 5333.0);
-        check_limiter_rates(&new_bg_limiter, 2.13, 2667.0);
+        check_limiter_rates(&limiter, 2.667, 3171.7);
+        check_limiter_rates(&new_bg_limiter, 1.333, 1585.8);
+    }
+
+    #[test]
+    fn test_bg_limiter_with_infinite_ru_groups() {
+        let resource_ctl = Arc::new(ResourceGroupManager::default());
+
+        // 3 foreground groups with large RU quota (no background limiter).
+        for i in 0..3 {
+            let rg = new_resource_group_ru(format!("fg_{i}"), i32::MAX as u64, 8);
+            resource_ctl.add_resource_group(rg);
+        }
+
+        // 1 background group with no explicit utilization limit.
+        // bg_util_limit defaults to 100, capped to 70 by BG_RESOURCE_THRESHOLD.
+        let bg = new_background_resource_group_ru("bg_worker".into(), 5000, 8, vec!["br".into()]);
+        resource_ctl.add_resource_group(bg);
+        let limiter = resource_ctl
+            .get_background_resource_limiter("bg_worker", "br")
+            .unwrap();
+
+        // 8 CPU cores, 10000 bytes/s IO.
+        let test_provider = TestResourceStatsProvider::new(8.0, 10000.0);
+        let compaction_pressure = Arc::new(AtomicU32::new(0));
+        let mut worker = GroupQuotaAdjustWorker::with_quota_getter(
+            resource_ctl.clone(),
+            test_provider,
+            compaction_pressure,
+        );
+
+        let reset_quota = |worker: &mut GroupQuotaAdjustWorker<TestResourceStatsProvider>,
+                           cpu: f64,
+                           io: f64,
+                           dur: Duration| {
+            worker.resource_quota_getter.cpu_used = cpu;
+            worker.resource_quota_getter.io_used = io;
+            let now = Instant::now_coarse();
+            worker.last_adjust_time = now - dur;
+        };
+
+        #[track_caller]
+        fn check(val: f64, expected: f64) {
+            assert!(
+                expected * 0.99 < val && val < expected * 1.01,
+                "actual: {}, expected: {}",
+                val,
+                expected
+            );
+        }
+
+        // CPU target = 8 * 0.7 = 5.6 cores, IO target = 10000 * 0.7 = 7000
+        // Only bg_worker has a limiter; fg groups are not in bg_group_stats.
+
+        // --- Initial: no load → budget = target ---
+        reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
+        worker.adjust_quota();
+        check(
+            limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
+            5.6 * MICROS_PER_SEC,
+        );
+        check(
+            limiter.get_limiter(ResourceType::Io).get_rate_limit(),
+            7000.0,
+        );
+
+        // --- Saturate CPU (100%) → budget drops ---
+        // CPU: resource_util = 100% > 70, budget = 5.6M * 30/100 = 1.68M
+        // IO: resource_util = 80% > 70, budget = 7000 * 10/100 = 700 → clamped to 1000
+        reset_quota(&mut worker, 8.0, 8000.0, Duration::from_secs(1));
+        worker.adjust_quota();
+        check(
+            limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
+            1.68 * MICROS_PER_SEC,
+        );
+        check(
+            limiter.get_limiter(ResourceType::Io).get_rate_limit(),
+            1000.0,
+        );
+
+        // --- Unsaturate CPU (25%) → budget recovers incrementally ---
+        // CPU: resource_util = 25% < 63 (0.9*70), current 1.68M < 5.04M (0.9*target)
+        //   → budget = 1.68 * 1.1 = 1.848
+        // IO: resource_util = 20% < 63, current 1000 < 6300
+        //   → budget = 1000 * 1.1 = 1100
+        reset_quota(&mut worker, 2.0, 2000.0, Duration::from_secs(1));
+        worker.adjust_quota();
+        check(
+            limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
+            1.848 * MICROS_PER_SEC,
+        );
+        check(
+            limiter.get_limiter(ResourceType::Io).get_rate_limit(),
+            1100.0,
+        );
     }
 
     #[test]
@@ -1008,104 +1158,123 @@ mod tests {
             );
         }
 
+        // Simulate 5000 bytes of write IO consumed per adjustment cycle (1s).
+        // This gives a consumed rate of 5000 bytes/s as the base.
+        let consume_write_io = |limiter: &Arc<ResourceLimiter>, bytes: u64| {
+            limiter.consume(
+                Duration::ZERO,
+                IoBytes {
+                    read: 0,
+                    write: bytes,
+                },
+                false,
+            );
+        };
+
         // First adjustment: establish baseline limits.
-        // CPU target = 6.4 cores, IO target = 8000
+        // util_limit 80% capped to 70%. CPU target = 5.6 cores, IO target = 7000
         reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
         worker.adjust_quota();
-        let cpu_limit = limiter.get_limiter(ResourceType::Cpu).get_rate_limit();
-        let io_limit = limiter.get_limiter(ResourceType::Io).get_rate_limit();
-        check(cpu_limit, 6.4 * MICROS_PER_SEC);
-        check(io_limit, 8000.0);
-
-        // Pressure = 0: write IO limiter should be unlimited.
-        assert!(
-            limiter
-                .get_write_io_limiter()
-                .get_rate_limit()
-                .is_infinite()
-        );
-
-        // Pressure = 50 (< 70): write IO should still be unlimited.
-        compaction_pressure.store(50, Ordering::Relaxed);
-        reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
-        worker.adjust_quota();
-        assert!(
-            limiter
-                .get_write_io_limiter()
-                .get_rate_limit()
-                .is_infinite()
-        );
-
-        // Verify CPU and IO limits are unchanged at target.
         check(
             limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
-            6.4 * MICROS_PER_SEC,
+            5.6 * MICROS_PER_SEC,
         );
         check(
             limiter.get_limiter(ResourceType::Io).get_rate_limit(),
-            8000.0,
+            7000.0,
         );
 
-        // Pressure = 70: throttle_factor = 1.0 - 0.9 * 0.0 = 1.0
-        // write IO budget = io_limit * 1.0 = 8000
-        compaction_pressure.store(70, Ordering::Relaxed);
+        // Pressure = 0, no write IO consumed: write IO limiter should be unlimited.
+        assert!(
+            limiter
+                .get_write_io_limiter()
+                .get_rate_limit()
+                .is_infinite()
+        );
+
+        // Pressure = 50 (< 70) with write IO: write IO should still be unlimited.
+        compaction_pressure.store(50, Ordering::Relaxed);
+        consume_write_io(&limiter, 5000);
         reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
         worker.adjust_quota();
-        let io_limit_now = limiter.get_limiter(ResourceType::Io).get_rate_limit();
-        check(
-            limiter.get_write_io_limiter().get_rate_limit(),
-            io_limit_now * 1.0,
+        assert!(
+            limiter
+                .get_write_io_limiter()
+                .get_rate_limit()
+                .is_infinite()
         );
+
+        // CPU and combined IO limits unchanged at target.
+        check(
+            limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
+            5.6 * MICROS_PER_SEC,
+        );
+        check(
+            limiter.get_limiter(ResourceType::Io).get_rate_limit(),
+            7000.0,
+        );
+
+        // Pressure = 70: throttle_factor = 1.0
+        // Consumed 5000 bytes in 1s → base = 5000. write IO = 5000 * 1.0 = 5000
+        compaction_pressure.store(70, Ordering::Relaxed);
+        consume_write_io(&limiter, 5000);
+        reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
+        worker.adjust_quota();
+        check(limiter.get_write_io_limiter().get_rate_limit(), 5000.0);
 
         // CPU and combined IO limits should not be affected by compaction pressure.
         check(
             limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
-            6.4 * MICROS_PER_SEC,
+            5.6 * MICROS_PER_SEC,
         );
 
-        // Pressure = 85: pressure_ratio = (85-70)/30 = 0.5
-        // throttle_factor = 1.0 - 0.9 * 0.5 = 0.55
+        // Pressure = 85: throttle_factor = 0.55
+        // base = 5000, write IO = 5000 * 0.55 = 2750
         compaction_pressure.store(85, Ordering::Relaxed);
+        consume_write_io(&limiter, 5000);
         reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
         worker.adjust_quota();
-        let io_limit_now = limiter.get_limiter(ResourceType::Io).get_rate_limit();
-        check(
-            limiter.get_write_io_limiter().get_rate_limit(),
-            io_limit_now * 0.55,
-        );
+        check(limiter.get_write_io_limiter().get_rate_limit(), 2750.0);
 
         // CPU limit unaffected.
         check(
             limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
-            6.4 * MICROS_PER_SEC,
+            5.6 * MICROS_PER_SEC,
         );
 
-        // Pressure = 100: pressure_ratio = 1.0
-        // throttle_factor = 1.0 - 0.9 * 1.0 = 0.1
+        // Pressure = 100: throttle_factor = 0.1
+        // base = 5000, write IO = 5000 * 0.1 = 500
         compaction_pressure.store(100, Ordering::Relaxed);
+        consume_write_io(&limiter, 5000);
         reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
         worker.adjust_quota();
-        let io_limit_now = limiter.get_limiter(ResourceType::Io).get_rate_limit();
-        check(
-            limiter.get_write_io_limiter().get_rate_limit(),
-            io_limit_now * 0.1,
-        );
+        check(limiter.get_write_io_limiter().get_rate_limit(), 500.0);
 
         // CPU limit unaffected.
         check(
             limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
-            6.4 * MICROS_PER_SEC,
+            5.6 * MICROS_PER_SEC,
         );
 
-        // Pressure drops back to 0: write IO should become unlimited again.
+        // Pressure drops to 0 (< 0.9 * 70 = 63): ramp up by 10%. Previous limit was
+        // 500. New limit = 500 * 1.1 = 550.
         compaction_pressure.store(0, Ordering::Relaxed);
+        consume_write_io(&limiter, 5000);
         reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
         worker.adjust_quota();
-        assert!(
-            limiter
-                .get_write_io_limiter()
-                .get_rate_limit()
-                .is_infinite()
-        );
+        check(limiter.get_write_io_limiter().get_rate_limit(), 550.0);
+
+        // Pressure stays at 0: another 10% ramp up. 550 * 1.1 = 605.
+        consume_write_io(&limiter, 5000);
+        reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
+        worker.adjust_quota();
+        check(limiter.get_write_io_limiter().get_rate_limit(), 605.0);
+
+        // Pressure = 65 (between 60 and 70): hold current limit.
+        compaction_pressure.store(65, Ordering::Relaxed);
+        consume_write_io(&limiter, 5000);
+        reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
+        worker.adjust_quota();
+        check(limiter.get_write_io_limiter().get_rate_limit(), 605.0);
     }
 }

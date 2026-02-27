@@ -12,6 +12,9 @@ pub struct Config {
     #[online_config(skip)]
     pub enabled: bool,
     pub priority_ctl_strategy: PriorityCtlStrategy,
+    /// Compaction pressure percentage at which background write IO throttling
+    /// begins. Dynamically configurable at runtime.
+    pub compaction_pressure_threshold: f64,
 }
 
 impl Default for Config {
@@ -19,6 +22,7 @@ impl Default for Config {
         Self {
             enabled: true,
             priority_ctl_strategy: PriorityCtlStrategy::Moderate,
+            compaction_pressure_threshold: 70.0,
         }
     }
 }
