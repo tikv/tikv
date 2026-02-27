@@ -302,7 +302,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             // Give more resources to online traffic by reducing background budget
             // proportionally to how far over the threshold we are.
             new_total_bg_budget =
-                current_total_bg_limit * (resource_util - BG_RESOURCE_THRESHOLD) / 100.0;
+                current_total_bg_limit * (1.0 - (resource_util - BG_RESOURCE_THRESHOLD) / 100.0);
         } else if current_total_bg_limit > target {
             // Background tasks exceed their utilization limit; reset to target.
             new_total_bg_budget = target;
@@ -345,7 +345,8 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             .resource_ctl
             .get_config()
             .value()
-            .compaction_pressure_threshold;
+            .compaction_pressure_threshold
+            .clamp(1.0, 99.0);
 
         // Compute consumed deltas once for all groups and update tracking.
         let deltas: Vec<u64> = bg_group_stats
@@ -792,35 +793,35 @@ mod tests {
         check_limiter_rates(&limiter, 5.6, 7000.0);
 
         // Above 70% (80% CPU, 80% IO): resource_util > 70 branch fires.
-        // CPU: budget = 5.6M * (80-70)/100 = 0.56M → clamped to floor 1.0
-        // IO: budget = 7000 * (80-70)/100 = 700 → clamped to floor 1000
+        // CPU: budget = 5.6M * (1 - 10/100) = 5.04M
+        // IO: budget = 7000 * (1 - 10/100) = 6300
         reset_quota(&mut worker, 6.4, 8000.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter_rates(&limiter, 1.0, 1000.0);
+        check_limiter_rates(&limiter, 5.04, 6300.0);
 
-        // Still over 70% (100% CPU): stays at floor.
-        // CPU: budget = 1.0M * 30/100 = 0.3M → clamped to floor 1.0
-        // IO: budget = 1000 * 25/100 = 250 → clamped to floor 1000
+        // Still over 70% (100% CPU, 95% IO): budget decreases further.
+        // CPU: 5.04M * (1 - 30/100) = 3.528M
+        // IO: 6300 * (1 - 25/100) = 4725
         reset_quota(&mut worker, 8.0, 9500.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter_rates(&limiter, 1.0, 1000.0);
+        check_limiter_rates(&limiter, 3.528, 4725.0);
 
-        // Still over 70% (93.75% CPU): stays at floor.
+        // Still over 70% (93.75% CPU, 95% IO):
+        // CPU: 3.528M * (1 - 23.75/100) = 3.528 * 0.7625 ≈ 2.6901M
+        // IO: 4725 * (1 - 25/100) = 3543.75
         reset_quota(&mut worker, 7.5, 9500.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter_rates(&limiter, 1.0, 1000.0);
+        check_limiter_rates(&limiter, 2.6901, 3543.75);
 
-        // Load drops (50% CPU): resource_util < 70%, current < 0.9 * target,
+        // Load drops (50% CPU, 20% IO): resource_util < 63%, current < 0.9 * target,
         // so incremental increase: budget = current * 1.1
-        // CPU: budget = 1.0M * 1.1 = 1.1M → 1.1 cores
-        // IO: budget = 1000 * 1.1 = 1100
+        // CPU: 2.6901 * 1.1 = 2.9591
+        // IO: 3543.75 * 1.1 = 3898.125
         reset_quota(&mut worker, 4.0, 2000.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter_rates(&limiter, 1.1, 1100.0);
+        check_limiter_rates(&limiter, 2.9591, 3898.125);
 
-        // Sustained overload drives budget back to min_floor.
-        // Iter 1: CPU 1.1M * 0.3 = 0.33M → floor 1.0M; IO 1100*0.25=275 → floor 1000
-        // Iter 2+: stays at floor.
+        // Sustained overload (100% CPU, 95% IO) drives budget toward min_floor.
         for _ in 0..5 {
             reset_quota(&mut worker, 8.0, 9500.0, Duration::from_secs(1));
             worker.adjust_quota();
@@ -855,14 +856,14 @@ mod tests {
         check_limiter_rates(&bg_limiter, 1.393, 1650.0);
 
         // Over 70% (100% CPU, 95% IO): budget shrinks.
-        // CPU: current_total = 4.18M, budget = 4.18M * 30/100 = 1.254M
-        // default: 1.254 * 2/3 ≈ 0.836, bg: 1.254/3 ≈ 0.418
-        // IO: current_total = 4950, budget = 4950 * 25/100 = 1237.5
-        // default: 1237.5 * 2/3 = 825, bg: 1237.5/3 ≈ 412.5
+        // CPU: current_total = 4.18M, budget = 4.18M * (1 - 30/100) = 4.18 * 0.7 =
+        // 2.926M default: 2.926 * 2/3 ≈ 1.951, bg: 2.926/3 ≈ 0.975
+        // IO: current_total = 4950, budget = 4950 * (1 - 25/100) = 4950 * 0.75 = 3712.5
+        // default: 3712.5 * 2/3 = 2475, bg: 3712.5/3 = 1237.5
         reset_quota(&mut worker, 8.0, 9500.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter_rates(&limiter, 0.836, 825.0);
-        check_limiter_rates(&bg_limiter, 0.418, 412.5);
+        check_limiter_rates(&limiter, 1.951, 2475.0);
+        check_limiter_rates(&bg_limiter, 0.975, 1237.5);
 
         // --- Limiter version change ---
         let bg = new_resource_group_ru(BACKGROUND_WORKER_THREAD.into(), 1000, 15);
@@ -893,15 +894,15 @@ mod tests {
         assert_eq!(io_stats.total_wait_dur_us, 0);
 
         // New bg limiter at infinity → target/2 = 2.8M.
-        // default at 0.836M. current_total = 0.836M + 2.8M = 3.636M
-        // 3.636M < 5.04M → incremental: budget = 3.636 * 1.1 = 4.0M
-        // default: 4.0 * 2/3 ≈ 2.667, new_bg: 4.0/3 ≈ 1.333
-        // IO: default 825, bg inf→3500, total=4325 < 6300 → 4325*1.1=4757.5
-        // default: 4757.5 * 2/3 ≈ 3171.7, new_bg: 4757.5/3 ≈ 1585.8
+        // default at 1.951M. current_total = 1.951M + 2.8M = 4.751M
+        // 4.751M < 5.04M → incremental: budget = 4.751 * 1.1 = 5.2261M
+        // default: 5.2261 * 2/3 ≈ 3.484, new_bg: 5.2261/3 ≈ 1.742
+        // IO: default 2475, bg inf→3500, total=5975 < 6300 → 5975*1.1=6572.5
+        // default: 6572.5 * 2/3 ≈ 4381.7, new_bg: 6572.5/3 ≈ 2190.8
         reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter_rates(&limiter, 2.667, 3171.7);
-        check_limiter_rates(&new_bg_limiter, 1.333, 1585.8);
+        check_limiter_rates(&limiter, 3.484, 4381.7);
+        check_limiter_rates(&new_bg_limiter, 1.742, 2190.8);
     }
 
     #[test]
@@ -967,33 +968,34 @@ mod tests {
         );
 
         // --- Saturate CPU (100%) → budget drops ---
-        // CPU: resource_util = 100% > 70, budget = 5.6M * 30/100 = 1.68M
-        // IO: resource_util = 80% > 70, budget = 7000 * 10/100 = 700 → clamped to 1000
+        // CPU: resource_util = 100% > 70, budget = 5.6M * (1 - 30/100) = 5.6M * 0.7 =
+        // 3.92M IO: resource_util = 80% > 70, budget = 7000 * (1 - 10/100) =
+        // 7000 * 0.9 = 6300
         reset_quota(&mut worker, 8.0, 8000.0, Duration::from_secs(1));
         worker.adjust_quota();
         check(
             limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
-            1.68 * MICROS_PER_SEC,
+            3.92 * MICROS_PER_SEC,
         );
         check(
             limiter.get_limiter(ResourceType::Io).get_rate_limit(),
-            1000.0,
+            6300.0,
         );
 
         // --- Unsaturate CPU (25%) → budget recovers incrementally ---
-        // CPU: resource_util = 25% < 63 (0.9*70), current 1.68M < 5.04M (0.9*target)
-        //   → budget = 1.68 * 1.1 = 1.848
-        // IO: resource_util = 20% < 63, current 1000 < 6300
-        //   → budget = 1000 * 1.1 = 1100
+        // CPU: resource_util = 25% < 63 (0.9*70), current 3.92M < 5.04M (0.9*target)
+        //   → budget = 3.92 * 1.1 = 4.312
+        // IO: resource_util = 20% < 63, current 6300 is NOT < 0.9 * 7000 = 6300
+        //   → no branch fires, budget stays at target = 7000
         reset_quota(&mut worker, 2.0, 2000.0, Duration::from_secs(1));
         worker.adjust_quota();
         check(
             limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
-            1.848 * MICROS_PER_SEC,
+            4.312 * MICROS_PER_SEC,
         );
         check(
             limiter.get_limiter(ResourceType::Io).get_rate_limit(),
-            1100.0,
+            7000.0,
         );
     }
 
