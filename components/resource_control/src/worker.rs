@@ -359,11 +359,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
                     .prev_write_io_consumed
                     .insert(g.name.clone(), curr)
                     .unwrap_or(0);
-                if curr >= prev {
-                    curr - prev
-                } else {
-                    curr
-                }
+                if curr >= prev { curr - prev } else { curr }
             })
             .collect();
 
