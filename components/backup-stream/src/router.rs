@@ -535,7 +535,6 @@ impl RouterInner {
             task,
             ranges.clone(),
             merged_file_size_limit,
-            gcs_v2_enable,
             cfg,
             backup_encryption_manager,
             backend_config,
@@ -1035,15 +1034,12 @@ impl StreamTaskHandler {
         task: StreamTask,
         ranges: Vec<(Vec<u8>, Vec<u8>)>,
         merged_file_size_limit: u64,
-        gcs_v2_enable: bool,
         temp_pool_cfg: tempfiles::Config,
         backup_encryption_manager: BackupEncryptionManager,
         backend_config: BackendConfig,
     ) -> Result<Self> {
         let temp_dir = &temp_pool_cfg.swap_files;
         tokio::fs::create_dir_all(temp_dir).await?;
-        let mut backend_config = backend_config;
-        backend_config.gcs_v2_enable = gcs_v2_enable;
         let storage = Arc::from(create_storage(task.info.get_storage(), backend_config)?);
         let start_ts = task.info.get_start_ts();
         Ok(Self {
@@ -2391,7 +2387,6 @@ mod tests {
             stream_task,
             vec![(vec![], vec![])],
             merged_file_size_limit,
-            false,
             make_tempfiles_cfg(tmp_dir.path()),
             BackupEncryptionManager::default(),
             BackendConfig::default(),
@@ -2803,7 +2798,6 @@ mod tests {
             stream_task,
             vec![(vec![], vec![])],
             0x100000,
-            false,
             make_tempfiles_cfg(tmp_dir.path()),
             backup_encryption_manager,
             BackendConfig::default(),
@@ -3174,7 +3168,6 @@ mod tests {
             stream_task,
             vec![(vec![], vec![])],
             merged_file_size_limit,
-            false,
             make_tempfiles_cfg(tempfile::tempdir().unwrap().path()),
             backup_encryption_manager.clone(),
             BackendConfig::default(),
