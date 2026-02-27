@@ -562,6 +562,93 @@ pub mod tests {
     }
 
     #[test]
+    fn test_commit_shared_lock_reads_pending_lock_bytes() {
+        use tikv_util::Either;
+
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+
+        let raw_key = b"shared-commit-pending";
+        let key = Key::from_raw(raw_key);
+        let start_ts_1 = TimeStamp::new(10);
+        let start_ts_2 = TimeStamp::new(20);
+        let commit_ts_1 = TimeStamp::new(30);
+        let commit_ts_2 = TimeStamp::new(40);
+
+        put_shared_lock(
+            &mut engine,
+            raw_key,
+            vec![
+                make_shared_sub_lock(raw_key, start_ts_1),
+                make_shared_sub_lock(raw_key, start_ts_2),
+            ],
+        );
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let cm = ConcurrencyManager::new_for_test(commit_ts_2);
+        let mut txn = MvccTxn::new(TimeStamp::zero(), cm);
+        let mut reader = SnapshotReader::new(TimeStamp::zero(), snapshot, true);
+
+        txn.start_ts = start_ts_1;
+        reader.start_ts = start_ts_1;
+        assert!(
+            commit(&mut txn, &mut reader, key.clone(), commit_ts_1, None)
+                .unwrap()
+                .is_none()
+        );
+
+        let pending_lock_bytes = txn
+            .get_pending_lock_bytes(&key)
+            .and_then(|pending| pending)
+            .expect("missing pending shared lock after first commit");
+        let mut pending_shared_locks = match txn_types::parse_lock(pending_lock_bytes).unwrap() {
+            Either::Right(shared_locks) => shared_locks,
+            Either::Left(_) => panic!("expected shared lock state after first commit"),
+        };
+        assert_eq!(pending_shared_locks.len(), 1);
+        assert!(
+            pending_shared_locks
+                .get_lock(&start_ts_1)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            pending_shared_locks
+                .get_lock(&start_ts_2)
+                .unwrap()
+                .is_some()
+        );
+
+        txn.start_ts = start_ts_2;
+        reader.start_ts = start_ts_2;
+        let released = commit(&mut txn, &mut reader, key.clone(), commit_ts_2, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(released.key, key);
+        assert_eq!(released.start_ts, start_ts_2);
+        assert_eq!(released.commit_ts, commit_ts_2);
+        assert!(released.pessimistic);
+
+        assert!(matches!(txn.get_pending_lock_bytes(&key), Some(None)));
+
+        write(&engine, &Context::default(), txn.into_modifies());
+        must_written(
+            &mut engine,
+            raw_key,
+            start_ts_1,
+            commit_ts_1,
+            WriteType::Lock,
+        );
+        must_written(
+            &mut engine,
+            raw_key,
+            start_ts_2,
+            commit_ts_2,
+            WriteType::Lock,
+        );
+        must_unlocked(&mut engine, raw_key);
+    }
+
+    #[test]
     fn test_commit_stale_pessimistic_lock_preserves_other_shared_locks() {
         use tikv_util::Either;
         use txn_types::SharedLocks;

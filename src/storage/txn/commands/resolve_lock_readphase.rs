@@ -113,21 +113,57 @@ impl<S: Snapshot> ReadCommand<S> for ResolveLockReadPhase {
 
 #[cfg(test)]
 mod tests {
+    use std::{collections::HashSet, sync::Arc};
+
+    use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
 
     use super::*;
-    use crate::storage::{kv::Engine, txn::tests::*, TestEngineBuilder};
+    use crate::storage::{
+        TestEngineBuilder,
+        kv::Engine,
+        lock_manager::MockLockManager,
+        mvcc::tests::{must_load_shared_lock, must_unlocked, write},
+        txn::{
+            commands::{WriteCommand, WriteContext},
+            tests::*,
+            txn_status_cache::TxnStatusCache,
+        },
+    };
 
     fn run_resolve_lock_read_phase<E: Engine>(
         engine: &mut E,
         txn_status: HashMap<TimeStamp, TimeStamp>,
+        scan_key: Option<Key>,
     ) -> ProcessResult {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut statistics = Statistics::default();
-        ResolveLockReadPhase::new(txn_status, None, Context::default())
+        ResolveLockReadPhase::new(txn_status, scan_key, Context::default())
             .cmd
             .process_read(snapshot, &mut statistics)
             .unwrap()
+    }
+
+    fn run_resolve_lock_write_phase<E: Engine>(
+        engine: &mut E,
+        command: ResolveLock,
+    ) -> ProcessResult {
+        let ctx = Context::default();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let cm = ConcurrencyManager::new_for_test(TimeStamp::new(100));
+        let lock_mgr = MockLockManager::new();
+        let write_context = WriteContext {
+            lock_mgr: &lock_mgr,
+            concurrency_manager: cm,
+            extra_op: Default::default(),
+            statistics: &mut Default::default(),
+            async_apply_prewrite: false,
+            raw_ext: None,
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+        };
+        let result = command.process_write(snapshot, write_context).unwrap();
+        write(engine, &ctx, result.to_be_write.modifies);
+        result.pr
     }
 
     #[test]
@@ -147,7 +183,7 @@ mod tests {
         let mut txn_status = HashMap::default();
         txn_status.insert(20.into(), 30.into());
         txn_status.insert(40.into(), 0.into());
-        let pr = run_resolve_lock_read_phase(&mut engine, txn_status);
+        let pr = run_resolve_lock_read_phase(&mut engine, txn_status, None);
         match pr {
             ProcessResult::NextCommand {
                 cmd: Command::ResolveLock(next),
@@ -173,5 +209,88 @@ mod tests {
             }
             _ => panic!("expected resolve lock command"),
         }
+    }
+
+    #[test]
+    fn test_resolve_lock_readphase_large_single_shared_key_progress() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"resolve-lock-large-shared";
+        let sub_lock_count = RESOLVE_LOCK_BATCH_SIZE + 64;
+
+        let mut txn_status = HashMap::default();
+        for i in 0..sub_lock_count {
+            let start_ts = TimeStamp::new(100 + i as u64);
+            let primary = format!("pk-{i}");
+            must_acquire_shared_pessimistic_lock(
+                &mut engine,
+                key,
+                primary.as_bytes(),
+                start_ts,
+                start_ts,
+                3000,
+            );
+            must_shared_prewrite_lock(&mut engine, key, primary.as_bytes(), start_ts, start_ts);
+            txn_status.insert(start_ts, TimeStamp::zero());
+        }
+
+        assert_eq!(
+            must_load_shared_lock(&mut engine, key).len(),
+            sub_lock_count
+        );
+
+        let expected_key = Key::from_raw(key);
+        let mut seen_read_batches: HashSet<Vec<u64>> = HashSet::default();
+        let mut scan_key = None;
+        let mut read_rounds = 0;
+        loop {
+            read_rounds += 1;
+            assert!(
+                read_rounds <= sub_lock_count + 1,
+                "resolve-lock read/write loop did not terminate"
+            );
+
+            let read_pr =
+                run_resolve_lock_read_phase(&mut engine, txn_status.clone(), scan_key.clone());
+            let resolve_cmd = match read_pr {
+                ProcessResult::Res => break,
+                ProcessResult::NextCommand {
+                    cmd: Command::ResolveLock(next),
+                } => next,
+                _ => panic!("unexpected process result from resolve-lock read phase"),
+            };
+
+            let mut batch = Vec::with_capacity(resolve_cmd.key_locks.len());
+            for (k, lock) in &resolve_cmd.key_locks {
+                assert_eq!(k, &expected_key);
+                batch.push(lock.ts.into_inner());
+            }
+            batch.sort_unstable();
+            assert!(
+                seen_read_batches.insert(batch.clone()),
+                "duplicate unresolved subset observed between iterations: {:?}",
+                batch
+            );
+
+            let write_pr = run_resolve_lock_write_phase(&mut engine, resolve_cmd);
+            match write_pr {
+                ProcessResult::Res => break,
+                ProcessResult::NextCommand {
+                    cmd: Command::ResolveLockReadPhase(next),
+                } => {
+                    scan_key = next.scan_key;
+                }
+                _ => panic!("unexpected process result from resolve-lock write phase"),
+            }
+        }
+
+        assert!(
+            seen_read_batches.len() > 1,
+            "test did not exercise multi-batch resolve-lock read phase"
+        );
+        assert!(matches!(
+            run_resolve_lock_read_phase(&mut engine, txn_status, None),
+            ProcessResult::Res
+        ));
+        must_unlocked(&mut engine, key);
     }
 }
