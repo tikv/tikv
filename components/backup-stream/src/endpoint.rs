@@ -6,7 +6,10 @@ use std::{
     fmt,
     marker::PhantomData,
     mem::ManuallyDrop,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -77,6 +80,27 @@ const SLOW_EVENT_THRESHOLD: f64 = 120.0;
 /// task has fatal error.
 const CHECKPOINT_SAFEPOINT_TTL_IF_ERROR: u64 = 24;
 
+/// Compute the next monotonically increasing `flush_ts`.
+///
+/// When PD is reachable, `pd_tso` is used as the candidate; otherwise the
+/// local physical clock is used. The result is always strictly greater
+/// than the previously issued `flush_ts`.
+fn next_flush_ts(last: &AtomicU64, pd_tso: TimeStamp) -> TimeStamp {
+    let candidate = if !pd_tso.is_zero() {
+        pd_tso
+    } else {
+        TimeStamp::compose(TimeStamp::physical_now(), 0)
+    };
+    loop {
+        let prev = last.load(Ordering::Acquire);
+        let next = std::cmp::max(candidate.into_inner(), prev + 1);
+        match last.compare_exchange_weak(prev, next, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return TimeStamp::new(next),
+            Err(_) => continue,
+        }
+    }
+}
+
 pub struct Endpoint<S, R, E: KvEngine, PDC> {
     // Note: those fields are more like a shared context between components.
     // For now, we copied them everywhere, maybe we'd better extract them into a
@@ -106,6 +130,9 @@ pub struct Endpoint<S, R, E: KvEngine, PDC> {
     pub abort_last_storage_save: Option<AbortHandle>,
     pub initial_scan_semaphore: Arc<Semaphore>,
     flush_done_subscribers: HashMap<String, Sender<FlushResult>>,
+    /// Tracks the last issued `flush_ts` to guarantee monotonicity across
+    /// flushes, even when PD is temporarily unavailable.
+    last_flush_ts: Arc<AtomicU64>,
 }
 
 impl<S, R, E: KvEngine, PDC> Drop for Endpoint<S, R, E, PDC> {
@@ -212,6 +239,7 @@ where
             checkpoint_mgr,
             abort_last_storage_save: None,
             flush_done_subscribers: Default::default(),
+            last_flush_ts: Arc::new(AtomicU64::new(0)),
         };
         ep.pool.spawn(root!(ep.min_ts_worker()));
         ep
@@ -837,15 +865,20 @@ where
     fn prepare_min_ts(&self) -> future![(TimeStamp, TimeStamp)] {
         let pd_cli = self.pd_client.clone();
         let cm = self.concurrency_manager.clone();
+        let last_flush_ts = Arc::clone(&self.last_flush_ts);
         async move {
             let pd_tso = pd_cli
                 .get_tso()
                 .await
                 .map_err(|err| Error::from(err).report("failed to get tso from pd"))
                 .unwrap_or_default();
-            cm.update_max_ts(pd_tso, "backup-stream").unwrap();
+            if pd_tso != TimeStamp::zero() {
+                cm.update_max_ts(pd_tso, "backup-stream").unwrap();
+            }
+            let flush_ts = next_flush_ts(&last_flush_ts, pd_tso);
             let min_ts = cm.global_min_lock_ts().unwrap_or(TimeStamp::max());
-            (Ord::min(pd_tso, min_ts), pd_tso)
+            let effective_pd = if pd_tso.is_zero() { flush_ts } else { pd_tso };
+            (Ord::min(effective_pd, min_ts), flush_ts)
         }
     }
 
@@ -1534,5 +1567,73 @@ where
 
     fn run(&mut self, task: Task) {
         self.run_task(task)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use txn_types::TimeStamp;
+
+    use super::next_flush_ts;
+
+    #[test]
+    fn test_next_flush_ts_normal_progression() {
+        let last = AtomicU64::new(0);
+        // Simulate three PD TSOs in order.
+        let ts1 = next_flush_ts(&last, TimeStamp::new(100));
+        let ts2 = next_flush_ts(&last, TimeStamp::new(200));
+        let ts3 = next_flush_ts(&last, TimeStamp::new(300));
+        assert!(ts1 < ts2);
+        assert!(ts2 < ts3);
+        assert_eq!(ts1, TimeStamp::new(100));
+        assert_eq!(ts2, TimeStamp::new(200));
+        assert_eq!(ts3, TimeStamp::new(300));
+    }
+
+    #[test]
+    fn test_next_flush_ts_zero_tso_still_increases() {
+        let last = AtomicU64::new(0);
+        let ts1 = next_flush_ts(&last, TimeStamp::new(500));
+        // PD unavailable: pd_tso = 0, should still be > ts1.
+        let ts2 = next_flush_ts(&last, TimeStamp::zero());
+        assert!(ts2 > ts1, "ts2={} should be > ts1={}", ts2, ts1);
+        // Another PD-unavailable call should still increase.
+        let ts3 = next_flush_ts(&last, TimeStamp::zero());
+        assert!(ts3 > ts2, "ts3={} should be > ts2={}", ts3, ts2);
+    }
+
+    #[test]
+    fn test_next_flush_ts_stale_pd_tso() {
+        let last = AtomicU64::new(0);
+        // Advance to a high value via local clock (PD unavailable).
+        let ts1 = next_flush_ts(&last, TimeStamp::zero());
+        // PD comes back with a stale value that is < ts1.
+        let ts2 = next_flush_ts(&last, TimeStamp::new(1));
+        assert!(
+            ts2 > ts1,
+            "stale PD tso should still produce a strictly greater flush_ts: ts2={} ts1={}",
+            ts2,
+            ts1
+        );
+    }
+
+    #[test]
+    fn test_next_flush_ts_duplicate_pd_tso() {
+        let last = AtomicU64::new(0);
+        let ts1 = next_flush_ts(&last, TimeStamp::new(42));
+        // Same TSO again — must still increase.
+        let ts2 = next_flush_ts(&last, TimeStamp::new(42));
+        assert!(ts2 > ts1);
+    }
+
+    #[test]
+    fn test_next_flush_ts_starts_from_zero() {
+        let last = AtomicU64::new(0);
+        // Even with pd_tso = 0 and last = 0, result must be > 0.
+        let ts = next_flush_ts(&last, TimeStamp::zero());
+        assert!(ts > TimeStamp::zero());
+        assert_eq!(last.load(Ordering::Acquire), ts.into_inner());
     }
 }

@@ -578,4 +578,110 @@ mod all {
             keyset.iter().map(|v| v.as_slice()),
         )
     }
+
+    /// Verify that `flush_ts` in metadata file names is monotonically
+    /// increasing even when PD becomes temporarily unavailable.
+    #[test]
+    fn monotonic_flush_ts_across_pd_failure() {
+        let mut suite = SuiteBuilder::new_named("monotonic_flush_ts")
+            .nodes(1)
+            .build();
+        suite.must_register_task(1, "monotonic_flush_ts");
+        suite.sync();
+
+        // Round 1: normal flush with PD available.
+        let round1 = run_async_test(suite.write_records(0, 8, 1));
+        suite.force_flush_files("monotonic_flush_ts");
+        suite.wait_for_flush();
+
+        let meta_names_after_r1 = collect_meta_filenames(suite.flushed_files.path());
+        assert!(
+            !meta_names_after_r1.is_empty(),
+            "expected at least one meta file after the first flush"
+        );
+        for name in &meta_names_after_r1 {
+            assert!(
+                !name.contains("SYNTHETIC"),
+                "SYNTHETIC suffix must not appear: {name}"
+            );
+        }
+
+        // Write data for round 2 while PD is still healthy.
+        let round2 = run_async_test(suite.write_records(64, 8, 1));
+
+        // Now make PD's next get_tso call fail — this will affect the flush
+        // path, not the data writes which have already committed.
+        suite.cluster.pd_client.trigger_tso_failure();
+
+        // Round 2: flush while PD is unavailable — flush_ts should fall back to
+        // the local clock and still be strictly greater than round-1's flush_ts.
+        suite.force_flush_files("monotonic_flush_ts");
+        suite.wait_for_flush();
+
+        let meta_names_after_r2 = collect_meta_filenames(suite.flushed_files.path());
+        assert!(
+            meta_names_after_r2.len() > meta_names_after_r1.len(),
+            "round-2 should produce new meta files: before={}, after={}",
+            meta_names_after_r1.len(),
+            meta_names_after_r2.len(),
+        );
+        for name in &meta_names_after_r2 {
+            assert!(
+                !name.contains("SYNTHETIC"),
+                "SYNTHETIC suffix must not appear: {name}"
+            );
+        }
+
+        // Extract the leading flush_ts (first 16 hex chars) from every meta
+        // file and verify strict ordering: every file produced in a later flush
+        // must have a larger flush_ts.
+        let mut flush_tss: Vec<u64> = meta_names_after_r2
+            .iter()
+            .map(|name| {
+                let hex_part = &name[..16];
+                u64::from_str_radix(hex_part, 16)
+                    .unwrap_or_else(|e| panic!("bad flush_ts hex in {name}: {e}"))
+            })
+            .collect();
+        flush_tss.sort();
+        for window in flush_tss.windows(2) {
+            assert!(
+                window[0] < window[1],
+                "flush_ts values must be strictly increasing, but got {} >= {}",
+                window[0],
+                window[1],
+            );
+        }
+
+        // Verify that all written data from both rounds is present.
+        suite.check_for_write_records(
+            suite.flushed_files.path(),
+            round1.union(&round2).map(Vec::as_slice),
+        );
+    }
+
+    /// Collect `.meta` file *stems* (without directory or extension) under the
+    /// `v1/backupmeta/` directory of the given root path, sorted
+    /// lexicographically.
+    fn collect_meta_filenames(root: &std::path::Path) -> Vec<String> {
+        let meta_dir = root.join("v1/backupmeta");
+        let mut names: Vec<String> = WalkDir::new(&meta_dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_str()
+                    .map_or(false, |n| n.ends_with(".meta"))
+            })
+            .map(|e| {
+                e.file_name()
+                    .to_str()
+                    .unwrap()
+                    .trim_end_matches(".meta")
+                    .to_owned()
+            })
+            .collect();
+        names.sort();
+        names
+    }
 }

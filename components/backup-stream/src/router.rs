@@ -52,7 +52,6 @@ use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use tracing::instrument;
 use tracing_active_tree::frame;
 use txn_types::{Key, TimeStamp, WriteRef};
-use uuid::Uuid;
 
 use super::errors::Result;
 use crate::{
@@ -1809,24 +1808,16 @@ impl MetadataInfo {
     }
 
     fn path_to_meta(&self, min_begin_ts: u64, flush_ts: u64) -> String {
-        // It is possible for flush_ts to be set to zero when PD is unavailable.
-        // In this scenario, a "tso" from the local clock will be synthesized.
-        // A special suffix needs to be appended to avoid file name collision.
-        let mut actual_flush_ts = flush_ts;
-        let suffix = if flush_ts == 0 {
-            actual_flush_ts = TimeStamp::compose(TimeStamp::physical_now(), 0).into_inner();
-            let uuid = Uuid::new_v4().as_u128();
-            format!("-SYNTHETIC{:X}", uuid)
-        } else {
-            String::new()
-        };
+        debug_assert!(
+            flush_ts > 0,
+            "flush_ts must be positive (monotonically assigned by Endpoint)"
+        );
         format!(
-            "v1/backupmeta/{:016X}-{:016X}-{:016X}-{:016X}{}.meta",
-            actual_flush_ts,
+            "v1/backupmeta/{:016X}-{:016X}-{:016X}-{:016X}.meta",
+            flush_ts,
             min_begin_ts,
             self.min_ts.unwrap_or_default(),
             self.max_ts.unwrap_or_default(),
-            suffix
         )
     }
 }
@@ -3379,29 +3370,16 @@ mod tests {
         meta.min_ts = Some(100);
         meta.max_ts = Some(200);
 
-        // Case 1: Normal flush_ts
         let path = meta.path_to_meta(50, 300);
         assert_eq!(
             path,
             "v1/backupmeta/000000000000012C-0000000000000032-0000000000000064-00000000000000C8.meta"
         );
 
-        // Case 2: flush_ts is 0
-        let path_synthetic = meta.path_to_meta(50, 0);
-        let another_path_synthetic = meta.path_to_meta(50, 0);
-        // synthetic paths should be unique due to different UUIDs
-        assert_ne!(another_path_synthetic, path_synthetic);
-
-        // Verify the synthetic path format with regex
-        let synthetic_pattern = regex::Regex::new(
-            r"^v1/backupmeta/([0-9A-F]{16})-[0-9A-F]{16}-[0-9A-F]{16}-[0-9A-F]{16}-SYNTHETIC[0-9A-F]+\.meta$"
-        ).unwrap();
-        let capture = synthetic_pattern
-            .captures(&path_synthetic)
-            .unwrap_or_else(|| panic!("non match: {}", path_synthetic));
-
-        // Check that the timestamp part is not 0 anymore (it uses physical_now)
-        let ts = u64::from_str_radix(capture.get(1).unwrap().as_str(), 16).unwrap();
-        assert_ne!(ts, 0);
+        // Different flush_ts values produce different, deterministic paths.
+        let path2 = meta.path_to_meta(50, 400);
+        assert_ne!(path, path2);
+        // Same arguments produce the same path (no UUID / randomness).
+        assert_eq!(path, meta.path_to_meta(50, 300));
     }
 }
