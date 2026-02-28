@@ -10,14 +10,10 @@ test-engine-kv-rocksdb = ["tikv/test-engine-kv-rocksdb", "engine_test/test-engin
 test-engine-raft-raft-engine = ["tikv/test-engine-raft-raft-engine", "engine_test/test-engine-raft-raft-engine"]
 test-engines-rocksdb = ["tikv/test-engines-rocksdb"]
 failpoints = ["tikv/failpoints", "fail/failpoints"]
+# Enable this if you cannot compile `grpcio` when running test cases in macOS.
 openssl-vendored = [
   "openssl/vendored",
-  # NB: the "openssl" feature does not make grpcio-sys v0.10 depends on
-  # openssl-sys, and it can not find the static openssl built by openssl-sys.
-  # Enabling "grpcio/openssl-vendored" explicitly makes grpcio-sys depends on
-  # openssl-sys and correctly links to the static openssl.
   "grpcio/openssl-vendored",
-  # NB: Enable SM4 support if OpenSSL is built from source and statically linked.
   "encryption_export/sm4",
 ]
 backup-stream-debug = []
