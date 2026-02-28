@@ -580,7 +580,8 @@ mod all {
     }
 
     /// Verify that `flush_ts` in metadata file names is monotonically
-    /// increasing even when PD becomes temporarily unavailable.
+    /// increasing and that a PD failure causes the flush to be skipped
+    /// (no synthesised TSO, no file override).
     #[test]
     fn monotonic_flush_ts_across_pd_failure() {
         let mut suite = SuiteBuilder::new_named("monotonic_flush_ts")
@@ -609,19 +610,28 @@ mod all {
         // Write data for round 2 while PD is still healthy.
         let round2 = run_async_test(suite.write_records(64, 8, 1));
 
-        // Now make PD's next get_tso call fail — this will affect the flush
-        // path, not the data writes which have already committed.
+        // Make PD's next get_tso call fail. The flush should be skipped
+        // entirely — no synthesised TSO, no new metadata file.
         suite.cluster.pd_client.trigger_tso_failure();
+        suite.force_flush_files("monotonic_flush_ts");
+        suite.wait_for_flush();
 
-        // Round 2: flush while PD is unavailable — flush_ts should fall back to
-        // the local clock and still be strictly greater than round-1's flush_ts.
+        let meta_names_after_pd_fail = collect_meta_filenames(suite.flushed_files.path());
+        assert_eq!(
+            meta_names_after_r1.len(),
+            meta_names_after_pd_fail.len(),
+            "no new metadata file should appear when PD is down"
+        );
+
+        // PD has recovered (trigger_tso_failure is one-shot).
+        // This flush should succeed normally.
         suite.force_flush_files("monotonic_flush_ts");
         suite.wait_for_flush();
 
         let meta_names_after_r2 = collect_meta_filenames(suite.flushed_files.path());
         assert!(
             meta_names_after_r2.len() > meta_names_after_r1.len(),
-            "round-2 should produce new meta files: before={}, after={}",
+            "post-recovery flush should produce new meta files: before={}, after={}",
             meta_names_after_r1.len(),
             meta_names_after_r2.len(),
         );
@@ -632,9 +642,7 @@ mod all {
             );
         }
 
-        // Extract the leading flush_ts (first 16 hex chars) from every meta
-        // file and verify strict ordering: every file produced in a later flush
-        // must have a larger flush_ts.
+        // Verify flush_ts monotonicity across all meta files.
         let mut flush_tss: Vec<u64> = meta_names_after_r2
             .iter()
             .map(|name| {
@@ -653,7 +661,7 @@ mod all {
             );
         }
 
-        // Verify that all written data from both rounds is present.
+        // Verify all data from both rounds is present.
         suite.check_for_write_records(
             suite.flushed_files.path(),
             round1.union(&round2).map(Vec::as_slice),

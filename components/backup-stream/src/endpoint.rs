@@ -6,10 +6,7 @@ use std::{
     fmt,
     marker::PhantomData,
     mem::ManuallyDrop,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -80,27 +77,6 @@ const SLOW_EVENT_THRESHOLD: f64 = 120.0;
 /// task has fatal error.
 const CHECKPOINT_SAFEPOINT_TTL_IF_ERROR: u64 = 24;
 
-/// Compute the next monotonically increasing `flush_ts`.
-///
-/// When PD is reachable, `pd_tso` is used as the candidate; otherwise the
-/// local physical clock is used. The result is always strictly greater
-/// than the previously issued `flush_ts`.
-fn next_flush_ts(last: &AtomicU64, pd_tso: TimeStamp) -> TimeStamp {
-    let candidate = if !pd_tso.is_zero() {
-        pd_tso
-    } else {
-        TimeStamp::compose(TimeStamp::physical_now(), 0)
-    };
-    loop {
-        let prev = last.load(Ordering::Acquire);
-        let next = std::cmp::max(candidate.into_inner(), prev + 1);
-        match last.compare_exchange_weak(prev, next, Ordering::AcqRel, Ordering::Acquire) {
-            Ok(_) => return TimeStamp::new(next),
-            Err(_) => continue,
-        }
-    }
-}
-
 pub struct Endpoint<S, R, E: KvEngine, PDC> {
     // Note: those fields are more like a shared context between components.
     // For now, we copied them everywhere, maybe we'd better extract them into a
@@ -131,8 +107,8 @@ pub struct Endpoint<S, R, E: KvEngine, PDC> {
     pub initial_scan_semaphore: Arc<Semaphore>,
     flush_done_subscribers: HashMap<String, Sender<FlushResult>>,
     /// Tracks the last issued `flush_ts` to guarantee monotonicity across
-    /// flushes, even when PD is temporarily unavailable.
-    last_flush_ts: Arc<AtomicU64>,
+    /// flushes. Only updated on the `Runnable` thread.
+    last_flush_ts: u64,
 }
 
 impl<S, R, E: KvEngine, PDC> Drop for Endpoint<S, R, E, PDC> {
@@ -239,7 +215,7 @@ where
             checkpoint_mgr,
             abort_last_storage_save: None,
             flush_done_subscribers: Default::default(),
-            last_flush_ts: Arc::new(AtomicU64::new(0)),
+            last_flush_ts: 0,
         };
         ep.pool.spawn(root!(ep.min_ts_worker()));
         ep
@@ -862,24 +838,28 @@ where
         router.unregister_task(task)
     }
 
-    fn prepare_min_ts(&self) -> future![(TimeStamp, TimeStamp)] {
+    /// Obtain the current `min_ts` and `pd_tso` from PD.
+    ///
+    /// Returns `Err` when PD is unreachable — callers must decide whether to
+    /// skip the operation or propagate the error.
+    fn prepare_min_ts(&self) -> future![Result<(TimeStamp, TimeStamp)>] {
         let pd_cli = self.pd_client.clone();
         let cm = self.concurrency_manager.clone();
-        let last_flush_ts = Arc::clone(&self.last_flush_ts);
         async move {
-            let pd_tso = pd_cli
-                .get_tso()
-                .await
-                .map_err(|err| Error::from(err).report("failed to get tso from pd"))
-                .unwrap_or_default();
-            if pd_tso != TimeStamp::zero() {
-                cm.update_max_ts(pd_tso, "backup-stream").unwrap();
-            }
-            let flush_ts = next_flush_ts(&last_flush_ts, pd_tso);
+            let pd_tso = pd_cli.get_tso().await.map_err(Error::from)?;
+            cm.update_max_ts(pd_tso, "backup-stream").unwrap();
             let min_ts = cm.global_min_lock_ts().unwrap_or(TimeStamp::max());
-            let effective_pd = if pd_tso.is_zero() { flush_ts } else { pd_tso };
-            (Ord::min(effective_pd, min_ts), flush_ts)
+            Ok((Ord::min(pd_tso, min_ts), pd_tso))
         }
+    }
+
+    /// Advance `last_flush_ts` and return a strictly increasing `flush_ts`.
+    ///
+    /// `pd_tso` must be a valid (non-zero) TSO obtained from PD.
+    fn next_flush_ts(&mut self, pd_tso: TimeStamp) -> TimeStamp {
+        let next = std::cmp::max(pd_tso.into_inner(), self.last_flush_ts + 1);
+        self.last_flush_ts = next;
+        TimeStamp::new(next)
     }
 
     fn do_flush(
@@ -935,48 +915,59 @@ where
 
     pub fn on_force_flush(&mut self, task: TaskSelectorRef<'_>, sender: Sender<FlushResult>) {
         let hnd = self.pool.handle().clone();
-        hnd.block_on(async {
-            info!("Triggering force flush."; "selector" => ?task);
-            let handlers = self.range_router.select_task_handler(task);
-            for hnd in handlers {
-                let (mts, fts) = self.prepare_min_ts().await;
-                let sched = self.scheduler.clone();
-                let sender = sender.clone();
-                self.subscribe_flush_done(&hnd.task.info.name, sender);
-                match hnd.set_flushing_status_cas(false, true) {
-                    Ok(_) => {
-                        self.region_op(ObserveOp::ResolveRegions {
-                            callback: Box::new(move |res| {
-                                try_send!(
-                                    sched,
-                                    Task::ExecFlush(hnd.task.info.name.to_owned(), res, fts)
-                                );
-                            }),
-                            min_ts: mts,
-                        })
-                        .await;
-                    }
-                    Err(_) => {
-                        info!("on_force_flush: a flush is on the way, waiting its finish..."; "task" => %hnd.task.info.name);
-                    }
+        info!("Triggering force flush."; "selector" => ?task);
+
+        let prepare_fut = self.prepare_min_ts();
+        let (mts, pd_tso) = match hnd.block_on(prepare_fut) {
+            Ok(v) => v,
+            Err(err) => {
+                err.report("failed to get TSO for flushing, skipping this flush");
+                return;
+            }
+        };
+        let fts = self.next_flush_ts(pd_tso);
+
+        let handlers: Vec<_> = self.range_router.select_task_handler(task).collect();
+        for handler in handlers {
+            let sched = self.scheduler.clone();
+            let sender = sender.clone();
+            self.subscribe_flush_done(&handler.task.info.name, sender);
+            match handler.set_flushing_status_cas(false, true) {
+                Ok(_) => {
+                    let task_name = handler.task.info.name.to_owned();
+                    hnd.block_on(self.region_op(ObserveOp::ResolveRegions {
+                        callback: Box::new(move |res| {
+                            try_send!(sched, Task::ExecFlush(task_name, res, fts));
+                        }),
+                        min_ts: mts,
+                    }));
+                }
+                Err(_) => {
+                    info!("on_force_flush: a flush is on the way, waiting its finish..."; "task" => %handler.task.info.name);
                 }
             }
-        });
+        }
     }
 
-    pub fn on_flush(&self, task: String) {
-        self.pool.block_on(async move {
-            let (mts, flush_ts) = self.prepare_min_ts().await;
-            let sched = self.scheduler.clone();
-            info!("min_ts prepared for flushing"; "min_ts" => %mts, "flush_ts" => %flush_ts);
-            self.region_op(ObserveOp::ResolveRegions {
-                callback: Box::new(move |res| {
-                    try_send!(sched, Task::ExecFlush(task, res, flush_ts));
-                }),
-                min_ts: mts,
-            })
-            .await
-        })
+    pub fn on_flush(&mut self, task: String) {
+        let hnd = self.pool.handle().clone();
+        let prepare_fut = self.prepare_min_ts();
+        let (mts, pd_tso) = match hnd.block_on(prepare_fut) {
+            Ok(v) => v,
+            Err(err) => {
+                err.report("failed to get TSO for flushing, skipping this flush");
+                return;
+            }
+        };
+        let flush_ts = self.next_flush_ts(pd_tso);
+        let sched = self.scheduler.clone();
+        info!("min_ts prepared for flushing"; "min_ts" => %mts, "flush_ts" => %flush_ts);
+        hnd.block_on(self.region_op(ObserveOp::ResolveRegions {
+            callback: Box::new(move |res| {
+                try_send!(sched, Task::ExecFlush(task, res, flush_ts));
+            }),
+            min_ts: mts,
+        }))
     }
 
     fn on_exec_flush(&mut self, task: String, resolved: ResolvedRegions, flush_ts: TimeStamp) {
@@ -1217,7 +1208,13 @@ where
                     metrics::MISC_EVENTS.skip_resolve_no_subscription.inc();
                     return;
                 }
-                let (min_ts, _) = self.pool.block_on(self.prepare_min_ts());
+                let (min_ts, _) = match self.pool.block_on(self.prepare_min_ts()) {
+                    Ok(v) => v,
+                    Err(err) => {
+                        err.report("failed to get TSO for min_ts resolution");
+                        return;
+                    }
+                };
                 let start_time = Instant::now();
                 // We need to reschedule the `Resolve` task to queue, because the subscription
                 // is asynchronous -- there may be transactions committed before
@@ -1567,73 +1564,5 @@ where
 
     fn run(&mut self, task: Task) {
         self.run_task(task)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    use txn_types::TimeStamp;
-
-    use super::next_flush_ts;
-
-    #[test]
-    fn test_next_flush_ts_normal_progression() {
-        let last = AtomicU64::new(0);
-        // Simulate three PD TSOs in order.
-        let ts1 = next_flush_ts(&last, TimeStamp::new(100));
-        let ts2 = next_flush_ts(&last, TimeStamp::new(200));
-        let ts3 = next_flush_ts(&last, TimeStamp::new(300));
-        assert!(ts1 < ts2);
-        assert!(ts2 < ts3);
-        assert_eq!(ts1, TimeStamp::new(100));
-        assert_eq!(ts2, TimeStamp::new(200));
-        assert_eq!(ts3, TimeStamp::new(300));
-    }
-
-    #[test]
-    fn test_next_flush_ts_zero_tso_still_increases() {
-        let last = AtomicU64::new(0);
-        let ts1 = next_flush_ts(&last, TimeStamp::new(500));
-        // PD unavailable: pd_tso = 0, should still be > ts1.
-        let ts2 = next_flush_ts(&last, TimeStamp::zero());
-        assert!(ts2 > ts1, "ts2={} should be > ts1={}", ts2, ts1);
-        // Another PD-unavailable call should still increase.
-        let ts3 = next_flush_ts(&last, TimeStamp::zero());
-        assert!(ts3 > ts2, "ts3={} should be > ts2={}", ts3, ts2);
-    }
-
-    #[test]
-    fn test_next_flush_ts_stale_pd_tso() {
-        let last = AtomicU64::new(0);
-        // Advance to a high value via local clock (PD unavailable).
-        let ts1 = next_flush_ts(&last, TimeStamp::zero());
-        // PD comes back with a stale value that is < ts1.
-        let ts2 = next_flush_ts(&last, TimeStamp::new(1));
-        assert!(
-            ts2 > ts1,
-            "stale PD tso should still produce a strictly greater flush_ts: ts2={} ts1={}",
-            ts2,
-            ts1
-        );
-    }
-
-    #[test]
-    fn test_next_flush_ts_duplicate_pd_tso() {
-        let last = AtomicU64::new(0);
-        let ts1 = next_flush_ts(&last, TimeStamp::new(42));
-        // Same TSO again — must still increase.
-        let ts2 = next_flush_ts(&last, TimeStamp::new(42));
-        assert!(ts2 > ts1);
-    }
-
-    #[test]
-    fn test_next_flush_ts_starts_from_zero() {
-        let last = AtomicU64::new(0);
-        // Even with pd_tso = 0 and last = 0, result must be > 0.
-        let ts = next_flush_ts(&last, TimeStamp::zero());
-        assert!(ts > TimeStamp::zero());
-        assert_eq!(last.load(Ordering::Acquire), ts.into_inner());
     }
 }
