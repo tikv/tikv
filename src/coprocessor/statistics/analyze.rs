@@ -190,6 +190,24 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                     .inc_by(quota_delay.as_micros() as u64);
             }
         }
+        {
+            let base = collector.mut_base();
+            let sampled_count = base.sketch_sample_count;
+            let total_count = base.count;
+            if sampled_count > 0 && total_count > sampled_count {
+                // `null_count` is gathered only on sampled rows. Since `count` is now
+                // full scanned rows, scale null counts to keep the same denominator.
+                let sampled_count_u128 = sampled_count as u128;
+                let total_count_u128 = total_count as u128;
+                for i in 0..self.columns_info.len() {
+                    let sampled_null_count = base.null_count[i].max(0) as u128;
+                    let estimated_null_count =
+                        (sampled_null_count * total_count_u128 + sampled_count_u128 / 2)
+                            / sampled_count_u128;
+                    base.null_count[i] = estimated_null_count.min(total_count_u128) as i64;
+                }
+            }
+        }
         for i in 0..self.column_groups.len() {
             let offsets = self.column_groups[i].get_column_offsets();
             if offsets.len() != 1 {
