@@ -128,7 +128,7 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
         idx: usize,
     ) -> Result<()> {
         let src_schema = self.src.schema();
-        let _res = ensure_columns_decoded(
+        ensure_columns_decoded(
             &mut self.context,
             &self.truncate_keys_exps,
             src_schema,
@@ -138,7 +138,7 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
 
         self.current_truncate_keys_unsafe.clear();
         unsafe {
-            let _res = eval_exprs_decoded_no_lifetime(
+            eval_exprs_decoded_no_lifetime(
                 &mut self.context,
                 &self.truncate_keys_exps,
                 src_schema,
@@ -172,7 +172,7 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
         let src_schema = self.src.schema();
         // Decode columns with mutable input first, so subsequent access to input can be
         // immutable (and the borrow checker will be happy)
-        let _res = ensure_columns_decoded(
+        ensure_columns_decoded(
             &mut self.context,
             &self.truncate_keys_exps,
             src_schema,
@@ -182,7 +182,7 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
 
         self.current_truncate_keys_unsafe.clear();
         unsafe {
-            let _res = eval_exprs_decoded_no_lifetime(
+            let _ =eval_exprs_decoded_no_lifetime(
                 &mut self.context,
                 &self.truncate_keys_exps,
                 src_schema,
