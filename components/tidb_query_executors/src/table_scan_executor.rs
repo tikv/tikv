@@ -114,6 +114,11 @@ impl<S: Storage, F: KvFormat> BatchTableScanExecutor<S, F> {
         })?;
         Ok(Self(wrapper))
     }
+
+    #[inline]
+    pub fn set_row_sample_rate(&mut self, sample_rate: f64) {
+        self.0.set_row_sample_rate(sample_rate);
+    }
 }
 
 #[async_trait]
@@ -873,6 +878,32 @@ mod tests {
         let exec_summary = s.summary_per_executor[1];
         assert_eq!(2, exec_summary.num_produced_rows);
         assert_eq!(1, exec_summary.num_iterations);
+    }
+
+    #[test]
+    fn test_row_sample_rate_zero_skips_decoding() {
+        let helper = TableScanTestHelper::new();
+        let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
+            helper.store(),
+            Arc::new(EvalConfig::default()),
+            helper.columns_info_by_idx(&[0, 1, 2]),
+            vec![helper.whole_table_range()],
+            vec![],
+            false,
+            false,
+            vec![],
+        )
+        .unwrap();
+        executor.set_row_sample_rate(0.0);
+
+        loop {
+            let result = block_on(executor.next_batch(2));
+            assert!(result.logical_rows.is_empty());
+            assert_eq!(result.physical_columns.rows_len(), 0);
+            if result.is_drained.unwrap().stop() {
+                break;
+            }
+        }
     }
 
     #[test]

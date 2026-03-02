@@ -54,6 +54,10 @@ pub struct ScanExecutor<S: Storage, I: ScanExecutorImpl, F: KvFormat> {
     /// or there was an error scanning the table, this flag will be set to
     /// `true` and `next_batch` should be never called again.
     is_ended: bool,
+
+    /// Row-level Bernoulli sampling ratio used to skip decoding for rows that
+    /// are not selected.
+    row_sample_rate: f64,
 }
 
 pub struct ScanExecutorOptions<S, I> {
@@ -98,7 +102,35 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
                 load_commit_ts,
             }),
             is_ended: false,
+            row_sample_rate: 1.0,
         })
+    }
+
+    /// Sets the per-row sampling rate. Out-of-range values are clamped to
+    /// `[0, 1]`. Non-finite values are ignored.
+    pub fn set_row_sample_rate(&mut self, sample_rate: f64) {
+        if sample_rate.is_finite() {
+            self.row_sample_rate = sample_rate.clamp(0.0, 1.0);
+        }
+    }
+
+    #[inline]
+    fn should_sample_row(&self, key: &[u8]) -> bool {
+        if self.row_sample_rate >= 1.0 {
+            return true;
+        }
+        if self.row_sample_rate <= 0.0 {
+            return false;
+        }
+
+        // A tiny key hash for deterministic Bernoulli gating without
+        // allocating per-row RNG state in the hot scan loop.
+        let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+        for b in key {
+            hash ^= *b as u64;
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3_u64);
+        }
+        hash <= (self.row_sample_rate * u64::MAX as f64) as u64
     }
 
     /// Fills a column vector and returns whether or not all ranges are drained.
@@ -118,6 +150,9 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
                 // Retrieved one row from point range or non-point range.
 
                 let (key, value) = row.kv();
+                if !self.should_sample_row(key) {
+                    continue;
+                }
                 if let Err(e) = self
                     .imp
                     .process_kv_pair(key, value, columns, row.commit_ts())
