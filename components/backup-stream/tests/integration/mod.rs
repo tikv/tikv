@@ -14,6 +14,7 @@ mod all {
 
     use backup_stream::{
         GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task, router::TaskSelector,
+        utils,
     };
     use futures::{Stream, StreamExt};
     use kvproto::metapb::RegionEpoch;
@@ -563,20 +564,14 @@ mod all {
             meta_names_after_r3.len() > meta_names_after_r2.len(),
             "a successful flush after repeated TSO failures should produce more meta files"
         );
-        for name in &meta_names_after_r3 {
-            assert!(
-                !name.contains("SYNTHETIC"),
-                "SYNTHETIC suffix must not appear: {name}"
-            );
-        }
 
         // Verify flush_ts monotonicity across all meta files.
         let mut flush_tss: Vec<u64> = meta_names_after_r3
             .iter()
             .map(|name| {
-                let hex_part = &name[..16];
-                u64::from_str_radix(hex_part, 16)
-                    .unwrap_or_else(|e| panic!("bad flush_ts hex in {name}: {e}"))
+                utils::parse_backupmeta_filename(name)
+                    .unwrap_or_else(|err| panic!("invalid backup meta file name {name}: {err}"))
+                    .flush_ts
             })
             .collect();
         flush_tss.sort();

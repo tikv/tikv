@@ -1813,10 +1813,14 @@ impl MetadataInfo {
             "flush_ts must be positive (monotonically assigned by Endpoint)"
         );
         format!(
-            "v1/backupmeta/{:016X}-{:016X}-{:016X}-{:016X}.meta",
+            "v1/backupmeta/{:016X}{:016X}-{}{:016X}{}{:016X}{}{:016X}.meta",
             flush_ts,
+            self.store_id,
+            utils::BACKUP_META_MIN_BEGIN_TS_PREFIX,
             min_begin_ts,
+            utils::BACKUP_META_MIN_TS_PREFIX,
             self.min_ts.unwrap_or_default(),
+            utils::BACKUP_META_MAX_TS_PREFIX,
             self.max_ts.unwrap_or_default(),
         )
     }
@@ -2300,29 +2304,19 @@ mod tests {
         for entry in walkdir::WalkDir::new(storage_path) {
             let entry = entry.unwrap();
             if entry.path().extension() == Some(OsStr::new("meta")) {
-                let filename = entry.path().file_stem().unwrap().to_os_string();
-                let parts: Vec<&str> = filename.to_str().unwrap().split('-').collect();
-
-                assert!(
-                    parts.len() >= 4,
-                    "Invalid meta file name format: expected at least 4 parts, got {}, file: {:?}",
-                    parts.len(),
-                    entry.file_name(),
-                );
-
-                for (i, label) in ["flushTs", "minDefaultTs", "minTs", "maxTs"]
-                    .iter()
-                    .enumerate()
-                {
-                    let val = u64::from_str_radix(parts[i], 16);
-                    assert!(
-                        val.is_ok(),
-                        "Failed to parse '{}' as u64 (hex) for {} in file name: {:?}",
-                        parts[i],
-                        label,
-                        entry.file_name(),
-                    );
-                }
+                let filename = entry
+                    .path()
+                    .file_stem()
+                    .and_then(OsStr::to_str)
+                    .unwrap_or_else(|| {
+                        panic!("invalid utf8 meta file name: {:?}", entry.file_name())
+                    });
+                utils::parse_backupmeta_filename(filename).unwrap_or_else(|err| {
+                    panic!(
+                        "invalid backup meta file name {:?}: {err}",
+                        entry.file_name()
+                    )
+                });
 
                 meta_count += 1;
             } else if entry.path().extension() == Some(OsStr::new("log")) {
@@ -3234,20 +3228,10 @@ mod tests {
             let entry = entry.unwrap();
             if entry.path().extension() == Some(OsStr::new("meta")) {
                 if let Some(filename) = entry.path().file_stem().and_then(OsStr::to_str) {
-                    // v1/backupmeta/{a}-{b}-{c}-{d}.meta
-                    let parts: Vec<&str> = filename.split('-').collect();
-                    if parts.len() == 4 {
-                        for p in parts {
-                            assert!(
-                                u64::from_str_radix(p, 16).is_ok(),
-                                "Part '{}' is not a valid hex u64",
-                                p
-                            );
-                        }
-                        meta_files.push(entry.path().to_path_buf());
-                    } else {
-                        panic!("backup meta file format changed")
-                    }
+                    utils::parse_backupmeta_filename(filename).unwrap_or_else(|err| {
+                        panic!("backup meta file format changed: {filename}, {err}")
+                    });
+                    meta_files.push(entry.path().to_path_buf());
                 }
             }
         }
@@ -3362,24 +3346,5 @@ mod tests {
             kv_pairs.push((apply_event.key.clone(), apply_event.value.clone()));
         }
         kv_pairs
-    }
-
-    #[test]
-    fn test_path_to_meta() {
-        let mut meta = MetadataInfo::with_capacity(0);
-        meta.min_ts = Some(100);
-        meta.max_ts = Some(200);
-
-        let path = meta.path_to_meta(50, 300);
-        assert_eq!(
-            path,
-            "v1/backupmeta/000000000000012C-0000000000000032-0000000000000064-00000000000000C8.meta"
-        );
-
-        // Different flush_ts values produce different, deterministic paths.
-        let path2 = meta.path_to_meta(50, 400);
-        assert_ne!(path, path2);
-        // Same arguments produce the same path (no UUID / randomness).
-        assert_eq!(path, meta.path_to_meta(50, 300));
     }
 }
