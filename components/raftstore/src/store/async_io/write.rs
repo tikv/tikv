@@ -74,15 +74,11 @@ const HIGH_CONCURRENCY_FUTILE_THRESHOLD_NS: u64 = 100_000; // 100us
 // Adaptive batching QPS-related constants for
 // calculate_adaptive_wait_duration()
 const ADAPTIVE_QPS_BASELINE_HISTORY_MIN_LEN: usize = 10;
-/// Divisor to pick median index from sorted samples.
-const ADAPTIVE_MEDIAN_INDEX_DIVISOR: usize = 2;
 const ADAPTIVE_DEFAULT_QPS_BASELINE: u64 = 1000;
 const ADAPTIVE_QPS_PRESSURE_LOWER_BOUND: u64 = 10000;
 // Dynamic threshold for high concurrency - initial and minimum value
 const ADAPTIVE_MIN_HIGH_CONCURRENCY_QPS: u64 = 40000;
 const ADAPTIVE_LOG_THROTTLE_INTERVAL_SECS: u64 = 5;
-/// Ratio used to select P90 from a sorted sample list.
-const ADAPTIVE_P90_PERCENTILE: f64 = 0.9;
 // EWMA smoothing factor for high_concurrency_qps_threshold update
 const ADAPTIVE_HIGH_CONCURRENCY_EWMA_ALPHA: f64 = 0.2; // 0.8*old + 0.2*new
 // High concurrency multiplier (0.9 of high_concurrency_qps_threshold)
@@ -588,9 +584,14 @@ impl WriteTaskBatchRecorder {
     fn wait_for_a_while(&mut self, adaptive_batch_enabled: bool) {
         self.wait_count += 1;
 
+        // Record wait_duration_adaptive for observing difference from actual spin
+        // duration.
+        STORE_WRITE_ADAPTIVE_WAIT_DURATION_HISTOGRAM
+            .observe(duration_to_sec(self.wait_duration_adaptive));
+
         // Fallback to old strategy: if wait_duration drops too low (<=40us), reset to
         // 20us. This is only applied when adaptive_batch_enabled is true
-        // This prevents the new adaptive algorithm from preforming too aggressively to
+        // This prevents the new adaptive algorithm from performing too aggressively to
         // increase IOPS unexpectedly.
         if adaptive_batch_enabled {
             if self.wait_duration_adaptive.as_nanos()
@@ -604,9 +605,10 @@ impl WriteTaskBatchRecorder {
         }
 
         // Use a simple linear function to calculate the wait duration.
-        spin_at_least(Duration::from_nanos(
-            (self.wait_duration.as_nanos() as f64 * (1.0 / self.trend)) as u64,
-        ));
+        let actual_spin_nanos = (self.wait_duration.as_nanos() as f64 * (1.0 / self.trend)) as u64;
+        STORE_WRITE_SPIN_ACTUAL_WAIT_DURATION_HISTOGRAM
+            .observe(duration_to_sec(Duration::from_nanos(actual_spin_nanos)));
+        spin_at_least(Duration::from_nanos(actual_spin_nanos));
     }
 }
 
@@ -1127,13 +1129,13 @@ where
         // Calculate median QPS for more stable metrics
         let mut sorted_qps: Vec<u64> = self.qps_history.iter().cloned().collect();
         sorted_qps.sort();
-        let avg_qps = sorted_qps[sorted_qps.len() / ADAPTIVE_MEDIAN_INDEX_DIVISOR]; // Median
+        let medium_qps = sorted_qps[sorted_qps.len() / 2]; // Median
 
         // Update baseline history
-        self.update_baseline_history(avg_qps);
+        self.update_baseline_history(medium_qps);
 
         // Calculate adjustment factors based on QPS
-        let new_wait_duration = self.calculate_adaptive_wait_duration(avg_qps);
+        let new_wait_duration = self.calculate_adaptive_wait_duration(medium_qps);
 
         // Update configuration (only wait_duration)
         self.batch.update_wait_duration_adaptive(new_wait_duration);
@@ -1149,7 +1151,7 @@ where
     /// - Consecutive low batch ratio counter (anti-oscillation mechanism) Uses
     ///   EWMA for smooth transitions and updates high_concurrency_qps_threshold
     ///   dynamically
-    fn calculate_adaptive_wait_duration(&mut self, avg_qps: u64) -> Duration {
+    fn calculate_adaptive_wait_duration(&mut self, medium_qps: u64) -> Duration {
         let current_wait_duration_nanos =
             self.batch.recorder.wait_duration_adaptive.as_nanos() as u64;
         let wait_duration_hint_nanos = self.batch.recorder.wait_duration_hint.as_nanos() as u64;
@@ -1164,10 +1166,10 @@ where
             sorted_qps.sort();
 
             // Use P50 (median, 50th percentile) as baseline
-            let p50_qps = sorted_qps[sorted_qps.len() / ADAPTIVE_MEDIAN_INDEX_DIVISOR];
+            let p50_qps = sorted_qps[sorted_qps.len() / 2];
 
             // Use P90 (90th percentile) to update high_concurrency_qps_threshold
-            let p90_index = (sorted_qps.len() as f64 * ADAPTIVE_P90_PERCENTILE) as usize;
+            let p90_index = (sorted_qps.len() as f64 * 0.9) as usize;
             let p90_qps = sorted_qps[p90_index.min(sorted_qps.len() - 1)];
 
             // Update high_concurrency_qps_threshold using P90 and EWMA (bidirectional
@@ -1230,12 +1232,12 @@ where
         // - 10000 < QPS < high_concurrency_qps_threshold: factor scales linearly from
         //   0.0 to 1.0
         // - QPS >= high_concurrency_qps_threshold: factor = 1.0
-        let qps_pressure_factor = if avg_qps <= ADAPTIVE_QPS_PRESSURE_LOWER_BOUND {
+        let qps_pressure_factor = if medium_qps <= ADAPTIVE_QPS_PRESSURE_LOWER_BOUND {
             ADAPTIVE_QPS_PRESSURE_MIN_FACTOR
-        } else if avg_qps >= self.high_concurrency_qps_threshold {
+        } else if medium_qps >= self.high_concurrency_qps_threshold {
             ADAPTIVE_QPS_PRESSURE_MAX_FACTOR
         } else {
-            (avg_qps - ADAPTIVE_QPS_PRESSURE_LOWER_BOUND) as f64
+            (medium_qps - ADAPTIVE_QPS_PRESSURE_LOWER_BOUND) as f64
                 / (self.high_concurrency_qps_threshold - ADAPTIVE_QPS_PRESSURE_LOWER_BOUND) as f64
         };
 
@@ -1523,7 +1525,7 @@ where
         if Self::should_emit_adaptive_log(&mut self.last_adaptive_adjustment_log, log_now) {
             info!(
                 "[adaptive adjustment] adaptive_batch_enabled: {}, update wait_duration, wait_count: {}, wasted_wait_count: {}, \
-                valid_wait_count: {}, wasted_wait_ratio: {:.2}, qps_baseline(P50): {}, avg_qps: {}, \
+                valid_wait_count: {}, wasted_wait_ratio: {:.2}, qps_baseline(P50): {}, medium_qps: {}, \
                 batch_achievement_ratio: {:.2}, qps_pressure_factor: {:.2}, high_concurrency_qps_threshold: {}, \
                 is_high_concurrency: {}, is_very_high_concurrency: {}, \
                 consecutive_low_batch_ratio_count: {}, smoothing_factor: {:.2}, target_duration: {}us, wait_duration: {}us => {}us, \
@@ -1534,7 +1536,7 @@ where
                 self.valid_wait_count,
                 wasted_wait_ratio,
                 qps_baseline,
-                avg_qps,
+                medium_qps,
                 batch_achievement_ratio,
                 qps_pressure_factor,
                 self.high_concurrency_qps_threshold,
