@@ -102,7 +102,10 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
     /// so that collect_scan_statistics gets request-scoped stats (from the
     /// Scanner), consistent with other handlers (e.g. DAG / checksum).
     pub(crate) fn merge_storage_stats_into(&mut self, dest: &mut Statistics) {
-        dest.add(&self.accumulated_storage_stats);
+        dest.add(&mem::take(&mut self.accumulated_storage_stats));
+        // Collect potential trailing scanner stats that were generated after
+        // the last per-batch collection.
+        self.data.collect_storage_stats(dest);
     }
 
     pub(crate) async fn collect_column_stats(&mut self) -> Result<AnalyzeSamplingResult> {
