@@ -57,7 +57,7 @@ pub const CDC_THREAD: &str = "cdc";
 
 pub const PD_WORKER_THREAD: &str = "pd-worker";
 
-pub const UNIFIED_READ_POOL_THREAD: &str = "unified-read";
+pub const UNIFIED_READ_POOL_THREAD: &str = "unified-read-pool";
 
 pub const DEBUGGER_THREAD: &str = "debugger";
 
