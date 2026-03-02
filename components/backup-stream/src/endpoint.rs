@@ -107,11 +107,7 @@ pub struct Endpoint<S, R, E: KvEngine, PDC> {
     pub initial_scan_semaphore: Arc<Semaphore>,
     flush_done_subscribers: HashMap<String, Sender<FlushResult>>,
     /// Tracks the last issued `flush_ts` to guarantee monotonicity across
-    /// flushes. Only updated on the `Runnable` thread.
     last_flush_ts: u64,
-    /// Controls whether flush can fallback to local monotonic `flush_ts` when
-    /// PD TSO allocation fails.
-    allow_flush_tso_fallback: bool,
 }
 
 impl<S, R, E: KvEngine, PDC> Drop for Endpoint<S, R, E, PDC> {
@@ -219,7 +215,6 @@ where
             abort_last_storage_save: None,
             flush_done_subscribers: Default::default(),
             last_flush_ts: 0,
-            allow_flush_tso_fallback: false,
         };
         ep.pool.spawn(root!(ep.min_ts_worker()));
         ep
@@ -874,17 +869,13 @@ where
         match hnd.block_on(self.prepare_min_ts()) {
             Ok((min_ts, pd_tso)) => Ok((min_ts, self.next_flush_ts(pd_tso))),
             Err(err) => {
-                if !self.allow_flush_tso_fallback {
-                    self.allow_flush_tso_fallback = true;
+                if self.last_flush_ts == 0 {
                     return Err(err);
                 }
                 err.report("failed to get TSO for flushing, fallback to local monotonic ts");
                 let flush_ts = self.next_flush_ts(TimeStamp::zero());
-                let min_lock_ts = self
-                    .concurrency_manager
-                    .global_min_lock_ts()
-                    .unwrap_or(TimeStamp::max());
-                Ok((Ord::min(flush_ts, min_lock_ts), flush_ts))
+                // Don't use synthetical tso to advance resolved_ts.
+                Ok((TimeStamp::zero(), flush_ts))
             }
         }
     }
