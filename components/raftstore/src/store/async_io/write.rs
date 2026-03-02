@@ -66,6 +66,30 @@ const RAFT_WB_SPLIT_SIZE: usize = ReadableSize::gb(1).0 as usize;
 /// The default size of the raft write batch recorder.
 const RAFT_WB_DEFAULT_RECORDER_SIZE: usize = 30;
 
+const RAFT_WB_WAIT_DURATION_UPPER_BOUND_NS: u64 = 1_000_000; // 1ms
+const RAFT_WB_WAIT_DURATION_LOWER_BOUND_NS: u64 = 10_000; // 10us
+const RAFT_WB_WAIT_DURATION_DEFAULT_NS: u64 = 20_000; // default config value for wait_duration is 20us
+// Adaptive batching constants for calculate_adaptive_wait_duration().
+// The algorithm adjusts wait_duration based on two signals:
+// - batch_ratio (batch_avg / batch_size_hint): how well we're batching
+// - qps_pressure (avg_qps / high_qps_threshold): how much load there is
+const ADAPTIVE_UPDATE_INTERVAL_SECS: u64 = 2;
+const ADAPTIVE_QPS_HISTORY_SIZE: usize = 100;
+/// Default QPS threshold for high concurrency (configurable via
+/// `adaptive_high_qps_threshold`). Used in tests as the reference value.
+#[cfg(test)]
+const ADAPTIVE_DEFAULT_HIGH_QPS_THRESHOLD: u64 = 40_000;
+/// Consecutive low-batch periods before declaring futile waiting.
+const ADAPTIVE_FUTILE_CONSECUTIVE: u32 = 2;
+/// Below this batch ratio is considered poor batching.
+const ADAPTIVE_BATCH_RATIO_LOW: f64 = 0.3;
+/// Above this batch ratio is considered good batching.
+const ADAPTIVE_BATCH_RATIO_GOOD: f64 = 0.6;
+/// EWMA smoothing factor (single value for all scenarios).
+const ADAPTIVE_SMOOTHING_ALPHA: f64 = 0.3;
+/// Log throttle interval in seconds.
+const ADAPTIVE_LOG_INTERVAL_SECS: u64 = 5;
+
 /// Notify the event to the specified region.
 pub trait PersistedNotifier: Clone + Send + 'static {
     fn notify(&self, region_id: u64, peer_id: u64, ready_number: u64);
@@ -396,6 +420,8 @@ struct WriteTaskBatchRecorder {
     trend: f64,
     /// Wait duration in nanoseconds.
     wait_duration: Duration,
+    wait_duration_adaptive: Duration,
+    wait_duration_hint: Duration,
     /// The count of wait.
     wait_count: u64,
     /// The max count of wait.
@@ -406,6 +432,8 @@ impl WriteTaskBatchRecorder {
     fn new(batch_size_hint: usize, wait_duration: Duration) -> Self {
         // Initialize the spin duration in advance.
         setup_for_spin_interval();
+        let wait_duration_adaptive =
+            wait_duration.min(Duration::from_nanos(RAFT_WB_WAIT_DURATION_DEFAULT_NS));
         Self {
             batch_size_hint,
             history: VecDeque::new(),
@@ -414,13 +442,15 @@ impl WriteTaskBatchRecorder {
             avg: 0,
             trend: 1.0,
             wait_duration,
+            wait_duration_adaptive,
+            wait_duration_hint: wait_duration,
             wait_count: 0,
             wait_max_count: 1,
         }
     }
 
-    #[cfg(test)]
-    fn get_avg(&self) -> usize {
+    #[inline]
+    pub fn get_avg(&self) -> usize {
         self.avg
     }
 
@@ -430,9 +460,15 @@ impl WriteTaskBatchRecorder {
     }
 
     #[inline]
-    fn update_config(&mut self, batch_size: usize, wait_duration: Duration) {
-        self.batch_size_hint = batch_size;
-        self.wait_duration = wait_duration;
+    fn update_config(&mut self, batch_size_config: usize, wait_duration_config: Duration) {
+        self.batch_size_hint = batch_size_config;
+        self.wait_duration = wait_duration_config;
+        self.wait_duration_hint = wait_duration_config;
+    }
+
+    #[inline]
+    fn update_wait_duration_adaptive(&mut self, wait_duration: Duration) {
+        self.wait_duration_adaptive = wait_duration;
     }
 
     fn record(&mut self, size: usize) {
@@ -449,7 +485,7 @@ impl WriteTaskBatchRecorder {
         self.avg = self.sum / len;
 
         if len >= self.capacity && self.batch_size_hint > 0 {
-            // The trend ranges from 0.5 to 2.0.
+            // The trend ranges from 0.5 to 2.0 (when adaptive batch is disabled).
             let trend = self.avg as f64 / self.batch_size_hint as f64;
             self.trend = trend.clamp(0.5, 2.0);
         } else {
@@ -467,12 +503,34 @@ impl WriteTaskBatchRecorder {
         batch_size < self.batch_size_hint && self.wait_count < self.wait_max_count
     }
 
-    fn wait_for_a_while(&mut self) {
+    fn wait_for_a_while(&mut self, adaptive_batch_enabled: bool) {
         self.wait_count += 1;
+
+        // Record wait_duration_adaptive for observing difference from actual spin
+        // duration.
+        STORE_WRITE_ADAPTIVE_WAIT_DURATION_HISTOGRAM
+            .observe(duration_to_sec(self.wait_duration_adaptive));
+
+        // Fallback to old strategy: if wait_duration drops too low (<=40us), reset to
+        // 20us. This is only applied when adaptive_batch_enabled is true
+        // This prevents the new adaptive algorithm from performing too aggressively to
+        // increase IOPS unexpectedly.
+        if adaptive_batch_enabled {
+            if self.wait_duration_adaptive.as_nanos()
+                <= (2 * RAFT_WB_WAIT_DURATION_DEFAULT_NS).into()
+            {
+                self.wait_duration = Duration::from_nanos(RAFT_WB_WAIT_DURATION_DEFAULT_NS);
+            } else {
+                self.wait_duration = self.wait_duration_adaptive;
+                self.trend = 1.0; // reset trend to 1.0
+            }
+        }
+
         // Use a simple linear function to calculate the wait duration.
-        spin_at_least(Duration::from_nanos(
-            (self.wait_duration.as_nanos() as f64 * (1.0 / self.trend)) as u64,
-        ));
+        let actual_spin_nanos = (self.wait_duration.as_nanos() as f64 * (1.0 / self.trend)) as u64;
+        STORE_WRITE_SPIN_ACTUAL_WAIT_DURATION_HISTOGRAM
+            .observe(duration_to_sec(Duration::from_nanos(actual_spin_nanos)));
+        spin_at_least(Duration::from_nanos(actual_spin_nanos));
     }
 }
 
@@ -677,8 +735,14 @@ where
     }
 
     #[inline]
-    fn update_config(&mut self, batch_size: usize, wait_duration: Duration) {
-        self.recorder.update_config(batch_size, wait_duration);
+    fn update_config(&mut self, batch_size_config: usize, wait_duration_config: Duration) {
+        self.recorder
+            .update_config(batch_size_config, wait_duration_config);
+    }
+
+    #[inline]
+    fn update_wait_duration_adaptive(&mut self, wait_duration: Duration) {
+        self.recorder.update_wait_duration_adaptive(wait_duration);
     }
 
     #[inline]
@@ -686,11 +750,12 @@ where
         self.recorder.should_wait(self.get_raft_size())
     }
 
-    fn wait_for_a_while(&mut self) {
-        self.recorder.wait_for_a_while();
+    fn wait_for_a_while(&mut self, adaptive_batch_enabled: bool) {
+        self.recorder.wait_for_a_while(adaptive_batch_enabled);
     }
 }
 
+/// A writer that handles asynchronous writes to the storage engine.
 pub struct Worker<EK, ER, N, T>
 where
     EK: KvEngine,
@@ -711,6 +776,20 @@ where
     message_metrics: RaftSendMessageMetrics,
     perf_context: ER::PerfContext,
     pending_latency_inspect: Vec<(Instant, Vec<LatencyInspector>)>,
+
+    // Adaptive batching related fields
+    adaptive_batch_enabled: bool,
+    /// Configurable QPS threshold for high concurrency detection.
+    adaptive_high_qps_threshold: u64,
+    /// Sliding window of QPS samples (one per second).
+    qps_history: VecDeque<u64>,
+    last_adaptive_update: Instant,
+    last_qps_stat: Instant,
+    current_write_tasks: u64,
+    /// Counter for consecutive low batch_ratio periods (< 0.3).
+    consecutive_low_batch_ratio_count: u32,
+    /// Single log throttle timestamp.
+    last_adaptive_log: Option<Instant>,
 }
 
 impl<EK, ER, N, T> Worker<EK, ER, N, T>
@@ -753,6 +832,16 @@ where
             message_metrics: RaftSendMessageMetrics::default(),
             perf_context,
             pending_latency_inspect: vec![],
+
+            // Adaptive batching initialization
+            adaptive_batch_enabled: cfg.value().adaptive_batch_enabled,
+            adaptive_high_qps_threshold: cfg.value().adaptive_high_qps_threshold,
+            qps_history: VecDeque::with_capacity(ADAPTIVE_QPS_HISTORY_SIZE),
+            last_adaptive_update: Instant::now(),
+            last_qps_stat: Instant::now(),
+            current_write_tasks: 0,
+            consecutive_low_batch_ratio_count: 0,
+            last_adaptive_log: None,
         }
     }
 
@@ -761,24 +850,37 @@ where
         while !stopped {
             let handle_begin = match self.receiver.recv() {
                 Ok(msg) => {
+                    let is_write_task = matches!(&msg, WriteMsg::WriteTask(_));
                     let now = Instant::now();
                     stopped |= self.handle_msg(msg);
+                    if is_write_task {
+                        self.current_write_tasks += 1;
+                    }
                     now
                 }
                 Err(_) => return,
             };
 
+            // Check if QPS history needs to be updated
+            let now = Instant::now();
+            if now.saturating_duration_since(self.last_qps_stat) >= Duration::from_secs(1) {
+                self.update_qps_history();
+            }
             while self.batch.get_raft_size() < self.raft_write_size_limit {
                 match self.receiver.try_recv() {
                     Ok(msg) => {
+                        let is_write_task = matches!(&msg, WriteMsg::WriteTask(_));
                         stopped |= self.handle_msg(msg);
+                        if is_write_task {
+                            self.current_write_tasks += 1;
+                        }
                     }
                     Err(TryRecvError::Empty) => {
-                        // If the size of the batch is small enough, it will wait for
-                        // a while to make the batch larger. This can reduce the IOPS
-                        // amplification if there are many trivial writes.
+                        // If the batch size is not large enough, wait for a while to make the batch
+                        // larger. This can reduce IOPS amplification when
+                        // there are many trivial writes.
                         if self.batch.should_wait() {
-                            self.batch.wait_for_a_while();
+                            self.batch.wait_for_a_while(self.adaptive_batch_enabled);
                             continue;
                         } else {
                             break;
@@ -807,7 +909,140 @@ where
 
             STORE_WRITE_LOOP_DURATION_HISTOGRAM
                 .observe(duration_to_sec(handle_begin.saturating_elapsed()));
+            self.update_adaptive_parameters();
         }
+    }
+
+    #[inline]
+    fn push_bounded_history(history: &mut VecDeque<u64>, value: u64, max_len: usize) {
+        history.push_back(value);
+        if history.len() > max_len {
+            history.pop_front();
+        }
+    }
+
+    #[inline]
+    fn should_emit_adaptive_log(last_log: &mut Option<Instant>, now: Instant) -> bool {
+        if let Some(last_log_time) = *last_log {
+            if now.saturating_duration_since(last_log_time)
+                < Duration::from_secs(ADAPTIVE_LOG_INTERVAL_SECS)
+            {
+                return false;
+            }
+        }
+        *last_log = Some(now);
+        true
+    }
+
+    fn update_qps_history(&mut self) {
+        let now = Instant::now();
+        let duration = now.saturating_duration_since(self.last_qps_stat);
+        if !duration.is_zero() {
+            let qps = (self.current_write_tasks as f64 / duration.as_secs_f64()) as u64;
+            Self::push_bounded_history(&mut self.qps_history, qps, ADAPTIVE_QPS_HISTORY_SIZE);
+        }
+        self.current_write_tasks = 0;
+        self.last_qps_stat = now;
+    }
+
+    fn update_adaptive_parameters(&mut self) {
+        if !self.adaptive_batch_enabled || self.qps_history.is_empty() {
+            return;
+        }
+
+        let now = Instant::now();
+        if now.saturating_duration_since(self.last_adaptive_update)
+            < Duration::from_secs(ADAPTIVE_UPDATE_INTERVAL_SECS)
+        {
+            return;
+        }
+        self.last_adaptive_update = now;
+
+        let mut sorted_qps: Vec<u64> = self.qps_history.iter().cloned().collect();
+        sorted_qps.sort();
+        let median_qps = sorted_qps[sorted_qps.len() / 2];
+
+        let new_wait_duration = self.calculate_adaptive_wait_duration(median_qps);
+        self.batch.update_wait_duration_adaptive(new_wait_duration);
+    }
+
+    /// Calculate adaptive wait duration based on two signals:
+    /// - batch_ratio: how well we're batching (batch_avg / batch_size_hint)
+    /// - qps_pressure: system load (avg_qps / high_qps_threshold)
+    ///
+    /// Uses EWMA smoothing and clamps to \[10us, 1ms\].
+    fn calculate_adaptive_wait_duration(&mut self, avg_qps: u64) -> Duration {
+        let current_ns = self.batch.recorder.wait_duration_adaptive.as_nanos() as u64;
+        let hint_ns = self.batch.recorder.wait_duration_hint.as_nanos() as u64;
+
+        // 1. Compute batch_ratio (with zero-guard)
+        let batch_ratio = if self.batch.recorder.batch_size_hint > 0
+            && self.batch.recorder.get_avg() > 0
+        {
+            self.batch.recorder.get_avg() as f64 / self.batch.recorder.batch_size_hint as f64
+        } else {
+            1.0 // no signal => assume OK
+        };
+
+        // 2. Compute qps_pressure in [0.0, 1.0]
+        //    Runtime guard: .max(1) prevents division by zero if config is invalid
+        let high_qps = self.adaptive_high_qps_threshold.max(1);
+        let qps_pressure = (avg_qps as f64 / high_qps as f64).min(1.0);
+
+        // 3. Track consecutive low batch ratio
+        if batch_ratio < ADAPTIVE_BATCH_RATIO_LOW {
+            self.consecutive_low_batch_ratio_count += 1;
+        } else {
+            self.consecutive_low_batch_ratio_count = 0;
+        }
+
+        // 4. Determine target via priority rules
+        //    Futile: only at low/mid QPS to avoid conflicting with high-QPS growth
+        let is_futile = self.consecutive_low_batch_ratio_count >= ADAPTIVE_FUTILE_CONSECUTIVE
+            && current_ns >= hint_ns
+            && qps_pressure <= 0.5;
+
+        let target_ns = if is_futile {
+            // Waited long + poor batch + low QPS -> cut aggressively
+            (current_ns as f64 * 0.6) as u64
+        } else if qps_pressure > 0.5 && current_ns < hint_ns {
+            // High QPS, below hint -> grow proportionally toward hint
+            let grow = 1.0 + 0.3 * qps_pressure;
+            (current_ns as f64 * grow) as u64
+        } else if batch_ratio >= ADAPTIVE_BATCH_RATIO_GOOD && current_ns >= hint_ns {
+            // Good batching, at/above hint -> reduce for latency
+            (current_ns as f64 * 0.9) as u64
+        } else if qps_pressure < 0.1 {
+            // Very low QPS -> nothing to batch
+            (current_ns as f64 * 0.7) as u64
+        } else {
+            // Hold steady
+            current_ns
+        };
+
+        // 5. EWMA smoothing
+        let smoothed_ns = ((1.0 - ADAPTIVE_SMOOTHING_ALPHA) * current_ns as f64
+            + ADAPTIVE_SMOOTHING_ALPHA * target_ns as f64) as u64;
+
+        // 6. Log (throttled)
+        let now = Instant::now();
+        if Self::should_emit_adaptive_log(&mut self.last_adaptive_log, now) {
+            info!(
+                "[adaptive] wait_duration: {}us => {}us, batch_ratio: {:.2}, \
+                 qps: {}, pressure: {:.2}, futile: {}, hint: {}us",
+                current_ns / 1_000,
+                smoothed_ns / 1_000,
+                batch_ratio,
+                avg_qps,
+                qps_pressure,
+                is_futile,
+                hint_ns / 1_000
+            );
+        }
+
+        Duration::from_nanos(
+            smoothed_ns.clamp(RAFT_WB_WAIT_DURATION_LOWER_BOUND_NS, RAFT_WB_WAIT_DURATION_UPPER_BOUND_NS),
+        )
     }
 
     // Returns whether it's a shutdown msg.
@@ -1022,6 +1257,8 @@ where
         // update config
         if let Some(incoming) = self.cfg_tracker.any_new() {
             self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
+            self.adaptive_batch_enabled = incoming.adaptive_batch_enabled;
+            self.adaptive_high_qps_threshold = incoming.adaptive_high_qps_threshold;
             self.metrics.waterfall_metrics = incoming.waterfall_metrics;
             self.batch.update_config(
                 incoming.raft_write_batch_size_hint.0 as usize,

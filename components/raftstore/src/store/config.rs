@@ -340,6 +340,15 @@ pub struct Config {
     #[doc(hidden)]
     pub raft_write_wait_duration: ReadableDuration,
 
+    /// Whether to enable adaptive adjustment of the raft write wait duration.
+    #[doc(hidden)]
+    pub adaptive_batch_enabled: bool,
+
+    /// QPS threshold above which the system is considered high-concurrency.
+    /// The adaptive algorithm grows wait_duration more aggressively above this.
+    #[doc(hidden)]
+    pub adaptive_high_qps_threshold: u64,
+
     pub waterfall_metrics: bool,
 
     pub io_reschedule_concurrent_max_count: usize,
@@ -545,6 +554,8 @@ impl Default for Config {
             raft_write_size_limit: ReadableSize::mb(1),
             raft_write_batch_size_hint: ReadableSize::kb(8),
             raft_write_wait_duration: ReadableDuration::micros(20),
+            adaptive_batch_enabled: false,
+            adaptive_high_qps_threshold: 40_000,
             waterfall_metrics: true,
             io_reschedule_concurrent_max_count: 4,
             io_reschedule_hotpot_duration: ReadableDuration::secs(5),
@@ -879,6 +890,12 @@ impl Config {
             return Err(box_err!(
                 "raft-write-wait-duration should be less than 1ms, current value is {}ms",
                 self.raft_write_wait_duration.as_millis()
+            ));
+        }
+
+        if self.adaptive_high_qps_threshold == 0 {
+            return Err(box_err!(
+                "adaptive-high-qps-threshold must be greater than 0"
             ));
         }
 
@@ -1247,6 +1264,12 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_write_wait_duration"])
             .set(self.raft_write_wait_duration.as_micros() as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["adaptive_batch_enabled"])
+            .set((self.adaptive_batch_enabled as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["adaptive_high_qps_threshold"])
+            .set(self.adaptive_high_qps_threshold as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["waterfall_metrics"])
             .set((self.waterfall_metrics as i32).into());
