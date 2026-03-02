@@ -66,7 +66,7 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
-          "description": "The storage size per TiKV instance",
+          "description": "The real disk used size per TiKV instance: capacity - available",
           "editable": true,
           "error": false,
           "fill": 5,
@@ -106,11 +106,20 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(tikv_store_size_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"used\"}) by (instance)",
+              "expr": "sum(tikv_store_size_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"capacity\"}) by (instance) - sum(tikv_store_size_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"available\"}) by (instance)",
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": "{{instance}}",
               "refId": "A",
+              "step": 10
+            },
+            {
+              "expr": "sum(tikv_store_size_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"used\"}) by (instance)",
+              "format": "time_series",
+              "hide": true,
+              "intervalFactor": 2,
+              "legendFormat": "{{instance}}-logical-used",
+              "refId": "B",
               "step": 10
             }
           ],
@@ -118,7 +127,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Store size",
+          "title": "Disk used size",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -2315,7 +2324,7 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
-          "description": "The storage size per TiKV instance",
+          "description": "The real disk used size per TiKV instance: capacity - available",
           "editable": true,
           "error": false,
           "fill": 5,
@@ -2355,11 +2364,20 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(tikv_store_size_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"used\"}) by (instance)",
+              "expr": "sum(tikv_store_size_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"capacity\"}) by (instance) - sum(tikv_store_size_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"available\"}) by (instance)",
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": "{{instance}}",
               "refId": "A",
+              "step": 10
+            },
+            {
+              "expr": "sum(tikv_store_size_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"used\"}) by (instance)",
+              "format": "time_series",
+              "hide": true,
+              "intervalFactor": 2,
+              "legendFormat": "{{instance}}-logical-used",
+              "refId": "B",
               "step": 10
             }
           ],
@@ -2367,7 +2385,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Store size",
+          "title": "Disk used size",
           "tooltip": {
             "msResolution": false,
             "shared": true,
