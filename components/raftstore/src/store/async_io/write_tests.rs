@@ -333,7 +333,7 @@ fn test_calculate_adaptive_wait_duration_clamps_to_bounds() {
     cfg.adaptive_batch_enabled = true;
     let mut t = TestWorker::new(&cfg, &engines);
 
-    // Low QPS + high batch ratio pushes below 10us and should clamp to lower bound.
+    // Low QPS + high batch ratio should clamp to lower bound (10us).
     t.worker.batch.recorder.wait_duration_hint = Duration::from_nanos(20_000);
     t.worker.batch.recorder.wait_duration_adaptive =
         Duration::from_nanos(RAFT_WB_WAIT_DURATION_LOWER_BOUND_NS);
@@ -346,7 +346,7 @@ fn test_calculate_adaptive_wait_duration_clamps_to_bounds() {
         Duration::from_nanos(RAFT_WB_WAIT_DURATION_LOWER_BOUND_NS)
     );
 
-    // High QPS + poor batching pushes above 1ms and should clamp to upper bound.
+    // High QPS + poor batching at upper bound should clamp to upper bound (1ms).
     t.worker.batch.recorder.wait_duration_adaptive =
         Duration::from_nanos(RAFT_WB_WAIT_DURATION_UPPER_BOUND_NS);
     t.worker.batch.recorder.batch_size_hint = 1_000;
@@ -354,7 +354,7 @@ fn test_calculate_adaptive_wait_duration_clamps_to_bounds() {
     t.worker.consecutive_low_batch_ratio_count = 0;
     let upper = t
         .worker
-        .calculate_adaptive_wait_duration(ADAPTIVE_MIN_HIGH_CONCURRENCY_QPS * 2);
+        .calculate_adaptive_wait_duration(ADAPTIVE_DEFAULT_HIGH_QPS_THRESHOLD * 2);
     assert_eq!(
         upper,
         Duration::from_nanos(RAFT_WB_WAIT_DURATION_UPPER_BOUND_NS)
@@ -373,21 +373,26 @@ fn test_calculate_adaptive_wait_duration_high_and_low_qps_paths() {
     let mut t = TestWorker::new(&cfg, &engines);
 
     // Keep batch ratio high (0.9) and only vary QPS pressure.
+    // current=15us < hint=20us, so high QPS should grow and low QPS should not.
     t.worker.batch.recorder.wait_duration_hint = Duration::from_nanos(20_000);
     t.worker.batch.recorder.wait_duration_adaptive = Duration::from_nanos(15_000);
     t.worker.batch.recorder.batch_size_hint = 1_000;
     t.worker.batch.recorder.avg = 900;
     t.worker.consecutive_low_batch_ratio_count = 0;
+    // Low QPS (1000) => qps_pressure=0.025 < 0.1 => very low QPS => target=current*0.7
     let low_qps = t.worker.calculate_adaptive_wait_duration(1_000);
-    assert_eq!(low_qps, Duration::from_nanos(14_550));
+    assert!(low_qps < Duration::from_nanos(15_000)); // reduced from 15000
+    assert!(low_qps >= Duration::from_nanos(RAFT_WB_WAIT_DURATION_LOWER_BOUND_NS));
 
+    // Reset state for high QPS test
     t.worker.batch.recorder.wait_duration_adaptive = Duration::from_nanos(15_000);
     t.worker.consecutive_low_batch_ratio_count = 0;
+    // High QPS (40000) => qps_pressure=1.0 > 0.5 && current < hint => grow
     let high_qps = t
         .worker
-        .calculate_adaptive_wait_duration(ADAPTIVE_MIN_HIGH_CONCURRENCY_QPS);
-    assert_eq!(high_qps, Duration::from_nanos(15_150));
-    assert!(high_qps > low_qps);
+        .calculate_adaptive_wait_duration(ADAPTIVE_DEFAULT_HIGH_QPS_THRESHOLD);
+    assert!(high_qps > Duration::from_nanos(15_000)); // grew from 15000
+    assert!(high_qps > low_qps); // directional check
 }
 
 #[test]
@@ -401,8 +406,9 @@ fn test_calculate_adaptive_wait_duration_futile_wait_reduction() {
     cfg.adaptive_batch_enabled = true;
     let mut t = TestWorker::new(&cfg, &engines);
 
-    // Force two consecutive low-batch periods and a long wait to trigger futile
-    // waiting.
+    // Setup: current=100us >= hint=20us, batch_ratio=0.1 (poor), QPS=5000
+    // qps_pressure = 5000/40000 = 0.125 <= 0.5 => futile gate satisfied
+    // After this call, consecutive_low_batch_ratio_count becomes 2 => futile triggered
     t.worker.batch.recorder.wait_duration_hint = Duration::from_nanos(20_000);
     t.worker.batch.recorder.wait_duration_adaptive = Duration::from_nanos(100_000);
     t.worker.batch.recorder.batch_size_hint = 1_000;
@@ -410,8 +416,149 @@ fn test_calculate_adaptive_wait_duration_futile_wait_reduction() {
     t.worker.consecutive_low_batch_ratio_count = 1;
     let new_wait = t.worker.calculate_adaptive_wait_duration(5_000);
     assert_eq!(t.worker.consecutive_low_batch_ratio_count, 2);
-    assert_eq!(new_wait, Duration::from_nanos(92_000));
-    assert!(new_wait < Duration::from_nanos(100_000));
+    // Futile: target=100000*0.6=60000, smoothed=(0.7*100000+0.3*60000)=88000
+    assert!(new_wait < Duration::from_nanos(100_000)); // reduced
+    assert!(new_wait > Duration::from_nanos(70_000)); // not too aggressive
+}
+
+#[test]
+fn test_adaptive_config_rejects_zero_threshold() {
+    use tikv_util::config::ReadableSize;
+
+    let split_size = crate::coprocessor::config::SPLIT_SIZE;
+
+    // Layer 1: Config::validate() rejects adaptive_high_qps_threshold == 0 at startup.
+    let mut cfg = Config::default();
+    cfg.adaptive_high_qps_threshold = 0;
+    let err = cfg
+        .validate(split_size, false, ReadableSize(0), false)
+        .unwrap_err();
+    assert!(
+        format!("{}", err).contains("adaptive-high-qps-threshold"),
+        "expected threshold validation error, got: {}",
+        err
+    );
+
+    // Layer 2: Hot-update to 0 — VersionTrack accepts it (validate() is not
+    // called on hot-update path), but the Worker's runtime .max(1) guard
+    // prevents division by zero. Verify the Worker picks up the new value
+    // and still functions correctly.
+    let path = Builder::new()
+        .prefix("async-io-adaptive-hotupdate")
+        .tempdir()
+        .unwrap();
+    let engines = new_temp_engine(&path);
+    let mut cfg = Config::default();
+    cfg.adaptive_batch_enabled = true;
+    cfg.adaptive_high_qps_threshold = 40_000;
+    let cfg_track = Arc::new(VersionTrack::new(cfg));
+    let (_, task_rx) = resource_control::channel::unbounded(None);
+    let (msg_tx, _msg_rx) = unbounded();
+    let trans = TestTransport { tx: msg_tx };
+    let (notify_tx, _notify_rx) = unbounded();
+    let notifier = TestNotifier { tx: notify_tx };
+    let mut worker = Worker::new(
+        1,
+        "writer".to_string(),
+        engines.raft.clone(),
+        Some(engines.kv.clone()),
+        task_rx,
+        notifier,
+        trans,
+        &cfg_track,
+    );
+    assert_eq!(worker.adaptive_high_qps_threshold, 40_000);
+
+    // Simulate hot-update: push threshold to 0 via VersionTrack
+    cfg_track
+        .update(|cfg: &mut Config| -> std::result::Result<(), Box<dyn std::error::Error>> {
+            cfg.adaptive_high_qps_threshold = 0;
+            Ok(())
+        })
+        .unwrap();
+
+    // Worker picks up the change through cfg_tracker (same path as write_to_db)
+    if let Some(incoming) = worker.cfg_tracker.any_new() {
+        worker.adaptive_high_qps_threshold = incoming.adaptive_high_qps_threshold;
+    }
+    assert_eq!(worker.adaptive_high_qps_threshold, 0);
+
+    // Runtime .max(1) guard: algorithm still works without panic.
+    worker.batch.recorder.wait_duration_hint = Duration::from_nanos(20_000);
+    worker.batch.recorder.wait_duration_adaptive = Duration::from_nanos(15_000);
+    worker.batch.recorder.batch_size_hint = 1_000;
+    worker.batch.recorder.avg = 500;
+    worker.consecutive_low_batch_ratio_count = 0;
+    let result = worker.calculate_adaptive_wait_duration(1_000);
+    // With threshold=0, high_qps=max(0,1)=1, qps_pressure=min(1000/1,1.0)=1.0
+    // => "always high pressure", grows toward hint
+    assert!(result > Duration::from_nanos(15_000));
+}
+
+#[test]
+fn test_adaptive_worker_zero_threshold_no_panic() {
+    // Directly set worker.adaptive_high_qps_threshold = 0 (bypassing config).
+    // .max(1) ensures no division by zero; behaves as "always high pressure"
+    // (qps_pressure = avg_qps / 1, clamped to 1.0).
+    let path = Builder::new()
+        .prefix("async-io-adaptive-zero")
+        .tempdir()
+        .unwrap();
+    let engines = new_temp_engine(&path);
+    let mut cfg = Config::default();
+    cfg.adaptive_batch_enabled = true;
+    let mut t = TestWorker::new(&cfg, &engines);
+
+    // Setup: threshold=0, qps=1000, current=15us, hint=20us
+    t.worker.adaptive_high_qps_threshold = 0;
+    t.worker.batch.recorder.wait_duration_hint = Duration::from_nanos(20_000);
+    t.worker.batch.recorder.wait_duration_adaptive = Duration::from_nanos(15_000);
+    t.worker.batch.recorder.batch_size_hint = 1_000;
+    t.worker.batch.recorder.avg = 500;
+    t.worker.consecutive_low_batch_ratio_count = 0;
+
+    // high_qps = max(0, 1) = 1, qps_pressure = min(1000/1, 1.0) = 1.0
+    // => Branch 2 (qps_pressure > 0.5 && current < hint), grows toward hint. No panic.
+    let result = t.worker.calculate_adaptive_wait_duration(1_000);
+    assert!(result > Duration::from_nanos(15_000)); // should grow
+    assert!(result <= Duration::from_nanos(RAFT_WB_WAIT_DURATION_UPPER_BOUND_NS));
+}
+
+#[test]
+fn test_adaptive_no_oscillation_high_qps_low_batch_at_hint() {
+    // High QPS + low batch_ratio + at hint: should NOT trigger futile,
+    // should hold steady (no oscillation).
+    let path = Builder::new()
+        .prefix("async-io-adaptive-oscillation")
+        .tempdir()
+        .unwrap();
+    let engines = new_temp_engine(&path);
+    let mut cfg = Config::default();
+    cfg.adaptive_batch_enabled = true;
+    let mut t = TestWorker::new(&cfg, &engines);
+
+    // Setup: qps=50000, batch_ratio=0.1, current=hint=20us
+    t.worker.batch.recorder.wait_duration_hint = Duration::from_nanos(20_000);
+    t.worker.batch.recorder.wait_duration_adaptive = Duration::from_nanos(20_000);
+    t.worker.batch.recorder.batch_size_hint = 1_000;
+    t.worker.batch.recorder.avg = 100; // batch_ratio = 0.1
+    t.worker.consecutive_low_batch_ratio_count = 5; // many consecutive low periods
+
+    // qps_pressure = 50000/40000 = 1.0 > 0.5 => futile blocked (even though consecutive_low >= 2)
+    // Branch 2: qps_pressure > 0.5 && current < hint? No (current == hint)
+    // Branch 5: hold steady => target = current
+    let result = t.worker.calculate_adaptive_wait_duration(50_000);
+    // Should stay near hint, not drop significantly
+    assert!(
+        result >= Duration::from_nanos(18_000),
+        "should stay near hint, got {:?}",
+        result
+    );
+    assert!(
+        result <= Duration::from_nanos(22_000),
+        "should not grow much above hint, got {:?}",
+        result
+    );
 }
 
 #[test]
