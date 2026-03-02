@@ -109,6 +109,9 @@ pub struct Endpoint<S, R, E: KvEngine, PDC> {
     /// Tracks the last issued `flush_ts` to guarantee monotonicity across
     /// flushes. Only updated on the `Runnable` thread.
     last_flush_ts: u64,
+    /// Controls whether flush can fallback to local monotonic `flush_ts` when
+    /// PD TSO allocation fails.
+    allow_flush_tso_fallback: bool,
 }
 
 impl<S, R, E: KvEngine, PDC> Drop for Endpoint<S, R, E, PDC> {
@@ -216,6 +219,7 @@ where
             abort_last_storage_save: None,
             flush_done_subscribers: Default::default(),
             last_flush_ts: 0,
+            allow_flush_tso_fallback: false,
         };
         ep.pool.spawn(root!(ep.min_ts_worker()));
         ep
@@ -855,11 +859,34 @@ where
 
     /// Advance `last_flush_ts` and return a strictly increasing `flush_ts`.
     ///
-    /// `pd_tso` must be a valid (non-zero) TSO obtained from PD.
+    /// When `pd_tso` is zero, this generates a local synthetic `flush_ts`.
     fn next_flush_ts(&mut self, pd_tso: TimeStamp) -> TimeStamp {
-        let next = std::cmp::max(pd_tso.into_inner(), self.last_flush_ts + 1);
+        let next = std::cmp::max(
+            pd_tso.into_inner(),
+            self.last_flush_ts.checked_add(1).expect("tso overflow"),
+        );
         self.last_flush_ts = next;
         TimeStamp::new(next)
+    }
+
+    fn prepare_min_ts_and_flush_ts(&mut self) -> Result<(TimeStamp, TimeStamp)> {
+        let hnd = self.pool.handle().clone();
+        match hnd.block_on(self.prepare_min_ts()) {
+            Ok((min_ts, pd_tso)) => Ok((min_ts, self.next_flush_ts(pd_tso))),
+            Err(err) => {
+                if !self.allow_flush_tso_fallback {
+                    self.allow_flush_tso_fallback = true;
+                    return Err(err);
+                }
+                err.report("failed to get TSO for flushing, fallback to local monotonic ts");
+                let flush_ts = self.next_flush_ts(TimeStamp::zero());
+                let min_lock_ts = self
+                    .concurrency_manager
+                    .global_min_lock_ts()
+                    .unwrap_or(TimeStamp::max());
+                Ok((Ord::min(flush_ts, min_lock_ts), flush_ts))
+            }
+        }
     }
 
     fn do_flush(
@@ -916,18 +943,36 @@ where
     pub fn on_force_flush(&mut self, task: TaskSelectorRef<'_>, sender: Sender<FlushResult>) {
         let hnd = self.pool.handle().clone();
         info!("Triggering force flush."; "selector" => ?task);
+        let handlers: Vec<_> = self.range_router.select_task_handler(task).collect();
 
-        let prepare_fut = self.prepare_min_ts();
-        let (mts, pd_tso) = match hnd.block_on(prepare_fut) {
+        let (mts, fts) = match self.prepare_min_ts_and_flush_ts() {
             Ok(v) => v,
             Err(err) => {
                 err.report("failed to get TSO for flushing, skipping this flush");
+                let err_msg = err.to_string();
+                let mut results = Vec::with_capacity(handlers.len().max(1));
+                for handler in handlers {
+                    results.push(FlushResult {
+                        task: handler.task.info.name.to_owned(),
+                        error: Some(Box::new(Error::Other(box_err!(
+                            "failed to get TSO for flushing task {}: {}",
+                            handler.task.info.name,
+                            err_msg
+                        )))),
+                    });
+                }
+                hnd.spawn(async move {
+                    for result in results {
+                        if sender.send(result).await.is_err() {
+                            info!("force flush result receiver is gone while reporting TSO error");
+                            break;
+                        }
+                    }
+                });
                 return;
             }
         };
-        let fts = self.next_flush_ts(pd_tso);
 
-        let handlers: Vec<_> = self.range_router.select_task_handler(task).collect();
         for handler in handlers {
             let sched = self.scheduler.clone();
             let sender = sender.clone();
@@ -951,15 +996,25 @@ where
 
     pub fn on_flush(&mut self, task: String) {
         let hnd = self.pool.handle().clone();
-        let prepare_fut = self.prepare_min_ts();
-        let (mts, pd_tso) = match hnd.block_on(prepare_fut) {
+        let (mts, flush_ts) = match self.prepare_min_ts_and_flush_ts() {
             Ok(v) => v,
             Err(err) => {
                 err.report("failed to get TSO for flushing, skipping this flush");
+                match self.range_router.get_task_handler(&task) {
+                    Ok(task_handler) => {
+                        task_handler.set_flushing_status(false);
+                        warn!("reset flushing status because preparing flush TSO failed"; "task" => %task);
+                    }
+                    Err(get_err) => {
+                        warn!("failed to reset flushing status after flush TSO failure";
+                            "task" => %task,
+                            "err" => ?get_err,
+                        );
+                    }
+                }
                 return;
             }
         };
-        let flush_ts = self.next_flush_ts(pd_tso);
         let sched = self.scheduler.clone();
         info!("min_ts prepared for flushing"; "min_ts" => %mts, "flush_ts" => %flush_ts);
         hnd.block_on(self.region_op(ObserveOp::ResolveRegions {

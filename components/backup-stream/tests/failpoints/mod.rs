@@ -579,9 +579,10 @@ mod all {
         )
     }
 
-    /// Verify that `flush_ts` in metadata file names is monotonically
-    /// increasing and that a PD failure causes the flush to be skipped
-    /// (no synthesised TSO, no file override).
+    /// Verify the expected behavior:
+    /// 1) The first flush fails when TSO allocation fails.
+    /// 2) After that, flush should always succeed, regardless of whether PD TSO
+    ///    allocation succeeds.
     #[test]
     fn monotonic_flush_ts_across_pd_failure() {
         let mut suite = SuiteBuilder::new_named("monotonic_flush_ts")
@@ -590,52 +591,60 @@ mod all {
         suite.must_register_task(1, "monotonic_flush_ts");
         suite.sync();
 
-        // Round 1: normal flush with PD available.
+        // Round 1: force the first flush to fail.
         let round1 = run_async_test(suite.write_records(0, 8, 1));
-        suite.force_flush_files("monotonic_flush_ts");
+        suite.cluster.pd_client.trigger_tso_failure();
+        suite.for_each_log_backup_cli(|_id, c| {
+            let res = c.flush_now(Default::default()).unwrap();
+            assert_eq!(res.results.len(), 1, "{:?}", res.results);
+            assert!(!res.results[0].success, "{:?}", res);
+            assert!(
+                res.results[0]
+                    .error_message
+                    .contains("failed to get TSO for flushing task"),
+                "{:?}",
+                res,
+            );
+        });
         suite.wait_for_flush();
-
         let meta_names_after_r1 = collect_meta_filenames(suite.flushed_files.path());
         assert!(
-            !meta_names_after_r1.is_empty(),
-            "expected at least one meta file after the first flush"
+            meta_names_after_r1.is_empty(),
+            "the first failed flush should not generate any meta files"
         );
-        for name in &meta_names_after_r1 {
-            assert!(
-                !name.contains("SYNTHETIC"),
-                "SYNTHETIC suffix must not appear: {name}"
-            );
-        }
 
-        // Write data for round 2 while PD is still healthy.
+        // Round 2: flush succeeds when PD TSO allocation succeeds.
         let round2 = run_async_test(suite.write_records(64, 8, 1));
-
-        // Make PD's next get_tso call fail. The flush should be skipped
-        // entirely — no synthesised TSO, no new metadata file.
-        suite.cluster.pd_client.trigger_tso_failure();
-        suite.force_flush_files("monotonic_flush_ts");
+        suite.for_each_log_backup_cli(|_id, c| {
+            let res = c.flush_now(Default::default()).unwrap();
+            assert_eq!(res.results.len(), 1, "{:?}", res.results);
+            assert!(res.results[0].success, "{:?}", res);
+            assert!(res.results[0].error_message.is_empty(), "{:?}", res);
+        });
         suite.wait_for_flush();
-
-        let meta_names_after_pd_fail = collect_meta_filenames(suite.flushed_files.path());
-        assert_eq!(
-            meta_names_after_r1.len(),
-            meta_names_after_pd_fail.len(),
-            "no new metadata file should appear when PD is down"
-        );
-
-        // PD has recovered (trigger_tso_failure is one-shot).
-        // This flush should succeed normally.
-        suite.force_flush_files("monotonic_flush_ts");
-        suite.wait_for_flush();
-
         let meta_names_after_r2 = collect_meta_filenames(suite.flushed_files.path());
         assert!(
-            meta_names_after_r2.len() > meta_names_after_r1.len(),
-            "post-recovery flush should produce new meta files: before={}, after={}",
-            meta_names_after_r1.len(),
-            meta_names_after_r2.len(),
+            !meta_names_after_r2.is_empty(),
+            "a successful flush should produce metadata files"
         );
-        for name in &meta_names_after_r2 {
+
+        // Round 3: flush still succeeds even if PD TSO allocation fails again.
+        let round3 = run_async_test(suite.write_records(128, 8, 1));
+        suite.cluster.pd_client.trigger_tso_failure();
+        suite.for_each_log_backup_cli(|_id, c| {
+            let res = c.flush_now(Default::default()).unwrap();
+            assert_eq!(res.results.len(), 1, "{:?}", res.results);
+            assert!(res.results[0].success, "{:?}", res);
+            assert!(res.results[0].error_message.is_empty(), "{:?}", res);
+        });
+        suite.wait_for_flush();
+
+        let meta_names_after_r3 = collect_meta_filenames(suite.flushed_files.path());
+        assert!(
+            meta_names_after_r3.len() > meta_names_after_r2.len(),
+            "a successful flush after repeated TSO failures should produce more meta files"
+        );
+        for name in &meta_names_after_r3 {
             assert!(
                 !name.contains("SYNTHETIC"),
                 "SYNTHETIC suffix must not appear: {name}"
@@ -643,7 +652,7 @@ mod all {
         }
 
         // Verify flush_ts monotonicity across all meta files.
-        let mut flush_tss: Vec<u64> = meta_names_after_r2
+        let mut flush_tss: Vec<u64> = meta_names_after_r3
             .iter()
             .map(|name| {
                 let hex_part = &name[..16];
@@ -664,7 +673,63 @@ mod all {
         // Verify all data from both rounds is present.
         suite.check_for_write_records(
             suite.flushed_files.path(),
-            round1.union(&round2).map(Vec::as_slice),
+            round1
+                .union(&round2)
+                .chain(round3.iter())
+                .map(Vec::as_slice),
+        );
+    }
+
+    #[test]
+    fn flush_status_is_cleared_when_tso_allocation_fails() {
+        let mut suite = SuiteBuilder::new_named("flush_status_tso_failure")
+            .nodes(1)
+            .build();
+        suite.must_register_task(1, "flush_status_tso_failure");
+        suite.sync();
+        let records = run_async_test(suite.write_records(0, 8, 1));
+        let meta_names_before = collect_meta_filenames(suite.flushed_files.path());
+
+        suite.wait_with_router(|router| {
+            let task = router.get_task_handler("flush_status_tso_failure").unwrap();
+            task.set_flushing_status(true);
+            true
+        });
+
+        suite.cluster.pd_client.trigger_tso_failure();
+        suite.run(|| Task::Flush("flush_status_tso_failure".to_owned()));
+
+        suite.wait_with_router(|router| {
+            let task = router.get_task_handler("flush_status_tso_failure").unwrap();
+            !task.is_flushing()
+        });
+
+        let meta_names_after_failed_flush = collect_meta_filenames(suite.flushed_files.path());
+        assert_eq!(
+            meta_names_before.len(),
+            meta_names_after_failed_flush.len(),
+            "flush should be skipped when TSO allocation fails",
+        );
+
+        suite.wait_with_router(|router| {
+            let task = router.get_task_handler("flush_status_tso_failure").unwrap();
+            let cas_result = task.set_flushing_status_cas(false, true).is_ok();
+            if cas_result {
+                task.set_flushing_status(false);
+            }
+            cas_result
+        });
+
+        suite.force_flush_files("flush_status_tso_failure");
+        suite.wait_for_flush();
+        let meta_names_after_recovery = collect_meta_filenames(suite.flushed_files.path());
+        assert!(
+            meta_names_after_recovery.len() > meta_names_after_failed_flush.len(),
+            "flush should recover after PD TSO failure is gone",
+        );
+        suite.check_for_write_records(
+            suite.flushed_files.path(),
+            records.iter().map(Vec::as_slice),
         );
     }
 
