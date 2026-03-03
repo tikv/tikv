@@ -219,8 +219,9 @@ impl FromStr for ReadableSize {
             "%" => {
                 return match size.parse::<f64>() {
                     Ok(n) if (0.0..=100.0).contains(&n) => {
-                        let total_mem = SysQuota::memory_limit_in_bytes();
-                        Ok(ReadableSize((total_mem as f64 * n / 100.0) as u64))
+                        let total_mem = SysQuota::memory_limit_in_bytes_current();
+                        let ratio = n / 100.0;
+                        Ok(ReadableSize((total_mem as f64 * ratio) as u64))
                     }
                     Ok(n) => Err(format!(
                         "percentage value must be between 0 and 100, got {n}: {s:?}"
@@ -279,7 +280,7 @@ impl<'de> Deserialize<'de> for ReadableSize {
                 E: de::Error,
             {
                 if size > 0.0 && size <= 1.0 {
-                    let total_mem = SysQuota::memory_limit_in_bytes();
+                    let total_mem = SysQuota::memory_limit_in_bytes_current();
                     Ok(ReadableSize((total_mem as f64 * size) as u64))
                 } else if size == 0.0 {
                     Ok(ReadableSize(0))
@@ -1979,7 +1980,7 @@ mod tests {
 
     #[test]
     fn test_parse_readable_size_percentage() {
-        let total_mem = SysQuota::memory_limit_in_bytes();
+        let total_mem = SysQuota::memory_limit_in_bytes_current();
 
         // String percentage format
         let cases = vec![
@@ -2014,7 +2015,7 @@ mod tests {
             s: ReadableSize,
         }
 
-        let total_mem = SysQuota::memory_limit_in_bytes();
+        let total_mem = SysQuota::memory_limit_in_bytes_current();
 
         // TOML string format with percentage
         let res: SizeHolder = toml::from_str("s = \"45%\"").unwrap();

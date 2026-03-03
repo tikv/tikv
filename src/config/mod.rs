@@ -7081,6 +7081,13 @@ mod tests {
         let expected_mem = (total_mem as f64 * 0.75) as u64;
         assert_eq!(cfg.memory_usage_limit.unwrap().0, expected_mem);
 
+        // Test memory-usage-limit with float ratio
+        let content = r#"
+            memory-usage-limit = 0.75
+        "#;
+        let cfg: TikvConfig = toml::from_str(content).unwrap();
+        assert_eq!(cfg.memory_usage_limit.unwrap().0, expected_mem);
+
         // Full validation passes with percentage values
         let content = r#"
             memory-usage-limit = "75%"
