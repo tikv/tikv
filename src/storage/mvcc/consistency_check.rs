@@ -20,7 +20,7 @@ use raftstore::{
     Result,
     coprocessor::{ConsistencyCheckMethod, ConsistencyCheckObserver, Coprocessor},
 };
-use tikv_util::{keybuilder::KeyBuilder, Either};
+use tikv_util::{Either, keybuilder::KeyBuilder};
 use txn_types::Key;
 
 use crate::storage::mvcc::{LockType, WriteRef, WriteType};

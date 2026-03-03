@@ -40,8 +40,8 @@ use raftstore::{
 use thiserror::Error;
 use tikv_kv::Engine;
 use tikv_util::{
-    config::ReadableSize, keybuilder::KeyBuilder, store::find_peer,
-    sys::thread::StdThreadBuildWrapper, worker::Worker, Either,
+    Either, config::ReadableSize, keybuilder::KeyBuilder, store::find_peer,
+    sys::thread::StdThreadBuildWrapper, worker::Worker,
 };
 use txn_types::Key;
 

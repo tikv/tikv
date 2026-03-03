@@ -1855,7 +1855,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let mut task_meta_data = TaskMetadata::from_ctx(task.cmd().resource_control_ctx());
         let pipelined = task.cmd().can_be_pipelined()
             && self.pessimistic_lock_mode() == PessimisticLockMode::Pipelined;
-        let is_shared_lock_cmd = if let Command::AcquirePessimisticLock(ref cmd) = task.cmd() {
+        let is_shared_lock_cmd = if let Command::AcquirePessimisticLock(cmd) = task.cmd() {
             cmd.keys.iter().any(|k| k.2)
         } else {
             false
