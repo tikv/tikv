@@ -98,11 +98,12 @@ pub fn parse_backupmeta_filename(
                 part.len()
             ));
         }
-        if !part.bytes().all(|c| c.is_ascii_hexdigit()) {
-            return Err(format!("{label} contains non-hex chars in {name}: {part}"));
-        }
         u64::from_str_radix(part, 16)
             .map_err(|e| format!("failed to parse {label} as hex u64 in {name}: {e}"))
+    }
+
+    if !name.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!("prefix must be hex in {name}"));
     }
 
     let (prefix, suffix) = name
@@ -112,9 +113,6 @@ pub fn parse_backupmeta_filename(
         return Err(format!(
             "expected flush_ts+store_id (32 hex digits) in {name}"
         ));
-    }
-    if !prefix.bytes().all(|c| c.is_ascii_hexdigit()) {
-        return Err(format!("prefix must be hex in {name}"));
     }
 
     const TAG_VALUE_LEN: usize = 17;
