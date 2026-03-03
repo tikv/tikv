@@ -29,7 +29,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use super::time::Instant;
-use crate::slow_log;
+use crate::{slow_log, sys::SysQuota};
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -216,9 +216,21 @@ impl FromStr for ReadableSize {
                 }
                 UNIT
             }
+            "%" => {
+                return match size.parse::<f64>() {
+                    Ok(n) if (0.0..=100.0).contains(&n) => {
+                        let total_mem = SysQuota::memory_limit_in_bytes();
+                        Ok(ReadableSize((total_mem as f64 * n / 100.0) as u64))
+                    }
+                    Ok(n) => Err(format!(
+                        "percentage value must be between 0 and 100, got {n}: {s:?}"
+                    )),
+                    Err(_) => Err(format!("invalid size string: {s:?}")),
+                };
+            }
             _ => {
                 return Err(format!(
-                    "only B, KB, KiB, MB, MiB, GB, GiB, TB, TiB, PB, and PiB are supported: {s:?}"
+                    "only B, KB, KiB, MB, MiB, GB, GiB, TB, TiB, PB, PiB, and % are supported: {s:?}"
                 ));
             }
         };
@@ -260,6 +272,23 @@ impl<'de> Deserialize<'de> for ReadableSize {
                 E: de::Error,
             {
                 Ok(ReadableSize(size))
+            }
+
+            fn visit_f64<E>(self, size: f64) -> Result<ReadableSize, E>
+            where
+                E: de::Error,
+            {
+                if size > 0.0 && size <= 1.0 {
+                    let total_mem = SysQuota::memory_limit_in_bytes();
+                    Ok(ReadableSize((total_mem as f64 * size) as u64))
+                } else if size == 0.0 {
+                    Ok(ReadableSize(0))
+                } else {
+                    Err(E::invalid_value(
+                        Unexpected::Float(size),
+                        &"a ratio between 0.0 and 1.0 (e.g., 0.45 for 45% of system memory)",
+                    ))
+                }
             }
 
             fn visit_str<E>(self, size_str: &str) -> Result<ReadableSize, E>
@@ -1946,6 +1975,70 @@ mod tests {
             let src_str = format!("s = {:?}", src);
             assert!(toml::from_str::<SizeHolder>(&src_str).is_err(), "{}", src);
         }
+    }
+
+    #[test]
+    fn test_parse_readable_size_percentage() {
+        let total_mem = SysQuota::memory_limit_in_bytes();
+
+        // String percentage format
+        let cases = vec![
+            ("45%", (total_mem as f64 * 0.45) as u64),
+            ("100%", total_mem),
+            ("0%", 0),
+            ("45.5%", (total_mem as f64 * 0.455) as u64),
+            ("4.5e1%", (total_mem as f64 * 0.45) as u64),
+        ];
+        for (src, exp) in cases {
+            let res: ReadableSize = src.parse().unwrap();
+            assert_eq!(res.0, exp, "parsing {:?}", src);
+        }
+
+        // Whitespace handling
+        let res: ReadableSize = " 45% ".parse().unwrap();
+        assert_eq!(res.0, (total_mem as f64 * 0.45) as u64);
+        let res: ReadableSize = "45 %".parse().unwrap();
+        assert_eq!(res.0, (total_mem as f64 * 0.45) as u64);
+
+        // Error cases
+        assert!("101%".parse::<ReadableSize>().is_err());
+        assert!("-1%".parse::<ReadableSize>().is_err());
+        assert!("abc%".parse::<ReadableSize>().is_err());
+        assert!("%".parse::<ReadableSize>().is_err());
+    }
+
+    #[test]
+    fn test_toml_readable_size_percentage() {
+        #[derive(Serialize, Deserialize)]
+        struct SizeHolder {
+            s: ReadableSize,
+        }
+
+        let total_mem = SysQuota::memory_limit_in_bytes();
+
+        // TOML string format with percentage
+        let res: SizeHolder = toml::from_str("s = \"45%\"").unwrap();
+        assert_eq!(res.s.0, (total_mem as f64 * 0.45) as u64);
+
+        // TOML float format (ratio of system memory)
+        let res: SizeHolder = toml::from_str("s = 0.45").unwrap();
+        assert_eq!(res.s.0, (total_mem as f64 * 0.45) as u64);
+
+        // Float edge cases
+        let res: SizeHolder = toml::from_str("s = 0.0").unwrap();
+        assert_eq!(res.s.0, 0);
+        let res: SizeHolder = toml::from_str("s = 1.0").unwrap();
+        assert_eq!(res.s.0, total_mem);
+
+        // Float out of range should error
+        assert!(toml::from_str::<SizeHolder>("s = 1.5").is_err());
+
+        // Serialization outputs absolute value (no percentage)
+        let holder = SizeHolder {
+            s: ReadableSize((total_mem as f64 * 0.45) as u64),
+        };
+        let serialized = toml::to_string(&holder).unwrap();
+        assert!(!serialized.contains('%'));
     }
 
     #[test]

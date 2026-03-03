@@ -7053,6 +7053,45 @@ mod tests {
     }
 
     #[test]
+    fn test_config_percentage_values() {
+        let total_mem = SysQuota::memory_limit_in_bytes();
+
+        // Test block-cache.capacity with string percentage
+        let content = r#"
+            [storage.block-cache]
+            capacity = "45%"
+        "#;
+        let cfg: TikvConfig = toml::from_str(content).unwrap();
+        let expected = (total_mem as f64 * 0.45) as u64;
+        assert_eq!(cfg.storage.block_cache.capacity.unwrap().0, expected);
+
+        // Test block-cache.capacity with float ratio
+        let content = r#"
+            [storage.block-cache]
+            capacity = 0.45
+        "#;
+        let cfg: TikvConfig = toml::from_str(content).unwrap();
+        assert_eq!(cfg.storage.block_cache.capacity.unwrap().0, expected);
+
+        // Test memory-usage-limit with string percentage
+        let content = r#"
+            memory-usage-limit = "75%"
+        "#;
+        let cfg: TikvConfig = toml::from_str(content).unwrap();
+        let expected_mem = (total_mem as f64 * 0.75) as u64;
+        assert_eq!(cfg.memory_usage_limit.unwrap().0, expected_mem);
+
+        // Full validation passes with percentage values
+        let content = r#"
+            memory-usage-limit = "75%"
+            [storage.block-cache]
+            capacity = "30%"
+        "#;
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+    }
+
+    #[test]
     fn test_validate_tikv_wal_config() {
         let tmp_path = tempfile::Builder::new().tempdir().unwrap().into_path();
         macro_rules! tmp_path_string_generate {
