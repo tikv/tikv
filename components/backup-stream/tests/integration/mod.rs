@@ -655,11 +655,7 @@ mod all {
         let mut names: Vec<String> = WalkDir::new(&meta_dir)
             .into_iter()
             .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.file_name()
-                    .to_str()
-                    .map_or(false, |n| n.ends_with(".meta"))
-            })
+            .filter(|e| e.file_name().to_str().is_some_and(|n| n.ends_with(".meta")))
             .map(|e| {
                 e.file_name()
                     .to_str()
