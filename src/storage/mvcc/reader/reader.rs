@@ -9,8 +9,8 @@ use kvproto::{
     kvrpcpb::Context,
 };
 use raftstore::store::{LocksStatus, PeerPessimisticLocks};
-use tikv_kv::{SnapshotExt, SEEK_BOUND};
-use tikv_util::{time::Instant, Either};
+use tikv_kv::{SEEK_BOUND, SnapshotExt};
+use tikv_util::{Either, time::Instant};
 use txn_types::{
     Key, LastChange, Lock, LockOrSharedLocks, OldValue, PessimisticLock, TimeStamp, TxnLockRef,
     Value, Write, WriteRef, WriteType,

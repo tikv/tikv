@@ -16,11 +16,10 @@ use tikv::storage::{
     txn::{TxnEntry, TxnEntryScanner},
 };
 use tikv_util::{
-    box_err,
+    Either, box_err,
     memory::{MemoryQuota, OwnedAllocated},
     time::{Instant, Limiter},
     worker::Scheduler,
-    Either,
 };
 use tokio::sync::Semaphore;
 use tracing::instrument;

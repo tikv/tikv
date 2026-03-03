@@ -61,7 +61,7 @@ pub use resolve_lock::{RESOLVE_LOCK_BATCH_SIZE, ResolveLock};
 pub use resolve_lock_lite::ResolveLockLite;
 pub use resolve_lock_readphase::ResolveLockReadPhase;
 pub use rollback::Rollback;
-use tikv_util::{deadline::Deadline, memory::HeapSize, Either};
+use tikv_util::{Either, deadline::Deadline, memory::HeapSize};
 use tracker::RequestType;
 pub use txn_heart_beat::TxnHeartBeat;
 use txn_types::{Key, TimeStamp, Value, Write};

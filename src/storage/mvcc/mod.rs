@@ -15,7 +15,7 @@ use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::kvrpcpb::{self, Assertion, IsolationLevel};
 use thiserror::Error;
 use tikv_util::{
-    metrics::CRITICAL_ERROR, panic_when_unexpected_key_or_data, set_panic_mark, Either,
+    Either, metrics::CRITICAL_ERROR, panic_when_unexpected_key_or_data, set_panic_mark,
 };
 pub use txn_types::{
     Key, Lock, LockType, Mutation, SHORT_VALUE_MAX_LEN, TimeStamp, Value, Write, WriteRef,
