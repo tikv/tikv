@@ -102,8 +102,8 @@ pub fn parse_backupmeta_filename(
             .map_err(|e| format!("failed to parse {label} as hex u64 in {name}: {e}"))
     }
 
-    if !name.bytes().all(|c| c.is_ascii_hexdigit()) {
-        return Err(format!("prefix must be hex in {name}"));
+    if !name.bytes().all(|c| c.is_ascii()) {
+        return Err(format!("name must be ascii in {name}"));
     }
 
     let (prefix, suffix) = name
@@ -112,6 +112,11 @@ pub fn parse_backupmeta_filename(
     if prefix.len() != 32 {
         return Err(format!(
             "expected flush_ts+store_id (32 hex digits) in {name}"
+        ));
+    }
+    if !prefix.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!(
+            "expected flush_ts+store_id to be hex digits in {name}"
         ));
     }
 

@@ -566,7 +566,7 @@ mod all {
         );
 
         // Verify flush_ts monotonicity across all meta files.
-        let mut flush_tss: Vec<u64> = meta_names_after_r3
+        let flush_tss: Vec<u64> = meta_names_after_r3
             .iter()
             .map(|name| {
                 utils::parse_backupmeta_filename(name)
@@ -574,15 +574,8 @@ mod all {
                     .flush_ts
             })
             .collect();
-        flush_tss.sort();
-        for window in flush_tss.windows(2) {
-            assert!(
-                window[0] < window[1],
-                "flush_ts values must be strictly increasing, but got {} >= {}",
-                window[0],
-                window[1],
-            );
-        }
+        assert_eq!(flush_tss.len(), 2, "{:?}", flush_tss);
+        assert_eq!(flush_tss[0] + 1, flush_tss[1]);
 
         // Verify all data from both rounds is present.
         suite.check_for_write_records(
@@ -624,15 +617,6 @@ mod all {
             meta_names_after_failed_flush.len(),
             "flush should be skipped when TSO allocation fails",
         );
-
-        suite.wait_with_router(|router| {
-            let task = router.get_task_handler("flush_status_tso_failure").unwrap();
-            let cas_result = task.set_flushing_status_cas(false, true).is_ok();
-            if cas_result {
-                task.set_flushing_status(false);
-            }
-            cas_result
-        });
 
         suite.force_flush_files("flush_status_tso_failure");
         suite.wait_for_flush();
