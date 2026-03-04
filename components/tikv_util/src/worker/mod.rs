@@ -64,21 +64,6 @@ mod tests {
         }
     }
 
-    struct TickRunner {
-        ch: mpsc::Sender<&'static str>,
-    }
-
-    impl Runnable for TickRunner {
-        type Task = &'static str;
-
-        fn run(&mut self, msg: &'static str) {
-            self.ch.send(msg).unwrap();
-        }
-        fn shutdown(&mut self) {
-            self.ch.send("").unwrap();
-        }
-    }
-
     #[test]
     fn test_worker() {
         let worker = Worker::new("test-worker");

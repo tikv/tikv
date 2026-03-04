@@ -621,7 +621,7 @@ mod tests {
         let _m = Monitor::new(on_jumped, now);
         thread::sleep(Duration::from_secs(1));
 
-        assert_eq!(jumped.load(Ordering::SeqCst), true);
+        assert!(jumped.load(Ordering::SeqCst));
     }
 
     #[test]

@@ -23,6 +23,9 @@ use crate::{
     timer::GLOBAL_TIMER_HANDLE,
 };
 
+type Hook = Arc<dyn Fn() + Send + Sync>;
+type TaskMetaMetricFn = Arc<dyn Fn(&[u8]) -> usize + Send + Sync>;
+
 const DEFAULT_CLEANUP_INTERVAL: Duration = if cfg!(test) {
     Duration::from_millis(100)
 } else {
@@ -150,7 +153,7 @@ impl Config {
     pub fn default_for_test() -> Self {
         Self {
             workers: 2,
-            max_tasks_per_worker: std::usize::MAX,
+            max_tasks_per_worker: usize::MAX,
             stack_size: 2_000_000,
         }
     }
@@ -195,9 +198,9 @@ pub struct YatpPoolRunner<T: PoolTicker> {
     inner: FutureRunner,
     ticker: TickerWrapper<T>,
     props: Option<GroupProperties>,
-    after_start: Option<Arc<dyn Fn() + Send + Sync>>,
-    before_stop: Option<Arc<dyn Fn() + Send + Sync>>,
-    before_pause: Option<Arc<dyn Fn() + Send + Sync>>,
+    after_start: Option<Hook>,
+    before_stop: Option<Hook>,
+    before_pause: Option<Hook>,
 
     // Statistics about the schedule wait/exec duration.
     // local histogram for high,medium,low priority tasks.
@@ -285,9 +288,9 @@ impl<T: PoolTicker> YatpPoolRunner<T> {
     fn new(
         inner: FutureRunner,
         ticker: TickerWrapper<T>,
-        after_start: Option<Arc<dyn Fn() + Send + Sync>>,
-        before_stop: Option<Arc<dyn Fn() + Send + Sync>>,
-        before_pause: Option<Arc<dyn Fn() + Send + Sync>>,
+        after_start: Option<Hook>,
+        before_stop: Option<Hook>,
+        before_pause: Option<Hook>,
         schedule_wait_durations: TaskScheduleHistograms,
         schedule_exec_durations: TaskScheduleHistograms,
     ) -> Self {
@@ -307,9 +310,9 @@ impl<T: PoolTicker> YatpPoolRunner<T> {
 pub struct YatpPoolBuilder<T: PoolTicker> {
     name_prefix: Option<String>,
     ticker: TickerWrapper<T>,
-    after_start: Option<Arc<dyn Fn() + Send + Sync>>,
-    before_stop: Option<Arc<dyn Fn() + Send + Sync>>,
-    before_pause: Option<Arc<dyn Fn() + Send + Sync>>,
+    after_start: Option<Hook>,
+    before_stop: Option<Hook>,
+    before_pause: Option<Hook>,
     min_thread_count: usize,
     core_thread_count: usize,
     max_thread_count: usize,
@@ -320,7 +323,7 @@ pub struct YatpPoolBuilder<T: PoolTicker> {
     // whether to tracker task scheduling wait/exec duration
     enable_task_wait_metrics: bool,
     enable_task_exec_metrics: bool,
-    metric_idx_from_task_meta: Option<Arc<dyn Fn(&[u8]) -> usize + Send + Sync>>,
+    metric_idx_from_task_meta: Option<TaskMetaMetricFn>,
 
     #[cfg(test)]
     background_cleanup_hook: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -338,7 +341,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
             core_thread_count: 1,
             max_thread_count: 1,
             stack_size: 0,
-            max_tasks: std::usize::MAX,
+            max_tasks: usize::MAX,
             cleanup_method: CleanupMethod::InPlace,
 
             enable_task_wait_metrics: false,
@@ -424,10 +427,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         self
     }
 
-    pub fn metric_idx_from_task_meta(
-        mut self,
-        f: Arc<dyn Fn(&[u8]) -> usize + Send + Sync>,
-    ) -> Self {
+    pub fn metric_idx_from_task_meta(mut self, f: TaskMetaMetricFn) -> Self {
         self.metric_idx_from_task_meta = Some(f);
         self
     }

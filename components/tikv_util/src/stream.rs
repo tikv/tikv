@@ -17,6 +17,7 @@ use tokio::runtime::Builder;
 
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(32);
 const MAX_RETRY_TIMES: usize = 14;
+type FailureHook<E> = dyn FnMut(&E) + Send + Sync + 'static;
 
 /// Wrapper of an `AsyncRead` instance, exposed as a `Sync` `Stream` of `Bytes`.
 pub struct AsyncReadAsSyncStreamOfBytes<R> {
@@ -106,7 +107,7 @@ where
 
 /// The extra configuration for retry.
 pub struct RetryExt<E> {
-    pub on_failure: Option<Box<dyn FnMut(&E) + Send + Sync + 'static>>,
+    pub on_failure: Option<Box<FailureHook<E>>>,
     pub max_retry_times: usize,
     pub max_retry_delay: Duration,
 }
@@ -218,10 +219,7 @@ macro_rules! retry_expr {
 
 /// Retires a future execution. Comparing to `retry`, this version allows more
 /// configurations.
-pub async fn retry_all_ext<'a, G, T, F, E>(
-    mut action: G,
-    ext: RetryExt<JustRetry<E>>,
-) -> Result<T, E>
+pub async fn retry_all_ext<G, T, F, E>(mut action: G, ext: RetryExt<JustRetry<E>>) -> Result<T, E>
 where
     G: FnMut() -> F,
     F: Future<Output = Result<T, E>>,
@@ -240,12 +238,12 @@ where
     F: Future<Output = Result<T, E>>,
     E: RetryError,
 {
-    ext.max_retry_times = (|| {
+    ext.max_retry_times = {
         fail::fail_point!("retry_count", |t| t
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(ext.max_retry_times));
         ext.max_retry_times
-    })();
+    };
 
     retry_expr!(action(), ext).await
 }
@@ -287,6 +285,7 @@ mod tests {
 
     #[test]
     fn test_retry_is_send_even_return_type_not_sync() {
+        #[allow(dead_code)]
         struct BangSync(Option<RefCell<()>>);
         let fut = retry(|| futures::future::ok::<_, TriviallyRetry>(BangSync(None)));
         assert_send(fut)

@@ -6,6 +6,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+type Range = (Vec<u8>, Vec<u8>);
+type RangeLatchEntry = (Arc<Mutex<()>>, Range);
+type RangeLatchMap = BTreeMap<Vec<u8>, RangeLatchEntry>;
+
 /// A structure used to manage range-based latch with mutual exclusion.
 ///
 /// Currently used to ensure mutual exclusion between compaction filter and
@@ -44,7 +48,7 @@ pub struct RangeLatch {
     ///   - `Arc<Mutex<()>>`: The latch object for this range.
     ///   - `(Vec<u8>, Vec<u8>)`: The actual range definition (start_key,
     ///     end_key).
-    range_latches: Mutex<BTreeMap<Vec<u8>, (Arc<Mutex<()>>, (Vec<u8>, Vec<u8>))>>,
+    range_latches: Mutex<RangeLatchMap>,
 }
 
 impl RangeLatch {
@@ -104,7 +108,12 @@ impl RangeLatch {
                 // Safety: `_mutex_guard` is declared before `handle` in `KeyHandleGuard`.
                 // So the mutex guard will be released earlier than the `Arc<KeyHandle>`.
                 // Then we can make sure the mutex guard doesn't point to released memory.
-                let mutex_guard = unsafe { std::mem::transmute(mutex_guard) };
+                let mutex_guard = unsafe {
+                    std::mem::transmute::<
+                        std::sync::MutexGuard<'_, ()>,
+                        std::sync::MutexGuard<'a, ()>,
+                    >(mutex_guard)
+                };
 
                 return RangeLatchGuard {
                     start_key,

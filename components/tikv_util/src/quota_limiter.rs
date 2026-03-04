@@ -198,6 +198,7 @@ impl Default for QuotaLimiter {
 
 impl QuotaLimiter {
     // 1000 millicpu equals to 1vCPU, 0 means unlimited
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         foreground_cpu_quota: usize,
         foreground_write_bandwidth: ReadableSize,
