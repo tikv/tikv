@@ -442,7 +442,10 @@ fn main() {
                 cfg: ccfg,
                 max_concurrent_subcompaction: max_compaction_num,
                 external_storage,
-                gcs_v2_enable: cfg.backup.gcs_v2_enable,
+                // Force compact-log-backup in tikv-ctl to use the GCS v2 backend.
+                // This ensures credentials_blob with either service_account or
+                // external_account (WIF) is handled by the same path.
+                gcs_v2_enable: true,
                 db: Some(tmp_engine.rocks),
             };
 
