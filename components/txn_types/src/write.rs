@@ -416,10 +416,10 @@ impl WriteRef<'_> {
     }
 
     /// Preconditions:
-    /// - The `Write` record `self` is referring to is the latest version
-    ///   found by reading at `read_ts`.
-    /// - The `read_ts` is safe, which means it's not earlier than the
-    ///   current GC safepoint.
+    /// - The `Write` record `self` is referring to is the latest version found
+    ///   by reading at `read_ts`.
+    /// - The `read_ts` is safe, which means it's not earlier than the current
+    ///   GC safepoint.
     ///
     /// Returns whether the `Write` record is valid, i.e. there's no GC fence
     /// or the GC fence doesn't point to any other version.
