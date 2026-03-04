@@ -120,10 +120,10 @@ impl TrackerSlab {
     }
 
     pub fn get_mut(&mut self, token: TrackerToken) -> Option<&mut Tracker> {
-        if let Some(entry) = self.slab.get_mut(token.key()) {
-            if entry.seq == token.seq() {
-                return Some(&mut entry.tracker);
-            }
+        if let Some(entry) = self.slab.get_mut(token.key())
+            && entry.seq == token.seq()
+        {
+            return Some(&mut entry.tracker);
         }
         None
     }

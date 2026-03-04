@@ -65,7 +65,7 @@ impl<T: AsRef<[u8]>> BufferReader for std::io::Cursor<T> {
     }
 }
 
-impl<'a> BufferReader for &'a [u8] {
+impl BufferReader for &[u8] {
     #[inline]
     fn bytes(&self) -> &[u8] {
         self
@@ -86,7 +86,7 @@ impl<'a> BufferReader for &'a [u8] {
     }
 }
 
-impl<'a, T: BufferReader + ?Sized> BufferReader for &'a mut T {
+impl<T: BufferReader + ?Sized> BufferReader for &mut T {
     #[inline]
     fn bytes(&self) -> &[u8] {
         (**self).bytes()
@@ -204,7 +204,7 @@ impl<T: AsMut<[u8]>> BufferWriter for std::io::Cursor<T> {
     }
 }
 
-impl<'a> BufferWriter for &'a mut [u8] {
+impl BufferWriter for &mut [u8] {
     #[inline]
     unsafe fn bytes_mut(&mut self, _size: usize) -> &mut [u8] {
         self
@@ -236,13 +236,16 @@ impl BufferWriter for Vec<u8> {
         // Ensure returned slice has enough space
         self.reserve(size);
         let ptr = self.as_mut_ptr();
-        &mut std::slice::from_raw_parts_mut(ptr, self.capacity())[self.len()..]
+        // SAFETY: `ptr` points to the vector allocation, which remains valid
+        // after `reserve`, and slicing from `self.len()` stays within capacity.
+        unsafe { &mut std::slice::from_raw_parts_mut(ptr, self.capacity())[self.len()..] }
     }
 
     #[inline]
     unsafe fn advance_mut(&mut self, count: usize) {
         let len = self.len();
-        self.set_len(len + count);
+        // SAFETY: callers guarantee that `count` bytes were initialized.
+        unsafe { self.set_len(len + count) };
     }
 
     #[inline]
@@ -252,15 +255,17 @@ impl BufferWriter for Vec<u8> {
     }
 }
 
-impl<'a, T: BufferWriter + ?Sized> BufferWriter for &'a mut T {
+impl<T: BufferWriter + ?Sized> BufferWriter for &mut T {
     #[inline]
     unsafe fn bytes_mut(&mut self, size: usize) -> &mut [u8] {
-        (**self).bytes_mut(size)
+        // SAFETY: forwarded to the underlying `BufferWriter` with the same contract.
+        unsafe { (**self).bytes_mut(size) }
     }
 
     #[inline]
     unsafe fn advance_mut(&mut self, count: usize) {
-        (**self).advance_mut(count)
+        // SAFETY: forwarded to the underlying `BufferWriter` with the same contract.
+        unsafe { (**self).advance_mut(count) }
     }
 
     #[inline]
@@ -272,12 +277,14 @@ impl<'a, T: BufferWriter + ?Sized> BufferWriter for &'a mut T {
 impl<T: BufferWriter + ?Sized> BufferWriter for Box<T> {
     #[inline]
     unsafe fn bytes_mut(&mut self, size: usize) -> &mut [u8] {
-        (**self).bytes_mut(size)
+        // SAFETY: forwarded to the underlying `BufferWriter` with the same contract.
+        unsafe { (**self).bytes_mut(size) }
     }
 
     #[inline]
     unsafe fn advance_mut(&mut self, count: usize) {
-        (**self).advance_mut(count)
+        // SAFETY: forwarded to the underlying `BufferWriter` with the same contract.
+        unsafe { (**self).advance_mut(count) }
     }
 
     #[inline]
