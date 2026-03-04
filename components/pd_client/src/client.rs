@@ -7,7 +7,6 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
     time::Duration,
-    u64,
 };
 
 use futures::{
@@ -81,7 +80,7 @@ impl RpcClient {
 
         // -1 means the max.
         let retries = match cfg.retry_max_count {
-            -1 => std::isize::MAX,
+            -1 => isize::MAX,
             v => v.saturating_add(1),
         };
         let monitor = Arc::new(
@@ -165,7 +164,7 @@ impl RpcClient {
                     return Ok(rpc_client);
                 }
                 Err(e) => {
-                    if i as usize % cfg.retry_log_every == 0 {
+                    if (i as usize).is_multiple_of(cfg.retry_log_every) {
                         warn!("validate PD endpoints failed"; "err" => ?e);
                     }
                     let _ = GLOBAL_TIMER_HANDLE
