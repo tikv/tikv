@@ -232,18 +232,19 @@ where
 
 /// Retires a future execution. Comparing to `retry`, this version allows more
 /// configurations.
+#[allow(clippy::redundant_closure_call)]
 pub async fn retry_ext<G, T, F, E>(mut action: G, mut ext: RetryExt<E>) -> Result<T, E>
 where
     G: FnMut() -> F,
     F: Future<Output = Result<T, E>>,
     E: RetryError,
 {
-    ext.max_retry_times = {
+    ext.max_retry_times = (|| {
         fail::fail_point!("retry_count", |t| t
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(ext.max_retry_times));
         ext.max_retry_times
-    };
+    })();
 
     retry_expr!(action(), ext).await
 }
