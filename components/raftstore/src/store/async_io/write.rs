@@ -963,7 +963,14 @@ where
 
         let mut sorted_qps: Vec<u64> = self.qps_history.iter().cloned().collect();
         sorted_qps.sort();
-        let medium_qps = sorted_qps[sorted_qps.len() / 2];
+        let medium_qps = if sorted_qps.len() % 2 == 1 {
+            sorted_qps[sorted_qps.len() / 2]
+        } else {
+            let right = sorted_qps.len() / 2;
+            let left = right - 1;
+            // Avoid potential overflow for large values.
+            sorted_qps[left] + (sorted_qps[right] - sorted_qps[left]) / 2
+        };
 
         let new_wait_duration = self.calculate_adaptive_wait_duration(medium_qps);
         self.batch.update_wait_duration_adaptive(new_wait_duration);
