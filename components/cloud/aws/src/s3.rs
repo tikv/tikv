@@ -143,12 +143,9 @@ impl BlobConfig for Config {
     }
 
     fn url(&self) -> io::Result<url::Url> {
-        self.bucket.url("s3").map_err(|s| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("error creating bucket url: {}", s),
-            )
-        })
+        self.bucket
+            .url("s3")
+            .map_err(|s| io::Error::other(format!("error creating bucket url: {}", s)))
     }
 }
 
@@ -308,12 +305,12 @@ impl S3Storage {
     }
 
     fn strip_prefix_if_needed(&self, key: String) -> String {
-        if let Some(prefix) = &self.config.bucket.prefix {
-            if key.starts_with(prefix.as_str()) {
-                return key[prefix.len()..]
-                    .trim_start_matches(DEFAULT_SEP)
-                    .to_owned();
-            }
+        if let Some(prefix) = &self.config.bucket.prefix
+            && key.starts_with(prefix.as_str())
+        {
+            return key[prefix.len()..]
+                .trim_start_matches(DEFAULT_SEP)
+                .to_owned();
         }
         key
     }
@@ -389,7 +386,7 @@ struct S3Uploader<'client> {
 pub enum UploadError {
     #[error("io error {0}")]
     Io(#[from] io::Error),
-    #[error("aws-sdk error: {msg}")]
+    #[error("aws-sdk error: {msg}, retryable: {retryable}")]
     // Maybe make it a trait if needed?
     Sdk { msg: String, retryable: bool },
 }
@@ -780,10 +777,7 @@ impl DeletableStorage for S3Storage {
                 .observe(now.saturating_elapsed().as_secs_f64());
             match res {
                 Ok(_) => Ok(()),
-                Err(e) => Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("failed to delete object {}", e),
-                )),
+                Err(e) => Err(io::Error::other(format!("failed to delete object {}", e))),
             }
         }
         .boxed_local()
@@ -824,10 +818,7 @@ impl IterableStorage for S3Storage {
                     .unwrap_or_else(|| futures::stream::empty().right_stream())
             })
             .map_err(|err| {
-                io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("sdk encounters an unexpected error: {:?}", err),
-                )
+                io::Error::other(format!("sdk encounters an unexpected error: {:?}", err))
             })
             .try_flatten()
             .boxed_local()
@@ -1335,7 +1326,7 @@ mod tests {
 
     #[ignore = "s3 test env is unavailable"]
     #[tokio::test]
-    #[cfg(FALSE)]
+    #[cfg(any())]
     // FIXME: enable this (or move this to an integration test) if we've got a
     // reliable way to test s3 (aws test_util requires custom logic to verify the
     // body stream which itself can have bug)
