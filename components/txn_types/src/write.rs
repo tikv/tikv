@@ -106,9 +106,11 @@ pub struct Write {
     ///
     /// 1. `Key_100_put`, `Key_120_del` applied
     /// 2. GC with safepoint = 130 started and `Key_100_put`, `Key_120_del` are
-    /// deleted 3. Finished applying `Key_100_put_R`, which means to rewrite
-    /// `Key_100_put` 4. Read at `140` should get nothing (since it's
-    /// MVCC-deleted at 120) but finds `Key_100_put`
+    ///    deleted
+    /// 3. Finished applying `Key_100_put_R`, which means to rewrite
+    ///    `Key_100_put`
+    /// 4. Read at `140` should get nothing (since it's MVCC-deleted at 120) but
+    ///    finds `Key_100_put`
     ///
     /// To solve the problem, when marking `has_overlapped_rollback` on an
     /// already-existed commit record, add a special field `gc_fence` on it. If
@@ -413,14 +415,14 @@ impl WriteRef<'_> {
         size
     }
 
-    /// Prev Conditions:
-    ///   * The `Write` record `self` is referring to is the latest version
-    ///     found by reading at `read_ts`
-    ///   * The `read_ts` is safe, which means, it's not earlier than the
-    ///     current GC safepoint.
-    /// Return:
-    ///   Whether the `Write` record is valid, ie. there's no GC fence or GC
-    /// fence doesn't points to any other version.
+    /// Preconditions:
+    /// - The `Write` record `self` is referring to is the latest version
+    ///   found by reading at `read_ts`.
+    /// - The `read_ts` is safe, which means it's not earlier than the
+    ///   current GC safepoint.
+    ///
+    /// Returns whether the `Write` record is valid, i.e. there's no GC fence
+    /// or the GC fence doesn't point to any other version.
     pub fn check_gc_fence_as_latest_version(&self, read_ts: TimeStamp) -> bool {
         // It's a valid write record if there's no GC fence or GC fence doesn't points
         // to any other version.
@@ -431,10 +433,11 @@ impl WriteRef<'_> {
         // * If `gc_fence_ts <= read_ts`, since the current version is the latest
         //   version found by reading at `read_ts`, the version at `gc_fence_ts` must be
         //   missing, so the current version must be invalid.
-        if let Some(gc_fence_ts) = self.gc_fence {
-            if !gc_fence_ts.is_zero() && gc_fence_ts <= read_ts {
-                return false;
-            }
+        if let Some(gc_fence_ts) = self.gc_fence
+            && !gc_fence_ts.is_zero()
+            && gc_fence_ts <= read_ts
+        {
+            return false;
         }
 
         true
@@ -567,13 +570,13 @@ mod tests {
         let cases: Vec<(Option<u64>, u64, bool)> = vec![
             (None, 10, true),
             (None, 100, true),
-            (None, u64::max_value(), true),
+            (None, u64::MAX, true),
             (Some(0), 100, true),
-            (Some(0), u64::max_value(), true),
+            (Some(0), u64::MAX, true),
             (Some(100), 50, true),
             (Some(100), 100, false),
             (Some(100), 150, false),
-            (Some(100), u64::max_value(), false),
+            (Some(100), u64::MAX, false),
         ];
 
         for case in cases {

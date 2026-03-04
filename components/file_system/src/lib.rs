@@ -1,7 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(test)]
-#![feature(duration_consts_float)]
 
 #[macro_use]
 extern crate lazy_static;
@@ -167,20 +166,20 @@ fn get_thread_io_bytes_stats() -> Result<IoBytes, String> {
         let mut current_stats = stats.get();
 
         // Add the mock IO bytes to the stats.
-        current_stats.read += (|| {
+        current_stats.read += {
             fail::fail_point!("delta_read_io_bytes", |d| d
                 .unwrap()
                 .parse::<u64>()
                 .unwrap());
             0
-        })();
-        current_stats.write += (|| {
+        };
+        current_stats.write += {
             fail::fail_point!("delta_write_io_bytes", |d| d
                 .unwrap()
                 .parse::<u64>()
                 .unwrap());
             0
-        })();
+        };
 
         stats.set(current_stats);
         Ok(current_stats)
@@ -583,7 +582,7 @@ impl<R: AsyncRead + Unpin> AsyncRead for Sha256Reader<R> {
             .lock()
             .expect("failed to lock hasher in Sha256Reader async read");
         if let Err(e) = hasher.update(new_data) {
-            return Poll::Ready(Err(io::Error::new(ErrorKind::Other, e)));
+            return Poll::Ready(Err(io::Error::other(e)));
         }
 
         Poll::Ready(Ok(()))
