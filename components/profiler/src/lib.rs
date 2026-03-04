@@ -7,18 +7,18 @@
 //!
 //! 1. gperftools
 //!
-//!    Linux:
+//!   Linux:
 //!
-//!      You can follow its [INSTALL manual](https://github.com/gperftools/gperftools/blob/master/INSTALL).
-//!      Roughly the instructions are the following:
+//!   You can follow its [INSTALL manual](https://github.com/gperftools/gperftools/blob/master/INSTALL).
+//!   Roughly the instructions are the following:
 //!
-//!      1. Download packages from [release](https://github.com/gperftools/gperftools/releases)
-//!      2. Run `./configure`
-//!      3. Run `make install`
+//!   1. Download packages from [release](https://github.com/gperftools/gperftools/releases)
+//!   2. Run `./configure`
+//!   3. Run `make install`
 //!
-//!    macOS:
+//!   macOS:
 //!
-//!      Simply `brew install gperftools`.
+//!   Simply `brew install gperftools`.
 //!
 //! ## Usage
 //!
