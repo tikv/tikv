@@ -122,7 +122,7 @@ impl EventListener for FlowListener {
                     }
                 }
 
-                let diff = if output < input { input - output } else { 0 };
+                let diff = input.saturating_sub(output);
 
                 let _ = self
                     .flow_info_sender

@@ -63,7 +63,12 @@ impl super::Storage for FixtureStorage {
             .data
             .range(range.lower_inclusive..range.upper_exclusive);
         // Erase the lifetime to be 'static.
-        self.data_view_unsafe = unsafe { Some(std::mem::transmute(data_view)) };
+        self.data_view_unsafe = unsafe {
+            Some(std::mem::transmute::<
+                btree_map::Range<'_, Vec<u8>, FixtureValue>,
+                btree_map::Range<'static, Vec<u8>, FixtureValue>,
+            >(data_view))
+        };
         self.is_backward_scan = is_backward_scan;
         self.is_key_only = is_key_only;
         Ok(())

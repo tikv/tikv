@@ -196,7 +196,6 @@ impl ConcurrencyManager {
     /// - Ok(()): If the update is successful or has no effect
     /// - Err(limit): If new_ts is greater than the max_ts_limit, returns the
     ///   current limit value
-
     pub fn update_max_ts(
         &self,
         new_ts: TimeStamp,
@@ -425,10 +424,10 @@ impl ConcurrencyManager {
         let mut min_lock_ts = None;
         // TODO: The iteration looks not so efficient. It's better to be optimized.
         self.lock_table.for_each(|handle| {
-            if let Some(curr_ts) = handle.with_lock(|lock| lock.as_ref().map(|l| l.ts)) {
-                if min_lock_ts.map(|ts| ts > curr_ts).unwrap_or(true) {
-                    min_lock_ts = Some(curr_ts);
-                }
+            if let Some(curr_ts) = handle.with_lock(|lock| lock.as_ref().map(|l| l.ts))
+                && min_lock_ts.map(|ts| ts > curr_ts).unwrap_or(true)
+            {
+                min_lock_ts = Some(curr_ts);
             }
         });
         min_lock_ts
@@ -438,14 +437,13 @@ impl ConcurrencyManager {
         let mut min_lock: Option<(TimeStamp, Key)> = None;
         // TODO: The iteration looks not so efficient. It's better to be optimized.
         self.lock_table.for_each_kv(|key, handle| {
-            if let Some(curr_ts) = handle.with_lock(|lock| lock.as_ref().map(|l| l.ts)) {
-                if min_lock
+            if let Some(curr_ts) = handle.with_lock(|lock| lock.as_ref().map(|l| l.ts))
+                && min_lock
                     .as_ref()
                     .map(|(ts, _)| ts > &curr_ts)
                     .unwrap_or(true)
-                {
-                    min_lock = Some((curr_ts, key.clone()));
-                }
+            {
+                min_lock = Some((curr_ts, key.clone()));
             }
         });
         min_lock
@@ -557,9 +555,9 @@ pub trait IntoErrorSource: sealed::Sealed {
 }
 
 // &str impl
-impl<'a> sealed::Sealed for &'a str {}
-impl<'a> IntoErrorSource for &'a str {
-    type Output = &'a str;
+impl sealed::Sealed for &str {}
+impl IntoErrorSource for &str {
+    type Output = Self;
     fn into_error_source(self) -> Self::Output {
         self
     }

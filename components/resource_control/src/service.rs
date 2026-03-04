@@ -275,10 +275,10 @@ impl ResourceManagerService {
                 all_reqs.push(req);
             }
 
-            if !all_reqs.is_empty() {
-                if let Err(e) = self.pd_client.report_ru_metrics(req).await {
-                    error!("report ru metrics failed"; "err" => ?e);
-                }
+            if !all_reqs.is_empty()
+                && let Err(e) = self.pd_client.report_ru_metrics(req).await
+            {
+                error!("report ru metrics failed"; "err" => ?e);
             }
 
             let dur = if cfg!(feature = "failpoints") {

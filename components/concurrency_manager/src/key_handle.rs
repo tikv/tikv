@@ -31,7 +31,11 @@ impl KeyHandle {
         // Safety: `_mutex_guard` is declared before `handle_ref` in `KeyHandleGuard`.
         // So the mutex guard will be released earlier than the `Arc<KeyHandle>`.
         // Then we can make sure the mutex guard doesn't point to released memory.
-        let mutex_guard = unsafe { mem::transmute(self.mutex.lock().await) };
+        let mutex_guard = unsafe {
+            mem::transmute::<AsyncMutexGuard<'_, ()>, AsyncMutexGuard<'static, ()>>(
+                self.mutex.lock().await,
+            )
+        };
         KeyHandleGuard {
             _mutex_guard: mutex_guard,
             handle: self,
@@ -47,7 +51,7 @@ impl KeyHandle {
     /// This method is not thread safe. Make sure that no other threads access
     /// `table` at the same time.
     pub(crate) unsafe fn set_table(&self, table: LockTable) {
-        *self.table.get() = Some(table);
+        unsafe { *self.table.get() = Some(table) };
     }
 }
 
