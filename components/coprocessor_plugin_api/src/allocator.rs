@@ -48,12 +48,22 @@ impl HostAllocator {
     }
 }
 
+impl Default for HostAllocator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 unsafe impl GlobalAlloc for HostAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        self.alloc_fn.load(Ordering::Relaxed).unwrap()(layout)
+        let alloc = self.alloc_fn.load(Ordering::Relaxed).unwrap();
+        // SAFETY: `set_allocator` installs a valid host allocator before use.
+        unsafe { alloc(layout) }
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        self.dealloc_fn.load(Ordering::Relaxed).unwrap()(ptr, layout)
+        let dealloc = self.dealloc_fn.load(Ordering::Relaxed).unwrap();
+        // SAFETY: `set_allocator` installs a valid host allocator before use.
+        unsafe { dealloc(ptr, layout) }
     }
 }
 
