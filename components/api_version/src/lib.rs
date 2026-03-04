@@ -259,7 +259,7 @@ impl<T: AsRef<[u8]>> RawValue<T> {
     #[inline]
     pub fn is_ttl_expired(&self, current_ts: u64) -> bool {
         self.expire_ts
-            .map_or(false, |expire_ts| expire_ts <= current_ts)
+            .is_some_and(|expire_ts| expire_ts <= current_ts)
     }
 }
 

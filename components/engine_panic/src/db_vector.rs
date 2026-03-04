@@ -17,7 +17,7 @@ impl Deref for PanicDbVector {
     }
 }
 
-impl<'a> PartialEq<&'a [u8]> for PanicDbVector {
+impl PartialEq<&[u8]> for PanicDbVector {
     fn eq(&self, rhs: &&[u8]) -> bool {
         **rhs == **self
     }

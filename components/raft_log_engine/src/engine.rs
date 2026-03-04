@@ -247,12 +247,11 @@ impl FileSystem for ManagedFileSystem {
     }
 
     fn exists_metadata<P: AsRef<Path>>(&self, path: P) -> bool {
-        if let Some(ref manager) = self.key_manager {
-            if let Ok(info) = manager.get_file(path.as_ref().to_str().unwrap()) {
-                if info.method != EncryptionMethod::Plaintext {
-                    return true;
-                }
-            }
+        if let Some(ref manager) = self.key_manager
+            && let Ok(info) = manager.get_file(path.as_ref().to_str().unwrap())
+            && info.method != EncryptionMethod::Plaintext
+        {
+            return true;
         }
         self.base_file_system.exists_metadata(path)
     }
@@ -631,10 +630,10 @@ impl RaftEngineDebug for RaftLogEngine {
     {
         if let Some(first_index) = self.first_index(raft_group_id) {
             for idx in first_index..=self.last_index(raft_group_id).unwrap() {
-                if let Some(entry) = self.get_entry(raft_group_id, idx)? {
-                    if !f(entry)? {
-                        break;
-                    }
+                if let Some(entry) = self.get_entry(raft_group_id, idx)?
+                    && !f(entry)?
+                {
+                    break;
                 }
             }
         }
