@@ -371,14 +371,12 @@ pub mod tests {
             .update_from_config_if_needed(configs, |_| {
                 Ok(create_mock_backend(
                     || {
-                        Err(Error::Other(Box::new(std::io::Error::new(
-                            ErrorKind::Other,
+                        Err(Error::Other(Box::new(std::io::Error::other(
                             "Encrypt error",
                         ))))
                     },
                     || {
-                        Err(Error::Other(Box::new(std::io::Error::new(
-                            ErrorKind::Other,
+                        Err(Error::Other(Box::new(std::io::Error::other(
                             "Decrypt error",
                         ))))
                     },
@@ -432,8 +430,7 @@ pub mod tests {
         let backends: Vec<Box<dyn AsyncBackend>> = vec![
             create_mock_backend(
                 || {
-                    Err(Error::Other(Box::new(std::io::Error::new(
-                        ErrorKind::Other,
+                    Err(Error::Other(Box::new(std::io::Error::other(
                         "Encrypt error 1",
                     ))))
                 },
@@ -442,8 +439,7 @@ pub mod tests {
             create_mock_backend(
                 || Ok(EncryptedContent::default()),
                 || {
-                    Err(Error::Other(Box::new(std::io::Error::new(
-                        ErrorKind::Other,
+                    Err(Error::Other(Box::new(std::io::Error::other(
                         "Decrypt error 2",
                     ))))
                 },

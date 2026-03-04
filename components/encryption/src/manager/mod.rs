@@ -383,7 +383,7 @@ fn check_stale_file_exist(
     file_dict: &mut FileDictionary,
     file_dict_file: &mut FileDictionaryFile,
 ) -> Result<()> {
-    if file_dict.files.get(fname).is_some() {
+    if file_dict.files.contains_key(fname) {
         if Path::new(fname).exists() {
             return Err(Error::Io(IoError::new(
                 ErrorKind::AlreadyExists,
@@ -816,10 +816,10 @@ impl DataKeyManager {
         while let Some(e) = iter.next() {
             let e = e?;
             if e.path().is_symlink() {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("unexpected symbolic link: {}", e.path().display()),
-                ));
+                return Err(io::Error::other(format!(
+                    "unexpected symbolic link: {}",
+                    e.path().display()
+                )));
             }
             let fname = e.path().to_str().unwrap();
             let sync = iter.peek().is_none();
@@ -933,10 +933,10 @@ impl DataKeyManager {
             while let Some(e) = iter.next() {
                 let e = e?;
                 if e.path().is_symlink() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("unexpected symbolic link: {}", e.path().display()),
-                    ));
+                    return Err(io::Error::other(format!(
+                        "unexpected symbolic link: {}",
+                        e.path().display()
+                    )));
                 }
                 let sub_path = e.path().strip_prefix(src_path).unwrap();
                 let src = e.path().to_str().unwrap();
@@ -1120,10 +1120,10 @@ impl<'a> DataKeyImporter<'a> {
 
 impl<'a> Drop for DataKeyImporter<'a> {
     fn drop(&mut self) {
-        if !self.committed {
-            if let Err(e) = self.rollback() {
-                warn!("failed to rollback imported data keys"; "err" => ?e);
-            }
+        if !self.committed
+            && let Err(e) = self.rollback()
+        {
+            warn!("failed to rollback imported data keys"; "err" => ?e);
         }
     }
 }
