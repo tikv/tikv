@@ -23,6 +23,7 @@ refer to https://github.com/tikv/tikv/pull/12442 and https://github.com/tikv/tik
 """
 [[disallowed-methods]]
 path = "futures_executor::thread_pool::ThreadPoolBuilder::after_start"
+allow-invalid = true
 reason = """
 Adding hooks directly will omit system hooks, please use
 <futures_executor::thread_pool::ThreadPoolBuilder as tikv_util::sys::thread::ThreadBuildWrapper>::with_sys_and_custom_hooks
@@ -30,6 +31,7 @@ refer to https://github.com/tikv/tikv/pull/12442 and https://github.com/tikv/tik
 """
 [[disallowed-methods]]
 path = "futures_executor::thread_pool::ThreadPoolBuilder::before_stop"
+allow-invalid = true
 reason = """
 Adding hooks directly will omit system hooks, please use
 <futures_executor::thread_pool::ThreadPoolBuilder as tikv_util::sys::thread::ThreadBuildWrapper>::with_sys_and_custom_hooks
