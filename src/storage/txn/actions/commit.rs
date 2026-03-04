@@ -12,6 +12,39 @@ use crate::storage::{
     Snapshot,
 };
 
+/// Helper function to handle the case when the lock is not found for our
+/// transaction.
+fn handle_lock_not_found<S: Snapshot>(
+    reader: &mut SnapshotReader<S>,
+    key: Key,
+    commit_ts: TimeStamp,
+) -> MvccResult<Option<ReleasedLock>> {
+    match reader.get_txn_commit_record(&key)?.info() {
+        Some((_, WriteType::Rollback)) | None => {
+            MVCC_CONFLICT_COUNTER.commit_lock_not_found.inc();
+            // None: related Rollback has been collapsed.
+            // Rollback: rollback by concurrent transaction.
+            info!(
+                "txn conflict (lock not found)";
+                "key" => %key,
+                "start_ts" => reader.start_ts,
+                "commit_ts" => commit_ts,
+            );
+            Err(ErrorInner::TxnLockNotFound {
+                start_ts: reader.start_ts,
+                commit_ts,
+                key: key.into_raw()?,
+            }
+            .into())
+        }
+        // Committed by concurrent transaction.
+        Some((_, WriteType::Put)) | Some((_, WriteType::Delete)) | Some((_, WriteType::Lock)) => {
+            MVCC_DUPLICATE_CMD_COUNTER_VEC.commit.inc();
+            Ok(None)
+        }
+    }
+}
+
 pub fn commit<S: Snapshot>(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<S>,
@@ -21,38 +54,6 @@ pub fn commit<S: Snapshot>(
     fail_point!("commit", |err| Err(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts,).into()
     ));
-
-    let handle_lock_not_found = |reader: &mut SnapshotReader<S>,
-                                 key: Key,
-                                 commit_ts: TimeStamp|
-     -> MvccResult<Option<ReleasedLock>> {
-        match reader.get_txn_commit_record(&key)?.info() {
-            Some((_, WriteType::Rollback)) | None => {
-                MVCC_CONFLICT_COUNTER.commit_lock_not_found.inc();
-                // None: related Rollback has been collapsed.
-                // Rollback: rollback by concurrent transaction.
-                info!(
-                    "txn conflict (lock not found)";
-                    "key" => %key,
-                    "start_ts" => reader.start_ts,
-                    "commit_ts" => commit_ts,
-                );
-                Err(ErrorInner::TxnLockNotFound {
-                    start_ts: reader.start_ts,
-                    commit_ts,
-                    key: key.into_raw()?,
-                }
-                .into())
-            }
-            // Committed by concurrent transaction.
-            Some((_, WriteType::Put))
-            | Some((_, WriteType::Delete))
-            | Some((_, WriteType::Lock)) => {
-                MVCC_DUPLICATE_CMD_COUNTER_VEC.commit.inc();
-                Ok(None)
-            }
-        }
-    };
 
     let (mut lock, shared_locks, commit) = match reader.load_lock(&key)? {
         Some(lock_or_shared) => {
