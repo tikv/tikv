@@ -28,5 +28,5 @@ pub fn name_to_cf(name: &str) -> Option<CfName> {
 }
 
 pub fn is_data_cf(cf: &str) -> bool {
-    DATA_CFS.iter().any(|c| *c == cf)
+    DATA_CFS.contains(&cf)
 }

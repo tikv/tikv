@@ -686,7 +686,7 @@ impl PdConnector {
         for m in members
             .iter()
             .filter(|m| *m != previous_leader)
-            .chain(&[previous_leader.clone()])
+            .chain(std::slice::from_ref(previous_leader))
         {
             for ep in m.get_client_urls() {
                 match self.connect(ep.as_str()).await {
@@ -774,19 +774,20 @@ impl PdConnector {
                 if !force && resp == members_resp {
                     return Err(box_err!("failed to connect to {:?}", leader));
                 }
-                if enable_forwarding && has_network_error {
-                    if let Ok(Some((client, info))) = self.try_forward(members, leader).await {
-                        let tso = if build_tso {
-                            Some(TimestampOracle::new(
-                                resp.get_header().get_cluster_id(),
-                                &client,
-                                info.call_option(),
-                            )?)
-                        } else {
-                            None
-                        };
-                        return Ok(Some((client, info, resp, tso)));
-                    }
+                if enable_forwarding
+                    && has_network_error
+                    && let Ok(Some((client, info))) = self.try_forward(members, leader).await
+                {
+                    let tso = if build_tso {
+                        Some(TimestampOracle::new(
+                            resp.get_header().get_cluster_id(),
+                            &client,
+                            info.call_option(),
+                        )?)
+                    } else {
+                        None
+                    };
+                    return Ok(Some((client, info, resp, tso)));
                 }
             }
         }
@@ -810,12 +811,11 @@ impl PdConnector {
                     return Ok((Some((client, ep.clone(), resp)), false));
                 }
                 Err(Error::Grpc(e)) => {
-                    if let RpcFailure(ref status) = e {
-                        if status.code() == RpcStatusCode::UNAVAILABLE
-                            || status.code() == RpcStatusCode::DEADLINE_EXCEEDED
-                        {
-                            network_fail_num += 1;
-                        }
+                    if let RpcFailure(ref status) = e
+                        && (status.code() == RpcStatusCode::UNAVAILABLE
+                            || status.code() == RpcStatusCode::DEADLINE_EXCEEDED)
+                    {
+                        network_fail_num += 1;
                     }
                     error!("failed to connect to PD member"; "endpoints" => ep, "error" => ?e);
                 }
