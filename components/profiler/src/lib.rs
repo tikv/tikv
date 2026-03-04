@@ -8,9 +8,8 @@
 //! gperftools:
 //!
 //! - Linux: follow its [INSTALL manual](https://github.com/gperftools/gperftools/blob/master/INSTALL).
-//!   Roughly: download packages from
-//!   [release](https://github.com/gperftools/gperftools/releases), run
-//!   `./configure`, then run `make install`.
+//!   Roughly: download packages from [release](https://github.com/gperftools/gperftools/releases),
+//!   run `./configure`, then run `make install`.
 //! - macOS: `brew install gperftools`.
 //!
 //! ## Usage
