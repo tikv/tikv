@@ -137,10 +137,10 @@ impl KmsBackend {
 
         {
             let mut opt_state = self.state.lock().await;
-            if let Some(state) = &*opt_state {
-                if state.cached(&ciphertext_key) {
-                    return state.encryption_backend.decrypt_content(content);
-                }
+            if let Some(state) = &*opt_state
+                && state.cached(&ciphertext_key)
+            {
+                return state.encryption_backend.decrypt_content(content);
             }
             {
                 let plaintext = retry(|| {
@@ -234,6 +234,7 @@ pub mod fake {
     }
 
     fn check_fail_point(fail_point_name: &str) -> Result<()> {
+        let _ = fail_point_name;
         fail_point!(fail_point_name, |val| {
             val.and_then(|x| x.parse::<bool>().ok())
                 .filter(|&fail| fail)
