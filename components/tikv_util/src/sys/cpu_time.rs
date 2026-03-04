@@ -109,7 +109,7 @@ mod imp {
                 guest_nice: parts.next()?.parse::<u64>().ok()?,
             })
         })()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "first line of /proc/stat malformed"))
+        .ok_or_else(|| io::Error::other("first line of /proc/stat malformed"))
     }
 
     pub fn cpu_time() -> io::Result<Duration> {

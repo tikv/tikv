@@ -140,10 +140,10 @@ mod imp {
             let ret = libc::getpriority(libc::PRIO_PROCESS, tid as u32);
             if ret == -1 {
                 let e = Error::last_os_error();
-                if let Some(errno) = e.raw_os_error() {
-                    if errno != 0 {
-                        return Err(e);
-                    }
+                if let Some(errno) = e.raw_os_error()
+                    && errno != 0
+                {
+                    return Err(e);
                 }
             }
             Ok(ret)

@@ -3,7 +3,7 @@
 //! This module is a subset of rust-prometheus's process collector, without the
 //! fd collector to avoid memory fragmentation issues when open fd is large.
 
-use std::io::{Error, ErrorKind, Result};
+use std::io::{Error, Result};
 
 use prometheus::{
     IntCounter, IntGauge, Opts,
@@ -16,7 +16,7 @@ use crate::sys::thread;
 /// Monitors current process.
 pub fn monitor_process() -> Result<()> {
     let pc = ProcessCollector::new();
-    prometheus::register(Box::new(pc)).map_err(|e| Error::new(ErrorKind::Other, e.to_string()))
+    prometheus::register(Box::new(pc)).map_err(|e| Error::other(e.to_string()))
 }
 
 /// A collector to collect process metrics.
@@ -62,11 +62,10 @@ impl ProcessCollector {
         .unwrap();
         descs.extend(start_time.desc().into_iter().cloned());
         // proc_start_time init once because it is immutable
-        if let Ok(boot_time) = procfs::boot_time_secs() {
-            if let Ok(p) = procfs::process::Process::myself() {
-                start_time
-                    .set(p.stat.starttime as i64 / thread::ticks_per_second() + boot_time as i64);
-            }
+        if let Ok(boot_time) = procfs::boot_time_secs()
+            && let Ok(p) = procfs::process::Process::myself()
+        {
+            start_time.set(p.stat.starttime as i64 / thread::ticks_per_second() + boot_time as i64);
         }
 
         Self {
