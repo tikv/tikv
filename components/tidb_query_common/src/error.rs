@@ -15,7 +15,7 @@ pub enum EvaluateError {
 
     /// This variant is only a compatible layer for existing CodecError.
     /// Ideally each error kind should occupy an enum variant.
-    #[error("{msg}")]
+    #[error("{msg} (code {code})")]
     Custom { code: i32, msg: String },
 
     #[error("{0}")]

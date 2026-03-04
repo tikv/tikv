@@ -529,7 +529,7 @@ impl PdCluster {
         if self
             .stores
             .get(&store_id)
-            .map_or(true, |s| s.store.get_id() != 0)
+            .is_none_or(|s| s.store.get_id() != 0)
         {
             self.stores.insert(
                 store_id,
@@ -780,10 +780,10 @@ impl PdCluster {
             if leader.get_store_id() != store_id {
                 continue;
             }
-            if let Ok(Some(region)) = self.get_region_by_id(region_id) {
-                if let Some(resp) = self.poll_heartbeat_responses(region, leader) {
-                    resps.push(resp);
-                }
+            if let Ok(Some(region)) = self.get_region_by_id(region_id)
+                && let Some(resp) = self.poll_heartbeat_responses(region, leader)
+            {
+                resps.push(resp);
             }
         }
 
@@ -1035,10 +1035,10 @@ impl TestPdClient {
                 None => continue,
             };
 
-            if let Some(p) = find_peer(&region, peer.get_store_id()) {
-                if p == &peer {
-                    return;
-                }
+            if let Some(p) = find_peer(&region, peer.get_store_id())
+                && p == &peer
+            {
+                return;
             }
         }
         let region = block_on(self.get_region_by_id(region_id)).unwrap();
@@ -1087,10 +1087,10 @@ impl TestPdClient {
             };
             let add = add_peers
                 .iter()
-                .all(|peer| find_peer(&region, peer.get_store_id()).map_or(false, |p| p == peer));
+                .all(|peer| find_peer(&region, peer.get_store_id()).is_some_and(|p| p == peer));
             let remove = remove_peers
                 .iter()
-                .all(|peer| find_peer(&region, peer.get_store_id()).map_or(true, |p| p != peer));
+                .all(|peer| find_peer(&region, peer.get_store_id()).is_none_or(|p| p != peer));
             if add && remove {
                 return;
             }
@@ -1403,7 +1403,7 @@ impl TestPdClient {
             .rl()
             .leaders
             .get(&region_id)
-            .map_or(false, |p| *p == peer)
+            .is_some_and(|p| *p == peer)
     }
 
     // check whether region is split by split_key or not.
@@ -1634,10 +1634,10 @@ impl PdClient for TestPdClient {
 
         for _ in 1..500 {
             sleep_ms(10);
-            if let Some(region) = self.cluster.rl().get_region(data_key(key)) {
-                if check_key_in_region(key, &region) {
-                    return Ok(region);
-                }
+            if let Some(region) = self.cluster.rl().get_region(data_key(key))
+                && check_key_in_region(key, &region)
+            {
+                return Ok(region);
             }
         }
 

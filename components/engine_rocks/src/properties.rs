@@ -9,7 +9,6 @@ use std::{
         Mutex,
         atomic::{AtomicU64, Ordering},
     },
-    u64,
 };
 
 use api_version::{ApiV2, KeyMode, KvFormat};

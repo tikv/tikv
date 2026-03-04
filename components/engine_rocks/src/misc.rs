@@ -47,7 +47,7 @@ impl RocksEngine {
             // There may be a range overlap with next range
             if last_end_key
                 .as_ref()
-                .map_or(false, |key| key.as_slice() > r.start_key)
+                .is_some_and(|key| key.as_slice() > r.start_key)
             {
                 written |= self.delete_all_in_range_cf_by_key(wopts, cf, r)?;
                 continue;
@@ -217,7 +217,7 @@ impl MiscExt for RocksEngine {
                     .map(|(_, time)| (handle, time))
             })
             .min_by(|(_, a), (_, b)| a.cmp(b))
-            && age_threshold.map_or(true, |threshold| time <= threshold)
+            && age_threshold.is_none_or(|threshold| time <= threshold)
         {
             let mut fopts = FlushOptions::default();
             fopts.set_wait(wait);
