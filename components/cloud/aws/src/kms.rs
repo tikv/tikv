@@ -353,7 +353,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(FALSE)]
+    #[cfg(any())]
     // FIXME: enable this (or move this to an integration test)
     async fn test_aws_kms_localstack() {
         let config = Config {

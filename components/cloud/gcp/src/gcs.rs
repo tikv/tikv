@@ -100,12 +100,9 @@ impl BlobConfig for Config {
     }
 
     fn url(&self) -> io::Result<url::Url> {
-        self.bucket.url("gcs").map_err(|s| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("error creating bucket url: {}", s),
-            )
-        })
+        self.bucket
+            .url("gcs")
+            .map_err(|s| io::Error::other(format!("error creating bucket url: {}", s)))
     }
 }
 
@@ -131,7 +128,7 @@ pub trait ResultExt {
 impl<T, E: Display> ResultExt for Result<T, E> {
     type Ok = T;
     fn or_io_error<D: Display>(self, msg: D) -> io::Result<T> {
-        self.map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}: {}", msg, e)))
+        self.map_err(|e| io::Error::other(format!("{}: {}", msg, e)))
     }
     fn or_invalid_input<D: Display>(self, msg: D) -> io::Result<T> {
         self.map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}: {}", msg, e)))
@@ -205,12 +202,12 @@ impl GcsStorage {
     }
 
     fn strip_prefix_if_needed(&self, key: String) -> String {
-        if let Some(prefix) = &self.config.bucket.prefix {
-            if key.starts_with(prefix.as_str()) {
-                return key[prefix.len()..]
-                    .trim_start_matches(DEFAULT_SEP)
-                    .to_owned();
-            }
+        if let Some(prefix) = &self.config.bucket.prefix
+            && key.starts_with(prefix.as_str())
+        {
+            return key[prefix.len()..]
+                .trim_start_matches(DEFAULT_SEP)
+                .to_owned();
         }
         key
     }
@@ -438,7 +435,7 @@ impl<'cli> GcsPrefixIter<'cli> {
             .cli
             .make_request(req.map(|_e| Body::empty()), tame_gcs::Scopes::ReadOnly)
             .await
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+            .map_err(io::Error::other)?;
         let resp = utils::read_from_http_body::<ListResponse>(res).await?;
         metrics::CLOUD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["gcp", "list"])

@@ -122,16 +122,15 @@ impl Config {
             env::var(ENV_CLIENT_ID).ok(),
             env::var(ENV_TENANT_ID).ok(),
             env::var(ENV_CLIENT_SECRET).ok(),
-        ) {
-            if !(client_id.is_empty() || tenant_id.is_empty() || client_secret.is_empty()) {
-                let client_id = ClientId::new(client_id);
-                let client_secret = ClientSecret::new(client_secret);
-                return Some(CredentialInfo {
-                    client_id,
-                    tenant_id,
-                    client_secret,
-                });
-            }
+        ) && !(client_id.is_empty() || tenant_id.is_empty() || client_secret.is_empty())
+        {
+            let client_id = ClientId::new(client_id);
+            let client_secret = ClientSecret::new(client_secret);
+            return Some(CredentialInfo {
+                client_id,
+                tenant_id,
+                client_secret,
+            });
         }
         None
     }
@@ -233,12 +232,9 @@ impl BlobConfig for Config {
     }
 
     fn url(&self) -> io::Result<url::Url> {
-        self.bucket.url("azure").map_err(|s| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("error creating bucket url: {}", s),
-            )
-        })
+        self.bucket
+            .url("azure")
+            .map_err(|s| io::Error::other(format!("error creating bucket url: {}", s)))
     }
 }
 
@@ -921,7 +917,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(feature = "azurite")]
+    #[cfg(any())]
     // test in Azurite emulator
     async fn test_azblob_storage() {
         use futures_util::stream;
