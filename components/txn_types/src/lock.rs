@@ -2,6 +2,7 @@
 
 use std::{borrow::Cow, mem::size_of};
 
+use bitflags::bitflags;
 use byteorder::ReadBytesExt;
 use collections::HashMap;
 use kvproto::kvrpcpb::{IsolationLevel, LockInfo, Op, WriteConflictReason};
@@ -46,6 +47,7 @@ const _RESERVED_PREFIX: u8 = b'T'; // Reserved for future use.
 const PESSIMISTIC_LOCK_WITH_CONFLICT_PREFIX: u8 = b'F';
 const GENERATION_PREFIX: u8 = b'g';
 const SHARED_LOCK_TXNS_INFO_PREFIX: u8 = b'h';
+const SHARED_LOCK_FLAGS_PREFIX: u8 = b'i';
 
 impl LockType {
     pub fn from_mutation(mutation: &Mutation) -> Option<LockType> {
@@ -654,8 +656,21 @@ impl Lock {
     }
 }
 
+bitflags! {
+    #[derive(Default)]
+    struct SharedLocksFlags: u8 {
+        // Indicates whether the shared locks are shrink-only, which means no
+        // new shared lock can be added. In other words, a shrink-only
+        // `SharedLocks` also blocks new incoming shared locks. This is a
+        // one-way change, a shrink-only `SharedLocks` cannot be changed back to
+        // a non-shrink-only one.
+        const SHRINK_ONLY = 0b0000_0001;
+    }
+}
+
 #[derive(PartialEq, Clone, Debug, Default)]
 pub struct SharedLocks {
+    flags: SharedLocksFlags,
     txn_info_segments: HashMap<TimeStamp, Either<Vec<u8>, Lock>>,
 }
 
@@ -664,10 +679,17 @@ impl SharedLocks {
         Default::default()
     }
 
-    pub fn new_with_txn_infos(
+    fn with_txn_infos(
+        mut self,
         txn_info_segments: HashMap<TimeStamp, Either<Vec<u8>, Lock>>,
     ) -> Self {
-        Self { txn_info_segments }
+        self.txn_info_segments = txn_info_segments;
+        self
+    }
+
+    fn with_flags(mut self, flags: SharedLocksFlags) -> Self {
+        self.flags = flags;
+        self
     }
 
     pub fn parse(mut b: &[u8]) -> Result<Self> {
@@ -680,9 +702,15 @@ impl SharedLocks {
             return Ok(Self::new());
         }
 
+        let mut flags = SharedLocksFlags::empty();
         let mut segments = HashMap::default();
         while !b.is_empty() {
             match b.read_u8()? {
+                SHARED_LOCK_FLAGS_PREFIX => {
+                    let flags_byte = b.read_u8()?;
+                    flags =
+                        SharedLocksFlags::from_bits(flags_byte).ok_or(ErrorInner::BadFormatLock)?;
+                }
                 SHARED_LOCK_TXNS_INFO_PREFIX => {
                     let len = number::decode_var_u64(&mut b)? as usize;
                     segments.reserve(len + 1); // some schedulers may append a new lock, reserve for it.
@@ -700,7 +728,7 @@ impl SharedLocks {
             }
         }
 
-        Ok(Self::new_with_txn_infos(segments))
+        Ok(Self::new().with_flags(flags).with_txn_infos(segments))
     }
 
     pub fn len(&self) -> usize {
@@ -716,6 +744,16 @@ impl SharedLocks {
                 *either = Either::Right(lock);
             }
         }
+    }
+
+    #[inline]
+    pub fn is_shrink_only(&self) -> bool {
+        self.flags.contains(SharedLocksFlags::SHRINK_ONLY)
+    }
+
+    #[inline]
+    pub fn set_shrink_only(&mut self) {
+        self.flags.insert(SharedLocksFlags::SHRINK_ONLY);
     }
 
     #[inline]
@@ -758,41 +796,47 @@ impl SharedLocks {
         }
     }
 
-    fn put_lock(&mut self, ts: TimeStamp, lock: Lock) -> Option<Lock> {
-        let previous = self.txn_info_segments.insert(ts, Either::Right(lock));
-
-        match previous {
-            Some(either) => match either {
-                Either::Left(encoded) => {
-                    // Previously stored as encoded lock info; decode it back to a Lock.
-                    Some(Lock::parse(&encoded).expect("failed to parse shared lock txn info"))
-                }
-                Either::Right(lock) => Some(lock),
-            },
-            None => None,
+    pub fn insert_lock(&mut self, lock: Lock) -> Result<()> {
+        let lock_type = lock.lock_type;
+        assert!(matches!(lock_type, LockType::Lock | LockType::Pessimistic));
+        if self.is_shrink_only() {
+            return Err(ErrorInner::InvalidOperation(format!(
+                "cannot insert new lock #{} into shrink-only SharedLocks",
+                lock.ts.into_inner()
+            ))
+            .into());
+        } else if self.contains_start_ts(lock.ts) {
+            return Err(ErrorInner::InvalidOperation(format!(
+                "lock #{} already exists in SharedLocks",
+                lock.ts.into_inner()
+            ))
+            .into());
         }
+        self.txn_info_segments.insert(lock.ts, Either::Right(lock));
+        Ok(())
     }
 
-    #[inline]
-    pub fn put_shared_lock(&mut self, lock: Lock) {
+    pub fn update_lock(&mut self, lock: Lock) -> Result<()> {
         let lock_type = lock.lock_type;
-        match lock_type {
-            LockType::Lock | LockType::Pessimistic => {}
-            _ => unreachable!(),
+        assert!(matches!(lock_type, LockType::Lock | LockType::Pessimistic));
+        if !self.contains_start_ts(lock.ts) {
+            return Err(ErrorInner::InvalidOperation(format!(
+                "lock #{} does not exist in SharedLocks",
+                lock.ts.into_inner()
+            ))
+            .into());
         }
-        let ts = lock.ts;
-        let old = self.put_lock(ts, lock);
-        if lock_type == LockType::Lock {
-            debug_assert!(
-                old.is_some(),
-                "shared lock should be prewritten over pessimistic lock"
-            );
-        }
+        self.txn_info_segments.insert(lock.ts, Either::Right(lock));
+        Ok(())
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut b = Vec::with_capacity(self.pre_allocate_size());
         b.push(LockType::Shared.to_u8());
+        if !self.flags.is_empty() {
+            b.push(SHARED_LOCK_FLAGS_PREFIX);
+            b.push(self.flags.bits());
+        }
         b.push(SHARED_LOCK_TXNS_INFO_PREFIX);
         b.encode_var_u64(self.len() as u64).unwrap();
         for seg in self.txn_info_segments.values() {
@@ -806,6 +850,11 @@ impl SharedLocks {
 
     fn pre_allocate_size(&self) -> usize {
         1 // lock type
+            + if !self.flags.is_empty() {
+                2 // SHARED_LOCK_FLAGS_PREFIX + flags byte
+            } else {
+                0
+            }
             + 1 // SHARED_LOCK_TXNS_INFO_PREFIX
             + MAX_VAR_U64_LEN // the size of shared locks
             + self
@@ -1209,7 +1258,7 @@ mod tests {
                 .set_txn_source(1)
                 .with_generation(10),
             ),
-            Either::Right(SharedLocks::new_with_txn_infos({
+            Either::Right(SharedLocks::new().with_txn_infos({
                 let mut segments = HashMap::default();
                 let seg1_ts: TimeStamp = 11.into();
                 let seg1 = Lock::new(
@@ -1842,9 +1891,9 @@ mod tests {
             false,
         );
 
-        shared_locks.put_shared_lock(txn1_lock);
-        shared_locks.put_shared_lock(txn2_pessimistic_lock);
-        shared_locks.put_shared_lock(txn2_prewrite_lock);
+        shared_locks.insert_lock(txn1_lock).unwrap();
+        shared_locks.insert_lock(txn2_pessimistic_lock).unwrap();
+        shared_locks.update_lock(txn2_prewrite_lock).unwrap();
 
         assert_eq!(shared_locks.len(), 2);
         assert_eq!(shared_locks.get_lock(&txn1_ts).unwrap().ts, txn1_ts);
@@ -1865,5 +1914,172 @@ mod tests {
 
         let missing_ts: TimeStamp = 42.into();
         assert!(shared_locks.get_lock(&missing_ts).is_none());
+    }
+
+    #[test]
+    fn test_shared_locks_shrink_only_flag_basic() {
+        let mut shared_locks = SharedLocks::new();
+
+        assert!(!shared_locks.is_shrink_only());
+
+        let lock_ts: TimeStamp = 10.into();
+        let lock = Lock::new(
+            LockType::Pessimistic,
+            b"primary".to_vec(),
+            lock_ts,
+            100,
+            None,
+            TimeStamp::zero(),
+            0,
+            TimeStamp::zero(),
+            false,
+        );
+        shared_locks.insert_lock(lock).unwrap();
+
+        shared_locks.set_shrink_only();
+        assert!(shared_locks.is_shrink_only());
+
+        let bytes = shared_locks.to_bytes();
+
+        let parsed = parse_lock(&bytes).unwrap();
+        match parsed {
+            Either::Right(parsed_shared_locks) => {
+                assert!(parsed_shared_locks.is_shrink_only());
+                assert_eq!(parsed_shared_locks.len(), 1);
+            }
+            _ => panic!("expected SharedLocks"),
+        }
+    }
+
+    #[test]
+    fn test_insert_lock_to_shrink_only_fails() {
+        let mut shared_locks = SharedLocks::new();
+
+        let lock = Lock::new(
+            LockType::Pessimistic,
+            b"txn1".to_vec(),
+            5.into(),
+            100,
+            None,
+            TimeStamp::zero(),
+            0,
+            TimeStamp::zero(),
+            false,
+        );
+
+        // Add a lock before setting shrink_only
+        shared_locks.insert_lock(lock).unwrap();
+
+        // Set shrink_only and try to add another lock
+        shared_locks.set_shrink_only();
+        let new_lock = Lock::new(
+            LockType::Pessimistic,
+            b"txn2".to_vec(),
+            7.into(),
+            100,
+            None,
+            TimeStamp::zero(),
+            0,
+            TimeStamp::zero(),
+            false,
+        );
+        let result = shared_locks.insert_lock(new_lock);
+        assert!(result.is_err());
+        assert_eq!(
+            format!("{}", result.unwrap_err()),
+            "invalid operation: cannot insert new lock #7 into shrink-only SharedLocks"
+        );
+    }
+
+    #[test]
+    fn test_insert_lock_duplicate_fails() {
+        let mut shared_locks = SharedLocks::new();
+        let lock_ts: TimeStamp = 10.into();
+
+        let lock = Lock::new(
+            LockType::Pessimistic,
+            b"primary".to_vec(),
+            lock_ts,
+            100,
+            None,
+            TimeStamp::zero(),
+            0,
+            TimeStamp::zero(),
+            false,
+        );
+
+        // First insert should succeed
+        shared_locks.insert_lock(lock.clone()).unwrap();
+
+        // Second insert with same ts should fail
+        let result = shared_locks.insert_lock(lock);
+        assert!(result.is_err());
+        assert_eq!(
+            format!("{}", result.unwrap_err()),
+            "invalid operation: lock #10 already exists in SharedLocks"
+        );
+    }
+
+    #[test]
+    fn test_update_lock_success() {
+        let mut shared_locks = SharedLocks::new();
+        let lock_ts: TimeStamp = 10.into();
+
+        let pessimistic_lock = Lock::new(
+            LockType::Pessimistic,
+            b"primary".to_vec(),
+            lock_ts,
+            100,
+            None,
+            TimeStamp::zero(),
+            0,
+            TimeStamp::zero(),
+            false,
+        );
+
+        shared_locks.insert_lock(pessimistic_lock.clone()).unwrap();
+
+        let prewrite_lock = Lock::new(
+            LockType::Lock,
+            b"primary".to_vec(),
+            lock_ts,
+            100,
+            None,
+            TimeStamp::zero(),
+            0,
+            TimeStamp::zero(),
+            false,
+        );
+        shared_locks.update_lock(prewrite_lock).unwrap();
+
+        // Verify the lock type
+        let found = shared_locks.get_lock(&lock_ts).unwrap();
+        assert_eq!(found.lock_type, LockType::Lock);
+    }
+
+    #[test]
+    fn test_update_lock_nonexistent_fails() {
+        let mut shared_locks = SharedLocks::new();
+        let lock_ts: TimeStamp = 10.into();
+
+        let lock = Lock::new(
+            LockType::Pessimistic,
+            b"primary".to_vec(),
+            lock_ts,
+            100,
+            None,
+            TimeStamp::zero(),
+            0,
+            TimeStamp::zero(),
+            false,
+        );
+
+        // Try to update non-existent lock
+        let result = shared_locks.update_lock(lock);
+        assert!(result.is_err());
+        assert_eq!(
+            format!("{}", result.unwrap_err()),
+            "invalid operation: lock #10 does not exist in SharedLocks"
+        );
     }
 }
