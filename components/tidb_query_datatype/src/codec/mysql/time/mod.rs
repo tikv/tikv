@@ -58,7 +58,7 @@ const MONTH_NAMES_ABBR: &[&str] = &[
 ];
 
 fn is_leap_year(year: u32) -> bool {
-    year & 3 == 0 && (year % 100 != 0 || year % 400 == 0)
+    year & 3 == 0 && (!year.is_multiple_of(100) || year.is_multiple_of(400))
 }
 
 fn last_day_of_month(year: u32, month: u32) -> u32 {
@@ -1608,20 +1608,20 @@ impl Time {
         let sec_dur = chrono::Duration::seconds(secs);
         let duration = sec_dur
             .checked_add(&chrono::Duration::nanoseconds(nanos))
-            .ok_or_else(|| Error::datetime_function_overflow())?;
+            .ok_or_else(Error::datetime_function_overflow)?;
         let time_type = self.get_time_type();
         let fsp = self.fsp() as i8;
         let mut new_time = if time_type == TimeType::Timestamp {
             let datetime = self
                 .try_into_chrono_datetime(ctx)?
                 .checked_add_signed(duration)
-                .ok_or_else(|| Error::datetime_function_overflow())?;
+                .ok_or_else(Error::datetime_function_overflow)?;
             Time::try_from_chrono_datetime(ctx, datetime, TimeType::Timestamp, fsp)?
         } else {
             let naive = self
                 .try_into_chrono_naive_datetime()?
                 .checked_add_signed(duration)
-                .ok_or_else(|| Error::datetime_function_overflow())?;
+                .ok_or_else(Error::datetime_function_overflow)?;
             Time::try_from_chrono_datetime(ctx, naive, time_type, fsp)?
         };
 
@@ -1782,7 +1782,7 @@ impl Time {
             }
             'p' => {
                 let hour = self.hour();
-                if (hour / 12) % 2 == 0 {
+                if (hour / 12).is_multiple_of(2) {
                     output.push_str("AM")
                 } else {
                     output.push_str("PM")

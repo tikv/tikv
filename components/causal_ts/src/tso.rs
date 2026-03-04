@@ -2,8 +2,8 @@
 
 //! ## The algorithm to make the TSO cache tolerate failure of TSO service
 //!
-//! 1. The expected total size (in duration) of TSO cache is specified by
-//! config item `causal-ts.alloc-ahead-buffer`.
+//! 1. The expected total size (in duration) of TSO cache is specified by config
+//!    item `causal-ts.alloc-ahead-buffer`.
 //!
 //! 2. Count usage of TSO on every renew interval.
 //!
@@ -11,10 +11,10 @@
 //! causal-ts.renew-interval`.
 //!
 //! 4. Then `tso_usage x cache_multiplier` is the expected number of TSO should
-//! be cached.
+//!    be cached.
 //!
 //! 5. And `tso_usage x cache_multiplier - tso_remain` is the expected number of
-//! TSO to be requested from TSO service (if it's not a flush).
+//!    TSO to be requested from TSO service (if it's not a flush).
 //!
 //! Others:
 //! * `cache_multiplier` is also used as capacity of TSO batch list, as we
@@ -131,11 +131,11 @@ impl TsoBatch {
 /// `TsoBatchList` is a ordered list of `TsoBatch`. It aims to:
 ///
 /// 1. Cache more number of TSO to improve high availability. See issue #12794.
-/// `TsoBatch` can only cache at most 262144 TSO as logical clock is 18 bits.
+///    `TsoBatch` can only cache at most 262144 TSO as logical clock is 18 bits.
 ///
 /// 2. Fully utilize cached TSO when some regions require latest TSO (e.g. in
-/// the scenario of leader transfer). Other regions without the requirement can
-/// still use older TSO cache.
+///    the scenario of leader transfer). Other regions without the requirement
+///    can still use older TSO cache.
 #[derive(Default, Debug)]
 pub struct TsoBatchList {
     inner: RwLock<TsoBatchListInner>,
@@ -157,11 +157,11 @@ pub struct TsoBatchList {
 /// The reasons why `crossbeam_skiplist::SkipMap` is not chosen:
 ///
 /// 1. In `flush()` procedure, a reader of `SkipMap` can still acquire a batch
-/// after the it is removed, which would violate the causality requirement.
-/// The `RwLock<BTreeMap>` avoid this scenario by lock synchronization.
+///    after the it is removed, which would violate the causality requirement.
+///    The `RwLock<BTreeMap>` avoid this scenario by lock synchronization.
 ///
 /// 2. It is a scenario with much more reads than writes. The `RwLock` would not
-/// be less efficient than lock free implementation.
+///    be less efficient than lock free implementation.
 type TsoBatchListInner = BTreeMap<u64, TsoBatch>;
 
 impl TsoBatchList {
@@ -228,12 +228,12 @@ impl TsoBatchList {
     pub fn push(&self, batch_size: u32, last_ts: TimeStamp, need_flush: bool) -> Result<u64> {
         let new_batch = TsoBatch::new(batch_size, last_ts);
 
-        if let Some((_, last_batch)) = self.inner.read().iter().next_back() {
-            if new_batch.original_start() < last_batch.excluded_end() {
-                error!("timestamp fall back"; "batch_size" => batch_size, "last_ts" => ?last_ts,
+        if let Some((_, last_batch)) = self.inner.read().iter().next_back()
+            && new_batch.original_start() < last_batch.excluded_end()
+        {
+            error!("timestamp fall back"; "batch_size" => batch_size, "last_ts" => ?last_ts,
                     "last_batch" => ?last_batch, "new_batch" => ?new_batch);
-                return Err(box_err!("timestamp fall back"));
-            }
+            return Err(box_err!("timestamp fall back"));
         }
 
         let key = new_batch.original_start().into_inner();
@@ -255,11 +255,11 @@ impl TsoBatchList {
         // Note: do NOT try to make it async.
         // According to benchmark, `write().pop_first()` can be done in ~50ns, while
         // async implemented by `Worker` costs ~1us.
-        if self.inner.read().len() > self.capacity as usize {
-            if let Some((_, batch)) = self.inner.write().pop_first() {
-                self.tso_remain
-                    .fetch_sub(batch.remain() as i32, Ordering::Relaxed);
-            }
+        if self.inner.read().len() > self.capacity as usize
+            && let Some((_, batch)) = self.inner.write().pop_first()
+        {
+            self.tso_remain
+                .fetch_sub(batch.remain() as i32, Ordering::Relaxed);
         }
 
         Ok(key)
@@ -385,7 +385,7 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
         let res = response
             .await
             .map_err(|_| box_err!("renew response channel is dropped"))
-            .and_then(|r| r.map_err(|err| Error::BatchRenew(err)));
+            .and_then(|r| r.map_err(Error::BatchRenew));
 
         TS_PROVIDER_TSO_BATCH_RENEW_DURATION_STATIC
             .get(res.borrow().into())
@@ -423,11 +423,10 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
             Ok(ts) => {
                 tso_batch_list
                     .push(new_batch_size, ts, need_flush)
-                    .map_err(|e| {
+                    .inspect_err(|_e| {
                         if need_flush {
                             tso_batch_list.flush();
                         }
-                        e
                     })?;
                 debug!("BatchTsoProvider::renew_tso_batch";
                     "tso_batch_list.remain" => tso_batch_list.remain(), "ts" => ?ts);

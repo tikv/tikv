@@ -113,7 +113,7 @@ impl<'a> Iterator for BitAndIterator<'a> {
         if self.cnt == self.output_rows {
             return None;
         }
-        if self.cnt % BITS == 0 {
+        if self.cnt.is_multiple_of(BITS) {
             let mut result: u64 = 0xffffffffffffffff;
             let idx = self.cnt / BITS;
             for i in self.vecs {
@@ -171,8 +171,8 @@ mod tests {
         let mut x = BitVec::with_capacity(0);
         x.push(false);
         x.push(true);
-        assert_eq!(x.get(0), false);
-        assert_eq!(x.get(1), true);
+        assert!(!x.get(0));
+        assert!(x.get(1));
     }
 
     #[test]

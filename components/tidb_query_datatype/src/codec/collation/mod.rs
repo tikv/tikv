@@ -144,13 +144,13 @@ pub trait Encoding {
 
     #[inline]
     fn lower(s: &str, writer: BytesWriter) -> BytesGuard {
-        let res = s.chars().flat_map(|ch| encoding::unicode_to_lower(ch));
+        let res = s.chars().flat_map(encoding::unicode_to_lower);
         writer.write_from_char_iter(res)
     }
 
     #[inline]
     fn upper(s: &str, writer: BytesWriter) -> BytesGuard {
-        let res = s.chars().flat_map(|ch| encoding::unicode_to_upper(ch));
+        let res = s.chars().flat_map(encoding::unicode_to_upper);
         writer.write_from_char_iter(res)
     }
 }

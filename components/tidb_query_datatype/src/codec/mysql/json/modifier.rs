@@ -30,7 +30,7 @@ pub struct BinaryModifier<'a> {
 
 impl<'a> BinaryModifier<'a> {
     /// Creates a new `BinaryModifier` from a `JsonRef`
-    pub fn new(old: JsonRef<'a>) -> BinaryModifier<'_> {
+    pub fn new(old: JsonRef<'a>) -> BinaryModifier<'a> {
         Self {
             // The initial offset is 0 by `as_ref()` call
             old,

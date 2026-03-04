@@ -74,7 +74,7 @@ impl AsMySqlBool for Real {
     }
 }
 
-impl<'a, T: AsMySqlBool> AsMySqlBool for &'a T {
+impl<T: AsMySqlBool> AsMySqlBool for &T {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         (**self).as_mysql_bool(context)
@@ -95,7 +95,7 @@ impl<'a> AsMySqlBool for BytesRef<'a> {
     }
 }
 
-impl<'a, T> AsMySqlBool for Option<&'a T>
+impl<T> AsMySqlBool for Option<&T>
 where
     T: AsMySqlBool,
 {
@@ -299,9 +299,11 @@ macro_rules! impl_evaluable_type {
 }
 
 unsafe fn retain_lifetime_transmute<T, U>(from: &T) -> &U {
-    // with the help of elided lifetime, we can ensure &T and &U
-    // shares the same lifetime.
-    &*(from as *const T as *const U)
+    unsafe {
+        // with the help of elided lifetime, we can ensure &T and &U
+        // shares the same lifetime.
+        &*(from as *const T as *const U)
+    }
 }
 
 impl Evaluable for Int {
@@ -437,13 +439,13 @@ impl<'a, T: Evaluable + EvaluableRet> EvaluableRef<'a> for &'a T {
 
 impl<A: UnsafeRefInto<B>, B> UnsafeRefInto<Option<B>> for Option<A> {
     unsafe fn unsafe_into(self) -> Option<B> {
-        self.map(|x| x.unsafe_into())
+        unsafe { self.map(|x| x.unsafe_into()) }
     }
 }
 
-impl<'a, T: Evaluable + EvaluableRet> UnsafeRefInto<&'static T> for &'a T {
+impl<T: Evaluable + EvaluableRet> UnsafeRefInto<&'static T> for &T {
     unsafe fn unsafe_into(self) -> &'static T {
-        std::mem::transmute(self)
+        unsafe { std::mem::transmute(self) }
     }
 }
 
@@ -504,31 +506,31 @@ impl<'a> EvaluableRef<'a> for BytesRef<'a> {
 
 impl<'a> UnsafeRefInto<BytesRef<'static>> for BytesRef<'a> {
     unsafe fn unsafe_into(self) -> BytesRef<'static> {
-        std::mem::transmute(self)
+        unsafe { std::mem::transmute(self) }
     }
 }
 
 impl<'a> UnsafeRefInto<JsonRef<'static>> for JsonRef<'a> {
     unsafe fn unsafe_into(self) -> JsonRef<'static> {
-        std::mem::transmute(self)
+        unsafe { std::mem::transmute(self) }
     }
 }
 
 impl<'a> UnsafeRefInto<EnumRef<'static>> for EnumRef<'a> {
     unsafe fn unsafe_into(self) -> EnumRef<'static> {
-        std::mem::transmute(self)
+        unsafe { std::mem::transmute(self) }
     }
 }
 
 impl<'a> UnsafeRefInto<SetRef<'static>> for SetRef<'a> {
     unsafe fn unsafe_into(self) -> SetRef<'static> {
-        std::mem::transmute(self)
+        unsafe { std::mem::transmute(self) }
     }
 }
 
 impl<'a> UnsafeRefInto<VectorFloat32Ref<'static>> for VectorFloat32Ref<'a> {
     unsafe fn unsafe_into(self) -> VectorFloat32Ref<'static> {
-        std::mem::transmute(self)
+        unsafe { std::mem::transmute(self) }
     }
 }
 
@@ -711,7 +713,7 @@ impl<'a> EvaluableRef<'a> for SetRef<'a> {
         }
     }
     #[inline]
-    fn borrow_vector_value(v: &'a VectorValue) -> &ChunkedVecSet {
+    fn borrow_vector_value(v: &'a VectorValue) -> &'a ChunkedVecSet {
         match v {
             VectorValue::Set(x) => x,
             other => panic!(

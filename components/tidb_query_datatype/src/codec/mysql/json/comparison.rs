@@ -73,8 +73,7 @@ impl<'a> Ord for JsonRef<'a> {
 
 impl<'a> PartialEq for JsonRef<'a> {
     fn eq(&self, right: &JsonRef<'_>) -> bool {
-        self.partial_cmp(right)
-            .map_or(false, |r| r == Ordering::Equal)
+        self.partial_cmp(right) == Some(Ordering::Equal)
     }
 }
 impl<'a> PartialOrd for JsonRef<'a> {

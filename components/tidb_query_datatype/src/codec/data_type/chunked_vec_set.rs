@@ -142,9 +142,9 @@ impl From<Vec<Option<Set>>> for ChunkedVecSet {
     }
 }
 
-impl<'a> UnsafeRefInto<&'static ChunkedVecSet> for &'a ChunkedVecSet {
+impl UnsafeRefInto<&'static ChunkedVecSet> for &ChunkedVecSet {
     unsafe fn unsafe_into(self) -> &'static ChunkedVecSet {
-        std::mem::transmute(self)
+        unsafe { std::mem::transmute(self) }
     }
 }
 

@@ -195,7 +195,7 @@ mod tests {
         let time: Time = Time::parse_datetime(&mut ctx, "2012-12-31 11:30:45", -1, true).unwrap();
         let duration = Duration::parse(&mut EvalContext::default(), "10:11:12", 0).unwrap();
         let dec: Decimal = "1234.00".parse().unwrap();
-        let data = vec![
+        let data = [
             Datum::I64(32),
             Datum::F64(32.5),
             Datum::Time(time),
@@ -236,7 +236,7 @@ mod tests {
         let time: Time = Time::parse_datetime(&mut ctx, "2012-12-31 11:30:45", -1, true).unwrap();
         let duration = Duration::parse(&mut ctx, "10:11:12", 0).unwrap();
         let dec: Decimal = "1234.00".parse().unwrap();
-        let datum_data = vec![
+        let datum_data = [
             Datum::I64(32),
             Datum::F64(32.5),
             Datum::Time(time),

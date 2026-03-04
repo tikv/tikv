@@ -572,10 +572,10 @@ impl Duration {
 
     pub fn from_i64(ctx: &mut EvalContext, n: i64, fsp: i8) -> Result<Duration> {
         if n > i64::from(MAX_DURATION_INT_VALUE) || n < -i64::from(MAX_DURATION_INT_VALUE) {
-            if n >= 10000000000 {
-                if let Ok(t) = DateTime::parse_from_i64(ctx, n, TimeType::DateTime, fsp) {
-                    return t.convert(ctx);
-                }
+            if n >= 10000000000
+                && let Ok(t) = DateTime::parse_from_i64(ctx, n, TimeType::DateTime, fsp)
+            {
+                return t.convert(ctx);
             }
             return Err(Error::overflow("Duration", n));
         }

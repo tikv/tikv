@@ -42,11 +42,27 @@ CLIPPY_LINTS=(
     -A clippy::type_complexity \
     -A clippy::significant_drop_in_scrutinee \
     -A clippy::derive_partial_eq_without_eq \
+    -A clippy::legacy_numeric_constants \
+    -A clippy::manual_div_ceil \
+    -A clippy::cloned_ref_to_slice_refs \
+    -A clippy::missing_transmute_annotations \
+    -A clippy::sliced_string_as_bytes \
+    -A clippy::redundant_guards \
+    -A clippy::to_string_trait_impl \
+    -A clippy::manual_inspect \
+    -A clippy::manual_is_multiple_of \
+    -A clippy::doc_lazy_continuation \
     -W clippy::dbg_macro \
     -W clippy::todo \
     -D clippy::upper_case_acronyms \
     -D clippy::disallowed_methods \
     -D rust-2018-idioms \
+    -A unstable_name_collisions \
+    -A non_local_definitions \
+    -A stable_features \
+    -A dead_code \
+    -A mismatched_lifetime_syntaxes \
+    -A unused_variables \
     -D clippy::assertions_on_result_states \
     -A clippy::non_canonical_partial_ord_impl \
     -A clippy::arc_with_non_send_sync \

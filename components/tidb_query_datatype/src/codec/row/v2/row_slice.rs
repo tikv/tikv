@@ -321,9 +321,11 @@ impl<'a, T: PrimInt> LeBytes<'a, T> {
 
     #[inline]
     unsafe fn get_unchecked(&self, index: usize) -> T {
-        let ptr = self.slice.as_ptr() as *const T;
-        let ptr = ptr.add(index);
-        std::ptr::read_unaligned(ptr)
+        unsafe {
+            let ptr = self.slice.as_ptr() as *const T;
+            let ptr = ptr.add(index);
+            std::ptr::read_unaligned(ptr)
+        }
     }
 
     #[inline]

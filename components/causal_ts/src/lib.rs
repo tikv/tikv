@@ -1,7 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![feature(div_duration)]
-
 #[macro_use]
 extern crate tikv_util;
 

@@ -202,7 +202,7 @@ fn count_leading_zeroes(i: u8, word: u32) -> u8 {
 /// removed from fraction.
 fn count_trailing_zeroes(i: u8, word: u32) -> u8 {
     let (mut c, mut i) = (0, i as usize);
-    while word % TEN_POW[i] == 0 {
+    while word.is_multiple_of(TEN_POW[i]) {
         i += 1;
         c += 1;
     }
@@ -2289,7 +2289,7 @@ impl Ord for Decimal {
     }
 }
 
-impl<'a, 'b> Add<&'a Decimal> for &'b Decimal {
+impl<'a> Add<&'a Decimal> for &Decimal {
     type Output = Res<Decimal>;
 
     fn add(self, rhs: &'a Decimal) -> Res<Decimal> {
@@ -2304,7 +2304,7 @@ impl<'a, 'b> Add<&'a Decimal> for &'b Decimal {
     }
 }
 
-impl<'a, 'b> Sub<&'a Decimal> for &'b Decimal {
+impl<'a> Sub<&'a Decimal> for &Decimal {
     type Output = Res<Decimal>;
 
     fn sub(self, rhs: &'a Decimal) -> Res<Decimal> {
@@ -2319,7 +2319,7 @@ impl<'a, 'b> Sub<&'a Decimal> for &'b Decimal {
     }
 }
 
-impl<'a, 'b> Mul<&'a Decimal> for &'b Decimal {
+impl<'a> Mul<&'a Decimal> for &Decimal {
     type Output = Res<Decimal>;
 
     fn mul(self, rhs: &'a Decimal) -> Res<Decimal> {
@@ -2327,7 +2327,7 @@ impl<'a, 'b> Mul<&'a Decimal> for &'b Decimal {
     }
 }
 
-impl<'a, 'b> Div<&'a Decimal> for &'b Decimal {
+impl<'a> Div<&'a Decimal> for &Decimal {
     type Output = Option<Res<Decimal>>;
 
     fn div(self, rhs: &'a Decimal) -> Self::Output {
@@ -2344,7 +2344,7 @@ impl Rem for Decimal {
     }
 }
 
-impl<'a, 'b> Rem<&'a Decimal> for &'b Decimal {
+impl<'a> Rem<&'a Decimal> for &Decimal {
     type Output = Option<Res<Decimal>>;
     fn rem(self, rhs: &'a Decimal) -> Self::Output {
         let result_frac_cnt = cmp::max(self.result_frac_cnt, rhs.result_frac_cnt);
