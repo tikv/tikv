@@ -30,18 +30,18 @@ impl SubRecorder for CpuRecorder {
         let pid = thread::process_id();
         self.thread_stats.iter_mut().for_each(|(tid, thread_stat)| {
             let cur_tag = thread_stat.attached_tag.load_full();
-            if let Some(cur_tag) = cur_tag {
-                if let Ok(cur_stat) = thread::thread_stat(pid, *tid) {
-                    STAT_TASK_COUNT.inc();
-                    let last_stat = &thread_stat.stat;
-                    if *last_stat != cur_stat {
-                        let delta_ms =
-                            (cur_stat.total_cpu_time() - last_stat.total_cpu_time()) * 1_000.;
-                        let record = records.entry(cur_tag).or_default();
-                        record.cpu_time += delta_ms as u32;
-                    }
-                    thread_stat.stat = cur_stat;
+            if let Some(cur_tag) = cur_tag
+                && let Ok(cur_stat) = thread::thread_stat(pid, *tid)
+            {
+                STAT_TASK_COUNT.inc();
+                let last_stat = &thread_stat.stat;
+                if *last_stat != cur_stat {
+                    let delta_ms =
+                        (cur_stat.total_cpu_time() - last_stat.total_cpu_time()) * 1_000.;
+                    let record = records.entry(cur_tag).or_default();
+                    record.cpu_time += delta_ms as u32;
                 }
+                thread_stat.stat = cur_stat;
             }
         });
     }

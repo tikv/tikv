@@ -164,7 +164,7 @@ impl SlowScore {
     }
 
     pub fn should_force_report_slow_store(&self) -> bool {
-        self.value >= OrderedFloat(100.0) && (self.last_tick_id % self.round_ticks == 0)
+        self.value >= OrderedFloat(100.0) && self.last_tick_id.is_multiple_of(self.round_ticks)
     }
 
     pub fn last_tick_finished(&self) -> bool {
@@ -178,7 +178,8 @@ impl SlowScore {
         self.last_tick_id += 1;
         self.last_tick_finished = false;
 
-        let (updated_score, has_new_record) = if self.last_tick_id % self.round_ticks == 0 {
+        let (updated_score, has_new_record) = if self.last_tick_id.is_multiple_of(self.round_ticks)
+        {
             // `last_update_time` is refreshed every round. If no update happens in a whole
             // round, we set the status to unknown.
             let has_new_record = self.last_record_time >= self.last_update_time;

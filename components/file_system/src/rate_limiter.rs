@@ -263,8 +263,7 @@ macro_rules! request_imp {
                 // Bytes served by next epoch (and skipped epochs) during refill are subtracted
                 // from pending_bytes, round up the rest.
                 DEFAULT_REFILL_PERIOD
-                    * ((locked.pending_bytes[priority_idx] + cached_bytes_per_epoch - 1)
-                        / cached_bytes_per_epoch) as u32
+                    * locked.pending_bytes[priority_idx].div_ceil(cached_bytes_per_epoch) as u32
             } else {
                 // `(a-1)/b` is equivalent to `roundup(a.saturating_sub(b)/b)`.
                 locked.next_refill_time - now
@@ -390,10 +389,10 @@ impl PriorityBasedIoRateLimiter {
             used_budgets += ((served_by_first_epoch + served_by_skipped_epochs) as f32
                 / (skipped_epochs + 1.0)) as usize;
             // Only apply rate limit adjustments on low-priority IOs.
-            if *pri == IoPriority::Medium {
-                if let Some(adjustor) = &locked.adjustor {
-                    total_budgets = adjustor.adjust(total_budgets);
-                }
+            if *pri == IoPriority::Medium
+                && let Some(adjustor) = &locked.adjustor
+            {
+                total_budgets = adjustor.adjust(total_budgets);
             }
             remaining_budgets = if total_budgets > used_budgets {
                 total_budgets - used_budgets
