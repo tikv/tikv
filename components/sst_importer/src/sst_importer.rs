@@ -411,7 +411,7 @@ impl<E: KvEngine> SstImporter<E> {
     ) -> Result<Option<Range>> {
         debug!("download start";
             "meta" => ?meta,
-            "url" => ?backend,
+            "storage_backend" => "[REDACTED]",
             "name" => name,
             "rewrite_rule" => ?rewrite_rule,
             "speed_limit" => speed_limiter.speed_limit(),
@@ -456,7 +456,7 @@ impl<E: KvEngine> SstImporter<E> {
     ) -> Result<Option<Range>> {
         debug!("download start";
             "metas" => ?basic_meta,
-            "url" => ?backend,
+            "storage_backend" => "[REDACTED]",
             "rewrite_rule" => ?rewrite_rule,
             "speed_limit" => speed_limiter.speed_limit(),
         );
