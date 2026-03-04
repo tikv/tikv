@@ -126,7 +126,7 @@ impl<'a> PartialOrd for VectorFloat32Ref<'a> {
 
 impl<'a> VectorFloat32Ref<'a> {
     pub fn new(value: &[u8]) -> Result<VectorFloat32Ref<'_>> {
-        if value.len() % F32_SIZE != 0 {
+        if !value.len().is_multiple_of(F32_SIZE) {
             return Err(box_err!("Vector length error. Please check the input."));
         }
         let check_vec = VectorFloat32Ref { value };
@@ -194,19 +194,21 @@ impl<'a> VectorFloat32Ref<'a> {
     // it will check the bounding in debug model and remove the check in
     // release.
     unsafe fn index_unchecked(&self, idx: usize) -> f32 {
-        #[cfg(debug_assertions)]
-        {
-            if idx > self.len() {
-                panic!(
-                    "Index out of bounds: index = {}, length = {}",
-                    idx,
-                    self.len()
-                );
+        unsafe {
+            #[cfg(debug_assertions)]
+            {
+                if idx > self.len() {
+                    panic!(
+                        "Index out of bounds: index = {}, length = {}",
+                        idx,
+                        self.len()
+                    );
+                }
             }
+            let byte_index: usize = idx * 4;
+            let float_ptr = self.value.as_ptr().add(byte_index) as *const f32;
+            float_ptr.read_unaligned()
         }
-        let byte_index: usize = idx * 4;
-        let float_ptr = self.value.as_ptr().add(byte_index) as *const f32;
-        float_ptr.read_unaligned()
     }
 
     pub fn l2_squared_distance(&self, b: VectorFloat32Ref<'a>) -> Result<f64> {

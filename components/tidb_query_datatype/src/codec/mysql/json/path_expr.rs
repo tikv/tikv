@@ -79,7 +79,7 @@ fn array_index_right(input: &str) -> IResult<&str, ArrayIndex> {
 fn array_index(input: &str) -> IResult<&str, ArraySelection> {
     map(
         alt((array_index_left, array_index_right, array_index_last)),
-        |index| ArraySelection::Index(index),
+        ArraySelection::Index,
     )(input)
 }
 
@@ -128,7 +128,7 @@ fn path_leg_array_selection(input: &str) -> IResult<&str, PathLeg> {
     let (input, _) = space0(input)?;
     let (input, leg) = map(
         alt((array_asterisk, array_range, array_index)),
-        |array_selection| PathLeg::ArraySelection(array_selection),
+        PathLeg::ArraySelection,
     )(input)
     .map_err(lift_error_to_failure)?;
     let (input, _) = space0(input)?;
@@ -187,7 +187,7 @@ fn path_leg_key(input: &str) -> IResult<&str, PathLeg> {
 
     map(
         alt((key_selection_key, key_selection_asterisk)),
-        |key_selection| PathLeg::Key(key_selection),
+        PathLeg::Key,
     )(input)
     .map_err(lift_error_to_failure)
 }

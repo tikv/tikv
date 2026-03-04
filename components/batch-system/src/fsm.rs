@@ -7,7 +7,6 @@ use std::{
         Arc,
         atomic::{AtomicPtr, AtomicUsize, Ordering},
     },
-    usize,
 };
 
 use resource_control::ResourceMetered;

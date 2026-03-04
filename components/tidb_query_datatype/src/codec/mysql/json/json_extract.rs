@@ -97,13 +97,13 @@ pub fn extract_json<'a>(j: JsonRef<'a>, path_legs: &[PathLeg]) -> Result<Vec<Jso
                         }
                     }
                     ArraySelection::Index(index) => {
-                        if let Some(index) = j.array_get_index(*index) {
-                            if index < elem_count {
-                                append_if_ref_unique(
-                                    &mut ret,
-                                    &extract_json(j.array_get_elem(index)?, sub_path_legs)?,
-                                )
-                            }
+                        if let Some(index) = j.array_get_index(*index)
+                            && index < elem_count
+                        {
+                            append_if_ref_unique(
+                                &mut ret,
+                                &extract_json(j.array_get_elem(index)?, sub_path_legs)?,
+                            )
                         }
                     }
                     ArraySelection::Range(start, end) => {
