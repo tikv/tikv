@@ -153,7 +153,7 @@ impl PoolInner {
     fn scale_pool_size(&self, thread_count: usize) {
         self.pool.scale_workers(thread_count);
         let mut max_tasks = self.max_tasks.load(Ordering::Acquire);
-        if max_tasks != std::usize::MAX {
+        if max_tasks != usize::MAX {
             max_tasks = max_tasks
                 .saturating_div(self.pool_size.load(Ordering::Acquire))
                 .saturating_mul(thread_count);
@@ -187,7 +187,7 @@ impl PoolInner {
         }));
 
         let max_tasks = self.max_tasks.load(Ordering::Acquire);
-        if max_tasks == std::usize::MAX {
+        if max_tasks == usize::MAX {
             return Ok(());
         }
 

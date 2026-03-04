@@ -31,7 +31,7 @@ const SLOG_CHANNEL_SIZE: usize = 10240;
 const SLOG_CHANNEL_OVERFLOW_STRATEGY: OverflowStrategy = OverflowStrategy::Drop;
 const TIMESTAMP_FORMAT: &str = "%Y/%m/%d %H:%M:%S%.3f %:z";
 
-static LOG_LEVEL: AtomicUsize = AtomicUsize::new(usize::max_value());
+static LOG_LEVEL: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 pub fn init_log<D>(
     drain: D,
@@ -450,11 +450,11 @@ where
             let mut s = SlowCostSerializer { cost: None };
             let kv = record.kv();
             let _ = kv.serialize(record, &mut s);
-            if let Some(cost) = s.cost {
-                if cost <= self.threshold {
-                    // Filter slow logs which are actually not that slow
-                    return Ok(());
-                }
+            if let Some(cost) = s.cost
+                && cost <= self.threshold
+            {
+                // Filter slow logs which are actually not that slow
+                return Ok(());
             }
         }
         self.inner.log(record, values)

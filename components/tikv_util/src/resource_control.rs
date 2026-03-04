@@ -56,6 +56,7 @@ impl<'a> TaskMetadata<'a> {
         }
     }
 
+    #[allow(clippy::wrong_self_convention)]
     pub fn to_vec(self) -> Vec<u8> {
         self.metadata.into_owned()
     }

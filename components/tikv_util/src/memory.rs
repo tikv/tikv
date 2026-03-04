@@ -33,10 +33,12 @@ const MAX_MEMORY_ALLOC_SIZE: usize = 1 << 48;
 /// The two types should be with same memory layout.
 #[inline]
 pub unsafe fn vec_transmute<F, T>(from: Vec<F>) -> Vec<T> {
-    debug_assert!(mem::size_of::<F>() == mem::size_of::<T>());
-    debug_assert!(mem::align_of::<F>() == mem::align_of::<T>());
-    let (ptr, len, cap) = from.into_raw_parts();
-    Vec::from_raw_parts(ptr as _, len, cap)
+    unsafe {
+        debug_assert!(mem::size_of::<F>() == mem::size_of::<T>());
+        debug_assert!(mem::align_of::<F>() == mem::align_of::<T>());
+        let (ptr, len, cap) = from.into_raw_parts();
+        Vec::from_raw_parts(ptr as _, len, cap)
+    }
 }
 
 /// Query the number of bytes of an object.
@@ -185,13 +187,12 @@ impl HeapSize for kvrpcpb::Context {
         self.resolved_locks.capacity() * mem::size_of::<u64>()
             + self.committed_locks.capacity() * mem::size_of::<u64>()
             + self.resource_group_tag.capacity()
-            + self.request_source.as_bytes().len()
+            + self.request_source.len()
             + self
                 .get_resource_control_context()
                 .resource_group_name
-                .as_bytes()
                 .len()
-            + self.get_source_stmt().session_alias.as_bytes().len()
+            + self.get_source_stmt().session_alias.len()
     }
 }
 

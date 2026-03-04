@@ -164,6 +164,7 @@ impl<'a> Value<'a> {
         Value(key)
     }
 
+    #[allow(clippy::self_named_constructors)]
     pub fn value(v: &'a [u8]) -> Self {
         Value(v)
     }

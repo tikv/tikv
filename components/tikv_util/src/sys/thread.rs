@@ -192,6 +192,7 @@ mod imp {
 
 #[cfg(target_os = "macos")]
 #[allow(bad_style)]
+#[allow(deprecated)]
 mod imp {
     use std::{io, iter::FromIterator, mem::size_of, ptr::null_mut, slice};
 

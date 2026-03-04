@@ -150,15 +150,15 @@ impl fmt::Display for ReadableSize {
         let size = self.0;
         if size == 0 {
             write!(f, "{}KiB", size)
-        } else if size % PIB == 0 {
+        } else if size.is_multiple_of(PIB) {
             write!(f, "{}PiB", size / PIB)
-        } else if size % TIB == 0 {
+        } else if size.is_multiple_of(TIB) {
             write!(f, "{}TiB", size / TIB)
-        } else if size % GIB == 0 {
+        } else if size.is_multiple_of(GIB) {
             write!(f, "{}GiB", size / GIB)
-        } else if size % MIB == 0 {
+        } else if size.is_multiple_of(MIB) {
             write!(f, "{}MiB", size / MIB)
-        } else if size % KIB == 0 {
+        } else if size.is_multiple_of(KIB) {
             write!(f, "{}KiB", size / KIB)
         } else {
             write!(f, "{}B", size)
@@ -211,7 +211,7 @@ impl FromStr for ReadableSize {
                 if size.chars().all(|c| char::is_ascii_digit(&c)) {
                     return size
                         .parse::<u64>()
-                        .map(|n| ReadableSize(n))
+                        .map(ReadableSize)
                         .map_err(|_| format!("invalid size string: {:?}", s));
                 }
                 UNIT
@@ -1497,7 +1497,7 @@ impl TomlWriter {
     fn write_current_table(&mut self, change: &mut HashMap<String, String>) {
         let keys: Vec<_> = change
             .keys()
-            .filter_map(|k| k.split('.').last())
+            .filter_map(|k| k.split('.').next_back())
             .map(str::to_owned)
             .collect();
         for k in keys {
@@ -1814,7 +1814,7 @@ impl RaftDataStateMachine {
         fs::read_dir(path).unwrap().any(|entry| {
             if let Ok(e) = entry {
                 let p = e.path();
-                p.is_file() && p.extension().map_or(false, |ext| ext == "raftlog")
+                p.is_file() && p.extension().is_some_and(|ext| ext == "raftlog")
             } else {
                 false
             }
@@ -2400,7 +2400,7 @@ mod tests {
             assert!(incoming.is_some());
             let incoming = incoming.unwrap();
             assert_eq!(incoming.v1, 1000);
-            assert_eq!(incoming.v2, true);
+            assert!(incoming.v2);
         }
 
         assert!(trackers.iter_mut().all(|tr| tr.any_new().is_none()));
