@@ -1041,9 +1041,8 @@ impl Decimal {
         if self.negative {
             buf.push(b'-');
         }
-        for _ in 0..int_len - cmp::max(int_cnt, 1) {
-            buf.push(b'0');
-        }
+        let zero_pad = (int_len - cmp::max(int_cnt, 1)) as usize;
+        buf.resize(buf.len() + zero_pad, b'0');
         if int_cnt > 0 {
             let base_idx = buf.len();
             let mut idx = base_idx + int_cnt as usize;
@@ -1073,9 +1072,7 @@ impl Decimal {
                 }
                 widx += 1;
             }
-            while buf.capacity() != buf.len() {
-                buf.push(b'0');
-            }
+            buf.resize(buf.capacity(), b'0');
         }
         // Safety: this only appends ASCII digits and punctuation.
         unsafe { String::from_utf8_unchecked(buf) }
