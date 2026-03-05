@@ -1547,7 +1547,7 @@ impl Time {
         if self.day() > self.last_day_of_month() || self.month() == 0 || self.day() == 0 {
             let date = if self.month() == 0 {
                 if self.year() < 1 {
-                    return Err(Error::incorrect_datetime_value(&self));
+                    return Err(Error::incorrect_datetime_value(self));
                 }
                 NaiveDate::from_ymd(self.year() as i32 - 1, 12, 1)
             } else {
