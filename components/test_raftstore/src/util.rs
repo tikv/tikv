@@ -459,7 +459,8 @@ pub fn make_cb(
     (cb, rx)
 }
 
-pub fn make_cb_ext(
+#[allow(clippy::extra_unused_type_parameters)]
+pub fn make_cb_ext<EK: KvEngine>(
     cmd: &RaftCmdRequest,
     proposed: Option<ExtCallback>,
     committed: Option<ExtCallback>,
