@@ -1955,9 +1955,6 @@ impl std::fmt::Debug for DataFile {
     }
 }
 
-#[derive(Clone, Ord, PartialOrd, PartialEq, Eq, Debug)]
-struct KeyRange(Vec<u8>);
-
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 struct TaskRange {
