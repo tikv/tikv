@@ -6729,6 +6729,7 @@ mod tests {
                 }
             }
         }
+        #[allow(unused_assignments)]
         fn must_call() -> ExtCallback {
             let mut d = DropPanic(true);
             Box::new(move || {
