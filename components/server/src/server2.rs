@@ -1308,7 +1308,7 @@ where
                     snap_size + kv_size + placeholder_size
                 };
                 // Check the disk usage and update the disk usage status.
-                let (cur_disk_status, cur_kv_disk_status, raft_disk_status, capacity, available) = disk_usage_checker.inspect(used_size, raft_size);
+                let (cur_disk_status, cur_kv_disk_status, raft_disk_status, capacity, available, actual_disk_used) = disk_usage_checker.inspect(used_size, raft_size);
                 let prev_disk_status = disk::get_disk_status(0); //0 no need care about failpoint.
                 if prev_disk_status != cur_disk_status {
                     warn!(
@@ -1331,8 +1331,11 @@ where
                 }
                 // Update disk capacity, used size and available size.
                 disk::set_disk_capacity(capacity);
+                // `DISK_USED_SIZE` is TiKV-estimated engine usage (kv/raft/snap/placeholder).
                 disk::set_disk_used_size(used_size);
                 disk::set_disk_available_size(available);
+                // `DISK_ACTUAL_USED_SIZE` is filesystem used bytes: total - free.
+                disk::set_disk_actual_used_size(actual_disk_used);
 
                 // Update metrics.
                 STORE_SIZE_EVENT_INT_VEC.raft_size.set(raft_size as i64);
@@ -1341,7 +1344,12 @@ where
 
                 STORE_SIZE_EVENT_INT_VEC.capacity.set(capacity as i64);
                 STORE_SIZE_EVENT_INT_VEC.available.set(available as i64);
-                STORE_SIZE_EVENT_INT_VEC.used.set(used_size as i64);
+                // `used` is filesystem used bytes derived from statvfs.
+                // `engine_used` is TiKV-estimated engine usage (historically reported as `used`).
+                // On filesystems reserving blocks for privileged users, `free > available`,
+                // so `used + available < capacity` may hold.
+                STORE_SIZE_EVENT_INT_VEC.used.set(actual_disk_used as i64);
+                STORE_SIZE_EVENT_INT_VEC.engine_used.set(used_size as i64);
             })
     }
 

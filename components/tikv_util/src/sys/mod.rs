@@ -420,7 +420,7 @@ mqueue /dev/mqueue mqueue rw,relatime 0 0
 
     #[test]
     fn test_get_disk_space_stats() {
-        let (capacity, available) = disk::get_disk_space_stats("./").unwrap();
+        let (capacity, available, _) = disk::get_disk_space_stats("./").unwrap();
         assert!(capacity > 0);
         assert!(available > 0);
         assert!(capacity >= available);

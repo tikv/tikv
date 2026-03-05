@@ -112,6 +112,14 @@
               "legendFormat": "{{instance}}",
               "refId": "A",
               "step": 10
+            },
+            {
+              "expr": "sum(tikv_store_size_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"engine_used\"}) by (instance)",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "{{instance}}-engine",
+              "refId": "B",
+              "step": 10
             }
           ],
           "thresholds": [],
@@ -2360,6 +2368,14 @@
               "intervalFactor": 2,
               "legendFormat": "{{instance}}",
               "refId": "A",
+              "step": 10
+            },
+            {
+              "expr": "sum(tikv_store_size_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"engine_used\"}) by (instance)",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "{{instance}}-engine",
+              "refId": "B",
               "step": 10
             }
           ],
