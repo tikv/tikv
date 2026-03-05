@@ -415,7 +415,7 @@ pub struct RouterInner {
     temp_file_memory_quota: AtomicU64,
     /// The max duration the local data can be pending.
     max_flush_interval: SyncRwLock<Duration>,
-    gcs_v2_enable: AtomicBool,
+    gcs_v2_enable: bool,
 
     /// Backup encryption manager
     backup_encryption_manager: BackupEncryptionManager,
@@ -448,7 +448,7 @@ impl RouterInner {
             temp_file_size_limit: AtomicU64::new(config.temp_file_size_limit),
             temp_file_memory_quota: AtomicU64::new(config.temp_file_memory_quota),
             max_flush_interval: SyncRwLock::new(config.max_flush_interval),
-            gcs_v2_enable: AtomicBool::new(config.gcs_v2_enable),
+            gcs_v2_enable: config.gcs_v2_enable,
             backup_encryption_manager,
             s3_multi_part_size: AtomicUsize::new(config.s3_multi_part_size),
         }
@@ -523,7 +523,7 @@ impl RouterInner {
         let task_name = task.info.get_name().to_owned();
         // register task info
         let cfg = self.tempfile_config_for_task(&task);
-        let gcs_v2_enable = self.gcs_v2_enable.load(Ordering::SeqCst);
+        let gcs_v2_enable = self.gcs_v2_enable;
         let backup_encryption_manager =
             self.build_backup_encryption_manager_for_task(&task).await?;
         let backend_config = BackendConfig {

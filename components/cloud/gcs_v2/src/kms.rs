@@ -1,8 +1,9 @@
-use async_trait::async_trait;
+// Copyright 2026 TiKV Project Authors. Licensed under Apache-2.0.
+
 use cloud::{
     error::{Error as CloudError, KmsError, Result},
     kms::{Config, CryptographyType, DataKeyPair, EncryptedKey, KmsProvider, PlainKey},
-    metrics,
+    metrics, STORAGE_VENDOR_NAME_GCP_V2,
 };
 use google_cloud_gax::{
     client_builder::Error as GaxBuildError,
@@ -14,13 +15,15 @@ use tikv_util::stream::RetryError;
 use tikv_util::time::Instant;
 use tokio::sync::OnceCell;
 
+use crate::credentials::{CredentialsMode, build_credentials, validate_credentials_json};
+
 const DEFAULT_DATAKEY_SIZE: usize = 32;
 
 pub struct GcpKms {
     config: Config,
     location: String,
     endpoint: Option<String>,
-    credentials_json: Option<String>,
+    credentials_mode: CredentialsMode,
     client: OnceCell<KeyManagementService>,
 }
 
@@ -34,59 +37,11 @@ impl std::fmt::Debug for GcpKms {
 }
 
 impl GcpKms {
-    fn build_auth_credentials(
-        creds_json: &str,
-    ) -> Result<google_cloud_auth::credentials::Credentials> {
-        if creds_json == "anonymous" {
-            return Ok(google_cloud_auth::credentials::anonymous::Builder::new().build());
-        }
-
-        let creds_value: serde_json::Value = serde_json::from_str(creds_json).map_err(|e| {
-            CloudError::KmsError(KmsError::Other(cloud::error::OtherError::from_box(box_err!(
-                "parse credential json: {}",
-                e
-            ))))
-        })?;
-
-        let creds_type = creds_value
-            .get("type")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                CloudError::KmsError(KmsError::Other(cloud::error::OtherError::from_box(
-                    box_err!("missing `type` in credentials"),
-                )))
-            })?;
-
-        let creds = match creds_type {
-            "service_account" => google_cloud_auth::credentials::service_account::Builder::new(
-                creds_value,
-            )
-            .build()
-            .map_err(|e| {
-                CloudError::KmsError(KmsError::Other(cloud::error::OtherError::from_box(
-                    box_err!("build service account credentials: {}", e),
-                )))
-            })?,
-            "external_account" => google_cloud_auth::credentials::external_account::Builder::new(
-                creds_value,
-            )
-            .build()
-            .map_err(|e| {
-                CloudError::KmsError(KmsError::Other(cloud::error::OtherError::from_box(
-                    box_err!("build external account credentials: {}", e),
-                )))
-            })?,
-            _ => {
-                return Err(CloudError::KmsError(KmsError::Other(
-                    cloud::error::OtherError::from_box(box_err!(
-                        "unsupported credentials type `{}`, supported: service_account, external_account",
-                        creds_type
-                    )),
-                )));
-            }
-        };
-
-        Ok(creds)
+    fn map_credential_error(e: std::io::Error) -> CloudError {
+        CloudError::KmsError(KmsError::Other(cloud::error::OtherError::from_box(box_err!(
+            "build credentials: {}",
+            e
+        ))))
     }
 
     pub fn new(mut config: Config) -> Result<Self> {
@@ -109,7 +64,7 @@ impl GcpKms {
             Some(config.location.endpoint.clone())
         };
 
-        let credentials_json =
+        let credentials_mode =
             match config.gcp.as_ref().and_then(|c| c.credential_file_path.as_deref()) {
             Some(path) => {
                 let json_data = std::fs::read(path).map_err(|e| {
@@ -117,28 +72,23 @@ impl GcpKms {
                         box_err!("read credential file: {}", e),
                     )))
                 })?;
-                serde_json::from_slice::<serde_json::Value>(&json_data).map_err(|e| {
-                    CloudError::KmsError(KmsError::Other(cloud::error::OtherError::from_box(
-                        box_err!("parse credential file as json: {}", e),
-                    )))
-                })?;
-                Some(
-                    String::from_utf8(json_data).map_err(|e| {
+                let json_string = String::from_utf8(json_data).map_err(|e| {
                         CloudError::KmsError(KmsError::Other(cloud::error::OtherError::from_box(
                             box_err!("credential file is not valid utf-8: {}", e),
                         )))
-                    })?,
-                )
+                    })?;
+                validate_credentials_json(&json_string).map_err(Self::map_credential_error)?;
+                CredentialsMode::Json(json_string)
             }
-            None if endpoint.is_some() => Some("anonymous".to_string()),
-            None => None,
+            None if endpoint.is_some() => CredentialsMode::Anonymous,
+            None => CredentialsMode::Default,
         };
 
         Ok(Self {
             config,
             location,
             endpoint,
-            credentials_json,
+            credentials_mode,
             client: OnceCell::new(),
         })
     }
@@ -151,8 +101,9 @@ impl GcpKms {
                 if let Some(ep) = self.endpoint.as_ref() {
                     builder = builder.with_endpoint(ep);
                 }
-                if let Some(creds_json) = self.credentials_json.as_ref() {
-                    let creds = Self::build_auth_credentials(creds_json)?;
+                if let Some(creds) =
+                    build_credentials(&self.credentials_mode).map_err(Self::map_credential_error)?
+                {
                     builder = builder.with_credentials(creds);
                 }
                 builder
@@ -182,10 +133,10 @@ fn map_kms_call_error(e: GaxError) -> CloudError {
     CloudError::KmsError(KmsError::Other(GaxKmsError(e).into()))
 }
 
-#[async_trait]
+#[async_trait::async_trait]
 impl KmsProvider for GcpKms {
     fn name(&self) -> &str {
-        "gcp"
+        STORAGE_VENDOR_NAME_GCP_V2
     }
 
     async fn decrypt_data_key(&self, data_key: &EncryptedKey) -> Result<Vec<u8>> {
@@ -614,10 +565,13 @@ mod tests {
         let creds = serde_json::json!({
             "type": "external_account",
         });
-        let err = GcpKms::build_auth_credentials(&creds.to_string()).unwrap_err();
-        let msg = format!("{err:?}");
+        let err = crate::credentials::build_credentials(&crate::credentials::CredentialsMode::Json(
+            creds.to_string(),
+        ))
+        .unwrap_err();
+        let msg = err.to_string();
         assert!(
-            msg.contains("build external account credentials"),
+            !msg.contains("unsupported credentials_blob type"),
             "unexpected error message: {msg}"
         );
     }
