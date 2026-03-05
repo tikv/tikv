@@ -547,7 +547,7 @@ mod tests {
         wait_on_new_thread(tx, spawn_long_time_future(read_pool.clone(), 7, 5).unwrap());
 
         // full
-        assert!(spawn_long_time_future(read_pool, 8, 100).is_err());
+        assert!(spawn_long_time_future(read_pool.clone(), 8, 100).is_err());
 
         rx.recv().unwrap().unwrap();
         rx.recv().unwrap().unwrap();
