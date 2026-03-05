@@ -209,8 +209,9 @@ mod tests {
     use super::*;
     use crate::types::test_util::RpnFnScalarEvaluator;
 
-    fn test_unary_func_ok_none<'a, I: EvaluableRef<'a>, O: EvaluableRet>(sig: ScalarFuncSig)
+    fn test_unary_func_ok_none<'a, I: EvaluableRef<'a>, O>(sig: ScalarFuncSig)
     where
+        O: EvaluableRet,
         O: PartialEq,
         Option<I>: Into<ScalarValue>,
         Option<O>: From<ScalarValue>,

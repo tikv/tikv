@@ -45,14 +45,13 @@ pub fn like<C: Collator, CS: Charset>(
                         break;
                     }
                 }
-                if let Some((_, toff)) = CS::decode_one(&target[tx..]) {
-                    if let Ok(std::cmp::Ordering::Equal) =
+                if let Some((_, toff)) = CS::decode_one(&target[tx..])
+                    && let Ok(std::cmp::Ordering::Equal) =
                         C::sort_compare(&target[tx..tx + toff], &pattern[px..px + poff], true)
-                    {
-                        tx += toff;
-                        px += poff;
-                        continue;
-                    }
+                {
+                    tx += toff;
+                    px += poff;
+                    continue;
                 }
             }
         }

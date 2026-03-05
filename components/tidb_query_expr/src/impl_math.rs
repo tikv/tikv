@@ -1007,8 +1007,9 @@ mod tests {
         }
     }
 
-    fn test_unary_func_ok_none<I: Evaluable, O: EvaluableRet>(sig: ScalarFuncSig)
+    fn test_unary_func_ok_none<I: Evaluable, O>(sig: ScalarFuncSig)
     where
+        O: EvaluableRet,
         O: PartialEq,
         Option<I>: Into<ScalarValue>,
         Option<O>: From<ScalarValue>,

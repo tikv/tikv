@@ -1822,7 +1822,7 @@ mod tests {
         }
     }
 
-    fn make_extra(ret_field_type: &FieldType) -> RpnFnCallExtra {
+    fn make_extra(ret_field_type: &FieldType) -> RpnFnCallExtra<'_> {
         RpnFnCallExtra { ret_field_type }
     }
 
@@ -2159,7 +2159,7 @@ mod tests {
             let rft = FieldTypeConfig::default().into();
             let extra = make_extra(&rft);
             let r = cast_enum_as_time(&mut ctx, &extra, Some(input));
-            assert_eq!(r.unwrap().is_none(), true)
+            assert!(r.unwrap().is_none())
         }
     }
 

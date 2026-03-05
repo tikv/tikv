@@ -12,7 +12,6 @@ use crate::{
 };
 
 /// A collecting subcompaction.
-
 /// Collecting a stream of [`LogFile`], and generate a stream of compactions.
 #[pin_project::pin_project]
 pub struct CollectSubcompaction<S: Stream<Item = Result<LogFile>>> {
@@ -293,7 +292,7 @@ mod test {
         };
         let t = with_ts;
 
-        let items = vec![
+        let items = [
             // should be filtered out.
             t(log_file("1", 999, r(1)), 40, 49),
             t(log_file("11", 456, r(1)), 201, 288),
