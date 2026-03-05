@@ -1015,7 +1015,6 @@ impl Decimal {
     }
 
     /// Prepare a buf for string output.
-    #[allow(dead_code)]
     fn prepare_buf(&self) -> (Vec<u8>, usize, u8, u8, u8) {
         let frac_cnt = self.frac_cnt;
         let (mut word_start_idx, mut int_cnt) = self.remove_leading_zeroes(self.int_cnt);
@@ -1034,6 +1033,52 @@ impl Decimal {
         }
         let buf = Vec::with_capacity(len as usize);
         (buf, word_start_idx, int_len, int_cnt, frac_cnt)
+    }
+
+    /// Converts decimal to a printable string representation without rounding.
+    fn to_string_impl(&self) -> String {
+        let (mut buf, word_start_idx, int_len, int_cnt, frac_cnt) = self.prepare_buf();
+        if self.negative {
+            buf.push(b'-');
+        }
+        for _ in 0..int_len - cmp::max(int_cnt, 1) {
+            buf.push(b'0');
+        }
+        if int_cnt > 0 {
+            let base_idx = buf.len();
+            let mut idx = base_idx + int_cnt as usize;
+            let mut widx = word_start_idx + word_cnt!(int_cnt) as usize;
+            buf.resize(idx, 0);
+            while idx > base_idx {
+                widx -= 1;
+                let mut x = self.word_buf[widx];
+                for _ in 0..cmp::min((idx - base_idx) as u8, DIGITS_PER_WORD) {
+                    idx -= 1;
+                    buf[idx] = b'0' + (x % 10) as u8;
+                    x /= 10;
+                }
+            }
+        } else {
+            buf.push(b'0');
+        };
+        if frac_cnt > 0 {
+            buf.push(b'.');
+            let mut widx = word_start_idx + word_cnt!(int_cnt) as usize;
+            let exp_idx = buf.len() + frac_cnt as usize;
+            while buf.len() < exp_idx {
+                let mut x = self.word_buf[widx];
+                for _ in 0..cmp::min((exp_idx - buf.len()) as u8, DIGITS_PER_WORD) {
+                    buf.push((x / DIG_MASK) as u8 + b'0');
+                    x = (x % DIG_MASK) * 10;
+                }
+                widx += 1;
+            }
+            while buf.capacity() != buf.len() {
+                buf.push(b'0');
+            }
+        }
+        // Safety: this only appends ASCII digits and punctuation.
+        unsafe { String::from_utf8_unchecked(buf) }
     }
 
     /// Get the least precision and fraction count to encode this decimal
@@ -1776,7 +1821,7 @@ impl ConvertTo<f64> for Decimal {
     /// Port from TiDB's MyDecimal::ToFloat64.
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<f64> {
-        let r = self.to_string().parse::<f64>();
+        let r = self.to_string_impl().parse::<f64>();
         debug_assert!(r.is_ok());
         Ok(r?)
     }
@@ -1926,7 +1971,7 @@ impl Display for Decimal {
         dec = dec
             .round(self.result_frac_cnt as i8, RoundMode::HalfEven)
             .unwrap();
-        fmt.write_str(&dec.to_string())
+        fmt.write_str(&dec.to_string_impl())
     }
 }
 
