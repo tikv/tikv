@@ -52,6 +52,39 @@ CLIPPY_LINTS=(
     -A clippy::manual_inspect \
     -A clippy::manual_is_multiple_of \
     -A clippy::doc_lazy_continuation \
+    -A clippy::empty_line_after_doc_comments \
+    -A clippy::empty_line_after_outer_attr \
+    -A clippy::collapsible_if \
+    -A clippy::unnecessary_map_or \
+    -A clippy::manual_contains \
+    -A clippy::unnecessary_get_then_check \
+    -A clippy::manual_repeat_n \
+    -A clippy::manual_abs_diff \
+    -A clippy::let_and_return \
+    -A clippy::single_match \
+    -A clippy::iter_kv_map \
+    -A clippy::io_other_error \
+    -A clippy::multiple_bound_locations \
+    -A clippy::macro_metavars_in_unsafe \
+    -A clippy::needless_lifetimes \
+    -A clippy::unnecessary_unwrap \
+    -A clippy::useless_vec \
+    -A clippy::question_mark \
+    -A clippy::needless_as_bytes \
+    -A clippy::manual_unwrap_or_default \
+    -A clippy::manual_unwrap_or \
+    -A clippy::swap_with_temporary \
+    -A clippy::needless_return \
+    -A clippy::vec_box \
+    -A clippy::useless_conversion \
+    -A clippy::doc_overindented_list_items \
+    -A clippy::unused_enumerate_index \
+    -A clippy::double_ended_iterator_last \
+    -A clippy::byte_char_slices \
+    -A clippy::unneeded_struct_pattern \
+    -A clippy::unnecessary_to_owned \
+    -A clippy::derivable_impls \
+    -A clippy::implied_bounds_in_impls \
     -W clippy::dbg_macro \
     -W clippy::todo \
     -D clippy::upper_case_acronyms \
@@ -63,6 +96,9 @@ CLIPPY_LINTS=(
     -A dead_code \
     -A mismatched_lifetime_syntaxes \
     -A unused_variables \
+    -A unused_assignments \
+    -A unsafe_op_in_unsafe_fn \
+    -A unexpected_cfgs \
     -D clippy::assertions_on_result_states \
     -A clippy::non_canonical_partial_ord_impl \
     -A clippy::arc_with_non_send_sync \
