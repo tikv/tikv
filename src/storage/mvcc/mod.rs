@@ -102,8 +102,8 @@ pub enum ErrorInner {
     },
 
     #[error(
-        "deadlock occurs between txn:{} and txn:{}, lock_key:{}, deadlock_key_hash:{}",
-        .start_ts, .lock_ts, log_wrappers::Value::key(.lock_key), .deadlock_key_hash
+        "deadlock occurs between txn:{} and txn:{}, lock_key:{}, deadlock_key_hash:{}, wait_chain_len:{}",
+        .start_ts, .lock_ts, log_wrappers::Value::key(.lock_key), .deadlock_key_hash, .wait_chain.len()
     )]
     Deadlock {
         start_ts: TimeStamp,
@@ -128,8 +128,8 @@ pub enum ErrorInner {
     DefaultNotFound { key: Vec<u8> },
 
     #[error(
-        "try to commit key {} with commit_ts {} but min_commit_ts is {}",
-        log_wrappers::Value::key(.key), .commit_ts, .min_commit_ts
+        "try to commit key {} with commit_ts {} but min_commit_ts is {}, start_ts {}",
+        log_wrappers::Value::key(.key), .commit_ts, .min_commit_ts, .start_ts
     )]
     CommitTsExpired {
         start_ts: TimeStamp,

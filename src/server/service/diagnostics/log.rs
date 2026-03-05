@@ -36,6 +36,7 @@ struct LogIterator {
 
 #[derive(Debug)]
 #[allow(clippy::enum_variant_names)]
+#[allow(dead_code)]
 // Allowing this is actually more understandabled when used in code.
 pub enum Error {
     InvalidRequest(String),
