@@ -2349,7 +2349,7 @@ fn test_get_lock_wait_info_api() {
         // The lock should be in waiting state here.
         let req = GetLockWaitInfoRequest::default();
         let resp = client.get_lock_wait_info(&req).unwrap();
-        if resp.entries.len() != 0 {
+        if !resp.entries.is_empty() {
             entries = Some(resp.entries.to_vec());
             break;
         }
