@@ -5,7 +5,6 @@
 //! [`Server`](crate::server::Server). The [`BTreeEngine`](kv::BTreeEngine) and
 //! [`RocksEngine`](RocksEngine) are used for testing only.
 
-#![feature(bound_map)]
 #![feature(min_specialization)]
 #![feature(type_alias_impl_trait)]
 #![feature(impl_trait_in_assoc_type)]
@@ -700,7 +699,7 @@ where
     F: FnOnce(&mut E) -> R,
 {
     TLS_ENGINE_ANY.with(|e| {
-        let engine = &mut *(*e.get() as *mut E);
+        let engine = unsafe { &mut *(*e.get() as *mut E) };
         f(engine)
     })
 }
@@ -732,10 +731,12 @@ pub unsafe fn destroy_tls_engine<E: Engine>() {
     // references to `TLS_ENGINE_ANY` can never be stored outside of
     // `TLS_ENGINE_ANY`.
     TLS_ENGINE_ANY.with(|e| {
-        let ptr = *e.get();
+        let ptr = unsafe { *e.get() };
         if !ptr.is_null() {
-            drop(Box::from_raw(ptr as *mut E));
-            *e.get() = ptr::null_mut();
+            unsafe {
+                drop(Box::from_raw(ptr as *mut E));
+                *e.get() = ptr::null_mut();
+            }
         }
     });
 }
