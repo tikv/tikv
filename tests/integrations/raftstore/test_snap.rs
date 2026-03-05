@@ -1318,10 +1318,20 @@ fn test_extra_snapshot_override() {
         // test None term will not check the term in snapshot
         check_term: None,
     });
-    let snap = cluster
-        .must_get_raft_engine(r0_leader.get_store_id())
-        .snapshot(snap_ctx.clone())
-        .unwrap();
+    let snapshot_with_retry = |ctx: SnapContext<'_>| {
+        let raft_engine = cluster.must_get_raft_engine(r0_leader.get_store_id());
+        for _ in 0..10 {
+            match raft_engine.snapshot(ctx.clone()) {
+                Ok(snap) => return snap,
+                Err(Error(box ErrorInner::Request(ref header))) if header.not_leader.is_some() => {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(err) => panic!("snapshot request should not fail: {err:?}"),
+            }
+        }
+        panic!("snapshot request keeps returning not_leader");
+    };
+    let snap = snapshot_with_retry(snap_ctx.clone());
     let r2_term = snap.ext().get_term().unwrap().get();
     assert_eq!(snap.get_region().clone(), r2.region.clone());
 
@@ -1339,10 +1349,7 @@ fn test_extra_snapshot_override() {
     // If `extra_snap_override`.`term` is set with a valid value, should return
     // a snapshot.
     snap_ctx.extra_region_override.as_mut().unwrap().check_term = Some(r2_term);
-    let snap = cluster
-        .must_get_raft_engine(r0_leader.get_store_id())
-        .snapshot(snap_ctx.clone())
-        .unwrap();
+    let snap = snapshot_with_retry(snap_ctx.clone());
     assert_eq!(snap.get_region().clone(), r2.region.clone());
     snap_ctx.extra_region_override.as_mut().unwrap().check_term = None;
 
