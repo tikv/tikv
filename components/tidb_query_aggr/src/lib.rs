@@ -329,7 +329,7 @@ where
 {
     #[inline]
     unsafe fn update_unsafe(&mut self, ctx: &mut EvalContext, value: Option<T>) -> Result<()> {
-        self.update_concrete_unsafe(ctx, value)
+        unsafe { self.update_concrete_unsafe(ctx, value) }
     }
 
     #[inline]
@@ -340,7 +340,7 @@ where
         repeat_times: usize,
     ) -> Result<()> {
         for _ in 0..repeat_times {
-            self.update_concrete_unsafe(ctx, value.clone())?;
+            unsafe { self.update_concrete_unsafe(ctx, value.clone())? };
         }
         Ok(())
     }
@@ -354,7 +354,9 @@ where
         logical_rows: &[usize],
     ) -> Result<()> {
         for physical_index in logical_rows {
-            self.update_concrete_unsafe(ctx, physical_values.get_option_ref(*physical_index))?;
+            unsafe {
+                self.update_concrete_unsafe(ctx, physical_values.get_option_ref(*physical_index))?
+            };
         }
         Ok(())
     }
