@@ -914,7 +914,9 @@ fn handle_zero_date(ctx: &mut EvalContext, mut args: TimeArgs) -> Result<Option<
     debug_assert!(args.is_zero());
 
     if no_zero_date {
-        (!strict_mode || ignore_truncate).ok_or(Error::truncated())?;
+        if strict_mode && !ignore_truncate {
+            return Err(Error::truncated());
+        }
         ctx.warnings.append_warning(Error::truncated());
         args.clear();
         return Ok(None);
@@ -936,7 +938,9 @@ fn handle_zero_in_date(ctx: &mut EvalContext, mut args: TimeArgs) -> Result<Opti
     if no_zero_in_date {
         // If we are in NO_ZERO_IN_DATE + STRICT_MODE, zero-in-date produces and error.
         // Otherwise, we reset the datetime value and check if we enabled NO_ZERO_DATE.
-        (!strict_mode || ignore_truncate).ok_or(Error::truncated())?;
+        if strict_mode && !ignore_truncate {
+            return Err(Error::truncated());
+        }
         ctx.warnings.append_warning(Error::truncated());
         args.clear();
         return handle_zero_date(ctx, args);
@@ -948,7 +952,9 @@ fn handle_zero_in_date(ctx: &mut EvalContext, mut args: TimeArgs) -> Result<Opti
 fn handle_invalid_date(ctx: &mut EvalContext, mut args: TimeArgs) -> Result<Option<TimeArgs>> {
     let sql_mode = ctx.cfg.sql_mode;
     let allow_invalid_date = sql_mode.contains(SqlMode::INVALID_DATES);
-    allow_invalid_date.ok_or(Error::truncated())?;
+    if !allow_invalid_date {
+        return Err(Error::truncated());
+    }
     args.clear();
     handle_zero_date(ctx, args)
 }
@@ -1540,7 +1546,9 @@ impl Time {
 
         if self.day() > self.last_day_of_month() || self.month() == 0 || self.day() == 0 {
             let date = if self.month() == 0 {
-                (self.year() >= 1).ok_or(Error::incorrect_datetime_value(self))?;
+                if self.year() < 1 {
+                    return Err(Error::incorrect_datetime_value(&self));
+                }
                 NaiveDate::from_ymd(self.year() as i32 - 1, 12, 1)
             } else {
                 NaiveDate::from_ymd(self.year() as i32, self.month(), 1)
