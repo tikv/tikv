@@ -4,7 +4,11 @@ use std::{
     fmt::Write,
     path::Path,
     str::FromStr,
-    sync::{Arc, Mutex, mpsc},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
     time::Duration,
 };
@@ -398,14 +402,27 @@ pub fn is_error_response(resp: &RaftCmdResponse) -> bool {
     resp.get_header().has_error()
 }
 
-#[derive(Default)]
 struct CallbackLeakDetector {
-    called: bool,
+    called: Arc<AtomicBool>,
+}
+
+impl Default for CallbackLeakDetector {
+    fn default() -> Self {
+        Self {
+            called: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+impl CallbackLeakDetector {
+    fn mark_called(&self) {
+        self.called.store(true, Ordering::Release);
+    }
 }
 
 impl Drop for CallbackLeakDetector {
     fn drop(&mut self) {
-        if self.called {
+        if self.called.load(Ordering::Acquire) {
             return;
         }
 
@@ -442,16 +459,16 @@ pub fn make_cb(
 ) -> (Callback<RocksSnapshot>, future::Receiver<RaftCmdResponse>) {
     let is_read = check_raft_cmd_request(cmd);
     let (tx, rx) = future::bounded(1, future::WakePolicy::Immediately);
-    let mut detector = CallbackLeakDetector::default();
+    let detector = CallbackLeakDetector::default();
     let cb = if is_read {
         Callback::read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
-            detector.called = true;
+            detector.mark_called();
             // we don't care error actually.
             let _ = tx.send(resp.response);
         }))
     } else {
         Callback::write(Box::new(move |resp: WriteResponse| {
-            detector.called = true;
+            detector.mark_called();
             // we don't care error actually.
             let _ = tx.send(resp.response);
         }))
