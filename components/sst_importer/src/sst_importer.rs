@@ -117,10 +117,10 @@ pub enum CacheKvFile {
 /// returns an error on an invalid internal state.
 /// pass the error back to the client side for further debugging.
 fn error(message: impl std::fmt::Display) -> Error {
-    Error::Io(io::Error::new(
-        ErrorKind::Other,
-        format!("internal error in TiKV: {}", message),
-    ))
+    Error::Io(io::Error::other(format!(
+        "internal error in TiKV: {}",
+        message
+    )))
 }
 
 impl CacheKvFile {
@@ -655,14 +655,13 @@ impl<E: KvEngine> SstImporter<E> {
 
             // Attempt to remove the partially downloaded file
             if dst_file.exists() {
-                if let Some(ref manager) = self.key_manager {
-                    if let Err(cleanup_err) = manager.delete_file(dst_file.to_str().unwrap(), None)
-                    {
-                        warn!("failed to remove encryption metadata for temporary file";
-                            "file" => %dst_file.display(),
-                            "error" => %cleanup_err
-                        );
-                    }
+                if let Some(ref manager) = self.key_manager
+                    && let Err(cleanup_err) = manager.delete_file(dst_file.to_str().unwrap(), None)
+                {
+                    warn!("failed to remove encryption metadata for temporary file";
+                        "file" => %dst_file.display(),
+                        "error" => %cleanup_err
+                    );
                 }
                 if let Err(cleanup_err) = file_system::remove_file(&dst_file) {
                     warn!("failed to remove temporary file after download failure";
@@ -1814,10 +1813,10 @@ impl<E: KvEngine> SstImporter<E> {
             warn!("failed to remove file"; "filename" => ?path_buf, "error" => ?e);
         }
         // remove tracking from key manager if needed
-        if let Some(key_manager) = self.key_manager.as_ref() {
-            if let Err(e) = key_manager.delete_file(&path_buf.to_string_lossy(), None) {
-                warn!("failed to remove file from key manager"; "filename" => ?path_buf, "error" => ?e);
-            }
+        if let Some(key_manager) = self.key_manager.as_ref()
+            && let Err(e) = key_manager.delete_file(&path_buf.to_string_lossy(), None)
+        {
+            warn!("failed to remove file from key manager"; "filename" => ?path_buf, "error" => ?e);
         }
     }
 }

@@ -84,7 +84,7 @@ impl<'a> RpnStackNodeVectorValue<'a> {
     }
 
     /// Gets a reference to the logical rows.
-    pub fn logical_rows_struct(&self) -> LogicalRows {
+    pub fn logical_rows_struct(&self) -> LogicalRows<'_> {
         match self {
             RpnStackNodeVectorValue::Generated { physical_value } => LogicalRows::Ref {
                 logical_rows: &IDENTICAL_LOGICAL_ROWS[0..physical_value.len()],
@@ -1293,9 +1293,9 @@ mod tests {
             .take_vector_value()
             .unwrap()
             .to_real_vec();
-        assert_eq!(taked_value[0].is_some_and(|x| x == 10.0), true);
-        assert_eq!(taked_value[1].is_none(), true);
-        assert_eq!(taked_value[2].is_some_and(|x| x == 20.0), true);
+        assert!(taked_value[0].is_some_and(|x| x == 10.0));
+        assert!(taked_value[1].is_none());
+        assert!(taked_value[2].is_some_and(|x| x == 20.0));
 
         let mut column2 = VectorValue::with_capacity(10, EvalType::Real);
         column2.push_real(Real::new(10.0).ok());
@@ -1315,9 +1315,9 @@ mod tests {
             .take_vector_value()
             .unwrap()
             .to_real_vec();
-        assert_eq!(taked_value[0].is_some_and(|x| x == 10.0), true);
-        assert_eq!(taked_value[1].is_none(), true);
-        assert_eq!(taked_value[2].is_some_and(|x| x == 40.0), true);
+        assert!(taked_value[0].is_some_and(|x| x == 10.0));
+        assert!(taked_value[1].is_none());
+        assert!(taked_value[2].is_some_and(|x| x == 40.0));
     }
 
     #[bench]

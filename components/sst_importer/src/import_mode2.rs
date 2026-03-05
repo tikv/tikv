@@ -67,10 +67,10 @@ impl ImportModeSwitcherV2 {
                     let now = Instant::now();
                     let mut switcher = switcher.lock().unwrap();
                     for range in prev_ranges.drain(..) {
-                        if let Some(next_check) = switcher.import_mode_ranges.get(&range) {
-                            if now >= *next_check {
-                                switcher.clear_import_mode_range(range);
-                            }
+                        if let Some(next_check) = switcher.import_mode_ranges.get(&range)
+                            && now >= *next_check
+                        {
+                            switcher.clear_import_mode_range(range);
                         }
                     }
 

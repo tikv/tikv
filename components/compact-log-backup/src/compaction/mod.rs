@@ -1,5 +1,5 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
-use std::{collections::HashSet, ops::Deref};
+use std::{collections::HashSet, fmt, ops::Deref};
 
 use bytes::Bytes;
 use derive_more::Display;
@@ -43,8 +43,7 @@ pub struct SubcompactionCollectKey {
 }
 
 /// A subcompaction.
-#[derive(Debug, Display, Clone)]
-#[display(fmt = "compaction({},sz={})", subc_key, size)]
+#[derive(Debug, Clone)]
 pub struct Subcompaction {
     pub inputs: Vec<Input>,
     pub size: u64,
@@ -72,6 +71,12 @@ impl Deref for Subcompaction {
 
     fn deref(&self) -> &Self::Target {
         &self.subc_key
+    }
+}
+
+impl fmt::Display for Subcompaction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "compaction({},sz={})", self.subc_key, self.size)
     }
 }
 

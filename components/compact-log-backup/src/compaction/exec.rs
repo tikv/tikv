@@ -259,8 +259,8 @@ where
         let items = super::util::execute_all_ext(
             c.inputs
                 .iter()
-                .cloned()
                 .map(|f| {
+                    let f = f.clone();
                     let source = &self.source;
                     Box::pin(async move {
                         let _lt = COMPACT_LOG_BACKUP_LOAD_A_FILE_DURATION.start_coarse_timer();
@@ -425,7 +425,7 @@ where
         let (sorted_items, cdiff) = Self::process_input(c, items).await;
         self.compact_stat.sort_duration += begin.saturating_elapsed();
         if sorted_items.is_empty() {
-            self.compact_stat.empty_generation += 1;
+            result.compact_stat.empty_generation += 1;
             return Ok(result);
         }
 

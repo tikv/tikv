@@ -447,11 +447,9 @@ mod tests {
                 let exp =
                     RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, mapper, 1)
                         .unwrap();
-                if by_hash {
-                    if let RpnExpressionNode::FnCall { args_len, .. } = exp[0] {
-                        // all constant args except base_val should be removed.
-                        assert_eq!(args_len, 1);
-                    }
+                if by_hash && let RpnExpressionNode::FnCall { args_len, .. } = exp[0] {
+                    // all constant args except base_val should be removed.
+                    assert_eq!(args_len, 1);
                 }
                 let mut ctx = EvalContext::default();
                 let schema = &[FieldTypeTp::LongLong.into()];

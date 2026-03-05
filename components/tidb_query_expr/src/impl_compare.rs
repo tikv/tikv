@@ -14,10 +14,7 @@ use tidb_query_datatype::{
 
 #[rpn_fn(nullable)]
 #[inline]
-pub fn compare<C: Comparer>(lhs: Option<&C::T>, rhs: Option<&C::T>) -> Result<Option<i64>>
-where
-    C: Comparer,
-{
+pub fn compare<C: Comparer>(lhs: Option<&C::T>, rhs: Option<&C::T>) -> Result<Option<i64>> {
     C::compare(lhs, rhs)
 }
 
@@ -942,7 +939,7 @@ mod tests {
                     .push_param_with_field_type(rhs, rhs_field_type.clone())
                     .evaluate(*sig)
                     .unwrap();
-                if accept_orderings.iter().any(|&x| x == ordering) {
+                if accept_orderings.contains(&ordering) {
                     assert_eq!(output, Some(1));
                 } else {
                     assert_eq!(output, Some(0));
