@@ -80,15 +80,19 @@ impl<T> Eq for TimeoutTask<T> {}
 
 impl<T> PartialOrd for TimeoutTask<T> {
     fn partial_cmp(&self, other: &TimeoutTask<T>) -> Option<Ordering> {
-        self.next_tick.partial_cmp(&other.next_tick)
+        Some(self.cmp(other))
     }
 }
 
 impl<T> Ord for TimeoutTask<T> {
     fn cmp(&self, other: &TimeoutTask<T>) -> Ordering {
-        self.next_tick
-            .partial_cmp(&other.next_tick)
-            .unwrap_or(Ordering::Equal)
+        self.next_tick.partial_cmp(&other.next_tick).unwrap_or(
+            match (self.next_tick, other.next_tick) {
+                (Instant::Monotonic(_), Instant::MonotonicCoarse(_)) => Ordering::Less,
+                (Instant::MonotonicCoarse(_), Instant::Monotonic(_)) => Ordering::Greater,
+                _ => Ordering::Equal,
+            },
+        )
     }
 }
 
