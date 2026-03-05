@@ -459,7 +459,7 @@ pub fn make_cb(
     (cb, rx)
 }
 
-pub fn make_cb_ext<EK: KvEngine>(
+pub fn make_cb_ext(
     cmd: &RaftCmdRequest,
     proposed: Option<ExtCallback>,
     committed: Option<ExtCallback>,
