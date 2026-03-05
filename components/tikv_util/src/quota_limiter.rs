@@ -216,7 +216,7 @@ impl QuotaLimiter {
         background_cpu_quota: usize,
         background_write_bandwidth: ReadableSize,
         background_read_bandwidth: ReadableSize,
-        background_iops: usize,
+        background_iops_limit: usize,
         max_delay_duration: ReadableDuration,
         enable_auto_tune: bool,
     ) -> Self {
@@ -230,7 +230,7 @@ impl QuotaLimiter {
             background_cpu_quota,
             background_write_bandwidth,
             background_read_bandwidth,
-            background_iops,
+            background_iops_limit,
         );
         let max_delay_duration = AtomicU64::new(max_delay_duration.0.as_nanos() as u64);
         let enable_auto_tune = AtomicBool::new(enable_auto_tune);
@@ -438,7 +438,7 @@ impl ConfigManager for QuotaLimitConfigManager {
                 .set_read_bandwidth_limit(read_bandwidth.clone().into(), false);
         }
 
-        if let Some(iops) = change.get("background_iops") {
+        if let Some(iops) = change.get("background_iops_limit") {
             self.quota_limiter.set_iops_limit(iops.into(), false);
         }
 
