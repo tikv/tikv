@@ -246,6 +246,7 @@ pub fn start_unsafe_recovery_report(
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct UnsafeRecoveryForceLeaderSyncer(Arc<InvokeClosureOnDrop>);
 
 impl UnsafeRecoveryForceLeaderSyncer {

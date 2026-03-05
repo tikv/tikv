@@ -172,6 +172,7 @@ pub fn redact(k: &[u8]) -> log_wrappers::Value<'_> {
 }
 
 #[derive(Eq, PartialEq)]
+#[allow(dead_code)]
 pub struct EndKey<'a>(pub &'a [u8]);
 
 impl<'a> PartialOrd for EndKey<'a> {
