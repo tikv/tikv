@@ -1015,6 +1015,7 @@ impl Decimal {
     }
 
     /// Prepare a buf for string output.
+    #[allow(dead_code)]
     fn prepare_buf(&self) -> (Vec<u8>, usize, u8, u8, u8) {
         let frac_cnt = self.frac_cnt;
         let (mut word_start_idx, mut int_cnt) = self.remove_leading_zeroes(self.int_cnt);
