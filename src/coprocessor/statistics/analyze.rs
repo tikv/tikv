@@ -211,9 +211,11 @@ trait RowSampleCollector: Send {
     );
     fn sampling(&mut self, data: &[Vec<u8>]);
     fn to_proto(&mut self) -> tipb::RowSampleCollector;
+    #[allow(dead_code)]
     fn get_reported_memory_usage(&mut self) -> usize {
         self.mut_base().reported_memory_usage
     }
+    #[allow(dead_code)]
     fn get_memory_usage(&mut self) -> usize {
         self.mut_base().memory_usage
     }

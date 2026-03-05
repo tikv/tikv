@@ -1586,6 +1586,7 @@ pub mod test_gc_worker {
     }
 
     #[derive(Clone, Default)]
+    #[allow(dead_code)]
     pub struct MultiRocksEngine {
         pub engines: Arc<Mutex<HashMap<u64, PrefixedEngine>>>,
         pub region_info: HashMap<u64, Region>,

@@ -9821,6 +9821,7 @@ mod tests {
     }
 
     #[allow(clippy::large_enum_variant)]
+    #[allow(dead_code)]
     pub enum Msg {
         WaitFor {
             token: LockWaitToken,
