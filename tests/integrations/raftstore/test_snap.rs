@@ -1319,7 +1319,7 @@ fn test_extra_snapshot_override() {
         check_term: None,
     });
     let snapshot_with_retry = |ctx: SnapContext<'_>| {
-        let raft_engine = cluster.must_get_raft_engine(r0_leader.get_store_id());
+        let mut raft_engine = cluster.must_get_raft_engine(r0_leader.get_store_id());
         for _ in 0..10 {
             match raft_engine.snapshot(ctx.clone()) {
                 Ok(snap) => return snap,
