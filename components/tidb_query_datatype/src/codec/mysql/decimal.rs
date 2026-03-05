@@ -1036,8 +1036,7 @@ impl Decimal {
     }
 
     /// Converts decimal to a printable string representation without rounding.
-    #[allow(clippy::inherent_to_string)]
-    pub fn to_string(&self) -> String {
+    fn to_string_impl(&self) -> String {
         let (mut buf, word_start_idx, int_len, int_cnt, frac_cnt) = self.prepare_buf();
         if self.negative {
             buf.push(b'-');
@@ -1819,7 +1818,7 @@ impl ConvertTo<f64> for Decimal {
     /// Port from TiDB's MyDecimal::ToFloat64.
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<f64> {
-        let r = self.to_string().parse::<f64>();
+        let r = self.to_string_impl().parse::<f64>();
         debug_assert!(r.is_ok());
         Ok(r?)
     }
@@ -1965,11 +1964,7 @@ impl FromStr for Decimal {
 
 impl Display for Decimal {
     fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
-        let mut dec = *self;
-        dec = dec
-            .round(self.result_frac_cnt as i8, RoundMode::HalfEven)
-            .unwrap();
-        fmt.write_str(&dec.to_string())
+        fmt.write_str(&self.to_string_impl())
     }
 }
 
