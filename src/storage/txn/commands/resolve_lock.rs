@@ -188,7 +188,6 @@ mod tests {
 
     use super::*;
     use crate::storage::{
-        TestEngineBuilder,
         kv::Engine,
         lock_manager::MockLockManager,
         mvcc::tests::{must_get_rollback_ts, must_unlocked, write},
@@ -198,6 +197,7 @@ mod tests {
             tests::{must_acquire_shared_pessimistic_lock, must_shared_prewrite_lock},
             txn_status_cache::TxnStatusCache,
         },
+        TestEngineBuilder,
     };
 
     fn run_resolve_lock<E: Engine>(
@@ -207,7 +207,7 @@ mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let cm = ConcurrencyManager::new_for_test(TimeStamp::new(100));
+        let cm = ConcurrencyManager::new(TimeStamp::new(100));
         let command = ResolveLock {
             ctx: ctx.clone(),
             txn_status,

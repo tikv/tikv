@@ -116,7 +116,7 @@ mod tests {
     use kvproto::kvrpcpb::Context;
 
     use super::*;
-    use crate::storage::{TestEngineBuilder, kv::Engine, txn::tests::*};
+    use crate::storage::{kv::Engine, txn::tests::*, TestEngineBuilder};
 
     fn run_resolve_lock_read_phase<E: Engine>(
         engine: &mut E,

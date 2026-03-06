@@ -2996,7 +2996,7 @@ mod tests {
     #[test]
     fn test_shared_lock_prewrite_cannot_amend_pessimistic_lock() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
-        let cm = ConcurrencyManager::new_for_test(1.into());
+        let cm = ConcurrencyManager::new(1.into());
         let mut statistics = Statistics::default();
 
         let key = b"shared-lock-key";

@@ -387,7 +387,7 @@ pub mod tests {
             let snapshot = engine.snapshot(Default::default()).unwrap();
             let current_ts = ts(start_ts + 20, 0);
             let start_ts = ts(start_ts, 0);
-            let cm = ConcurrencyManager::new_for_test(current_ts);
+            let cm = ConcurrencyManager::new(current_ts);
             let mut txn = MvccTxn::new(start_ts, cm);
             let mut reader = SnapshotReader::new(start_ts, snapshot, true);
             let released = cleanup(
