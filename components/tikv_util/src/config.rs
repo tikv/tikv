@@ -2129,18 +2129,18 @@ mod tests {
         assert_eq!(res.0, (total_mem as f64 * 0.45) as u64);
 
         // Error cases
-        assert!("101%".parse::<ReadableSizeOrPercent>().is_err());
-        assert!("-1%".parse::<ReadableSizeOrPercent>().is_err());
-        assert!("abc%".parse::<ReadableSizeOrPercent>().is_err());
-        assert!("%".parse::<ReadableSizeOrPercent>().is_err());
+        "101%".parse::<ReadableSizeOrPercent>().unwrap_err();
+        "-1%".parse::<ReadableSizeOrPercent>().unwrap_err();
+        "abc%".parse::<ReadableSizeOrPercent>().unwrap_err();
+        "%".parse::<ReadableSizeOrPercent>().unwrap_err();
 
         // Absolute sizes still work
         let res: ReadableSizeOrPercent = "5GiB".parse().unwrap();
         assert_eq!(res.0, 5 * GIB);
 
         // ReadableSize now rejects percentages
-        assert!("45%".parse::<ReadableSize>().is_err());
-        assert!("100%".parse::<ReadableSize>().is_err());
+        "45%".parse::<ReadableSize>().unwrap_err();
+        "100%".parse::<ReadableSize>().unwrap_err();
     }
 
     #[test]
@@ -2167,7 +2167,7 @@ mod tests {
         assert_eq!(res.s.0, total_mem);
 
         // Float out of range should error
-        assert!(toml::from_str::<SizeOrPercentHolder>("s = 1.5").is_err());
+        toml::from_str::<SizeOrPercentHolder>("s = 1.5").unwrap_err();
 
         // Serialization outputs absolute value (no percentage)
         let holder = SizeOrPercentHolder {
@@ -2181,8 +2181,8 @@ mod tests {
         struct SizeHolder {
             s: ReadableSize,
         }
-        assert!(toml::from_str::<SizeHolder>("s = 0.45").is_err());
-        assert!(toml::from_str::<SizeHolder>("s = \"45%\"").is_err());
+        toml::from_str::<SizeHolder>("s = 0.45").unwrap_err();
+        toml::from_str::<SizeHolder>("s = \"45%\"").unwrap_err();
     }
 
     #[test]
