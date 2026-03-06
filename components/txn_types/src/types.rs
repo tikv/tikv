@@ -318,6 +318,7 @@ pub enum MutationType {
     Put,
     Delete,
     Lock,
+    SharedLock,
     Insert,
     Other,
 }
@@ -337,6 +338,11 @@ pub enum Mutation {
     Delete(Key, Assertion),
     /// Set a lock on `Key`.
     Lock(Key, Assertion),
+    /// Set a shared lock on `Key`.
+    ///
+    /// This variant is only used by shared pessimistic locks so we can
+    /// distinguish them from normal lock mutations.
+    SharedLock(Key, Assertion),
     /// Put `Value` into `Key` if `Key` does not yet exist.
     ///
     /// Returns `kvrpcpb::KeyError::AlreadyExists` if the key already exists.
@@ -351,9 +357,10 @@ impl HeapSize for Mutation {
     fn approximate_heap_size(&self) -> usize {
         match self {
             Mutation::Put(kv, _) | Mutation::Insert(kv, _) => kv.approximate_heap_size(),
-            Mutation::Delete(k, _) | Mutation::CheckNotExists(k, _) | Mutation::Lock(k, _) => {
-                k.approximate_heap_size()
-            }
+            Mutation::Delete(k, _)
+            | Mutation::CheckNotExists(k, _)
+            | Mutation::Lock(k, _)
+            | Mutation::SharedLock(k, _) => k.approximate_heap_size(),
         }
     }
 }
@@ -380,6 +387,9 @@ impl Display for Mutation {
             Mutation::Lock(key, assertion) => {
                 write!(f, "Lock key:{:?} assertion:{:?}", key, assertion)
             }
+            Mutation::SharedLock(key, assertion) => {
+                write!(f, "SharedLock key:{:?} assertion:{:?}", key, assertion)
+            }
             // TODO: find a proper way to print values, debug printing them in the log
             //       may result in large files.
             Mutation::Insert((key, _), assertion) => write!(
@@ -400,6 +410,7 @@ impl Mutation {
             Mutation::Put((key, _), _) => key,
             Mutation::Delete(key, _) => key,
             Mutation::Lock(key, _) => key,
+            Mutation::SharedLock(key, _) => key,
             Mutation::Insert((key, _), _) => key,
             Mutation::CheckNotExists(key, _) => key,
         }
@@ -410,6 +421,7 @@ impl Mutation {
             Mutation::Put(..) => MutationType::Put,
             Mutation::Delete(..) => MutationType::Delete,
             Mutation::Lock(..) => MutationType::Lock,
+            Mutation::SharedLock(..) => MutationType::SharedLock,
             Mutation::Insert(..) => MutationType::Insert,
             _ => MutationType::Other,
         }
@@ -420,6 +432,7 @@ impl Mutation {
             Mutation::Put((key, value), _) => (key, Some(value)),
             Mutation::Delete(key, _) => (key, None),
             Mutation::Lock(key, _) => (key, None),
+            Mutation::SharedLock(key, _) => (key, None),
             Mutation::Insert((key, value), _) => (key, Some(value)),
             Mutation::CheckNotExists(key, _) => (key, None),
         }
@@ -441,6 +454,7 @@ impl Mutation {
             Mutation::Put(_, assertion) => assertion,
             Mutation::Delete(_, assertion) => assertion,
             Mutation::Lock(_, assertion) => assertion,
+            Mutation::SharedLock(_, assertion) => assertion,
             Mutation::Insert(_, assertion) => assertion,
             Mutation::CheckNotExists(_, assertion) => assertion,
         }
@@ -451,6 +465,7 @@ impl Mutation {
             Mutation::Put(_, assertion) => assertion,
             Mutation::Delete(_, assertion) => assertion,
             Mutation::Lock(_, assertion) => assertion,
+            Mutation::SharedLock(_, assertion) => assertion,
             Mutation::Insert(_, assertion) => assertion,
             Mutation::CheckNotExists(_, assertion) => assertion,
         } = assertion;
@@ -469,6 +484,11 @@ impl Mutation {
     /// Creates a Lock mutation with none assertion.
     pub fn make_lock(key: Key) -> Self {
         Mutation::Lock(key, Assertion::None)
+    }
+
+    /// Creates a SharedLock mutation with none assertion.
+    pub fn make_shared_lock(key: Key) -> Self {
+        Mutation::SharedLock(key, Assertion::None)
     }
 
     /// Creates a Insert mutation with none assertion.
@@ -491,6 +511,9 @@ impl From<kvrpcpb::Mutation> for Mutation {
             ),
             kvrpcpb::Op::Del => Mutation::Delete(Key::from_raw(m.get_key()), m.get_assertion()),
             kvrpcpb::Op::Lock => Mutation::Lock(Key::from_raw(m.get_key()), m.get_assertion()),
+            kvrpcpb::Op::SharedLock => {
+                Mutation::SharedLock(Key::from_raw(m.get_key()), m.get_assertion())
+            }
             kvrpcpb::Op::Insert => Mutation::Insert(
                 (Key::from_raw(m.get_key()), m.take_value()),
                 m.get_assertion(),
