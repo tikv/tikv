@@ -2145,7 +2145,7 @@ mod tests {
 
     #[test]
     fn test_toml_readable_size_percentage() {
-        #[derive(Serialize, Deserialize)]
+        #[derive(Debug, Serialize, Deserialize)]
         struct SizeOrPercentHolder {
             s: ReadableSizeOrPercent,
         }
@@ -2177,7 +2177,7 @@ mod tests {
         assert!(!serialized.contains('%'));
 
         // ReadableSize now rejects float ratio
-        #[derive(Serialize, Deserialize)]
+        #[derive(Debug, Serialize, Deserialize)]
         struct SizeHolder {
             s: ReadableSize,
         }
