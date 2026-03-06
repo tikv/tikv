@@ -7002,8 +7002,7 @@ mod tests {
         );
 
         // Test validating memory_usage_limit when it's greater than max.
-        cfg.memory_usage_limit =
-            Some(ReadableSizeOrPercent(SysQuota::memory_limit_in_bytes() * 2));
+        cfg.memory_usage_limit = Some(ReadableSizeOrPercent(SysQuota::memory_limit_in_bytes() * 2));
         cfg.validate().unwrap_err();
 
         // Test memory_usage_limit is based on block cache size if it's not configured.
