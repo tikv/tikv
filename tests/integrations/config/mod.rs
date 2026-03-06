@@ -758,7 +758,7 @@ fn test_serde_custom_tikv_config() {
         },
         block_cache: BlockCacheConfig {
             shared: None,
-            capacity: Some(ReadableSize::gb(40)),
+            capacity: Some(ReadableSizeOrPercent::gb(40)),
             num_shard_bits: 10,
             strict_capacity_limit: true,
             high_pri_pool_ratio: 0.8,
