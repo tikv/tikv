@@ -405,7 +405,7 @@ pub fn rollback_shared_lock(
 
     // `protected` is always false for a shared lock
     assert!(!key.is_encoded_from(&lock.primary));
-    assert!(lock.generation == 0);
+    assert_eq!(lock.generation, 0);
     if let Some(write) = make_rollback(reader.start_ts, false, overlapped_write) {
         txn.put_write(key.clone(), reader.start_ts, write.as_ref().to_bytes());
     }

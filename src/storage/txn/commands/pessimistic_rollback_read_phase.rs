@@ -151,14 +151,14 @@ pub mod tests {
 
         // read pessimistic lock with smaller for_update_ts, should not find any lock.
         let pr = run_read_phase(&mut engine, 10, 20, None);
-        matches!(pr, ProcessResult::MultiRes { .. });
+        assert!(matches!(pr, ProcessResult::MultiRes { .. }));
 
         // no matching start_ts
         let pr = run_read_phase(&mut engine, 30, 40, None);
-        matches!(pr, ProcessResult::MultiRes { .. });
+        assert!(matches!(pr, ProcessResult::MultiRes { .. }));
 
         // should bypass prewrite lock
         let pr = run_read_phase(&mut engine, 20, 40, None);
-        matches!(pr, ProcessResult::MultiRes { .. });
+        assert!(matches!(pr, ProcessResult::MultiRes { .. }));
     }
 }
