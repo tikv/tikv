@@ -1,0 +1,4 @@
+interface:
+  display_name: "Rust Upgrade Loop"
+  short_description: "Rust upgrade workflow with CI failure loop"
+  default_prompt: "Use this skill to upgrade Rust toolchain/edition and iterate clippy/test failures until pull_unit_test is green with signed commits."
