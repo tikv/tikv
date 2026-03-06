@@ -100,7 +100,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         let mut encountered_locks = vec![];
         let need_old_value = context.extra_op == ExtraOp::ReadOldValue;
         let mut old_values = OldValues::default();
-        for (k, should_not_exist, _is_shared) in keys {
+        for (k, should_not_exist, is_shared_lock) in keys {
             match acquire_pessimistic_lock(
                 &mut txn,
                 &mut reader,
@@ -115,6 +115,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                 need_old_value,
                 self.lock_only_if_exists,
                 self.allow_lock_with_conflict,
+                is_shared_lock,
             ) {
                 Ok((key_res, old_value)) => {
                     res.push(key_res);
@@ -141,6 +142,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                         request_parameters,
                         k,
                         should_not_exist,
+                        is_shared_lock,
                     );
                     encountered_locks.push(lock_info);
                     // Do not lock previously succeeded keys.
