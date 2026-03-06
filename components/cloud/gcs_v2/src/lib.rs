@@ -1,10 +1,9 @@
 // Copyright 2026 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{future::Future, io};
+use std::{cmp, future::Future, io};
 use std::pin::Pin;
 
 use async_trait::async_trait;
-use bytes::Bytes;
 use cloud::blob::{
     BlobConfig, BlobObject, BlobStorage, BlobStream, DeletableStorage, IterableStorage, PutResource,
 };
@@ -16,9 +15,10 @@ use futures_util::stream::StreamExt;
 use futures_util::TryStreamExt;
 use google_cloud_storage::client::{Storage, StorageControl};
 use google_cloud_storage::model_ext::ReadRange;
+use google_cloud_storage::streaming_source::{SizeHint, StreamingSource};
 use kvproto::brpb::Gcs as InputConfig;
 use tikv_util::{error, info, time::Instant};
-use tokio::sync::OnceCell;
+use tokio::sync::{Mutex, OnceCell};
 use url::Url;
 
 mod credentials;
@@ -130,6 +130,51 @@ impl std::error::Error for GcsApiError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         Some(&self.source)
     }
+}
+
+const PUT_READ_CHUNK_SIZE: usize = 256 * 1024;
+
+struct PutResourceSource {
+    reader: Mutex<PutResource<'static>>,
+    exact_size: u64,
+}
+
+impl PutResourceSource {
+    fn new(reader: PutResource<'_>, exact_size: u64) -> Self {
+        Self {
+            reader: Mutex::new(into_static_put_resource(reader)),
+            exact_size,
+        }
+    }
+}
+
+impl StreamingSource for PutResourceSource {
+    type Error = io::Error;
+
+    async fn next(&mut self) -> Option<Result<bytes::Bytes, Self::Error>> {
+        let mut buf = vec![0; cmp::max(1, cmp::min(self.exact_size as usize, PUT_READ_CHUNK_SIZE))];
+        match self.reader.lock().await.read(&mut buf).await {
+            Ok(0) => None,
+            Ok(n) => {
+                buf.truncate(n);
+                Some(Ok(bytes::Bytes::from(buf)))
+            }
+            Err(e) => Some(Err(e)),
+        }
+    }
+
+    fn size_hint(&self) -> impl Future<Output = Result<SizeHint, Self::Error>> + Send {
+        std::future::ready(Ok(SizeHint::with_exact(self.exact_size)))
+    }
+}
+
+fn into_static_put_resource(reader: PutResource<'_>) -> PutResource<'static> {
+    // SAFETY: `put()` awaits `write_object(...).send_buffered()` to completion
+    // before returning, so the widened lifetime never outlives the original
+    // `reader`. In google-cloud-storage 1.0.0, the buffered upload path
+    // consumes the payload inside that future and does not detach it into a
+    // background task.
+    unsafe { std::mem::transmute::<PutResource<'_>, PutResource<'static>>(reader) }
 }
 
 #[derive(Clone, Debug)]
@@ -412,60 +457,36 @@ impl BlobStorage for GcsStorage {
         Box::new(self.inner.config.clone())
     }
 
-    async fn put(&self, name: &str, mut reader: PutResource<'_>, content_length: u64) -> io::Result<()> {
+    async fn put(&self, name: &str, reader: PutResource<'_>, content_length: u64) -> io::Result<()> {
         let full_name = self.full_path(name);
-
-        let begin = Instant::now_coarse();
-        let mut data = Vec::new();
-        reader
-            .0
-            .read_to_end(&mut data)
-            .await
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-        metrics::CLOUD_REQUEST_HISTOGRAM_VEC
-            .with_label_values(&["gcp", "read_local"])
-            .observe(begin.saturating_elapsed_secs());
 
         let bucket = self.bucket_resource_name();
         let client = self.get_data_client().await?;
-        let data = Bytes::from(data);
+        let payload = PutResourceSource::new(reader, content_length);
         let storage_class = self.inner.config.storage_class.clone();
         let predefined_acl = self.inner.config.predefined_acl.clone();
         let begin = Instant::now_coarse();
-        let req = if content_length == 0 {
-            "insert_simple"
-        } else {
-            "insert_multipart"
-        };
-        tikv_util::stream::retry_ext(
-            move || {
-                let client = client.clone();
-                let bucket = bucket.clone();
-                let full_name = full_name.clone();
-                let data = data.clone();
-                let storage_class = storage_class.clone();
-                let predefined_acl = predefined_acl.clone();
-                async move {
-                    let mut builder = client.write_object(bucket, full_name, data);
-                    if let Some(storage_class) = storage_class.as_ref() {
-                        builder = builder.set_storage_class(storage_class.clone());
-                    }
-                    if let Some(predefined_acl) = predefined_acl.as_ref() {
-                        builder = builder.set_predefined_acl(predefined_acl.clone());
-                    }
-                    builder
-                        .send_buffered()
-                        .await
-                        .map(|_| ())
-                        .map_err(|e| GcsApiError::new("write_object", e))
-                }
-            },
-            tikv_util::stream::RetryExt::default(),
-        )
-        .await
-        .map_err(|e| e.into_io_error())?;
+        let mut builder = client
+            .write_object(bucket, full_name, payload)
+            // TiKV's upload source is single-pass. Force resumable uploads so
+            // google-cloud-storage keeps retry/continue behavior even for
+            // small objects, instead of falling back to non-idempotent
+            // single-shot uploads.
+            .with_resumable_upload_threshold(0_usize);
+        if let Some(storage_class) = storage_class.as_ref() {
+            builder = builder.set_storage_class(storage_class.clone());
+        }
+        if let Some(predefined_acl) = predefined_acl.as_ref() {
+            builder = builder.set_predefined_acl(predefined_acl.clone());
+        }
+        builder
+            .send_buffered()
+            .await
+            .map(|_| ())
+            .map_err(|e| GcsApiError::new("write_object", e).into_io_error())?;
         metrics::CLOUD_REQUEST_HISTOGRAM_VEC
-            .with_label_values(&["gcp", req])
+            // Keep metric labels aligned with the actual upload API used above.
+            .with_label_values(&["gcp", "insert_multipart"])
             .observe(begin.saturating_elapsed_secs());
 
         Ok(())

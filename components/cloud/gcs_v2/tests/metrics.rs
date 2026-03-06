@@ -143,7 +143,6 @@ async fn gcs_v2_put_emits_metrics() -> Result<(), Box<dyn std::error::Error>> {
     let cfg = make_cfg(&endpoint, "test-bucket", "pfx", "COLDLINE", "projectPrivate");
     let s = gcs_v2::GcsStorage::from_input(cfg)?;
 
-    let before_read_local = histogram_sample_count("gcp", "read_local");
     let before_insert = histogram_sample_count("gcp", "insert_multipart");
 
     s.put(
@@ -153,17 +152,19 @@ async fn gcs_v2_put_emits_metrics() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
 
-    let after_read_local = histogram_sample_count("gcp", "read_local");
     let after_insert = histogram_sample_count("gcp", "insert_multipart");
 
-    assert!(after_read_local >= before_read_local + 1);
     assert!(after_insert >= before_insert + 1);
 
     let captured = captured.lock().unwrap();
     let mut saw_predefined = false;
     let mut saw_storage_class = false;
+    let mut saw_resumable = false;
     for req in captured.iter() {
         let s = String::from_utf8_lossy(req);
+        if s.contains("uploadType=resumable") {
+            saw_resumable = true;
+        }
         if s.contains("predefinedAcl=projectPrivate") {
             saw_predefined = true;
         }
@@ -171,8 +172,41 @@ async fn gcs_v2_put_emits_metrics() -> Result<(), Box<dyn std::error::Error>> {
             saw_storage_class = true;
         }
     }
+    assert!(saw_resumable);
     assert!(saw_predefined);
     assert!(saw_storage_class);
+
+    let _ = shutdown.send(());
+    Ok(())
+}
+
+#[tokio::test]
+async fn gcs_v2_zero_length_put_is_accounted_as_resumable() -> Result<(), Box<dyn std::error::Error>> {
+    let (endpoint, shutdown, captured) = start_server().await?;
+    let cfg = make_cfg(&endpoint, "test-bucket", "pfx", "COLDLINE", "projectPrivate");
+    let s = gcs_v2::GcsStorage::from_input(cfg)?;
+
+    let before_multipart = histogram_sample_count("gcp", "insert_multipart");
+    let before_simple = histogram_sample_count("gcp", "insert_simple");
+
+    s.put(
+        "zero",
+        PutResource(Box::new(futures::io::Cursor::new(Vec::<u8>::new()))),
+        0,
+    )
+    .await?;
+
+    let after_multipart = histogram_sample_count("gcp", "insert_multipart");
+    let after_simple = histogram_sample_count("gcp", "insert_simple");
+    assert!(after_multipart >= before_multipart + 1);
+    assert_eq!(after_simple, before_simple);
+
+    let captured = captured.lock().unwrap();
+    assert!(
+        captured
+            .iter()
+            .any(|req| String::from_utf8_lossy(req).contains("uploadType=resumable"))
+    );
 
     let _ = shutdown.send(());
     Ok(())
