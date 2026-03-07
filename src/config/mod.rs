@@ -4318,6 +4318,23 @@ impl TikvConfig {
                         self.rocksdb.titan.enabled = Some(true);
                     }
                 }
+                // Titan is incompatible with TTL. If Titan was resolved as enabled
+                // (either inherited from last_cfg or auto-enabled), reject the
+                // configuration when TTL is also enabled. The user must first
+                // migrate off Titan before enabling TTL.
+                if self.storage.enable_ttl
+                    && matches!(self.rocksdb.titan.enabled, Some(true))
+                {
+                    return Err(
+                        "Titan is incompatible with TTL. To disable Titan, either: \
+                         (1) set rocksdb.defaultcf.titan.blob-run-mode to \"fallback\", \
+                         run a full compaction to drain blob files, then set \
+                         rocksdb.titan.enabled to false; or \
+                         (2) evacuate all data from this node (e.g. via store deletion or \
+                         placement rules), then start a fresh TiKV instance."
+                            .into(),
+                    );
+                }
                 if self.rocksdb.defaultcf.titan.min_blob_size.is_none() {
                     // get blob size from last config
                     self.rocksdb.defaultcf.titan.min_blob_size =
