@@ -312,10 +312,8 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
             } else {
                 remaining_sleep
             };
-            if sleep_duration > Duration::ZERO {
-                if self.sleep_or_stop(sleep_duration) {
-                    break;
-                }
+            if sleep_duration > Duration::ZERO && self.sleep_or_stop(sleep_duration) {
+                break;
             }
         }
         debug!("compaction-runner stopped");
