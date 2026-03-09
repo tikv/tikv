@@ -4268,10 +4268,7 @@ where
                     return false;
                 }
             }
-<<<<<<< HEAD
-=======
         } else {
-            fail_point!("propose_readindex_from_follower");
             // reject replica_read request if tikv's disk is (near) full because the
             // read_index will be block for a long time as its raft log
             // replication is stopped.
@@ -4282,7 +4279,6 @@ where
                 cb.report_error(err_resp);
                 return false;
             }
->>>>>>> 061b43a8f5 (raftstore: reject follower read request on disk-full follower (#19211))
         }
 
         if !self.is_leader() && self.leader_id() == INVALID_ID {
