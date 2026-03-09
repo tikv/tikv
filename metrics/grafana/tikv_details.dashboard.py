@@ -233,18 +233,34 @@ def Cluster() -> RowPanel:
     layout.row(
         [
             graph_panel(
-                title="Store size",
-                description="The storage size per TiKV instance",
+                title="Disk used size",
+                description="The real disk used size per TiKV instance: capacity - available",
                 yaxes=yaxes(left_format=UNITS.BYTES_IEC),
                 fill=1,
                 stack=True,
                 legend=graph_legend(max=False),
                 targets=[
                     target(
+                        expr=expr_operator(
+                            expr_sum(
+                                "tikv_store_size_bytes",
+                                label_selectors=['type="capacity"'],
+                            ),
+                            "-",
+                            expr_sum(
+                                "tikv_store_size_bytes",
+                                label_selectors=['type="available"'],
+                            ),
+                        ),
+                        legend_format=r"{{instance}}",
+                    ),
+                    target(
                         expr=expr_sum(
                             "tikv_store_size_bytes",
-                            label_selectors=['type = "used"'],
+                            label_selectors=['type="used"'],
                         ),
+                        legend_format=r"{{instance}}-logical-used",
+                        hide=True,
                     ),
                 ],
             ),
