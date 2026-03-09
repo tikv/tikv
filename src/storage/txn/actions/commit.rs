@@ -134,8 +134,8 @@ pub fn commit<S: Snapshot>(
     };
 
     if !commit {
-        // Rollback a stale pessimistic lock. This function must be called by
-        // resolve-lock in this case.
+        // Rollback a stale pessimistic lock (or remove a sub-lock from shared
+        // locks). This function must be called by resolve-lock in this case.
         assert!(lock.is_pessimistic_lock());
         return match shared_locks {
             Some(shared_locks) => {

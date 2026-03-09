@@ -128,7 +128,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
             )?,
             Some(Either::Right(shared_locks)) => {
                 // a shared-locked key cannot be the primary key of a transaction thus reject
-                // the request directly.
+                // the request directly. This can happen when the original lock is already
+                // gone and another transaction places a shared lock on the same key.
                 warn!("reject check_txn_status on shared lock";
                     "lock_ts" => self.lock_ts,
                     "key" => ?&self.primary_key,

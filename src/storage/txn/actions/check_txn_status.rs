@@ -374,8 +374,8 @@ pub fn rollback_shared_lock(
     let lock = match shared_locks.remove_lock(&lock_ts)? {
         Some(l) => l,
         None => {
-            // misuse of rollback_shared_lock? maybe print a warning with stack?
-            return Ok(None);
+            // misuse of rollback_shared_lock.
+            unreachable!();
         }
     };
 
