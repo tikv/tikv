@@ -6571,6 +6571,56 @@ mod tests {
     }
 
     #[test]
+    fn test_titan_ttl_incompatible_after_resolution() {
+        // Regression test: when titan.enabled is None in the current config but
+        // last_cfg has titan.enabled = Some(true), the resolved value should be
+        // Some(true). Combined with enable_ttl = true, this must be rejected.
+        // Previously, validate() ran before titan.enabled was resolved, so the
+        // TTL+Titan check was bypassed when titan.enabled was still None.
+
+        // Case 1: titan.enabled inherited from last_cfg as Some(true)
+        {
+            let (mut cfg, dir) = TikvConfig::with_tmp().unwrap();
+            // Simulate an existing Titan-enabled instance by persisting a config
+            // with titan.enabled = Some(true).
+            cfg.rocksdb.titan.enabled = Some(true);
+            persist_config(&cfg).unwrap();
+            let (storage, ..) = new_engines::<ApiV1>(cfg);
+            drop(storage);
+
+            // Now load a fresh config (titan.enabled = None) with TTL enabled.
+            let mut cfg = TikvConfig::from_file(&dir.path().join("config.toml"), None).unwrap();
+            assert_eq!(cfg.rocksdb.titan.enabled, None);
+            cfg.storage.enable_ttl = true;
+            let result = validate_and_persist_config(&mut cfg, false);
+            assert!(result.is_err(), "should reject TTL with resolved Titan");
+            assert!(
+                result.unwrap_err().contains("Titan is incompatible with TTL"),
+                "error message should mention Titan-TTL incompatibility"
+            );
+        }
+
+        // Case 2: titan.enabled explicitly Some(true) with TTL — caught by validate()
+        {
+            let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
+            cfg.rocksdb.titan.enabled = Some(true);
+            cfg.storage.enable_ttl = true;
+            let result = validate_and_persist_config(&mut cfg, false);
+            assert!(result.is_err(), "should reject explicit Titan + TTL");
+        }
+
+        // Case 3: titan.enabled = None, no last_cfg, TTL enabled — titan resolves
+        // to false (due to TTL), so this should succeed.
+        {
+            let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
+            assert_eq!(cfg.rocksdb.titan.enabled, None);
+            cfg.storage.enable_ttl = true;
+            validate_and_persist_config(&mut cfg, false).unwrap();
+            assert_eq!(cfg.rocksdb.titan.enabled, Some(false));
+        }
+    }
+
+    #[test]
     fn test_change_store_scheduler_worker_pool_size() {
         let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
         cfg.storage.scheduler_worker_pool_size = 4;
