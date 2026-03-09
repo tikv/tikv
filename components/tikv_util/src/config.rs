@@ -276,8 +276,8 @@ impl<'de> Deserialize<'de> for ReadableSize {
 
 /// A size value that can also be specified as a percentage of system memory.
 ///
-/// Unlike `ReadableSize`, this type accepts percentage strings like `"45%"` and
-/// float ratios like `0.45` in TOML, which are resolved against system memory.
+/// Unlike `ReadableSize`, this type accepts percentage strings like `"45%"`
+/// in TOML, which are resolved against system memory.
 /// This is only appropriate for memory-proportional config fields like
 /// `memory-usage-limit` and `storage.block-cache.capacity`.
 #[derive(Clone, Debug, Copy, PartialEq, PartialOrd, Default)]
@@ -400,23 +400,6 @@ impl<'de> Deserialize<'de> for ReadableSizeOrPercent {
                 E: de::Error,
             {
                 Ok(ReadableSizeOrPercent(size))
-            }
-
-            fn visit_f64<E>(self, size: f64) -> Result<ReadableSizeOrPercent, E>
-            where
-                E: de::Error,
-            {
-                if size > 0.0 && size <= 1.0 {
-                    let total_mem = SysQuota::memory_limit_in_bytes();
-                    Ok(ReadableSizeOrPercent((total_mem as f64 * size) as u64))
-                } else if size == 0.0 {
-                    Ok(ReadableSizeOrPercent(0))
-                } else {
-                    Err(E::invalid_value(
-                        Unexpected::Float(size),
-                        &"a ratio between 0.0 and 1.0 (e.g., 0.45 for 45% of system memory)",
-                    ))
-                }
             }
 
             fn visit_str<E>(self, size_str: &str) -> Result<ReadableSizeOrPercent, E>
@@ -2156,17 +2139,10 @@ mod tests {
         let res: SizeOrPercentHolder = toml::from_str("s = \"45%\"").unwrap();
         assert_eq!(res.s.0, (total_mem as f64 * 0.45) as u64);
 
-        // TOML float format (ratio of system memory)
-        let res: SizeOrPercentHolder = toml::from_str("s = 0.45").unwrap();
-        assert_eq!(res.s.0, (total_mem as f64 * 0.45) as u64);
-
-        // Float edge cases
-        let res: SizeOrPercentHolder = toml::from_str("s = 0.0").unwrap();
-        assert_eq!(res.s.0, 0);
-        let res: SizeOrPercentHolder = toml::from_str("s = 1.0").unwrap();
-        assert_eq!(res.s.0, total_mem);
-
-        // Float out of range should error
+        // Float values should be rejected
+        toml::from_str::<SizeOrPercentHolder>("s = 0.45").unwrap_err();
+        toml::from_str::<SizeOrPercentHolder>("s = 0.0").unwrap_err();
+        toml::from_str::<SizeOrPercentHolder>("s = 1.0").unwrap_err();
         toml::from_str::<SizeOrPercentHolder>("s = 1.5").unwrap_err();
 
         // Serialization outputs absolute value (no percentage)

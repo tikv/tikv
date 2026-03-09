@@ -7071,13 +7071,12 @@ mod tests {
         let expected = (total_mem as f64 * 0.45) as u64;
         assert_eq!(cfg.storage.block_cache.capacity.unwrap().0, expected);
 
-        // Test block-cache.capacity with float ratio
+        // Float values should be rejected for block-cache.capacity
         let content = r#"
             [storage.block-cache]
             capacity = 0.45
         "#;
-        let cfg: TikvConfig = toml::from_str(content).unwrap();
-        assert_eq!(cfg.storage.block_cache.capacity.unwrap().0, expected);
+        toml::from_str::<TikvConfig>(content).unwrap_err();
 
         // Test memory-usage-limit with string percentage
         let content = r#"
@@ -7087,12 +7086,11 @@ mod tests {
         let expected_mem = (total_mem as f64 * 0.75) as u64;
         assert_eq!(cfg.memory_usage_limit.unwrap().0, expected_mem);
 
-        // Test memory-usage-limit with float ratio
+        // Float values should be rejected for memory-usage-limit
         let content = r#"
             memory-usage-limit = 0.75
         "#;
-        let cfg: TikvConfig = toml::from_str(content).unwrap();
-        assert_eq!(cfg.memory_usage_limit.unwrap().0, expected_mem);
+        toml::from_str::<TikvConfig>(content).unwrap_err();
 
         // Full validation passes with percentage values
         let content = r#"
