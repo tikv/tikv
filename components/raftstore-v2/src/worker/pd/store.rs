@@ -493,7 +493,7 @@ where
         // size manually.
         #[cfg(any(test, feature = "testexport"))]
         {
-            let (capacity, available) = disk::get_disk_space_stats("./").unwrap();
+            let (capacity, available, _) = disk::get_disk_space_stats("./").unwrap();
 
             disk::set_disk_capacity(capacity);
             disk::set_disk_used_size(capacity - available);

@@ -7,11 +7,16 @@ use std::{
 use fail::fail_point;
 pub use kvproto::disk_usage::DiskUsage;
 
-// The following variables are used to store the disk capacity, used size, and
-// available size.
+// The following variables are used to store the disk capacity and two used
+// sizes:
+// - DISK_USED_SIZE: TiKV-estimated engine usage (kv/raft/snap/placeholder)
+//   reported by the storage stats worker.
+// - DISK_ACTUAL_USED_SIZE: filesystem used bytes derived from statvfs
+//   (`total_space - free_space`).
 static DISK_CAPACITY: AtomicU64 = AtomicU64::new(0);
 static DISK_USED_SIZE: AtomicU64 = AtomicU64::new(0);
 static DISK_AVAILABLE_SIZE: AtomicU64 = AtomicU64::new(0);
+static DISK_ACTUAL_USED_SIZE: AtomicU64 = AtomicU64::new(0);
 
 // DISK_RESERVED_SPACE means if left space is less than this, tikv will
 // turn to maintenance mode. There are another 2 value derived from this,
@@ -50,6 +55,16 @@ pub fn set_disk_available_size(v: u64) {
 #[inline]
 pub fn get_disk_available_size() -> u64 {
     DISK_AVAILABLE_SIZE.load(Ordering::Acquire)
+}
+
+#[inline]
+pub fn set_disk_actual_used_size(v: u64) {
+    DISK_ACTUAL_USED_SIZE.store(v, Ordering::Release)
+}
+
+#[inline]
+pub fn get_disk_actual_used_size() -> u64 {
+    DISK_ACTUAL_USED_SIZE.load(Ordering::Acquire)
 }
 
 #[inline]
@@ -122,15 +137,28 @@ pub fn get_disk_status(_store_id: u64) -> DiskUsage {
     }
 }
 
-pub fn get_disk_space_stats<P: AsRef<Path>>(path: P) -> std::io::Result<(u64, u64)> {
+// Returns (total_space, available_space, free_space) from statvfs.
+//
+// Note: `free_space` may be larger than `available_space` when the filesystem
+// reserves blocks for privileged users. Filesystem used bytes can be derived as
+// `total_space - free_space`. When there is no reservation (so `free_space ==
+// available_space`), `used + available_space == total_space`. Otherwise
+// `used + available_space < total_space`.
+pub fn get_disk_space_stats<P: AsRef<Path>>(path: P) -> std::io::Result<(u64, u64, u64)> {
     fail_point!("mock_disk_space_stats", |stats| {
         let stats = stats.unwrap();
         let values = stats.split(',').collect::<Vec<_>>();
-        Ok((
-            values[0].parse::<u64>().unwrap(),
-            values[1].parse::<u64>().unwrap(),
-        ))
+        let total = values[0].parse::<u64>().unwrap();
+        let avail = values[1].parse::<u64>().unwrap();
+        // If `free` is omitted, assume there is no reserved block and use
+        // `avail` as `free`.
+        let free = values.get(2).map_or(avail, |v| v.parse::<u64>().unwrap());
+        Ok((total, avail, free))
     });
     let disk_stats = fs2::statvfs(path)?;
-    Ok((disk_stats.total_space(), disk_stats.available_space()))
+    Ok((
+        disk_stats.total_space(),
+        disk_stats.available_space(),
+        disk_stats.free_space(),
+    ))
 }

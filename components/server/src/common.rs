@@ -221,7 +221,7 @@ impl TikvServerCore {
             }
         }
 
-        let (disk_cap, disk_avail) =
+        let (disk_cap, disk_avail, _) =
             disk::get_disk_space_stats(&self.config.storage.data_dir).unwrap();
         let mut capacity = disk_cap;
         if self.config.raft_store.capacity.0 > 0 {
@@ -242,7 +242,7 @@ impl TikvServerCore {
         let separated_raft_mount_path =
             path_in_diff_mount_point(&self.config.storage.data_dir, &raft_data_dir);
         if separated_raft_mount_path {
-            let (raft_disk_cap, raft_disk_avail) =
+            let (raft_disk_cap, raft_disk_avail, _) =
                 disk::get_disk_space_stats(&raft_data_dir).unwrap();
             // reserve space for raft engine if raft engine is deployed separately
             let raft_reserved_size =
@@ -977,7 +977,22 @@ impl DiskUsageChecker {
     /// `raft_used_size` is the used size of raft engine.
     ///
     /// Returns the disk usage status of the whole disk, kv engine and raft
-    /// engine, the whole disk capacity and available size.
+    /// engine, the whole disk capacity and available size, and the filesystem
+    /// used size derived from statvfs.
+    ///
+    /// - `capacity`: the disk capacity used by TiKV for checking/reporting. It
+    ///   may be clamped by `raft_store.capacity`.
+    /// - `available`: the remaining space TiKV can still use before hitting
+    ///   `capacity`, computed as `min(capacity - kvdb_used_size,
+    ///   statvfs.available_space())`.
+    /// - `actual_disk_used`: filesystem used bytes computed from statvfs as
+    ///   `total_space - free_space`.
+    ///
+    /// Note: `free_space` may be larger than `available_space` on filesystems
+    /// (like ext4) that reserve blocks for root users. In that case,
+    /// `actual_disk_used + available_space < total_space`. When there is no
+    /// reservation (so `free_space == available_space`), the sum equals
+    /// `total_space`.
     pub fn inspect(
         &self,
         kvdb_used_size: u64,
@@ -988,6 +1003,7 @@ impl DiskUsageChecker {
         disk::DiskUsage, // raft disk status
         u64,             // whole capacity
         u64,             // whole available
+        u64,             // actual_disk_used
     ) {
         // By default, the almost full threshold of kv engine is half of the
         // configured value.
@@ -1013,9 +1029,10 @@ impl DiskUsageChecker {
                             disk::DiskUsage::Normal,
                             0,
                             0,
+                            0,
                         );
                     }
-                    Ok((cap, avail)) => {
+                    Ok((cap, avail, _)) => {
                         if !self.separated_raft_auxiliary_mount_path {
                             // If the auxiliary directory of raft engine is not separated from
                             // kv engine, returns u64::MAX to indicate that the disk space of
@@ -1040,7 +1057,7 @@ impl DiskUsageChecker {
                                         );
                                         (0_u64, 0_u64)
                                     }
-                                    Ok((total, avail)) => (total, avail),
+                                    Ok((total, avail, _)) => (total, avail),
                                 };
                             (cap + auxiliary_disk_cap, avail + auxiliary_disk_avail)
                         } else {
@@ -1062,7 +1079,7 @@ impl DiskUsageChecker {
             }
         };
         // Check the disk space of kv engine.
-        let (disk_cap, disk_avail) = match disk::get_disk_space_stats(&self.kvdb_path) {
+        let (disk_cap, disk_avail, disk_free) = match disk::get_disk_space_stats(&self.kvdb_path) {
             Err(e) => {
                 error!(
                     "get disk stat for kv store failed";
@@ -1075,10 +1092,12 @@ impl DiskUsageChecker {
                     disk::DiskUsage::Normal,
                     0,
                     0,
+                    0,
                 );
             }
-            Ok((total, avail)) => (total, avail),
+            Ok((total, avail, free)) => (total, avail, free),
         };
+        let actual_disk_used = disk_cap.saturating_sub(disk_free);
         let capacity = if self.config_disk_capacity == 0 || disk_cap < self.config_disk_capacity {
             disk_cap
         } else {
@@ -1099,6 +1118,7 @@ impl DiskUsageChecker {
             raft_disk_status,
             capacity,
             available,
+            actual_disk_used,
         )
     }
 }

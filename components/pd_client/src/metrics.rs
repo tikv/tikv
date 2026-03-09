@@ -47,6 +47,9 @@ make_static_metric! {
     }
 
     pub label_enum StoreSizeEventType {
+        // `used` is filesystem used bytes derived from statvfs (`total - free`).
+        // `engine_used` is TiKV-estimated engine usage (kept for compatibility as
+        // it used to be reported as `used` historically).
         capacity,
         available,
         used,
@@ -54,6 +57,7 @@ make_static_metric! {
         raft_size,
         kv_size,
         import_size,
+        engine_used,
     }
 
     pub struct StoreSizeEventIntrVec: IntGauge {

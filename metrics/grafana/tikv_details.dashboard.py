@@ -246,6 +246,13 @@ def Cluster() -> RowPanel:
                             label_selectors=['type = "used"'],
                         ),
                     ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_store_size_bytes",
+                            label_selectors=['type = "engine_used"'],
+                        ),
+                        legend_format=r"{{instance}}-engine",
+                    ),
                 ],
             ),
             graph_panel(

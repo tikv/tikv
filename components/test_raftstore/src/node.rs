@@ -371,7 +371,7 @@ impl Simulator for NodeCluster {
                     let kv_size = util::get_engine_cfs_used_size(rocks_engine.as_ref())
                         .expect("get kv engine size");
                     let used_size = snap_size + kv_size;
-                    let (capacity, available) = disk::get_disk_space_stats(&data_dir).unwrap();
+                    let (capacity, available, _) = disk::get_disk_space_stats(&data_dir).unwrap();
 
                     disk::set_disk_capacity(capacity);
                     disk::set_disk_used_size(used_size);
