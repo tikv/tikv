@@ -10,6 +10,7 @@ use itertools::izip;
 use kvproto::coprocessor::KeyRange;
 use tidb_query_common::{
     Result,
+    metrics::ExecutorName,
     storage::{IntervalRange, Storage},
 };
 use tidb_query_datatype::{
@@ -148,6 +149,7 @@ impl<S: Storage, F: KvFormat> BatchIndexScanExecutor<S, F> {
             fill_extra_common_handle_key: is_fill_extra_common_handle_key,
         };
         let wrapper = ScanExecutor::new(ScanExecutorOptions {
+            executor_name: ExecutorName::batch_index_scan,
             imp,
             storage,
             key_ranges,

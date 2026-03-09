@@ -168,6 +168,19 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
         let rows_len = input_logical_rows.len();
         self.has_input_rows |= rows_len > 0;
 
+        // SimpleAgg compute-volume proxy: rows * aggr_exprs_len.
+        // Each aggregate expression is evaluated once per row.
+        let rows_u64 = rows_len as u64;
+        let aggr_exprs_u64 = entities.each_aggr_exprs.len() as u64;
+
+        let work = rows_u64.saturating_mul(aggr_exprs_u64);
+        if work > 0 {
+            tidb_query_common::metrics::record_executor_work(
+                tidb_query_common::metrics::ExecutorName::batch_simple_aggr,
+                work,
+            );
+        }
+
         assert_eq!(self.states.len(), entities.each_aggr_exprs.len());
 
         for idx in 0..self.states.len() {

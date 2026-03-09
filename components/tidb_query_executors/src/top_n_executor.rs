@@ -206,6 +206,26 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         mut physical_columns: LazyBatchColumnVec,
         logical_rows: Vec<usize>,
     ) -> Result<()> {
+        if !logical_rows.is_empty() {
+            let rows = logical_rows.len() as u64;
+            let order_by_len = self.order_exprs.len() as u64;
+            let n = self.n.max(1) as u64;
+
+            // Approx compare volume: O(rows * log2(n) * order_by_len).
+            let log2n = 64 - (n.max(2).leading_zeros() as u64) - 1;
+
+            let compare_ops = rows
+                .saturating_mul(order_by_len)
+                .saturating_mul(log2n.max(1));
+
+            if compare_ops > 0 {
+                tidb_query_common::metrics::record_executor_work(
+                    tidb_query_common::metrics::ExecutorName::batch_top_n,
+                    compare_ops,
+                );
+            }
+        }
+
         ensure_columns_decoded(
             &mut self.context,
             &self.order_exprs,

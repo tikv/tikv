@@ -9,7 +9,7 @@ use tidb_query_datatype::{
     expr::{EvalConfig, EvalContext},
     match_template_evaltype,
 };
-use tidb_query_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode};
+use tidb_query_expr::{RpnExpression, RpnExpressionBuilder, RpnExpressionNode, RpnStackNode};
 use tipb::{Expr, FieldType, Selection};
 
 use crate::interface::*;
@@ -19,6 +19,7 @@ pub struct BatchSelectionExecutor<Src: BatchExecutor> {
     src: Src,
 
     conditions: Vec<RpnExpression>,
+    condition_column_ref_counts: Vec<u32>,
 }
 
 // We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we
@@ -38,10 +39,19 @@ impl BatchSelectionExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
 impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
     #[cfg(test)]
     pub fn new_for_test(src: Src, conditions: Vec<RpnExpression>) -> Self {
+        let condition_column_ref_counts = conditions
+            .iter()
+            .map(|expr| {
+                expr.iter()
+                    .filter(|n| matches!(n, RpnExpressionNode::ColumnRef { .. }))
+                    .count() as u32
+            })
+            .collect();
         Self {
             context: EvalContext::default(),
             src,
             conditions,
+            condition_column_ref_counts,
         }
     }
 
@@ -52,19 +62,24 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
 
     pub fn new(config: Arc<EvalConfig>, src: Src, conditions_def: Vec<Expr>) -> Result<Self> {
         let mut conditions = Vec::with_capacity(conditions_def.len());
+        let mut condition_column_ref_counts = Vec::with_capacity(conditions_def.len());
         let mut ctx = EvalContext::new(config);
         for def in conditions_def {
-            conditions.push(RpnExpressionBuilder::build_from_expr_tree(
-                def,
-                &mut ctx,
-                src.schema().len(),
-            )?);
+            let expr =
+                RpnExpressionBuilder::build_from_expr_tree(def, &mut ctx, src.schema().len())?;
+            condition_column_ref_counts.push(
+                expr.iter()
+                    .filter(|n| matches!(n, RpnExpressionNode::ColumnRef { .. }))
+                    .count() as u32,
+            );
+            conditions.push(expr);
         }
 
         Ok(Self {
             context: ctx,
             src,
             conditions,
+            condition_column_ref_counts,
         })
     }
 
@@ -83,6 +98,20 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
         while condition_index < self.conditions.len() && !src_result.logical_rows.is_empty() {
             src_logical_rows_copy.clear();
             src_logical_rows_copy.extend_from_slice(&src_result.logical_rows);
+
+            // Selection predicate evaluation cost is dominated by expression evaluation.
+            // Approximate work as rows * (number_of_rpn_nodes + number_of_column_refs),
+            // once per evaluated condition.
+            let rows_u64 = src_logical_rows_copy.len() as u64;
+            let rpn_nodes_u64 = self.conditions[condition_index].len() as u64;
+            let col_refs_u64 = self.condition_column_ref_counts[condition_index] as u64;
+            let weighted_nodes_u64 = rpn_nodes_u64.saturating_add(col_refs_u64);
+            if rows_u64 > 0 && weighted_nodes_u64 > 0 {
+                tidb_query_common::metrics::record_executor_work(
+                    tidb_query_common::metrics::ExecutorName::batch_selection,
+                    rows_u64.saturating_mul(weighted_nodes_u64),
+                );
+            }
 
             match self.conditions[condition_index].eval(
                 &mut self.context,
