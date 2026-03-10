@@ -368,8 +368,15 @@ pub(crate) struct ResourceGroup {
 
 impl ResourceGroup {
     fn new(group: PbResourceGroup, limiter: Option<Arc<ResourceLimiter>>) -> Self {
-        let background_source_types =
+        let mut background_source_types =
             HashSet::from_iter(group.get_background_settings().get_job_types().to_owned());
+        // The request source name of lightning and import into is changed from
+        // "lightning" to "import" in https://github.com/pingcap/tidb/pull/66795.
+        // Here, we add "import" if "lightning" is configured to handle legacy
+        // configurations.
+        if background_source_types.contains("lightning") {
+            background_source_types.insert("import".into());
+        }
         let fallback_default =
             !group.has_background_settings() && group.name != DEFAULT_RESOURCE_GROUP_NAME;
         Self {
@@ -1265,5 +1272,22 @@ pub(crate) mod tests {
             &mgr.get_resource_limiter("test1", "stats", 0).unwrap(),
             &default_limiter
         ));
+
+        // test legacy task_type "lightning" can be converted to "import".
+        let lightning_group = new_background_resource_group_ru(
+            "lightning".into(),
+            200,
+            MEDIUM_PRIORITY,
+            vec!["lightning".into()],
+        );
+        mgr.add_resource_group(lightning_group);
+        assert!(
+            mgr.get_background_resource_limiter("lightning", "lightning")
+                .is_some()
+        );
+        assert!(
+            mgr.get_background_resource_limiter("lightning", "import")
+                .is_some()
+        );
     }
 }
