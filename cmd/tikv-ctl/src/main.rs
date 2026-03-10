@@ -406,6 +406,7 @@ fn main() {
             minimal_compaction_size,
             prefetch_running_count,
             prefetch_buffer_count,
+            gcs_v2_enable,
         } => {
             let tmp_engine =
                 TemporaryRocks::new(&cfg).expect("failed to create temp engine for writing SSTs.");
@@ -437,17 +438,15 @@ fn main() {
                 compression,
                 compression_level,
             };
-            let exec = compact_log::Execution {
+            let mut exec = compact_log::Execution {
                 out_prefix: ccfg.recommended_prefix(&name),
                 cfg: ccfg,
                 max_concurrent_subcompaction: max_compaction_num,
                 external_storage,
-                // Force compact-log-backup in tikv-ctl to use the GCS v2 backend.
-                // This ensures credentials_blob with either service_account or
-                // external_account (WIF) is handled by the same path.
-                gcs_v2_enable: true,
+                backend_config: Default::default(),
                 db: Some(tmp_engine.rocks),
             };
+            exec.backend_config.gcs_v2_enable = gcs_v2_enable.unwrap_or(true);
 
             use tikv::server::status_server::lite::Server as StatusServerLite;
             struct ExportTiKVInfo {
