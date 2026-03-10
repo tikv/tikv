@@ -24,7 +24,7 @@ use resource_control::{
 };
 use thiserror::Error;
 use tikv_util::{
-    resource_control::TaskMetadata,
+    resource_control::{TaskMetadata, priority_from_task_meta},
     sys::{SysQuota, cpu_time::ProcessStat},
     thread_name_prefix::{UNIFIED_READ_POOL_THREAD, matches_thread_name_prefix},
     time::Instant,
@@ -33,7 +33,10 @@ use tikv_util::{
 };
 use tracker::TlsTrackedFuture;
 use yatp::{
-    metrics::MULTILEVEL_LEVEL_ELAPSED, pool::Remote, queue::Extras, task::future::TaskCell,
+    metrics::MULTILEVEL_LEVEL_ELAPSED,
+    pool::Remote,
+    queue::{Extras, TaskCell as TaskCellTrait},
+    task::future::TaskCell,
 };
 
 use self::metrics::*;
@@ -155,15 +158,45 @@ impl ReadPoolHandle {
                 ..
             } => {
                 let task_priority = TaskPriority::from(metadata.override_priority());
-                let running_tasks = running_tasks[task_priority as usize].clone();
+                let running_task_gauge = running_tasks[task_priority as usize].clone();
                 // Note that the running task number limit is not strict.
                 // If several tasks are spawned at the same time while the running task number
                 // is close to the limit, they may all pass this check and the number of running
                 // tasks may exceed the limit.
-                if running_tasks.get() as usize >= *max_tasks {
-                    return Err(ReadPoolError::UnifiedReadPoolFull);
+                if running_task_gauge.get() as usize >= *max_tasks {
+                    // When resource control is enabled, attempt to evict the
+                    // lowest-priority queued task if the incoming task has
+                    // strictly higher priority. This implements queue fairness:
+                    // important tasks can preempt less important queued tasks
+                    // when the pool is full.
+                    if let Some(ref ctl) = resource_ctl {
+                        let estimated_priority = ctl.peek_priority_of(&metadata, priority);
+                        if let Some(mut evicted) = remote.try_evict_lowest(estimated_priority) {
+                            // Decrement the running_tasks counter for the
+                            // evicted task's priority level. The evicted task's
+                            // future (which contains the running_tasks.dec()
+                            // closure) will be dropped without executing.
+                            let evicted_prio =
+                                priority_from_task_meta(evicted.mut_extras().metadata());
+                            running_tasks[evicted_prio as usize].dec();
+                            UNIFIED_READ_POOL_EVICTED_TASKS.inc();
+                            // Dropping the evicted TaskCell destroys the future
+                            // inside it. That future holds the oneshot::Sender
+                            // used by spawn_handle (or by coprocessor's manual
+                            // channel). When the sender is dropped the
+                            // corresponding receiver gets a Canceled error,
+                            // which callers surface as SchedTooBusy /
+                            // ServerIsBusy back to the client.
+                            drop(evicted);
+                            // Fall through to enqueue the new task below.
+                        } else {
+                            return Err(ReadPoolError::UnifiedReadPoolFull);
+                        }
+                    } else {
+                        return Err(ReadPoolError::UnifiedReadPoolFull);
+                    }
                 }
-                running_tasks.inc();
+                running_task_gauge.inc();
                 let fixed_level = match priority {
                     CommandPri::High => Some(0),
                     CommandPri::Normal => None,
@@ -177,7 +210,7 @@ impl ReadPoolHandle {
                         TlsTrackedFuture::new(with_resource_limiter(
                             ControlledFuture::new(
                                 f.map(move |_| {
-                                    running_tasks.dec();
+                                    running_task_gauge.dec();
                                 }),
                                 resource_ctl.clone(),
                                 group_name,
@@ -189,7 +222,7 @@ impl ReadPoolHandle {
                 } else {
                     TaskCell::new(
                         TlsTrackedFuture::new(f.map(move |_| {
-                            running_tasks.dec();
+                            running_task_gauge.dec();
                         })),
                         extras,
                     )
@@ -903,6 +936,11 @@ mod metrics {
             &["name"]
         )
         .unwrap();
+        pub static ref UNIFIED_READ_POOL_EVICTED_TASKS: IntCounter = register_int_counter!(
+            "tikv_unified_read_pool_evicted_tasks",
+            "Number of tasks evicted from the unified read pool by higher-priority tasks"
+        )
+        .unwrap();
     }
 }
 
@@ -1337,5 +1375,188 @@ mod tests {
             assert_eq!(count_metric(&name), 2);
             drop(pool);
         }
+    }
+
+    // Duplicated from resource_control::resource_group::tests which is
+    // #[cfg(test)] pub(crate) and not accessible from this crate.
+    fn new_resource_group_ru(
+        name: String,
+        ru: u64,
+        group_priority: u32,
+    ) -> kvproto::resource_manager::ResourceGroup {
+        use kvproto::resource_manager::{GroupMode, GroupRequestUnitSettings, ResourceGroup};
+        let mut group = ResourceGroup::new();
+        group.set_name(name);
+        group.set_mode(GroupMode::RuMode);
+        group.set_priority(group_priority);
+        let mut ru_setting = GroupRequestUnitSettings::new();
+        ru_setting.mut_r_u().mut_settings().set_fill_rate(ru);
+        group.set_r_u_settings(ru_setting);
+        group
+    }
+
+    #[test]
+    fn test_yatp_eviction() {
+        // Test that when the read pool is full, a higher-priority incoming task
+        // can evict the lowest-priority queued task.
+        //
+        // Strategy: Use 1 worker thread and max_tasks_per_worker=4 (total=4).
+        // Spawn 1 blocking task to occupy the only worker thread, then spawn
+        // 3 low-priority tasks that will sit in the queue. The pool is now
+        // "full" (4 running_tasks). A high-priority task should evict one of
+        // the queued low-priority tasks.
+        //
+        // Note on the two priority systems:
+        // - `override_priority` (in ResourceControlContext) determines the TaskPriority
+        //   bucket (High/Medium/Low) used for running_tasks counters. Both groups use 0
+        //   here, so all tasks are "medium".
+        // - Resource group priority (1 vs 16) is what peek_priority_of uses for the
+        //   eviction comparison. "high_group" (priority=16) produces a numerically
+        //   smaller value than "low_group" (priority=1), meaning it is scheduled first
+        //   and can evict low_group tasks.
+        let resource_manager = ResourceGroupManager::default();
+        let low_group = new_resource_group_ru("low_group".into(), 5000, 1);
+        resource_manager.add_resource_group(low_group);
+        let high_group = new_resource_group_ru("high_group".into(), 5000, 16);
+        resource_manager.add_resource_group(high_group);
+
+        let name = "test-yatp-eviction";
+        let resource_ctl = resource_manager.derive_controller(name.into(), true);
+
+        let config = UnifiedReadPoolConfig {
+            min_thread_count: 1,
+            max_thread_count: 1,
+            max_tasks_per_worker: 4,
+            ..Default::default()
+        };
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let pool = build_yatp_read_pool_with_name(
+            &config,
+            DummyReporter,
+            engine,
+            Some(resource_ctl),
+            CleanupMethod::InPlace,
+            name.to_owned(),
+            false,
+        );
+
+        let gen_task = || {
+            let (tx, rx) = oneshot::channel::<()>();
+            let task = async move {
+                let _ = rx.await;
+            };
+            (task, tx)
+        };
+
+        let handle = pool.handle();
+
+        let low_ctx = ResourceControlContext {
+            resource_group_name: "low_group".to_string(),
+            override_priority: 0,
+            ..Default::default()
+        };
+
+        // Task 1: synchronously blocks the only worker thread so that it
+        // cannot pop any further tasks from the global priority queue. An
+        // async-only future (oneshot::channel::await) would return Pending
+        // immediately, letting the worker loop back and drain tasks 2-4 from
+        // the queue before the eviction attempt — causing a race.
+        let (block_tx, block_rx) = std::sync::mpsc::channel::<()>();
+        let task1 = async move {
+            let _ = block_rx.recv();
+        };
+        handle
+            .spawn(
+                task1,
+                CommandPri::Normal,
+                1,
+                TaskMetadata::from_ctx(&low_ctx),
+                None,
+            )
+            .unwrap();
+
+        // Wait for task1 to be picked up and block the worker.
+        thread::sleep(Duration::from_millis(300));
+
+        // Tasks 2-4: these will sit in the global queue since the worker is
+        // blocked by task1.
+        let (task2, _tx2) = gen_task();
+        let (task3, _tx3) = gen_task();
+        let (task4, _tx4) = gen_task();
+
+        handle
+            .spawn(
+                task2,
+                CommandPri::Normal,
+                2,
+                TaskMetadata::from_ctx(&low_ctx),
+                None,
+            )
+            .unwrap();
+        handle
+            .spawn(
+                task3,
+                CommandPri::Normal,
+                3,
+                TaskMetadata::from_ctx(&low_ctx),
+                None,
+            )
+            .unwrap();
+        handle
+            .spawn(
+                task4,
+                CommandPri::Normal,
+                4,
+                TaskMetadata::from_ctx(&low_ctx),
+                None,
+            )
+            .unwrap();
+
+        // Verify pool is full: spawning another low-priority task should fail.
+        let (task_low5, _tx_low5) = gen_task();
+        match handle.spawn(
+            task_low5,
+            CommandPri::Normal,
+            5,
+            TaskMetadata::from_ctx(&low_ctx),
+            None,
+        ) {
+            Err(ReadPoolError::UnifiedReadPoolFull) => {}
+            other => panic!(
+                "expected UnifiedReadPoolFull for low-priority task, got {:?}",
+                other.err()
+            ),
+        }
+
+        // Now spawn a high-priority task — should succeed via eviction of a
+        // queued low-priority task.
+        let (task_high, _tx_high) = gen_task();
+        let high_ctx = ResourceControlContext {
+            resource_group_name: "high_group".to_string(),
+            override_priority: 0,
+            ..Default::default()
+        };
+
+        handle
+            .spawn(
+                task_high,
+                CommandPri::High,
+                6,
+                TaskMetadata::from_ctx(&high_ctx),
+                None,
+            )
+            .expect("high-priority task should succeed via eviction");
+
+        // The eviction metric should have been incremented.
+        assert!(
+            UNIFIED_READ_POOL_EVICTED_TASKS.get() >= 1,
+            "eviction counter should be incremented"
+        );
+
+        // Unblock task1 so the worker thread can resume and the pool can
+        // shut down cleanly.
+        let _ = block_tx.send(());
+        thread::sleep(Duration::from_millis(300));
     }
 }
