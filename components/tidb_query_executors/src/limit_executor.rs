@@ -182,7 +182,7 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
 
         self.current_truncate_keys_unsafe.clear();
         unsafe {
-            let _ =eval_exprs_decoded_no_lifetime(
+            let _ = eval_exprs_decoded_no_lifetime(
                 &mut self.context,
                 &self.truncate_keys_exps,
                 src_schema,
