@@ -1281,7 +1281,13 @@ pub(crate) mod tests {
             vec!["lightning".into()],
         );
         mgr.add_resource_group(lightning_group);
-        assert!(mgr.get_background_resource_limiter("lightning", "lightning").is_some());
-        assert!(mgr.get_background_resource_limiter("lightning", "import").is_some());
+        assert!(
+            mgr.get_background_resource_limiter("lightning", "lightning")
+                .is_some()
+        );
+        assert!(
+            mgr.get_background_resource_limiter("lightning", "import")
+                .is_some()
+        );
     }
 }
