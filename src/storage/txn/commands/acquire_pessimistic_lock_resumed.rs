@@ -151,6 +151,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
                 need_old_value,
                 params.lock_only_if_exists,
                 true,
+                false,
             ) {
                 Ok((key_res, old_value)) => {
                     res.push(key_res);
@@ -166,7 +167,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
                 }
                 Err(MvccError(box MvccErrorInner::KeyIsLocked(lock_info))) => {
                     let mut lock_info =
-                        WriteResultLockInfo::new(lock_info, params, key, should_not_exist);
+                        WriteResultLockInfo::new(lock_info, params, key, should_not_exist, false);
                     lock_info.lock_wait_token = lock_wait_token;
                     lock_info.req_states = Some(req_states);
                     res.push(PessimisticLockKeyResult::Waiting);
@@ -352,6 +353,7 @@ mod tests {
             lock_hash,
             parameters,
             should_not_exist: false,
+            is_shared_lock: false,
             lock_wait_token: token,
             legacy_wake_up_index: Some(0),
             req_states,

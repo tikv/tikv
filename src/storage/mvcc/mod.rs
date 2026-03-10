@@ -17,7 +17,7 @@ use tikv_util::{
     metrics::CRITICAL_ERROR, panic_when_unexpected_key_or_data, set_panic_mark, Either,
 };
 pub use txn_types::{
-    Key, Lock, LockType, Mutation, TimeStamp, Value, Write, WriteRef, WriteType,
+    Key, Lock, LockType, Mutation, SharedLocks, TimeStamp, Value, Write, WriteRef, WriteType,
     SHORT_VALUE_MAX_LEN,
 };
 
@@ -396,6 +396,11 @@ impl From<txn_types::Error> for ErrorInner {
                 primary,
                 reason,
             },
+            txn_types::Error(e @ box txn_types::ErrorInner::InvalidOperation(_)) => {
+                // This error indicates misuse of SharedLocks API. It
+                // should be handled internally.
+                ErrorInner::Other(e)
+            }
         }
     }
 }
@@ -889,5 +894,15 @@ pub mod tests {
             reader.scan_keys(start.map(Key::from_raw), limit).unwrap(),
             expect
         );
+    }
+
+    pub fn must_load_shared_lock<E: Engine>(engine: &mut E, key: &[u8]) -> SharedLocks {
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, true);
+        let lock_or_shared = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
+        match lock_or_shared {
+            Either::Right(shared_locks) => shared_locks,
+            Either::Left(_) => panic!("Expected SharedLocks, got Lock"),
+        }
     }
 }

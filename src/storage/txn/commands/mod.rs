@@ -217,9 +217,10 @@ impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLock
             .take_mutations()
             .into_iter()
             .map(|x| match x.get_op() {
-                Op::PessimisticLock => (
+                Op::PessimisticLock | Op::SharedPessimisticLock => (
                     Key::from_raw(x.get_key()),
                     x.get_assertion() == Assertion::NotExist,
+                    x.get_op() == Op::SharedPessimisticLock,
                 ),
                 _ => panic!("mismatch Op in pessimistic lock mutations"),
             })
@@ -500,6 +501,8 @@ pub struct WriteResultLockInfo {
     pub lock_info_pb: LockInfo,
     pub parameters: PessimisticLockParameters,
     pub hash_for_latch: u64,
+    /// Whether the pending request is trying to acquire a shared lock.
+    pub is_shared_lock_request: bool,
     /// If a request is woken up after waiting for some lock, and it encounters
     /// another lock again after resuming, this field will carry the token
     /// that was already allocated before.
@@ -515,6 +518,7 @@ impl WriteResultLockInfo {
         parameters: PessimisticLockParameters,
         key: Key,
         should_not_exist: bool,
+        is_shared_lock_request: bool,
     ) -> Self {
         let lock = lock_manager::LockDigest {
             ts: lock_info_pb.get_lock_version().into(),
@@ -528,6 +532,7 @@ impl WriteResultLockInfo {
             lock_info_pb,
             parameters,
             hash_for_latch,
+            is_shared_lock_request,
             lock_wait_token: LockWaitToken(None),
             req_states: None,
         }
@@ -574,10 +579,13 @@ fn find_mvcc_infos_by_key<S: Snapshot>(
 ) -> Result<LockWritesVals> {
     let mut writes = vec![];
     let mut values = vec![];
-    let lock = reader.load_lock(key)?.map(|lock| match lock {
-        Either::Left(lock) => lock,
-        Either::Right(_shared_locks) => {
-            unimplemented!("SharedLocks returned from load_lock is not supported here")
+    let lock = reader.load_lock(key)?.and_then(|lock| match lock {
+        Either::Left(lock) => Some(lock),
+        // For SharedLocks, we return the first lock for debug purposes.
+        // This function is only used for collecting MVCC info for debugging.
+        Either::Right(mut shared_locks) => {
+            let first_ts = shared_locks.iter_ts().next().cloned();
+            first_ts.and_then(|ts| shared_locks.get_lock(&ts).ok().flatten().cloned())
         }
     });
     loop {

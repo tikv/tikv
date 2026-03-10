@@ -1755,15 +1755,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     statistics.add(&reader.statistics);
                     let (read_locks, _) = read_res?;
                     let mut locks = Vec::with_capacity(read_locks.len());
-                    for (key, lock) in read_locks.into_iter() {
-                        let lock = match lock {
-                            Either::Left(lock) => lock,
-                            Either::Right(_shared_locks) => unimplemented!(
-                                "SharedLocks returned from scan_locks is not supported here"
-                            ),
+                    for (key, lock_or_shared_locks) in read_locks.into_iter() {
+                        let lock_info = match lock_or_shared_locks {
+                            Either::Left(lock) => {
+                                lock.into_lock_info(key.into_raw().map_err(txn::Error::from)?)
+                            }
+                            Either::Right(shared_locks) => shared_locks
+                                .into_lock_info(key.into_raw().map_err(txn::Error::from)?),
                         };
-                        let lock_info =
-                            lock.into_lock_info(key.into_raw().map_err(txn::Error::from)?);
                         locks.push(lock_info);
                     }
 
@@ -4051,6 +4050,28 @@ pub mod test_util {
 
     pub fn new_acquire_pessimistic_lock_command_with_pk(
         keys: Vec<(Key, bool)>,
+        pk: Option<&[u8]>,
+        start_ts: impl Into<TimeStamp>,
+        for_update_ts: impl Into<TimeStamp>,
+        return_values: bool,
+        check_existence: bool,
+    ) -> PessimisticLockCommand {
+        let keys = keys
+            .into_iter()
+            .map(|(k, b)| (k, b, false))
+            .collect::<Vec<_>>();
+        new_acquire_pessimistic_lock_command_with_pk_with_shared(
+            keys,
+            pk,
+            start_ts,
+            for_update_ts,
+            return_values,
+            check_existence,
+        )
+    }
+
+    pub fn new_acquire_pessimistic_lock_command_with_pk_with_shared(
+        keys: Vec<(Key, bool, bool)>,
         pk: Option<&[u8]>,
         start_ts: impl Into<TimeStamp>,
         for_update_ts: impl Into<TimeStamp>,
@@ -7990,7 +8011,10 @@ mod tests {
             storage
                 .sched_txn_command(
                     commands::AcquirePessimisticLock::new(
-                        vec![(Key::from_raw(b"a"), false), (Key::from_raw(b"b"), false)],
+                        vec![
+                            (Key::from_raw(b"a"), false, false),
+                            (Key::from_raw(b"b"), false, false),
+                        ],
                         b"a".to_vec(),
                         20.into(),
                         3000,
@@ -9910,7 +9934,10 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::AcquirePessimisticLock::new(
-                    vec![(Key::from_raw(b"foo"), false), (Key::from_raw(&k), false)],
+                    vec![
+                        (Key::from_raw(b"foo"), false, false),
+                        (Key::from_raw(&k), false, false),
+                    ],
                     k.clone(),
                     20.into(),
                     3000,
@@ -10002,7 +10029,7 @@ mod tests {
                 storage
                     .sched_txn_command(
                         commands::AcquirePessimisticLock::new(
-                            vec![(k.clone(), false)],
+                            vec![(k.clone(), false, false)],
                             k.to_raw().unwrap(),
                             lock_ts.into(),
                             3000,
@@ -10595,7 +10622,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::AcquirePessimisticLock::new(
-                    vec![(key1.clone(), false)],
+                    vec![(key1.clone(), false, false)],
                     k1.to_vec(),
                     1.into(),
                     0,
@@ -10618,7 +10645,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::AcquirePessimisticLock::new(
-                    vec![(key2.clone(), false)],
+                    vec![(key2.clone(), false, false)],
                     k2.to_vec(),
                     10.into(),
                     0,
@@ -10852,7 +10879,9 @@ mod tests {
             ],
 
             command: AcquirePessimisticLock::new(
-                keys.iter().map(|&it| (Key::from_raw(it), true)).collect(),
+                keys.iter()
+                    .map(|&it| (Key::from_raw(it), true, false))
+                    .collect(),
                 keys[0].to_vec(),
                 TimeStamp::new(10),
                 0,
@@ -10878,7 +10907,9 @@ mod tests {
             ],
 
             command: AcquirePessimisticLock::new(
-                keys.iter().map(|&it| (Key::from_raw(it), true)).collect(),
+                keys.iter()
+                    .map(|&it| (Key::from_raw(it), true, false))
+                    .collect(),
                 keys[0].to_vec(),
                 TimeStamp::new(10),
                 0,
@@ -12223,6 +12254,72 @@ mod tests {
                     must_locked(&mut storage.engine, key.as_slice(), start_ts);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_scan_lock_with_shared_lock() {
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+        let key = Key::from_raw(b"shared-lock");
+        let pk1 = b"shared-pk-1".to_vec();
+        let pk2 = b"shared-pk-2".to_vec();
+
+        for (start_ts, primary) in [(10, pk1.clone()), (20, pk2.clone())] {
+            storage
+                .sched_txn_command(
+                    new_acquire_pessimistic_lock_command_with_pk_with_shared(
+                        vec![(key.clone(), false, true)],
+                        Some(primary.as_slice()),
+                        start_ts,
+                        start_ts + 1,
+                        false,
+                        false,
+                    ),
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+        }
+        storage
+            .sched_txn_command(
+                commands::PrewritePessimistic::with_defaults(
+                    vec![(
+                        txn_types::Mutation::make_shared_lock(key),
+                        DoPessimisticCheck,
+                    )],
+                    pk2.clone(),
+                    20.into(),
+                    21.into(),
+                ),
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        let locks =
+            block_on(storage.scan_lock(Context::default(), 30.into(), None, None, 10)).unwrap();
+        assert_eq!(locks.len(), 1);
+        let lock = &locks[0];
+        assert_eq!(lock.get_key(), b"shared-lock");
+        assert_eq!(lock.get_lock_type(), Op::SharedLock);
+
+        let mut shared_locks = HashMap::default();
+        for lock in lock.get_shared_lock_infos() {
+            shared_locks.insert(lock.get_lock_version(), lock);
+        }
+        assert_eq!(shared_locks.len(), 2);
+
+        for (ts, for_update_ts, primary, op) in
+            [(10, 11, pk1, Op::PessimisticLock), (20, 21, pk2, Op::Lock)]
+        {
+            let shared_lock = shared_locks.get(&ts).expect("shared lock missing");
+            assert_eq!(shared_lock.get_key(), b"shared-lock");
+            assert_eq!(shared_lock.get_primary_lock(), primary.as_slice());
+            assert_eq!(shared_lock.get_lock_type(), op);
+            assert_eq!(shared_lock.get_lock_for_update_ts(), for_update_ts);
         }
     }
 }

@@ -36,7 +36,8 @@ command! {
         }
         content => {
             /// The set of keys to lock.
-            keys: Vec<(Key, bool)>,
+            /// (Key, bool, bool) means (key, should_not_exist, is_shared_lock)
+            keys: Vec<(Key, bool, bool)>,
             /// The primary lock. Secondary locks (from `keys`) will refer to the primary lock.
             primary: Vec<u8>,
             /// The transaction timestamp.
@@ -71,7 +72,7 @@ impl CommandExt for AcquirePessimisticLock {
     fn write_bytes(&self) -> usize {
         self.keys
             .iter()
-            .map(|(key, _)| key.as_encoded().len())
+            .map(|(key, ..)| key.as_encoded().len())
             .sum()
     }
 
@@ -99,7 +100,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         let mut encountered_locks = vec![];
         let need_old_value = context.extra_op == ExtraOp::ReadOldValue;
         let mut old_values = OldValues::default();
-        for (k, should_not_exist) in keys {
+        for (k, should_not_exist, is_shared_lock) in keys {
             match acquire_pessimistic_lock(
                 &mut txn,
                 &mut reader,
@@ -114,6 +115,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                 need_old_value,
                 self.lock_only_if_exists,
                 self.allow_lock_with_conflict,
+                is_shared_lock,
             ) {
                 Ok((key_res, old_value)) => {
                     res.push(key_res);
@@ -140,6 +142,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                         request_parameters,
                         k,
                         should_not_exist,
+                        is_shared_lock,
                     );
                     encountered_locks.push(lock_info);
                     // Do not lock previously succeeded keys.

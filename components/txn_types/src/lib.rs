@@ -12,7 +12,7 @@ use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::kvrpcpb;
 pub use lock::{
     check_ts_conflict, check_ts_conflict_for_replica_read, decode_lock_start_ts, decode_lock_type,
-    parse_lock, Lock, LockOrSharedLocks, LockType, PessimisticLock, TxnLockRef,
+    parse_lock, Lock, LockOrSharedLocks, LockType, PessimisticLock, SharedLocks, TxnLockRef,
 };
 use thiserror::Error;
 pub use timestamp::{TimeStamp, TsSet, TSO_PHYSICAL_SHIFT_BITS};
@@ -53,6 +53,8 @@ pub enum ErrorInner {
         primary: Vec<u8>,
         reason: kvrpcpb::WriteConflictReason,
     },
+    #[error("invalid operation: {0}")]
+    InvalidOperation(String),
 }
 
 impl ErrorInner {
@@ -78,6 +80,9 @@ impl ErrorInner {
                 primary: primary.to_owned(),
                 reason: reason.to_owned(),
             }),
+            ErrorInner::InvalidOperation(reason) => {
+                Some(ErrorInner::InvalidOperation(reason.clone()))
+            }
         }
     }
 }
@@ -118,6 +123,11 @@ impl ErrorCodeExt for Error {
             ErrorInner::BadFormatWrite => error_code::storage::BAD_FORMAT_WRITE,
             ErrorInner::KeyIsLocked(_) => error_code::storage::KEY_IS_LOCKED,
             ErrorInner::WriteConflict { .. } => error_code::storage::WRITE_CONFLICT,
+            ErrorInner::InvalidOperation(_) => {
+                // This error is caused by misuse of internal API and should be
+                // handled internally.
+                error_code::storage::UNKNOWN
+            }
         }
     }
 }

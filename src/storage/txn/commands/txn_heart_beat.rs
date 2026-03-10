@@ -98,9 +98,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
 
                 lock
             }
-            Some(Either::Right(_shared_locks)) => {
-                unimplemented!("SharedLocks returned from load_lock is not supported here")
-            }
+            // A shared-locked key cannot be the primary key of a transaction.
+            // Fall through to TxnNotFound for stale requests.
             _ => {
                 return Err(MvccError::from(MvccErrorInner::TxnNotFound {
                     start_ts: self.start_ts,
