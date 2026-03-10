@@ -1457,8 +1457,15 @@ mod tests {
             ..Default::default()
         };
 
-        // Task 1: blocks the only worker thread.
-        let (task1, _tx1) = gen_task();
+        // Task 1: synchronously blocks the only worker thread so that it
+        // cannot pop any further tasks from the global priority queue. An
+        // async-only future (oneshot::channel::await) would return Pending
+        // immediately, letting the worker loop back and drain tasks 2-4 from
+        // the queue before the eviction attempt — causing a race.
+        let (block_tx, block_rx) = std::sync::mpsc::channel::<()>();
+        let task1 = async move {
+            let _ = block_rx.recv();
+        };
         handle
             .spawn(
                 task1,
@@ -1469,10 +1476,11 @@ mod tests {
             )
             .unwrap();
 
-        // Wait for task1 to be picked up by the worker.
+        // Wait for task1 to be picked up and block the worker.
         thread::sleep(Duration::from_millis(300));
 
-        // Tasks 2-4: these will sit in the queue since the worker is busy.
+        // Tasks 2-4: these will sit in the global queue since the worker is
+        // blocked by task1.
         let (task2, _tx2) = gen_task();
         let (task3, _tx3) = gen_task();
         let (task4, _tx4) = gen_task();
@@ -1523,7 +1531,7 @@ mod tests {
 
         // Now spawn a high-priority task — should succeed via eviction of a
         // queued low-priority task.
-        let (task_high, tx_high) = gen_task();
+        let (task_high, _tx_high) = gen_task();
         let high_ctx = ResourceControlContext {
             resource_group_name: "high_group".to_string(),
             override_priority: 0,
@@ -1546,8 +1554,9 @@ mod tests {
             "eviction counter should be incremented"
         );
 
-        // Complete the high-priority task.
-        tx_high.send(()).unwrap();
+        // Unblock task1 so the worker thread can resume and the pool can
+        // shut down cleanly.
+        let _ = block_tx.send(());
         thread::sleep(Duration::from_millis(300));
     }
 }
