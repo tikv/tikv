@@ -41,7 +41,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ) -> bool {
         assert_eq!(m.get_msg_type(), MessageType::MsgReadIndex);
 
-        fail::fail_point!("on_step_read_index_msg");
         ctx.coprocessor_host
             .on_step_read_index(m, self.state_role());
         // Must use the commit index of `PeerStorage` instead of the commit index
