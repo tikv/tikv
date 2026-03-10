@@ -409,10 +409,6 @@ impl IndexScanExecutorImpl {
             .map(|x| x as i64)
     }
 
-<<<<<<< HEAD
-    #[inline]
-    fn decode_int_handle_from_key(&self, key: &[u8]) -> Result<i64> {
-=======
     /// ## V1/V2 Global Index Version (non-unique, non-clustered):
     /// ```text
     /// [INDEX_VALUE_PARTITION_ID_FLAG][partition_id (8 bytes)][handle_flag][handle_data]
@@ -454,7 +450,6 @@ impl IndexScanExecutorImpl {
         if key.is_empty() {
             return Err(other_err!("Key is empty, cannot decode handle"));
         }
->>>>>>> 188d9fd96c (copr: support new global index key value format V2 (#19276))
         let flag = key[0];
         let mut val = &key[1..];
 
@@ -3759,8 +3754,6 @@ mod tests {
             0
         );
     }
-<<<<<<< HEAD
-=======
 
     #[test]
     fn test_decode_int_handle_and_partition_from_key() {
@@ -4262,5 +4255,4 @@ mod tests {
             }
         }
     }
->>>>>>> 188d9fd96c (copr: support new global index key value format V2 (#19276))
 }
