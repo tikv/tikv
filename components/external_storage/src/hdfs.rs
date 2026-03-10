@@ -23,7 +23,7 @@ fn try_convert_to_path(url: &Url) -> &str {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct HdfsConfig {
     pub hadoop_home: String,
     pub linux_user: String,
