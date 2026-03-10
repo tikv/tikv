@@ -40,17 +40,20 @@ pub struct StatsCollector<'a, T: IterMetricsCollector> {
     kind: StatsKind,
 
     internal_tombstone: usize,
+    block_read_count: usize,
     raw_value_tombstone: usize,
 }
 
 impl<'a, T: IterMetricsCollector> StatsCollector<'a, T> {
     pub fn new(collector: T, kind: StatsKind, stats: &'a mut CfStatistics) -> Self {
         let internal_tombstone = collector.internal_delete_skipped_count() as usize;
+        let block_read_count = collector.block_read_count() as usize;
         StatsCollector {
             collector,
             stats,
             kind,
             internal_tombstone,
+            block_read_count,
             raw_value_tombstone: RAW_VALUE_TOMBSTONE.with(|m| *m.borrow()),
         }
     }
@@ -60,6 +63,10 @@ impl<T: IterMetricsCollector> Drop for StatsCollector<'_, T> {
     fn drop(&mut self) {
         self.stats.raw_value_tombstone +=
             RAW_VALUE_TOMBSTONE.with(|m| *m.borrow()) - self.raw_value_tombstone;
+        self.stats.block_read_count +=
+            self.collector
+                .block_read_count()
+                .saturating_sub(self.block_read_count as u64) as usize;
         let internal_tombstone =
             self.collector.internal_delete_skipped_count() as usize - self.internal_tombstone;
         match self.kind {
@@ -97,6 +104,7 @@ pub struct CfStatistics {
     pub over_seek_bound: usize,
 
     pub flow_stats: FlowStatistics,
+    pub block_read_count: usize,
 
     pub next_tombstone: usize,
     pub prev_tombstone: usize,
@@ -159,6 +167,7 @@ impl CfStatistics {
         self.seek_for_prev = self.seek_for_prev.saturating_add(other.seek_for_prev);
         self.over_seek_bound = self.over_seek_bound.saturating_add(other.over_seek_bound);
         self.flow_stats.add(&other.flow_stats);
+        self.block_read_count = self.block_read_count.saturating_add(other.block_read_count);
         self.next_tombstone = self.next_tombstone.saturating_add(other.next_tombstone);
         self.prev_tombstone = self.prev_tombstone.saturating_add(other.prev_tombstone);
         self.seek_tombstone = self.seek_tombstone.saturating_add(other.seek_tombstone);

@@ -122,6 +122,13 @@ pub trait IterMetricsCollector {
 
     fn internal_key_skipped_count(&self) -> u64;
 
+    /// Total number of RocksDB data blocks read from storage.
+    ///
+    /// Engines that cannot provide this metric should keep the default `0`.
+    fn block_read_count(&self) -> u64 {
+        0
+    }
+
     // todo: add more metrics related methods when needed.
 }
 
