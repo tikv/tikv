@@ -372,10 +372,10 @@ impl ResourceGroup {
             HashSet::from_iter(group.get_background_settings().get_job_types().to_owned());
         // The request source name of lightning and import into is changed from
         // "lightning" to "import" in https://github.com/pingcap/tidb/pull/66795.
-        // Here, we add "import" if "lihgtning" is configured to handle legacy
+        // Here, we add "import" if "lightning" is configured to handle legacy
         // configurations.
         if background_source_types.contains("lightning") {
-            background_source_types.insert("import".to_string());
+            background_source_types.insert("import".into());
         }
         let fallback_default =
             !group.has_background_settings() && group.name != DEFAULT_RESOURCE_GROUP_NAME;
@@ -1273,7 +1273,7 @@ pub(crate) mod tests {
             &default_limiter
         ));
 
-        // test legacy task_type "lightning" can be coverted to "import".
+        // test legacy task_type "lightning" can be converted to "import".
         let lightning_group = new_background_resource_group_ru(
             "lightning".into(),
             200,
