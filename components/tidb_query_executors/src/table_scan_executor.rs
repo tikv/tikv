@@ -6,6 +6,7 @@ use api_version::{ApiV1, KvFormat};
 use async_trait::async_trait;
 use collections::HashMap;
 use kvproto::coprocessor::KeyRange;
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use smallvec::SmallVec;
 use tidb_query_common::{
     Result,
@@ -101,6 +102,8 @@ impl<S: Storage, F: KvFormat> BatchTableScanExecutor<S, F> {
             handle_indices,
             primary_column_ids,
             is_column_filled,
+            row_sample_rate: 1.0,
+            rng: StdRng::from_entropy(),
         };
         let wrapper = ScanExecutor::new(ScanExecutorOptions {
             imp,
@@ -197,6 +200,12 @@ struct TableScanExecutorImpl {
     /// `next_batch`. It is a struct level field in order to prevent repeated
     /// memory allocations since its length is fixed for each `next_batch` call.
     is_column_filled: Vec<bool>,
+
+    /// Row-level Bernoulli sampling ratio used to skip decoding for rows that
+    /// are not selected.
+    row_sample_rate: f64,
+
+    rng: StdRng,
 }
 
 impl TableScanExecutorImpl {
@@ -293,6 +302,24 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
     #[inline]
     fn mut_context(&mut self) -> &mut EvalContext {
         &mut self.context
+    }
+
+    #[inline]
+    fn should_process_row(&mut self) -> bool {
+        if self.row_sample_rate >= 1.0 {
+            return true;
+        }
+        if self.row_sample_rate <= 0.0 {
+            return false;
+        }
+        self.rng.gen_range(0.0, 1.0) < self.row_sample_rate
+    }
+
+    #[inline]
+    fn set_row_sample_rate(&mut self, sample_rate: f64) {
+        if sample_rate.is_finite() {
+            self.row_sample_rate = sample_rate.clamp(0.0, 1.0);
+        }
     }
 
     /// Constructs empty columns, with PK in decoded format and the rest in raw

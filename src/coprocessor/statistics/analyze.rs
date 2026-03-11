@@ -165,11 +165,7 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                         &self.columns_info,
                         &self.column_groups,
                     );
-                    collector.collect_column(
-                        &column_vals,
-                        &collation_key_vals,
-                        &self.columns_info,
-                    );
+                    collector.collect_column(&column_vals, &collation_key_vals, &self.columns_info);
                 }
             }
 
@@ -201,9 +197,9 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                 let total_count_u128 = total_count as u128;
                 for i in 0..self.columns_info.len() {
                     let sampled_null_count = base.null_count[i].max(0) as u128;
-                    let estimated_null_count =
-                        (sampled_null_count * total_count_u128 + sampled_count_u128 / 2)
-                            / sampled_count_u128;
+                    let estimated_null_count = (sampled_null_count * total_count_u128
+                        + sampled_count_u128 / 2)
+                        / sampled_count_u128;
                     base.null_count[i] = estimated_null_count.min(total_count_u128) as i64;
                 }
             }

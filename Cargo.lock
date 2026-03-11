@@ -7371,6 +7371,7 @@ dependencies = [
  "log_wrappers",
  "match-template",
  "protobuf 2.8.0",
+ "rand 0.7.3",
  "slog",
  "slog-global",
  "smallvec",
