@@ -348,7 +348,7 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn from_backup_stream_config(value: BackupStreamConfig, gcs_v2_enable: bool) -> Self {
+    pub fn from_backup_stream_config(value: BackupStreamConfig) -> Self {
         let prefix = PathBuf::from(value.temp_path);
         let temp_file_size_limit = value.file_size_limit.0;
         let temp_file_memory_quota = value.temp_file_memory_quota.0;
@@ -360,7 +360,7 @@ impl Config {
             temp_file_memory_quota,
             max_flush_interval,
             s3_multi_part_size,
-            gcs_v2_enable,
+            gcs_v2_enable: value.gcs_v2_enable,
         }
     }
 }

@@ -126,7 +126,6 @@ where
         store_id: u64,
         store: S,
         config: BackupStreamConfig,
-        gcs_v2_enable: bool,
         resolved_ts_config: ResolvedTsConfig,
         scheduler: Scheduler<Task>,
         observer: BackupStreamObserver,
@@ -143,7 +142,7 @@ where
             .expect("failed to create tokio runtime for backup stream worker.");
 
         let meta_client = MetadataClient::new(store, store_id);
-        let conf = router::Config::from_backup_stream_config(config.clone(), gcs_v2_enable);
+        let conf = router::Config::from_backup_stream_config(config.clone());
         let range_router = Router::new(scheduler.clone(), conf, backup_encryption_manager.clone());
 
         // spawn a worker to watch task changes from etcd periodically.
