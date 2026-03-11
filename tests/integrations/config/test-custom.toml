@@ -695,3 +695,5 @@ split.split-contained-score = 0.5
 enabled = false
 priority-ctl-strategy = "aggressive"
 compaction-pressure-threshold = 70.0
+write-io-ceiling = 102400.0
+write-io-floor = 10.0

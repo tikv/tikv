@@ -481,7 +481,7 @@ pub struct EnginesResourceInfo {
     latest_normalized_pending_bytes: AtomicU32,
     normalized_pending_bytes_collector: MovingAvgU32,
     // Shared compaction pressure (0-100+) read by GroupQuotaAdjustWorker.
-    shared_compaction_pressure: Arc<AtomicU32>,
+    compaction_pending_bytes_ratio: Arc<AtomicU32>,
 }
 
 impl EnginesResourceInfo {
@@ -492,7 +492,7 @@ impl EnginesResourceInfo {
         tablet_registry: TabletRegistry<RocksEngine>,
         raft_engine: Option<RocksEngine>,
         max_samples_to_preserve: usize,
-        shared_compaction_pressure: Arc<AtomicU32>,
+        compaction_pending_bytes_ratio: Arc<AtomicU32>,
     ) -> Self {
         // Match DATA_CFS.
         let base_max_compactions = [
@@ -506,7 +506,7 @@ impl EnginesResourceInfo {
             raft_engine,
             latest_normalized_pending_bytes: AtomicU32::new(0),
             normalized_pending_bytes_collector: MovingAvgU32::new(max_samples_to_preserve),
-            shared_compaction_pressure,
+            compaction_pending_bytes_ratio,
         }
     }
 
@@ -646,7 +646,7 @@ impl EnginesResourceInfo {
         let effective_pressure = std::cmp::max(normalized_pending_bytes, avg);
         self.latest_normalized_pending_bytes
             .store(effective_pressure, Ordering::Relaxed);
-        self.shared_compaction_pressure
+        self.compaction_pending_bytes_ratio
             .store(effective_pressure, Ordering::Relaxed);
     }
 

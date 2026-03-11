@@ -171,10 +171,6 @@ impl QuotaLimiter {
         self.limiter.speed_limit()
     }
 
-    pub(crate) fn total_consumed(&self) -> u64 {
-        self.limiter.total_bytes_consumed() as u64
-    }
-
     pub(crate) fn set_rate_limit(&self, mut limit: f64) {
         // treat 0 as infinity.
         if limit <= f64::EPSILON {
