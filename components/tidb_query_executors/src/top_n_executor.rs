@@ -218,12 +218,10 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
                 .saturating_mul(order_by_len)
                 .saturating_mul(log2n.max(1));
 
-            if compare_ops > 0 {
-                tidb_query_common::metrics::record_executor_work(
-                    tidb_query_common::metrics::ExecutorName::batch_top_n,
-                    compare_ops,
-                );
-            }
+            tidb_query_common::metrics::record_executor_work(
+                tidb_query_common::metrics::ExecutorName::batch_top_n,
+                compare_ops,
+            );
         }
 
         ensure_columns_decoded(

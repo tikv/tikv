@@ -63,12 +63,10 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
         // Limit compute-volume proxy: number of rows observed from child.
         // (Even if we later truncate, the executor still inspected the batch.)
         let input_rows_u64 = result.logical_rows.len() as u64;
-        if input_rows_u64 > 0 {
-            tidb_query_common::metrics::record_executor_work(
-                tidb_query_common::metrics::ExecutorName::batch_limit,
-                input_rows_u64,
-            );
-        }
+        tidb_query_common::metrics::record_executor_work(
+            tidb_query_common::metrics::ExecutorName::batch_limit,
+            input_rows_u64,
+        );
         if result.logical_rows.len() < self.remaining_rows {
             self.remaining_rows -= result.logical_rows.len();
         } else {

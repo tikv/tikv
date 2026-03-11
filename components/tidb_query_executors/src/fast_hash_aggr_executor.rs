@@ -358,12 +358,10 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
 
         // 2. Update states according to the group.
         let input_rows_u64 = input_logical_rows.len() as u64;
-        if input_rows_u64 > 0 {
-            tidb_query_common::metrics::record_executor_work(
-                tidb_query_common::metrics::ExecutorName::batch_fast_hash_aggr,
-                input_rows_u64,
-            );
-        }
+        tidb_query_common::metrics::record_executor_work(
+            tidb_query_common::metrics::ExecutorName::batch_fast_hash_aggr,
+            input_rows_u64,
+        );
 
         HashAggregationHelper::update_each_row_states_by_offset(
             entities,

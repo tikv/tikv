@@ -111,7 +111,6 @@ impl Tracker {
     }
 
     pub fn write_ru_v2(&self, detail: &mut pb::Ruv2) {
-        detail.set_kv_engine_cache_miss(self.metrics.kv_engine_cache_miss);
         detail.set_coprocessor_executor_iterations(self.metrics.coprocessor_executor_iterations);
         detail.set_coprocessor_response_bytes(self.metrics.coprocessor_response_bytes);
         detail.set_raftstore_store_write_trigger_wb_bytes(
@@ -253,8 +252,6 @@ pub struct RequestMetrics {
     pub apply_write_memtable_nanos: u64,
 
     // RU v2 metrics.
-    pub kv_engine_cache_miss: u64,
-    pub resource_manager_write_cnt: u64,
     pub executor_work_batch_index_scan: u64,
     pub executor_work_batch_table_scan: u64,
     pub executor_work_batch_selection: u64,

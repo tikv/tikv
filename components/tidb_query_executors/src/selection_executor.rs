@@ -106,12 +106,10 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
             let rpn_nodes_u64 = self.conditions[condition_index].len() as u64;
             let col_refs_u64 = self.condition_column_ref_counts[condition_index] as u64;
             let weighted_nodes_u64 = rpn_nodes_u64.saturating_add(col_refs_u64);
-            if rows_u64 > 0 && weighted_nodes_u64 > 0 {
-                tidb_query_common::metrics::record_executor_work(
-                    tidb_query_common::metrics::ExecutorName::batch_selection,
-                    rows_u64.saturating_mul(weighted_nodes_u64),
-                );
-            }
+            tidb_query_common::metrics::record_executor_work(
+                tidb_query_common::metrics::ExecutorName::batch_selection,
+                rows_u64.saturating_mul(weighted_nodes_u64),
+            );
 
             match self.conditions[condition_index].eval(
                 &mut self.context,

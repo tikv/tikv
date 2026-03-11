@@ -174,12 +174,10 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
         let aggr_exprs_u64 = entities.each_aggr_exprs.len() as u64;
 
         let work = rows_u64.saturating_mul(aggr_exprs_u64);
-        if work > 0 {
-            tidb_query_common::metrics::record_executor_work(
-                tidb_query_common::metrics::ExecutorName::batch_simple_aggr,
-                work,
-            );
-        }
+        tidb_query_common::metrics::record_executor_work(
+            tidb_query_common::metrics::ExecutorName::batch_simple_aggr,
+            work,
+        );
 
         assert_eq!(self.states.len(), entities.each_aggr_exprs.len());
 
