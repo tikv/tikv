@@ -15,6 +15,12 @@ pub struct Config {
     /// Compaction pressure percentage at which background write IO throttling
     /// begins. Dynamically configurable at runtime.
     pub compaction_pressure_threshold: f64,
+    /// Maximum write IO rate (MB/s) allowed for background tasks when
+    /// compaction pressure is lower than the threshold.
+    pub write_io_ceiling: f64,
+    /// Minimum write IO rate (MB/s) that background tasks are always allowed,
+    /// even under maximum compaction pressure.
+    pub write_io_floor: f64,
 }
 
 impl Default for Config {
@@ -23,6 +29,8 @@ impl Default for Config {
             enabled: true,
             priority_ctl_strategy: PriorityCtlStrategy::Moderate,
             compaction_pressure_threshold: 70.0,
+            write_io_ceiling: 100.0 * 1024.0,
+            write_io_floor: 10.0,
         }
     }
 }
