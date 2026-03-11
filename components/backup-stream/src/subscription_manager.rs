@@ -1037,9 +1037,10 @@ mod test {
             std::fs::create_dir_all(&tmp).unwrap();
             let mut bs_cfg = BackupStreamConfig::default();
             bs_cfg.temp_path = tmp.to_string_lossy().into_owned();
+            bs_cfg.gcs_v2_enable = false;
             let router = RouterInner::new(
                 scheduler.clone(),
-                crate::router::Config::from_backup_stream_config(bs_cfg, false),
+                crate::router::Config::from_backup_stream_config(bs_cfg),
                 BackupEncryptionManager::default(),
             );
             let mut task = StreamBackupTaskInfo::new();

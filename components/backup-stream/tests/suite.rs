@@ -385,6 +385,7 @@ impl Suite {
         let regions = sim.region_info_accessors.get(&id).unwrap().clone();
         let ob = self.obs.get(&id).unwrap().clone();
         cfg.enable = true;
+        cfg.gcs_v2_enable = false;
         cfg.temp_path = format!("/{}/{}", self.temp_files.path().display(), id);
         let resolver = LeadershipResolver::new(
             id,
@@ -402,7 +403,6 @@ impl Suite {
             id,
             self.meta_store.clone(),
             cfg,
-            false,
             ResolvedTsConfig::default(),
             worker.scheduler(),
             ob,
