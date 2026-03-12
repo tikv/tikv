@@ -739,6 +739,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         );
                     }
                     metrics::tls_collect_scan_details(CMD, &statistics);
+                    with_tls_tracker(|tracker| {
+                        tracker.metrics.storage_processed_keys_get =
+                            tracker.metrics.storage_processed_keys_get.saturating_add(1);
+                    });
                     metrics::tls_collect_read_flow(
                         ctx.get_region_id(),
                         Some(key.as_encoded()),
@@ -983,6 +987,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             {
                                 Ok(mut point_getter) => {
                                     let v = point_getter.get_entry(&key, need_commit_ts);
+                                    with_tls_tracker(|tracker| {
+                                        tracker.metrics.storage_processed_keys_get = tracker
+                                            .metrics
+                                            .storage_processed_keys_get
+                                            .saturating_add(1);
+                                    });
                                     let stat = point_getter.take_statistics();
                                     metrics::tls_collect_read_flow(
                                         region_id,
@@ -1124,6 +1134,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let begin_instant = Instant::now();
 
                     let stage_snap_recv_ts = begin_instant;
+                    let requested_keys = keys.len() as u64;
                     let (result, stats) = Self::with_perf_context(CMD, || {
                         let _guard = sample.observe_cpu();
                         let mut reader = MvccReader::new(
@@ -1185,6 +1196,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         (result, reader.statistics)
                     });
                     metrics::tls_collect_scan_details(CMD, &stats);
+                    with_tls_tracker(|tracker| {
+                        tracker.metrics.storage_processed_keys_batch_get = tracker
+                            .metrics
+                            .storage_processed_keys_batch_get
+                            .saturating_add(requested_keys);
+                    });
                     let now = Instant::now();
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
@@ -1334,6 +1351,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let stage_snap_recv_ts = begin_instant;
                     let mut statistics = Vec::with_capacity(keys.len());
                     let buckets = snapshot.ext().get_buckets();
+                    let requested_keys = keys.len() as u64;
                     let (result, stats) = Self::with_perf_context(CMD, || {
                         let _guard = sample.observe_cpu();
                         let snap_store = SnapshotStore::new(
@@ -1394,6 +1412,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         );
                     }
                     metrics::tls_collect_scan_details(CMD, &stats);
+                    if result.is_ok() {
+                        with_tls_tracker(|tracker| {
+                            tracker.metrics.storage_processed_keys_batch_get = tracker
+                                .metrics
+                                .storage_processed_keys_batch_get
+                                .saturating_add(requested_keys);
+                        });
+                    }
                     let now = Instant::now();
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)

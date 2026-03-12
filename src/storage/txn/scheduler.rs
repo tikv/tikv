@@ -1886,6 +1886,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         };
         let txn_ext = snapshot.ext().get_txn_ext().cloned();
         let deadline = task.cmd().deadline();
+        let write_bytes = task.cmd().write_bytes() as u64;
         let write_result = Self::handle_task(self.clone(), snapshot, task, sched_details).await;
 
         // Feed MVCC scan stats into the per-request tracker before any callback/early
@@ -1907,6 +1908,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 .metrics
                 .mvcc_processed_versions_size
                 .saturating_add(mvcc_processed_versions_size);
+            tracker.metrics.raftstore_store_write_trigger_wb_bytes = tracker
+                .metrics
+                .raftstore_store_write_trigger_wb_bytes
+                .saturating_add(write_bytes);
         });
 
         let mut write_result = match deadline

@@ -790,6 +790,13 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             if drained.stop() || self.paging_size.is_some_and(|p| record_all >= p as usize) {
                 self.out_most_executor
                     .collect_exec_stats(&mut self.exec_stats);
+                tidb_query_common::metrics::record_coprocessor_executor_iterations(
+                    self.exec_stats
+                        .summary_per_executor
+                        .iter()
+                        .map(|s| s.num_iterations as u64)
+                        .sum(),
+                );
                 let range = if drained == BatchExecIsDrain::Drain {
                     None
                 } else {
@@ -1012,6 +1019,13 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
     ) -> Result<StreamResponse> {
         self.out_most_executor
             .collect_exec_stats(&mut self.exec_stats);
+        tidb_query_common::metrics::record_coprocessor_executor_iterations(
+            self.exec_stats
+                .summary_per_executor
+                .iter()
+                .map(|s| s.num_iterations as u64)
+                .sum(),
+        );
 
         let mut s_resp = StreamResponse::default();
         s_resp.set_data(box_try!(chunk.write_to_bytes()));

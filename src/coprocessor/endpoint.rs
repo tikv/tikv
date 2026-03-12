@@ -535,14 +535,17 @@ impl<E: Engine> Endpoint<E> {
         let mut storage_stats = Statistics::default();
         handler.collect_scan_statistics(&mut storage_stats);
         tracker.collect_storage_statistics(storage_stats);
-        let (exec_details, exec_details_v2) = tracker.get_exec_details();
-        tracker.on_finish_all_items();
-        record_logical_read_bytes(exec_details_v2.get_scan_detail_v2().processed_versions_size);
         let mut resp = match result {
             Ok(resp) => {
                 let resp_size = resp.data.len() as u64;
                 COPR_RESP_SIZE.inc_by(resp_size);
                 record_network_out_bytes(resp_size);
+                with_tls_tracker(|tracker| {
+                    tracker.metrics.coprocessor_response_bytes = tracker
+                        .metrics
+                        .coprocessor_response_bytes
+                        .saturating_add(resp_size);
+                });
                 resp
             }
             Err(e) => {
@@ -555,6 +558,9 @@ impl<E: Engine> Endpoint<E> {
                 make_error_response(e).into()
             }
         };
+        let (exec_details, exec_details_v2) = tracker.get_exec_details();
+        tracker.on_finish_all_items();
+        record_logical_read_bytes(exec_details_v2.get_scan_detail_v2().processed_versions_size);
         resp.set_exec_details(exec_details);
         resp.set_exec_details_v2(exec_details_v2);
         resp.set_latest_buckets_version(buckets_version);
@@ -812,10 +818,14 @@ impl<E: Engine> Endpoint<E> {
                     result
                 };
 
-                let (exec_details, exec_details_v2) = tracker.get_item_exec_details();
-
                 match result {
                     Err(e) => {
+                        let (exec_details, exec_details_v2) = tracker.get_item_exec_details();
+                        record_logical_read_bytes(
+                            exec_details_v2
+                                .get_scan_detail_v2()
+                                .processed_versions_size,
+                        );
                         let mut resp = make_error_response(e);
                         resp.set_exec_details(exec_details);
                         resp.set_exec_details_v2(exec_details_v2);
@@ -827,6 +837,13 @@ impl<E: Engine> Endpoint<E> {
                         let resp_size = resp.data.len() as u64;
                         COPR_RESP_SIZE.inc_by(resp_size);
                         record_network_out_bytes(resp_size);
+                        with_tls_tracker(|tracker| {
+                            tracker.metrics.coprocessor_response_bytes = tracker
+                                .metrics
+                                .coprocessor_response_bytes
+                                .saturating_add(resp_size);
+                        });
+                        let (exec_details, exec_details_v2) = tracker.get_item_exec_details();
                         record_logical_read_bytes(exec_details_v2.get_scan_detail_v2().processed_versions_size);
                         resp.set_exec_details(exec_details);
                         resp.set_exec_details_v2(exec_details_v2);
@@ -1636,6 +1653,58 @@ mod tests {
         .unwrap();
         assert_eq!(resp.get_data().len(), 0);
         assert!(!resp.get_other_error().is_empty());
+    }
+
+    #[test]
+    fn test_unary_response_bytes_in_ru_v2() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cm = ConcurrencyManager::new_for_test(1.into());
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            None,
+        );
+
+        let prev_tracker = ::tracker::get_tls_tracker_token();
+        let req_info = RequestInfo {
+            region_id: 0,
+            start_ts: 0,
+            task_id: 0,
+            resource_group_tag: vec![],
+            begin: std::time::Instant::now(),
+            request_type: RequestType::CoprocessorDag,
+            cid: 0,
+            is_external_req: false,
+        };
+        let tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(req_info));
+        set_tls_tracker_token(tracker);
+
+        let handler_builder = Box::new(move |_, _: &_| {
+            let mut response = coppb::Response::default();
+            response.set_data(vec![1, 2, 3, 4]);
+            Ok(UnaryFixture::new(Ok(response)).into_boxed())
+        });
+        let resp = block_on(
+            copr.handle_unary_request(ParseCopRequestResult::default_for_test(handler_builder)),
+        )
+        .unwrap();
+
+        assert_eq!(
+            resp.get_exec_details_v2()
+                .get_ru_v2()
+                .get_coprocessor_response_bytes(),
+            4
+        );
+
+        set_tls_tracker_token(prev_tracker);
+        GLOBAL_TRACKERS.remove(tracker);
     }
 
     #[test]
