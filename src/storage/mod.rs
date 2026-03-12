@@ -1944,6 +1944,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
     // Schedule raw modify commands, which reuse the scheduler worker pool.
     // TODO: separate the txn and raw commands if needed in the future.
+    // TODO(Patch C): wrap `future` with `.in_resource_metering_tag(resource_tag)`
+    // so that raw write CPU on the scheduler pool is attributed to the region.
+    // This requires accepting a `&Context` parameter to create the tag.
     fn sched_raw_command<T>(
         &self,
         metadata: TaskMetadata<'_>,

@@ -610,6 +610,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let ctx = cmd.ctx().clone();
         let deadline = cmd.deadline();
         let sched = self.clone();
+        // Patch B: attach resource metering tag so that precheck CPU on the
+        // scheduler pool is attributed to the region.
+        let resource_tag = self.inner.resource_tag_factory.new_tag(&ctx);
         let execution = async move {
             match unsafe { with_tls_engine(|engine: &mut E| engine.precheck_write_with_ctx(&ctx)) }
             {
@@ -654,7 +657,8 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     }
                 }
             }
-        };
+        }
+        .in_resource_metering_tag(resource_tag);
         let execution = track(execution, TlsFutureTracker::new(tracker_token, tag, cid));
         self.get_sched_pool()
             .spawn(
@@ -725,6 +729,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let priority = task.cmd().priority();
         let future_tracker =
             TlsFutureTracker::new(task.tracker_token(), task.cmd().tag(), task.cid());
+        // Patch A: create resource metering tag early so that snapshot and all
+        // subsequent scheduler CPU is attributed to the region.
+        let resource_tag = self.inner.resource_tag_factory.new_tag(task.cmd().ctx());
         let execution = async move {
             fail_point!("scheduler_start_execute");
             if sched.check_task_deadline_exceeded(&task, None) {
@@ -790,7 +797,8 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     sched.finish_with_err(task.cid(), Error::from(err), None);
                 }
             }
-        };
+        }
+        .in_resource_metering_tag(resource_tag);
         let execution = track(execution, future_tracker);
         let execution_bytes = std::mem::size_of_val(&execution);
         let memory_quota = self.inner.memory_quota.clone();
@@ -1238,55 +1246,53 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             return;
         }
 
-        let resource_tag = self.inner.resource_tag_factory.new_tag(task.cmd().ctx());
-        async {
-            let tag = task.cmd().tag();
-            fail_point!("scheduler_async_snapshot_finish");
-            SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
+        // Resource metering tag is already attached by execute(), no need to
+        // wrap again here. The nested attachment protection in
+        // ResourceMeteringTag::attach() would skip it anyway.
+        let tag = task.cmd().tag();
+        fail_point!("scheduler_async_snapshot_finish");
+        SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
 
-            let region_id = task.cmd().ctx().get_region_id();
-            let ts = task.cmd().ts();
-            match task.cmd() {
-                Command::Prewrite(_) | Command::PrewritePessimistic(_) => {
-                    tls_collect_query(region_id, QueryKind::Prewrite);
-                }
-                Command::AcquirePessimisticLock(_) => {
-                    tls_collect_query(region_id, QueryKind::AcquirePessimisticLock);
-                }
-                Command::Commit(_) => {
-                    tls_collect_query(region_id, QueryKind::Commit);
-                }
-                Command::Rollback(_) | Command::PessimisticRollback(_) => {
-                    tls_collect_query(region_id, QueryKind::Rollback);
-                }
-                _ => {}
+        let region_id = task.cmd().ctx().get_region_id();
+        let ts = task.cmd().ts();
+        match task.cmd() {
+            Command::Prewrite(_) | Command::PrewritePessimistic(_) => {
+                tls_collect_query(region_id, QueryKind::Prewrite);
             }
-
-            fail_point!("scheduler_process");
-            GLOBAL_TRACKERS.with_tracker(task.tracker_token(), |tracker| {
-                record_network_in_bytes(tracker.metrics.grpc_req_size);
-            });
-
-            if task.cmd().readonly() {
-                self.process_read(snapshot, task, &mut sched_details);
-                record_logical_read_bytes(sched_details.stat.processed_size as u64);
-            } else {
-                record_logical_write_bytes(task.cmd().write_bytes() as u64);
-                self.process_write(snapshot, task, &mut sched_details).await;
-            };
-            tls_collect_scan_details(tag.get_str(), &sched_details.stat);
-            let elapsed = sched_details.start_instant.saturating_elapsed();
-            slow_log!(
-                elapsed,
-                "[region {}] scheduler handle command: {}, ts: {}, details: {:?}",
-                region_id,
-                tag,
-                ts,
-                sched_details,
-            );
+            Command::AcquirePessimisticLock(_) => {
+                tls_collect_query(region_id, QueryKind::AcquirePessimisticLock);
+            }
+            Command::Commit(_) => {
+                tls_collect_query(region_id, QueryKind::Commit);
+            }
+            Command::Rollback(_) | Command::PessimisticRollback(_) => {
+                tls_collect_query(region_id, QueryKind::Rollback);
+            }
+            _ => {}
         }
-        .in_resource_metering_tag(resource_tag)
-        .await;
+
+        fail_point!("scheduler_process");
+        GLOBAL_TRACKERS.with_tracker(task.tracker_token(), |tracker| {
+            record_network_in_bytes(tracker.metrics.grpc_req_size);
+        });
+
+        if task.cmd().readonly() {
+            self.process_read(snapshot, task, &mut sched_details);
+            record_logical_read_bytes(sched_details.stat.processed_size as u64);
+        } else {
+            record_logical_write_bytes(task.cmd().write_bytes() as u64);
+            self.process_write(snapshot, task, &mut sched_details).await;
+        };
+        tls_collect_scan_details(tag.get_str(), &sched_details.stat);
+        let elapsed = sched_details.start_instant.saturating_elapsed();
+        slow_log!(
+            elapsed,
+            "[region {}] scheduler handle command: {}, ts: {}, details: {:?}",
+            region_id,
+            tag,
+            ts,
+            sched_details,
+        );
     }
 
     /// Processes a read command within a worker thread, then posts
@@ -2979,5 +2985,84 @@ mod tests {
             .unwrap();
         std::thread::sleep(Duration::from_millis(100));
         assert_eq!(scheduler.inner.memory_quota.in_use(), 0);
+    }
+
+    /// After Patch A, the resource metering tag is attached in execute()
+    /// before snapshot. Verify that a normal write command (Rollback) still
+    /// completes successfully through the new wrapping.
+    #[test]
+    fn test_execute_resource_metering_tag_covers_snapshot() {
+        let (scheduler, _engine) = new_test_scheduler();
+
+        // Issue a Rollback command — it goes through execute() -> snapshot ->
+        // process() -> process_write(). If the metering wrapper broke
+        // anything, this would fail or hang.
+        let mut req = BatchRollbackRequest::default();
+        req.mut_context().max_execution_duration_ms = 5000;
+        req.mut_context().set_region_id(1);
+        req.set_keys(vec![b"k1".to_vec()].into());
+        req.set_start_version(10);
+        let cmd: TypedCommand<()> = req.into();
+        let (cb, f) = paired_future_callback();
+        scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
+        // The command should complete without error (key doesn't exist, so
+        // rollback is a no-op).
+        block_on_timeout(f, Duration::from_secs(5))
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
+
+    /// After Patch A, verify that a read command (CheckSecondaryLocks) also
+    /// works correctly with the metering tag attached from execute().
+    #[test]
+    fn test_execute_resource_metering_tag_covers_read() {
+        let (scheduler, _engine) = new_test_scheduler();
+
+        let mut req = CheckSecondaryLocksRequest::default();
+        req.mut_context().max_execution_duration_ms = 5000;
+        req.mut_context().set_region_id(2);
+        req.set_keys(vec![b"k1".to_vec()].into());
+        req.set_start_version(10);
+        let cmd: TypedCommand<SecondaryLocksStatus> = req.into();
+        let (cb, f) = paired_future_callback();
+        scheduler.run_cmd(cmd.cmd, StorageCallback::SecondaryLocksStatus(cb));
+        block_on_timeout(f, Duration::from_secs(5))
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
+
+    /// After Patch B, fail_fast_or_check_deadline() also wraps its future
+    /// with a resource metering tag. Verify that the deadline path still
+    /// works correctly: when a command cannot acquire latches, it should
+    /// eventually return DeadlineExceeded.
+    #[test]
+    fn test_fail_fast_resource_metering_tag() {
+        let (scheduler, _) = new_test_scheduler();
+
+        // Hold latch on key "b" so the next command cannot acquire it.
+        let mut lock = Lock::new(&[Key::from_raw(b"b")]);
+        let cid = scheduler.inner.gen_id();
+        assert!(scheduler.inner.latches.acquire(&mut lock, cid));
+
+        // Issue a command that needs latch on "b" with a short deadline.
+        // It will enter fail_fast_or_check_deadline() which now has the
+        // metering tag wrapper.
+        let mut req = BatchRollbackRequest::default();
+        req.mut_context().max_execution_duration_ms = 100;
+        req.mut_context().set_region_id(3);
+        req.set_keys(vec![b"a".to_vec(), b"b".to_vec()].into());
+        let cmd: TypedCommand<()> = req.into();
+        let (cb, f) = paired_future_callback();
+        scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
+
+        // Wait for deadline to expire.
+        thread::sleep(Duration::from_millis(300));
+        assert!(matches!(
+            block_on(f).unwrap(),
+            Err(StorageError(box StorageErrorInner::DeadlineExceeded))
+        ));
+        scheduler.release_latches(lock, cid, None);
     }
 }
