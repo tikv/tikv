@@ -1050,7 +1050,7 @@ mod tests {
 
         // only default group, always return infinity.
         reset_quota(&mut worker, 6.4);
-        priority_limiters[1].consume(Duration::from_secs(50), IoBytes::default(), true);
+        priority_limiters[1].consume(Duration::from_secs(50), IoBytes::default(), true, false);
         worker.adjust();
         check_limiter(f64::INFINITY, f64::INFINITY, f64::INFINITY);
 
@@ -1060,46 +1060,46 @@ mod tests {
         resource_ctl.add_resource_group(rg2);
 
         reset_quota(&mut worker, 6.4);
-        priority_limiters[1].consume(Duration::from_secs(64), IoBytes::default(), true);
+        priority_limiters[1].consume(Duration::from_secs(64), IoBytes::default(), true, false);
         worker.adjust();
         check_limiter(f64::INFINITY, f64::INFINITY, f64::INFINITY);
 
         reset_quota(&mut worker, 6.4);
         for _i in 0..100 {
-            priority_limiters[0].consume(Duration::from_millis(240), IoBytes::default(), true);
-            priority_limiters[1].consume(Duration::from_millis(400), IoBytes::default(), true);
+            priority_limiters[0].consume(Duration::from_millis(240), IoBytes::default(), true, false);
+            priority_limiters[1].consume(Duration::from_millis(400), IoBytes::default(), true, false);
         }
         worker.adjust();
         check_limiter(f64::INFINITY, 3.2, 0.8);
 
         reset_quota(&mut worker, 6.4);
         for _i in 0..100 {
-            priority_limiters[0].consume(Duration::from_millis(120), IoBytes::default(), true);
-            priority_limiters[1].consume(Duration::from_millis(200), IoBytes::default(), true);
+            priority_limiters[0].consume(Duration::from_millis(120), IoBytes::default(), true, false);
+            priority_limiters[1].consume(Duration::from_millis(200), IoBytes::default(), true, false);
         }
         worker.adjust();
         check_limiter(f64::INFINITY, 1.6, 0.8);
 
         reset_quota(&mut worker, 6.4);
         for _i in 0..100 {
-            priority_limiters[2].consume(Duration::from_millis(200), IoBytes::default(), true);
+            priority_limiters[2].consume(Duration::from_millis(200), IoBytes::default(), true, false);
         }
         worker.adjust();
         check_limiter(f64::INFINITY, f64::INFINITY, f64::INFINITY);
 
         reset_quota(&mut worker, 8.0);
         for _i in 0..100 {
-            priority_limiters[0].consume(Duration::from_millis(240), IoBytes::default(), true);
-            priority_limiters[1].consume(Duration::from_millis(240), IoBytes::default(), true);
-            priority_limiters[2].consume(Duration::from_millis(320), IoBytes::default(), true);
+            priority_limiters[0].consume(Duration::from_millis(240), IoBytes::default(), true, false);
+            priority_limiters[1].consume(Duration::from_millis(240), IoBytes::default(), true, false);
+            priority_limiters[2].consume(Duration::from_millis(320), IoBytes::default(), true, false);
         }
         worker.adjust();
         check_limiter(f64::INFINITY, 3.2, 0.8);
 
         reset_quota(&mut worker, 6.0);
         for _i in 0..100 {
-            priority_limiters[0].consume(Duration::from_millis(240), IoBytes::default(), true);
-            priority_limiters[2].consume(Duration::from_millis(360), IoBytes::default(), true);
+            priority_limiters[0].consume(Duration::from_millis(240), IoBytes::default(), true, false);
+            priority_limiters[2].consume(Duration::from_millis(360), IoBytes::default(), true, false);
         }
         worker.adjust();
         check_limiter(f64::INFINITY, 3.2, 3.2);
