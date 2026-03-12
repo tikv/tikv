@@ -120,7 +120,7 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
         self.src
     }
 
-    // Record the truncate key values for the last row
+    // Record the truncate key values for the given index
     #[inline]
     fn record_truncate_key_values(
         &mut self,
