@@ -851,6 +851,11 @@ lazy_static! {
         "Cache evict bytes."
     ).unwrap();
 
+    pub static ref WAIT_MERGE_SOURCE_TIMEOUT_COUNTER: IntCounter = register_int_counter!(
+        "tikv_raftstore_wait_merge_source_timeout_total",
+        "Total number of WaitMergeSource timeouts in the apply FSM."
+    ).unwrap();
+
     pub static ref COMPACTION_GUARD_ACTION_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
             "tikv_raftstore_compaction_guard_action_total",

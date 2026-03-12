@@ -2417,3 +2417,162 @@ fn test_node_merge_with_apply_ahead_of_persist() {
 
     cluster.must_put(b"k1", b"v3");
 }
+
+/// Regression test: if the source apply delegate is destroyed before
+/// `CatchUpLogs` completes, the target gets stuck in `WaitMergeSource`
+/// and in-memory locks leak. The `WaitMergeSource` timeout in apply.rs
+/// must detect this and destroy the target delegate, releasing all
+/// pending `KeyHandleGuard`s so `resolved_ts` is not pinned.
+#[test]
+fn test_merge_source_destroy_before_catch_up_logs_leaks_cm_lock() {
+    let mut cluster = new_server_cluster(0, 3);
+    configure_for_merge(&mut cluster.cfg);
+    cluster.run();
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    let peer_on_store1 = find_peer(&region, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1);
+
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+
+    // Make source on store 3 fall behind so CatchUpLogs is needed.
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(left.get_id(), 3)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend),
+    ));
+    cluster.must_put(b"k11", b"v11");
+    must_get_none(&cluster.get_engine(3), b"k11");
+
+    // Get the target (right) region's leader and its concurrency manager.
+    let right_leader = cluster.leader_of_region(right.get_id()).unwrap();
+    let leader_store = right_leader.get_store_id();
+    let cm = cluster.sim.rl().get_concurrency_manager(leader_store);
+
+    // Set up gRPC client to the leader store.
+    let addr = cluster.sim.rl().get_addr(leader_store);
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(env).connect(&addr);
+    let client = TikvClient::new(channel);
+
+    // --- Phase 1: Trigger merge with the source unable to signal -----------
+    //
+    // "after_handle_catch_up_logs_for_merge" with "return()" makes
+    // logs_up_to_date_for_merge return immediately: the source's Arc clone
+    // of logs_up_to_date is dropped (never signaled), the source is not
+    // destroyed through the normal merge path, and no Noop is sent to the
+    // target.  The target enters WaitMergeSource permanently.
+    fail::cfg("after_handle_catch_up_logs_for_merge", "return()").unwrap();
+    fail::cfg("wait_merge_source_timeout_millis", "return(3000)").unwrap();
+    struct FailpointGuard(Vec<&'static str>);
+    impl Drop for FailpointGuard {
+        fn drop(&mut self) {
+            for name in &self.0 {
+                fail::remove(name);
+            }
+        }
+    }
+    let _fp_guard = FailpointGuard(vec![
+        "after_handle_catch_up_logs_for_merge",
+        "wait_merge_source_timeout_millis",
+    ]);
+
+    pd_client.merge_region(left.get_id(), right.get_id());
+
+    // Wait for the merge to reach WaitMergeSource on the leader.
+    // After this point the target's apply is stuck.
+    thread::sleep(Duration::from_secs(2));
+
+    // --- Phase 2: Async-commit prewrite on the target region ---------------
+    //
+    // The prewrite creates a KeyHandleGuard + Lock in the concurrency
+    // manager (via async_commit_timestamps).  The Raft entry is committed
+    // → WriteEvent::Committed fires → prewrite RPC returns.  But the
+    // entry cannot be applied (stuck behind WaitMergeSource), so
+    // WriteEvent::Finished never fires and the guard is never dropped.
+    //
+    // We run the prewrite in a background thread because if the response
+    // policy falls back to OnApplied (non-async-commit path), the RPC
+    // will block until apply completes — which it never will.  The CM
+    // lock is created before the Raft proposal regardless of response
+    // policy, so we observe it from the main thread.
+    let do_prewrite = {
+        let right_id = right.get_id();
+        move |cluster: &mut Cluster<ServerCluster>| {
+            let leader = cluster.leader_of_region(right_id).unwrap();
+            let epoch = cluster.get_region_epoch(right_id);
+            let mut ctx = Context::default();
+            ctx.set_region_id(right_id);
+            ctx.set_peer(leader);
+            ctx.set_region_epoch(epoch);
+
+            let mut req = PrewriteRequest::default();
+            req.set_context(ctx);
+            req.set_primary_lock(b"k3".to_vec());
+            let mut mutation = Mutation::default();
+            mutation.set_op(Op::Put);
+            mutation.set_key(b"k3".to_vec());
+            mutation.set_value(b"merge_test".to_vec());
+            req.mut_mutations().push(mutation);
+            req.set_start_version(200);
+            req.set_lock_ttl(20000);
+            req.set_use_async_commit(true);
+            // Set secondaries (even empty) to enable async commit path,
+            // which creates the CM lock via async_commit_timestamps.
+            req.set_secondaries(vec![].into());
+            req
+        }
+    };
+
+    let prewrite_req = do_prewrite(&mut cluster);
+    let prewrite_client = client.clone();
+    let _prewrite_handle = thread::spawn(move || {
+        // This may block if response policy is OnApplied (apply stuck).
+        // That's fine — the CM lock is created before proposal.
+        let _ = prewrite_client.kv_prewrite(&prewrite_req);
+    });
+
+    // Wait for the CM lock to appear.  The lock is created by the scheduler
+    // (async_commit_timestamps) before the Raft proposal, so it appears
+    // quickly even if the apply is stuck.
+    let start = Instant::now();
+    while cm.global_min_lock_ts().is_none() {
+        if start.saturating_elapsed() > Duration::from_secs(10) {
+            panic!(
+                "timed out waiting for CM lock from async-commit prewrite; \
+                 the prewrite might not have reached the scheduler yet"
+            );
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+
+    // --- Phase 3: Assert the lock MUST be cleaned up -----------------------
+    //
+    // A correct implementation would detect that WaitMergeSource can never
+    // complete (logs_up_to_date has no external Arc clones / timeout) and
+    // would destroy the target's apply delegate, which drains pending_cmds
+    // → callbacks fire → WriteEvent::Finished delivered → guards dropped
+    // → CM lock cleared.
+    //
+    // Give the system a generous window to clean up.
+    thread::sleep(Duration::from_secs(5));
+
+    assert_eq!(
+        cm.global_min_lock_ts(),
+        None,
+        "BUG: in-memory lock leaked! The source's logs_up_to_date was never signaled \
+         (source apply delegate destroyed before CatchUpLogs could complete). \
+         The target is stuck at WaitMergeSource. The prewrite's KeyHandleGuard \
+         in handle_async_write was never dropped. resolved_ts is permanently pinned.\n\n\
+         To fix: implement WaitMergeSource timeout (Option 2A) or \
+         CatchUpLogs retry (Option 1A) in the apply FSM."
+    );
+
+}

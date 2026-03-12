@@ -1854,6 +1854,90 @@ fn test_raw_put_deadline() {
     must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
 }
 
+/// If `WriteEvent::Finished` is never delivered (e.g. apply delegate
+/// destroyed, channel dropped), the scheduler timeout must release the
+/// `KeyHandleGuard` so the in-memory lock doesn't leak permanently.
+#[test]
+fn test_scheduler_timeout_releases_orphaned_lock_guard() {
+    struct FailpointGuard(Vec<&'static str>);
+    impl Drop for FailpointGuard {
+        fn drop(&mut self) {
+            for name in &self.0 {
+                fail::remove(name);
+            }
+        }
+    }
+
+    let mut cluster = new_server_cluster(0, 1);
+    cluster.run();
+
+    let region = cluster.get_region(b"");
+    let leader = cluster.leader_of_region(region.get_id()).unwrap();
+    let store_id = leader.get_store_id();
+    let cm = cluster.sim.rl().get_concurrency_manager(store_id);
+
+    let addr = cluster.sim.rl().get_addr(store_id);
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(env).connect(&addr);
+    let client = TikvClient::new(channel);
+
+    // Short scheduler timeout and suppress WriteEvent::Finished delivery.
+    fail::cfg("write_event_finished_timeout_millis", "return(3000)").unwrap();
+    fail::cfg("drop_write_event_finished", "return()").unwrap();
+    let _fp_guard = FailpointGuard(vec![
+        "write_event_finished_timeout_millis",
+        "drop_write_event_finished",
+    ]);
+
+    let epoch = cluster.get_region_epoch(region.get_id());
+    let mut ctx = Context::default();
+    ctx.set_region_id(region.get_id());
+    ctx.set_peer(leader);
+    ctx.set_region_epoch(epoch);
+
+    let mut req = PrewriteRequest::default();
+    req.set_context(ctx);
+    req.set_primary_lock(b"k_orphan".to_vec());
+    let mut mutation = kvrpcpb::Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(b"k_orphan".to_vec());
+    mutation.set_value(b"val".to_vec());
+    req.mut_mutations().push(mutation);
+    req.set_start_version(100);
+    req.set_lock_ttl(20000);
+    req.set_use_async_commit(true);
+    req.set_secondaries(vec![].into());
+
+    let prewrite_client = client.clone();
+    let _prewrite_handle = thread::spawn(move || {
+        let _ = prewrite_client.kv_prewrite(&req);
+    });
+
+    // Wait for the CM lock to appear.
+    let start = std::time::Instant::now();
+    while cm.global_min_lock_ts().is_none() {
+        if start.elapsed() > Duration::from_secs(10) {
+            panic!("timed out waiting for CM lock from prewrite");
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(cm.global_min_lock_ts(), Some(100.into()));
+
+    // Poll until the scheduler timeout (3s) fires and releases the guard,
+    // rather than a fixed sleep.
+    let start = std::time::Instant::now();
+    while cm.global_min_lock_ts().is_some() {
+        if start.elapsed() > Duration::from_secs(10) {
+            panic!(
+                "in-memory lock leaked: scheduler timeout should have dropped \
+                 the KeyHandleGuard after WriteEvent::Finished was not delivered"
+            );
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+    assert_eq!(cm.global_min_lock_ts(), None);
+}
+
 #[test]
 #[allow(unused)]
 fn test_shared_exclusive_lock_conflict() {

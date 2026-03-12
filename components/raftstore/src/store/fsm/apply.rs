@@ -34,6 +34,8 @@ use engine_traits::{
     SstMetaInfo, WriteBatch, WriteOptions, util::SequenceNumber,
 };
 use fail::fail_point;
+use futures::compat::Future01CompatExt;
+use futures::FutureExt;
 use health_controller::types::LatencyInspector;
 use kvproto::{
     import_sstpb::SstMeta,
@@ -57,14 +59,17 @@ use smallvec::{SmallVec, smallvec};
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
-    Either, MustConsumeVec, box_err, box_try,
+    Either, MustConsumeVec,     box_err, box_try,
     config::{Tracker, VersionTrack},
-    debug, error, info,
+    debug, error,
+    future::poll_future_notify,
+    info,
     memory::HeapSize,
     mpsc::{LooseBoundedSender, Receiver, loose_bounded},
     safe_panic, slow_log,
     store::{find_peer, find_peer_by_id, find_peer_mut, is_learner, remove_peer},
     time::{Instant, duration_to_sec},
+    timer::GLOBAL_TIMER_HANDLE,
     warn,
     worker::Scheduler,
 };
@@ -418,6 +423,7 @@ where
 
     yield_duration: Duration,
     yield_msg_size: u64,
+    merge_source_wait_timeout: Duration,
 
     store_id: u64,
     /// region_id -> (peer_id, is_splitting)
@@ -514,6 +520,7 @@ where
             perf_context: EK::get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply),
             yield_duration: cfg.apply_yield_duration.0,
             yield_msg_size: cfg.apply_yield_write_size.0,
+            merge_source_wait_timeout: cfg.merge_source_wait_timeout.0,
             delete_ssts: vec![],
             pending_delete_ssts: vec![],
             store_id,
@@ -971,22 +978,26 @@ fn can_witness_skip(entry: &Entry) -> bool {
     field_number != 3
 }
 
-/// A struct that stores the state related to Merge.
+/// Stores state for a target delegate waiting on the source during merge.
 ///
 /// When executing a `CommitMerge`, the source peer may have not applied
 /// to the required index, so the target peer has to abort current execution
 /// and wait for it asynchronously.
-///
-/// When rolling the stack, all states required to recover are stored in
-/// this struct.
-/// TODO: check whether generator/coroutine is a good choice in this case.
 struct WaitSourceMergeState {
     /// A flag that indicates whether the source peer has applied to the
     /// required index. If the source peer is ready, this flag should be set
     /// to the region id of source peer.
     logs_up_to_date: Arc<AtomicU64>,
+    entered_at: Instant,
+    /// Computed once on entry so the timer delay and the elapsed check in
+    /// `resume_pending` always agree, even if a failpoint is toggled
+    /// in between.
+    timeout: Duration,
 }
 
+/// When rolling the stack, all states required to recover are stored in
+/// this struct.
+/// TODO: check whether generator/coroutine is a good choice in this case.
 struct YieldState<EK>
 where
     EK: KvEngine,
@@ -1020,6 +1031,8 @@ impl Debug for WaitSourceMergeState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WaitSourceMergeState")
             .field("logs_up_to_date", &self.logs_up_to_date)
+            .field("entered_at", &self.entered_at)
+            .field("timeout", &self.timeout)
             .finish()
     }
 }
@@ -1239,7 +1252,37 @@ where
                         heap_size: None,
                     });
                     if let ApplyResult::WaitMergeSource(logs_up_to_date) = res {
-                        self.wait_merge_state = Some(WaitSourceMergeState { logs_up_to_date });
+                        let timeout = (|| {
+                            fail_point!("wait_merge_source_timeout_millis", |v| {
+                                Duration::from_millis(
+                                    v.unwrap().parse::<u64>().unwrap(),
+                                )
+                            });
+                            apply_ctx.merge_source_wait_timeout
+                        })();
+                        self.wait_merge_state = Some(WaitSourceMergeState {
+                            logs_up_to_date,
+                            entered_at: Instant::now(),
+                            timeout,
+                        });
+                        let region_id = self.region_id();
+                        let router = apply_ctx.router.clone();
+                        // Schedule a single Noop wakeup so `resume_pending`
+                        // can check the elapsed time.  If the region is
+                        // destroyed by another path before the timer fires,
+                        // `router.mailbox()` returns None and the Noop is
+                        // lost.  This is acceptable: the scheduler-level
+                        // timeout in `handle_async_write` acts as a fallback
+                        // to release orphaned KeyHandleGuards.
+                        let delay = GLOBAL_TIMER_HANDLE
+                            .delay(std::time::Instant::now() + timeout)
+                            .compat()
+                            .map(move |_| {
+                                if let Some(mailbox) = router.mailbox(region_id) {
+                                    let _ = mailbox.force_send(Box::new(Msg::Noop));
+                                }
+                            });
+                        poll_future_notify(delay);
                     }
                     return;
                 }
@@ -4233,11 +4276,21 @@ where
         }
     }
 
-    fn resume_pending(&mut self, ctx: &mut ApplyContext<EK>) {
+    fn resume_pending(&mut self, ctx: &mut ApplyContext<EK>) -> bool {
         if let Some(ref state) = self.delegate.wait_merge_state {
             let source_region_id = state.logs_up_to_date.load(Ordering::SeqCst);
             if source_region_id == 0 {
-                return;
+                if state.entered_at.saturating_elapsed() >= state.timeout {
+                    error!(
+                        "WaitMergeSource timed out; destroying apply delegate";
+                        "region_id" => self.delegate.region_id(),
+                        "peer_id" => self.delegate.id(),
+                        "timeout" => ?state.timeout,
+                    );
+                    WAIT_MERGE_SOURCE_TIMEOUT_COUNTER.inc();
+                    return true;
+                }
+                return false;
             }
             self.delegate.ready_source_region_id = source_region_id;
         }
@@ -4256,12 +4309,93 @@ where
                 // It can either be executing another `CommitMerge` in pending_msgs
                 // or has been written too much data.
                 s.pending_msgs = state.pending_msgs;
-                return;
+                return false;
             }
         }
 
         if !state.pending_msgs.is_empty() {
             self.handle_tasks(ctx, &mut state.pending_msgs);
+        }
+        false
+    }
+
+    /// Called when `resume_pending` detects that the WaitMergeSource timeout
+    /// has elapsed.  The source peer is presumed gone, so we destroy this
+    /// apply delegate and drain all pending callbacks so that the scheduler
+    /// can release KeyHandleGuards and latches.  The peer FSM will be
+    /// notified and eventually recreated via snapshot.
+    fn on_wait_merge_source_timeout(&mut self, ctx: &mut ApplyContext<EK>) {
+        self.delegate.wait_merge_state = None;
+
+        // Drain yield_state.pending_msgs before destroy() drops them, since
+        // they may contain callbacks that must be invoked to release
+        // scheduler resources.
+        let yield_msgs = self
+            .delegate
+            .yield_state
+            .as_mut()
+            .map(|ys| std::mem::take(&mut ys.pending_msgs))
+            .unwrap_or_default();
+
+        if !self.delegate.stopped {
+            // destroy() drops yield_state.pending_entries (committed Raft
+            // entries waiting behind WaitMergeSource).  This is safe because
+            // the merge has failed on this peer; the peer will be recreated
+            // via snapshot and the entries will be re-applied.
+            self.destroy(ctx);
+            ctx.notifier.notify_one(
+                self.delegate.region_id(),
+                PeerMsg::ApplyRes(Box::new(TaskRes::Destroy {
+                    region_id: self.delegate.region_id(),
+                    peer_id: self.delegate.id(),
+                    merge_from_snapshot: false,
+                })),
+            );
+        }
+
+        let region_id = self.delegate.region_id();
+        let peer_id = self.delegate.id();
+
+        // Invoke callbacks for any messages still queued so that the
+        // scheduler's WriteEvent channels close properly and
+        // KeyHandleGuards are dropped.  Use RegionNotFound (not
+        // StaleCommand) because the delegate is being destroyed, not
+        // merely stale -- this avoids unnecessary client retries that
+        // could hit the same stuck state.
+        let drain_msg = |msg: Box<Msg<EK>>| {
+            match *msg {
+                Msg::Apply { mut apply, .. } => {
+                    for p in apply.cbs.drain(..) {
+                        let cmd = PendingCmd::new(p.index, p.term, p.cb);
+                        notify_region_removed(region_id, peer_id, cmd);
+                    }
+                }
+                Msg::Change {
+                    cmd: ChangeObserver { region_id, .. },
+                    cb,
+                    ..
+                } => {
+                    let resp = ReadResponse {
+                        response: cmd_resp::new_error(Error::RegionNotFound(region_id)),
+                        snapshot: None,
+                        txn_extra_op: TxnExtraOp::Noop,
+                    };
+                    cb.invoke_read(resp);
+                }
+                Msg::Noop => {}
+                _ => {
+                    warn!(
+                        "dropping message during WaitMergeSource timeout cleanup";
+                        "region_id" => region_id,
+                    );
+                }
+            }
+        };
+        for msg in yield_msgs {
+            drain_msg(msg);
+        }
+        while let Ok(msg) = self.receiver.try_recv() {
+            drain_msg(msg);
         }
     }
 
@@ -4778,7 +4912,11 @@ where
                 // query the length.
                 handle_result = HandleResult::stop_at(normal.receiver.len(), false);
             }
-            normal.resume_pending(&mut self.apply_ctx);
+            let merge_timed_out = normal.resume_pending(&mut self.apply_ctx);
+            if merge_timed_out {
+                normal.on_wait_merge_source_timeout(&mut self.apply_ctx);
+                return HandleResult::stop_at(0, false);
+            }
             if normal.delegate.wait_merge_state.is_some() {
                 // Yield due to applying CommitMerge, this fsm can be released if its
                 // channel msg count equals to last count because it will receive

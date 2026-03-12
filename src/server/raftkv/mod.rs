@@ -620,6 +620,7 @@ where
                     if let Some(cb) = on_applied {
                         cb(&mut res);
                     }
+                    fail_point!("drop_write_event_finished", |_| {});
                     applied_tx.notify(res);
                 }),
                 drop_on_applied_callback,
