@@ -824,14 +824,15 @@ mod tests {
             .unwrap();
 
         // default ru=2000, bg ru=1000 → shares: 2/3, 1/3
-        // No load: default at floor 1.0M, bg at infinity → target/2 = 2.8M
-        // current_total = 1.0M + 2.8M = 3.8M < 0.9 * 5.6M = 5.04M
-        // budget = 3.8M * 1.1 = 4.18M
-        // default: 4.18 * 2/3 ≈ 2.787, bg: 4.18/3 ≈ 1.393
+        // No load: default at 3.63M, bg at infinity → target/2 = 2.8M
+        // current_total = 3.63M + 2.8M = 6.43M > target (5.6M) → budget = target = 5.6M
+        // default: 5.6 * 2/3 ≈ 3.733, bg: 5.6/3 ≈ 1.867
+        // IO: current_total = 5500 + 3500 = 9000 > 7000 → budget = 7000
+        // default: 7000 * 2/3 ≈ 4667, bg: 7000/3 ≈ 2333
         reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter_rates(&limiter, 2.787, 3300.0);
-        check_limiter_rates(&bg_limiter, 1.393, 1650.0);
+        check_limiter_rates(&limiter, 3.733, 4666.7);
+        check_limiter_rates(&bg_limiter, 1.867, 2333.3);
 
         // Over 70% (100% CPU, 95% IO): budget scales down from target.
         // CPU: pressure = 1.0. budget = min_floor = 1.0M
