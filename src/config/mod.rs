@@ -73,7 +73,7 @@ use serde_json::{Map, Value, to_value};
 use tikv_util::{
     config::{
         self, LogFormat, MIB, RaftDataStateMachine, ReadableDuration, ReadableSchedule,
-        ReadableSize, TomlWriter,
+        ReadableSize, ReadableSizeOrPercent, TomlWriter,
     },
     logger::{get_level_by_string, get_string_by_level, set_log_level},
     sys::SysQuota,
@@ -3678,7 +3678,7 @@ pub struct TikvConfig {
 
     #[doc(hidden)]
     #[online_config(skip)]
-    pub memory_usage_limit: Option<ReadableSize>,
+    pub memory_usage_limit: Option<ReadableSizeOrPercent>,
 
     #[doc(hidden)]
     #[online_config(skip)]
@@ -3970,7 +3970,7 @@ impl TikvConfig {
             } else {
                 (total_mem as f64) * BLOCK_CACHE_RATE
             };
-            self.storage.block_cache.capacity = Some(ReadableSize(capacity as u64));
+            self.storage.block_cache.capacity = Some(ReadableSizeOrPercent(capacity as u64));
         }
 
         // Validate for v2.
@@ -4134,7 +4134,7 @@ impl TikvConfig {
                         * MEMORY_USAGE_LIMIT_RATE) as u64,
                 );
             }
-            let limit = ReadableSize(cmp::min(limit, SysQuota::memory_limit_in_bytes()));
+            let limit = ReadableSizeOrPercent(cmp::min(limit, SysQuota::memory_limit_in_bytes()));
             let default = Self::suggested_memory_usage_limit();
             if limit > default {
                 warn!(
@@ -4513,7 +4513,7 @@ impl TikvConfig {
                         .map(|s| s.0)
                         .unwrap_or_default();
                     let sum = a.0 + b.0 + c.0 + d;
-                    self.storage.block_cache.capacity = Some(ReadableSize(sum));
+                    self.storage.block_cache.capacity = Some(ReadableSizeOrPercent(sum));
                 }
             }
         }
@@ -4691,10 +4691,10 @@ impl TikvConfig {
         Ok((cfg, tmp))
     }
 
-    fn suggested_memory_usage_limit() -> ReadableSize {
+    fn suggested_memory_usage_limit() -> ReadableSizeOrPercent {
         let total = SysQuota::memory_limit_in_bytes();
-        // Reserve some space for page cache. The
-        ReadableSize((total as f64 * MEMORY_USAGE_LIMIT_RATE) as u64)
+        // Reserve some space for page cache.
+        ReadableSizeOrPercent((total as f64 * MEMORY_USAGE_LIMIT_RATE) as u64)
     }
 
     pub fn build_shared_rocks_env(
@@ -7007,22 +7007,28 @@ mod tests {
         );
 
         // Test validating memory_usage_limit when it's greater than max.
-        cfg.memory_usage_limit = Some(ReadableSize(SysQuota::memory_limit_in_bytes() * 2));
+        cfg.memory_usage_limit = Some(ReadableSizeOrPercent(SysQuota::memory_limit_in_bytes() * 2));
         cfg.validate().unwrap_err();
 
         // Test memory_usage_limit is based on block cache size if it's not configured.
         cfg.memory_usage_limit = None;
-        cfg.storage.block_cache.capacity = Some(ReadableSize(3 * GIB));
+        cfg.storage.block_cache.capacity = Some(ReadableSizeOrPercent(3 * GIB));
         cfg.validate().unwrap();
-        assert_eq!(cfg.memory_usage_limit.unwrap(), ReadableSize(5 * GIB));
+        assert_eq!(
+            cfg.memory_usage_limit.unwrap(),
+            ReadableSizeOrPercent(5 * GIB)
+        );
 
         // Test memory_usage_limit will fallback to system memory capacity with huge
         // block cache.
         cfg.memory_usage_limit = None;
         let system = SysQuota::memory_limit_in_bytes();
-        cfg.storage.block_cache.capacity = Some(ReadableSize(system * 3 / 4));
+        cfg.storage.block_cache.capacity = Some(ReadableSizeOrPercent(system * 3 / 4));
         cfg.validate().unwrap();
-        assert_eq!(cfg.memory_usage_limit.unwrap(), ReadableSize(system));
+        assert_eq!(
+            cfg.memory_usage_limit.unwrap(),
+            ReadableSizeOrPercent(system)
+        );
 
         // Test raftstore.enable-partitioned-raft-kv-compatible-learner.
         let mut cfg = TikvConfig::default();
@@ -7055,6 +7061,50 @@ mod tests {
             invalid_cfg.validate().unwrap_err().to_string(),
             "Titan is unavailable for feature TTL"
         );
+    }
+
+    #[test]
+    fn test_config_percentage_values() {
+        let total_mem = SysQuota::memory_limit_in_bytes();
+
+        // Test block-cache.capacity with string percentage
+        let content = r#"
+            [storage.block-cache]
+            capacity = "45%"
+        "#;
+        let cfg: TikvConfig = toml::from_str(content).unwrap();
+        let expected = (total_mem as f64 * 0.45) as u64;
+        assert_eq!(cfg.storage.block_cache.capacity.unwrap().0, expected);
+
+        // Float values should be rejected for block-cache.capacity
+        let content = r#"
+            [storage.block-cache]
+            capacity = 0.45
+        "#;
+        toml::from_str::<TikvConfig>(content).unwrap_err();
+
+        // Test memory-usage-limit with string percentage
+        let content = r#"
+            memory-usage-limit = "75%"
+        "#;
+        let cfg: TikvConfig = toml::from_str(content).unwrap();
+        let expected_mem = (total_mem as f64 * 0.75) as u64;
+        assert_eq!(cfg.memory_usage_limit.unwrap().0, expected_mem);
+
+        // Float values should be rejected for memory-usage-limit
+        let content = r#"
+            memory-usage-limit = 0.75
+        "#;
+        toml::from_str::<TikvConfig>(content).unwrap_err();
+
+        // Full validation passes with percentage values
+        let content = r#"
+            memory-usage-limit = "75%"
+            [storage.block-cache]
+            capacity = "30%"
+        "#;
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
     }
 
     #[test]
