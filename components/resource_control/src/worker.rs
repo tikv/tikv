@@ -346,8 +346,8 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         let pressure = self.compaction_pending_bytes_ratio.load(Ordering::Relaxed) as f64;
         let config = self.resource_ctl.get_config().value().clone();
         let threshold = config.compaction_pressure_threshold.clamp(1.0, 99.0);
-        let ceiling = config.write_io_ceiling * 1024.0 * 1024.0; // MB/s → bytes/s
-        let floor = config.write_io_floor * 1024.0 * 1024.0; // MB/s → bytes/s
+        let ceiling = config.write_io_ceiling.0 as f64; // bytes/s
+        let floor = config.write_io_floor.0 as f64; // bytes/s
 
         let total_budget = if pressure < threshold {
             // Below threshold: ramp up current limit by 10%, capped at ceiling.

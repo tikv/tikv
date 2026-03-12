@@ -917,8 +917,8 @@ fn test_serde_custom_tikv_config() {
         enabled: false,
         priority_ctl_strategy: PriorityCtlStrategy::Aggressive,
         compaction_pressure_threshold: 70.0,
-        write_io_ceiling: 100.0 * 1024.0,
-        write_io_floor: 10.0,
+        write_io_ceiling: ReadableSize::gb(100),
+        write_io_floor: ReadableSize::mb(10),
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");

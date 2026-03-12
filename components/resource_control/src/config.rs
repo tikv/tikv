@@ -3,7 +3,7 @@ use std::{fmt, sync::Arc};
 
 use online_config::{ConfigManager, ConfigValue, OnlineConfig};
 use serde::{Deserialize, Serialize};
-use tikv_util::config::VersionTrack;
+use tikv_util::config::{ReadableSize, VersionTrack};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
@@ -15,12 +15,12 @@ pub struct Config {
     /// Compaction pressure percentage at which background write IO throttling
     /// begins. Dynamically configurable at runtime.
     pub compaction_pressure_threshold: f64,
-    /// Maximum write IO rate (MB/s) allowed for background tasks when
+    /// Maximum write IO rate allowed for background tasks when
     /// compaction pressure is lower than the threshold.
-    pub write_io_ceiling: f64,
-    /// Minimum write IO rate (MB/s) that background tasks are always allowed,
+    pub write_io_ceiling: ReadableSize,
+    /// Minimum write IO rate that background tasks are always allowed,
     /// even under maximum compaction pressure.
-    pub write_io_floor: f64,
+    pub write_io_floor: ReadableSize,
 }
 
 impl Default for Config {
@@ -29,8 +29,8 @@ impl Default for Config {
             enabled: true,
             priority_ctl_strategy: PriorityCtlStrategy::Moderate,
             compaction_pressure_threshold: 70.0,
-            write_io_ceiling: 100.0 * 1024.0,
-            write_io_floor: 10.0,
+            write_io_ceiling: ReadableSize::gb(100),
+            write_io_floor: ReadableSize::mb(10),
         }
     }
 }
