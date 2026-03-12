@@ -32,14 +32,6 @@ pub struct BatchLimitExecutor<Src: BatchExecutor> {
     /// Stores previous truncate keys to compare with current truncate keys
     prev_truncate_keys: Vec<ScalarValue>,
 
-    // TODO This info could be fetched from the optimizer instead of at runtime.
-    //
-    // In rank limit, input rows are sorted.
-    is_ascent: bool,
-
-    // Set to true when is_ascent is set
-    is_ascent_set: bool,
-
     /// Stores current truncate keys
     /// It is just used to reduce allocations. The lifetime is not really
     /// 'static. The elements are only valid in the same batch where they
@@ -60,8 +52,6 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
             truncate_keys_field_type: Vec::with_capacity(0),
             truncate_key_num: 0,
             prev_truncate_keys: Vec::with_capacity(0),
-            is_ascent: false, // Will be initialized at runtime
-            is_ascent_set: false,
             current_truncate_keys_unsafe: Vec::with_capacity(0),
             executed_in_limit_for_test: false,
             executed_in_rank_limit_for_test: false,
@@ -100,8 +90,6 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
             truncate_keys_field_type,
             truncate_key_num,
             prev_truncate_keys: Vec::with_capacity(truncate_key_num),
-            is_ascent: false, // Will be initialized at runtime
-            is_ascent_set: false,
             current_truncate_keys_unsafe: Vec::with_capacity(truncate_key_num),
             executed_in_limit_for_test: false,
             executed_in_rank_limit_for_test: false,
@@ -259,60 +247,6 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
 
         Ok(left)
     }
-
-    #[inline]
-    fn init_is_ascent_if_possible(&mut self, result: &mut BatchExecuteResult) -> Result<()> {
-        if self.is_ascent_set || result.logical_rows.len() <= 1 {
-            return Ok(());
-        }
-
-        let src_schema = self.src.schema();
-        let total_row_num = result.logical_rows.len();
-        let logical_rows_for_init = [
-            result.logical_rows[0],
-            result.logical_rows[total_row_num - 1],
-        ];
-
-        ensure_columns_decoded(
-            &mut self.context,
-            &self.truncate_keys_exps,
-            src_schema,
-            &mut result.physical_columns,
-            &logical_rows_for_init,
-        )?;
-
-        self.current_truncate_keys_unsafe.clear();
-        unsafe {
-            eval_exprs_decoded_no_lifetime(
-                &mut self.context,
-                &self.truncate_keys_exps,
-                src_schema,
-                &result.physical_columns,
-                &logical_rows_for_init,
-                &mut self.current_truncate_keys_unsafe,
-            )?;
-        }
-
-        for key_col_index in 0..self.truncate_key_num {
-            let first = self.current_truncate_keys_unsafe[key_col_index].get_logical_scalar_ref(0);
-            let last = self.current_truncate_keys_unsafe[key_col_index].get_logical_scalar_ref(1);
-            match first.cmp_sort_key(&last, &self.truncate_keys_field_type[key_col_index])? {
-                Ordering::Less => {
-                    self.is_ascent = true;
-                    self.is_ascent_set = true;
-                    break;
-                }
-                Ordering::Greater => {
-                    self.is_ascent = false;
-                    self.is_ascent_set = true;
-                    break;
-                }
-                Ordering::Equal => {}
-            }
-        }
-
-        Ok(())
-    }
 }
 
 #[async_trait]
@@ -368,16 +302,6 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
             let total_row_num = result.logical_rows.len();
             if total_row_num == 0 {
                 return result;
-            }
-
-            let res = self.init_is_ascent_if_possible(&mut result);
-            if let Err(err) = res {
-                return BatchExecuteResult {
-                    is_drained: Err(err),
-                    physical_columns: result.physical_columns,
-                    logical_rows: result.logical_rows,
-                    warnings: EvalWarnings::default(),
-                };
             }
 
             let output_row_num;
@@ -1306,199 +1230,5 @@ mod tests {
             assert_eq!(results[i], actual_logical_rows);
             assert!(exec.executed_in_rank_limit_for_test);
         }
-    }
-
-    #[test]
-    fn test_rank_limit_init_is_ascent_with_ordered_input() {
-        let cases = vec![
-            (vec![Some(1), Some(2), Some(3)], true),
-            (vec![Some(3), Some(2), Some(1)], false),
-        ];
-
-        for (input, expected_is_ascent) in cases {
-            let src_exec = MockExecutor::new(
-                vec![FieldTypeTp::LongLong.into()],
-                vec![BatchExecuteResult {
-                    physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(
-                        input.into(),
-                    )]),
-                    logical_rows: vec![0, 1, 2],
-                    warnings: EvalWarnings::default(),
-                    is_drained: Ok(BatchExecIsDrain::Drain),
-                }],
-            );
-
-            let config = Arc::new(EvalConfig::default());
-            let truncate_key_exp = RpnExpressionBuilder::new_for_test()
-                .push_column_ref_for_test(0)
-                .build_for_test();
-            let mut exec = BatchLimitExecutor::new_rank_limit_for_test(
-                src_exec,
-                10,
-                true,
-                config,
-                vec![truncate_key_exp],
-            )
-            .unwrap();
-
-            let r = block_on(exec.next_batch(10));
-            assert!(r.is_drained.unwrap().stop());
-            assert!(exec.is_ascent_set);
-            assert_eq!(exec.is_ascent, expected_is_ascent);
-        }
-    }
-
-    #[test]
-    fn test_rank_limit_init_is_ascent_with_equal_first_and_last() {
-        let src_exec = MockExecutor::new(
-            vec![FieldTypeTp::LongLong.into()],
-            vec![BatchExecuteResult {
-                physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(
-                    vec![Some(1), Some(1), Some(1)].into(),
-                )]),
-                logical_rows: vec![0, 1, 2],
-                warnings: EvalWarnings::default(),
-                is_drained: Ok(BatchExecIsDrain::Drain),
-            }],
-        );
-
-        let config = Arc::new(EvalConfig::default());
-        let truncate_key_exp = RpnExpressionBuilder::new_for_test()
-            .push_column_ref_for_test(0)
-            .build_for_test();
-        let mut exec = BatchLimitExecutor::new_rank_limit_for_test(
-            src_exec,
-            10,
-            true,
-            config,
-            vec![truncate_key_exp],
-        )
-        .unwrap();
-
-        let r = block_on(exec.next_batch(10));
-        assert!(r.is_drained.unwrap().stop());
-        assert!(!exec.is_ascent_set);
-        assert!(!exec.is_ascent);
-    }
-
-    #[test]
-    fn test_rank_limit_empty_or_single_row_batches_do_not_init_is_ascent() {
-        let src_exec = MockExecutor::new(
-            vec![FieldTypeTp::LongLong.into()],
-            vec![
-                BatchExecuteResult {
-                    physical_columns: LazyBatchColumnVec::empty(),
-                    logical_rows: Vec::new(),
-                    warnings: EvalWarnings::default(),
-                    is_drained: Ok(BatchExecIsDrain::Remain),
-                },
-                BatchExecuteResult {
-                    physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(
-                        vec![Some(5)].into(),
-                    )]),
-                    logical_rows: vec![0],
-                    warnings: EvalWarnings::default(),
-                    is_drained: Ok(BatchExecIsDrain::Remain),
-                },
-                BatchExecuteResult {
-                    physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(
-                        vec![Some(4)].into(),
-                    )]),
-                    logical_rows: vec![0],
-                    warnings: EvalWarnings::default(),
-                    is_drained: Ok(BatchExecIsDrain::Drain),
-                },
-            ],
-        );
-
-        let config = Arc::new(EvalConfig::default());
-        let truncate_key_exp = RpnExpressionBuilder::new_for_test()
-            .push_column_ref_for_test(0)
-            .build_for_test();
-        let mut exec = BatchLimitExecutor::new_rank_limit_for_test(
-            src_exec,
-            10,
-            true,
-            config,
-            vec![truncate_key_exp],
-        )
-        .unwrap();
-
-        let r = block_on(exec.next_batch(10));
-        assert!(r.logical_rows.is_empty());
-        assert!(r.is_drained.unwrap().is_remain());
-        assert!(!exec.is_ascent_set);
-
-        let r = block_on(exec.next_batch(10));
-        assert_eq!(r.logical_rows, vec![0]);
-        assert!(r.is_drained.unwrap().is_remain());
-        assert!(!exec.is_ascent_set);
-
-        let r = block_on(exec.next_batch(10));
-        assert_eq!(r.logical_rows, vec![0]);
-        assert!(r.is_drained.unwrap().stop());
-        assert!(!exec.is_ascent_set);
-    }
-
-    #[test]
-    fn test_rank_limit_all_equal_in_first_batches_then_change() {
-        let src_exec = MockExecutor::new(
-            vec![FieldTypeTp::LongLong.into()],
-            vec![
-                BatchExecuteResult {
-                    physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(
-                        vec![Some(5), Some(5)].into(),
-                    )]),
-                    logical_rows: vec![0, 1],
-                    warnings: EvalWarnings::default(),
-                    is_drained: Ok(BatchExecIsDrain::Remain),
-                },
-                BatchExecuteResult {
-                    physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(
-                        vec![Some(5), Some(5), Some(5)].into(),
-                    )]),
-                    logical_rows: vec![0, 1, 2],
-                    warnings: EvalWarnings::default(),
-                    is_drained: Ok(BatchExecIsDrain::Remain),
-                },
-                BatchExecuteResult {
-                    physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(
-                        vec![Some(5), Some(5), Some(4), Some(4)].into(),
-                    )]),
-                    logical_rows: vec![0, 1, 2, 3],
-                    warnings: EvalWarnings::default(),
-                    is_drained: Ok(BatchExecIsDrain::Drain),
-                },
-            ],
-        );
-
-        let config = Arc::new(EvalConfig::default());
-        let truncate_key_exp = RpnExpressionBuilder::new_for_test()
-            .push_column_ref_for_test(0)
-            .build_for_test();
-        let mut exec = BatchLimitExecutor::new_rank_limit_for_test(
-            src_exec,
-            1,
-            true,
-            config,
-            vec![truncate_key_exp],
-        )
-        .unwrap();
-
-        let r = block_on(exec.next_batch(10));
-        assert_eq!(r.logical_rows, vec![0, 1]);
-        assert!(r.is_drained.unwrap().is_remain());
-        assert!(!exec.is_ascent_set);
-
-        let r = block_on(exec.next_batch(10));
-        assert_eq!(r.logical_rows, vec![0, 1, 2]);
-        assert!(r.is_drained.unwrap().is_remain());
-        assert!(!exec.is_ascent_set);
-
-        let r = block_on(exec.next_batch(10));
-        assert_eq!(r.logical_rows, vec![0, 1]);
-        assert!(r.is_drained.unwrap().stop());
-        assert!(exec.is_ascent_set);
-        assert!(!exec.is_ascent);
     }
 }
