@@ -304,7 +304,8 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         let min_floor = match resource_type {
             ResourceType::Cpu => MICROS_PER_SEC,
             ResourceType::Io => resource_stats.total_quota * 0.1,
-        };
+        }
+        .min(target);
 
         let mut new_total_bg_budget = target;
         if resource_util > bg_resource_threshold {
