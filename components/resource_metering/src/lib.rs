@@ -377,4 +377,102 @@ mod tests {
         .join()
         .unwrap();
     }
+
+    /// Verify that `in_resource_metering_tag` attaches the correct region tag
+    /// to the thread-local storage during the entire poll of the wrapped
+    /// future. This is the core mechanism that Patch A/B relies on: wrapping
+    /// the scheduler execution future ensures that snapshot/precheck CPU on
+    /// the scheduler pool is attributed to the correct region.
+    #[test]
+    fn test_in_resource_metering_tag_attaches_region_during_poll() {
+        use std::sync::{
+            Arc as StdArc,
+            atomic::{AtomicU64, Ordering::SeqCst},
+        };
+
+        std::thread::spawn(|| {
+            let observed_region_id = StdArc::new(AtomicU64::new(0));
+            let observed_clone = observed_region_id.clone();
+
+            let resource_tag_factory = ResourceTagFactory::new_for_test();
+            let ctx = {
+                let mut c = kvproto::kvrpcpb::Context::default();
+                c.set_region_id(42);
+                let mut peer = kvproto::metapb::Peer::default();
+                peer.set_store_id(1);
+                peer.set_id(100);
+                c.set_peer(peer);
+                c
+            };
+            let tag = resource_tag_factory.new_tag(&ctx);
+
+            // Build a future that, when polled, checks the thread-local
+            // attached tag and records the region_id it finds.
+            let inner_future = async move {
+                STORAGE.with(|s| {
+                    let ls = s.borrow();
+                    // During poll, the tag should be attached.
+                    assert!(ls.is_set, "tag should be attached during poll");
+                    let tag_infos = ls.attached_tag.swap(None);
+                    assert!(tag_infos.is_some(), "attached_tag should be Some during poll");
+                    let infos = tag_infos.unwrap();
+                    observed_clone.store(infos.region_id, SeqCst);
+                    // Put it back so Guard::drop works correctly.
+                    assert!(ls.attached_tag.swap(Some(infos)).is_none());
+                });
+                // Simulate some work (e.g. snapshot, process).
+                123u64
+            };
+
+            let wrapped = inner_future.in_resource_metering_tag(tag);
+            let result = futures::executor::block_on(wrapped);
+            assert_eq!(result, 123);
+            assert_eq!(observed_region_id.load(SeqCst), 42);
+
+            // After the future completes, tag should be detached.
+            STORAGE.with(|s| {
+                let ls = s.borrow();
+                assert!(!ls.is_set, "tag should be detached after future completes");
+                let local_tag = ls.attached_tag.swap(None);
+                assert!(local_tag.is_none(), "attached_tag should be None after future completes");
+            });
+        })
+        .join()
+        .unwrap();
+    }
+
+    /// Verify that nested `in_resource_metering_tag` is rejected.
+    /// In debug mode, `ResourceMeteringTag::attach()` triggers a
+    /// `debug_assert!` panic on nested attachment. This confirms that
+    /// after Patch A moves the tag to execute(), process() must NOT
+    /// keep an inner wrapping — otherwise it would panic in debug builds.
+    #[test]
+    fn test_nested_resource_metering_tag_is_rejected() {
+        let result = std::thread::spawn(|| {
+            let factory = ResourceTagFactory::new_for_test();
+
+            let outer_ctx = {
+                let mut c = kvproto::kvrpcpb::Context::default();
+                c.set_region_id(100);
+                c
+            };
+            let inner_ctx = {
+                let mut c = kvproto::kvrpcpb::Context::default();
+                c.set_region_id(200);
+                c
+            };
+            let outer_tag = factory.new_tag(&outer_ctx);
+            let inner_tag = factory.new_tag(&inner_ctx);
+
+            let inner_future = async { 42u64 };
+            let wrapped_inner = inner_future.in_resource_metering_tag(inner_tag);
+            let outer_future = async { wrapped_inner.await };
+            let wrapped_outer = outer_future.in_resource_metering_tag(outer_tag);
+
+            futures::executor::block_on(wrapped_outer);
+        })
+        .join();
+        // In debug mode, nested attachment panics via debug_assert!.
+        assert!(result.is_err(), "nested attachment should panic in debug mode");
+    }
 }
