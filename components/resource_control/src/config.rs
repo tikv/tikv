@@ -12,15 +12,18 @@ pub struct Config {
     #[online_config(skip)]
     pub enabled: bool,
     pub priority_ctl_strategy: PriorityCtlStrategy,
+    /// Overall resource utilization percentage above which background tasks
+    /// are throttled. Also caps the background utilization limit.
+    pub bg_resource_threshold: f64,
     /// Compaction pressure percentage at which background write IO throttling
     /// begins. Dynamically configurable at runtime.
-    pub compaction_pressure_threshold: f64,
+    pub bg_compaction_pressure_threshold: f64,
     /// Maximum write IO rate allowed for background tasks when
     /// compaction pressure is lower than the threshold.
-    pub write_io_ceiling: ReadableSize,
+    pub bg_write_io_ceiling: ReadableSize,
     /// Minimum write IO rate that background tasks are always allowed,
     /// even under maximum compaction pressure.
-    pub write_io_floor: ReadableSize,
+    pub bg_write_io_floor: ReadableSize,
 }
 
 impl Default for Config {
@@ -28,9 +31,10 @@ impl Default for Config {
         Self {
             enabled: true,
             priority_ctl_strategy: PriorityCtlStrategy::Moderate,
-            compaction_pressure_threshold: 70.0,
-            write_io_ceiling: ReadableSize::gb(100),
-            write_io_floor: ReadableSize::mb(10),
+            bg_resource_threshold: 70.0,
+            bg_compaction_pressure_threshold: 70.0,
+            bg_write_io_ceiling: ReadableSize::gb(100),
+            bg_write_io_floor: ReadableSize::mb(10),
         }
     }
 }
