@@ -136,7 +136,7 @@ fn collect_report_read_peer_stats(
     mut report_read_stats: HashMap<u64, pdpb::PeerStat>,
     mut stats: pdpb::StoreStats,
 ) -> pdpb::StoreStats {
-    if report_read_stats.len() < capacity * 4 {
+    if report_read_stats.len() < capacity * 5 {
         for (_, read_stat) in report_read_stats {
             stats.peer_stats.push(read_stat);
         }
@@ -146,6 +146,7 @@ fn collect_report_read_peer_stats(
     let mut bytes_topn_report = TopN::new(capacity);
     let mut stats_topn_report = TopN::new(capacity);
     let mut cpu_topn_report = TopN::new(capacity);
+    let mut scheduler_cpu_topn_report = TopN::new(capacity);
     for read_stat in report_read_stats.values() {
         let mut cmp_stat = PeerCmpReadStat::default();
         cmp_stat.region_id = read_stat.region_id;
@@ -158,9 +159,12 @@ fn collect_report_read_peer_stats(
         let mut query_cmp_stat = cmp_stat.clone();
         query_cmp_stat.report_stat = get_read_query_num(read_stat.get_query_stats());
         stats_topn_report.push(query_cmp_stat);
-        let mut cpu_cmp_stat = cmp_stat;
+        let mut cpu_cmp_stat = cmp_stat.clone();
         cpu_cmp_stat.report_stat = read_stat.get_cpu_stats().get_unified_read();
         cpu_topn_report.push(cpu_cmp_stat);
+        let mut sched_cmp_stat = cmp_stat;
+        sched_cmp_stat.report_stat = read_stat.get_cpu_stats().get_scheduler();
+        scheduler_cpu_topn_report.push(sched_cmp_stat);
     }
 
     for x in keys_topn_report {
@@ -182,6 +186,12 @@ fn collect_report_read_peer_stats(
     }
 
     for x in cpu_topn_report {
+        if let Some(report_stat) = report_read_stats.remove(&x.region_id) {
+            stats.peer_stats.push(report_stat);
+        }
+    }
+
+    for x in scheduler_cpu_topn_report {
         if let Some(report_stat) = report_read_stats.remove(&x.region_id) {
             stats.peer_stats.push(report_stat);
         }

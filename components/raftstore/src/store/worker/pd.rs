@@ -46,7 +46,8 @@ use tikv_util::{
     sys::{SysQuota, disk, thread::StdThreadBuildWrapper},
     thd_name,
     thread_name_prefix::{
-        SCHEDULE_WORKER_POOL_THREAD, STATS_MONITOR_THREAD, UNIFIED_READ_POOL_THREAD,
+        SCHEDULE_WORKER_HIGH_PRI_THREAD, SCHEDULE_WORKER_POOL_THREAD,
+        SCHEDULE_WORKER_PRIORITY_THREAD, STATS_MONITOR_THREAD, UNIFIED_READ_POOL_THREAD,
         matches_thread_name_prefix,
     },
     time::{Instant as TiInstant, UnixSecs},
@@ -907,7 +908,7 @@ const HOTSPOT_KEY_RATE_THRESHOLD: u64 = 128;
 const HOTSPOT_QUERY_RATE_THRESHOLD: u64 = 128;
 const HOTSPOT_BYTE_RATE_THRESHOLD: u64 = 8 * 1024;
 const HOTSPOT_REPORT_CAPACITY: usize = 1000;
-const HOTSPOT_REPORT_METRICS: usize = 4;
+const HOTSPOT_REPORT_METRICS: usize = 5;
 
 // TODO: support dynamic configure threshold in future.
 fn hotspot_cpu_usage_report_threshold() -> u64 {
@@ -1415,7 +1416,10 @@ where
                     let name = record.get_key();
                     if matches_thread_name_prefix(name, UNIFIED_READ_POOL_THREAD) {
                         store_unified_read += record.get_value();
-                    } else if matches_thread_name_prefix(name, SCHEDULE_WORKER_POOL_THREAD) {
+                    } else if matches_thread_name_prefix(name, SCHEDULE_WORKER_POOL_THREAD)
+                        || matches_thread_name_prefix(name, SCHEDULE_WORKER_HIGH_PRI_THREAD)
+                        || matches_thread_name_prefix(name, SCHEDULE_WORKER_PRIORITY_THREAD)
+                    {
                         store_scheduler += record.get_value();
                     }
                 }
@@ -2837,6 +2841,7 @@ fn collect_report_read_peer_stats(
     let mut bytes_topn_report = TopN::new(capacity);
     let mut stats_topn_report = TopN::new(capacity);
     let mut cpu_topn_report = TopN::new(capacity);
+    let mut scheduler_cpu_topn_report = TopN::new(capacity);
     for read_stat in report_read_stats.values() {
         let mut cmp_stat = PeerCmpReadStat::default();
         cmp_stat.region_id = read_stat.region_id;
@@ -2849,9 +2854,12 @@ fn collect_report_read_peer_stats(
         let mut query_cmp_stat = cmp_stat.clone();
         query_cmp_stat.report_stat = get_read_query_num(read_stat.get_query_stats());
         stats_topn_report.push(query_cmp_stat);
-        let mut cpu_cmp_stat = cmp_stat;
+        let mut cpu_cmp_stat = cmp_stat.clone();
         cpu_cmp_stat.report_stat = read_stat.get_cpu_stats().get_unified_read();
         cpu_topn_report.push(cpu_cmp_stat);
+        let mut sched_cmp_stat = cmp_stat;
+        sched_cmp_stat.report_stat = read_stat.get_cpu_stats().get_scheduler();
+        scheduler_cpu_topn_report.push(sched_cmp_stat);
     }
 
     for x in keys_topn_report {
@@ -2873,6 +2881,12 @@ fn collect_report_read_peer_stats(
     }
 
     for x in cpu_topn_report {
+        if let Some(report_stat) = report_read_stats.remove(&x.region_id) {
+            stats.peer_stats.push(report_stat);
+        }
+    }
+
+    for x in scheduler_cpu_topn_report {
         if let Some(report_stat) = report_read_stats.remove(&x.region_id) {
             stats.peer_stats.push(report_stat);
         }
