@@ -305,21 +305,23 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
             }
 
             let output_row_num;
-            if total_row_num < self.remaining_rows {
+            if total_row_num <= self.remaining_rows {
                 output_row_num = total_row_num;
                 self.remaining_rows -= output_row_num;
 
-                // Record truncate key values for further search
-                let res = self.record_truncate_key_values(&mut result, output_row_num - 1);
-                match res {
-                    Ok(_) => {}
-                    Err(err) => {
-                        return BatchExecuteResult {
-                            is_drained: Err(err),
-                            physical_columns: result.physical_columns,
-                            logical_rows: result.logical_rows,
-                            warnings: EvalWarnings::default(),
-                        };
+                if self.remaining_rows == 0 {
+                    // Record truncate key values for further search
+                    let res = self.record_truncate_key_values(&mut result, output_row_num - 1);
+                    match res {
+                        Ok(_) => {}
+                        Err(err) => {
+                            return BatchExecuteResult {
+                                is_drained: Err(err),
+                                physical_columns: result.physical_columns,
+                                logical_rows: result.logical_rows,
+                                warnings: EvalWarnings::default(),
+                            };
+                        }
                     }
                 }
             } else {
