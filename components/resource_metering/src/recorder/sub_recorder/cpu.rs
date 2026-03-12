@@ -1,10 +1,15 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use collections::HashMap;
-use tikv_util::sys::thread::{self, Pid};
+use tikv_util::{
+    sys::thread::{self, Pid, THREAD_NAME_HASHMAP},
+    thread_name_prefix::{
+        SCHEDULE_WORKER_POOL_THREAD, UNIFIED_READ_POOL_THREAD, matches_thread_name_prefix,
+    },
+};
 
 use crate::{
-    RawRecords,
+    RawRecords, ThreadPoolType,
     metrics::STAT_TASK_COUNT,
     recorder::{
         SubRecorder,
@@ -24,6 +29,24 @@ pub struct CpuRecorder {
     thread_stats: HashMap<Pid, ThreadStat>,
 }
 
+/// Detect the thread pool type from the thread name stored in
+/// [`THREAD_NAME_HASHMAP`].
+fn detect_thread_pool_type(tid: Pid) -> ThreadPoolType {
+    let map = THREAD_NAME_HASHMAP.lock().unwrap();
+    match map.get(&tid) {
+        Some(name) => {
+            if matches_thread_name_prefix(name, UNIFIED_READ_POOL_THREAD) {
+                ThreadPoolType::UnifiedRead
+            } else if matches_thread_name_prefix(name, SCHEDULE_WORKER_POOL_THREAD) {
+                ThreadPoolType::Scheduler
+            } else {
+                ThreadPoolType::Unknown
+            }
+        }
+        None => ThreadPoolType::Unknown,
+    }
+}
+
 impl SubRecorder for CpuRecorder {
     fn tick(&mut self, records: &mut RawRecords, _: &mut HashMap<Pid, LocalStorage>) {
         let records = &mut records.records;
@@ -38,7 +61,7 @@ impl SubRecorder for CpuRecorder {
                         let delta_ms =
                             (cur_stat.total_cpu_time() - last_stat.total_cpu_time()) * 1_000.;
                         let record = records.entry(cur_tag).or_default();
-                        record.cpu_time += delta_ms as u32;
+                        record.add_cpu_time(delta_ms as u32, thread_stat.pool_type);
                     }
                     thread_stat.stat = cur_stat;
                 }
@@ -75,11 +98,13 @@ impl SubRecorder for CpuRecorder {
     }
 
     fn thread_created(&mut self, id: Pid, store: &LocalStorage) {
+        let pool_type = detect_thread_pool_type(id);
         self.thread_stats.insert(
             id,
             ThreadStat {
                 attached_tag: store.attached_tag.clone(),
                 stat: Default::default(),
+                pool_type,
             },
         );
     }
@@ -88,6 +113,7 @@ impl SubRecorder for CpuRecorder {
 struct ThreadStat {
     attached_tag: SharedTagInfos,
     stat: thread::ThreadStat,
+    pool_type: ThreadPoolType,
 }
 
 #[cfg(test)]

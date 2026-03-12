@@ -9,7 +9,7 @@ use pd_client::{
     BucketStat, PdClient, RegionStat, RegionWriteCfCopDetail, metrics::PD_HEARTBEAT_COUNTER_VEC,
 };
 use raftstore::store::{ReadStats, WriteStats};
-use resource_metering::RawRecords;
+use resource_metering::{RawRecords, RegionCpuRecord};
 use slog::{debug, error, info};
 use tikv_util::{store::QueryStats, time::UnixSecs};
 
@@ -139,24 +139,39 @@ where
         peer_stat.last_region_report_ts = unix_secs_now;
 
         // Calculate the CPU usage since the last region heartbeat.
-        let cpu_usage = {
+        let (cpu_usage, cpu_stats) = {
             // Take out the region CPU record.
-            let cpu_time_duration = Duration::from_millis(
-                self.region_cpu_records_since_region_heartbeat
-                    .remove(&region_id)
-                    .unwrap_or(0) as u64,
-            );
+            let cpu_record = self
+                .region_cpu_records_since_region_heartbeat
+                .remove(&region_id)
+                .unwrap_or_default();
             let interval_second = unix_secs_now.into_inner() - last_report_ts.into_inner();
             // Keep consistent with the calculation of cpu_usages in a store heartbeat.
             // See components/tikv_util/src/metrics/threads_linux.rs for more details.
             if interval_second > 0 {
-                ((cpu_time_duration.as_secs_f64() * 100.0) / interval_second as f64) as u64
+                let total = ((Duration::from_millis(cpu_record.cpu_time_ms as u64).as_secs_f64()
+                    * 100.0)
+                    / interval_second as f64) as u64;
+                let unified_read = ((Duration::from_millis(
+                    cpu_record.unified_read_cpu_time_ms as u64,
+                )
+                .as_secs_f64()
+                    * 100.0)
+                    / interval_second as f64) as u64;
+                let scheduler = ((Duration::from_millis(
+                    cpu_record.scheduler_cpu_time_ms as u64,
+                )
+                .as_secs_f64()
+                    * 100.0)
+                    / interval_second as f64) as u64;
+                let mut stats = pdpb::CpuStats::default();
+                stats.set_unified_read(unified_read);
+                stats.set_scheduler(scheduler);
+                (total, stats)
             } else {
-                0
+                (0, pdpb::CpuStats::default())
             }
         };
-        let mut cpu_stats = pdpb::CpuStats::default();
-        cpu_stats.set_unified_read(cpu_usage);
 
         let region_stat = RegionStat {
             down_peers: task.down_peers,
@@ -452,7 +467,7 @@ where
     fn calculate_region_cpu_records(
         store_id: u64,
         records: Arc<RawRecords>,
-        region_cpu_records: &mut HashMap<u64, u32>,
+        region_cpu_records: &mut HashMap<u64, RegionCpuRecord>,
     ) {
         for (tag, record) in &records.records {
             let record_store_id = tag.store_id;
@@ -460,7 +475,10 @@ where
                 continue;
             }
             // Reporting a region heartbeat later will clear the corresponding record.
-            *region_cpu_records.entry(tag.region_id).or_insert(0) += record.cpu_time;
+            region_cpu_records
+                .entry(tag.region_id)
+                .or_default()
+                .merge_raw_record(record);
         }
     }
 }
@@ -468,8 +486,8 @@ where
 fn remove_peer_stat_from_maps(
     region_id: u64,
     region_peers: &mut HashMap<u64, PeerStat>,
-    region_cpu_records_since_region_heartbeat: &mut HashMap<u64, u32>,
-    region_cpu_records_since_store_heartbeat: &mut HashMap<u64, u32>,
+    region_cpu_records_since_region_heartbeat: &mut HashMap<u64, RegionCpuRecord>,
+    region_cpu_records_since_store_heartbeat: &mut HashMap<u64, RegionCpuRecord>,
 ) -> bool {
     let removed = region_peers.remove(&region_id).is_some();
     region_cpu_records_since_region_heartbeat.remove(&region_id);
@@ -485,10 +503,24 @@ mod tests {
     fn test_remove_peer_stat_from_maps() {
         let mut region_peers = HashMap::default();
         region_peers.insert(1, PeerStat::default());
-        let mut region_cpu_records_since_region_heartbeat = HashMap::default();
-        region_cpu_records_since_region_heartbeat.insert(1, 10);
-        let mut region_cpu_records_since_store_heartbeat = HashMap::default();
-        region_cpu_records_since_store_heartbeat.insert(1, 12);
+        let mut region_cpu_records_since_region_heartbeat: HashMap<u64, RegionCpuRecord> =
+            HashMap::default();
+        region_cpu_records_since_region_heartbeat.insert(
+            1,
+            RegionCpuRecord {
+                cpu_time_ms: 10,
+                ..Default::default()
+            },
+        );
+        let mut region_cpu_records_since_store_heartbeat: HashMap<u64, RegionCpuRecord> =
+            HashMap::default();
+        region_cpu_records_since_store_heartbeat.insert(
+            1,
+            RegionCpuRecord {
+                cpu_time_ms: 12,
+                ..Default::default()
+            },
+        );
 
         assert!(remove_peer_stat_from_maps(
             1,
