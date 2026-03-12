@@ -4,7 +4,8 @@ use collections::HashMap;
 use tikv_util::{
     sys::thread::{self, Pid, THREAD_NAME_HASHMAP},
     thread_name_prefix::{
-        SCHEDULE_WORKER_POOL_THREAD, UNIFIED_READ_POOL_THREAD, matches_thread_name_prefix,
+        SCHEDULE_WORKER_HIGH_PRI_THREAD, SCHEDULE_WORKER_POOL_THREAD,
+        SCHEDULE_WORKER_PRIORITY_THREAD, UNIFIED_READ_POOL_THREAD, matches_thread_name_prefix,
     },
 };
 
@@ -37,7 +38,10 @@ fn detect_thread_pool_type(tid: Pid) -> ThreadPoolType {
         Some(name) => {
             if matches_thread_name_prefix(name, UNIFIED_READ_POOL_THREAD) {
                 ThreadPoolType::UnifiedRead
-            } else if matches_thread_name_prefix(name, SCHEDULE_WORKER_POOL_THREAD) {
+            } else if matches_thread_name_prefix(name, SCHEDULE_WORKER_POOL_THREAD)
+                || matches_thread_name_prefix(name, SCHEDULE_WORKER_HIGH_PRI_THREAD)
+                || matches_thread_name_prefix(name, SCHEDULE_WORKER_PRIORITY_THREAD)
+            {
                 ThreadPoolType::Scheduler
             } else {
                 ThreadPoolType::Unknown
