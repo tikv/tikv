@@ -105,6 +105,12 @@ pub struct Config {
     pub enable_ttl: bool,
     #[online_config(skip)]
     pub background_error_recovery_window: ReadableDuration,
+    /// Safety-net timeout for `WriteEvent::Finished` delivery in the
+    /// scheduler.  Should be larger than the raftstore
+    /// `merge-source-wait-timeout` so the apply-level cleanup has time
+    /// to deliver the event before this fires.
+    #[online_config(skip)]
+    pub write_event_finished_timeout: ReadableDuration,
     /// Interval to check TTL for all SSTs,
     pub ttl_check_poll_interval: ReadableDuration,
     #[online_config(skip)]
@@ -146,6 +152,7 @@ impl Default for Config {
             block_cache: BlockCacheConfig::default(),
             io_rate_limit: IoRateLimitConfig::default(),
             background_error_recovery_window: ReadableDuration::hours(1),
+            write_event_finished_timeout: ReadableDuration::secs(90),
             memory_quota: DEFAULT_TXN_MEMORY_QUOTA_CAPACITY,
             max_ts: MaxTsConfig::default(),
         }

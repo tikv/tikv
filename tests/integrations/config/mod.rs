@@ -782,6 +782,7 @@ fn test_serde_custom_tikv_config() {
             other_priority: IoPriority::Low,
         },
         background_error_recovery_window: ReadableDuration::hours(1),
+        write_event_finished_timeout: ReadableDuration::secs(90),
         txn_status_cache_capacity: 1000,
         memory_quota: ReadableSize::kb(123),
         max_ts: MaxTsConfig {
