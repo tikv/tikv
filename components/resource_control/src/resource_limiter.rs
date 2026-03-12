@@ -91,11 +91,21 @@ impl ResourceLimiter {
         self.is_background
     }
 
-    pub fn consume(&self, cpu_time: Duration, io_bytes: IoBytes, wait: bool) -> Duration {
+    pub fn consume(
+        &self,
+        cpu_time: Duration,
+        io_bytes: IoBytes,
+        wait: bool,
+        skip_compaction_pressure: bool,
+    ) -> Duration {
         let cpu_dur =
             self.limiters[ResourceType::Cpu as usize].consume(cpu_time.as_micros() as u64, wait);
         let io_dur = self.limiters[ResourceType::Io as usize].consume_io(io_bytes, wait);
-        let write_io_dur = self.write_io_limiter.consume(io_bytes.write, wait);
+        let write_io_dur = if skip_compaction_pressure {
+            Duration::ZERO
+        } else {
+            self.write_io_limiter.consume(io_bytes.write, wait)
+        };
         let wait_dur = cpu_dur.max(io_dur).max(write_io_dur);
         if !wait_dur.is_zero()
             && let Some(h) = &self.wait_histogram
@@ -105,8 +115,13 @@ impl ResourceLimiter {
         wait_dur
     }
 
-    pub async fn async_consume(&self, cpu_time: Duration, io_bytes: IoBytes) -> Duration {
-        let dur = self.consume(cpu_time, io_bytes, true);
+    pub async fn async_consume(
+        &self,
+        cpu_time: Duration,
+        io_bytes: IoBytes,
+        skip_compaction_pressure: bool,
+    ) -> Duration {
+        let dur = self.consume(cpu_time, io_bytes, true, skip_compaction_pressure);
         if !dur.is_zero() {
             _ = GLOBAL_TIMER_HANDLE
                 .delay(Instant::now() + dur)
