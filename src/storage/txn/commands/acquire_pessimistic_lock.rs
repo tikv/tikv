@@ -507,7 +507,7 @@ mod tests {
         shared: bool,
     ) -> WriteResult {
         let snap = engine.snapshot(Default::default()).unwrap();
-        let concurrency_manager = ConcurrencyManager::new_for_test(start_ts.into());
+        let concurrency_manager = ConcurrencyManager::new(start_ts.into());
         let cmd = AcquirePessimisticLock::new(
             vec![(Key::from_raw(key), false, shared)],
             pk.to_vec(),

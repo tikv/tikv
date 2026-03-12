@@ -2957,7 +2957,7 @@ pub mod tests {
         // Set the slock to shrink-only.
         let mut shared_locks = load_shared_locks(&mut engine, key);
         shared_locks.set_shrink_only();
-        let cm = ConcurrencyManager::new_for_test(TimeStamp::zero());
+        let cm = ConcurrencyManager::new(TimeStamp::zero());
         let mut txn = MvccTxn::new(1.into(), cm);
         txn.put_shared_locks(Key::from_raw(key), &shared_locks, false);
         engine

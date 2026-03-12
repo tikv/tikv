@@ -1140,6 +1140,54 @@ pub mod test_util {
         Ok(())
     }
 
+    pub fn pessimistic_lock<E: Engine>(
+        engine: &mut E,
+        statistics: &mut Statistics,
+        keys: Vec<(&[u8], bool)>,
+        primary: Vec<u8>,
+        start_ts: u64,
+        for_update_ts: u64,
+        return_values: bool,
+    ) -> PessimisticLockResults {
+        let ctx = Context::default();
+        let snap = engine.snapshot(Default::default()).unwrap();
+        let concurrency_manager = ConcurrencyManager::new(start_ts.into());
+        let cmd = AcquirePessimisticLock::new(
+            keys.into_iter()
+                .map(|key| (Key::from_raw(key.0), key.1, false))
+                .collect(),
+            primary,
+            TimeStamp::from(start_ts),
+            0,
+            false,
+            TimeStamp::from(for_update_ts),
+            None,
+            return_values,
+            TimeStamp::zero(),
+            false,
+            false,
+            false,
+            ctx,
+        );
+        let context = WriteContext {
+            lock_mgr: &MockLockManager::new(),
+            concurrency_manager,
+            extra_op: ExtraOp::Noop,
+            statistics,
+            async_apply_prewrite: false,
+            raw_ext: None,
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+        };
+
+        let ret = cmd.cmd.process_write(snap, context).unwrap();
+        let ctx = Context::default();
+        engine.write(&ctx, ret.to_be_write).unwrap();
+        match ret.pr {
+            ProcessResult::PessimisticLockRes { res } => res.unwrap(),
+            _ => unreachable!(),
+        }
+    }
+
     pub fn gen_ts_provider(api_version: ApiVersion) -> Option<Arc<CausalTsProviderImpl>> {
         if api_version == ApiVersion::V2 {
             let test_provider: causal_ts::CausalTsProviderImpl =
