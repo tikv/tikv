@@ -275,15 +275,13 @@ impl F1Sketch {
             self.once.insert(hash_val);
         }
     }
-}
 
-impl From<F1Sketch> for tipb::FmSketch {
-    fn from(sketch: F1Sketch) -> tipb::FmSketch {
-        let mut proto = tipb::FmSketch::default();
-        proto.set_mask(sketch.mask);
-        let hash = sketch.once.into_iter().collect();
-        proto.set_hashset(hash);
-        proto
+    fn into_proto(self, max_fm_sketch_size: usize) -> tipb::FmSketch {
+        let mut fm_sketch = FmSketch::new(max_fm_sketch_size);
+        for hash in self.once {
+            fm_sketch.insert_hash_value(hash);
+        }
+        fm_sketch.into()
     }
 }
 
@@ -292,6 +290,7 @@ struct BaseRowSampleCollector {
     null_count: Vec<i64>,
     count: u64,
     sketch_sample_count: u64,
+    max_fm_sketch_size: usize,
     fm_sketches: Vec<FmSketch>,
     f1_sketches: Vec<F1Sketch>,
     rng: StdRng,
@@ -306,6 +305,7 @@ impl Default for BaseRowSampleCollector {
             null_count: vec![],
             count: 0,
             sketch_sample_count: 0,
+            max_fm_sketch_size: 0,
             fm_sketches: vec![],
             f1_sketches: vec![],
             rng: StdRng::from_entropy(),
@@ -322,6 +322,7 @@ impl BaseRowSampleCollector {
             null_count: vec![0; col_and_group_len],
             count: 0,
             sketch_sample_count: 0,
+            max_fm_sketch_size,
             fm_sketches: vec![FmSketch::new(max_fm_sketch_size); col_and_group_len],
             f1_sketches: vec![F1Sketch::new(); col_and_group_len],
             rng: StdRng::from_entropy(),
@@ -408,7 +409,7 @@ impl BaseRowSampleCollector {
         proto_collector.set_fm_sketch(pb_fm_sketches);
         let pb_f1_sketches = mem::take(&mut self.f1_sketches)
             .into_iter()
-            .map(|fm_sketch| fm_sketch.into())
+            .map(|fm_sketch| fm_sketch.into_proto(self.max_fm_sketch_size))
             .collect();
         proto_collector.set_f1_sketch(pb_f1_sketches);
         proto_collector.set_sketch_sample_count(self.sketch_sample_count as i64);
@@ -1012,6 +1013,18 @@ mod tests {
     use tidb_query_datatype::codec::{datum, datum::Datum};
 
     use super::*;
+
+    #[test]
+    fn test_f1_sketch_proto_respects_max_size() {
+        let max_fm_sketch_size = 8;
+        let mut sketch = F1Sketch::new();
+        for i in 0..(max_fm_sketch_size * 4) {
+            sketch.insert_hash_value((i as u64) * 11400714819323198485);
+        }
+
+        let proto = sketch.into_proto(max_fm_sketch_size);
+        assert!(proto.get_hashset().len() <= max_fm_sketch_size);
+    }
 
     #[test]
     fn test_sample_collector() {
