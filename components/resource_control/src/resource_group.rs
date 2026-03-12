@@ -163,6 +163,17 @@ impl ResourceGroupManager {
         {
             self.group_count.fetch_add(1, Ordering::Relaxed);
         }
+        self.update_has_background();
+    }
+
+    fn update_has_background(&self) {
+        let any_has_bg = self
+            .resource_groups
+            .iter()
+            .any(|g| !g.background_source_types.is_empty());
+        self.registry.read().iter().for_each(|controller| {
+            controller.set_has_background(any_has_bg);
+        });
     }
 
     fn build_resource_limiter(
@@ -196,6 +207,7 @@ impl ResourceGroupManager {
             info!("remove resource group"; "name"=> name);
             self.group_count.fetch_sub(1, Ordering::Relaxed);
         }
+        self.update_has_background();
     }
 
     pub fn retain(&self, mut f: impl FnMut(&String, &PbResourceGroup) -> bool) {
@@ -435,6 +447,8 @@ pub struct ResourceController {
     last_rest_vt_time: Cell<Instant>,
     // whether the settings are customized by user
     customized: AtomicBool,
+    // whether any resource group has background settings configured
+    has_background: AtomicBool,
 }
 
 // we are ensure to visit the `last_rest_vt_time` by only 1 thread so it's
@@ -452,6 +466,7 @@ impl ResourceController {
             max_ru_quota: Mutex::new(DEFAULT_MAX_RU_QUOTA),
             last_rest_vt_time: Cell::new(Instant::now_coarse()),
             customized: AtomicBool::new(false),
+            has_background: AtomicBool::new(false),
         }
     }
 
@@ -559,7 +574,11 @@ impl ResourceController {
     }
 
     pub fn is_customized(&self) -> bool {
-        self.customized.load(Ordering::Acquire)
+        self.customized.load(Ordering::Acquire) || self.has_background.load(Ordering::Acquire)
+    }
+
+    pub fn set_has_background(&self, has_background: bool) {
+        self.has_background.store(has_background, Ordering::Release);
     }
 
     #[inline]
