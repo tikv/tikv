@@ -31,7 +31,9 @@ impl HllSketch {
         let rank = if w == 0 {
             (64 - HLL_BUCKET_BITS + 1) as u8
         } else {
-            (w.leading_zeros() + 1) as u8
+            // `w` is right-aligned after removing the bucket bits, so exclude the
+            // bucket width from the full-width leading-zero count.
+            (w.leading_zeros() + 1 - HLL_BUCKET_BITS) as u8
         };
         if rank > self.registers[bucket] {
             self.registers[bucket] = rank;
@@ -99,5 +101,21 @@ mod tests {
         let estimate = left.ndv();
         assert!(estimate > 350);
         assert!(estimate < 1800);
+    }
+
+    #[test]
+    fn test_hll_rank_ignores_bucket_bits() {
+        let mut sketch = HllSketch::new();
+
+        // The first non-bucket bit is 1, so the rank should be 1 rather than 1 + p.
+        let hash = (1_u64 << 63) | 0x7;
+        sketch.insert_hash_value(hash);
+        assert_eq!(sketch.registers[0x7], 1);
+
+        // Six leading zeros in the non-bucket bits should produce rank 7.
+        let mut sketch = HllSketch::new();
+        let hash = (1_u64 << (63 - 6)) | 0x3;
+        sketch.insert_hash_value(hash);
+        assert_eq!(sketch.registers[0x3], 7);
     }
 }
