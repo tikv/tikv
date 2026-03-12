@@ -39,14 +39,7 @@ impl BatchSelectionExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
 impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
     #[cfg(test)]
     pub fn new_for_test(src: Src, conditions: Vec<RpnExpression>) -> Self {
-        let condition_column_ref_counts = conditions
-            .iter()
-            .map(|expr| {
-                expr.iter()
-                    .filter(|n| matches!(n, RpnExpressionNode::ColumnRef { .. }))
-                    .count() as u32
-            })
-            .collect();
+        let condition_column_ref_counts = conditions.iter().map(count_column_refs).collect();
         Self {
             context: EvalContext::default(),
             src,
@@ -67,11 +60,7 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
         for def in conditions_def {
             let expr =
                 RpnExpressionBuilder::build_from_expr_tree(def, &mut ctx, src.schema().len())?;
-            condition_column_ref_counts.push(
-                expr.iter()
-                    .filter(|n| matches!(n, RpnExpressionNode::ColumnRef { .. }))
-                    .count() as u32,
-            );
+            condition_column_ref_counts.push(count_column_refs(&expr));
             conditions.push(expr);
         }
 
@@ -147,6 +136,14 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
 
         Ok(())
     }
+}
+
+fn count_column_refs(expr: &RpnExpression) -> u32 {
+    expr.iter()
+        .filter(|node| matches!(node, RpnExpressionNode::ColumnRef { .. }))
+        .count()
+        .try_into()
+        .unwrap_or(u32::MAX)
 }
 
 fn update_logical_rows_by_scalar_value(
