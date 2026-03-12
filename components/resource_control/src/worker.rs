@@ -33,10 +33,6 @@ use crate::{
 pub const BACKGROUND_LIMIT_ADJUST_DURATION: Duration = Duration::from_secs(10);
 
 const MICROS_PER_SEC: f64 = 1_000_000.0;
-/// CPU utilization threshold (percentage) above which background traffic is
-/// throttled. Also used as the cap for the background utilization limit and
-/// the compaction-pressure write-IO throttle onset.
-const BG_RESOURCE_THRESHOLD: f64 = 70.0;
 // the minimal schedule wait duration due to the overhead of queue.
 // We should exclude this cause when calculate the estimated total wait
 // duration.
@@ -164,11 +160,17 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         if bg_util_limit == 0 {
             bg_util_limit = 100;
         }
-        // Cap utilization limit to BG_RESOURCE_THRESHOLD. Background
+        let bg_resource_threshold = self
+            .resource_ctl
+            .get_config()
+            .value()
+            .bg_resource_threshold
+            .clamp(1.0, 99.0);
+        // Cap utilization limit to bg_resource_threshold. Background
         // tasks should never consume more than this fraction of total resources.
         // When CPU utilization exceeds the threshold, the headroom goes negative
         // and the background rate limit is reduced.
-        bg_util_limit = bg_util_limit.min(BG_RESOURCE_THRESHOLD as u64);
+        bg_util_limit = bg_util_limit.min(bg_resource_threshold as u64);
 
         BACKGROUND_TASK_RESOURCE_UTILIZATION_VEC
             .with_label_values(&["limit"])
@@ -195,12 +197,14 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             ResourceType::Cpu,
             dur_secs,
             bg_util_limit,
+            bg_resource_threshold,
             &mut background_groups,
         );
         self.do_adjust(
             ResourceType::Io,
             dur_secs,
             bg_util_limit,
+            bg_resource_threshold,
             &mut background_groups,
         );
 
@@ -222,6 +226,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         resource_type: ResourceType,
         dur_secs: f64,
         utilization_limit: u64,
+        bg_resource_threshold: f64,
         bg_group_stats: &mut [GroupStats],
     ) {
         let resource_stats = match self.resource_quota_getter.get_current_stats(resource_type) {
@@ -302,19 +307,19 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         };
 
         let mut new_total_bg_budget = target;
-        if resource_util > BG_RESOURCE_THRESHOLD {
+        if resource_util > bg_resource_threshold {
             // System is overloaded. Linearly scale budget from target down to
             // min_floor as utilization goes from threshold (70%) to 100%.
             // This aggressively throttles background regardless of how much
             // it's consuming, freeing resources for online traffic.
             let pressure =
-                (resource_util - BG_RESOURCE_THRESHOLD) / (100.0 - BG_RESOURCE_THRESHOLD);
+                (resource_util - bg_resource_threshold) / (100.0 - bg_resource_threshold);
             new_total_bg_budget = target * (1.0 - pressure) + min_floor * pressure;
         } else if current_total_bg_limit > target {
             // Background limit exceeds its allowed share; reset to target.
             new_total_bg_budget = target;
         } else if current_total_bg_limit < 0.9 * target
-            && resource_util < 0.9 * BG_RESOURCE_THRESHOLD
+            && resource_util < 0.9 * bg_resource_threshold
         {
             // System is idle; increase limit incrementally from current limit.
             new_total_bg_budget = current_total_bg_limit + 0.1 * current_total_bg_limit;
@@ -336,8 +341,8 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
     /// When pressure >= threshold, linearly scale write IO from ceiling to
     /// floor. Below threshold, write IO is unlimited (infinity).
     ///
-    /// Ceiling and floor are read from config (write_io_ceiling,
-    /// write_io_floor) in MB/s.
+    /// Ceiling and floor are read from config (bg_write_io_ceiling,
+    /// bg_write_io_floor) in MB/s.
     fn adjust_write_io_by_compaction_pressure(
         &self,
         bg_group_stats: &[GroupStats],
@@ -345,9 +350,9 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
     ) {
         let pressure = self.compaction_pending_bytes_ratio.load(Ordering::Relaxed) as f64;
         let config = self.resource_ctl.get_config().value().clone();
-        let threshold = config.compaction_pressure_threshold.clamp(1.0, 99.0);
-        let ceiling = config.write_io_ceiling.0 as f64; // bytes/s
-        let floor = config.write_io_floor.0 as f64; // bytes/s
+        let threshold = config.bg_compaction_pressure_threshold.clamp(1.0, 99.0);
+        let ceiling = config.bg_write_io_ceiling.0 as f64; // bytes/s
+        let floor = config.bg_write_io_floor.0 as f64; // bytes/s
 
         let total_budget = if pressure < threshold {
             // Below threshold: ramp up current limit by 10%, capped at ceiling.
@@ -895,7 +900,7 @@ mod tests {
         }
 
         // 1 background group with no explicit utilization limit.
-        // bg_util_limit defaults to 100, capped to 70 by BG_RESOURCE_THRESHOLD.
+        // bg_util_limit defaults to 100, capped to 70 by bg_resource_threshold.
         let bg = new_background_resource_group_ru("bg_worker".into(), 5000, 8, vec!["br".into()]);
         resource_ctl.add_resource_group(bg);
         let limiter = resource_ctl
@@ -1151,8 +1156,8 @@ mod tests {
             );
         }
 
-        // Constants matching config defaults (write_io_ceiling=100GB/s,
-        // write_io_floor=10MB/s).
+        // Constants matching config defaults (bg_write_io_ceiling=100GB/s,
+        // bg_write_io_floor=10MB/s).
         let ceiling = 100.0 * 1024.0 * 1024.0 * 1024.0; // 100 GB/s in bytes/s
         let floor = 10.0 * 1024.0 * 1024.0; // 10 MB/s in bytes/s
 
