@@ -88,8 +88,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
 
         let (pr, lock_guards) = if old_value == previous_value {
             if delete {
-                // Delete case: only delete if there's actually a value to delete
-                if previous_value.is_some() {
+                // Delete case: delete the key if there's actually a value to delete
+                let lock_guards = if previous_value.is_some() {
                     if let Some(ref raw_ext) = raw_ext {
                         key = key.append_ts(raw_ext.ts);
                     }
@@ -101,14 +101,17 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
                         _ => Modify::Delete(cf, key),
                     };
                     data.push(m);
-                }
-                // Succeed regardless - if there's nothing to delete, comparison still succeeded
+                    raw_ext.into_iter().map(|r| r.key_guard).collect()
+                } else {                    
+                    vec![]
+                };
+
                 (
                     ProcessResult::RawCompareAndSwapRes {
                         previous_value: old_value,
                         succeed: true,
                     },
-                    raw_ext.into_iter().map(|r| r.key_guard).collect(),
+                    lock_guards,
                 )
             } else {
                 // Put case: write the new value
