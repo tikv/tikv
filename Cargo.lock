@@ -8197,7 +8197,7 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.40",
  "tikv_util",
- "time 0.1.45",
+ "time 0.1.43",
  "tracker",
  "yatp",
 ]
