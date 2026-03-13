@@ -55,8 +55,15 @@ impl CommandExt for RawCompareAndSwap {
     gen_lock!(key);
 
     fn write_bytes(&self) -> usize {
-        let value_len = if self.delete { 0 } else { self.value.len() };
-        self.key.len() + value_len
+        if self.delete {
+            if self.api_version == ApiVersion::V2 {
+                self.key.as_encoded().len() + ApiV2::ENCODED_LOGICAL_DELETE.len()
+            } else {
+                0
+            }
+        } else {
+            self.key.as_encoded().len() + self.value.len()
+        }
     }
 }
 

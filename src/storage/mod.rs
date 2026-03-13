@@ -3200,7 +3200,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 delete,
                 ctx,
             );
-            Self::sched_raw_atomic_command(sched, cmd, Box::new(|res| callback(res)));
+            Self::sched_raw_atomic_command(sched, cmd, callback);
         })
     }
 
