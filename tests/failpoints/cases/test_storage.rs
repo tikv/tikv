@@ -41,7 +41,7 @@ use tikv::{
         *,
     },
 };
-use tikv_util::{future::paired_future_callback, worker::dummy_scheduler, Either, HandyRwLock};
+use tikv_util::{Either, HandyRwLock, future::paired_future_callback, worker::dummy_scheduler};
 use txn_types::{Key, Mutation, TimeStamp};
 
 #[test_case(test_raftstore::new_server_cluster)]

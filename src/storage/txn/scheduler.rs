@@ -57,7 +57,7 @@ use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};
 use tikv_util::{
     memory::MemoryQuota, quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE,
 };
-use tracker::{set_tls_tracker_token, TrackerToken, TrackerTokenArray, GLOBAL_TRACKERS};
+use tracker::{GLOBAL_TRACKERS, TrackerToken, TrackerTokenArray, set_tls_tracker_token};
 use txn_types::{LockInfoExt, TimeStamp};
 
 use super::task::Task;
@@ -2257,10 +2257,10 @@ mod tests {
     };
     use raftstore::store::{LocksStatus, ReadStats, WriteStats};
     use tikv_util::{
+        Either,
         config::ReadableSize,
         future::{block_on_timeout, paired_future_callback},
         memory::HeapSize,
-        Either,
     };
     use txn_types::{Key, LockType, SharedLocks, TimeStamp};
 

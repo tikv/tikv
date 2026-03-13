@@ -244,6 +244,7 @@ mod tests {
 
     use super::*;
     use crate::storage::{
+        Engine, Statistics, TestEngineBuilder,
         lock_manager::MockLockManager,
         mvcc::tests::must_load_shared_lock,
         txn::{
@@ -255,7 +256,6 @@ mod tests {
             tests::{must_commit, must_rollback},
             txn_status_cache::TxnStatusCache,
         },
-        Engine, Statistics, TestEngineBuilder,
     };
 
     impl PartialEq for PessimisticLockKeyResult {

@@ -41,9 +41,9 @@ pub use self::{
     },
 };
 use crate::storage::{
+    Error as StorageError, ErrorInner as StorageErrorInner, Result as StorageResult,
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     types::{MvccInfo, PessimisticLockResults, PrewriteResult, SecondaryLocksStatus, TxnStatus},
-    Error as StorageError, ErrorInner as StorageErrorInner, Result as StorageResult,
 };
 
 /// Process result of a command.

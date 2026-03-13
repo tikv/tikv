@@ -188,6 +188,7 @@ mod tests {
 
     use super::*;
     use crate::storage::{
+        TestEngineBuilder,
         kv::Engine,
         lock_manager::MockLockManager,
         mvcc::tests::{
@@ -199,7 +200,6 @@ mod tests {
             tests::{must_acquire_shared_pessimistic_lock, must_shared_prewrite_lock},
             txn_status_cache::TxnStatusCache,
         },
-        TestEngineBuilder,
     };
 
     fn run_resolve_lock<E: Engine>(
