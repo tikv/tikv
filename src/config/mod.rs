@@ -4322,6 +4322,23 @@ impl TikvConfig {
                         self.rocksdb.titan.enabled = Some(true);
                     }
                 }
+                // Titan is incompatible with TTL. If Titan was resolved as enabled
+                // (either inherited from last_cfg or auto-enabled), reject the
+                // configuration when TTL is also enabled. The user must first
+                // migrate off Titan before enabling TTL.
+                if self.storage.enable_ttl
+                    && matches!(self.rocksdb.titan.enabled, Some(true))
+                {
+                    return Err(
+                        "Titan is incompatible with TTL. To disable Titan, either: \
+                         (1) set rocksdb.defaultcf.titan.blob-run-mode to \"fallback\", \
+                         run a full compaction to drain blob files, then set \
+                         rocksdb.titan.enabled to false; or \
+                         (2) evacuate all data from this node (e.g. via store deletion or \
+                         placement rules), then start a fresh TiKV instance."
+                            .into(),
+                    );
+                }
                 if self.rocksdb.defaultcf.titan.min_blob_size.is_none() {
                     // get blob size from last config
                     self.rocksdb.defaultcf.titan.min_blob_size =
@@ -6554,6 +6571,56 @@ mod tests {
                     .min_blob_size,
                 Some(ReadableSize::kb(32)),
             );
+        }
+    }
+
+    #[test]
+    fn test_titan_ttl_incompatible_after_resolution() {
+        // Regression test: when titan.enabled is None in the current config but
+        // last_cfg has titan.enabled = Some(true), the resolved value should be
+        // Some(true). Combined with enable_ttl = true, this must be rejected.
+        // Previously, validate() ran before titan.enabled was resolved, so the
+        // TTL+Titan check was bypassed when titan.enabled was still None.
+
+        // Case 1: titan.enabled inherited from last_cfg as Some(true)
+        {
+            let (mut cfg, dir) = TikvConfig::with_tmp().unwrap();
+            // Simulate an existing Titan-enabled instance by persisting a config
+            // with titan.enabled = Some(true).
+            cfg.rocksdb.titan.enabled = Some(true);
+            persist_config(&cfg).unwrap();
+            let (storage, ..) = new_engines::<ApiV1>(cfg);
+            drop(storage);
+
+            // Now load a fresh config (titan.enabled = None) with TTL enabled.
+            let mut cfg = TikvConfig::from_file(&dir.path().join("config.toml"), None).unwrap();
+            assert_eq!(cfg.rocksdb.titan.enabled, None);
+            cfg.storage.enable_ttl = true;
+            let result = validate_and_persist_config(&mut cfg, false);
+            assert!(result.is_err(), "should reject TTL with resolved Titan");
+            assert!(
+                result.unwrap_err().contains("Titan is incompatible with TTL"),
+                "error message should mention Titan-TTL incompatibility"
+            );
+        }
+
+        // Case 2: titan.enabled explicitly Some(true) with TTL — caught by validate()
+        {
+            let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
+            cfg.rocksdb.titan.enabled = Some(true);
+            cfg.storage.enable_ttl = true;
+            let result = validate_and_persist_config(&mut cfg, false);
+            assert!(result.is_err(), "should reject explicit Titan + TTL");
+        }
+
+        // Case 3: titan.enabled = None, no last_cfg, TTL enabled — titan resolves
+        // to false (due to TTL), so this should succeed.
+        {
+            let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
+            assert_eq!(cfg.rocksdb.titan.enabled, None);
+            cfg.storage.enable_ttl = true;
+            validate_and_persist_config(&mut cfg, false).unwrap();
+            assert_eq!(cfg.rocksdb.titan.enabled, Some(false));
         }
     }
 
