@@ -438,7 +438,8 @@ impl<E: Engine> Endpoint<E> {
     /// Safety: This function must be called within a context where a TLS engine
     /// exists.
     async unsafe fn get_snapshot_with_timeout(ctx: &ReqContext) -> Result<E::IMSnap> {
-        let snapshot_future = with_tls_engine(|engine| Self::async_in_memory_snapshot(engine, ctx));
+        let snapshot_future =
+            unsafe { with_tls_engine(|engine| Self::async_in_memory_snapshot(engine, ctx)) };
         let max_duration_to_get_snapshot = ctx.deadline.remaining_duration();
         if max_duration_to_get_snapshot.is_zero() {
             return Err(Error::DeadlineExceeded);
