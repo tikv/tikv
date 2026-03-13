@@ -593,13 +593,15 @@ impl<S: EngineSnapshot> MvccReader<S> {
                                 };
                                 self.statistics.write.get += 1;
                                 let write = WriteRef::parse(&value)?.to_owned();
-                                assert!(
-                                    write.write_type == WriteType::Put
-                                        || write.write_type == WriteType::Delete,
-                                    "Write record pointed by last_change_ts {} should be Put or Delete, but got {:?}",
-                                    commit_ts,
-                                    write.write_type,
-                                );
+                                if write.write_type != WriteType::Put
+                                    && write.write_type != WriteType::Delete
+                                {
+                                    return Err(box_err!(
+                                        "Write record pointed by last_change_ts {} should be Put or Delete, but got {:?}",
+                                        commit_ts,
+                                        write.write_type
+                                    ));
+                                }
                                 seek_res = Some((commit_ts, write));
                                 continue;
                             }
@@ -694,7 +696,9 @@ impl<S: EngineSnapshot> MvccReader<S> {
 
     /// Return the first committed key for which `start_ts` equals to `ts`
     pub fn seek_ts(&mut self, ts: TimeStamp) -> Result<Option<Key>> {
-        assert!(self.scan_mode.is_some());
+        if self.scan_mode.is_none() {
+            return Err(box_err!("seek_ts requires scan_mode to be set"));
+        }
         self.create_write_cursor()?;
 
         let cursor = self.write_cursor.as_mut().unwrap();
