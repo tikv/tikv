@@ -272,7 +272,7 @@ pub mod tests {
 
         let mut txn = MvccTxn::new(
             TimeStamp::zero(),
-            ConcurrencyManager::new_for_test(TimeStamp::zero()),
+            ConcurrencyManager::new(TimeStamp::zero()),
         );
         txn.put_shared_locks(Key::from_raw(key), &shared_locks, true);
         write(engine, &Context::default(), txn.into_modifies());
@@ -471,7 +471,7 @@ pub mod tests {
         );
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let cm = ConcurrencyManager::new_for_test(TimeStamp::new(50));
+        let cm = ConcurrencyManager::new(TimeStamp::new(50));
         let mut txn = MvccTxn::new(TimeStamp::zero(), cm);
         let mut reader = SnapshotReader::new(TimeStamp::zero(), snapshot, true);
 

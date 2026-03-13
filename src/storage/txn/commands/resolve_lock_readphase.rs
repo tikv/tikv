@@ -150,7 +150,7 @@ mod tests {
     ) -> ProcessResult {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let cm = ConcurrencyManager::new_for_test(TimeStamp::new(100));
+        let cm = ConcurrencyManager::new(TimeStamp::new(100));
         let lock_mgr = MockLockManager::new();
         let write_context = WriteContext {
             lock_mgr: &lock_mgr,

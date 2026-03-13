@@ -584,14 +584,14 @@ pub mod tests {
         );
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let cm = ConcurrencyManager::new_for_test(commit_ts_2);
+        let cm = ConcurrencyManager::new(commit_ts_2);
         let mut txn = MvccTxn::new(TimeStamp::zero(), cm);
         let mut reader = SnapshotReader::new(TimeStamp::zero(), snapshot, true);
 
         txn.start_ts = start_ts_1;
         reader.start_ts = start_ts_1;
         assert!(
-            commit(&mut txn, &mut reader, key.clone(), commit_ts_1, None)
+            commit(&mut txn, &mut reader, key.clone(), commit_ts_1)
                 .unwrap()
                 .is_none()
         );
@@ -620,7 +620,7 @@ pub mod tests {
 
         txn.start_ts = start_ts_2;
         reader.start_ts = start_ts_2;
-        let released = commit(&mut txn, &mut reader, key.clone(), commit_ts_2, None)
+        let released = commit(&mut txn, &mut reader, key.clone(), commit_ts_2)
             .unwrap()
             .unwrap();
         assert_eq!(released.key, key);

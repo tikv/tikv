@@ -247,7 +247,7 @@ pub mod tests {
         mutator(&mut lock);
         shared_locks.update_lock(lock).unwrap();
 
-        let cm = ConcurrencyManager::new_for_test(start_ts);
+        let cm = ConcurrencyManager::new(start_ts);
         let mut txn = MvccTxn::new(start_ts, cm);
         txn.put_shared_locks(Key::from_raw(key), &shared_locks, false);
         write(engine, &Context::default(), txn.into_modifies());
