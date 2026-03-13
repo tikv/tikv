@@ -59,7 +59,7 @@ impl CommandExt for RawCompareAndSwap {
             if self.api_version == ApiVersion::V2 {
                 self.key.as_encoded().len() + ApiV2::ENCODED_LOGICAL_DELETE.len()
             } else {
-                0
+                self.key.as_encoded().len()
             }
         } else {
             self.key.as_encoded().len() + self.value.len()
@@ -102,7 +102,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
                     };
                     data.push(m);
                     raw_ext.into_iter().map(|r| r.key_guard).collect()
-                } else {                    
+                } else {
                     vec![]
                 };
 
