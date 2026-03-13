@@ -385,7 +385,7 @@ impl Suite {
         let regions = sim.region_info_accessors.get(&id).unwrap().clone();
         let ob = self.obs.get(&id).unwrap().clone();
         cfg.enable = true;
-        cfg.gcs_v2_enable = false;
+        cfg.gcs_v2_enable = true;
         cfg.temp_path = format!("/{}/{}", self.temp_files.path().display(), id);
         let resolver = LeadershipResolver::new(
             id,

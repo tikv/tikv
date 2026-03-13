@@ -446,7 +446,7 @@ fn main() {
                 backend_config: Default::default(),
                 db: Some(tmp_engine.rocks),
             };
-            exec.backend_config.gcs_v2_enable = gcs_v2_enable.unwrap_or(true);
+            exec.backend_config.gcs_v2_enable = gcs_v2_enable;
 
             use tikv::server::status_server::lite::Server as StatusServerLite;
             struct ExportTiKVInfo {
