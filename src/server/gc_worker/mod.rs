@@ -11,6 +11,7 @@ pub mod rawkv_compaction_filter;
 pub use compaction_filter::WriteCompactionFilterFactory;
 #[cfg(any(test, feature = "failpoints"))]
 pub use compaction_runner::FIRST_COMPACTION_CANDIDATE_REGION;
+#[cfg(any(test, feature = "failpoints"))]
 pub use compaction_filter::test_utils::{TestGcRunner, gc_by_compact};
 pub use compaction_runner::{CompactionCandidate, CompactionRunner, CompactionRunnerHandle};
 pub use config::{AutoCompactionConfig, DEFAULT_GC_BATCH_KEYS, GcConfig, GcWorkerConfigManager};

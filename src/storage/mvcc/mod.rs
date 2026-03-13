@@ -18,8 +18,8 @@ use tikv_util::{
     Either, metrics::CRITICAL_ERROR, panic_when_unexpected_key_or_data, set_panic_mark,
 };
 pub use txn_types::{
-    Key, Lock, LockType, Mutation, SHORT_VALUE_MAX_LEN, TimeStamp, Value, Write, WriteRef,
-    WriteType,
+    Key, Lock, LockType, Mutation, SHORT_VALUE_MAX_LEN, SharedLocks, TimeStamp, Value, Write,
+    WriteRef, WriteType,
 };
 
 pub use self::{
