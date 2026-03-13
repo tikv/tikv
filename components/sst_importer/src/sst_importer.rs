@@ -2948,6 +2948,54 @@ mod tests {
     }
 
     #[test]
+    fn test_update_import_apply_kv_concurrency() {
+        let cfg = Config::default();
+        let threads = ResizableRuntime::new(
+            Config::default().num_threads,
+            "test",
+            Box::new(create_tokio_runtime),
+            Box::new(|_| {}),
+        );
+        let threads_clone = Arc::new(Mutex::new(threads));
+        let mut cfg_mgr = ImportConfigManager::new(cfg.clone(), Arc::downgrade(&threads_clone));
+
+        let cfg_new = Config {
+            apply_kv_concurrency: 32,
+            ..cfg
+        };
+        let change = Config::default().diff(&cfg_new);
+        cfg_mgr.dispatch(change).unwrap();
+        assert_eq!(
+            cfg_mgr.rl().apply_kv_concurrency,
+            cfg_new.apply_kv_concurrency
+        );
+    }
+
+    #[test]
+    fn test_update_import_apply_kv_concurrency_zero() {
+        let cfg = Config::default();
+        let threads = ResizableRuntime::new(
+            Config::default().num_threads,
+            "test",
+            Box::new(create_tokio_runtime),
+            Box::new(|_| {}),
+        );
+        let threads_clone = Arc::new(Mutex::new(threads));
+        let mut cfg_mgr = ImportConfigManager::new(cfg.clone(), Arc::downgrade(&threads_clone));
+
+        let cfg_new = Config {
+            apply_kv_concurrency: 0,
+            ..cfg
+        };
+        let change = Config::default().diff(&cfg_new);
+        cfg_mgr.dispatch(change).unwrap();
+        assert_eq!(
+            cfg_mgr.rl().apply_kv_concurrency,
+            Config::default().apply_kv_concurrency
+        );
+    }
+
+    #[test]
     fn test_download_kv_file_to_mem_cache() {
         // create a sample kv file.
         let (_temp_dir, backend, kv_meta, buff) = create_sample_external_kv_file().unwrap();

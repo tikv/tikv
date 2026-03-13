@@ -1,9 +1,12 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     convert::identity,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 
@@ -50,6 +53,7 @@ use tikv_util::{
     time::{Instant, Limiter},
 };
 use tokio::time::sleep;
+use tokio::sync::Semaphore;
 use txn_types::{Key, WriteRef, WriteType};
 
 use super::{
@@ -64,14 +68,6 @@ use crate::{
     tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
-/// The concurrency of sending raft request for every `apply` requests.
-/// This value `16` would mainly influence the speed of applying a huge file:
-/// when we downloading the files into disk, loading all of them into memory may
-/// lead to OOM. This would be able to back-pressure them.
-/// (only log files greater than 16 * 7M = 112M would be throttled by this.)
-/// NOTE: Perhaps add a memory quota for download to disk mode and get rid of
-/// this value?
-const REQUEST_WRITE_CONCURRENCY: usize = 16;
 /// The extra bytes required by the wire encoding.
 /// Generally, a field (and a embedded message) would introduce some extra
 /// bytes. In detail, they are:
@@ -202,6 +198,8 @@ pub struct ImportSstService<E: Engine> {
     // it's some iff multi-rocksdb is enabled
     store_meta: Option<Arc<Mutex<StoreMeta<E::Local>>>>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
+    apply_kv_limiter: Arc<Semaphore>,
+    apply_kv_concurrency: Arc<AtomicUsize>,
 
     // When less than now, don't accept any requests.
     suspend: Arc<SuspendDeadline>,
@@ -440,6 +438,7 @@ impl<E: Engine> ImportSstService<E> {
             }
         });
         let num_threads = cfg.num_threads;
+        let apply_kv_concurrency = cfg.apply_kv_concurrency;
         let cfg_mgr = ConfigManager::new(cfg, Arc::downgrade(&threads_clone));
         handle.spawn(Self::tick(importer.clone(), cfg_mgr.clone()));
         // Drop the initial pool to accept new tasks
@@ -461,6 +460,8 @@ impl<E: Engine> ImportSstService<E> {
             writer,
             store_meta,
             resource_manager,
+            apply_kv_limiter: Arc::new(Semaphore::new(apply_kv_concurrency)),
+            apply_kv_concurrency: Arc::new(AtomicUsize::new(apply_kv_concurrency)),
             suspend: Arc::default(),
             mem_limit,
             force_partition_range_mgr,
@@ -484,6 +485,7 @@ impl<E: Engine> ImportSstService<E> {
         mut req: ApplyRequest,
         importer: Arc<SstImporter<E::Local>>,
         writer: raft_writer::ThrottledTlsEngineWriter,
+        apply_kv_limiter: Arc<Semaphore>,
         limiter: Limiter,
         max_raft_size: usize,
     ) -> std::result::Result<Option<Range>, ImportPbError> {
@@ -503,7 +505,7 @@ impl<E: Engine> ImportSstService<E> {
                 .external_storage_or_cache(req.get_storage_backend(), req.get_storage_cache_id())?,
         );
 
-        let mut inflight_futures = VecDeque::new();
+        let mut inflight_futures = Vec::new();
 
         let mut tasks = metas.iter().zip(rules.iter()).peekable();
         while let Some((meta, rule)) = tasks.next() {
@@ -546,20 +548,53 @@ impl<E: Engine> ImportSstService<E> {
                         .write::<E>(w, context.clone())
                         .map_err(transfer_error)
                 };
-                inflight_futures.push_back(
-                    tokio::spawn(task)
+                let permit = apply_kv_limiter
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| {
+                        let mut err = ImportPbError::default();
+                        err.set_message(
+                            "task canceled, probably runtime is shutting down.".to_owned(),
+                        );
+                        err
+                    })?;
+                inflight_futures.push(
+                    tokio::spawn(async move {
+                        let _permit = permit;
+                        task.await
+                    })
                         .map_err(convert_join_error)
                         .map(|x| x.and_then(identity)),
                 );
-                if inflight_futures.len() >= REQUEST_WRITE_CONCURRENCY {
-                    inflight_futures.pop_front().unwrap().await?;
-                }
             }
         }
         assert!(collector.is_empty());
         futures::future::try_join_all(inflight_futures).await?;
 
         Ok(range)
+    }
+
+    fn refresh_apply_kv_concurrency(&self) {
+        let target = self.cfg.rl().apply_kv_concurrency;
+        let current = self
+            .apply_kv_concurrency
+            .swap(target, Ordering::SeqCst);
+        match current.cmp(&target) {
+            std::cmp::Ordering::Less => {
+                self.apply_kv_limiter.add_permits(target - current);
+            }
+            std::cmp::Ordering::Greater => {
+                let diff = current - target;
+                let sem = self.apply_kv_limiter.clone();
+                self.threads.spawn(async move {
+                    if let Ok(p) = sem.acquire_many_owned(diff as u32).await {
+                        p.forget();
+                    }
+                });
+            }
+            std::cmp::Ordering::Equal => {}
+        }
     }
 }
 
@@ -919,6 +954,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     // Downloads KV file and performs key-rewrite then apply kv into this tikv
     // store.
     fn apply(&mut self, _ctx: RpcContext<'_>, req: ApplyRequest, sink: UnarySink<ApplyResponse>) {
+        self.refresh_apply_kv_concurrency();
         let label = "apply";
         IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
         let start = Instant::now();
@@ -927,6 +963,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let mem_limit = self.mem_limit;
         let max_raft_size = self.raft_entry_max_size.0 as usize;
         let applier = self.writer.clone();
+        let apply_kv_limiter = self.apply_kv_limiter.clone();
 
         let handle_task = async move {
             defer! { IMPORT_RPC_COUNT.with_label_values(&[label]).dec() }
@@ -945,7 +982,16 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 }
             }
 
-            match Self::do_apply(req, importer, applier, limiter, max_raft_size).await {
+            match Self::do_apply(
+                req,
+                importer,
+                applier,
+                apply_kv_limiter,
+                limiter,
+                max_raft_size,
+            )
+            .await
+            {
                 Ok(Some(r)) => resp.set_range(r),
                 Err(e) => resp.set_error(e),
                 _ => {}
