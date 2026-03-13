@@ -10,12 +10,12 @@ use crate::storage::{
     lock_manager::LockManager,
     mvcc::{ErrorInner, MvccTxn, SnapshotReader},
     txn::{
+        Error, Result,
         actions::check_txn_status::*,
         commands::{
             Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
             WriteCommand, WriteContext, WriteResult,
         },
-        Error, Result,
     },
 };
 

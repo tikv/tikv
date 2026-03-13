@@ -86,9 +86,9 @@ mod tests {
     use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
 
     use crate::storage::{
+        TestEngineBuilder,
         mvcc::tests::{must_get_rollback_protected, must_load_shared_lock, must_unlocked},
         txn::tests::*,
-        TestEngineBuilder,
     };
 
     #[test]

@@ -4,13 +4,12 @@ use tikv_util::Either;
 use txn_types::{Key, Lock, LockType, SharedLocks, TimeStamp, Write, WriteType};
 
 use crate::storage::{
-    mvcc::{self, MvccReader, MvccTxn, SnapshotReader, MAX_TXN_WRITE_SIZE},
-    txn::{
-        self,
-        actions::check_txn_status::{rollback_lock, rollback_shared_lock},
-        Result as TxnResult,
-    },
     Snapshot,
+    mvcc::{self, MAX_TXN_WRITE_SIZE, MvccReader, MvccTxn, SnapshotReader},
+    txn::{
+        self, Result as TxnResult,
+        actions::check_txn_status::{rollback_lock, rollback_shared_lock},
+    },
 };
 
 pub const FLASHBACK_BATCH_SIZE: usize = 256 + 1 /* To store the next key for multiple batches */;

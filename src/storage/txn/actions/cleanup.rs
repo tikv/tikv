@@ -10,7 +10,7 @@ use crate::storage::{
         metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
     },
     txn::actions::check_txn_status::{
-        check_txn_status_missing_lock, rollback_lock, rollback_shared_lock, MissingLockAction,
+        MissingLockAction, check_txn_status_missing_lock, rollback_lock, rollback_shared_lock,
     },
 };
 
