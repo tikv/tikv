@@ -98,42 +98,14 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
 
                 lock
             }
-            Some(Either::Right(mut shared_locks))
-                if shared_locks.contains_start_ts(self.start_ts) =>
-            {
-                let lock = shared_locks
-                    .get_lock(&self.start_ts)
-                    .map_err(MvccError::from)?
-                    .expect("lock should exist since contains_start_ts returned true")
-                    .clone();
-                let mut updated_lock = lock.clone();
-                let mut updated = false;
-
-                if updated_lock.ttl < self.advise_ttl {
-                    updated_lock.ttl = self.advise_ttl;
-                    updated = true;
-                }
-
-                // only for non-async-commit pipelined transactions, we can update the
-                // min_commit_ts
-                if !updated_lock.use_async_commit
-                    && updated_lock.generation > 0
-                    && self.min_commit_ts > 0
-                    && updated_lock.min_commit_ts < self.min_commit_ts.into()
-                {
-                    return Err(box_err!(
-                        "pipelined transaction should not hold shared locks"
-                    ));
-                }
-
-                if updated {
-                    shared_locks
-                        .update_lock(updated_lock.clone())
-                        .map_err(MvccError::from)?;
-                    txn.put_shared_locks(self.primary_key.clone(), &shared_locks, false);
-                }
-
-                updated_lock
+            Some(Either::Right(shared_locks)) if shared_locks.contains_start_ts(self.start_ts) => {
+                // Reject the request because a shared locked key cannot be the primary key of a
+                // transaction according to the design and transaction heartbeats are only sent
+                // for the primary key.
+                return Err(MvccError::from(MvccErrorInner::PrimaryMismatch(
+                    shared_locks.into_lock_info(self.primary_key.into_raw()?),
+                ))
+                .into());
             }
             _ => {
                 return Err(MvccError::from(MvccErrorInner::TxnNotFound {
@@ -170,7 +142,7 @@ pub mod tests {
     use std::sync::Arc;
 
     use concurrency_manager::ConcurrencyManager;
-    use kvproto::kvrpcpb::Context;
+    use kvproto::kvrpcpb::{Context, Op};
     use tikv_util::deadline::Deadline;
 
     use super::*;
@@ -178,21 +150,20 @@ pub mod tests {
         Engine,
         kv::TestEngineBuilder,
         lock_manager::MockLockManager,
-        mvcc::tests::*,
+        mvcc::{self, tests::*},
         txn::{
-            commands::WriteCommand, scheduler::DEFAULT_EXECUTION_DURATION_LIMIT, tests::*,
+            self, commands::WriteCommand, scheduler::DEFAULT_EXECUTION_DURATION_LIMIT, tests::*,
             txn_status_cache::TxnStatusCache,
         },
     };
 
-    pub fn must_success<E: Engine>(
+    fn txn_heart_beat<E: Engine>(
         engine: &mut E,
         primary_key: &[u8],
         start_ts: impl Into<TimeStamp>,
         advise_ttl: u64,
-        expect_ttl: u64,
-    ) {
-        let ctx = Context::default();
+        min_commit_ts: u64,
+    ) -> Result<WriteResult> {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new_for_test(start_ts);
@@ -202,22 +173,31 @@ pub mod tests {
             start_ts,
             advise_ttl,
             deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
-            min_commit_ts: 0,
+            min_commit_ts,
         };
-        let result = command
-            .process_write(
-                snapshot,
-                WriteContext {
-                    lock_mgr: &MockLockManager::new(),
-                    concurrency_manager: cm,
-                    extra_op: Default::default(),
-                    statistics: &mut Default::default(),
-                    async_apply_prewrite: false,
-                    raw_ext: None,
-                    txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
-                },
-            )
-            .unwrap();
+        command.process_write(
+            snapshot,
+            WriteContext {
+                lock_mgr: &MockLockManager::new(),
+                concurrency_manager: cm,
+                extra_op: Default::default(),
+                statistics: &mut Default::default(),
+                async_apply_prewrite: false,
+                raw_ext: None,
+                txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+            },
+        )
+    }
+
+    pub fn must_success<E: Engine>(
+        engine: &mut E,
+        primary_key: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        advise_ttl: u64,
+        expect_ttl: u64,
+    ) {
+        let ctx = Context::default();
+        let result = txn_heart_beat(engine, primary_key, start_ts, advise_ttl, 0).unwrap();
         if let ProcessResult::TxnStatus {
             txn_status: TxnStatus::Uncommitted { lock, .. },
         } = result.pr
@@ -235,34 +215,67 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
         advise_ttl: u64,
     ) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(Default::default()).unwrap();
+        assert!(txn_heart_beat(engine, primary_key, start_ts, advise_ttl, 0).is_err());
+    }
+
+    fn load_shared_sub_lock<E: Engine>(
+        engine: &mut E,
+        key: &[u8],
+        start_ts: impl Into<TimeStamp>,
+    ) -> txn_types::Lock {
+        let mut shared_locks = must_load_shared_lock(engine, key);
+        shared_locks
+            .get_lock(&start_ts.into())
+            .unwrap()
+            .expect("shared sub-lock should exist")
+            .clone()
+    }
+
+    fn update_shared_sub_lock<E: Engine>(
+        engine: &mut E,
+        key: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        mutator: impl FnOnce(&mut txn_types::Lock),
+    ) {
         let start_ts = start_ts.into();
+        let mut shared_locks = must_load_shared_lock(engine, key);
+        let mut lock = shared_locks
+            .get_lock(&start_ts)
+            .unwrap()
+            .expect("shared sub-lock should exist")
+            .clone();
+        mutator(&mut lock);
+        shared_locks.update_lock(lock).unwrap();
+
         let cm = ConcurrencyManager::new_for_test(start_ts);
-        let command = TxnHeartBeat {
-            ctx,
-            primary_key: Key::from_raw(primary_key),
-            start_ts,
-            advise_ttl,
-            deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
-            min_commit_ts: 0,
-        };
-        assert!(
-            command
-                .process_write(
-                    snapshot,
-                    WriteContext {
-                        lock_mgr: &MockLockManager::new(),
-                        concurrency_manager: cm,
-                        extra_op: Default::default(),
-                        statistics: &mut Default::default(),
-                        async_apply_prewrite: false,
-                        raw_ext: None,
-                        txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
-                    },
-                )
-                .is_err()
-        );
+        let mut txn = MvccTxn::new(start_ts, cm);
+        txn.put_shared_locks(Key::from_raw(key), &shared_locks, false);
+        write(engine, &Context::default(), txn.into_modifies());
+    }
+
+    fn must_primary_mismatch(err: txn::Error, key: &[u8]) {
+        match err {
+            txn::Error(box txn::ErrorInner::Mvcc(mvcc::Error(
+                box mvcc::ErrorInner::PrimaryMismatch(lock_info),
+            ))) => {
+                assert_eq!(lock_info.key, key);
+                assert_eq!(lock_info.lock_type, Op::SharedLock);
+            }
+            e => panic!("unexpected error: {:?}", e),
+        }
+    }
+
+    fn must_heartbeat_err<E: Engine>(
+        engine: &mut E,
+        primary_key: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        advise_ttl: u64,
+        min_commit_ts: u64,
+    ) -> txn::Error {
+        match txn_heart_beat(engine, primary_key, start_ts, advise_ttl, min_commit_ts) {
+            Ok(_) => panic!("expected TxnHeartBeat to fail"),
+            Err(err) => err,
+        }
     }
 
     #[test]
@@ -360,5 +373,47 @@ pub mod tests {
         } else {
             unreachable!();
         }
+    }
+
+    #[test]
+    fn test_txn_heartbeat_rejects_shared_lock_key() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"k1";
+        let primary = b"pk";
+        let start_ts = 10;
+
+        must_acquire_shared_pessimistic_lock(&mut engine, key, primary, start_ts, start_ts, 100);
+        let lock_before = load_shared_sub_lock(&mut engine, key, start_ts);
+
+        let err = must_heartbeat_err(&mut engine, key, start_ts, 200, 0);
+        must_primary_mismatch(err, key);
+
+        let lock_after = load_shared_sub_lock(&mut engine, key, start_ts);
+        assert_eq!(lock_after.ttl, lock_before.ttl);
+        assert_eq!(lock_after.min_commit_ts, lock_before.min_commit_ts);
+        assert_eq!(lock_after.generation, lock_before.generation);
+    }
+
+    #[test]
+    fn test_txn_heartbeat_rejects_shared_lock_with_pipelined_fields() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"k1";
+        let primary = b"pk";
+        let start_ts = 10;
+
+        must_acquire_shared_pessimistic_lock(&mut engine, key, primary, start_ts, start_ts, 100);
+        update_shared_sub_lock(&mut engine, key, start_ts, |lock| {
+            lock.generation = 1;
+            lock.min_commit_ts = 20.into();
+        });
+        let lock_before = load_shared_sub_lock(&mut engine, key, start_ts);
+
+        let err = must_heartbeat_err(&mut engine, key, start_ts, 250, 30);
+        must_primary_mismatch(err, key);
+
+        let lock_after = load_shared_sub_lock(&mut engine, key, start_ts);
+        assert_eq!(lock_after.ttl, lock_before.ttl);
+        assert_eq!(lock_after.min_commit_ts, lock_before.min_commit_ts);
+        assert_eq!(lock_after.generation, lock_before.generation);
     }
 }

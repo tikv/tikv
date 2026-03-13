@@ -363,7 +363,9 @@ fn create_error_stream(
 
 /// A helper for uploading a large files to S3 storage.
 ///
-/// Note: this uploader does not support uploading files larger than 19.5 GiB.
+/// The uploader automatically adjusts part size to respect S3's 10000 part
+/// limit. Maximum file size is approximately (part_size * 10000), but the part
+/// size will be increased automatically if needed.
 struct S3Uploader<'client> {
     client: &'client Client,
 
@@ -443,6 +445,8 @@ fn get_content_md5(object_lock_enabled: bool, content: &[u8]) -> Option<String> 
 /// Specifies the minimum size to use multi-part upload.
 /// AWS S3 requires each part to be at least 5 MiB.
 const MINIMUM_PART_SIZE: usize = 5 * 1024 * 1024;
+/// S3 has a maximum of 10000 parts per multipart upload.
+const MAX_PARTS: u64 = 10000;
 
 impl<'client> S3Uploader<'client> {
     /// Creates a new uploader with a given target location and upload
@@ -469,7 +473,26 @@ impl<'client> S3Uploader<'client> {
         reader: &mut (dyn AsyncRead + Unpin + Send),
         est_len: u64,
     ) -> Result<(), UploadError> {
-        if est_len <= self.multi_part_size as u64 {
+        let effective_part_size = if est_len > self.multi_part_size as u64 {
+            let min_part_size_for_limit = est_len.div_ceil(MAX_PARTS);
+            let adjusted_size =
+                std::cmp::max(self.multi_part_size as u64, min_part_size_for_limit) as usize;
+
+            if adjusted_size != self.multi_part_size {
+                debug!(
+                    "adjusted multipart size from {} to {} bytes for file size {} bytes (estimated {} parts)",
+                    self.multi_part_size,
+                    adjusted_size,
+                    est_len,
+                    est_len.div_ceil(adjusted_size as u64)
+                );
+            }
+            adjusted_size
+        } else {
+            self.multi_part_size
+        };
+
+        if est_len <= effective_part_size as u64 {
             // For short files, execute one put_object to upload the entire thing.
             let mut data = Vec::with_capacity(est_len as usize);
             reader.read_to_end(&mut data).await?;
@@ -479,7 +502,7 @@ impl<'client> S3Uploader<'client> {
             // Otherwise, use multipart upload to improve robustness.
             self.upload_id = retry_and_count(|| self.begin(), "begin_upload").await?;
             let upload_res = async {
-                let mut buf = vec![0; self.multi_part_size];
+                let mut buf = vec![0; effective_part_size];
                 let mut part_number = 1;
                 loop {
                     let data_size = try_read_exact(reader, &mut buf).await?;
@@ -1415,5 +1438,42 @@ mod tests {
         assert!(matches!(try_read_exact(&mut data, &mut buf).await, Ok(5)));
         assert_eq!(&buf[..5], b"ogia.");
         assert!(matches!(try_read_exact(&mut data, &mut buf).await, Ok(0)));
+    }
+
+    #[test]
+    fn test_multipart_size_adjustment() {
+        const MAX_PARTS: u64 = 10000;
+        let multi_part_size = MINIMUM_PART_SIZE; // 5MB
+
+        // Test case 1: Small file, no adjustment needed
+        let est_len = 10u64 * 1024 * 1024; // 10MB
+        let min_part_size = est_len.div_ceil(MAX_PARTS);
+        let effective_size = std::cmp::max(multi_part_size as u64, min_part_size);
+        assert_eq!(effective_size, multi_part_size as u64);
+
+        // Test case 2: File that would exceed 10000 parts with 5MB part size
+        let est_len = 60u64 * 1024 * 1024 * 1024; // 60GB
+        let min_part_size = est_len.div_ceil(MAX_PARTS);
+        let effective_size = std::cmp::max(multi_part_size as u64, min_part_size);
+        // Should be at least 6MB to fit in 10000 parts
+        assert!(effective_size > multi_part_size as u64);
+        assert!(est_len.div_ceil(effective_size) <= MAX_PARTS);
+
+        // Test case 3: Very large file (100GB)
+        let est_len = 100 * 1024 * 1024 * 1024u64; // 100GB
+        let min_part_size = est_len.div_ceil(MAX_PARTS);
+        let effective_size = std::cmp::max(multi_part_size as u64, min_part_size);
+        // Should be at least ~10MB to fit in 10000 parts
+        assert!(effective_size > multi_part_size as u64);
+        assert!(est_len.div_ceil(effective_size) <= MAX_PARTS);
+
+        // Verify the estimated parts count
+        let estimated_parts = est_len.div_ceil(effective_size);
+        assert!(
+            estimated_parts <= MAX_PARTS,
+            "estimated parts {} exceeds maximum {}",
+            estimated_parts,
+            MAX_PARTS
+        );
     }
 }
