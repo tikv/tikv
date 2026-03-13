@@ -722,10 +722,12 @@ pub enum Cmd {
 
         #[structopt(
             long = "gcs-v2-enable",
+            parse(try_from_str),
+            default_value = "true",
             possible_values = &["true", "false"],
             help("whether to enable GCS v2 external storage backend for compact-log-backup")
         )]
-        gcs_v2_enable: Option<bool>,
+        gcs_v2_enable: bool,
     },
     /// Get the state of a region's RegionReadProgress.
     GetRegionReadProgress {
@@ -926,7 +928,7 @@ mod tests {
         .unwrap();
 
         match opt.cmd.unwrap() {
-            Cmd::CompactLogBackup { gcs_v2_enable, .. } => assert_eq!(gcs_v2_enable, None),
+            Cmd::CompactLogBackup { gcs_v2_enable, .. } => assert!(gcs_v2_enable),
             cmd => panic!("unexpected command: {:?}", std::mem::discriminant(&cmd)),
         }
     }
@@ -948,7 +950,7 @@ mod tests {
         .unwrap();
 
         match opt.cmd.unwrap() {
-            Cmd::CompactLogBackup { gcs_v2_enable, .. } => assert_eq!(gcs_v2_enable, Some(false)),
+            Cmd::CompactLogBackup { gcs_v2_enable, .. } => assert!(!gcs_v2_enable),
             cmd => panic!("unexpected command: {:?}", std::mem::discriminant(&cmd)),
         }
     }
