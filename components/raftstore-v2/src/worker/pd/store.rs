@@ -136,7 +136,7 @@ fn collect_report_read_peer_stats(
     mut report_read_stats: HashMap<u64, pdpb::PeerStat>,
     mut stats: pdpb::StoreStats,
 ) -> pdpb::StoreStats {
-    if report_read_stats.len() < capacity * 4 {
+    if report_read_stats.len() < capacity * 5 {
         for (_, read_stat) in report_read_stats {
             stats.peer_stats.push(read_stat);
         }
@@ -146,6 +146,7 @@ fn collect_report_read_peer_stats(
     let mut bytes_topn_report = TopN::new(capacity);
     let mut stats_topn_report = TopN::new(capacity);
     let mut cpu_topn_report = TopN::new(capacity);
+    let mut scheduler_cpu_topn_report = TopN::new(capacity);
     for read_stat in report_read_stats.values() {
         let mut cmp_stat = PeerCmpReadStat::default();
         cmp_stat.region_id = read_stat.region_id;
@@ -158,9 +159,12 @@ fn collect_report_read_peer_stats(
         let mut query_cmp_stat = cmp_stat.clone();
         query_cmp_stat.report_stat = get_read_query_num(read_stat.get_query_stats());
         stats_topn_report.push(query_cmp_stat);
-        let mut cpu_cmp_stat = cmp_stat;
+        let mut cpu_cmp_stat = cmp_stat.clone();
         cpu_cmp_stat.report_stat = read_stat.get_cpu_stats().get_unified_read();
         cpu_topn_report.push(cpu_cmp_stat);
+        let mut sched_cmp_stat = cmp_stat;
+        sched_cmp_stat.report_stat = read_stat.get_cpu_stats().get_scheduler();
+        scheduler_cpu_topn_report.push(sched_cmp_stat);
     }
 
     for x in keys_topn_report {
@@ -182,6 +186,12 @@ fn collect_report_read_peer_stats(
     }
 
     for x in cpu_topn_report {
+        if let Some(report_stat) = report_read_stats.remove(&x.region_id) {
+            stats.peer_stats.push(report_stat);
+        }
+    }
+
+    for x in scheduler_cpu_topn_report {
         if let Some(report_stat) = report_read_stats.remove(&x.region_id) {
             stats.peer_stats.push(report_stat);
         }
@@ -217,23 +227,53 @@ where
                 let query_stats = region_peer
                     .query_stats
                     .sub_query_stats(&region_peer.last_store_report_query_stats);
-                let cpu_usage = if interval_seconds > 0 {
-                    let cpu_time_duration = Duration::from_millis(
-                        self.region_cpu_records_since_store_heartbeat
+                let (cpu_usage, unified_read_cpu_usage, scheduler_cpu_usage) =
+                    if interval_seconds > 0 {
+                        let cpu_record = self
+                            .region_cpu_records_since_store_heartbeat
                             .remove(region_id)
-                            .unwrap_or(0) as u64,
-                    );
-                    ((cpu_time_duration.as_secs_f64() * 100.0) / interval_seconds as f64) as u64
-                } else {
-                    self.region_cpu_records_since_store_heartbeat
-                        .remove(region_id);
-                    0
-                };
+                            .unwrap_or_default();
+                        let total = ((Duration::from_millis(cpu_record.cpu_time_ms as u64)
+                            .as_secs_f64()
+                            * 100.0)
+                            / interval_seconds as f64) as u64;
+                        let unified_read = ((Duration::from_millis(
+                            cpu_record.unified_read_cpu_time_ms as u64,
+                        )
+                        .as_secs_f64()
+                            * 100.0)
+                            / interval_seconds as f64)
+                            as u64;
+                        let scheduler = ((Duration::from_millis(
+                            cpu_record.scheduler_cpu_time_ms as u64,
+                        )
+                        .as_secs_f64()
+                            * 100.0)
+                            / interval_seconds as f64)
+                            as u64;
+                        (total, unified_read, scheduler)
+                    } else {
+                        self.region_cpu_records_since_store_heartbeat
+                            .remove(region_id);
+                        (0, 0, 0)
+                    };
                 let cpu_usage = if cpu_usage < hotspot_cpu_usage_report_threshold() {
                     0
                 } else {
                     cpu_usage
                 };
+                let unified_read_cpu_usage =
+                    if unified_read_cpu_usage < hotspot_cpu_usage_report_threshold() {
+                        0
+                    } else {
+                        unified_read_cpu_usage
+                    };
+                let scheduler_cpu_usage =
+                    if scheduler_cpu_usage < hotspot_cpu_usage_report_threshold() {
+                        0
+                    } else {
+                        scheduler_cpu_usage
+                    };
                 region_peer.last_store_report_read_bytes = region_peer.read_bytes;
                 region_peer.last_store_report_read_keys = region_peer.read_keys;
                 region_peer
@@ -252,7 +292,8 @@ where
                 read_stat.set_read_bytes(read_bytes);
                 read_stat.set_query_stats(query_stats.0);
                 let mut cpu_stats = pdpb::CpuStats::default();
-                cpu_stats.set_unified_read(cpu_usage);
+                cpu_stats.set_unified_read(unified_read_cpu_usage);
+                cpu_stats.set_scheduler(scheduler_cpu_usage);
                 read_stat.set_cpu_stats(cpu_stats);
                 report_peers.insert(*region_id, read_stat);
             }

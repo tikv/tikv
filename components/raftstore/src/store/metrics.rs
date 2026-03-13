@@ -1049,4 +1049,10 @@ lazy_static! {
             "Is raft process busy or not",
             &["type"]
         ).unwrap();
+
+    pub static ref STORE_CPU_POOL_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_raftstore_cpu_pool_usage",
+        "CPU usage comparison between store-level (ThreadInfoStatistics) and region-level sum (resource metering) per thread pool.",
+        &["pool", "source"]
+    ).unwrap();
 }
