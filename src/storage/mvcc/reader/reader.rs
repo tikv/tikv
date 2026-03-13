@@ -738,6 +738,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             return Ok((vec![], false));
         }
         let mut locks = Vec::with_capacity(limit);
+        let mut lock_count: usize = 0;
         let mut has_remain = false;
         while cursor.valid()? {
             let key = Key::from_encoded_slice(cursor.key(&mut self.statistics.lock));
@@ -753,23 +754,32 @@ impl<S: EngineSnapshot> MvccReader<S> {
             match &mut lock_or_shared_locks {
                 Either::Left(l) => {
                     if filter(&key, l) {
+                        lock_count += 1;
                         locks.push((key, lock_or_shared_locks));
                     }
                 }
                 Either::Right(shared_locks) => {
                     shared_locks.filter_shared_locks(|shared_lock| filter(&key, shared_lock))?;
                     if !shared_locks.is_empty() {
+                        if limit > 0 {
+                            let remaining = limit - lock_count;
+                            if shared_locks.len() > remaining {
+                                shared_locks.truncate_to(remaining);
+                                has_remain = true;
+                            }
+                        }
+                        lock_count += shared_locks.len();
                         locks.push((key, lock_or_shared_locks));
                     }
                 }
             }
-            if limit > 0 && locks.len() == limit {
+            if limit > 0 && lock_count >= limit {
                 has_remain = true;
                 break;
             }
             cursor.next(&mut self.statistics.lock);
         }
-        self.statistics.lock.processed_keys += locks.len();
+        self.statistics.lock.processed_keys += lock_count;
         Ok((locks, has_remain))
     }
 
@@ -999,7 +1009,7 @@ pub mod tests {
     };
     use pd_client::FeatureGate;
     use raftstore::store::RegionSnapshot;
-    use txn_types::{LastChange, LockType, Mutation};
+    use txn_types::{LastChange, Lock, LockType, Mutation, SharedLocks, TimeStamp};
 
     use super::*;
     use crate::storage::{
@@ -1985,6 +1995,67 @@ pub mod tests {
             2,
             &visible_locks[..2],
             true,
+        );
+    }
+
+    #[test]
+    fn test_scan_locks_from_storage_shared_locks_limit() {
+        // This test guarantees that the limit parameter take effect on shared locks as
+        // well.
+        let path = tempfile::Builder::new()
+            .prefix("_test_storage_mvcc_reader_scan_locks_from_storage_shared_locks_limit")
+            .tempdir()
+            .unwrap();
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![], vec![]);
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(&db, &region);
+
+        // Create a SharedLocks with 5 individual locks on key "k1"
+        let mut shared_locks = SharedLocks::new();
+        for i in 1..=5u64 {
+            let lock = Lock::new(
+                LockType::Pessimistic,
+                format!("k{}", i).into_bytes(),
+                i.into(),
+                100,
+                None,
+                TimeStamp::zero(),
+                0,
+                TimeStamp::zero(),
+                false,
+            );
+            shared_locks.insert_lock(lock).unwrap();
+        }
+
+        // Write SharedLocks directly to CF_LOCK
+        let key = Key::from_raw(b"shared_lock_key");
+        engine.write(vec![Modify::Put(
+            CF_LOCK,
+            key.clone(),
+            shared_locks.to_bytes(),
+        )]);
+
+        // Scan with limit=1
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.clone(), region.clone());
+        let mut reader = MvccReader::new(snap, None, false);
+        let (locks, _has_remain) = reader
+            .scan_locks_from_storage(None, None, |_, _| true, 1)
+            .unwrap();
+
+        // Count total individual locks returned
+        let total_locks: usize = locks
+            .iter()
+            .map(|(_, lor)| match lor {
+                Either::Left(_) => 1,
+                Either::Right(shared) => shared.len(),
+            })
+            .sum();
+
+        assert!(
+            total_locks <= 1,
+            "Expected at most 1 lock when limit=1, but got {} locks.",
+            total_locks
         );
     }
 

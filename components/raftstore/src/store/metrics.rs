@@ -427,6 +427,20 @@ lazy_static! {
             "Bucketed histogram of write msg block wait duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
+    /// Actual wait duration passed to spin_at_least in wait_for_a_while (after trend adjustment).
+    pub static ref STORE_WRITE_SPIN_ACTUAL_WAIT_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_write_spin_actual_wait_duration_seconds",
+            "Bucketed histogram of actual spin wait duration used in wait_for_a_while (after trend).",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    /// Adaptive wait duration (wait_duration_adaptive) for observing difference from actual spin.
+    pub static ref STORE_WRITE_ADAPTIVE_WAIT_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_write_adaptive_wait_duration_seconds",
+            "Bucketed histogram of adaptive wait duration (wait_duration_adaptive) in batching.",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
 
     /// Waterfall Metrics
     pub static ref STORE_WF_BATCH_WAIT_DURATION_HISTOGRAM: Histogram =

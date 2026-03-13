@@ -629,12 +629,29 @@ impl ResourceController {
     }
 
     pub fn get_priority(&self, name: &[u8], pri: CommandPri) -> u64 {
-        let level = match pri {
-            CommandPri::Low => 2,
-            CommandPri::Normal => 1,
-            CommandPri::High => 0,
+        let level = Self::command_pri_to_level(pri);
+        self.resource_group(name).get_priority(level, None, true)
+    }
+
+    /// Returns the priority for the given task metadata without incrementing
+    /// virtual time. Used for pre-spawn eviction comparison.
+    pub fn peek_priority_of(&self, metadata: &TaskMetadata<'_>, pri: CommandPri) -> u64 {
+        let level = Self::command_pri_to_level(pri);
+        let group = self.resource_group(metadata.group_name());
+        let override_priority = if metadata.override_priority() == 0 {
+            None
+        } else {
+            Some(metadata.override_priority())
         };
-        self.resource_group(name).get_priority(level, None)
+        group.get_priority(level, override_priority, false)
+    }
+
+    fn command_pri_to_level(pri: CommandPri) -> usize {
+        match pri {
+            CommandPri::High => 0,
+            CommandPri::Normal => 1,
+            CommandPri::Low => 2,
+        }
     }
 }
 
@@ -648,6 +665,7 @@ impl TaskPriorityProvider for ResourceController {
             } else {
                 Some(metadata.override_priority())
             },
+            true,
         )
     }
 }
@@ -672,14 +690,18 @@ struct GroupPriorityTracker {
 }
 
 impl GroupPriorityTracker {
-    fn get_priority(&self, level: usize, override_priority: Option<u32>) -> u64 {
+    /// Computes the scheduling priority for a task at the given level.
+    /// When `advance_vt` is true, atomically increments the virtual time
+    /// (used when actually scheduling a task). When false, reads virtual
+    /// time without advancing it (used for priority comparison only).
+    fn get_priority(&self, level: usize, override_priority: Option<u32>, advance_vt: bool) -> u64 {
         let task_extra_priority = TASK_EXTRA_FACTOR_BY_LEVEL[level] * 1000 * self.weight;
-        let vt = (if self.vt_delta_for_get > 0 {
+        let vt = (if advance_vt && self.vt_delta_for_get > 0 {
             self.virtual_time
                 .fetch_add(self.vt_delta_for_get, Ordering::Relaxed)
                 + self.vt_delta_for_get
         } else {
-            self.virtual_time.load(Ordering::Relaxed)
+            self.virtual_time.load(Ordering::Relaxed) + self.vt_delta_for_get
         }) + task_extra_priority;
         let priority = override_priority.unwrap_or(self.group_priority);
         concat_priority_vt(priority, vt)

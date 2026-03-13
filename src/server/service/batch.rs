@@ -1,6 +1,8 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use std::collections::HashMap;
+
 use api_version::KvFormat;
 use kvproto::kvrpcpb::*;
 use protobuf::Message;
@@ -9,7 +11,7 @@ use tikv_util::{
     mpsc::future::{Sender, WakePolicy},
     time::Instant,
 };
-use tracker::{GLOBAL_TRACKERS, RequestInfo, RequestType, Tracker, TrackerToken, with_tls_tracker};
+use tracker::{GLOBAL_TRACKERS, RequestInfo, RequestType, Tracker, TrackerToken};
 use txn_types::ValueEntry;
 
 use crate::{
@@ -158,6 +160,7 @@ impl BatcherBuilder {
 
 pub struct GetCommandResponseConsumer {
     tx: Sender<MeasuredSingleResponse>,
+    trackers: HashMap<u64, TrackerToken>,
 }
 
 impl ResponseBatchConsumer<(Option<ValueEntry>, Statistics)> for GetCommandResponseConsumer {
@@ -175,9 +178,22 @@ impl ResponseBatchConsumer<(Option<ValueEntry>, Statistics)> for GetCommandRespo
         } else {
             match res {
                 Ok((val, statistics)) => {
-                    let scan_detail_v2 = resp.mut_exec_details_v2().mut_scan_detail_v2();
-                    statistics.write_scan_detail(scan_detail_v2);
-                    with_tls_tracker(|tracker| tracker.write_scan_detail(scan_detail_v2));
+                    let exec_detail_v2 = resp.mut_exec_details_v2();
+                    let tracker = self.trackers.get(&id).copied();
+                    {
+                        let scan_detail_v2 = exec_detail_v2.mut_scan_detail_v2();
+                        statistics.write_scan_detail(scan_detail_v2);
+                        if let Some(tracker) = tracker {
+                            let _ = GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                                tracker.write_scan_detail(scan_detail_v2);
+                            });
+                        }
+                    }
+                    if let Some(tracker) = tracker {
+                        let _ = GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                            tracker.write_ru_v2(exec_detail_v2.mut_ru_v2());
+                        });
+                    }
                     match val {
                         Some(val) => {
                             resp.set_value(val.value);
@@ -270,11 +286,19 @@ fn future_batch_get_command<E: Engine, L: LockManager, F: KvFormat>(
         .get_override_priority();
     let resource_priority = ResourcePriority::from(group_priority);
 
+    let trackers_by_id: HashMap<u64, TrackerToken> = requests
+        .iter()
+        .copied()
+        .zip(trackers.iter().copied())
+        .collect();
     let res = storage.batch_get_command(
         gets,
         requests,
         trackers.clone(),
-        GetCommandResponseConsumer { tx: tx.clone() },
+        GetCommandResponseConsumer {
+            tx: tx.clone(),
+            trackers: trackers_by_id,
+        },
         begin_instant,
     );
     let f = async move {
@@ -334,7 +358,10 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager, F: KvFormat>(
     let res = storage.raw_batch_get_command(
         gets,
         requests,
-        GetCommandResponseConsumer { tx: tx.clone() },
+        GetCommandResponseConsumer {
+            tx: tx.clone(),
+            trackers: HashMap::default(),
+        },
     );
     let f = async move {
         // This error can only cause by readpool busy.
@@ -376,7 +403,10 @@ mod tests {
     #[test]
     fn test_get_command_response_consumer_sets_commit_ts() {
         let (tx, mut rx) = unbounded(WakePolicy::Immediately);
-        let consumer = GetCommandResponseConsumer { tx };
+        let consumer = GetCommandResponseConsumer {
+            tx,
+            trackers: HashMap::default(),
+        };
 
         consumer.consume(
             7,
@@ -401,7 +431,10 @@ mod tests {
     #[test]
     fn test_get_command_response_consumer_commit_ts_default_zero() {
         let (tx, mut rx) = unbounded(WakePolicy::Immediately);
-        let consumer = GetCommandResponseConsumer { tx };
+        let consumer = GetCommandResponseConsumer {
+            tx,
+            trackers: HashMap::default(),
+        };
 
         consumer.consume(
             8,

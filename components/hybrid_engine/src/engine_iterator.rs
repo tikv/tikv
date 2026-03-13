@@ -129,6 +129,13 @@ where
             Either::Right(c) => c.internal_key_skipped_count(),
         }
     }
+
+    fn block_read_count(&self) -> u64 {
+        match &self.collector {
+            Either::Left(c) => c.block_read_count(),
+            Either::Right(c) => c.block_read_count(),
+        }
+    }
 }
 
 impl<EK, EC> MetricsExt for HybridEngineIterator<EK, EC>

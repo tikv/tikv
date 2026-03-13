@@ -4291,7 +4291,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#b336a102cdb4e0e737059627c4dc03c24f07f02c"
+source = "git+https://github.com/pingcap/kvproto.git#8478a5610086d5141b40ea50008dc1e44aead6a0"
 dependencies = [
  "bytes",
  "futures 0.3.15",
@@ -8197,7 +8197,8 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.40",
  "tikv_util",
- "time 0.1.43",
+ "time 0.1.45",
+ "tracker",
  "yatp",
 ]
 
@@ -9889,7 +9890,7 @@ checksum = "09041cd90cf85f7f8b2df60c646f853b7f535ce68f85244eb6731cf89fa498ec"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/tikv/yatp.git?branch=master#793be4d789d4bd15292fe4d06e38063b4ec9d48e"
+source = "git+https://github.com/tikv/yatp.git?branch=master#9fcf102bfcc3acaa0d992b018ada7593deb04d97"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-skiplist 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)",

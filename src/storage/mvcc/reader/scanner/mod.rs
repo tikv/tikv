@@ -632,7 +632,7 @@ pub(crate) fn load_data_by_lock<S: Snapshot, I: Iterator>(
 mod tests {
     use engine_rocks::ReadPerfInstant;
     use engine_traits::MiscExt;
-    use txn_types::OldValue;
+    use txn_types::{LastChange, OldValue};
 
     use super::*;
     use crate::storage::{
@@ -1198,5 +1198,94 @@ mod tests {
         // meet lock, load_commit_ts is set, so even access_locks is set, it should be
         // ignored
         scanner.next_entry().unwrap_err();
+    }
+
+    #[test]
+    fn test_scan_with_load_commit_ts_top_lock_versions_across_seek_bound_and_delete() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+
+        let lock_count_lt = SEEK_BOUND - 1;
+        let lock_count_ge = SEEK_BOUND + 1;
+
+        let keys_put = [b"k1".as_slice(), b"k2".as_slice()];
+        let lock_counts_put = [lock_count_lt, lock_count_ge];
+        for (&key, &lock_count) in keys_put.iter().zip(lock_counts_put.iter()) {
+            must_prewrite_put(&mut engine, key, key, key, 1);
+            must_commit(&mut engine, key, 1, 1);
+            for ts in 2..=lock_count + 1 {
+                must_prewrite_lock(&mut engine, key, key, ts);
+                must_commit(&mut engine, key, ts, ts);
+            }
+        }
+
+        let keys_delete = [b"k3".as_slice(), b"k4".as_slice()];
+        let lock_counts_delete = [lock_count_lt, lock_count_ge];
+        for (&key, &lock_count) in keys_delete.iter().zip(lock_counts_delete.iter()) {
+            must_prewrite_put(&mut engine, key, key, key, 1);
+            must_commit(&mut engine, key, 1, 1);
+            must_prewrite_delete(&mut engine, key, key, 2);
+            must_commit(&mut engine, key, 2, 2);
+            for ts in 3..=lock_count + 2 {
+                must_prewrite_lock(&mut engine, key, key, ts);
+                must_commit(&mut engine, key, ts, ts);
+            }
+        }
+
+        // Sanity check `last_change` and the seek-bound threshold for the top LOCK
+        // records.
+        let check_snapshot = engine.snapshot(Default::default()).unwrap();
+
+        let check_top_lock = |key: &[u8], top_ts: u64, last_change_ts: u64, expect_ge: bool| {
+            let write_value = check_snapshot
+                .get_cf(
+                    engine_traits::CF_WRITE,
+                    &Key::from_raw(key).append_ts(top_ts.into()),
+                )
+                .unwrap()
+                .unwrap();
+            let write = WriteRef::parse(&write_value).unwrap();
+            assert_eq!(write.write_type, WriteType::Lock);
+            match write.last_change {
+                LastChange::Exist {
+                    last_change_ts: ts,
+                    estimated_versions_to_last_change,
+                } => {
+                    assert_eq!(ts, last_change_ts.into());
+                    if expect_ge {
+                        assert!(estimated_versions_to_last_change >= SEEK_BOUND);
+                    } else {
+                        assert!(estimated_versions_to_last_change < SEEK_BOUND);
+                    }
+                }
+                other => panic!("unexpected last_change: {:?}", other),
+            }
+        };
+
+        check_top_lock(b"k1", lock_count_lt + 1, 1, false);
+        check_top_lock(b"k2", lock_count_ge + 1, 1, true);
+        check_top_lock(b"k3", lock_count_lt + 2, 2, false);
+        check_top_lock(b"k4", lock_count_ge + 2, 2, true);
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, 100.into())
+            .fill_cache(false)
+            .range(None, None)
+            .desc(false)
+            .set_load_commit_ts(true)
+            .build()
+            .unwrap();
+
+        // `k3` and `k4` are deleted, so they must be skipped.
+        let (key, entry) = scanner.next_entry().unwrap().unwrap();
+        assert_eq!(key, Key::from_raw(b"k1"));
+        assert_eq!(entry.value, b"k1".to_vec());
+        assert_eq!(entry.commit_ts.unwrap().into_inner(), 1);
+
+        let (key, entry) = scanner.next_entry().unwrap().unwrap();
+        assert_eq!(key, Key::from_raw(b"k2"));
+        assert_eq!(entry.value, b"k2".to_vec());
+        assert_eq!(entry.commit_ts.unwrap().into_inner(), 1);
+
+        assert!(scanner.next_entry().unwrap().is_none());
     }
 }
