@@ -9,7 +9,6 @@ use std::{
 };
 
 use lazy_static::lazy_static;
-use time::Timespec;
 use tokio_executor::park::ParkThread;
 use tokio_timer::{
     self, Delay,
@@ -19,7 +18,7 @@ use tokio_timer::{
 
 use crate::{
     sys::thread::StdThreadBuildWrapper,
-    time::{Instant, monotonic_raw_now},
+    time::{Instant, Timespec, monotonic_raw_now},
 };
 
 pub struct Timer<T> {

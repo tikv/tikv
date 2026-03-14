@@ -5,6 +5,7 @@ pub use std::time::Duration;
 use std::{
     cell::RefCell,
     cmp::Ordering,
+    convert::TryFrom,
     ops::{Add, AddAssign, Sub, SubAssign},
     sync::{
         Once,
@@ -15,7 +16,58 @@ use std::{
 };
 
 use async_speed_limit::clock::{BlockingClock, Clock, StandardClock};
-use time::{Duration as TimeDuration, Timespec};
+use time::Duration as TimeDuration;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct Timespec {
+    pub sec: i64,
+    pub nsec: i32,
+}
+
+impl Timespec {
+    pub fn new(sec: i64, nsec: i32) -> Self {
+        let total_nanos = i128::from(sec) * i128::from(NANOSECONDS_PER_SECOND) + i128::from(nsec);
+        Self::from_total_nanos(total_nanos)
+    }
+
+    fn from_total_nanos(total_nanos: i128) -> Self {
+        let nanos_per_second = i128::from(NANOSECONDS_PER_SECOND);
+        let sec = total_nanos.div_euclid(nanos_per_second);
+        let nsec = total_nanos.rem_euclid(nanos_per_second);
+        Self {
+            sec: i64::try_from(sec).expect("timespec seconds overflow"),
+            nsec: i32::try_from(nsec).expect("timespec nanoseconds overflow"),
+        }
+    }
+
+    fn total_nanos(self) -> i128 {
+        i128::from(self.sec) * i128::from(NANOSECONDS_PER_SECOND) + i128::from(self.nsec)
+    }
+}
+
+impl Add<TimeDuration> for Timespec {
+    type Output = Timespec;
+
+    fn add(self, rhs: TimeDuration) -> Self::Output {
+        Timespec::from_total_nanos(self.total_nanos() + rhs.whole_nanoseconds())
+    }
+}
+
+impl Sub<TimeDuration> for Timespec {
+    type Output = Timespec;
+
+    fn sub(self, rhs: TimeDuration) -> Self::Output {
+        Timespec::from_total_nanos(self.total_nanos() - rhs.whole_nanoseconds())
+    }
+}
+
+impl Sub<Timespec> for Timespec {
+    type Output = TimeDuration;
+
+    fn sub(self, rhs: Timespec) -> Self::Output {
+        TimeDuration::nanoseconds_i128(self.total_nanos() - rhs.total_nanos())
+    }
+}
 
 /// Converts Duration to milliseconds.
 #[inline]
@@ -38,6 +90,12 @@ pub fn duration_to_us(d: Duration) -> u64 {
     let nanos = u64::from(d.subsec_nanos());
     // If Duration is too large, the result may be overflow.
     d.as_secs() * 1_000_000 + (nanos / 1_000)
+}
+
+#[inline]
+pub fn system_time_now() -> Timespec {
+    let duration = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+    Timespec::new(duration.as_secs() as i64, duration.subsec_nanos() as i32)
 }
 
 /// Converts TimeSpec to nanoseconds
@@ -214,17 +272,18 @@ const NANOSECONDS_PER_MILLISECOND: i64 = 1_000_000;
 
 #[cfg(not(target_os = "linux"))]
 mod inner {
-    use time::{self, Timespec};
+    use std::sync::OnceLock;
 
-    use super::NANOSECONDS_PER_SECOND;
+    use super::Timespec;
+
+    fn monotonic_std_now() -> std::time::Instant {
+        static START: OnceLock<std::time::Instant> = OnceLock::new();
+        *START.get_or_init(std::time::Instant::now)
+    }
 
     pub fn monotonic_raw_now() -> Timespec {
-        // TODO Add monotonic raw clock time impl for macos and windows
-        // Currently use `time::get_precise_ns()` instead.
-        let ns = time::precise_time_ns();
-        let s = ns / NANOSECONDS_PER_SECOND;
-        let ns = ns % NANOSECONDS_PER_SECOND;
-        Timespec::new(s as i64, ns as i32)
+        let elapsed = monotonic_std_now().elapsed();
+        Timespec::new(elapsed.as_secs() as i64, elapsed.subsec_nanos() as i32)
     }
 
     pub fn monotonic_now() -> Timespec {
@@ -242,7 +301,7 @@ mod inner {
 mod inner {
     use std::io;
 
-    use time::Timespec;
+    use super::Timespec;
 
     #[inline]
     pub fn monotonic_raw_now() -> Timespec {
@@ -358,7 +417,7 @@ impl Instant {
 
     pub(crate) fn elapsed_duration(later: Timespec, earlier: Timespec) -> Duration {
         if later >= earlier {
-            (later - earlier).to_std().unwrap()
+            Duration::try_from(later - earlier).unwrap()
         } else {
             panic!(
                 "monotonic time jumped back, {:.9} -> {:.9}",
@@ -370,7 +429,7 @@ impl Instant {
 
     pub(crate) fn saturating_elapsed_duration(later: Timespec, earlier: Timespec) -> Duration {
         if later >= earlier {
-            (later - earlier).to_std().unwrap()
+            Duration::try_from(later - earlier).unwrap()
         } else {
             error!(
                 "monotonic time jumped back, {:.3} -> {:.3}",
@@ -436,9 +495,9 @@ impl Add<Duration> for Instant {
 
     fn add(self, other: Duration) -> Instant {
         match self {
-            Instant::Monotonic(t) => Instant::Monotonic(t + TimeDuration::from_std(other).unwrap()),
+            Instant::Monotonic(t) => Instant::Monotonic(t + TimeDuration::try_from(other).unwrap()),
             Instant::MonotonicCoarse(t) => {
-                Instant::MonotonicCoarse(t + TimeDuration::from_std(other).unwrap())
+                Instant::MonotonicCoarse(t + TimeDuration::try_from(other).unwrap())
             }
         }
     }
@@ -455,9 +514,9 @@ impl Sub<Duration> for Instant {
 
     fn sub(self, other: Duration) -> Instant {
         match self {
-            Instant::Monotonic(t) => Instant::Monotonic(t - TimeDuration::from_std(other).unwrap()),
+            Instant::Monotonic(t) => Instant::Monotonic(t - TimeDuration::try_from(other).unwrap()),
             Instant::MonotonicCoarse(t) => {
-                Instant::MonotonicCoarse(t - TimeDuration::from_std(other).unwrap())
+                Instant::MonotonicCoarse(t - TimeDuration::try_from(other).unwrap())
             }
         }
     }

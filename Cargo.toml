@@ -338,9 +338,8 @@ backup-stream = { path = "components/backup-stream", default-features = false }
 batch-system = { path = "components/batch-system" }
 causal_ts = { path = "components/causal_ts" }
 cdc = { path = "components/cdc", default-features = false }
-# Do not enable default-features because it implicitly enables oldtime which is
-# vulnerable to RUSTSEC-2020-0071, see more in deny.toml.
-chrono = { version = "0.4", default-features = false }
+# Keep default features disabled so we don't pull in legacy optional time APIs.
+chrono = { version = "0.4.44", default-features = false }
 # Do not enable default-features because it implicitly enables the unsound
 # "atty" crate, see more about RUSTSEC-2021-0145 in deny.toml.
 clap = { version = "2.32", default-features = false, features = [
@@ -410,7 +409,7 @@ tikv_alloc = { path = "components/tikv_alloc" }
 tikv_kv = { path = "components/tikv_kv", default-features = false }
 tikv_util = { path = "components/tikv_util" }
 tipb_helper = { path = "components/tipb_helper" }
-time = { version = "0.1" }
+time = { version = "0.3.47" }
 tracker = { path = "components/tracker" }
 txn_types = { path = "components/txn_types" }
 # External libs

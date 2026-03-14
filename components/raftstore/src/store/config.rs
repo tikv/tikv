@@ -684,11 +684,11 @@ impl Config {
     }
 
     pub fn raft_store_max_leader_lease(&self) -> TimeDuration {
-        TimeDuration::from_std(self.raft_store_max_leader_lease.0).unwrap()
+        TimeDuration::try_from(self.raft_store_max_leader_lease.0).unwrap()
     }
 
     pub fn raft_base_tick_interval(&self) -> TimeDuration {
-        TimeDuration::from_std(self.raft_base_tick_interval.0).unwrap()
+        TimeDuration::try_from(self.raft_base_tick_interval.0).unwrap()
     }
 
     pub fn raft_heartbeat_interval(&self) -> Duration {
@@ -696,11 +696,11 @@ impl Config {
     }
 
     pub fn check_leader_lease_interval(&self) -> TimeDuration {
-        TimeDuration::from_std(self.check_leader_lease_interval.0).unwrap()
+        TimeDuration::try_from(self.check_leader_lease_interval.0).unwrap()
     }
 
     pub fn renew_leader_lease_advance_duration(&self) -> TimeDuration {
-        TimeDuration::from_std(self.renew_leader_lease_advance_duration.0).unwrap()
+        TimeDuration::try_from(self.renew_leader_lease_advance_duration.0).unwrap()
     }
 
     pub fn raft_log_gc_count_limit(&self) -> u64 {
