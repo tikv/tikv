@@ -100,12 +100,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         for (req, ch, _) in read_index_req.take_cmds().drain(..) {
             ch.read_tracker().map(|tracker| {
                 GLOBAL_TRACKERS.with_tracker(tracker, |t| {
-                    t.metrics.read_index_confirm_wait_nanos = std::time::Duration::try_from(
-                        time - read_index_req.propose_time,
-                    )
-                        .unwrap()
-                        .as_nanos()
-                        as u64;
+                    t.metrics.read_index_confirm_wait_nanos =
+                        std::time::Duration::try_from(time - read_index_req.propose_time)
+                            .unwrap()
+                            .as_nanos() as u64;
                 })
             });
 
@@ -146,12 +144,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         for (_, ch, _) in read_index_req.take_cmds().drain(..) {
             ch.read_tracker().map(|tracker| {
                 GLOBAL_TRACKERS.with_tracker(tracker, |t| {
-                    t.metrics.read_index_confirm_wait_nanos = std::time::Duration::try_from(
-                        time - read_index_req.propose_time,
-                    )
-                        .unwrap()
-                        .as_nanos()
-                        as u64;
+                    t.metrics.read_index_confirm_wait_nanos =
+                        std::time::Duration::try_from(time - read_index_req.propose_time)
+                            .unwrap()
+                            .as_nanos() as u64;
                 })
             });
             ch.report_error(response.clone());
