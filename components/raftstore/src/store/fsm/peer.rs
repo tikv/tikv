@@ -2406,6 +2406,11 @@ where
             |_| {}
         );
         fail_point!(
+            "on_raft_base_tick_idle_1003",
+            self.fsm.hibernate_state.group_state() == GroupState::Idle && self.fsm.peer_id() == 1003,
+            |_| {}
+        );
+        fail_point!(
             "on_raft_base_tick_chaos",
             self.fsm.hibernate_state.group_state() == GroupState::Chaos,
             |_| {}
