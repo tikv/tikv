@@ -478,7 +478,7 @@ impl<'client> S3Uploader<'client> {
         } else {
             // Otherwise, use multipart upload to improve robustness.
             self.upload_id = retry_and_count(|| self.begin(), "begin_upload").await?;
-            let upload_res = async {
+            let upload_res = Box::pin(async {
                 let mut buf = vec![0; self.multi_part_size];
                 let mut part_number = 1;
                 loop {
@@ -486,16 +486,16 @@ impl<'client> S3Uploader<'client> {
                     if data_size == 0 {
                         break;
                     }
-                    let part = retry_and_count(
+                    let part = Box::pin(retry_and_count(
                         || self.upload_part(part_number, &buf[..data_size]),
                         "upload_part",
-                    )
+                    ))
                     .await?;
                     self.parts.push(part);
                     part_number += 1;
                 }
                 Ok(())
-            }
+            })
             .await;
 
             if upload_res.is_ok() {
