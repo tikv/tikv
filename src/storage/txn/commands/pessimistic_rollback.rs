@@ -70,6 +70,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
         let rows = keys.len();
         let mut released_locks = ReleasedLocks::new();
         for key in keys {
+            let key_for_log = key.clone();
             fail_point!("pessimistic_rollback", |err| Err(
                 crate::storage::mvcc::Error::from(crate::storage::mvcc::txn::make_txn_error(
                     err,
@@ -120,7 +121,17 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
             } else {
                 Ok(None)
             };
-            released_locks.push(released_lock?);
+            let released_lock = released_lock?;
+            if released_lock.is_some() {
+                info!(
+                    "pessimistic_rollback rolled back pessimistic lock";
+                    "key" => %key_for_log,
+                    "start_ts" => self.start_ts,
+                    "for_update_ts" => self.for_update_ts,
+                    "request_source" => %ctx.get_request_source(),
+                );
+            }
+            released_locks.push(released_lock);
         }
 
         let pr = if self.scan_key.is_none() {

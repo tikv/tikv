@@ -61,15 +61,25 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Cleanup {
         );
 
         let mut released_locks = ReleasedLocks::new();
+        let modifies_before = txn.modifies.len();
+        let key = self.key.clone();
         // The rollback must be protected, see more on
         // [issue #7364](https://github.com/tikv/tikv/issues/7364)
-        released_locks.push(cleanup(
-            &mut txn,
-            &mut reader,
-            self.key,
-            self.current_ts,
-            true,
-        )?);
+        let released = cleanup(&mut txn, &mut reader, self.key, self.current_ts, true)?;
+        let wrote_rollback = txn.modifies.len() > modifies_before;
+        if released.is_some() || wrote_rollback {
+            info!(
+                "cleanup rolled back lock";
+                "key" => %key,
+                "start_ts" => self.start_ts,
+                "current_ts" => self.current_ts,
+                "protect_rollback" => true,
+                "released_lock" => ?released,
+                "wrote_rollback" => wrote_rollback,
+                "request_source" => %self.ctx.get_request_source(),
+            );
+        }
+        released_locks.push(released);
 
         let new_acquired_locks = txn.take_new_locks();
         let mut write_data = WriteData::from_modifies(txn.into_modifies());

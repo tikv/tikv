@@ -10,7 +10,10 @@ use crate::storage::{
     ProcessResult, Snapshot,
     kv::WriteData,
     lock_manager::LockManager,
-    mvcc::{MvccTxn, OverlappedWrite, ReleasedLock, SnapshotReader, TimeStamp, TxnCommitRecord},
+    mvcc::{
+        LockType, MvccTxn, OverlappedWrite, ReleasedLock, SnapshotReader, TimeStamp,
+        TxnCommitRecord,
+    },
     txn::{
         Result,
         actions::check_txn_status::{collapse_prev_rollback, make_rollback},
@@ -169,9 +172,26 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
             let (status, need_rollback, rollback_overlapped_write) = match reader.load_lock(&key)? {
                 // The lock exists, the lock information is returned.
                 Some(Either::Left(lock)) if lock.ts == self.start_ts => {
+                    let lock_type = lock.lock_type;
+                    let ttl = lock.ttl;
+                    let for_update_ts = lock.for_update_ts;
+                    let use_async_commit = lock.use_async_commit;
+                    let min_commit_ts = lock.min_commit_ts;
                     let (status, need_rollback, rollback_overlapped_write, lock_released) =
                         check_status_from_lock(&mut txn, &mut reader, lock, &key, region_id)?;
                     released_lock = lock_released;
+                    if lock_type == LockType::Pessimistic && released_lock.is_some() {
+                        info!(
+                            "check_secondary_locks rolled back pessimistic lock";
+                            "key" => %key,
+                            "start_ts" => self.start_ts,
+                            "ttl" => ttl,
+                            "for_update_ts" => for_update_ts,
+                            "use_async_commit" => use_async_commit,
+                            "min_commit_ts" => min_commit_ts,
+                            "request_source" => %self.ctx.get_request_source(),
+                        );
+                    }
                     (status, need_rollback, rollback_overlapped_write)
                 }
                 // Async commit transactions don't write shared locks, so if we get SharedLocks,
@@ -194,12 +214,23 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
             // status being changed, a rollback may be written and this rollback
             // needs to be protected.
             if need_rollback {
-                if let Some(l) = mismatch_lock {
-                    txn.mark_rollback_on_mismatching_lock(&key, l, true);
+                let has_mismatch_lock = mismatch_lock.is_some();
+                if let Some(ref lock) = mismatch_lock {
+                    txn.mark_rollback_on_mismatching_lock(&key, lock.clone(), true);
                 }
                 // We must protect this rollback in case this rollback is collapsed and a stale
                 // acquire_pessimistic_lock and prewrite succeed again.
+                let has_overlapped_write = rollback_overlapped_write.is_some();
                 if let Some(write) = make_rollback(self.start_ts, true, rollback_overlapped_write) {
+                    info!(
+                        "check_secondary_locks wrote protected rollback";
+                        "key" => %key,
+                        "start_ts" => self.start_ts,
+                        "has_overlapped_write" => has_overlapped_write,
+                        "has_mismatch_lock" => has_mismatch_lock,
+                        "mismatch_lock" => ?mismatch_lock,
+                        "request_source" => %self.ctx.get_request_source(),
+                    );
                     txn.put_write(key.clone(), self.start_ts, write.as_ref().to_bytes());
                     collapse_prev_rollback(&mut txn, &mut reader, &key)?;
                 }

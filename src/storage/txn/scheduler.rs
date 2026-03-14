@@ -570,7 +570,13 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let cid = task.cid();
         let tracker_token = task.tracker_token();
         let cmd = task.cmd();
-        debug!("received new command"; "cid" => cid, "cmd" => ?cmd, "tracker" => ?tracker_token);
+        debug!(
+            "received new command";
+            "cid" => cid,
+            "cmd" => ?cmd,
+            "tracker" => ?tracker_token,
+            "request_source" => cmd.ctx().get_request_source(),
+        );
 
         let tag = cmd.tag();
         let priority_tag = get_priority_tag(cmd.priority());

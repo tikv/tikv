@@ -81,6 +81,8 @@ impl CommandExt for ResolveLock {
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
     fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let (ctx, txn_status, key_locks) = (self.ctx, self.txn_status, self.key_locks);
+        const RESOLVE_LOCK_LOG_SAMPLE_LIMIT: usize = 8;
+        let txn_status_count = txn_status.len();
 
         let mut txn = MvccTxn::new(TimeStamp::zero(), context.concurrency_manager);
         let mut reader = ReaderWithStats::new(
@@ -92,23 +94,48 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
         let rows = key_locks.len();
         let mut released_locks = ReleasedLocks::new();
         let mut known_txn_status = vec![];
+        let mut processed_keys = 0usize;
+        let mut committed_keys = 0usize;
+        let mut rolled_back_keys = 0usize;
+        let mut commit_lock_not_found_keys = 0usize;
+        let mut sampled_key_logs = 0usize;
+        let mut suppressed_key_logs = 0usize;
         for (current_key, current_lock) in key_locks {
             // No special casing for shared locks here, `cleanup` and `commit` will handle
             // them.
             txn.start_ts = current_lock.ts;
             reader.start_ts = current_lock.ts;
+            processed_keys += 1;
             let commit_ts = *txn_status
                 .get(&current_lock.ts)
                 .expect("txn status not found");
 
             let released = if commit_ts.is_zero() {
-                cleanup(
+                let released = cleanup(
                     &mut txn,
                     &mut reader,
                     current_key.clone(),
                     TimeStamp::zero(),
                     false,
-                )?
+                )?;
+                rolled_back_keys += 1;
+                if sampled_key_logs < RESOLVE_LOCK_LOG_SAMPLE_LIMIT {
+                    info!(
+                        "resolve_lock rolling back transaction";
+                        "key" => %current_key,
+                        "start_ts" => current_lock.ts,
+                        "lock_type" => ?current_lock.lock_type,
+                        "ttl" => current_lock.ttl,
+                        "for_update_ts" => current_lock.for_update_ts,
+                        "use_async_commit" => current_lock.use_async_commit,
+                        "min_commit_ts" => current_lock.min_commit_ts,
+                        "request_source" => %ctx.get_request_source(),
+                    );
+                    sampled_key_logs += 1;
+                } else {
+                    suppressed_key_logs += 1;
+                }
+                released
             } else if commit_ts > current_lock.ts {
                 // Continue to resolve locks if the not found committed locks are pessimistic
                 // type. They could be left if the transaction is finally committed and
@@ -116,11 +143,30 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
                 match commit(&mut txn, &mut reader, current_key.clone(), commit_ts, None) {
                     Ok(res) => {
                         known_txn_status.push((current_lock.ts, commit_ts));
+                        committed_keys += 1;
+                        if sampled_key_logs < RESOLVE_LOCK_LOG_SAMPLE_LIMIT {
+                            info!(
+                                "resolve_lock committing transaction";
+                                "key" => %current_key,
+                                "start_ts" => current_lock.ts,
+                                "commit_ts" => commit_ts,
+                                "lock_type" => ?current_lock.lock_type,
+                                "ttl" => current_lock.ttl,
+                                "for_update_ts" => current_lock.for_update_ts,
+                                "use_async_commit" => current_lock.use_async_commit,
+                                "min_commit_ts" => current_lock.min_commit_ts,
+                                "request_source" => %ctx.get_request_source(),
+                            );
+                            sampled_key_logs += 1;
+                        } else {
+                            suppressed_key_logs += 1;
+                        }
                         res
                     }
                     Err(MvccError(box MvccErrorInner::TxnLockNotFound { .. }))
                         if current_lock.is_pessimistic_lock() =>
                     {
+                        commit_lock_not_found_keys += 1;
                         None
                     }
                     Err(err) => return Err(err.into()),
@@ -137,6 +183,20 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
                 scan_key = Some(current_key);
                 break;
             }
+        }
+
+        if suppressed_key_logs > 0 {
+            info!(
+                "resolve_lock sampled key logs";
+                "processed_keys" => processed_keys,
+                "committed_keys" => committed_keys,
+                "rolled_back_keys" => rolled_back_keys,
+                "commit_lock_not_found_keys" => commit_lock_not_found_keys,
+                "txn_status_count" => txn_status_count,
+                "sampled_key_logs" => sampled_key_logs,
+                "suppressed_key_logs" => suppressed_key_logs,
+                "request_source" => %ctx.get_request_source(),
+            );
         }
 
         known_txn_status.sort();

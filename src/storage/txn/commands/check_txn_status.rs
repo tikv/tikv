@@ -114,18 +114,64 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
         ));
 
         let (txn_status, released) = match reader.load_lock(&self.primary_key)? {
-            Some(Either::Left(lock)) if lock.ts == self.lock_ts => check_txn_status_lock_exists(
-                &mut txn,
-                &mut reader,
-                self.primary_key,
-                lock,
-                self.current_ts,
-                self.caller_start_ts,
-                self.force_sync_commit,
-                self.resolving_pessimistic_lock,
-                self.verify_is_primary,
-                self.rollback_if_not_exist,
-            )?,
+            Some(Either::Left(lock)) if lock.ts == self.lock_ts => {
+                let lock_type = lock.lock_type;
+                let ttl = lock.ttl;
+                let for_update_ts = lock.for_update_ts;
+                let use_async_commit = lock.use_async_commit;
+                let min_commit_ts = lock.min_commit_ts;
+
+                let result = check_txn_status_lock_exists(
+                    &mut txn,
+                    &mut reader,
+                    self.primary_key.clone(),
+                    lock,
+                    self.current_ts,
+                    self.caller_start_ts,
+                    self.force_sync_commit,
+                    self.resolving_pessimistic_lock,
+                    self.verify_is_primary,
+                    self.rollback_if_not_exist,
+                )?;
+
+                match &result.0 {
+                    TxnStatus::TtlExpire => {
+                        info!(
+                            "check_txn_status rolled back expired lock";
+                            "key" => %self.primary_key,
+                            "lock_ts" => self.lock_ts,
+                            "current_ts" => self.current_ts,
+                            "caller_start_ts" => self.caller_start_ts,
+                            "lock_type" => ?lock_type,
+                            "ttl" => ttl,
+                            "for_update_ts" => for_update_ts,
+                            "use_async_commit" => use_async_commit,
+                            "min_commit_ts" => min_commit_ts,
+                            "resolving_pessimistic_lock" => self.resolving_pessimistic_lock,
+                            "request_source" => %self.ctx.get_request_source(),
+                        );
+                    }
+                    TxnStatus::PessimisticRollBack => {
+                        info!(
+                            "check_txn_status pessimistic rolled back expired lock";
+                            "key" => %self.primary_key,
+                            "lock_ts" => self.lock_ts,
+                            "current_ts" => self.current_ts,
+                            "caller_start_ts" => self.caller_start_ts,
+                            "lock_type" => ?lock_type,
+                            "ttl" => ttl,
+                            "for_update_ts" => for_update_ts,
+                            "use_async_commit" => use_async_commit,
+                            "min_commit_ts" => min_commit_ts,
+                            "resolving_pessimistic_lock" => self.resolving_pessimistic_lock,
+                            "request_source" => %self.ctx.get_request_source(),
+                        );
+                    }
+                    _ => {}
+                }
+
+                result
+            }
             Some(Either::Right(shared_locks)) => {
                 // a shared-locked key cannot be the primary key of a transaction thus reject
                 // the request directly.
@@ -143,17 +189,25 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
                     Either::Left(lock) => Some(lock),
                     Either::Right(_) => None, // SharedLocks already handled above
                 });
-                (
-                    check_txn_status_missing_lock(
-                        &mut txn,
-                        &mut reader,
-                        self.primary_key,
-                        lock,
-                        MissingLockAction::rollback(self.rollback_if_not_exist),
-                        self.resolving_pessimistic_lock,
-                    )?,
-                    None,
-                )
+                let result = check_txn_status_missing_lock(
+                    &mut txn,
+                    &mut reader,
+                    self.primary_key.clone(),
+                    lock,
+                    MissingLockAction::rollback(self.rollback_if_not_exist),
+                    self.resolving_pessimistic_lock,
+                )?;
+
+                if matches!(result, TxnStatus::LockNotExist) && self.rollback_if_not_exist {
+                    info!(
+                        "check_txn_status wrote rollback for missing lock";
+                        "key" => %self.primary_key,
+                        "lock_ts" => self.lock_ts,
+                        "request_source" => %self.ctx.get_request_source(),
+                    );
+                }
+
+                (result, None)
             }
         };
 
