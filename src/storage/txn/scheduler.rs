@@ -286,6 +286,8 @@ struct TxnSchedulerInner<L: LockManager> {
 
     in_memory_peer_size_limit: Arc<AtomicU64>,
     in_memory_instance_size_limit: Arc<AtomicU64>,
+
+    write_event_finished_timeout: Duration,
 }
 
 #[inline]
@@ -482,6 +484,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             memory_quota: Arc::new(MemoryQuota::new(config.memory_quota.0 as _)),
             in_memory_peer_size_limit: dynamic_configs.in_memory_peer_size_limit,
             in_memory_instance_size_limit: dynamic_configs.in_memory_instance_size_limit,
+            write_event_finished_timeout: config.write_event_finished_timeout.0,
         });
 
         SCHED_TXN_MEMORY_QUOTA
@@ -1752,8 +1755,40 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         };
         drop(downgraded_guard);
 
+        let write_event_timeout = (|| {
+            fail_point!("write_event_finished_timeout_millis", |v| {
+                std::time::Duration::from_millis(v.unwrap().parse::<u64>().unwrap())
+            });
+            txn_scheduler.inner.write_event_finished_timeout
+        })();
+        let mut deadline = GLOBAL_TIMER_HANDLE
+            .delay(std::time::Instant::now() + write_event_timeout)
+            .compat();
+
         let mut final_pr = Some(pr);
-        while let Some(ev) = res.next().await {
+        let mut timed_out = false;
+        loop {
+            let next_event = res.next();
+            futures::pin_mut!(next_event);
+            let ev = match futures::future::select(next_event, &mut deadline).await {
+                futures::future::Either::Left((ev, _)) => ev,
+                futures::future::Either::Right((_, _)) => {
+                    error!(
+                        "handle_async_write timed out waiting for WriteEvent::Finished, \
+                         dropping lock guards to prevent in-memory lock leak";
+                        "tag" => ?tag,
+                        "cid" => cid,
+                        "timeout" => ?write_event_timeout,
+                    );
+                    SCHED_WRITE_EVENT_TIMEOUT_COUNTER.inc();
+                    timed_out = true;
+                    break;
+                }
+            };
+            let ev = match ev {
+                Some(ev) => ev,
+                None => break,
+            };
             match ev {
                 WriteEvent::Committed => {
                     let early_return = (|| {
@@ -1839,6 +1874,31 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     return;
                 }
             }
+        }
+
+        if timed_out {
+            // Drop lock_guards to release in-memory locks and unpin
+            // resolved_ts, then properly dequeue the task context, invoke
+            // the client callback with an error, and release latches.
+            drop(lock_guards);
+            if txn_scheduler.inner.flow_controller.enabled() {
+                txn_scheduler
+                    .inner
+                    .flow_controller
+                    .unconsume(region_id, write_size);
+            }
+            sched_details.async_write_nanos =
+                async_write_start.saturating_elapsed().as_nanos() as u64;
+            txn_scheduler.finish_with_err(
+                cid,
+                StorageErrorInner::Other(
+                    "write event finished timeout: apply may be stuck; \
+                     write may already be committed, client should retry"
+                        .into(),
+                ),
+                Some(sched_details),
+            );
+            return;
         }
 
         // If it's not finished while the channel is closed, it means the write

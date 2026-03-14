@@ -588,6 +588,11 @@ lazy_static! {
         "Counter of request exceed bound"
     )
     .unwrap();
+    pub static ref SCHED_WRITE_EVENT_TIMEOUT_COUNTER: IntCounter = register_int_counter!(
+        "tikv_scheduler_write_event_timeout_total",
+        "Total number of scheduler write-event timeouts that dropped lock guards."
+    )
+    .unwrap();
     pub static ref CHECK_MEM_LOCK_DURATION_HISTOGRAM: HistogramVec = register_histogram_vec!(
         "tikv_storage_check_mem_lock_duration_seconds",
         "Histogram of the duration of checking memory locks",
