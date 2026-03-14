@@ -3175,6 +3175,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         value: Vec<u8>,
         ttl: u64,
         callback: Callback<(Option<Value>, bool)>,
+        delete: bool,
     ) -> Result<()> {
         const CMD: CommandKind = CommandKind::raw_compare_and_swap;
         let api_version = self.api_version;
@@ -3189,8 +3190,17 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
         self.sched_raw_command(metadata, priority, CMD, async move {
             let key = F::encode_raw_key_owned(key, None);
-            let cmd = RawCompareAndSwap::new(cf, key, previous_value, value, ttl, api_version, ctx);
-            Self::sched_raw_atomic_command(sched, cmd, Box::new(callback));
+            let cmd = RawCompareAndSwap::new(
+                cf,
+                key,
+                previous_value,
+                value,
+                ttl,
+                api_version,
+                delete,
+                ctx,
+            );
+            Self::sched_raw_atomic_command(sched, cmd, callback);
         })
     }
 
@@ -7869,6 +7879,7 @@ mod tests {
                 b"v".to_vec(),
                 0,
                 expect_value_callback(tx.clone(), 0, expected),
+                false,
             )
             .unwrap();
         rx.recv().unwrap();
@@ -7884,6 +7895,7 @@ mod tests {
                 b"v1".to_vec(),
                 0,
                 expect_value_callback(tx.clone(), 0, expected),
+                false,
             )
             .unwrap();
         rx.recv().unwrap();
@@ -7899,6 +7911,7 @@ mod tests {
                 b"v2".to_vec(),
                 0,
                 expect_value_callback(tx.clone(), 0, expected),
+                false,
             )
             .unwrap();
         rx.recv().unwrap();
@@ -7914,6 +7927,7 @@ mod tests {
                 b"v2".to_vec(),
                 0,
                 expect_value_callback(tx.clone(), 0, expected),
+                false,
             )
             .unwrap();
         rx.recv().unwrap();
@@ -7974,6 +7988,7 @@ mod tests {
                 b"v4".to_vec(),
                 0,
                 expect_value_callback(tx.clone(), 0, expected),
+                false,
             )
             .unwrap();
         rx.recv().unwrap();
@@ -8000,6 +8015,7 @@ mod tests {
                 b"v".to_vec(),
                 0,
                 expect_value_callback(tx, 0, expected),
+                false,
             )
             .unwrap();
         rx.recv().unwrap();
@@ -8028,6 +8044,197 @@ mod tests {
                 false,
             ))
             .unwrap(),
+        );
+    }
+
+    #[test]
+    fn test_raw_compare_and_swap_delete() {
+        test_kv_format_impl!(test_raw_compare_and_swap_delete_impl);
+    }
+
+    fn test_raw_compare_and_swap_delete_impl<F: KvFormat>() {
+        let storage = TestStorageBuilder::<_, _, F>::new(MockLockManager::new())
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+        let ctx = Context {
+            api_version: F::CLIENT_TAG,
+            ..Default::default()
+        };
+
+        let key = b"r\0delete_key";
+
+        // Test 1: CAS delete with existing_val=v1, expected_val=v1 (should succeed)
+        // Setup: put v1
+        let expected = (None, true);
+        storage
+            .raw_compare_and_swap_atomic(
+                ctx.clone(),
+                "".to_string(),
+                key.to_vec(),
+                None,
+                b"v1".to_vec(),
+                0,
+                expect_value_callback(tx.clone(), 0, expected),
+                false,
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Test: delete v1
+        let expected = (Some(b"v1".to_vec()), true);
+        storage
+            .raw_compare_and_swap_atomic(
+                ctx.clone(),
+                "".to_string(),
+                key.to_vec(),
+                Some(b"v1".to_vec()),
+                b"dummy".to_vec(), // value ignored for deletes
+                0,
+                expect_value_callback(tx.clone(), 0, expected),
+                true,
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            storage
+                .get_concurrency_manager()
+                .global_min_lock_ts()
+                .is_none()
+        );
+
+        // Verify key is deleted
+        expect_none(block_on(storage.raw_get(ctx.clone(), "".to_string(), key.to_vec())).unwrap());
+
+        // Test 2: CAS delete with existing_val=v2, expected_val=v1 (should fail)
+        // Setup: put v2
+        let expected = (None, true);
+        storage
+            .raw_compare_and_swap_atomic(
+                ctx.clone(),
+                "".to_string(),
+                key.to_vec(),
+                None,
+                b"v2".to_vec(),
+                0,
+                expect_value_callback(tx.clone(), 0, expected),
+                false,
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Test: try to delete with wrong expected value
+        let expected = (Some(b"v2".to_vec()), false);
+        storage
+            .raw_compare_and_swap_atomic(
+                ctx.clone(),
+                "".to_string(),
+                key.to_vec(),
+                Some(b"v1".to_vec()),
+                b"dummy".to_vec(),
+                0,
+                expect_value_callback(tx.clone(), 0, expected),
+                true,
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            storage
+                .get_concurrency_manager()
+                .global_min_lock_ts()
+                .is_none()
+        );
+
+        // Verify key still has v2
+        expect_value(
+            b"v2".to_vec(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), key.to_vec())).unwrap(),
+        );
+
+        // Clean up: delete v2
+        storage
+            .raw_batch_delete_atomic(
+                ctx.clone(),
+                "".to_string(),
+                vec![key.to_vec()],
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Test 3: CAS delete with existing_val=nil, expected_val=nil (should succeed as
+        // noop)
+        let expected = (None, true);
+        storage
+            .raw_compare_and_swap_atomic(
+                ctx.clone(),
+                "".to_string(),
+                key.to_vec(),
+                None,
+                b"dummy".to_vec(),
+                0,
+                expect_value_callback(tx.clone(), 0, expected),
+                true,
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            storage
+                .get_concurrency_manager()
+                .global_min_lock_ts()
+                .is_none()
+        );
+
+        // Verify key is still nil
+        expect_none(block_on(storage.raw_get(ctx.clone(), "".to_string(), key.to_vec())).unwrap());
+
+        // Test 4: CAS delete with existing_val=v1, expected_val=nil (should fail)
+        // Setup: put v1
+        let expected = (None, true);
+        storage
+            .raw_compare_and_swap_atomic(
+                ctx.clone(),
+                "".to_string(),
+                key.to_vec(),
+                None,
+                b"v1".to_vec(),
+                0,
+                expect_value_callback(tx.clone(), 0, expected),
+                false,
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Test: try to delete expecting nil
+        let expected = (Some(b"v1".to_vec()), false);
+        storage
+            .raw_compare_and_swap_atomic(
+                ctx.clone(),
+                "".to_string(),
+                key.to_vec(),
+                None,
+                b"dummy".to_vec(),
+                0,
+                expect_value_callback(tx, 0, expected),
+                true,
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            storage
+                .get_concurrency_manager()
+                .global_min_lock_ts()
+                .is_none()
+        );
+
+        // Verify key still has v1
+        expect_value(
+            b"v1".to_vec(),
+            block_on(storage.raw_get(ctx, "".to_string(), key.to_vec())).unwrap(),
         );
     }
 
