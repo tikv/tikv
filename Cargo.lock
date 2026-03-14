@@ -7322,6 +7322,7 @@ dependencies = [
  "ordered-float",
  "protobuf 2.8.0",
  "regex",
+ "ryu",
  "serde",
  "serde_json",
  "slog",

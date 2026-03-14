@@ -55,7 +55,7 @@ impl serde_json::ser::Formatter for MySqlFormatter {
     where
         W: ?Sized + std::io::Write,
     {
-        let mut buffer = zmij::Buffer::new();
+        let mut buffer = ryu::Buffer::new();
         let formatted = buffer.format_finite(value);
         Self::write_mysql_float(writer, formatted)
     }
@@ -65,7 +65,7 @@ impl serde_json::ser::Formatter for MySqlFormatter {
     where
         W: ?Sized + std::io::Write,
     {
-        let mut buffer = zmij::Buffer::new();
+        let mut buffer = ryu::Buffer::new();
         let formatted = buffer.format_finite(value);
         Self::write_mysql_float(writer, formatted)
     }
