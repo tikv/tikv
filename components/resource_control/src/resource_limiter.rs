@@ -40,6 +40,10 @@ pub struct ResourceLimiter {
     _name: String,
     version: u64,
     limiters: [QuotaLimiter; ResourceType::COUNT],
+    // Dedicated write-only IO limiter for compaction pressure throttling.
+    // Independent from the combined IO limiter; rate is set by do_adjust
+    // based on compaction pressure. Defaults to f64::INFINITY (no throttle).
+    write_io_limiter: QuotaLimiter,
     // whether the resource limiter is a background limiter or priority limiter.
     is_background: bool,
     // the wait duration histogram for prioitry limiter.
@@ -77,6 +81,7 @@ impl ResourceLimiter {
             _name: name,
             version,
             limiters: [cpu_limiter, io_limiter],
+            write_io_limiter: QuotaLimiter::new(f64::INFINITY),
             is_background,
             wait_histogram,
         }
@@ -86,11 +91,22 @@ impl ResourceLimiter {
         self.is_background
     }
 
-    pub fn consume(&self, cpu_time: Duration, io_bytes: IoBytes, wait: bool) -> Duration {
+    pub fn consume(
+        &self,
+        cpu_time: Duration,
+        io_bytes: IoBytes,
+        wait: bool,
+        skip_compaction_pressure: bool,
+    ) -> Duration {
         let cpu_dur =
             self.limiters[ResourceType::Cpu as usize].consume(cpu_time.as_micros() as u64, wait);
         let io_dur = self.limiters[ResourceType::Io as usize].consume_io(io_bytes, wait);
-        let wait_dur = cpu_dur.max(io_dur);
+        let write_io_dur = if skip_compaction_pressure {
+            Duration::ZERO
+        } else {
+            self.write_io_limiter.consume(io_bytes.write, wait)
+        };
+        let wait_dur = cpu_dur.max(io_dur).max(write_io_dur);
         if !wait_dur.is_zero()
             && let Some(h) = &self.wait_histogram
         {
@@ -99,8 +115,13 @@ impl ResourceLimiter {
         wait_dur
     }
 
-    pub async fn async_consume(&self, cpu_time: Duration, io_bytes: IoBytes) -> Duration {
-        let dur = self.consume(cpu_time, io_bytes, true);
+    pub async fn async_consume(
+        &self,
+        cpu_time: Duration,
+        io_bytes: IoBytes,
+        skip_compaction_pressure: bool,
+    ) -> Duration {
+        let dur = self.consume(cpu_time, io_bytes, true, skip_compaction_pressure);
         if !dur.is_zero() {
             _ = GLOBAL_TIMER_HANDLE
                 .delay(Instant::now() + dur)
@@ -113,6 +134,11 @@ impl ResourceLimiter {
     #[inline]
     pub(crate) fn get_limiter(&self, ty: ResourceType) -> &QuotaLimiter {
         &self.limiters[ty as usize]
+    }
+
+    #[inline]
+    pub(crate) fn get_write_io_limiter(&self) -> &QuotaLimiter {
+        &self.write_io_limiter
     }
 
     pub(crate) fn get_limit_statistics(&self, ty: ResourceType) -> GroupStatistics {
@@ -179,7 +205,7 @@ impl QuotaLimiter {
     }
 
     fn consume(&self, value: u64, wait: bool) -> Duration {
-        if value == 0 && self.limiter.speed_limit().is_infinite() {
+        if value == 0 {
             return Duration::ZERO;
         }
         let mut dur = self.limiter.consume_duration(value as usize);

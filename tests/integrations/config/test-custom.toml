@@ -694,3 +694,7 @@ split.split-contained-score = 0.5
 [resource-control]
 enabled = false
 priority-ctl-strategy = "aggressive"
+bg-resource-threshold = 70.0
+bg-compaction-pressure-threshold = 70.0
+bg-write-io-ceiling = "100GB"
+bg-write-io-floor = "10MB"

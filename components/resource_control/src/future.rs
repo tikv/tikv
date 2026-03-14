@@ -72,16 +72,24 @@ pub struct LimitedFuture<F: Future> {
     // if the future is first polled, we need to let it consume a 0 value
     // to compensate the debt of previously finished tasks.
     is_first_poll: bool,
+    // Skip the compaction pressure write IO limiter. Set to true for
+    // operations like SST ingestion that don't cause compaction.
+    skip_compaction_pressure: bool,
 }
 
 impl<F: Future> LimitedFuture<F> {
-    pub fn new(f: F, resource_limiter: Arc<ResourceLimiter>) -> Self {
+    pub fn new(
+        f: F,
+        resource_limiter: Arc<ResourceLimiter>,
+        skip_compaction_pressure: bool,
+    ) -> Self {
         Self {
             f,
             pre_delay: None.into(),
             post_delay: None.into(),
             resource_limiter,
             is_first_poll: true,
+            skip_compaction_pressure,
         }
     }
 }
@@ -96,7 +104,12 @@ impl<F: Future> Future for LimitedFuture<F> {
             *this.is_first_poll = false;
             let wait_dur = this
                 .resource_limiter
-                .consume(Duration::ZERO, IoBytes::default(), true)
+                .consume(
+                    Duration::ZERO,
+                    IoBytes::default(),
+                    true,
+                    *this.skip_compaction_pressure,
+                )
                 .min(MAX_WAIT_DURATION);
             if wait_dur > Duration::ZERO {
                 *this.pre_delay = Some(
@@ -136,9 +149,12 @@ impl<F: Future> Future for LimitedFuture<F> {
             .as_mut()
             .and_then(|tracker| tracker.update())
             .unwrap_or_else(IoBytes::default);
-        let mut wait_dur = this
-            .resource_limiter
-            .consume(dur, io_bytes, res.is_pending());
+        let mut wait_dur = this.resource_limiter.consume(
+            dur,
+            io_bytes,
+            res.is_pending(),
+            *this.skip_compaction_pressure,
+        );
         if wait_dur == Duration::ZERO || res.is_ready() {
             return res;
         }
@@ -197,9 +213,10 @@ impl<F: Future> Future for OptionalFuture<F> {
 pub async fn with_resource_limiter<F: Future>(
     f: F,
     limiter: Option<Arc<ResourceLimiter>>,
+    skip_compaction_pressure: bool,
 ) -> F::Output {
     if let Some(limiter) = limiter {
-        LimitedFuture::new(f, limiter).await
+        LimitedFuture::new(f, limiter, skip_compaction_pressure).await
     } else {
         f.await
     }
@@ -263,7 +280,7 @@ mod tests {
             <F as Future>::Output: Send,
         {
             let (sender, receiver) = channel::<()>();
-            let fut = NotifyFuture::new(LimitedFuture::new(f, limiter), sender);
+            let fut = NotifyFuture::new(LimitedFuture::new(f, limiter, false), sender);
             pool.spawn(fut).unwrap();
             receiver.recv().unwrap();
         }
