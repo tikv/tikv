@@ -17,6 +17,9 @@ use crate::codec::Error;
 #[derive(Clone, Debug)]
 pub struct MySqlFormatter {}
 
+#[derive(Clone, Debug)]
+pub struct CompactJsonFormatter {}
+
 impl serde_json::ser::Formatter for MySqlFormatter {
     #[inline]
     fn begin_object_value<W>(&mut self, writer: &mut W) -> std::io::Result<()>
@@ -92,12 +95,52 @@ impl MySqlFormatter {
     }
 }
 
+impl serde_json::ser::Formatter for CompactJsonFormatter {
+    #[inline]
+    fn write_f32<W>(&mut self, writer: &mut W, value: f32) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        let mut buffer = ryu::Buffer::new();
+        let formatted = buffer.format_finite(value);
+        MySqlFormatter::write_mysql_float(writer, formatted)
+    }
+
+    #[inline]
+    fn write_f64<W>(&mut self, writer: &mut W, value: f64) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        let mut buffer = ryu::Buffer::new();
+        let formatted = buffer.format_finite(value);
+        MySqlFormatter::write_mysql_float(writer, formatted)
+    }
+}
+
+impl CompactJsonFormatter {
+    pub fn new() -> Self {
+        CompactJsonFormatter {}
+    }
+}
+
 impl<'a> ToString for JsonRef<'a> {
     /// This function is a simple combination and rewrite of serde_json's
     /// `to_writer_pretty`
     fn to_string(&self) -> String {
         let mut writer = Vec::with_capacity(128);
         let mut ser = JsonSerializer::with_formatter(&mut writer, MySqlFormatter::new());
+        self.serialize(&mut ser).unwrap();
+        unsafe {
+            // serde_json will not emit invalid UTF-8
+            String::from_utf8_unchecked(writer)
+        }
+    }
+}
+
+impl<'a> JsonRef<'a> {
+    pub(crate) fn to_compact_string(&self) -> String {
+        let mut writer = Vec::with_capacity(128);
+        let mut ser = JsonSerializer::with_formatter(&mut writer, CompactJsonFormatter::new());
         self.serialize(&mut ser).unwrap();
         unsafe {
             // serde_json will not emit invalid UTF-8
