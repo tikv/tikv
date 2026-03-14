@@ -49,11 +49,46 @@ impl serde_json::ser::Formatter for MySqlFormatter {
             writer.write_all(b", ")
         }
     }
+
+    #[inline]
+    fn write_f32<W>(&mut self, writer: &mut W, value: f32) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        let mut buffer = zmij::Buffer::new();
+        let formatted = buffer.format_finite(value);
+        Self::write_mysql_float(writer, formatted)
+    }
+
+    #[inline]
+    fn write_f64<W>(&mut self, writer: &mut W, value: f64) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        let mut buffer = zmij::Buffer::new();
+        let formatted = buffer.format_finite(value);
+        Self::write_mysql_float(writer, formatted)
+    }
 }
 
 impl MySqlFormatter {
     pub fn new() -> Self {
         MySqlFormatter {}
+    }
+
+    #[inline]
+    fn write_mysql_float<W>(writer: &mut W, formatted: &str) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        if let Some(exponent_idx) = formatted.find(['e', 'E']) {
+            let bytes = formatted.as_bytes();
+            if bytes.get(exponent_idx + 1) == Some(&b'+') {
+                writer.write_all(&bytes[..exponent_idx + 1])?;
+                return writer.write_all(&bytes[exponent_idx + 2..]);
+            }
+        }
+        writer.write_all(formatted.as_bytes())
     }
 }
 
