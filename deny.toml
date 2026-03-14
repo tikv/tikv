@@ -34,7 +34,7 @@ deny = [
     # Ban trait crates from RustCrypto.
     { name = "aead" },
     { name = "cipher" },
-    { name = "digest", wrappers = ["sha2", "md-5", "sha1", "hmac"] },
+    { name = "digest", wrappers = ["sha2", "md-5", "sha1", "hmac", "crc-fast"] },
     { name = "password-hash" },
     { name = "signature" },
 ]
