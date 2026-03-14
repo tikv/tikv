@@ -61,11 +61,11 @@ use tikv_util::{
     debug, error, info,
     store::{find_peer_by_id, is_learner},
     sys::disk::DiskUsage,
-    time::{Instant as TiInstant, InstantExt, duration_to_sec, monotonic_raw_now},
+    time::{Instant as TiInstant, InstantExt, Timespec, duration_to_sec, monotonic_raw_now},
     warn,
     worker::Scheduler,
 };
-use time::{Duration as TimeDuration, Timespec};
+use time::Duration as TimeDuration;
 use tracker::{GLOBAL_TRACKERS, TrackerTokenArray};
 use txn_types::{TimeStamp, WriteBatchFlags};
 use uuid::Uuid;
@@ -3190,7 +3190,9 @@ where
                     // AppendEntriesResponse and is ready to calculate its commit-log-duration.
                     ctx.current_time.replace(monotonic_raw_now());
                     ctx.raft_metrics.commit_log.observe(duration_to_sec(
-                        (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
+                        (ctx.current_time.unwrap() - propose_time)
+                            .try_into()
+                            .unwrap(),
                     ));
                     self.maybe_renew_leader_lease(propose_time, ctx, None);
                     lease_to_be_updated = false;
@@ -3321,7 +3323,7 @@ where
             // When a proposal was proposed with this ctx before, the current_time can be
             // some.
             let current_time = *ctx.current_time.get_or_insert_with(monotonic_raw_now);
-            let elapsed = match (current_time - propose_time).to_std() {
+            let elapsed = match std::time::Duration::try_from(current_time - propose_time) {
                 Ok(elapsed) => elapsed,
                 Err(_) => return false,
             };
@@ -3539,7 +3541,7 @@ where
             cb.read_tracker().map(|tracker| {
                 GLOBAL_TRACKERS.with_tracker(tracker, |t| {
                     t.metrics.read_index_confirm_wait_nanos =
-                        (time - read.propose_time).to_std().unwrap().as_nanos() as u64;
+                        (time - read.propose_time).try_into().unwrap().as_nanos() as u64;
                 })
             });
             // leader reports key is locked
@@ -3603,7 +3605,7 @@ where
             ch.read_tracker().map(|tracker| {
                 GLOBAL_TRACKERS.with_tracker(tracker, |t| {
                     t.metrics.read_index_confirm_wait_nanos = (time - read_index_req.propose_time)
-                        .to_std()
+                        .try_into()
                         .unwrap()
                         .as_nanos()
                         as u64;

@@ -562,7 +562,7 @@ fn test_malformed_read_index() {
             .cfg
             .raft_store
             .raft_store_max_leader_lease()
-            .to_std()
+            .try_into()
             .unwrap(),
     );
     let region = cluster.get_region(b"k1");

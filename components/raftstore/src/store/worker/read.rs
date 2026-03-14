@@ -26,9 +26,8 @@ use tikv_util::{
     debug, error,
     lru::LruCache,
     store::find_peer_by_id,
-    time::{ThreadReadId, monotonic_raw_now},
+    time::{ThreadReadId, Timespec, monotonic_raw_now},
 };
-use time::Timespec;
 use tracker::GLOBAL_TRACKERS;
 use txn_types::{TimeStamp, WriteBatchFlags};
 
@@ -1381,7 +1380,7 @@ mod tests {
             })),
         );
         assert_eq!(
-            rx.recv_timeout(Duration::seconds(5).to_std().unwrap())
+            rx.recv_timeout(Duration::seconds(5).try_into().unwrap())
                 .unwrap()
                 .request,
             cmd
@@ -1520,7 +1519,7 @@ mod tests {
         must_not_redirect(&mut reader, &rx, task);
 
         // Wait for expiration.
-        thread::sleep(Duration::seconds(1).to_std().unwrap());
+        thread::sleep(Duration::seconds(1).try_into().unwrap());
         must_redirect(&mut reader, &rx, cmd.clone());
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.lease_expire.get()),
@@ -1663,7 +1662,7 @@ mod tests {
             })),
         );
         assert_eq!(
-            rx.recv_timeout(Duration::seconds(5).to_std().unwrap())
+            rx.recv_timeout(Duration::seconds(5).try_into().unwrap())
                 .unwrap()
                 .request,
             cmd9

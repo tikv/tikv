@@ -69,13 +69,15 @@ use tikv_util::{
         cpu_time::ProcessStat,
         disk::{DiskUsage, get_disk_status},
     },
-    time::{Instant as TiInstant, SlowTimer, duration_to_sec, monotonic_raw_now},
+    time::{
+        Instant as TiInstant, SlowTimer, Timespec, duration_to_sec, monotonic_raw_now,
+        system_time_now,
+    },
     timer::SteadyTimer,
     warn,
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
     yatp_pool::FuturePool,
 };
-use time::{self, Timespec};
 
 use crate::{
     Error, Result, bytes_capacity,
@@ -953,7 +955,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             );
         }
         self.fsm.store.id = store.get_id();
-        self.fsm.store.start_time = Some(time::get_time());
+        self.fsm.store.start_time = Some(system_time_now());
         self.register_cleanup_import_sst_tick();
         self.register_full_compact_tick();
         self.register_load_metrics_window_tick();
@@ -1510,7 +1512,7 @@ where
                 self.cfg.value().raft_election_timeout_ticks as u32
             };
         let unsafe_vote_deadline =
-            Some(self.node_start_time + time::Duration::from_std(election_timeout).unwrap());
+            Some(self.node_start_time + time::Duration::try_from(election_timeout).unwrap());
         let mut ctx = PollContext {
             cfg: self.cfg.value().clone(),
             store: self.store.clone(),
@@ -2768,7 +2770,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
         let completed_apply_peers_count = completed_apply_peers_count.unwrap();
         let during_starting_stage = {
-            (time::get_time().sec as u32).saturating_sub(start_ts_sec)
+            (system_time_now().sec as u32).saturating_sub(start_ts_sec)
                 <= STORE_CHECK_PENDING_APPLY_DURATION.as_secs() as u32
         };
         // If the store is busy in handling applying logs when starting, it should not

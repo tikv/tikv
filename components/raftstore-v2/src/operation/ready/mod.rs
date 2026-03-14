@@ -702,7 +702,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         let current_time = monotonic_raw_now();
                         ctx.current_time.replace(current_time);
                         ctx.raft_metrics.commit_log.observe(duration_to_sec(
-                            (current_time - propose_time).to_std().unwrap(),
+                            std::time::Duration::try_from(current_time - propose_time).unwrap(),
                         ));
                         self.maybe_renew_leader_lease(propose_time, &ctx.store_meta, None);
                         update_lease = false;
@@ -1194,7 +1194,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // When a proposal was proposed with this ctx before, the current_time can be
             // some.
             let current_time = *ctx.current_time.get_or_insert_with(monotonic_raw_now);
-            let elapsed = match (current_time - propose_time).to_std() {
+            let elapsed = match std::time::Duration::try_from(current_time - propose_time) {
                 Ok(elapsed) => elapsed,
                 Err(_) => return false,
             };

@@ -101,7 +101,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ch.read_tracker().map(|tracker| {
                 GLOBAL_TRACKERS.with_tracker(tracker, |t| {
                     t.metrics.read_index_confirm_wait_nanos = (time - read_index_req.propose_time)
-                        .to_std()
+                        .try_into()
                         .unwrap()
                         .as_nanos()
                         as u64;
@@ -146,7 +146,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ch.read_tracker().map(|tracker| {
                 GLOBAL_TRACKERS.with_tracker(tracker, |t| {
                     t.metrics.read_index_confirm_wait_nanos = (time - read_index_req.propose_time)
-                        .to_std()
+                        .try_into()
                         .unwrap()
                         .as_nanos()
                         as u64;

@@ -34,7 +34,10 @@ fn link_sys_lib(lib: &str, tool: &cc::Tool) {
     let libname = &lib[3..lib.len() - 2];
     // Get around the issue "the linking modifiers `+bundle` and `+whole-archive`
     // are not compatible with each other when generating rlibs"
-    println!("cargo:rustc-link-lib=static:-bundle,+whole-archive={}", &libname);
+    println!(
+        "cargo:rustc-link-lib=static:-bundle,+whole-archive={}",
+        &libname
+    );
     println!(
         "cargo:rustc-link-search=native={}",
         path.parent().unwrap().display()
@@ -42,9 +45,18 @@ fn link_sys_lib(lib: &str, tool: &cc::Tool) {
 }
 
 fn main() {
+    let now = time::OffsetDateTime::now_utc();
     println!(
         "cargo:rustc-env=TIKV_BUILD_TIME={}",
-        time::now_utc().strftime("%Y-%m-%d %H:%M:%S").unwrap()
+        format!(
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+            now.year(),
+            u8::from(now.month()),
+            now.day(),
+            now.hour(),
+            now.minute(),
+            now.second()
+        )
     );
 
     let tool = cc::Build::default().get_compiler();

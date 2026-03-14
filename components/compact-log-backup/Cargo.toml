@@ -57,5 +57,5 @@ pprof = { version = "0.13", default-features = false, features = [
   "flamegraph",
   "protobuf-codec",
 ] } 
-tempdir = "0.3"
+tempfile = "3.0"
 test_util = { workspace = true }

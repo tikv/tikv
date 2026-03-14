@@ -1,6 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::RefCell;
+use std::{
+    cell::RefCell,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use num::traits::Pow;
 use tidb_query_codegen::rpn_fn;
@@ -693,8 +696,8 @@ pub struct MySqlRng {
 
 impl MySqlRng {
     fn new() -> Self {
-        let current_time = time::get_time();
-        let nsec = i64::from(current_time.nsec);
+        let current_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+        let nsec = i64::from(current_time.subsec_nanos());
         Self::new_with_seed(nsec)
     }
 
