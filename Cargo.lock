@@ -871,7 +871,6 @@ dependencies = [
  "hex 0.4.3",
  "keys",
  "kvproto",
- "lazy_static",
  "log_wrappers",
  "online_config",
  "prometheus",
