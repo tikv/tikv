@@ -310,7 +310,7 @@ use crate::codec::mysql::{TimeDecoder, TimeEncoder};
 
 impl Display for Json {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.as_ref().to_string())
+        f.write_str(&self.as_ref().to_compact_string())
     }
 }
 
