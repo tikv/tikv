@@ -42,12 +42,15 @@ refer to https://github.com/tikv/tikv/pull/12442 and https://github.com/tikv/tik
 [[disallowed-methods]]
 path = "time::now"
 reason = "time::now is unsound, see RUSTSEC-2020-0071"
+allow-invalid = true
 [[disallowed-methods]]
 path = "time::at"
 reason = "time::at is unsound, see RUSTSEC-2020-0071"
+allow-invalid = true
 [[disallowed-methods]]
 path = "time::at_utc"
 reason = "time::at_utc is unsound, see RUSTSEC-2020-0071"
+allow-invalid = true
 
 # See more about RUSTSEC-2023-0072 in deny.toml.
 [[disallowed-methods]]
