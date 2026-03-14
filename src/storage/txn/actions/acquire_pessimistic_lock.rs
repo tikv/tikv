@@ -9,9 +9,10 @@ use txn_types::{
 };
 
 use crate::storage::{
+    Snapshot,
     mvcc::{
-        metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
         Error as MvccError, ErrorInner, MvccTxn, Result as MvccResult, SnapshotReader,
+        metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
     },
     txn::{
         actions::{check_data_constraint::check_data_constraint, common::next_last_change_info},
@@ -19,7 +20,6 @@ use crate::storage::{
         scheduler::LAST_CHANGE_TS,
     },
     types::PessimisticLockKeyResult,
-    Snapshot,
 };
 
 /// Acquires pessimistic lock on a single key. Optionally reads the previous
@@ -573,19 +573,19 @@ pub mod tests {
 
     use super::*;
     use crate::storage::{
+        Engine,
         kv::WriteData,
         mvcc::{Error as MvccError, MvccReader},
-        Engine,
     };
     #[cfg(test)]
     use crate::storage::{
+        TestEngineBuilder,
         mvcc::tests::*,
         txn::actions::prewrite::tests::{
-            old_value_put_delete_lock_insert, old_value_random, OldValueRandomTest,
+            OldValueRandomTest, old_value_put_delete_lock_insert, old_value_random,
         },
         txn::commands::pessimistic_rollback,
         txn::tests::*,
-        TestEngineBuilder,
     };
 
     pub fn acquire_pessimistic_lock_allow_lock_with_conflict<E: Engine>(

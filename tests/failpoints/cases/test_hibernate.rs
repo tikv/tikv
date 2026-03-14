@@ -10,7 +10,7 @@ use kvproto::raft_serverpb::{ExtraMessage, ExtraMessageType, RaftMessage};
 use raft::eraftpb::MessageType;
 use raftstore::store::{PeerMsg, PeerTick};
 use test_raftstore::*;
-use tikv_util::{config::ReadableDuration, HandyRwLock};
+use tikv_util::{HandyRwLock, config::ReadableDuration};
 
 #[test]
 fn test_break_leadership_on_restart() {

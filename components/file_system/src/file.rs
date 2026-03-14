@@ -13,7 +13,7 @@ use std::{
 // Extention Traits
 use fs2::FileExt;
 
-use super::{get_io_rate_limiter, get_io_type, IoOp, IoRateLimiter};
+use super::{IoOp, IoRateLimiter, get_io_rate_limiter, get_io_type};
 
 /// A wrapper around `std::fs::File` with capability to track and regulate IO
 /// flow.
@@ -169,23 +169,23 @@ impl File {
     }
 
     pub fn lock_shared(&self) -> io::Result<()> {
-        self.inner.lock_shared()
+        fs2::FileExt::lock_shared(&self.inner)
     }
 
     pub fn lock_exclusive(&self) -> io::Result<()> {
-        self.inner.lock_exclusive()
+        fs2::FileExt::lock_exclusive(&self.inner)
     }
 
     pub fn try_lock_shared(&self) -> io::Result<()> {
-        self.inner.try_lock_shared()
+        fs2::FileExt::try_lock_shared(&self.inner)
     }
 
     pub fn try_lock_exclusive(&self) -> io::Result<()> {
-        self.inner.try_lock_exclusive()
+        fs2::FileExt::try_lock_exclusive(&self.inner)
     }
 
     pub fn unlock(&self) -> io::Result<()> {
-        self.inner.unlock()
+        fs2::FileExt::unlock(&self.inner)
     }
 }
 
@@ -301,10 +301,11 @@ mod tests {
         let data_path = tmp_dir.path();
         let file_path = data_path.join(SPACE_PLACEHOLDER_FILE);
         let f = File::create(file_path).unwrap();
-        // EINVAL when len == 0.
-        assert_eq!(
-            f.allocate(0).unwrap_err().raw_os_error().unwrap(),
-            libc::EINVAL
-        );
+        // Some unix platforms reject `allocate(0)` with EINVAL while others
+        // treat it as a no-op.
+        match f.allocate(0) {
+            Ok(()) => assert_eq!(f.metadata().unwrap().len(), 0),
+            Err(e) => assert_eq!(e.raw_os_error(), Some(libc::EINVAL)),
+        }
     }
 }

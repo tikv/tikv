@@ -6,7 +6,7 @@ use api_version::KvFormat;
 use tikv_util::time::Instant;
 use yatp::task::future::reschedule;
 
-use super::{range::*, ranges_iter::*, OwnedKvPairEntry, Storage};
+use super::{OwnedKvPairEntry, Storage, range::*, ranges_iter::*};
 use crate::error::StorageError;
 
 const KEY_BUFFER_CAPACITY: usize = 64;
@@ -58,7 +58,7 @@ impl RescheduleChecker {
     #[inline(always)]
     async fn check_reschedule(&mut self, force_check: bool) {
         self.prev_key_count += 1;
-        if (force_check || self.prev_key_count % CHECK_KEYS == 0)
+        if (force_check || self.prev_key_count.is_multiple_of(CHECK_KEYS))
             && self.prev_start.saturating_elapsed() > MAX_TIME_SLICE
         {
             reschedule().await;
@@ -302,11 +302,11 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
 
 #[cfg(test)]
 mod tests {
-    use api_version::{keyspace::KvPairEntry, ApiV1};
+    use api_version::{ApiV1, keyspace::KvPairEntry};
     use futures::executor::block_on;
 
     use super::*;
-    use crate::storage::{test_fixture::FixtureStorage, IntervalRange, PointRange, Range};
+    use crate::storage::{IntervalRange, PointRange, Range, test_fixture::FixtureStorage};
 
     fn create_storage() -> FixtureStorage {
         let data: &[(&'static [u8], &'static [u8])] = &[

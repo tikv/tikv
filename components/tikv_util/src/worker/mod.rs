@@ -16,13 +16,13 @@ mod metrics;
 mod pool;
 
 pub use pool::{
-    dummy_scheduler, Builder, LazyWorker, ReceiverWrapper, Runnable, RunnableWithTimer,
-    ScheduleError, Scheduler, Worker,
+    Builder, LazyWorker, ReceiverWrapper, Runnable, RunnableWithTimer, ScheduleError, Scheduler,
+    Worker, dummy_scheduler,
 };
 
 pub use self::future::{
-    dummy_scheduler as dummy_future_scheduler, Runnable as FutureRunnable,
-    Scheduler as FutureScheduler, Stopped, Worker as FutureWorker,
+    Runnable as FutureRunnable, Scheduler as FutureScheduler, Stopped, Worker as FutureWorker,
+    dummy_scheduler as dummy_future_scheduler,
 };
 
 #[cfg(test)]
@@ -61,21 +61,6 @@ mod tests {
 
         fn shutdown(&mut self) {
             let _ = self.ch.send(vec![]);
-        }
-    }
-
-    struct TickRunner {
-        ch: mpsc::Sender<&'static str>,
-    }
-
-    impl Runnable for TickRunner {
-        type Task = &'static str;
-
-        fn run(&mut self, msg: &'static str) {
-            self.ch.send(msg).unwrap();
-        }
-        fn shutdown(&mut self) {
-            self.ch.send("").unwrap();
         }
     }
 

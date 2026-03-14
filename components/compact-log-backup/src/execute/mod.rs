@@ -18,7 +18,7 @@ use hooking::{
 use kvproto::brpb::StorageBackend;
 use tikv_util::config::ReadableSize;
 use tokio::runtime::Handle;
-use tracing::{trace_span, Instrument};
+use tracing::{Instrument, trace_span};
 use tracing_active_tree::{frame, root};
 use txn_types::TimeStamp;
 
@@ -31,10 +31,11 @@ use super::{
     storage::{LoadFromExt, StreamMetaStorage},
 };
 use crate::{
-    compaction::{exec::SubcompactionExecArg, SubcompactionResult},
+    ErrorKind,
+    compaction::{SubcompactionResult, exec::SubcompactionExecArg},
     errors::{Result, TraceResultExt},
     execute::hooking::SubcompactionSkippedCtx,
-    util, ErrorKind,
+    util,
 };
 
 const COMPACTION_V1_PREFIX: &str = "v1/compactions";
@@ -73,13 +74,11 @@ impl slog::KV for ExecutionConfig {
         serializer.emit_u64("until_ts", self.until_ts)?;
         let date = |pts| {
             let ts = TimeStamp::new(pts).physical();
-            chrono::DateTime::<Utc>::from_utc(
-                chrono::NaiveDateTime::from_timestamp(
-                    ts as i64 / 1000,
-                    (ts % 1000) as u32 * 1_000_000,
-                ),
-                Utc,
+            chrono::DateTime::<Utc>::from_timestamp(
+                ts as i64 / 1000,
+                (ts % 1000) as u32 * 1_000_000,
             )
+            .expect("timestamp generated from tso physical part should be valid")
         };
         serializer.emit_arguments("from_date", &format_args!("{}", date(self.from_ts)))?;
         serializer.emit_arguments("until_date", &format_args!("{}", date(self.until_ts)))?;
@@ -164,8 +163,8 @@ impl Execution {
         ext.prefetch_running_count = self.cfg.prefetch_running_count as usize;
         ext.prefetch_buffer_count = self.cfg.prefetch_buffer_count as usize;
 
-        let ExecuteCtx {
-            ref storage,
+        let &mut ExecuteCtx {
+            storage,
             ref mut hooks,
             ..
         } = cx;

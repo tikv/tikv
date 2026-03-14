@@ -8,8 +8,8 @@ use std::{
     pin::Pin,
     result,
     sync::{
-        atomic::{AtomicI32, AtomicU8, Ordering},
         Arc, Mutex,
+        atomic::{AtomicI32, AtomicU8, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -17,11 +17,11 @@ use std::{
 use collections::{HashMap, HashSet};
 use crossbeam::queue::ArrayQueue;
 use futures::{
+    Future, Sink,
     channel::oneshot,
     compat::Future01CompatExt,
     ready,
     task::{Context, Poll, Waker},
-    Future, Sink,
 };
 use futures_timer::Delay;
 use grpcio::{
@@ -45,14 +45,14 @@ use tikv_util::{
     timer::GLOBAL_TIMER_HANDLE,
     worker::{Scheduler, Worker},
 };
-use yatp::{task::future::TaskCell, ThreadPool};
+use yatp::{ThreadPool, task::future::TaskCell};
 
 use crate::server::{
+    Config, StoreAddrResolver,
     load_statistics::ThreadLoadPool,
     metrics::*,
     resolve::{Error as ResolveError, Result as ResolveResult},
     snap::Task as SnapTask,
-    Config, StoreAddrResolver,
 };
 
 // Implement health_controller::HealthChecker for HealthChecker to bridge with
@@ -418,7 +418,7 @@ fn report_unreachable(router: &impl RaftExtension, msg: &RaftMessage) {
 }
 
 fn grpc_error_is_unimplemented(e: &grpcio::Error) -> bool {
-    if let grpcio::Error::RpcFailure(ref status) = e {
+    if let grpcio::Error::RpcFailure(status) = e {
         status.code() == RpcStatusCode::UNIMPLEMENTED
     } else {
         false

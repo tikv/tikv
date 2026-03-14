@@ -4,8 +4,8 @@ use std::{fmt::Display, sync::Arc, time::Duration};
 
 use engine_rocks::{RocksEngine, RocksEngineIterator, RocksSnapshot};
 use engine_traits::{
-    iter_option, CacheRegion, Iterable, Iterator, KvEngine, Peekable, RegionCacheEngine,
-    SnapshotMiscExt, CF_LOCK, CF_WRITE,
+    CF_LOCK, CF_WRITE, CacheRegion, Iterable, Iterator, KvEngine, Peekable, RegionCacheEngine,
+    SnapshotMiscExt, iter_option,
 };
 use pd_client::PdClient;
 use slog_global::{error, info, warn};
@@ -17,9 +17,9 @@ use tikv_util::{
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
 use crate::{
+    RegionCacheMemoryEngine, RegionState,
     background::{parse_write, split_ts},
     read::{RegionCacheIterator, RegionCacheSnapshot},
-    RegionCacheMemoryEngine, RegionState,
 };
 
 // Cross check stops for some reason.
@@ -945,18 +945,18 @@ impl std::fmt::Debug for KeyCheckingInfo {
 mod tests {
     use std::{sync::Arc, time::Duration};
 
-    use engine_rocks::{util::new_engine_opt, RocksDbOptions, RocksWriteBatchVec};
+    use engine_rocks::{RocksDbOptions, RocksWriteBatchVec, util::new_engine_opt};
     use engine_traits::{
-        CacheRegion, KvEngine, Mutable, RegionCacheEngine, WriteBatch, WriteBatchExt, CF_DEFAULT,
-        CF_LOCK, CF_WRITE,
+        CF_DEFAULT, CF_LOCK, CF_WRITE, CacheRegion, KvEngine, Mutable, RegionCacheEngine,
+        WriteBatch, WriteBatchExt,
     };
     use futures::future::ready;
     use keys::data_key;
     use kvproto::metapb::{Region, RegionEpoch};
     use pd_client::PdClient;
     use raftstore::{
-        coprocessor::{RegionInfoCallback, RegionInfoProvider},
         RegionInfo, SeekRegionCallback,
+        coprocessor::{RegionInfoCallback, RegionInfoProvider},
     };
     use tempfile::Builder;
     use tikv_util::{config::VersionTrack, store::new_peer};
@@ -964,8 +964,8 @@ mod tests {
 
     use super::Result;
     use crate::{
-        cross_check::CrossChecker, InMemoryEngineConfig, InMemoryEngineContext,
-        RegionCacheMemoryEngine, RegionCacheWriteBatch,
+        InMemoryEngineConfig, InMemoryEngineContext, RegionCacheMemoryEngine,
+        RegionCacheWriteBatch, cross_check::CrossChecker,
     };
 
     #[derive(Clone)]

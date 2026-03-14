@@ -2,14 +2,14 @@
 
 use std::{
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     thread,
     time::Duration,
 };
 
-use engine_traits::{MiscExt, CF_WRITE};
+use engine_traits::{CF_WRITE, MiscExt};
 use kvproto::kvrpcpb::*;
 use test_raftstore::*;
 use tikv_util::config::ReadableDuration;

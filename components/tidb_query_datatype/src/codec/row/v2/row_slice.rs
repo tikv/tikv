@@ -321,9 +321,11 @@ impl<'a, T: PrimInt> LeBytes<'a, T> {
 
     #[inline]
     unsafe fn get_unchecked(&self, index: usize) -> T {
-        let ptr = self.slice.as_ptr() as *const T;
-        let ptr = ptr.add(index);
-        std::ptr::read_unaligned(ptr)
+        unsafe {
+            let ptr = self.slice.as_ptr() as *const T;
+            let ptr = ptr.add(index);
+            std::ptr::read_unaligned(ptr)
+        }
     }
 
     #[inline]
@@ -366,12 +368,12 @@ mod tests {
 
     use super::{
         super::encoder_for_test::{Column, RowEncoder},
-        read_le_bytes, RowSlice,
+        RowSlice, read_le_bytes,
     };
     use crate::{
+        FieldTypeTp,
         codec::data_type::{Duration, ScalarValue},
         expr::EvalContext,
-        FieldTypeTp,
     };
 
     #[test]

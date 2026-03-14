@@ -2,7 +2,7 @@
 
 use std::{
     convert::From,
-    fs::{read_dir, File},
+    fs::{File, read_dir},
     io::{BufRead, BufReader, Seek, SeekFrom},
     path::Path,
 };
@@ -36,6 +36,7 @@ struct LogIterator {
 
 #[derive(Debug)]
 #[allow(clippy::enum_variant_names)]
+#[allow(dead_code)]
 // Allowing this is actually more understandabled when used in code.
 pub enum Error {
     InvalidRequest(String),

@@ -17,18 +17,16 @@ macro_rules! flow_controller_fn {
     ($fn_name:ident, $region_id:ident, $type:ident) => {
         pub fn $fn_name(&self, $region_id: u64) -> $type {
             match self {
-                FlowController::Singleton(ref controller) => controller.$fn_name($region_id),
-                FlowController::Tablet(ref controller) => controller.$fn_name($region_id),
+                FlowController::Singleton(controller) => controller.$fn_name($region_id),
+                FlowController::Tablet(controller) => controller.$fn_name($region_id),
             }
         }
     };
     ($fn_name:ident, $region_id:ident, $bytes:ident, $type:ident) => {
         pub fn $fn_name(&self, $region_id: u64, $bytes: usize) -> $type {
             match self {
-                FlowController::Singleton(ref controller) => {
-                    controller.$fn_name($region_id, $bytes)
-                }
-                FlowController::Tablet(ref controller) => controller.$fn_name($region_id, $bytes),
+                FlowController::Singleton(controller) => controller.$fn_name($region_id, $bytes),
+                FlowController::Tablet(controller) => controller.$fn_name($region_id, $bytes),
             }
         }
     };
@@ -45,39 +43,39 @@ impl FlowController {
 
     pub fn unconsume(&self, region_id: u64, bytes: usize) {
         match self {
-            FlowController::Singleton(ref controller) => controller.unconsume(region_id, bytes),
-            FlowController::Tablet(ref controller) => controller.unconsume(region_id, bytes),
+            FlowController::Singleton(controller) => controller.unconsume(region_id, bytes),
+            FlowController::Tablet(controller) => controller.unconsume(region_id, bytes),
         }
     }
 
     pub fn update_config(&self, change: ConfigChange) -> online_config::Result<()> {
         match self {
-            FlowController::Singleton(ref controller) => controller.update_config(change),
-            FlowController::Tablet(ref controller) => controller.update_config(change),
+            FlowController::Singleton(controller) => controller.update_config(change),
+            FlowController::Tablet(controller) => controller.update_config(change),
         }
     }
 
     pub fn enable(&self, enable: bool) {
         match self {
-            FlowController::Singleton(ref controller) => controller.enable(enable),
-            FlowController::Tablet(ref controller) => controller.enable(enable),
+            FlowController::Singleton(controller) => controller.enable(enable),
+            FlowController::Tablet(controller) => controller.enable(enable),
         }
     }
 
     pub fn enabled(&self) -> bool {
         match self {
-            FlowController::Singleton(ref controller) => controller.enabled(),
-            FlowController::Tablet(ref controller) => controller.enabled(),
+            FlowController::Singleton(controller) => controller.enabled(),
+            FlowController::Tablet(controller) => controller.enabled(),
         }
     }
 
     #[cfg(test)]
     pub fn set_speed_limit(&self, region_id: u64, speed_limit: f64) {
         match self {
-            FlowController::Singleton(ref controller) => {
+            FlowController::Singleton(controller) => {
                 controller.set_speed_limit(region_id, speed_limit)
             }
-            FlowController::Tablet(ref controller) => {
+            FlowController::Tablet(controller) => {
                 controller.set_speed_limit(region_id, speed_limit)
             }
         }

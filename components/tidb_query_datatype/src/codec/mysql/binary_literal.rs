@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    codec::{error::Error, Result},
+    codec::{Result, error::Error},
     expr::EvalContext,
 };
 
@@ -21,7 +21,7 @@ fn trim_leading_zero_bytes(bytes: &[u8]) -> &[u8] {
     let (pos, _) = bytes
         .iter()
         .enumerate()
-        .find(|(_, &x)| x != 0)
+        .find(|&(_, &x)| x != 0)
         .unwrap_or((bytes.len() - 1, &0));
     &bytes[pos..]
 }
@@ -76,7 +76,7 @@ impl BinaryLiteral {
             // format is x'val' or X'val'
             let trimed = s[1..].trim_start_matches('\'');
             let trimed = trimed.trim_end_matches('\'');
-            if trimed.len() % 2 != 0 {
+            if !trimed.len().is_multiple_of(2) {
                 return Err(box_err!(
                     "invalid hexadecimal format, must even numbers, but {}",
                     s.len()

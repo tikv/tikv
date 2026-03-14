@@ -1,11 +1,11 @@
 #![allow(clippy::redundant_clone)]
 
 use std::ops::Bound;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crossbeam_epoch as epoch;
-use crossbeam_skiplist::{base, SkipList};
+use crossbeam_skiplist::{SkipList, base};
 
 fn ref_entry<'a, K, V>(e: impl Into<Option<base::RefEntry<'a, K, V>>>) -> Entry<'a, K, V> {
     Entry(e.into())

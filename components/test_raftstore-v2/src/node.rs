@@ -17,19 +17,19 @@ use kvproto::{
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,
 };
-use raft::{prelude::MessageType, SnapshotStatus};
+use raft::{SnapshotStatus, prelude::MessageType};
 use raftstore::{
+    Result,
     coprocessor::CoprocessorHost,
     errors::Error as RaftError,
     store::{
-        config::RaftstoreConfigManager, AutoSplitController, GlobalReplicationState,
-        RegionSnapshot, SplitConfigManager, TabletSnapKey, TabletSnapManager, Transport,
+        AutoSplitController, GlobalReplicationState, RegionSnapshot, SplitConfigManager,
+        TabletSnapKey, TabletSnapManager, Transport, config::RaftstoreConfigManager,
     },
-    Result,
 };
 use raftstore_v2::{
-    router::{PeerMsg, RaftRouter},
     StateStorage, StoreMeta, StoreRouter,
+    router::{PeerMsg, RaftRouter},
 };
 use resource_control::ResourceGroupManager;
 use resource_metering::CollectorRegHandle;
@@ -41,8 +41,8 @@ use tikv::{
     config::{ConfigController, Module},
     import::SstImporter,
     server::{
-        raftkv::ReplicaReadLockChecker, tablet_snap::copy_tablet_snapshot, NodeV2,
-        Result as ServerResult,
+        NodeV2, Result as ServerResult, raftkv::ReplicaReadLockChecker,
+        tablet_snap::copy_tablet_snapshot,
     },
 };
 use tikv_util::{

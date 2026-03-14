@@ -7,11 +7,10 @@ use kvproto::{
 };
 use test_raftstore::{Cluster, ServerCluster, SimulateEngine};
 use tikv::storage::{
-    self,
+    self, Engine, Error as StorageError, ErrorInner as StorageErrorInner, TxnStatus,
     kv::{Error as KvError, ErrorInner as KvErrorInner, RocksEngine},
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MAX_TXN_WRITE_SIZE},
     txn::{Error as TxnError, ErrorInner as TxnErrorInner},
-    Engine, Error as StorageError, ErrorInner as StorageErrorInner, TxnStatus,
 };
 use tikv_util::HandyRwLock;
 use txn_types::{self, Key, KvPair, Mutation, TimeStamp, Value};

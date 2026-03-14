@@ -2,7 +2,7 @@
 
 use std::{iter::FromIterator, sync::Arc, time::Duration};
 
-use engine_traits::{Peekable, RaftEngineReadOnly, CF_RAFT};
+use engine_traits::{CF_RAFT, Peekable, RaftEngineReadOnly};
 use futures::executor::block_on;
 use kvproto::{
     metapb, pdpb,
@@ -12,7 +12,7 @@ use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use tikv_util::{config::ReadableDuration, mpsc, store::find_peer, HandyRwLock};
+use tikv_util::{HandyRwLock, config::ReadableDuration, mpsc, store::find_peer};
 
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]

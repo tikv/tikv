@@ -5,7 +5,7 @@ use std::{
     f64,
 };
 
-use super::{super::Result, constants::*, Json, JsonRef, JsonType, ERR_CONVERT_FAILED};
+use super::{super::Result, ERR_CONVERT_FAILED, Json, JsonRef, JsonType, constants::*};
 
 fn compare<T: Ord>(x: T, y: T) -> Ordering {
     x.cmp(&y)
@@ -73,8 +73,7 @@ impl<'a> Ord for JsonRef<'a> {
 
 impl<'a> PartialEq for JsonRef<'a> {
     fn eq(&self, right: &JsonRef<'_>) -> bool {
-        self.partial_cmp(right)
-            .map_or(false, |r| r == Ordering::Equal)
+        self.partial_cmp(right) == Some(Ordering::Equal)
     }
 }
 impl<'a> PartialOrd for JsonRef<'a> {

@@ -10,20 +10,18 @@ use kvproto::{
 };
 use protobuf::Message;
 use tikv_util::{
-    box_err,
-    codec::number::{NumberEncoder, MAX_VAR_U64_LEN},
+    MustConsumeVec, box_err,
+    codec::number::{MAX_VAR_U64_LEN, NumberEncoder},
     debug, error,
     memory::HeapSize,
-    time::{duration_to_sec, monotonic_raw_now},
-    MustConsumeVec,
+    time::{Timespec, duration_to_sec, monotonic_raw_now},
 };
-use time::Timespec;
 use uuid::Uuid;
 
 use super::msg::ErrorCallback;
 use crate::{
-    store::{fsm::apply, metrics::*, Config},
     Result,
+    store::{Config, fsm::apply, metrics::*},
 };
 
 const READ_QUEUE_SHRINK_SIZE: usize = 64;
@@ -82,7 +80,9 @@ impl<C> ReadIndexRequest<C> {
 
 impl<C> Drop for ReadIndexRequest<C> {
     fn drop(&mut self) {
-        let dur = (monotonic_raw_now() - self.propose_time).to_std().unwrap();
+        let dur = (monotonic_raw_now() - self.propose_time)
+            .try_into()
+            .unwrap();
         RAFT_READ_INDEX_PENDING_DURATION.observe(duration_to_sec(dur));
     }
 }

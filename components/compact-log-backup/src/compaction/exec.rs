@@ -7,8 +7,8 @@ use std::{
 
 use engine_rocks::RocksEngine;
 use engine_traits::{
-    ExternalSstFileInfo, SstCompressionType, SstExt, SstWriter, SstWriterBuilder, CF_WRITE,
-    DATA_KEY_PREFIX_LEN,
+    CF_WRITE, DATA_KEY_PREFIX_LEN, ExternalSstFileInfo, SstCompressionType, SstExt, SstWriter,
+    SstWriterBuilder,
 };
 use external_storage::{ExternalStorage, UnpinReader};
 use file_system::Sha256Reader;
@@ -24,7 +24,7 @@ use crate::{
     compaction::SST_OUT_REL,
     errors::{OtherErrExt, Result, TraceResultExt},
     source::{Record, Source},
-    statistic::{prom::*, LoadStatistic, SubcompactStatistic},
+    statistic::{LoadStatistic, SubcompactStatistic, prom::*},
     storage::DEFAULT_COMPACTION_OUT_PREFIX,
     util::{self, Cooperate, ExecuteAllExt},
 };
@@ -252,15 +252,15 @@ where
         &mut self,
         c: &Subcompaction,
         ext: &mut SubcompactExt,
-    ) -> Result<impl Iterator<Item = Vec<Record>>> {
+    ) -> Result<impl Iterator<Item = Vec<Record>> + use<DB>> {
         let mut eext = ExecuteAllExt::default();
         eext.max_concurrency = ext.max_load_concurrency;
 
         let items = super::util::execute_all_ext(
             c.inputs
                 .iter()
-                .cloned()
                 .map(|f| {
+                    let f = f.clone();
                     let source = &self.source;
                     Box::pin(async move {
                         let _lt = COMPACT_LOG_BACKUP_LOAD_A_FILE_DURATION.start_coarse_timer();
@@ -425,7 +425,7 @@ where
         let (sorted_items, cdiff) = Self::process_input(c, items).await;
         self.compact_stat.sort_duration += begin.saturating_elapsed();
         if sorted_items.is_empty() {
-            self.compact_stat.empty_generation += 1;
+            result.compact_stat.empty_generation += 1;
             return Ok(result);
         }
 
@@ -473,16 +473,16 @@ where
 
 #[cfg(test)]
 mod test {
-    use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
+    use engine_traits::{CF_DEFAULT, CF_WRITE, CfName};
     use tidb_query_datatype::codec::table::encode_row_key;
     use txn_types::{Key, Write, WriteType};
 
     use crate::{
-        compaction::{exec::SubcompactionExec, Subcompaction},
+        compaction::{Subcompaction, exec::SubcompactionExec},
         source::Record,
         storage::{Epoch, MetaFile},
         test_util::{
-            gen_step, save_many_log_files, CompactInMem, KvGen, LogFileBuilder, TmpStorage,
+            CompactInMem, KvGen, LogFileBuilder, TmpStorage, gen_step, save_many_log_files,
         },
     };
 

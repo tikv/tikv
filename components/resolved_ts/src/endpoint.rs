@@ -11,7 +11,7 @@ use std::{
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
-use futures::channel::oneshot::{channel, Receiver, Sender};
+use futures::channel::oneshot::{Receiver, Sender, channel};
 use grpcio::Environment;
 use kvproto::{kvrpcpb::LeaderInfo, metapb::Region, raft_cmdpb::AdminCmdType};
 use online_config::{self, ConfigChange, ConfigManager, OnlineConfig};
@@ -37,12 +37,12 @@ use tokio::sync::{Notify, Semaphore};
 use txn_types::{Key, TimeStamp};
 
 use crate::{
-    advance::{AdvanceTsWorker, LeadershipResolver, DEFAULT_CHECK_LEADER_TIMEOUT_DURATION},
+    Error, ON_DROP_WARN_HEAP_SIZE, Result, TsSource, TxnLocks,
+    advance::{AdvanceTsWorker, DEFAULT_CHECK_LEADER_TIMEOUT_DURATION, LeadershipResolver},
     cmd::{ChangeLog, ChangeRow},
     metrics::*,
     resolver::{LastAttempt, Resolver},
     scanner::{ScanEntries, ScanTask, ScannerPool},
-    Error, Result, TsSource, TxnLocks, ON_DROP_WARN_HEAP_SIZE,
 };
 
 /// grace period for identifying slow resolved-ts and safe-ts.
@@ -1069,26 +1069,26 @@ impl fmt::Debug for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut de = f.debug_struct("ResolvedTsTask");
         match self {
-            Task::RegionDestroyed(ref region) => de
+            Task::RegionDestroyed(region) => de
                 .field("name", &"region_destroyed")
                 .field("region", &region)
                 .finish(),
-            Task::RegionUpdated(ref region) => de
+            Task::RegionUpdated(region) => de
                 .field("name", &"region_updated")
                 .field("region", &region)
                 .finish(),
-            Task::RegisterRegion { ref region } => de
+            Task::RegisterRegion { region } => de
                 .field("name", &"register_region")
                 .field("region", &region)
                 .finish(),
-            Task::DeRegisterRegion { ref region_id } => de
+            Task::DeRegisterRegion { region_id } => de
                 .field("name", &"deregister_region")
                 .field("region_id", &region_id)
                 .finish(),
             Task::ReRegisterRegion {
-                ref region_id,
-                ref observe_id,
-                ref cause,
+                region_id,
+                observe_id,
+                cause,
             } => de
                 .field("name", &"re_register_region")
                 .field("region_id", &region_id)
@@ -1096,9 +1096,9 @@ impl fmt::Debug for Task {
                 .field("cause", &cause)
                 .finish(),
             Task::ResolvedTsAdvanced {
-                ref regions,
-                ref ts,
-                ref ts_source,
+                regions,
+                ts,
+                ts_source,
             } => de
                 .field("name", &"advance_resolved_ts")
                 .field("regions", &regions)
@@ -1107,9 +1107,9 @@ impl fmt::Debug for Task {
                 .finish(),
             Task::ChangeLog { .. } => de.field("name", &"change_log").finish(),
             Task::ScanLocks {
-                ref region_id,
-                ref observe_id,
-                ref apply_index,
+                region_id,
+                observe_id,
+                apply_index,
                 ..
             } => de
                 .field("name", &"scan_locks")
@@ -1118,7 +1118,7 @@ impl fmt::Debug for Task {
                 .field("apply_index", &apply_index)
                 .finish(),
             Task::AdvanceResolvedTs { .. } => de.field("name", &"advance_resolved_ts").finish(),
-            Task::ChangeConfig { ref change } => de
+            Task::ChangeConfig { change } => de
                 .field("name", &"change_config")
                 .field("change", &change)
                 .finish(),

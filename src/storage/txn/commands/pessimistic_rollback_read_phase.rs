@@ -4,14 +4,14 @@
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
-    mvcc::{metrics::ScanLockReadTimeSource::pessimistic_rollback, MvccReader},
+    ScanMode, Snapshot, Statistics,
+    mvcc::{MvccReader, metrics::ScanLockReadTimeSource::pessimistic_rollback},
     txn,
     txn::{
+        ProcessResult, RESOLVE_LOCK_BATCH_SIZE, Result, StorageResult,
         commands::{Command, CommandExt, PessimisticRollback, ReadCommand, TypedCommand},
         sched_pool::tls_collect_keyread_histogram_vec,
-        ProcessResult, Result, StorageResult, RESOLVE_LOCK_BATCH_SIZE,
     },
-    ScanMode, Snapshot, Statistics,
 };
 command! {
     PessimisticRollbackReadPhase:
@@ -93,10 +93,10 @@ pub mod tests {
 
     use super::*;
     use crate::storage::{
+        TestEngineBuilder,
         kv::Engine,
         mvcc::tests::must_load_shared_lock,
         txn::{scheduler::DEFAULT_EXECUTION_DURATION_LIMIT, tests::*},
-        TestEngineBuilder,
     };
 
     fn run_read_phase<E: Engine>(

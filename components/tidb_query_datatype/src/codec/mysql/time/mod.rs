@@ -21,14 +21,14 @@ use tipb::FieldType;
 
 pub use self::{extension::*, tz::Tz, weekmode::WeekMode};
 use crate::{
+    FieldTypeAccessor, FieldTypeTp,
     codec::{
+        Error, Result, TEN_POW,
         convert::ConvertTo,
         data_type::Real,
-        mysql::{check_fsp, duration::SECS_PER_DAY, Decimal, Duration, Res, DEFAULT_FSP, MAX_FSP},
-        Error, Result, TEN_POW,
+        mysql::{DEFAULT_FSP, Decimal, Duration, MAX_FSP, Res, check_fsp, duration::SECS_PER_DAY},
     },
     expr::{EvalContext, Flag, SqlMode},
-    FieldTypeAccessor, FieldTypeTp,
 };
 
 const MIN_TIMESTAMP: i64 = 0;
@@ -58,7 +58,7 @@ const MONTH_NAMES_ABBR: &[&str] = &[
 ];
 
 fn is_leap_year(year: u32) -> bool {
-    year & 3 == 0 && (year % 100 != 0 || year % 400 == 0)
+    year & 3 == 0 && (!year.is_multiple_of(100) || year.is_multiple_of(400))
 }
 
 fn last_day_of_month(year: u32, month: u32) -> u32 {
@@ -914,7 +914,9 @@ fn handle_zero_date(ctx: &mut EvalContext, mut args: TimeArgs) -> Result<Option<
     debug_assert!(args.is_zero());
 
     if no_zero_date {
-        (!strict_mode || ignore_truncate).ok_or(Error::truncated())?;
+        if strict_mode && !ignore_truncate {
+            return Err(Error::truncated());
+        }
         ctx.warnings.append_warning(Error::truncated());
         args.clear();
         return Ok(None);
@@ -936,7 +938,9 @@ fn handle_zero_in_date(ctx: &mut EvalContext, mut args: TimeArgs) -> Result<Opti
     if no_zero_in_date {
         // If we are in NO_ZERO_IN_DATE + STRICT_MODE, zero-in-date produces and error.
         // Otherwise, we reset the datetime value and check if we enabled NO_ZERO_DATE.
-        (!strict_mode || ignore_truncate).ok_or(Error::truncated())?;
+        if strict_mode && !ignore_truncate {
+            return Err(Error::truncated());
+        }
         ctx.warnings.append_warning(Error::truncated());
         args.clear();
         return handle_zero_date(ctx, args);
@@ -948,7 +952,9 @@ fn handle_zero_in_date(ctx: &mut EvalContext, mut args: TimeArgs) -> Result<Opti
 fn handle_invalid_date(ctx: &mut EvalContext, mut args: TimeArgs) -> Result<Option<TimeArgs>> {
     let sql_mode = ctx.cfg.sql_mode;
     let allow_invalid_date = sql_mode.contains(SqlMode::INVALID_DATES);
-    allow_invalid_date.ok_or(Error::truncated())?;
+    if !allow_invalid_date {
+        return Err(Error::truncated());
+    }
     args.clear();
     handle_zero_date(ctx, args)
 }
@@ -1467,9 +1473,17 @@ impl Time {
         let dur = chrono::Duration::nanoseconds(duration.to_nanos());
 
         let time = if unlikely(ctx.cfg.is_test) {
-            Utc.ymd(2020, 2, 2).and_hms(0, 0, 0).checked_add_signed(dur)
+            Utc.with_ymd_and_hms(2020, 2, 2, 0, 0, 0)
+                .single()
+                .expect("constant datetime should be valid")
+                .checked_add_signed(dur)
         } else {
-            Utc::today().and_hms(0, 0, 0).checked_add_signed(dur)
+            Utc::now()
+                .date_naive()
+                .and_hms_opt(0, 0, 0)
+                .expect("midnight should be valid")
+                .and_utc()
+                .checked_add_signed(dur)
         };
 
         let time = time.ok_or::<Error>(box_err!("parse from duration {} overflows", duration))?;
@@ -1540,14 +1554,24 @@ impl Time {
 
         if self.day() > self.last_day_of_month() || self.month() == 0 || self.day() == 0 {
             let date = if self.month() == 0 {
-                (self.year() >= 1).ok_or(Error::incorrect_datetime_value(self))?;
-                NaiveDate::from_ymd(self.year() as i32 - 1, 12, 1)
+                if self.year() < 1 {
+                    return Err(Error::incorrect_datetime_value(self));
+                }
+                NaiveDate::from_ymd_opt(self.year() as i32 - 1, 12, 1)
+                    .expect("normalized date should be valid")
             } else {
-                NaiveDate::from_ymd(self.year() as i32, self.month(), 1)
+                NaiveDate::from_ymd_opt(self.year() as i32, self.month(), 1)
+                    .expect("normalized date should be valid")
             } + chrono::Duration::days(i64::from(self.day()) - 1);
             let datetime = NaiveDateTime::new(
                 date,
-                NaiveTime::from_hms_micro(self.hour(), self.minute(), self.second(), self.micro()),
+                NaiveTime::from_hms_micro_opt(
+                    self.hour(),
+                    self.minute(),
+                    self.second(),
+                    self.micro(),
+                )
+                .expect("normalized time should be valid"),
             );
             return Time::try_from_chrono_datetime(
                 ctx,
@@ -1608,20 +1632,20 @@ impl Time {
         let sec_dur = chrono::Duration::seconds(secs);
         let duration = sec_dur
             .checked_add(&chrono::Duration::nanoseconds(nanos))
-            .ok_or_else(|| Error::datetime_function_overflow())?;
+            .ok_or_else(Error::datetime_function_overflow)?;
         let time_type = self.get_time_type();
         let fsp = self.fsp() as i8;
         let mut new_time = if time_type == TimeType::Timestamp {
             let datetime = self
                 .try_into_chrono_datetime(ctx)?
                 .checked_add_signed(duration)
-                .ok_or_else(|| Error::datetime_function_overflow())?;
+                .ok_or_else(Error::datetime_function_overflow)?;
             Time::try_from_chrono_datetime(ctx, datetime, TimeType::Timestamp, fsp)?
         } else {
             let naive = self
                 .try_into_chrono_naive_datetime()?
                 .checked_add_signed(duration)
-                .ok_or_else(|| Error::datetime_function_overflow())?;
+                .ok_or_else(Error::datetime_function_overflow)?;
             Time::try_from_chrono_datetime(ctx, naive, time_type, fsp)?
         };
 
@@ -1712,9 +1736,11 @@ impl Time {
 
     pub fn weekday(self) -> Weekday {
         let date = if self.month() == 0 {
-            NaiveDate::from_ymd(self.year() as i32 - 1, 12, 1)
+            NaiveDate::from_ymd_opt(self.year() as i32 - 1, 12, 1)
+                .expect("weekday date should be valid")
         } else {
-            NaiveDate::from_ymd(self.year() as i32, self.month(), 1)
+            NaiveDate::from_ymd_opt(self.year() as i32, self.month(), 1)
+                .expect("weekday date should be valid")
         } + chrono::Duration::days(i64::from(self.day()) - 1);
         date.weekday()
     }
@@ -1782,7 +1808,7 @@ impl Time {
             }
             'p' => {
                 let hour = self.hour();
-                if (hour / 12) % 2 == 0 {
+                if (hour / 12).is_multiple_of(2) {
                     output.push_str("AM")
                 } else {
                     output.push_str("PM")
@@ -2195,7 +2221,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        codec::mysql::{duration::*, MAX_FSP, UNSPECIFIED_FSP},
+        codec::mysql::{MAX_FSP, UNSPECIFIED_FSP, duration::*},
         expr::EvalConfig,
     };
 

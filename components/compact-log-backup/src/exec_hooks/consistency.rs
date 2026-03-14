@@ -1,16 +1,16 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 pub use engine_traits::SstCompressionType;
-use external_storage::{locking::RemoteLock, ExternalStorage};
+use external_storage::{ExternalStorage, locking::RemoteLock};
 use futures::{io::AsyncReadExt, stream::TryStreamExt};
 use tikv_util::warn;
 
 use crate::{
+    ErrorKind, TraceResultExt,
     errors::Result,
     execute::hooking::{AbortedCtx, AfterFinishCtx, BeforeStartCtx, ExecHooks},
     storage::LOCK_PREFIX,
     util::storage_url,
-    ErrorKind, TraceResultExt,
 };
 
 #[derive(Default)]

@@ -12,20 +12,20 @@ use std::{
 };
 
 use collections::HashSet;
-use dashmap::{mapref::entry::Entry, DashMap};
+use dashmap::{DashMap, mapref::entry::Entry};
 use encryption::{DataKeyManager, FileEncryptionInfo, MultiMasterKeyBackend};
 use encryption_export::create_async_backend;
-use engine_rocks::{get_env, RocksSstReader};
+use engine_rocks::{RocksSstReader, get_env};
 use engine_traits::{
-    name_to_cf, util::check_key_in_range, CfName, IterOptions, Iterator, KvEngine, RefIterable,
-    SstCompressionType, SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT,
-    CF_WRITE,
+    CF_DEFAULT, CF_WRITE, CfName, IterOptions, Iterator, KvEngine, RefIterable, SstCompressionType,
+    SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder, name_to_cf,
+    util::check_key_in_range,
 };
 use external_storage::{
-    compression_reader_dispatcher, encrypt_wrap_reader, wrap_with_checksum_reader_if_needed,
-    ExternalStorage, RestoreConfig,
+    ExternalStorage, RestoreConfig, compression_reader_dispatcher, encrypt_wrap_reader,
+    wrap_with_checksum_reader_if_needed,
 };
-use file_system::{get_io_rate_limiter, IoType, OpenOptions};
+use file_system::{IoType, OpenOptions, get_io_rate_limiter};
 use kvproto::{
     brpb::{CipherInfo, StorageBackend},
     encryptionpb::{EncryptionMethod, FileEncryptionInfo_oneof_mode, MasterKey},
@@ -34,6 +34,7 @@ use kvproto::{
     metapb::Region,
 };
 use tikv_util::{
+    Either, HandyRwLock,
     codec::{
         bytes::{decode_bytes_in_place, encode_bytes},
         stream_event::{EventEncoder, EventIterator, Iterator as EIterator},
@@ -41,14 +42,14 @@ use tikv_util::{
     future::RescheduleChecker,
     memory::{MemoryQuota, OwnedAllocated},
     resizable_threadpool::DeamonRuntimeHandle,
-    sys::{thread::ThreadBuildWrapper, SysQuota},
+    sys::{SysQuota, thread::ThreadBuildWrapper},
     time::{Instant, Limiter},
-    Either, HandyRwLock,
 };
 use tokio::{runtime::Runtime, sync::OnceCell};
 use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
+    Config, ConfigManager as ImportConfigManager, Error, Result,
     caching::cache_map::{CacheMap, ShareOwned},
     import_file::{ImportDir, ImportFile},
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
@@ -56,7 +57,7 @@ use crate::{
     metrics::*,
     sst_merge_iter::BinaryIterator,
     sst_writer::{RawSstWriter, TxnSstWriter},
-    util, Config, ConfigManager as ImportConfigManager, Error, Result,
+    util,
 };
 
 pub struct LoadedFile {
@@ -116,10 +117,10 @@ pub enum CacheKvFile {
 /// returns an error on an invalid internal state.
 /// pass the error back to the client side for further debugging.
 fn error(message: impl std::fmt::Display) -> Error {
-    Error::Io(io::Error::new(
-        ErrorKind::Other,
-        format!("internal error in TiKV: {}", message),
-    ))
+    Error::Io(io::Error::other(format!(
+        "internal error in TiKV: {}",
+        message
+    )))
 }
 
 impl CacheKvFile {
@@ -654,14 +655,13 @@ impl<E: KvEngine> SstImporter<E> {
 
             // Attempt to remove the partially downloaded file
             if dst_file.exists() {
-                if let Some(ref manager) = self.key_manager {
-                    if let Err(cleanup_err) = manager.delete_file(dst_file.to_str().unwrap(), None)
-                    {
-                        warn!("failed to remove encryption metadata for temporary file";
-                            "file" => %dst_file.display(),
-                            "error" => %cleanup_err
-                        );
-                    }
+                if let Some(ref manager) = self.key_manager
+                    && let Err(cleanup_err) = manager.delete_file(dst_file.to_str().unwrap(), None)
+                {
+                    warn!("failed to remove encryption metadata for temporary file";
+                        "file" => %dst_file.display(),
+                        "error" => %cleanup_err
+                    );
                 }
                 if let Err(cleanup_err) = file_system::remove_file(&dst_file) {
                     warn!("failed to remove temporary file after download failure";
@@ -1813,10 +1813,10 @@ impl<E: KvEngine> SstImporter<E> {
             warn!("failed to remove file"; "filename" => ?path_buf, "error" => ?e);
         }
         // remove tracking from key manager if needed
-        if let Some(key_manager) = self.key_manager.as_ref() {
-            if let Err(e) = key_manager.delete_file(&path_buf.to_string_lossy(), None) {
-                warn!("failed to remove file from key manager"; "filename" => ?path_buf, "error" => ?e);
-            }
+        if let Some(key_manager) = self.key_manager.as_ref()
+            && let Err(e) = key_manager.delete_file(&path_buf.to_string_lossy(), None)
+        {
+            warn!("failed to remove file from key manager"; "filename" => ?path_buf, "error" => ?e);
         }
     }
 }
@@ -2165,8 +2165,8 @@ mod tests {
         io::{self, Cursor},
         ops::Sub,
         sync::{
-            atomic::{AtomicUsize, Ordering},
             Mutex,
+            atomic::{AtomicUsize, Ordering},
         },
         usize,
     };
@@ -2175,8 +2175,8 @@ mod tests {
     use encryption::{EncrypterWriter, Iv};
     use engine_rocks::get_env;
     use engine_traits::{
-        collect, Error as TraitError, ExternalSstFileInfo, Iterable, Iterator, RefIterable,
-        SstCompressionType::Zstd, SstReader, SstWriter, CF_DEFAULT, DATA_CFS,
+        CF_DEFAULT, DATA_CFS, Error as TraitError, ExternalSstFileInfo, Iterable, Iterator,
+        RefIterable, SstCompressionType::Zstd, SstReader, SstWriter, collect,
     };
     use external_storage::read_external_storage_info_buff;
     use file_system::Sha256Reader;
@@ -2743,7 +2743,7 @@ mod tests {
 
     #[test]
     fn test_read_external_storage_into_file_timed_out() {
-        use futures_util::stream::{pending, TryStreamExt};
+        use futures_util::stream::{TryStreamExt, pending};
 
         let mut input = pending::<io::Result<&[u8]>>().into_async_read();
         let mut output = Vec::new();
@@ -2830,7 +2830,7 @@ mod tests {
 
     #[test]
     fn test_read_external_storage_info_buff_timed_out() {
-        use futures_util::stream::{pending, TryStreamExt};
+        use futures_util::stream::{TryStreamExt, pending};
 
         let mut input = pending::<io::Result<&[u8]>>().into_async_read();
         let err = block_on_external_io(read_external_storage_info_buff(
@@ -4352,7 +4352,7 @@ mod tests {
 
     #[test]
     fn test_download_kv_with_plaintext_data_key() {
-        let data_key: [u8; 32] = rand::thread_rng().gen();
+        let data_key: [u8; 32] = rand::thread_rng().r#gen();
         let mut cipher = CipherInfo::new();
         cipher.set_cipher_key(data_key.to_vec());
         cipher.set_cipher_type(EncryptionMethod::Aes256Ctr);

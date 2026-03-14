@@ -407,12 +407,12 @@ impl Display for Mutation {
 impl Mutation {
     pub fn key(&self) -> &Key {
         match self {
-            Mutation::Put((ref key, _), _) => key,
-            Mutation::Delete(ref key, _) => key,
-            Mutation::Lock(ref key, _) => key,
-            Mutation::SharedLock(ref key, _) => key,
-            Mutation::Insert((ref key, _), _) => key,
-            Mutation::CheckNotExists(ref key, _) => key,
+            Mutation::Put((key, _), _) => key,
+            Mutation::Delete(key, _) => key,
+            Mutation::Lock(key, _) => key,
+            Mutation::SharedLock(key, _) => key,
+            Mutation::Insert((key, _), _) => key,
+            Mutation::CheckNotExists(key, _) => key,
         }
     }
 
@@ -462,12 +462,12 @@ impl Mutation {
 
     pub fn set_assertion(&mut self, assertion: Assertion) {
         *match self {
-            Mutation::Put(_, ref mut assertion) => assertion,
-            Mutation::Delete(_, ref mut assertion) => assertion,
-            Mutation::Lock(_, ref mut assertion) => assertion,
-            Mutation::SharedLock(_, ref mut assertion) => assertion,
-            Mutation::Insert(_, ref mut assertion) => assertion,
-            Mutation::CheckNotExists(_, ref mut assertion) => assertion,
+            Mutation::Put(_, assertion) => assertion,
+            Mutation::Delete(_, assertion) => assertion,
+            Mutation::Lock(_, assertion) => assertion,
+            Mutation::SharedLock(_, assertion) => assertion,
+            Mutation::Insert(_, assertion) => assertion,
+            Mutation::CheckNotExists(_, assertion) => assertion,
         } = assertion;
     }
 

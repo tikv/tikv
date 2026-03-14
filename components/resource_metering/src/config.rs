@@ -7,8 +7,8 @@ use serde_derive::{Deserialize, Serialize};
 use tikv_util::config::ReadableDuration;
 
 use crate::{
-    recorder::ConfigChangeNotifier as RecorderConfigChangeNotifier,
-    reporter::ConfigChangeNotifier as ReporterConfigChangeNotifier, AddressChangeNotifier,
+    AddressChangeNotifier, recorder::ConfigChangeNotifier as RecorderConfigChangeNotifier,
+    reporter::ConfigChangeNotifier as ReporterConfigChangeNotifier,
 };
 
 const MIN_PRECISION: ReadableDuration = ReadableDuration::millis(100);

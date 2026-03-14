@@ -3,14 +3,14 @@ use std::{error::Error as StdError, io};
 
 use ::aws_smithy_runtime_api::client::orchestrator::HttpResponse;
 use aws_config::{
+    ConfigLoader, Region,
     default_provider::credentials::DefaultCredentialsChain,
     environment::EnvironmentVariableRegionProvider,
     meta::region::{self, ProvideRegion, RegionProviderChain},
     profile::ProfileFileRegionProvider,
     provider_config::ProviderConfig,
-    ConfigLoader, Region,
 };
-use aws_credential_types::provider::{error::CredentialsError, ProvideCredentials};
+use aws_credential_types::provider::{ProvideCredentials, error::CredentialsError};
 use aws_sdk_kms::config::SharedHttpClient;
 use aws_sdk_s3::config::HttpClient;
 use aws_smithy_runtime::client::http::hyper_014::HyperClientBuilder;
@@ -19,7 +19,7 @@ use futures::{Future, TryFutureExt};
 use hyper::Client;
 use hyper_tls::HttpsConnector;
 use tikv_util::{
-    stream::{block_on_external_io, retry_ext, RetryError, RetryExt},
+    stream::{RetryError, RetryExt, block_on_external_io, retry_ext},
     warn,
 };
 
@@ -294,7 +294,9 @@ mod tests {
         const AWS_WEB_IDENTITY_TOKEN_FILE: &str = "AWS_WEB_IDENTITY_TOKEN_FILE";
 
         let default_provider = DefaultCredentialsProvider::new(new_http_client()).await;
-        std::env::set_var(AWS_WEB_IDENTITY_TOKEN_FILE, "tmp");
+        unsafe {
+            std::env::set_var(AWS_WEB_IDENTITY_TOKEN_FILE, "tmp");
+        }
         // mock k8s env with web_identitiy_provider
         fail::cfg("cred_err", "return").unwrap();
         fail::cfg("retry_count", "return(1)").unwrap();
@@ -315,6 +317,8 @@ mod tests {
 
         fail::remove("cred_err");
         fail::remove("retry_count");
-        std::env::remove_var(AWS_WEB_IDENTITY_TOKEN_FILE);
+        unsafe {
+            std::env::remove_var(AWS_WEB_IDENTITY_TOKEN_FILE);
+        }
     }
 }

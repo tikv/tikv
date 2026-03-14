@@ -275,7 +275,7 @@ impl Encoding for EncodingGb18030 {
 mod tests {
     use bstr::ByteSlice;
 
-    use crate::codec::collation::{encoding::EncodingGb18030, Encoding};
+    use crate::codec::collation::{Encoding, encoding::EncodingGb18030};
 
     #[test]
     fn test_encode() {

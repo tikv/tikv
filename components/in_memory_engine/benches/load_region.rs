@@ -5,17 +5,17 @@
 use std::sync::Arc;
 
 use criterion::*;
-use engine_rocks::{util::new_engine, RocksEngine};
+use engine_rocks::{RocksEngine, util::new_engine};
 use engine_traits::{
-    CacheRegion, KvEngine, Mutable, RegionCacheEngine, WriteBatch, WriteBatchExt, CF_DEFAULT,
-    CF_WRITE, DATA_CFS,
+    CF_DEFAULT, CF_WRITE, CacheRegion, DATA_CFS, KvEngine, Mutable, RegionCacheEngine, WriteBatch,
+    WriteBatchExt,
 };
 use futures::future::ready;
 use in_memory_engine::{BackgroundRunner, *};
 use keys::{DATA_MAX_KEY, DATA_MIN_KEY};
 use pd_client::PdClient;
 use raftstore::coprocessor::config::SPLIT_SIZE;
-use rand::{thread_rng, RngCore};
+use rand::{RngCore, thread_rng};
 use tikv_util::config::VersionTrack;
 use txn_types::{Key, TimeStamp, Write, WriteType};
 

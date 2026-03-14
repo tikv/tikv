@@ -6,14 +6,14 @@ use std::{
     fmt::{self, Debug, Display, Formatter},
     future::Future,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
 
 use futures::{
-    channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender},
+    channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded},
     compat::{Future01CompatExt, Stream01CompatExt},
     executor::block_on,
     future::FutureExt,
@@ -157,12 +157,12 @@ impl<T: Display + Send> Scheduler<T> {
     pub fn schedule_force(&self, task: T) -> Result<(), ScheduleError<T>> {
         self.counter.fetch_add(1, Ordering::SeqCst);
         self.metrics_pending_task_count.inc();
-        if let Err(e) = self.sender.unbounded_send(Msg::Task(task)) {
-            if let Msg::Task(t) = e.into_inner() {
-                self.counter.fetch_sub(1, Ordering::SeqCst);
-                self.metrics_pending_task_count.dec();
-                return Err(ScheduleError::Stopped(t));
-            }
+        if let Err(e) = self.sender.unbounded_send(Msg::Task(task))
+            && let Msg::Task(t) = e.into_inner()
+        {
+            self.counter.fetch_sub(1, Ordering::SeqCst);
+            self.metrics_pending_task_count.dec();
+            return Err(ScheduleError::Stopped(t));
         }
         Ok(())
     }
@@ -545,12 +545,13 @@ impl Worker {
     }
 }
 
+#[cfg(test)]
 mod tests {
 
     use std::{
         sync::{
-            atomic::{self, AtomicU64},
             Arc, Mutex,
+            atomic::{self, AtomicU64},
         },
         time::Duration,
     };

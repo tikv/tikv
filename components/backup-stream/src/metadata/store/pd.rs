@@ -3,7 +3,7 @@
 use std::{collections::VecDeque, fmt::Display, pin::Pin, task::ready};
 
 use async_trait::async_trait;
-use futures::{stream, Stream};
+use futures::{Stream, stream};
 use kvproto::meta_storagepb::{self as mpb, WatchResponse};
 use pd_client::meta_storage::{Get, MetaStorageClient, Put, Watch};
 use pin_project::pin_project;
@@ -200,10 +200,10 @@ mod tests {
 
     use futures::{Future, StreamExt};
     use pd_client::{
-        meta_storage::{Checked, Source, Sourced},
         RpcClient,
+        meta_storage::{Checked, Source, Sourced},
     };
-    use test_pd::{mocker::MetaStorage, util::*, Server as PdServer};
+    use test_pd::{Server as PdServer, mocker::MetaStorage, util::*};
     use tikv_util::config::ReadableDuration;
 
     use super::PdStore;

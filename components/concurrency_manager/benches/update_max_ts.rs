@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use concurrency_manager::{ActionOnInvalidMaxTs, ConcurrencyManager};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use txn_types::TimeStamp;
 
 fn benchmark_update_max_ts(c: &mut Criterion) {

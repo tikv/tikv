@@ -18,8 +18,8 @@ use raft::eraftpb::ConfChangeType;
 use tikv_util::{box_err, error, info, time::Instant as TiInstant, warn};
 
 use super::{
-    fsm::new_admin_request, worker::new_change_peer_v2_request, PeerMsg, RaftRouter,
-    SignificantMsg, SignificantRouter, StoreMsg,
+    PeerMsg, RaftRouter, SignificantMsg, SignificantRouter, StoreMsg, fsm::new_admin_request,
+    worker::new_change_peer_v2_request,
 };
 use crate::Result;
 
@@ -246,6 +246,7 @@ pub fn start_unsafe_recovery_report(
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct UnsafeRecoveryForceLeaderSyncer(Arc<InvokeClosureOnDrop>);
 
 impl UnsafeRecoveryForceLeaderSyncer {

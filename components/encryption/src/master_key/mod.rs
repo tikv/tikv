@@ -7,7 +7,7 @@ use kvproto::encryptionpb::{EncryptedContent, EncryptionMethod, MasterKey};
 use tikv_util::{box_err, error};
 use tokio::sync::RwLock;
 
-use crate::{manager::generate_data_key, Error, MasterKeyConfig, Result};
+use crate::{Error, MasterKeyConfig, Result, manager::generate_data_key};
 
 /// Provide API to encrypt/decrypt key dictionary content.
 ///
@@ -38,9 +38,9 @@ mod metadata;
 use self::metadata::*;
 
 mod kms;
+pub use self::kms::KmsBackend;
 #[cfg(any(test, feature = "testexport"))]
 pub use self::kms::fake;
-pub use self::kms::KmsBackend;
 
 #[derive(Default, Debug, Clone)]
 pub struct PlaintextBackend {}
@@ -371,14 +371,12 @@ pub mod tests {
             .update_from_config_if_needed(configs, |_| {
                 Ok(create_mock_backend(
                     || {
-                        Err(Error::Other(Box::new(std::io::Error::new(
-                            ErrorKind::Other,
+                        Err(Error::Other(Box::new(std::io::Error::other(
                             "Encrypt error",
                         ))))
                     },
                     || {
-                        Err(Error::Other(Box::new(std::io::Error::new(
-                            ErrorKind::Other,
+                        Err(Error::Other(Box::new(std::io::Error::other(
                             "Decrypt error",
                         ))))
                     },
@@ -432,8 +430,7 @@ pub mod tests {
         let backends: Vec<Box<dyn AsyncBackend>> = vec![
             create_mock_backend(
                 || {
-                    Err(Error::Other(Box::new(std::io::Error::new(
-                        ErrorKind::Other,
+                    Err(Error::Other(Box::new(std::io::Error::other(
                         "Encrypt error 1",
                     ))))
                 },
@@ -442,8 +439,7 @@ pub mod tests {
             create_mock_backend(
                 || Ok(EncryptedContent::default()),
                 || {
-                    Err(Error::Other(Box::new(std::io::Error::new(
-                        ErrorKind::Other,
+                    Err(Error::Other(Box::new(std::io::Error::other(
                         "Decrypt error 2",
                     ))))
                 },

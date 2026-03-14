@@ -3,15 +3,15 @@
 use std::{mem, sync::Arc};
 
 use engine_traits::{
-    FlushState, KvEngine, PerfContextKind, SstApplyState, TabletRegistry, WriteBatch, DATA_CFS_LEN,
+    DATA_CFS_LEN, FlushState, KvEngine, PerfContextKind, SstApplyState, TabletRegistry, WriteBatch,
 };
 use kvproto::{metapb, raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
 use raftstore::{
     coprocessor::{Cmd, CmdObserveInfo, CoprocessorHost, ObserveLevel},
     store::{
-        fsm::{apply::DEFAULT_APPLY_WB_SIZE, ApplyMetrics},
         Config, ReadTask,
+        fsm::{ApplyMetrics, apply::DEFAULT_APPLY_WB_SIZE},
     },
 };
 use slog::Logger;
@@ -19,9 +19,9 @@ use sst_importer::SstImporter;
 use tikv_util::{log::SlogFormat, worker::Scheduler, yatp_pool::FuturePool};
 
 use crate::{
+    TabletTask,
     operation::{AdminCmdResult, ApplyFlowControl, DataTrace},
     router::{CmdResChannel, SstApplyIndex},
-    TabletTask,
 };
 
 pub(crate) struct Observe {

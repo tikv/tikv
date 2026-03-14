@@ -41,11 +41,11 @@ impl fmt::Display for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut de = f.debug_struct("CheckLeaderTask");
         match self {
-            Task::CheckLeader { ref leaders, .. } => de
+            Task::CheckLeader { leaders, .. } => de
                 .field("name", &"check_leader")
                 .field("leader_num", &leaders.len())
                 .finish(),
-            Task::GetStoreTs { ref key_range, .. } => de
+            Task::GetStoreTs { key_range, .. } => de
                 .field("name", &"fet_store_ts")
                 .field("key_range", &key_range)
                 .finish(),

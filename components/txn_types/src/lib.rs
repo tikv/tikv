@@ -11,16 +11,16 @@ use std::io;
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::kvrpcpb;
 pub use lock::{
+    Lock, LockInfoExt, LockOrSharedLocks, LockType, PessimisticLock, SharedLocks, TxnLockRef,
     check_ts_conflict, check_ts_conflict_for_replica_read, decode_lock_start_ts, decode_lock_type,
-    parse_lock, Lock, LockInfoExt, LockOrSharedLocks, LockType, PessimisticLock, SharedLocks,
-    TxnLockRef,
+    parse_lock,
 };
 use thiserror::Error;
-pub use timestamp::{TimeStamp, TsSet, TSO_PHYSICAL_SHIFT_BITS};
+pub use timestamp::{TSO_PHYSICAL_SHIFT_BITS, TimeStamp, TsSet};
 pub use types::{
-    insert_old_value_if_resolved, is_short_value, Key, KvPair, KvPairEntry, LastChange, Mutation,
-    MutationType, OldValue, OldValues, TxnExtra, TxnExtraScheduler, Value, ValueEntry,
-    WriteBatchFlags, SHORT_VALUE_MAX_LEN,
+    Key, KvPair, KvPairEntry, LastChange, Mutation, MutationType, OldValue, OldValues,
+    SHORT_VALUE_MAX_LEN, TxnExtra, TxnExtraScheduler, Value, ValueEntry, WriteBatchFlags,
+    insert_old_value_if_resolved, is_short_value,
 };
 pub use write::{Write, WriteRef, WriteType};
 

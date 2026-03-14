@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{atomic::AtomicU64, Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicU64},
     thread,
     time::Duration,
 };
@@ -9,19 +9,19 @@ use std::{
 use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
 use causal_ts::CausalTsProviderImpl;
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{Engines, Iterable, KvEngine, RaftEngine, DATA_CFS, DATA_KEY_PREFIX_LEN};
+use engine_traits::{DATA_CFS, DATA_KEY_PREFIX_LEN, Engines, Iterable, KvEngine, RaftEngine};
 use health_controller::HealthController;
 use kvproto::{
     kvrpcpb::ApiVersion, metapb, raft_serverpb::StoreIdent, replication_modepb::ReplicationStatus,
 };
-use pd_client::{Error as PdError, PdClient, INVALID_ID};
+use pd_client::{Error as PdError, INVALID_ID, PdClient};
 use raftstore::{
     coprocessor::dispatcher::CoprocessorHost,
     store::{
-        self,
-        fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
-        initial_region, AutoSplitController, Config as StoreConfig, DiskCheckRunner,
-        GlobalReplicationState, PdTask, RefreshConfigTask, SnapManager, SplitCheckTask, Transport,
+        self, AutoSplitController, Config as StoreConfig, DiskCheckRunner, GlobalReplicationState,
+        PdTask, RefreshConfigTask, SnapManager, SplitCheckTask, Transport,
+        fsm::{ApplyRouter, RaftBatchSystem, RaftRouter, store::StoreMeta},
+        initial_region,
     },
 };
 use resource_metering::CollectorRegHandle;

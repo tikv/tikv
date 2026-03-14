@@ -17,6 +17,7 @@ use tokio::runtime::Builder;
 
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(32);
 const MAX_RETRY_TIMES: usize = 14;
+type FailureHook<E> = dyn FnMut(&E) + Send + Sync + 'static;
 
 /// Wrapper of an `AsyncRead` instance, exposed as a `Sync` `Stream` of `Bytes`.
 pub struct AsyncReadAsSyncStreamOfBytes<R> {
@@ -106,7 +107,7 @@ where
 
 /// The extra configuration for retry.
 pub struct RetryExt<E> {
-    pub on_failure: Option<Box<dyn FnMut(&E) + Send + Sync + 'static>>,
+    pub on_failure: Option<Box<FailureHook<E>>>,
     pub max_retry_times: usize,
     pub max_retry_delay: Duration,
 }
@@ -149,9 +150,9 @@ impl<E> Default for RetryExt<E> {
 #[doc(hidden)]
 pub mod __macro_helper {
     #[doc(hidden)]
-    pub use rand::thread_rng as __thread_rng;
-    #[doc(hidden)]
     pub use rand::Rng as __rand_Rng;
+    #[doc(hidden)]
+    pub use rand::thread_rng as __thread_rng;
     #[doc(hidden)]
     pub use tokio::time::sleep as __tokio_sleep;
 }
@@ -182,7 +183,7 @@ macro_rules! retry_expr {
     };
     ($action:expr, $ext:expr) => {
         async {
-            use $crate::stream::{RetryError, __macro_helper};
+            use $crate::stream::{__macro_helper, RetryError};
 
             let mut ext: $crate::stream::RetryExt<_> = $ext;
             let max_retry_times = ext.max_retry_times;
@@ -218,10 +219,7 @@ macro_rules! retry_expr {
 
 /// Retires a future execution. Comparing to `retry`, this version allows more
 /// configurations.
-pub async fn retry_all_ext<'a, G, T, F, E>(
-    mut action: G,
-    ext: RetryExt<JustRetry<E>>,
-) -> Result<T, E>
+pub async fn retry_all_ext<G, T, F, E>(mut action: G, ext: RetryExt<JustRetry<E>>) -> Result<T, E>
 where
     G: FnMut() -> F,
     F: Future<Output = Result<T, E>>,
@@ -234,6 +232,7 @@ where
 
 /// Retires a future execution. Comparing to `retry`, this version allows more
 /// configurations.
+#[allow(clippy::redundant_closure_call)]
 pub async fn retry_ext<G, T, F, E>(mut action: G, mut ext: RetryExt<E>) -> Result<T, E>
 where
     G: FnMut() -> F,
@@ -287,6 +286,7 @@ mod tests {
 
     #[test]
     fn test_retry_is_send_even_return_type_not_sync() {
+        #[allow(dead_code)]
         struct BangSync(Option<RefCell<()>>);
         let fut = retry(|| futures::future::ok::<_, TriviallyRetry>(BangSync(None)));
         assert_send(fut)

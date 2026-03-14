@@ -5,29 +5,29 @@ use std::{fmt::Debug, ops::Deref, result, sync::Arc};
 
 use bytes::Bytes;
 use crossbeam::epoch;
-use crossbeam_skiplist::{base::OwnedIter, SkipList};
+use crossbeam_skiplist::{SkipList, base::OwnedIter};
 use engine_rocks::{raw::SliceTransform, util::FixedSuffixSliceTransform};
 use engine_traits::{
-    CacheRegion, CfNamesExt, DbVector, Error, FailedReason, IterMetricsCollector, IterOptions,
-    Iterable, Iterator, MetricsExt, Peekable, ReadOptions, Result, Snapshot, SnapshotMiscExt,
-    CF_DEFAULT,
+    CF_DEFAULT, CacheRegion, CfNamesExt, DbVector, Error, FailedReason, IterMetricsCollector,
+    IterOptions, Iterable, Iterator, MetricsExt, Peekable, ReadOptions, Result, Snapshot,
+    SnapshotMiscExt,
 };
 use prometheus::local::LocalHistogram;
 use slog_global::error;
 use tikv_util::{box_err, time::Instant};
 
 use crate::{
+    RegionCacheMemoryEngine,
     background::BackgroundTask,
-    engine::{cf_to_id, SkiplistEngine},
+    engine::{SkiplistEngine, cf_to_id},
     keys::{
-        decode_key, encode_seek_for_prev_key, encode_seek_key, InternalBytes, InternalKey,
-        ValueType,
+        InternalBytes, InternalKey, ValueType, decode_key, encode_seek_for_prev_key,
+        encode_seek_key,
     },
     metrics::IN_MEMORY_ENGINE_SEEK_DURATION,
     perf_context::PERF_CONTEXT,
     perf_counter_add,
     statistics::{LocalStatistics, Statistics, Tickers},
-    RegionCacheMemoryEngine,
 };
 
 // The max snapshot number that can exist in the RocksDB. This is typically used
@@ -673,13 +673,13 @@ mod tests {
     use crossbeam::epoch;
     use crossbeam_skiplist::SkipList;
     use engine_rocks::{
-        raw::DBStatisticsTickerType, util::new_engine_opt, RocksDbOptions, RocksStatistics,
+        RocksDbOptions, RocksStatistics, raw::DBStatisticsTickerType, util::new_engine_opt,
     };
     use engine_traits::{
-        CacheRegion, EvictReason, FailedReason, IterMetricsCollector, IterOptions, Iterable,
-        Iterator, MetricsExt, Mutable, Peekable, ReadOptions, RegionCacheEngine,
-        RegionCacheEngineExt, RegionEvent, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK,
-        CF_WRITE,
+        CF_DEFAULT, CF_LOCK, CF_WRITE, CacheRegion, EvictReason, FailedReason,
+        IterMetricsCollector, IterOptions, Iterable, Iterator, MetricsExt, Mutable, Peekable,
+        ReadOptions, RegionCacheEngine, RegionCacheEngineExt, RegionEvent, WriteBatch,
+        WriteBatchExt,
     };
     use keys::DATA_PREFIX_KEY;
     use tempfile::Builder;
@@ -687,17 +687,17 @@ mod tests {
 
     use super::{RegionCacheIterator, RegionCacheSnapshot};
     use crate::{
-        engine::{cf_to_id, SkiplistEngine},
+        InMemoryEngineConfig, InMemoryEngineContext, RegionCacheMemoryEngine,
+        RegionCacheWriteBatch,
+        engine::{SkiplistEngine, cf_to_id},
         keys::{
-            construct_key, construct_region_key, construct_user_key, construct_value, decode_key,
-            encode_key, encode_seek_key, InternalBytes, ValueType,
+            InternalBytes, ValueType, construct_key, construct_region_key, construct_user_key,
+            construct_value, decode_key, encode_key, encode_seek_key,
         },
         perf_context::PERF_CONTEXT,
         region_manager::RegionState,
         statistics::Tickers,
         test_util::new_region,
-        InMemoryEngineConfig, InMemoryEngineContext, RegionCacheMemoryEngine,
-        RegionCacheWriteBatch,
     };
 
     #[test]

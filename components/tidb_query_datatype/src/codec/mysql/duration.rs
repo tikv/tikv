@@ -8,16 +8,16 @@ use std::{
 use codec::prelude::*;
 use tipb::FieldType;
 
-use super::{check_fsp, Decimal, DEFAULT_FSP};
+use super::{DEFAULT_FSP, Decimal, check_fsp};
 use crate::{
+    FieldTypeAccessor,
     codec::{
+        Error, Result, TEN_POW,
         convert::ConvertTo,
         error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE},
-        mysql::{Time as DateTime, TimeType, MAX_FSP, MIN_FSP},
-        Error, Result, TEN_POW,
+        mysql::{MAX_FSP, MIN_FSP, Time as DateTime, TimeType},
     },
     expr::EvalContext,
-    FieldTypeAccessor,
 };
 
 pub const NANOS_PER_MICRO: i64 = 1_000;
@@ -95,9 +95,9 @@ fn check_nanos(nanos: i64) -> Result<i64> {
 
 mod parser {
     use nom::{
+        IResult,
         character::complete::{anychar, char, digit0, digit1, space0, space1},
         combinator::opt,
-        IResult,
     };
 
     use super::*;
@@ -572,10 +572,10 @@ impl Duration {
 
     pub fn from_i64(ctx: &mut EvalContext, n: i64, fsp: i8) -> Result<Duration> {
         if n > i64::from(MAX_DURATION_INT_VALUE) || n < -i64::from(MAX_DURATION_INT_VALUE) {
-            if n >= 10000000000 {
-                if let Ok(t) = DateTime::parse_from_i64(ctx, n, TimeType::DateTime, fsp) {
-                    return t.convert(ctx);
-                }
+            if n >= 10000000000
+                && let Ok(t) = DateTime::parse_from_i64(ctx, n, TimeType::DateTime, fsp)
+            {
+                return t.convert(ctx);
             }
             return Err(Error::overflow("Duration", n));
         }
@@ -1225,13 +1225,13 @@ mod tests {
 
             let r = Duration::from_i64(&mut ctx, input, fsp);
 
-            let expect_str = if expect.is_ok() {
-                format!("{}", expect.as_ref().unwrap())
+            let expect_str = if let Ok(v) = &expect {
+                format!("{v}")
             } else {
                 format!("{:?}", &expect)
             };
-            let result_str = if r.is_ok() {
-                format!("{}", r.as_ref().unwrap())
+            let result_str = if let Ok(v) = &r {
+                format!("{v}")
             } else {
                 format!("{:?}", &r)
             };

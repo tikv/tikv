@@ -4,24 +4,28 @@ use std::{
     fmt::Write,
     path::Path,
     str::FromStr,
-    sync::{mpsc, Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
     time::Duration,
 };
 
 use collections::HashMap;
 use encryption_export::{
-    data_key_manager_from_config, DataKeyManager, FileConfig, MasterKeyConfig,
+    DataKeyManager, FileConfig, MasterKeyConfig, data_key_manager_from_config,
 };
-use engine_rocks::{config::BlobRunMode, RocksEngine, RocksSnapshot, RocksStatistics};
+use engine_rocks::{RocksEngine, RocksSnapshot, RocksStatistics, config::BlobRunMode};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    CfName, CfNamesExt, Engines, Iterable, KvEngine, Peekable, RaftEngineDebug, RaftEngineReadOnly,
-    CF_DEFAULT, CF_RAFT, CF_WRITE,
+    CF_DEFAULT, CF_RAFT, CF_WRITE, CfName, CfNamesExt, Engines, Iterable, KvEngine, Peekable,
+    RaftEngineDebug, RaftEngineReadOnly,
 };
 use fail::fail_point;
 use file_system::IoRateLimiter;
-use futures::{executor::block_on, future::BoxFuture, StreamExt};
+use futures::{StreamExt, executor::block_on, future::BoxFuture};
 use grpcio::{ChannelBuilder, Environment};
 use hybrid_engine::HybridEngine;
 use in_memory_engine::RegionCacheMemoryEngine;
@@ -42,11 +46,11 @@ use pd_client::PdClient;
 use protobuf::RepeatedField;
 use raft::eraftpb::ConfChangeType;
 use raftstore::{
+    RaftRouterCompactedEventSender, RegionInfoAccessor, Result,
     coprocessor::CoprocessorHost,
     store::{fsm::RaftRouter, *},
-    RaftRouterCompactedEventSender, RegionInfoAccessor, Result,
 };
-use rand::{seq::SliceRandom, RngCore};
+use rand::{RngCore, seq::SliceRandom};
 use server::common::ConfiguredRaftEngine;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
@@ -55,18 +59,19 @@ use tikv::{
     config::*,
     server::KvEngineFactoryBuilder,
     storage::{
+        Engine, Snapshot,
         kv::{SnapContext, SnapshotExt},
-        point_key_range, Engine, Snapshot,
+        point_key_range,
     },
 };
 pub use tikv_util::store::{find_peer, new_learner_peer, new_peer};
 use tikv_util::{
+    HandyRwLock,
     config::*,
     escape,
     mpsc::future,
     time::{Instant, ThreadReadId},
     worker::LazyWorker,
-    HandyRwLock,
 };
 use txn_types::Key;
 
@@ -397,14 +402,27 @@ pub fn is_error_response(resp: &RaftCmdResponse) -> bool {
     resp.get_header().has_error()
 }
 
-#[derive(Default)]
 struct CallbackLeakDetector {
-    called: bool,
+    called: Arc<AtomicBool>,
+}
+
+impl Default for CallbackLeakDetector {
+    fn default() -> Self {
+        Self {
+            called: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+impl CallbackLeakDetector {
+    fn mark_called(&self) {
+        self.called.store(true, Ordering::Release);
+    }
 }
 
 impl Drop for CallbackLeakDetector {
     fn drop(&mut self) {
-        if self.called {
+        if self.called.load(Ordering::Acquire) {
             return;
         }
 
@@ -441,16 +459,16 @@ pub fn make_cb(
 ) -> (Callback<RocksSnapshot>, future::Receiver<RaftCmdResponse>) {
     let is_read = check_raft_cmd_request(cmd);
     let (tx, rx) = future::bounded(1, future::WakePolicy::Immediately);
-    let mut detector = CallbackLeakDetector::default();
+    let detector = CallbackLeakDetector::default();
     let cb = if is_read {
         Callback::read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
-            detector.called = true;
+            detector.mark_called();
             // we don't care error actually.
             let _ = tx.send(resp.response);
         }))
     } else {
         Callback::write(Box::new(move |resp: WriteResponse| {
-            detector.called = true;
+            detector.mark_called();
             // we don't care error actually.
             let _ = tx.send(resp.response);
         }))
@@ -458,6 +476,7 @@ pub fn make_cb(
     (cb, rx)
 }
 
+#[allow(clippy::extra_unused_type_parameters)]
 pub fn make_cb_ext<EK: KvEngine>(
     cmd: &RaftCmdRequest,
     proposed: Option<ExtCallback>,

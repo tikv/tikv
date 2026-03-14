@@ -45,14 +45,13 @@ pub fn like<C: Collator, CS: Charset>(
                         break;
                     }
                 }
-                if let Some((_, toff)) = CS::decode_one(&target[tx..]) {
-                    if let Ok(std::cmp::Ordering::Equal) =
+                if let Some((_, toff)) = CS::decode_one(&target[tx..])
+                    && let Ok(std::cmp::Ordering::Equal) =
                         C::sort_compare(&target[tx..tx + toff], &pattern[px..px + poff], true)
-                    {
-                        tx += toff;
-                        px += poff;
-                        continue;
-                    }
+                {
+                    tx += toff;
+                    px += poff;
+                    continue;
                 }
             }
         }
@@ -70,7 +69,7 @@ pub fn like<C: Collator, CS: Charset>(
 
 #[cfg(test)]
 mod tests {
-    use tidb_query_datatype::{builder::FieldTypeBuilder, Collation, FieldTypeTp};
+    use tidb_query_datatype::{Collation, FieldTypeTp, builder::FieldTypeBuilder};
     use tipb::ScalarFuncSig;
 
     use crate::test_util::RpnFnScalarEvaluator;

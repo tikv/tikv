@@ -22,10 +22,10 @@ use std::{
     path::{Path, PathBuf},
     pin::Pin,
     sync::{
-        atomic::{AtomicU8, AtomicUsize, Ordering},
         Arc, Mutex as BlockMutex,
+        atomic::{AtomicU8, AtomicUsize, Ordering},
     },
-    task::{ready, Context, Poll},
+    task::{Context, Poll, ready},
     time::Instant,
 };
 
@@ -789,15 +789,15 @@ mod test {
         path::Path,
         pin::Pin,
         sync::{
-            atomic::{AtomicUsize, Ordering},
             Arc,
+            atomic::{AtomicUsize, Ordering},
         },
     };
 
     use async_compression::tokio::bufread::ZstdDecoder;
     use encryption::{BackupEncryptionManager, DataKeyManager, MultiMasterKeyBackend};
     use kvproto::{brpb::CompressionType, encryptionpb::EncryptionMethod};
-    use tempfile::{tempdir, TempDir};
+    use tempfile::{TempDir, tempdir};
     use test_util::new_test_key_manager;
     use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
     use walkdir::WalkDir;

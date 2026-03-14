@@ -1,7 +1,7 @@
 [package]
 name = "compact-log-backup"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
@@ -57,5 +57,5 @@ pprof = { version = "0.13", default-features = false, features = [
   "flamegraph",
   "protobuf-codec",
 ] } 
-tempdir = "0.3"
+tempfile = "3.0"
 test_util = { workspace = true }

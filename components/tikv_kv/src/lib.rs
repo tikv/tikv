@@ -5,7 +5,6 @@
 //! [`Server`](crate::server::Server). The [`BTreeEngine`](kv::BTreeEngine) and
 //! [`RocksEngine`](RocksEngine) are used for testing only.
 
-#![feature(bound_map)]
 #![feature(min_specialization)]
 #![feature(type_alias_impl_trait)]
 #![feature(impl_trait_in_assoc_type)]
@@ -37,8 +36,8 @@ use std::{
 
 use collections::HashMap;
 use engine_traits::{
-    CfName, IterOptions, KvEngine as LocalEngine, MetricsExt, Mutable, MvccProperties, ReadOptions,
-    TabletRegistry, WriteBatch, CF_DEFAULT, CF_LOCK,
+    CF_DEFAULT, CF_LOCK, CfName, IterOptions, KvEngine as LocalEngine, MetricsExt, Mutable,
+    MvccProperties, ReadOptions, TabletRegistry, WriteBatch,
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use futures::{future::BoxFuture, prelude::*};
@@ -52,8 +51,8 @@ use kvproto::{
 };
 use pd_client::BucketMeta;
 use raftstore::{
-    store::{PessimisticLockPair, TxnExt},
     SeekRegionCallback,
+    store::{PessimisticLockPair, TxnExt},
 };
 use thiserror::Error;
 use tikv_util::{
@@ -69,8 +68,8 @@ pub use self::{
     raft_extension::{FakeExtension, RaftExtension},
     rocksdb_engine::{RocksEngine, RocksSnapshot},
     stats::{
-        CfStatistics, FlowStatistics, FlowStatsReporter, LoadDataHint, StageLatencyStats,
-        Statistics, StatisticsSummary, RAW_VALUE_TOMBSTONE,
+        CfStatistics, FlowStatistics, FlowStatsReporter, LoadDataHint, RAW_VALUE_TOMBSTONE,
+        StageLatencyStats, Statistics, StatisticsSummary,
     },
 };
 
@@ -126,9 +125,9 @@ impl Modify {
 
     pub fn key(&self) -> &Key {
         match self {
-            Modify::Delete(_, ref k) => k,
-            Modify::Put(_, ref k, _) => k,
-            Modify::PessimisticLock(ref k, _) => k,
+            Modify::Delete(_, k) => k,
+            Modify::Put(_, k, _) => k,
+            Modify::PessimisticLock(k, _) => k,
             Modify::DeleteRange(..) | Modify::Ingest(_) => unreachable!(),
         }
     }
@@ -700,7 +699,7 @@ where
     F: FnOnce(&mut E) -> R,
 {
     TLS_ENGINE_ANY.with(|e| {
-        let engine = &mut *(*e.get() as *mut E);
+        let engine = unsafe { &mut *(*e.get() as *mut E) };
         f(engine)
     })
 }
@@ -732,10 +731,12 @@ pub unsafe fn destroy_tls_engine<E: Engine>() {
     // references to `TLS_ENGINE_ANY` can never be stored outside of
     // `TLS_ENGINE_ANY`.
     TLS_ENGINE_ANY.with(|e| {
-        let ptr = *e.get();
+        let ptr = unsafe { *e.get() };
         if !ptr.is_null() {
-            drop(Box::from_raw(ptr as *mut E));
-            *e.get() = ptr::null_mut();
+            unsafe {
+                drop(Box::from_raw(ptr as *mut E));
+                *e.get() = ptr::null_mut();
+            }
         }
     });
 }
@@ -744,7 +745,7 @@ pub unsafe fn destroy_tls_engine<E: Engine>() {
 pub fn snapshot<E: Engine>(
     engine: &mut E,
     ctx: SnapContext<'_>,
-) -> impl std::future::Future<Output = Result<E::Snap>> {
+) -> impl std::future::Future<Output = Result<E::Snap>> + use<E> {
     let begin = Instant::now();
     let val = engine.async_snapshot(ctx);
     // make engine not cross yield point
@@ -762,7 +763,7 @@ pub fn snapshot<E: Engine>(
 pub fn in_memory_snapshot<E: Engine>(
     engine: &mut E,
     ctx: SnapContext<'_>,
-) -> impl std::future::Future<Output = Result<E::IMSnap>> {
+) -> impl std::future::Future<Output = Result<E::IMSnap>> + use<E> {
     let begin = Instant::now();
     let val = engine.async_in_memory_snapshot(ctx);
     // make engine not cross yield point

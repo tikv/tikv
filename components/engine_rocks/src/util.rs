@@ -2,19 +2,19 @@
 
 use std::{ffi::CString, fs, path::Path, str::FromStr, sync::Arc};
 
-use engine_traits::{Engines, Range, Result, CF_DEFAULT};
+use engine_traits::{CF_DEFAULT, Engines, Range, Result};
 use fail::fail_point;
 use rocksdb::{
-    load_latest_options, CColumnFamilyDescriptor, CFHandle, ColumnFamilyOptions, CompactionFilter,
+    CColumnFamilyDescriptor, CFHandle, ColumnFamilyOptions, CompactionFilter,
     CompactionFilterContext, CompactionFilterDecision, CompactionFilterFactory,
-    CompactionFilterValueType, DBTableFileCreationReason, Env, Range as RocksRange, SliceTransform,
-    DB,
+    CompactionFilterValueType, DB, DBTableFileCreationReason, Env, Range as RocksRange,
+    SliceTransform, load_latest_options,
 };
 use slog_global::warn;
 
 use crate::{
-    cf_options::RocksCfOptions, db_options::RocksDbOptions, engine::RocksEngine, r2e,
-    rocks_metrics_defs::*, RocksStatistics,
+    RocksStatistics, cf_options::RocksCfOptions, db_options::RocksDbOptions, engine::RocksEngine,
+    r2e, rocks_metrics_defs::*,
 };
 
 pub fn new_temp_engine(path: &tempfile::TempDir) -> Engines<RocksEngine, RocksEngine> {
@@ -215,13 +215,12 @@ pub fn get_engine_compression_ratio_at_level(
     level: usize,
 ) -> Option<f64> {
     let prop = format!("{}{}", ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, level);
-    if let Some(v) = engine.get_property_value_cf(handle, &prop) {
-        if let Ok(f) = f64::from_str(&v) {
-            // RocksDB returns -1.0 if the level is empty.
-            if f >= 0.0 {
-                return Some(f);
-            }
-        }
+    if let Some(v) = engine.get_property_value_cf(handle, &prop)
+        && let Ok(f) = f64::from_str(&v)
+        // RocksDB returns -1.0 if the level is empty.
+        && f >= 0.0
+    {
+        return Some(f);
     }
     None
 }
@@ -529,7 +528,7 @@ impl CompactionFilter for RangeCompactionFilter {
 #[cfg(test)]
 mod tests {
     use engine_traits::{
-        CfOptionsExt, FlowControlFactorsExt, Iterable, MiscExt, Peekable, SyncMutable, CF_DEFAULT,
+        CF_DEFAULT, CfOptionsExt, FlowControlFactorsExt, Iterable, MiscExt, Peekable, SyncMutable,
     };
     use rocksdb::DB;
     use tempfile::Builder;

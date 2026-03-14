@@ -4,18 +4,18 @@ use std::{
     fmt::{self, Debug},
     ops::Bound,
     result,
-    sync::{atomic::AtomicU64, Arc},
+    sync::{Arc, atomic::AtomicU64},
 };
 
-use crossbeam::epoch::{self, default_collector, Guard};
+use crossbeam::epoch::{self, Guard, default_collector};
 use crossbeam_skiplist::{
-    base::{Entry, OwnedIter},
     SkipList,
+    base::{Entry, OwnedIter},
 };
 use engine_rocks::RocksEngine;
 use engine_traits::{
-    CacheRegion, EvictReason, FailedReason, KvEngine, OnEvictFinishedCallback, RegionCacheEngine,
-    RegionCacheEngineExt, RegionEvent, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+    CF_DEFAULT, CF_LOCK, CF_WRITE, CacheRegion, DATA_CFS, EvictReason, FailedReason, KvEngine,
+    OnEvictFinishedCallback, RegionCacheEngine, RegionCacheEngineExt, RegionEvent,
 };
 use fail::fail_point;
 use kvproto::metapb::Region;
@@ -25,15 +25,15 @@ use slog_global::error;
 use tikv_util::{config::VersionTrack, info, warn, worker::Scheduler};
 
 use crate::{
+    InMemoryEngineConfig, InMemoryEngineContext,
     background::{BackgroundTask, BgWorkManager, PdRangeHintService},
     keys::{
-        encode_key_for_boundary_with_mvcc, encode_key_for_boundary_without_mvcc, InternalBytes,
+        InternalBytes, encode_key_for_boundary_with_mvcc, encode_key_for_boundary_without_mvcc,
     },
     memory_controller::MemoryController,
     read::RegionCacheSnapshot,
     region_manager::{LoadFailedReason, RegionCacheStatus, RegionManager, RegionState},
     statistics::Statistics,
-    InMemoryEngineConfig, InMemoryEngineContext,
 };
 
 pub(crate) const CF_DEFAULT_USIZE: usize = 0;
@@ -638,24 +638,24 @@ pub mod tests {
     use crossbeam::epoch;
     use engine_rocks::util::new_engine;
     use engine_traits::{
-        CacheRegion, EvictReason, Mutable, RegionCacheEngine, RegionCacheEngineExt, RegionEvent,
-        WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+        CF_DEFAULT, CF_LOCK, CF_WRITE, CacheRegion, DATA_CFS, EvictReason, Mutable,
+        RegionCacheEngine, RegionCacheEngineExt, RegionEvent, WriteBatch, WriteBatchExt,
     };
     use tikv_util::config::{ReadableDuration, VersionTrack};
     use tokio::{
         runtime::Builder,
-        sync::{mpsc, Mutex},
+        sync::{Mutex, mpsc},
         time::timeout,
     };
 
     use super::SkiplistEngine;
     use crate::{
+        InMemoryEngineConfig, InMemoryEngineContext, InternalBytes, RegionCacheMemoryEngine,
+        ValueType,
         keys::{construct_key, construct_user_key, encode_key},
         memory_controller::MemoryController,
         region_manager::{CacheRegionMeta, RegionManager, RegionState::*},
         test_util::new_region,
-        InMemoryEngineConfig, InMemoryEngineContext, InternalBytes, RegionCacheMemoryEngine,
-        ValueType,
     };
 
     fn count_region(mgr: &RegionManager, mut f: impl FnMut(&CacheRegionMeta) -> bool) -> usize {

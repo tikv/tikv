@@ -2,7 +2,7 @@
 name = "server"
 version = "0.0.1"
 license = "Apache-2.0"
-edition = "2021"
+edition = "2024"
 publish = false
 
 [features]
@@ -21,6 +21,7 @@ test-engines-rocksdb = ["tikv/test-engines-rocksdb"]
 test-engines-panic = ["tikv/test-engines-panic"]
 nortcheck = ["engine_rocks/nortcheck"]
 backup-stream-debug = ["backup-stream/backup-stream-debug"]
+testexport = []
 
 [dependencies]
 api_version = { workspace = true }

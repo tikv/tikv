@@ -4,13 +4,13 @@
 
 use std::{sync::Arc, thread, time::*};
 
-use engine_traits::{Peekable, CF_RAFT};
+use engine_traits::{CF_RAFT, Peekable};
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use tikv_util::{config::ReadableDuration, HandyRwLock};
+use tikv_util::{HandyRwLock, config::ReadableDuration};
 
 /// A helper function for testing the behaviour of the gc of stale peer
 /// which is out of region.

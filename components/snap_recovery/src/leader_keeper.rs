@@ -12,7 +12,7 @@ use futures::compat::Future01CompatExt;
 use raftstore::{
     errors::{Error, Result},
     store::{
-        msg::CampaignType, Callback, CasualMessage, CasualRouter, SignificantMsg, SignificantRouter,
+        Callback, CasualMessage, CasualRouter, SignificantMsg, SignificantRouter, msg::CampaignType,
     },
 };
 use tikv_util::{future::paired_future_callback, timer::GLOBAL_TIMER_HANDLE};

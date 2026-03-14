@@ -3,19 +3,19 @@
 use std::{
     fs::File,
     io::Read,
-    sync::{mpsc::sync_channel, Arc, Mutex},
+    sync::{Arc, Mutex, mpsc::sync_channel},
     thread::sleep,
     time::Duration,
 };
 
 use engine_rocks::RocksSstWriterBuilder;
 use engine_traits::{
-    CacheRegion, EvictReason, RegionCacheEngine, RegionCacheEngineExt, SstWriter, SstWriterBuilder,
-    CF_DEFAULT, DATA_CFS,
+    CF_DEFAULT, CacheRegion, DATA_CFS, EvictReason, RegionCacheEngine, RegionCacheEngineExt,
+    SstWriter, SstWriterBuilder,
 };
 use file_system::calc_crc32_bytes;
 use in_memory_engine::test_util::new_region;
-use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
+use keys::{DATA_MAX_KEY, DATA_MIN_KEY, data_key};
 use kvproto::{
     import_sstpb::SstMeta,
     kvrpcpb::Context,
@@ -28,25 +28,25 @@ use raft::eraftpb::MessageType;
 use raftstore::{
     coprocessor::ObserveHandle,
     store::{
-        fsm::{apply::ChangeObserver, ApplyTask},
+        fsm::{ApplyTask, apply::ChangeObserver},
         msg::Callback,
     },
 };
 use tempfile::tempdir;
 use test_coprocessor::{
-    handle_request, init_data_with_details_pd_client, DagChunkSpliter, DagSelect, ProductTable,
+    DagChunkSpliter, DagSelect, ProductTable, handle_request, init_data_with_details_pd_client,
 };
 use test_raftstore::{
-    configure_for_merge, get_tso, must_get_equal, new_learner_peer, new_peer, new_put_cf_cmd,
-    new_server_cluster_with_hybrid_engine, sleep_ms, CloneFilterFactory, Cluster, Direction,
-    RegionPacketFilter, ServerCluster,
+    CloneFilterFactory, Cluster, Direction, RegionPacketFilter, ServerCluster, configure_for_merge,
+    get_tso, must_get_equal, new_learner_peer, new_peer, new_put_cf_cmd,
+    new_server_cluster_with_hybrid_engine, sleep_ms,
 };
 use test_util::eventually;
 use tidb_query_datatype::{
-    codec::{datum, Datum},
+    codec::{Datum, datum},
     expr::EvalContext,
 };
-use tikv_util::{mpsc::unbounded, HandyRwLock};
+use tikv_util::{HandyRwLock, mpsc::unbounded};
 use tipb::SelectResponse;
 use txn_types::Key;
 

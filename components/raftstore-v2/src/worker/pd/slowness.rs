@@ -13,7 +13,7 @@ use health_controller::{
 };
 use kvproto::pdpb;
 use pd_client::PdClient;
-use raftstore::store::{metrics::*, Config};
+use raftstore::store::{Config, metrics::*};
 use slog::warn;
 
 use super::Runner;

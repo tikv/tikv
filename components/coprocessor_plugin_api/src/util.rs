@@ -108,12 +108,12 @@ macro_rules! declare_plugin {
         static HOST_ALLOCATOR: $crate::allocator::HostAllocator =
             $crate::allocator::HostAllocator::new();
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub unsafe extern "C" fn _plugin_get_build_info() -> $crate::util::BuildInfo {
             $crate::util::BuildInfo::get()
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub unsafe extern "C" fn _plugin_get_plugin_info() -> $crate::util::PluginInfo {
             $crate::util::PluginInfo {
                 name: $plugin_name,
@@ -121,7 +121,7 @@ macro_rules! declare_plugin {
             }
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub unsafe extern "C" fn _plugin_create(
             host_allocator: $crate::allocator::HostAllocatorPtr,
         ) -> *mut dyn $crate::CoprocessorPlugin {

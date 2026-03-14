@@ -7,8 +7,8 @@ use std::{
     collections::VecDeque,
     mem,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
     u64, usize,
@@ -23,7 +23,7 @@ use codec::{
 use collections::{HashMap, HashSet};
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
 use engine_traits::{
-    Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions, CF_LOCK,
+    CF_LOCK, Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions,
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
@@ -48,48 +48,46 @@ use parking_lot::RwLockUpgradableReadGuard;
 use pd_client::{Feature, INVALID_ID};
 use protobuf::Message;
 use raft::{
-    self,
+    self, GetEntriesContext, INVALID_INDEX, LightReady, NO_LIMIT, ProgressState, RawNode, Ready,
+    SnapshotStatus, StateRole,
     eraftpb::{self, Entry, EntryType, MessageType},
-    GetEntriesContext, LightReady, ProgressState, RawNode, Ready, SnapshotStatus, StateRole,
-    INVALID_INDEX, NO_LIMIT,
 };
 use rand::seq::SliceRandom;
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
-    box_err, box_try,
+    Either, box_err, box_try,
     codec::number::decode_u64,
     debug, error, info,
     store::{find_peer_by_id, is_learner},
     sys::disk::DiskUsage,
-    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, InstantExt},
+    time::{Instant as TiInstant, InstantExt, Timespec, duration_to_sec, monotonic_raw_now},
     warn,
     worker::Scheduler,
-    Either,
 };
-use time::{Duration as TimeDuration, Timespec};
-use tracker::{TrackerTokenArray, GLOBAL_TRACKERS};
+use time::Duration as TimeDuration;
+use tracker::{GLOBAL_TRACKERS, TrackerTokenArray};
 use txn_types::{TimeStamp, WriteBatchFlags};
 use uuid::Uuid;
 
 use super::{
-    cmd_resp,
+    DestroyPeerJob, LocalReadContext, cmd_resp,
     local_metrics::{IoType, RaftMetrics},
     metrics::*,
     peer_storage::{
-        write_peer_state, CheckApplyingSnapStatus, HandleReadyResult, PeerStorage,
-        RAFT_INIT_LOG_TERM,
+        CheckApplyingSnapStatus, HandleReadyResult, PeerStorage, RAFT_INIT_LOG_TERM,
+        write_peer_state,
     },
     read_queue::{ReadIndexQueue, ReadIndexRequest},
     transport::Transport,
     util::{
-        self, check_req_region_epoch, is_initial_msg, AdminCmdEpochState, ChangePeerI,
-        ConfChangeKind, Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
+        self, AdminCmdEpochState, ChangePeerI, ConfChangeKind, Lease, LeaseState,
+        NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER, check_req_region_epoch, is_initial_msg,
     },
     worker::BucketStatsInfo,
-    DestroyPeerJob, LocalReadContext,
 };
 use crate::{
+    Error, Result,
     coprocessor::{
         CoprocessorHost, RegionChangeEvent, RegionChangeReason, RoleChange,
         TransferLeaderCustomContext,
@@ -97,29 +95,28 @@ use crate::{
     errors::RAFTSTORE_IS_BUSY,
     router::{RaftStoreRouter, ReadContext},
     store::{
+        Callback, Config, GlobalReplicationState, PdTask, PeerMsg, RAFT_INIT_LOG_INDEX,
+        ReadCallback, ReadIndexContext, ReadResponse, TxnExt, WriteCallback,
         async_io::{read::ReadTask, write::WriteMsg, write_router::WriteRouter},
         entry_storage::CacheWarmupState,
         fsm::{
+            Apply, ApplyMetrics, ApplyTask, Proposal,
             apply::{self, CatchUpLogs},
             store::PollContext,
-            Apply, ApplyMetrics, ApplyTask, Proposal,
         },
         hibernate_state::GroupState,
-        memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES},
+        memory::{MEMTRACE_RAFT_ENTRIES, needs_evict_entry_cache},
         msg::{CampaignType, CasualMessage, ErrorCallback, RaftCommand},
         peer_storage::HandleSnapshotResult,
         snapshot_backup::{AbortReason, SnapshotBrState},
         txn_ext::LocksStatus,
         unsafe_recovery::{ForceLeaderState, UnsafeRecoveryState},
-        util::{admin_cmd_epoch_lookup, RegionReadProgress},
+        util::{RegionReadProgress, admin_cmd_epoch_lookup},
         worker::{
             HeartbeatTask, RaftlogGcTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask,
             SplitCheckTask,
         },
-        Callback, Config, GlobalReplicationState, PdTask, PeerMsg, ReadCallback, ReadIndexContext,
-        ReadResponse, TxnExt, WriteCallback, RAFT_INIT_LOG_INDEX,
     },
-    Error, Result,
 };
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
@@ -3193,7 +3190,9 @@ where
                     // AppendEntriesResponse and is ready to calculate its commit-log-duration.
                     ctx.current_time.replace(monotonic_raw_now());
                     ctx.raft_metrics.commit_log.observe(duration_to_sec(
-                        (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
+                        (ctx.current_time.unwrap() - propose_time)
+                            .try_into()
+                            .unwrap(),
                     ));
                     self.maybe_renew_leader_lease(propose_time, ctx, None);
                     lease_to_be_updated = false;
@@ -3324,7 +3323,7 @@ where
             // When a proposal was proposed with this ctx before, the current_time can be
             // some.
             let current_time = *ctx.current_time.get_or_insert_with(monotonic_raw_now);
-            let elapsed = match (current_time - propose_time).to_std() {
+            let elapsed = match std::time::Duration::try_from(current_time - propose_time) {
                 Ok(elapsed) => elapsed,
                 Err(_) => return false,
             };
@@ -3542,7 +3541,9 @@ where
             cb.read_tracker().map(|tracker| {
                 GLOBAL_TRACKERS.with_tracker(tracker, |t| {
                     t.metrics.read_index_confirm_wait_nanos =
-                        (time - read.propose_time).to_std().unwrap().as_nanos() as u64;
+                        std::time::Duration::try_from(time - read.propose_time)
+                            .unwrap()
+                            .as_nanos() as u64;
                 })
             });
             // leader reports key is locked
@@ -3605,11 +3606,10 @@ where
         for (_, ch, _) in read_index_req.take_cmds().drain(..) {
             ch.read_tracker().map(|tracker| {
                 GLOBAL_TRACKERS.with_tracker(tracker, |t| {
-                    t.metrics.read_index_confirm_wait_nanos = (time - read_index_req.propose_time)
-                        .to_std()
-                        .unwrap()
-                        .as_nanos()
-                        as u64;
+                    t.metrics.read_index_confirm_wait_nanos =
+                        std::time::Duration::try_from(time - read_index_req.propose_time)
+                            .unwrap()
+                            .as_nanos() as u64;
                 })
             });
             ch.report_error(response.clone());
@@ -6732,6 +6732,7 @@ mod tests {
                 }
             }
         }
+        #[allow(unused_assignments)]
         fn must_call() -> ExtCallback {
             let mut d = DropPanic(true);
             Box::new(move || {

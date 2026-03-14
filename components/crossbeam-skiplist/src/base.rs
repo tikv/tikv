@@ -1,6 +1,6 @@
 //! A lock-free skip list. See [`SkipList`].
 
-use alloc::alloc::{alloc, dealloc, handle_alloc_error, Layout};
+use alloc::alloc::{Layout, alloc, dealloc, handle_alloc_error};
 use alloc::sync::Arc;
 use core::borrow::Borrow;
 use core::cmp;
@@ -9,7 +9,7 @@ use core::marker::PhantomData;
 use core::mem;
 use core::ops::{Bound, Deref, Index, RangeBounds};
 use core::ptr;
-use core::sync::atomic::{fence, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering, fence};
 
 use crossbeam_epoch::{self as epoch, Atomic, Collector, Guard, Shared};
 use crossbeam_utils::CachePadded;
@@ -365,11 +365,7 @@ impl<K, V> SkipList<K, V> {
 
         // Due to the relaxed memory ordering, the length counter may sometimes
         // underflow and produce a very large value. We treat such values as 0.
-        if len > isize::MAX as usize {
-            0
-        } else {
-            len
-        }
+        if len > isize::MAX as usize { 0 } else { len }
     }
 
     /// Ensures that all `Guard`s used with the skip list come from the same
@@ -1806,7 +1802,7 @@ where
         };
         match (&next_head, &self.tail) {
             // The next key is larger than the latest tail key we observed with this iterator.
-            (Some(ref next), Some(t)) if next.key() >= t.key() => {
+            (Some(next), Some(t)) if next.key() >= t.key() => {
                 unsafe {
                     next.node.decrement(guard);
                 }
@@ -2105,7 +2101,7 @@ impl<K, V> Drop for IntoIter<K, V> {
             unsafe {
                 // Unprotected loads are okay because this function is the only one currently using
                 // the skip list.
-                let next = (*self.node).tower[0].load(Ordering::Relaxed, epoch::unprotected());
+                let next = (&(*self.node).tower)[0].load(Ordering::Relaxed, epoch::unprotected());
 
                 // We can safely do this without deferring because references to
                 // keys & values that we give out never outlive the SkipList.
@@ -2136,7 +2132,7 @@ impl<K, V> Iterator for IntoIter<K, V> {
                 //
                 // Unprotected loads are okay because this function is the only one currently using
                 // the skip list.
-                let next = (*self.node).tower[0].load(Ordering::Relaxed, epoch::unprotected());
+                let next = (&(*self.node).tower)[0].load(Ordering::Relaxed, epoch::unprotected());
 
                 // Deallocate the current node and move to the next one.
                 Node::dealloc(self.node);

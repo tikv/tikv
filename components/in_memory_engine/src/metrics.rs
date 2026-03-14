@@ -8,8 +8,8 @@ use prometheus::*;
 use prometheus_static_metric::*;
 
 use crate::{
-    statistics::{Tickers, ENGINE_TICKER_TYPES},
     InMemoryEngineStatistics,
+    statistics::{ENGINE_TICKER_TYPES, Tickers},
 };
 
 make_auto_flush_static_metric! {

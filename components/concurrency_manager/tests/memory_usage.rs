@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    mem::{forget, ManuallyDrop},
+    mem::{ManuallyDrop, forget},
     thread,
 };
 
@@ -80,8 +80,8 @@ fn test_memory_usage() {
 fn stress_skipmap_range_iter() {
     use std::{
         sync::{
-            atomic::{AtomicBool, AtomicU64, Ordering},
             Arc,
+            atomic::{AtomicBool, AtomicU64, Ordering},
         },
         time::{Duration, Instant},
     };

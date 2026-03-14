@@ -5,25 +5,23 @@ use std::sync::Mutex;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftRequestHeader};
 use raft::{
-    eraftpb::{self, MessageType},
     Storage,
+    eraftpb::{self, MessageType},
 };
 use raftstore::{
+    Error, Result,
     store::{
-        can_amend_read, cmd_resp,
+        ReadDelegate, ReadIndexRequest, ReadProgress, Transport, can_amend_read, cmd_resp,
         fsm::{apply::notify_stale_req, new_read_index_request},
         metrics::RAFT_READ_INDEX_PENDING_COUNT,
         msg::{ErrorCallback, ReadCallback},
         propose_read_index, should_renew_lease,
         simple_write::SimpleWriteEncoder,
-        util::{check_req_region_epoch, LeaseState},
-        ReadDelegate, ReadIndexRequest, ReadProgress, Transport,
+        util::{LeaseState, check_req_region_epoch},
     },
-    Error, Result,
 };
 use slog::debug;
-use tikv_util::time::monotonic_raw_now;
-use time::Timespec;
+use tikv_util::time::{Timespec, monotonic_raw_now};
 use tracker::GLOBAL_TRACKERS;
 
 use crate::{
@@ -188,11 +186,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         for (req, ch, mut read_index) in read_index_req.take_cmds().drain(..) {
             ch.read_tracker().map(|tracker| {
                 GLOBAL_TRACKERS.with_tracker(tracker, |t| {
-                    t.metrics.read_index_confirm_wait_nanos = (time - read_index_req.propose_time)
-                        .to_std()
-                        .unwrap()
-                        .as_nanos()
-                        as u64;
+                    t.metrics.read_index_confirm_wait_nanos =
+                        std::time::Duration::try_from(time - read_index_req.propose_time)
+                            .unwrap()
+                            .as_nanos() as u64;
                 })
             });
 

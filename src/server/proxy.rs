@@ -136,7 +136,7 @@ impl Proxy {
     }
 
     /// Get a client and do work on the client.
-    pub fn call_on<C>(&mut self, addr: &str, callback: C) -> impl Future<Output = ()>
+    pub fn call_on<C>(&mut self, addr: &str, callback: C) -> impl Future<Output = ()> + use<C>
     where
         C: FnOnce(&TikvClient) + Send + 'static,
     {

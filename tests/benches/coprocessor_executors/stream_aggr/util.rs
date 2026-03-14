@@ -4,11 +4,11 @@ use std::sync::Arc;
 
 use criterion::{black_box, measurement::Measurement};
 use tidb_query_datatype::expr::EvalConfig;
-use tidb_query_executors::{interface::BatchExecutor, BatchStreamAggregationExecutor};
+use tidb_query_executors::{BatchStreamAggregationExecutor, interface::BatchExecutor};
 use tikv::storage::Statistics;
 use tipb::Expr;
 
-use crate::util::{bencher::Bencher, FixtureBuilder};
+use crate::util::{FixtureBuilder, bencher::Bencher};
 
 pub trait StreamAggrBencher<M>
 where

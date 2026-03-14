@@ -11,16 +11,15 @@ use tikv_util::codec::BytesSlice;
 use tipb::{ColumnInfo, FieldType};
 
 use super::{
-    datum,
+    Datum, Error, Result, datum,
     datum::DatumDecoder,
     mysql::{Duration, Time},
-    Datum, Error, Result,
 };
 use crate::{
+    FieldTypeTp,
     codec::{batch::LazyBatchColumnVec, data_type::ScalarValueRef},
     expr::EvalContext,
     prelude::*,
-    FieldTypeTp,
 };
 
 // handle or index id
@@ -332,7 +331,7 @@ pub fn decode_row(
     cols: &HashMap<i64, ColumnInfo>,
 ) -> Result<HashMap<i64, Datum>> {
     let mut values = datum::decode(data)?;
-    if values.first().map_or(true, |d| *d == Datum::Null) {
+    if values.first().is_none_or(|d| *d == Datum::Null) {
         return Ok(HashMap::default());
     }
     if values.len() & 1 == 1 {

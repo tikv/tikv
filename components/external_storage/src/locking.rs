@@ -22,13 +22,13 @@ use std::io;
 
 use chrono::Utc;
 use futures_util::{
-    future::{ok, FutureExt, LocalBoxFuture},
+    future::{FutureExt, LocalBoxFuture, ok},
     io::AsyncReadExt,
     stream::TryStreamExt,
 };
 use tikv_util::sys::{
     hostname,
-    thread::{process_id, Pid},
+    thread::{Pid, process_id},
 };
 use uuid::Uuid;
 

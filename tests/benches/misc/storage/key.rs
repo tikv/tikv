@@ -2,7 +2,7 @@
 
 use rand::{self, Rng, RngCore};
 use tidb_query_datatype::{
-    codec::{datum, table, Datum},
+    codec::{Datum, datum, table},
     expr::EvalContext,
 };
 use txn_types::Key;
@@ -16,7 +16,7 @@ fn gen_rand_str(len: usize) -> Vec<u8> {
 
 #[bench]
 fn bench_row_key_gen_hash(b: &mut test::Bencher) {
-    let id: i64 = rand::thread_rng().gen();
+    let id: i64 = rand::thread_rng().r#gen();
     let row_key = Key::from_raw(&table::encode_row_key(id, id));
     b.iter(|| {
         test::black_box(row_key.gen_hash());
@@ -25,7 +25,7 @@ fn bench_row_key_gen_hash(b: &mut test::Bencher) {
 
 #[bench]
 fn bench_index_key_gen_hash(b: &mut test::Bencher) {
-    let id: i64 = rand::thread_rng().gen();
+    let id: i64 = rand::thread_rng().r#gen();
     let encoded_index_val = datum::encode_key(
         &mut EvalContext::default(),
         &[Datum::Bytes(gen_rand_str(64))],

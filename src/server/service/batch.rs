@@ -9,19 +9,19 @@ use tikv_util::{
     mpsc::future::{Sender, WakePolicy},
     time::Instant,
 };
-use tracker::{with_tls_tracker, RequestInfo, RequestType, Tracker, TrackerToken, GLOBAL_TRACKERS};
+use tracker::{GLOBAL_TRACKERS, RequestInfo, RequestType, Tracker, TrackerToken, with_tls_tracker};
 use txn_types::ValueEntry;
 
 use crate::{
     server::{
-        metrics::{GrpcTypeKind, ResourcePriority, REQUEST_BATCH_SIZE_HISTOGRAM_VEC},
-        service::kv::{batch_commands_response, GrpcRequestDuration, MeasuredSingleResponse},
+        metrics::{GrpcTypeKind, REQUEST_BATCH_SIZE_HISTOGRAM_VEC, ResourcePriority},
+        service::kv::{GrpcRequestDuration, MeasuredSingleResponse, batch_commands_response},
     },
     storage::{
+        ResponseBatchConsumer, Result, Storage,
         errors::{extract_key_error, extract_region_error},
         kv::{Engine, Statistics},
         lock_manager::LockManager,
-        ResponseBatchConsumer, Result, Storage,
     },
 };
 
@@ -270,16 +270,18 @@ fn future_batch_get_command<E: Engine, L: LockManager, F: KvFormat>(
         .get_override_priority();
     let resource_priority = ResourcePriority::from(group_priority);
 
-    let res = storage.batch_get_command(
-        gets,
-        requests,
-        trackers.clone(),
-        GetCommandResponseConsumer { tx: tx.clone() },
-        begin_instant,
-    );
+    let storage = storage.clone();
     let f = async move {
         // This error can only cause by readpool busy.
-        let res = res.await;
+        let res = storage
+            .batch_get_command(
+                gets,
+                requests,
+                trackers.clone(),
+                GetCommandResponseConsumer { tx: tx.clone() },
+                begin_instant,
+            )
+            .await;
         for tracker in trackers {
             GLOBAL_TRACKERS.remove(tracker);
         }
@@ -331,14 +333,16 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager, F: KvFormat>(
         .get_override_priority();
     let resource_priority = ResourcePriority::from(group_priority);
 
-    let res = storage.raw_batch_get_command(
-        gets,
-        requests,
-        GetCommandResponseConsumer { tx: tx.clone() },
-    );
+    let storage = storage.clone();
     let f = async move {
         // This error can only cause by readpool busy.
-        let res = res.await;
+        let res = storage
+            .raw_batch_get_command(
+                gets,
+                requests,
+                GetCommandResponseConsumer { tx: tx.clone() },
+            )
+            .await;
         if let Some(e) = extract_region_error(&res) {
             let mut resp = RawGetResponse::default();
             resp.set_region_error(e);
@@ -367,7 +371,7 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager, F: KvFormat>(
 mod tests {
     use std::time::Duration;
 
-    use tikv_util::mpsc::future::{unbounded, WakePolicy};
+    use tikv_util::mpsc::future::{WakePolicy, unbounded};
     use txn_types::{TimeStamp, ValueEntry};
 
     use super::*;

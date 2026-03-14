@@ -10,6 +10,7 @@ use num_traits::{AsPrimitive, FromPrimitive};
 use crate::time::Instant;
 
 #[derive(PartialEq, Debug)]
+#[allow(clippy::enum_variant_names)]
 pub enum Trend {
     Increasing,
     Decreasing,
@@ -220,7 +221,7 @@ pub(super) mod tests {
 
     use crate::{
         smoother::{
-            Smoother, Trend, SMOOTHER_STALE_RECORD_THRESHOLD, SMOOTHER_TIME_RANGE_THRESHOLD,
+            SMOOTHER_STALE_RECORD_THRESHOLD, SMOOTHER_TIME_RANGE_THRESHOLD, Smoother, Trend,
         },
         time::Instant,
     };

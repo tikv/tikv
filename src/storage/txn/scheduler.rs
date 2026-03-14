@@ -27,8 +27,8 @@ use std::{
     marker::PhantomData,
     mem,
     sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
     u64,
@@ -39,7 +39,7 @@ use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use crossbeam::utils::CachePadded;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use futures::{compat::Future01CompatExt, FutureExt as _, StreamExt};
+use futures::{FutureExt as _, StreamExt, compat::Future01CompatExt};
 use kvproto::{
     kvrpcpb::{self, CommandPri, Context, DiskFullOpt},
     pdpb::QueryKind,
@@ -49,51 +49,49 @@ use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
 use resource_control::{ResourceController, ResourceGroupManager, TaskMetadata};
 use resource_metering::{
-    record_logical_read_bytes, record_logical_write_bytes, record_network_in_bytes, FutureExt,
-    ResourceTagFactory,
+    FutureExt, ResourceTagFactory, record_logical_read_bytes, record_logical_write_bytes,
+    record_network_in_bytes,
 };
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};
 use tikv_util::{
     memory::MemoryQuota, quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE,
 };
-use tracker::{set_tls_tracker_token, TrackerToken, TrackerTokenArray, GLOBAL_TRACKERS};
+use tracker::{GLOBAL_TRACKERS, TrackerToken, TrackerTokenArray, set_tls_tracker_token};
 use txn_types::{LockInfoExt, TimeStamp};
 
 use super::task::Task;
 use crate::{
     server::lock_manager::waiter_manager,
     storage::{
+        DynamicConfigs, Error as StorageError, ErrorInner as StorageErrorInner,
+        PessimisticLockKeyResult, PessimisticLockResults,
         config::Config,
         errors::SharedError,
         get_causal_ts, get_priority_tag, get_raw_key_guard,
         kv::{
-            self, with_tls_engine, Engine, FlowStatsReporter, Result as EngineResult, SnapContext,
-            Statistics,
+            self, Engine, FlowStatsReporter, Result as EngineResult, SnapContext, Statistics,
+            with_tls_engine,
         },
         lock_manager::{
-            self,
+            self, DiagnosticContext, LockManager, LockWaitToken,
             lock_wait_context::{LockWaitContext, PessimisticLockKeyCallback},
             lock_waiting_queue::{DelayedNotifyAllFuture, LockWaitEntry, LockWaitQueues},
-            DiagnosticContext, LockManager, LockWaitToken,
         },
         metrics::*,
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, ReleasedLock},
         txn::{
-            commands,
+            Error, ErrorInner, ProcessResult, commands,
             commands::{
                 Command, RawExt, ReleasedLocks, ResponsePolicy, WriteContext, WriteResult,
                 WriteResultLockInfo,
             },
             flow_controller::FlowController,
             latch::{Latches, Lock},
-            sched_pool::{tls_collect_query, tls_collect_scan_details, SchedPool},
+            sched_pool::{SchedPool, tls_collect_query, tls_collect_scan_details},
             txn_status_cache::TxnStatusCache,
-            Error, ErrorInner, ProcessResult,
         },
         types::StorageCallback,
-        DynamicConfigs, Error as StorageError, ErrorInner as StorageErrorInner,
-        PessimisticLockKeyResult, PessimisticLockResults,
     },
 };
 
@@ -1857,7 +1855,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let mut task_meta_data = TaskMetadata::from_ctx(task.cmd().resource_control_ctx());
         let pipelined = task.cmd().can_be_pipelined()
             && self.pessimistic_lock_mode() == PessimisticLockMode::Pipelined;
-        let is_shared_lock_cmd = if let Command::AcquirePessimisticLock(ref cmd) = task.cmd() {
+        let is_shared_lock_cmd = if let Command::AcquirePessimisticLock(cmd) = task.cmd() {
             cmd.keys.iter().any(|k| k.2)
         } else {
             false
@@ -2259,15 +2257,16 @@ mod tests {
     };
     use raftstore::store::{LocksStatus, ReadStats, WriteStats};
     use tikv_util::{
+        Either,
         config::ReadableSize,
         future::{block_on_timeout, paired_future_callback},
         memory::HeapSize,
-        Either,
     };
     use txn_types::{Key, LockType, SharedLocks, TimeStamp};
 
     use super::*;
     use crate::storage::{
+        RocksEngine, SecondaryLocksStatus, TestEngineBuilder, TxnStatus,
         kv::{Error as KvError, ErrorInner as KvErrorInner},
         lock_manager::{MockLockManager, WaitTimeout},
         mvcc::{self, Mutation},
@@ -2278,7 +2277,6 @@ mod tests {
             flow_controller::{EngineFlowController, FlowController},
             latch::*,
         },
-        RocksEngine, SecondaryLocksStatus, TestEngineBuilder, TxnStatus,
     };
 
     #[derive(Clone)]

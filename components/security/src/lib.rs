@@ -117,10 +117,10 @@ impl SecurityConfig {
     /// If modified, update the timestamp of this modification.
     pub fn is_modified(&self, last: &mut Option<SystemTime>) -> Result<bool, Box<dyn Error>> {
         let this = fs::metadata(&self.cert_path)?.modified()?;
-        if let Some(last) = last {
-            if *last == this {
-                return Ok(false);
-            }
+        if let Some(last) = last
+            && *last == this
+        {
+            return Ok(false);
         }
         *last = Some(this);
         Ok(true)

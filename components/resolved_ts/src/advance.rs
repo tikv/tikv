@@ -4,8 +4,8 @@ use std::{
     cmp,
     ffi::CString,
     sync::{
-        atomic::{AtomicI32, Ordering},
         Arc,
+        atomic::{AtomicI32, Ordering},
     },
     time::Duration,
 };
@@ -14,7 +14,7 @@ use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use fail::fail_point;
-use futures::{compat::Future01CompatExt, future::select_all, FutureExt, TryFutureExt};
+use futures::{FutureExt, TryFutureExt, compat::Future01CompatExt, future::select_all};
 use grpcio::{
     ChannelBuilder, CompressionAlgorithms, Environment, Error as GrpcError, RpcStatusCode,
 };
@@ -43,7 +43,7 @@ use tokio::{
 };
 use txn_types::TimeStamp;
 
-use crate::{endpoint::Task, metrics::*, TsSource};
+use crate::{TsSource, endpoint::Task, metrics::*};
 
 pub(crate) const DEFAULT_CHECK_LEADER_TIMEOUT_DURATION: Duration = Duration::from_secs(5); // 5s
 const DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL: usize = 2;
@@ -590,8 +590,8 @@ impl RegionProgress {
 mod tests {
     use std::{
         sync::{
-            mpsc::{channel, Receiver, Sender},
             Arc,
+            mpsc::{Receiver, Sender, channel},
         },
         time::Duration,
     };

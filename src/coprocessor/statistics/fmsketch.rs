@@ -96,7 +96,7 @@ mod tests {
     use std::{iter::repeat, slice::from_ref};
 
     use tidb_query_datatype::{
-        codec::{datum, datum::Datum, Result},
+        codec::{Result, datum, datum::Datum},
         expr::EvalContext,
     };
 

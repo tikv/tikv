@@ -17,10 +17,10 @@ use tikv_util::escape;
 
 use crate::{
     codec::{
+        Error, Result, TEN_POW,
         convert::{self, ConvertTo},
         data_type::*,
         mysql::DEFAULT_DIV_FRAC_INCR,
-        Error, Result, TEN_POW,
     },
     expr::EvalContext,
 };
@@ -202,7 +202,7 @@ fn count_leading_zeroes(i: u8, word: u32) -> u8 {
 /// removed from fraction.
 fn count_trailing_zeroes(i: u8, word: u32) -> u8 {
     let (mut c, mut i) = (0, i as usize);
-    while word % TEN_POW[i] == 0 {
+    while word.is_multiple_of(TEN_POW[i]) {
         i += 1;
         c += 1;
     }
@@ -1033,6 +1033,50 @@ impl Decimal {
         }
         let buf = Vec::with_capacity(len as usize);
         (buf, word_start_idx, int_len, int_cnt, frac_cnt)
+    }
+
+    /// Converts decimal to a printable string representation without rounding.
+    #[allow(clippy::inherent_to_string, clippy::inherent_to_string_shadow_display)]
+    pub fn to_string(&self) -> String {
+        let (mut buf, word_start_idx, int_len, int_cnt, frac_cnt) = self.prepare_buf();
+        if self.negative {
+            buf.push(b'-');
+        }
+        let zero_pad = (int_len - cmp::max(int_cnt, 1)) as usize;
+        buf.resize(buf.len() + zero_pad, b'0');
+        if int_cnt > 0 {
+            let base_idx = buf.len();
+            let mut idx = base_idx + int_cnt as usize;
+            let mut widx = word_start_idx + word_cnt!(int_cnt) as usize;
+            buf.resize(idx, 0);
+            while idx > base_idx {
+                widx -= 1;
+                let mut x = self.word_buf[widx];
+                for _ in 0..cmp::min((idx - base_idx) as u8, DIGITS_PER_WORD) {
+                    idx -= 1;
+                    buf[idx] = b'0' + (x % 10) as u8;
+                    x /= 10;
+                }
+            }
+        } else {
+            buf.push(b'0');
+        };
+        if frac_cnt > 0 {
+            buf.push(b'.');
+            let mut widx = word_start_idx + word_cnt!(int_cnt) as usize;
+            let exp_idx = buf.len() + frac_cnt as usize;
+            while buf.len() < exp_idx {
+                let mut x = self.word_buf[widx];
+                for _ in 0..cmp::min((exp_idx - buf.len()) as u8, DIGITS_PER_WORD) {
+                    buf.push((x / DIG_MASK) as u8 + b'0');
+                    x = (x % DIG_MASK) * 10;
+                }
+                widx += 1;
+            }
+            buf.resize(buf.capacity(), b'0');
+        }
+        // Safety: this only appends ASCII digits and punctuation.
+        unsafe { String::from_utf8_unchecked(buf) }
     }
 
     /// Get the least precision and fraction count to encode this decimal
@@ -1919,51 +1963,6 @@ impl FromStr for Decimal {
     }
 }
 
-impl ToString for Decimal {
-    fn to_string(&self) -> String {
-        let (mut buf, word_start_idx, int_len, int_cnt, frac_cnt) = self.prepare_buf();
-        if self.negative {
-            buf.push(b'-');
-        }
-        let padding = int_len - cmp::max(int_cnt, 1);
-        buf.resize(padding as usize + buf.len(), b'0');
-        if int_cnt > 0 {
-            let base_idx = buf.len();
-            let mut idx = base_idx + int_cnt as usize;
-            let mut widx = word_start_idx + word_cnt!(int_cnt) as usize;
-            buf.resize(idx, 0);
-            while idx > base_idx {
-                widx -= 1;
-                let mut x = self.word_buf[widx];
-                for _ in 0..cmp::min((idx - base_idx) as u8, DIGITS_PER_WORD) {
-                    idx -= 1;
-                    buf[idx] = b'0' + (x % 10) as u8;
-                    x /= 10;
-                }
-            }
-        } else {
-            buf.push(b'0');
-        };
-        if frac_cnt > 0 {
-            buf.push(b'.');
-            let mut widx = word_start_idx + word_cnt!(int_cnt) as usize;
-            let exp_idx = buf.len() + frac_cnt as usize;
-            while buf.len() < exp_idx {
-                let mut x = self.word_buf[widx];
-                for _ in 0..cmp::min((exp_idx - buf.len()) as u8, DIGITS_PER_WORD) {
-                    buf.push((x / DIG_MASK) as u8 + b'0');
-                    x = (x % DIG_MASK) * 10;
-                }
-                widx += 1;
-            }
-            while buf.capacity() != buf.len() {
-                buf.push(b'0');
-            }
-        }
-        unsafe { String::from_utf8_unchecked(buf) }
-    }
-}
-
 impl Display for Decimal {
     fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
         let mut dec = *self;
@@ -2334,7 +2333,7 @@ impl Ord for Decimal {
     }
 }
 
-impl<'a, 'b> Add<&'a Decimal> for &'b Decimal {
+impl<'a> Add<&'a Decimal> for &Decimal {
     type Output = Res<Decimal>;
 
     fn add(self, rhs: &'a Decimal) -> Res<Decimal> {
@@ -2349,7 +2348,7 @@ impl<'a, 'b> Add<&'a Decimal> for &'b Decimal {
     }
 }
 
-impl<'a, 'b> Sub<&'a Decimal> for &'b Decimal {
+impl<'a> Sub<&'a Decimal> for &Decimal {
     type Output = Res<Decimal>;
 
     fn sub(self, rhs: &'a Decimal) -> Res<Decimal> {
@@ -2364,7 +2363,7 @@ impl<'a, 'b> Sub<&'a Decimal> for &'b Decimal {
     }
 }
 
-impl<'a, 'b> Mul<&'a Decimal> for &'b Decimal {
+impl<'a> Mul<&'a Decimal> for &Decimal {
     type Output = Res<Decimal>;
 
     fn mul(self, rhs: &'a Decimal) -> Res<Decimal> {
@@ -2372,7 +2371,7 @@ impl<'a, 'b> Mul<&'a Decimal> for &'b Decimal {
     }
 }
 
-impl<'a, 'b> Div<&'a Decimal> for &'b Decimal {
+impl<'a> Div<&'a Decimal> for &Decimal {
     type Output = Option<Res<Decimal>>;
 
     fn div(self, rhs: &'a Decimal) -> Self::Output {
@@ -2389,7 +2388,7 @@ impl Rem for Decimal {
     }
 }
 
-impl<'a, 'b> Rem<&'a Decimal> for &'b Decimal {
+impl<'a> Rem<&'a Decimal> for &Decimal {
     type Output = Option<Res<Decimal>>;
     fn rem(self, rhs: &'a Decimal) -> Self::Output {
         let result_frac_cnt = cmp::max(self.result_frac_cnt, rhs.result_frac_cnt);

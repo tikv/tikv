@@ -1,9 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::Ordering;
+use std::{
+    sync::atomic::Ordering,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use collections::HashMap;
-use engine_traits::{StatisticsReporter, CF_DEFAULT};
+use engine_traits::{CF_DEFAULT, StatisticsReporter};
 use lazy_static::lazy_static;
 use prometheus::*;
 use prometheus_static_metric::*;
@@ -12,8 +15,9 @@ use rocksdb::{
 };
 
 use crate::{
-    engine::RocksEngine, rocks_metrics_defs::*, RocksStatistics, TITAN_COMPRESSION_FACTOR,
-    TITAN_COMPRESSION_FACTOR_SMOOTHER, TITAN_MAX_BLOB_SIZE_SEEN, TITAN_MAX_COMPACTION_FACTOR,
+    RocksStatistics, TITAN_COMPRESSION_FACTOR, TITAN_COMPRESSION_FACTOR_SMOOTHER,
+    TITAN_MAX_BLOB_SIZE_SEEN, TITAN_MAX_COMPACTION_FACTOR, engine::RocksEngine,
+    rocks_metrics_defs::*,
 };
 
 make_auto_flush_static_metric! {
@@ -1048,7 +1052,10 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
         let oldest_snapshot_time =
             db.get_property_int(ROCKSDB_OLDEST_SNAPSHOT_TIME)
                 .map_or(0, |t| {
-                    let now = time::get_time().sec as u64;
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs();
                     // RocksDB returns 0 if no snapshots.
                     if t > 0 && now > t { now - t } else { 0 }
                 });

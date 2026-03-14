@@ -4,18 +4,18 @@ use std::str::FromStr;
 
 use async_trait::async_trait;
 use criterion::measurement::Measurement;
-use rand::{seq::SliceRandom, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, seq::SliceRandom};
 use rand_xorshift::XorShiftRng;
 use test_coprocessor::*;
-use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_common::{Result, storage::IntervalRange};
 use tidb_query_datatype::{
+    FieldTypeTp,
     codec::{
         batch::{LazyBatchColumn, LazyBatchColumnVec},
         data_type::Decimal,
         datum::{Datum, DatumEncoder},
     },
     expr::{EvalContext, EvalWarnings},
-    FieldTypeTp,
 };
 use tidb_query_executors::interface::*;
 use tikv::storage::{RocksEngine, Statistics};
@@ -59,7 +59,7 @@ impl FixtureBuilder {
         let mut rng: XorShiftRng = SeedableRng::seed_from_u64(SEED_1);
         let mut col = Vec::with_capacity(self.rows);
         for _ in 0..self.rows {
-            col.push(Datum::I64(rng.gen()));
+            col.push(Datum::I64(rng.r#gen()));
         }
         self.columns.push(col);
         self.field_types.push(FieldTypeTp::LongLong.into());

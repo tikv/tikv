@@ -7,17 +7,17 @@ use std::{
 };
 
 use engine_rocks::{
-    raw::IngestExternalFileOptions, RocksEngine, RocksSnapshot, RocksSstWriterBuilder,
+    RocksEngine, RocksSnapshot, RocksSstWriterBuilder, raw::IngestExternalFileOptions,
 };
 use engine_test::new_temp_engine;
 use engine_traits::{
-    CfOptionsExt, CompactExt, DeleteStrategy, Engines, KvEngine, MiscExt, Range, SstWriter,
-    SstWriterBuilder, SyncMutable, WriteOptions, CF_DEFAULT, CF_WRITE,
+    CF_DEFAULT, CF_WRITE, CfOptionsExt, CompactExt, DeleteStrategy, Engines, KvEngine, MiscExt,
+    Range, SstWriter, SstWriterBuilder, SyncMutable, WriteOptions,
 };
 use keys::data_key;
 use kvproto::metapb::{Peer, Region};
 use raftstore::store::{
-    apply_sst_cf_files_by_ingest, build_sst_cf_file_list, CfFile, RegionSnapshot,
+    CfFile, RegionSnapshot, apply_sst_cf_files_by_ingest, build_sst_cf_file_list,
 };
 use tempfile::Builder;
 use test_raftstore::*;

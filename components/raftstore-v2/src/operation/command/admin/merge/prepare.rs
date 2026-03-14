@@ -30,7 +30,7 @@
 use std::{mem, time::Duration};
 
 use collections::HashMap;
-use engine_traits::{Checkpointer, KvEngine, RaftEngine, RaftLogBatch, CF_LOCK};
+use engine_traits::{CF_LOCK, Checkpointer, KvEngine, RaftEngine, RaftLogBatch};
 use futures::channel::oneshot;
 use kvproto::{
     metapb::RegionEpoch,
@@ -44,11 +44,11 @@ use kvproto::{
 };
 use parking_lot::RwLockUpgradableReadGuard;
 use protobuf::Message;
-use raft::{eraftpb::EntryType, GetEntriesContext, NO_LIMIT};
+use raft::{GetEntriesContext, NO_LIMIT, eraftpb::EntryType};
 use raftstore::{
-    coprocessor::RegionChangeReason,
-    store::{metrics::PEER_ADMIN_CMD_COUNTER, util, LocksStatus, ProposalContext, Transport},
     Error, Result,
+    coprocessor::RegionChangeReason,
+    store::{LocksStatus, ProposalContext, Transport, metrics::PEER_ADMIN_CMD_COUNTER, util},
 };
 use slog::{debug, error, info};
 use tikv_util::{
@@ -56,11 +56,11 @@ use tikv_util::{
 };
 use txn_types::WriteBatchFlags;
 
-use super::{merge_source_path, CatchUpLogs};
+use super::{CatchUpLogs, merge_source_path};
 use crate::{
     batch::StoreContext,
     fsm::ApplyResReporter,
-    operation::{command::parse_at, AdminCmdResult, SimpleWriteReqDecoder},
+    operation::{AdminCmdResult, SimpleWriteReqDecoder, command::parse_at},
     raft::{Apply, Peer},
     router::{CmdResChannel, PeerMsg, RaftRequest},
 };

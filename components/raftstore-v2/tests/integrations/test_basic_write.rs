@@ -2,14 +2,14 @@
 
 use std::{assert_matches::assert_matches, time::Duration};
 
-use engine_traits::{Peekable, CF_DEFAULT};
+use engine_traits::{CF_DEFAULT, Peekable};
 use futures::executor::block_on;
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
-use raftstore_v2::{router::PeerMsg, SimpleWriteEncoder};
+use raftstore_v2::{SimpleWriteEncoder, router::PeerMsg};
 use tikv_util::store::new_peer;
 
-use crate::cluster::{check_skip_wal, Cluster};
+use crate::cluster::{Cluster, check_skip_wal};
 
 /// Test basic write flow.
 #[test]

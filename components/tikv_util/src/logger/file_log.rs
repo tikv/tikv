@@ -3,7 +3,7 @@
 use std::{
     fmt::{self, Display, Formatter},
     fs::{self, DirEntry, File, OpenOptions},
-    io::{self, Error, ErrorKind, Write},
+    io::{self, Error, Write},
     path::{Path, PathBuf},
 };
 
@@ -14,15 +14,14 @@ use crate::{
     worker::{LazyWorker, Runnable},
 };
 
+type RenameFn = dyn Send + Fn(&Path) -> io::Result<PathBuf>;
+
 /// Opens log file with append mode. Creates a new log file if it doesn't exist.
 fn open_log_file(path: impl AsRef<Path>) -> io::Result<File> {
     let path = path.as_ref();
-    let parent = path.parent().ok_or_else(|| {
-        Error::new(
-            ErrorKind::Other,
-            "Unable to get parent directory of log file",
-        )
-    })?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| Error::other("Unable to get parent directory of log file"))?;
     if !parent.is_dir() {
         fs::create_dir_all(parent)?
     }
@@ -59,7 +58,7 @@ pub trait Rotator: Send {
 pub struct RotatingFileLogger {
     path: PathBuf,
     file: File,
-    rename: Box<dyn Send + Fn(&Path) -> io::Result<PathBuf>>,
+    rename: Box<RenameFn>,
     rotators: Vec<Box<dyn Rotator>>,
     archive_worker: LazyWorker<Task>,
 }
@@ -68,7 +67,7 @@ pub struct RotatingFileLogger {
 pub struct RotatingFileLoggerBuilder {
     rotators: Vec<Box<dyn Rotator>>,
     path: PathBuf,
-    rename: Box<dyn Send + Fn(&Path) -> io::Result<PathBuf>>,
+    rename: Box<RenameFn>,
     max_backups: usize,
     max_days: ReadableDuration,
 }
@@ -258,10 +257,10 @@ impl Runner {
         let mut logs = Vec::new();
         for f in fs::read_dir(&self.log_dir)? {
             let f = f?;
-            if f.file_type()?.is_file() {
-                if let Some(dt) = dt_from_file_name(f.path().as_path(), &self.file_name) {
-                    logs.push(LogInfo { f, dt });
-                }
+            if f.file_type()?.is_file()
+                && let Some(dt) = dt_from_file_name(f.path().as_path(), &self.file_name)
+            {
+                logs.push(LogInfo { f, dt });
             }
         }
         logs.sort_by(|l1, l2| l2.dt.cmp(&l1.dt));
@@ -322,7 +321,7 @@ mod tests {
     }
 
     fn rename_fail() -> io::Result<PathBuf> {
-        Err(Error::from(ErrorKind::NotFound))
+        Err(Error::from(io::ErrorKind::NotFound))
     }
 
     #[test]

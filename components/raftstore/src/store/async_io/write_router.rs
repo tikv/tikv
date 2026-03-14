@@ -7,8 +7,8 @@ use std::{
     mem,
     ops::Index,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -354,7 +354,7 @@ pub(crate) mod tests {
     use std::thread;
 
     use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
-    use resource_control::channel::{bounded, Receiver};
+    use resource_control::channel::{Receiver, bounded};
     use tikv_util::config::ReadableDuration;
 
     use super::*;

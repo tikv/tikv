@@ -9,28 +9,28 @@ use std::{
 use async_trait::async_trait;
 use azure_core::auth::{AccessToken, TokenCredential};
 use azure_identity::{ClientSecretCredential, DefaultAzureCredential};
-use azure_storage::{prelude::*, ConnectionString, ConnectionStringBuilder};
+use azure_storage::{ConnectionString, ConnectionStringBuilder, prelude::*};
 use azure_storage_blobs::{blob::operations::PutBlockBlobBuilder, prelude::*};
 use cloud::{
     blob::{
-        none_to_empty, read_to_end, unimplemented, BlobConfig, BlobObject, BlobStorage, BucketConf,
-        DeletableStorage, IterableStorage, PutResource, StringNonEmpty,
+        BlobConfig, BlobObject, BlobStorage, BucketConf, DeletableStorage, IterableStorage,
+        PutResource, StringNonEmpty, none_to_empty, read_to_end, unimplemented,
     },
     metrics::AZBLOB_UPLOAD_DURATION,
 };
 use futures::TryFutureExt;
-use futures_util::{future::FutureExt, io::AsyncRead, stream, stream::StreamExt, TryStreamExt};
+use futures_util::{TryStreamExt, future::FutureExt, io::AsyncRead, stream, stream::StreamExt};
 pub use kvproto::brpb::{AzureBlobStorage as InputConfig, AzureCustomerKey};
 use oauth2::{ClientId, ClientSecret};
 use tikv_util::{
     debug, defer,
-    stream::{retry, RetryError},
+    stream::{RetryError, retry},
     time::Instant,
 };
 use time::OffsetDateTime;
 use tokio::{
     sync::Mutex,
-    time::{timeout, Duration},
+    time::{Duration, timeout},
 };
 
 const ENV_CLIENT_ID: &str = "AZURE_CLIENT_ID";
@@ -122,16 +122,15 @@ impl Config {
             env::var(ENV_CLIENT_ID).ok(),
             env::var(ENV_TENANT_ID).ok(),
             env::var(ENV_CLIENT_SECRET).ok(),
-        ) {
-            if !(client_id.is_empty() || tenant_id.is_empty() || client_secret.is_empty()) {
-                let client_id = ClientId::new(client_id);
-                let client_secret = ClientSecret::new(client_secret);
-                return Some(CredentialInfo {
-                    client_id,
-                    tenant_id,
-                    client_secret,
-                });
-            }
+        ) && !(client_id.is_empty() || tenant_id.is_empty() || client_secret.is_empty())
+        {
+            let client_id = ClientId::new(client_id);
+            let client_secret = ClientSecret::new(client_secret);
+            return Some(CredentialInfo {
+                client_id,
+                tenant_id,
+                client_secret,
+            });
         }
         None
     }
@@ -233,12 +232,9 @@ impl BlobConfig for Config {
     }
 
     fn url(&self) -> io::Result<url::Url> {
-        self.bucket.url("azure").map_err(|s| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("error creating bucket url: {}", s),
-            )
-        })
+        self.bucket
+            .url("azure")
+            .map_err(|s| io::Error::other(format!("error creating bucket url: {}", s)))
     }
 }
 
@@ -840,11 +836,21 @@ mod tests {
         let mut bucket = BucketConf::default(container_name);
         bucket.endpoint = Some(StringNonEmpty::static_str("http://127.0.0.1:10000/user"));
         bucket.prefix = Some(StringNonEmpty::static_str("backup 02/prefix"));
-        env::remove_var(ENV_ACCOUNT_NAME);
-        env::remove_var(ENV_SHARED_KEY);
-        env::remove_var(ENV_CLIENT_ID);
-        env::remove_var(ENV_TENANT_ID);
-        env::remove_var(ENV_CLIENT_SECRET);
+        unsafe {
+            env::remove_var(ENV_ACCOUNT_NAME);
+        }
+        unsafe {
+            env::remove_var(ENV_SHARED_KEY);
+        }
+        unsafe {
+            env::remove_var(ENV_CLIENT_ID);
+        }
+        unsafe {
+            env::remove_var(ENV_TENANT_ID);
+        }
+        unsafe {
+            env::remove_var(ENV_CLIENT_SECRET);
+        }
         let config = Config::default(bucket.clone());
 
         assert_eq!(config.account_name.is_none(), true);
@@ -853,11 +859,21 @@ mod tests {
         assert_eq!(config.env_account_name.is_none(), true);
         assert_eq!(config.env_shared_key.is_none(), true);
 
-        env::set_var(ENV_ACCOUNT_NAME, "user1");
-        env::set_var(ENV_SHARED_KEY, "cGFzc3dk");
-        env::set_var(ENV_CLIENT_ID, "<client_id>");
-        env::set_var(ENV_TENANT_ID, "<tenant_id>");
-        env::set_var(ENV_CLIENT_SECRET, "<client_secret>");
+        unsafe {
+            env::set_var(ENV_ACCOUNT_NAME, "user1");
+        }
+        unsafe {
+            env::set_var(ENV_SHARED_KEY, "cGFzc3dk");
+        }
+        unsafe {
+            env::set_var(ENV_CLIENT_ID, "<client_id>");
+        }
+        unsafe {
+            env::set_var(ENV_TENANT_ID, "<tenant_id>");
+        }
+        unsafe {
+            env::set_var(ENV_CLIENT_SECRET, "<client_secret>");
+        }
 
         let config = Config::default(bucket);
 
@@ -883,15 +899,25 @@ mod tests {
         assert_eq!(debug_str.contains("<client_secret>"), false);
         assert_eq!(debug_str.contains("cGFzc3dk"), false);
 
-        env::remove_var(ENV_ACCOUNT_NAME);
-        env::remove_var(ENV_SHARED_KEY);
-        env::remove_var(ENV_CLIENT_ID);
-        env::remove_var(ENV_TENANT_ID);
-        env::remove_var(ENV_CLIENT_SECRET);
+        unsafe {
+            env::remove_var(ENV_ACCOUNT_NAME);
+        }
+        unsafe {
+            env::remove_var(ENV_SHARED_KEY);
+        }
+        unsafe {
+            env::remove_var(ENV_CLIENT_ID);
+        }
+        unsafe {
+            env::remove_var(ENV_TENANT_ID);
+        }
+        unsafe {
+            env::remove_var(ENV_CLIENT_SECRET);
+        }
     }
 
     #[tokio::test]
-    #[cfg(feature = "azurite")]
+    #[cfg(any())]
     // test in Azurite emulator
     async fn test_azblob_storage() {
         use futures_util::stream;

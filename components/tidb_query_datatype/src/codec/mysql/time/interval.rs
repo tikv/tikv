@@ -7,9 +7,9 @@ use regex::Regex;
 
 use crate::{
     codec::{
-        data_type::{BytesRef, Decimal, Real},
-        mysql::{duration::*, RoundMode, DEFAULT_FSP, MAX_FSP, MIN_FSP},
         Error, Result,
+        data_type::{BytesRef, Decimal, Real},
+        mysql::{DEFAULT_FSP, MAX_FSP, MIN_FSP, RoundMode, duration::*},
     },
     expr::EvalContext,
 };
@@ -457,7 +457,7 @@ impl Interval {
 
         // Populate fields in reverse order
         for (i, &matched) in matches.iter().rev().enumerate() {
-            fields[index as usize - i] = &matched;
+            fields[index as usize - i] = matched;
         }
 
         // Helper to parse integer fields and handle errors
@@ -563,7 +563,7 @@ impl Interval {
         input: &str,
     ) -> Result<Duration> {
         let val = Self::parse_from_str_internal(ctx, unit, input, true)?
-            .ok_or_else(|| Error::datetime_function_overflow())?;
+            .ok_or_else(Error::datetime_function_overflow)?;
         use IntervalUnit::*;
         match unit {
             Microsecond | Second | Minute | Hour | Day | Week | Month | Quarter | Year => {

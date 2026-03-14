@@ -1,7 +1,7 @@
 [package]
 name = "tidb_query_datatype"
 version = "0.0.1"
-edition = "2021"
+edition = "2024"
 publish = false
 description = "Data type of a query engine to run TiDB pushed down executors"
 license = "Apache-2.0"
@@ -33,6 +33,7 @@ num-traits = "0.2"
 ordered-float = "2.0"
 protobuf = "2"
 regex = "1.1"
+ryu = "1"
 serde = "1.0"
 serde_json = "1.0"
 slog = { workspace = true }

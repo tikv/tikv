@@ -9,14 +9,16 @@ use tipb::FieldType;
 
 use super::{Error, Result};
 use crate::{
+    EvalType, FieldTypeFlag, FieldTypeTp,
     codec::{
+        Datum,
         data_type::{ChunkRef, VectorFloat32Ref, VectorValue},
         datum,
         datum_codec::DatumPayloadDecoder,
         mysql::{
             decimal::{
-                Decimal, DecimalDatumPayloadChunkEncoder, DecimalDecoder, DecimalEncoder,
-                DECIMAL_STRUCT_SIZE,
+                DECIMAL_STRUCT_SIZE, Decimal, DecimalDatumPayloadChunkEncoder, DecimalDecoder,
+                DecimalEncoder,
             },
             duration::{
                 Duration, DurationDatumPayloadChunkEncoder, DurationDecoder, DurationEncoder,
@@ -29,11 +31,9 @@ use crate::{
                 VectorFloat32Encoder,
             },
         },
-        Datum,
     },
     expr::EvalContext,
     prelude::*,
-    EvalType, FieldTypeFlag, FieldTypeTp,
 };
 
 /// `Column` stores the same column data of multi rows in one chunk.
@@ -371,11 +371,11 @@ impl Column {
                     self.append_f64(*v)
                 }
             }
-            Datum::Bytes(ref v) => self.append_bytes(v),
-            Datum::Dec(ref v) => self.append_decimal(v),
+            Datum::Bytes(v) => self.append_bytes(v),
+            Datum::Dec(v) => self.append_decimal(v),
             Datum::Dur(v) => self.append_duration(*v),
             Datum::Time(v) => self.append_time(*v),
-            Datum::Json(ref v) => self.append_json(v.as_ref()),
+            Datum::Json(v) => self.append_json(v.as_ref()),
             _ => Err(box_err!("unsupported datum {:?}", data)),
         }
     }
@@ -1026,7 +1026,7 @@ impl Column {
         let mut col = Column::new(tp, length);
         col.length = length;
         col.null_cnt = buf.read_u32_le()? as usize;
-        let null_length = (col.length + 7) / 8_usize;
+        let null_length = col.length.div_ceil(8_usize);
         if col.null_cnt > 0 {
             col.null_bitmap = buf.read_bytes(null_length)?.to_vec();
         } else {
@@ -1056,7 +1056,7 @@ pub trait ChunkColumnEncoder: NumberEncoder {
         self.write_u32_le(col.null_cnt as u32)?;
         // bitmap
         if col.null_cnt > 0 {
-            let length = (col.length + 7) / 8;
+            let length = col.length.div_ceil(8);
             self.write_bytes(&col.null_bitmap[0..length])?;
         }
         // offsets

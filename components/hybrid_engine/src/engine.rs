@@ -76,10 +76,10 @@ mod tests {
     use std::sync::Arc;
 
     use engine_rocks::util::new_engine;
-    use engine_traits::{CacheRegion, CF_DEFAULT, CF_LOCK, CF_WRITE};
+    use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE, CacheRegion};
     use in_memory_engine::{
-        config::InMemoryEngineConfigManager, test_util::new_region, InMemoryEngineConfig,
-        InMemoryEngineContext, RegionCacheMemoryEngine,
+        InMemoryEngineConfig, InMemoryEngineContext, RegionCacheMemoryEngine,
+        config::InMemoryEngineConfigManager, test_util::new_region,
     };
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use tempfile::Builder;

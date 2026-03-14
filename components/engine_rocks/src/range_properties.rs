@@ -3,13 +3,13 @@
 use std::path::Path;
 
 use engine_traits::{
-    MiscExt, Range, RangePropertiesExt, Result, CF_DEFAULT, CF_LOCK, CF_WRITE, LARGE_CFS,
+    CF_DEFAULT, CF_LOCK, CF_WRITE, LARGE_CFS, MiscExt, Range, RangePropertiesExt, Result,
 };
 use tikv_util::{box_err, box_try, debug, info};
 
 use crate::{
     engine::RocksEngine,
-    properties::{get_range_stats, RangeProperties},
+    properties::{RangeProperties, get_range_stats},
 };
 
 impl RangePropertiesExt for RocksEngine {

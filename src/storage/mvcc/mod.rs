@@ -15,11 +15,11 @@ use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::kvrpcpb::{self, Assertion, IsolationLevel};
 use thiserror::Error;
 use tikv_util::{
-    metrics::CRITICAL_ERROR, panic_when_unexpected_key_or_data, set_panic_mark, Either,
+    Either, metrics::CRITICAL_ERROR, panic_when_unexpected_key_or_data, set_panic_mark,
 };
 pub use txn_types::{
-    Key, Lock, LockType, Mutation, SharedLocks, TimeStamp, Value, Write, WriteRef, WriteType,
-    SHORT_VALUE_MAX_LEN,
+    Key, Lock, LockType, Mutation, SHORT_VALUE_MAX_LEN, SharedLocks, TimeStamp, Value, Write,
+    WriteRef, WriteType,
 };
 
 pub use self::{
@@ -28,7 +28,7 @@ pub use self::{
     },
     metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM},
     reader::*,
-    txn::{GcInfo, MvccTxn, ReleasedLock, MAX_TXN_WRITE_SIZE},
+    txn::{GcInfo, MAX_TXN_WRITE_SIZE, MvccTxn, ReleasedLock},
 };
 
 #[derive(Debug, Error)]
@@ -102,8 +102,8 @@ pub enum ErrorInner {
     },
 
     #[error(
-        "deadlock occurs between txn:{} and txn:{}, lock_key:{}, deadlock_key_hash:{}",
-        .start_ts, .lock_ts, log_wrappers::Value::key(.lock_key), .deadlock_key_hash
+        "deadlock occurs between txn:{} and txn:{}, lock_key:{}, deadlock_key_hash:{}, wait_chain_len:{}",
+        .start_ts, .lock_ts, log_wrappers::Value::key(.lock_key), .deadlock_key_hash, .wait_chain.len()
     )]
     Deadlock {
         start_ts: TimeStamp,
@@ -128,8 +128,8 @@ pub enum ErrorInner {
     DefaultNotFound { key: Vec<u8> },
 
     #[error(
-        "try to commit key {} with commit_ts {} but min_commit_ts is {}",
-        log_wrappers::Value::key(.key), .commit_ts, .min_commit_ts
+        "try to commit key {} with commit_ts {} but min_commit_ts is {}, start_ts {}",
+        log_wrappers::Value::key(.key), .commit_ts, .min_commit_ts, .start_ts
     )]
     CommitTsExpired {
         start_ts: TimeStamp,
@@ -327,8 +327,8 @@ impl ErrorInner {
                 })
             }
             ErrorInner::PrimaryMismatch(l) => Some(ErrorInner::PrimaryMismatch(l.clone())),
-            ErrorInner::GenerationOutOfOrder(gen, key, lock_info) => Some(
-                ErrorInner::GenerationOutOfOrder(*gen, key.clone(), lock_info.clone()),
+            ErrorInner::GenerationOutOfOrder(r#gen, key, lock_info) => Some(
+                ErrorInner::GenerationOutOfOrder(*r#gen, key.clone(), lock_info.clone()),
             ),
             ErrorInner::InvalidMaxTsUpdate(e) => Some(ErrorInner::InvalidMaxTsUpdate(e.clone())),
             ErrorInner::NotInShrinkMode(shared_locks) => {

@@ -2,32 +2,32 @@
 
 use std::sync::Arc;
 
+use DecodeHandleStrategy::*;
 use api_version::{ApiV1, KvFormat};
 use async_trait::async_trait;
 use codec::{number::NumberCodec, prelude::NumberDecoder};
 use itertools::izip;
 use kvproto::coprocessor::KeyRange;
 use tidb_query_common::{
-    storage::{IntervalRange, Storage},
     Result,
+    storage::{IntervalRange, Storage},
 };
 use tidb_query_datatype::{
+    EvalType, FieldTypeAccessor,
     codec::{
+        Datum,
         batch::{LazyBatchColumn, LazyBatchColumnVec},
         collation::collator::PADDING_SPACE,
         datum,
         datum::DatumDecoder,
-        row::v2::{decode_v2_u64, RowSlice, V1CompatibleEncoder},
+        row::v2::{RowSlice, V1CompatibleEncoder, decode_v2_u64},
         table,
-        table::{check_index_key, INDEX_VALUE_VERSION_FLAG, MAX_OLD_ENCODED_VALUE_LEN},
-        Datum,
+        table::{INDEX_VALUE_VERSION_FLAG, MAX_OLD_ENCODED_VALUE_LEN, check_index_key},
     },
     expr::{EvalConfig, EvalContext},
-    EvalType, FieldTypeAccessor,
 };
 use tipb::{ColumnInfo, FieldType, IndexScan};
 use txn_types::TimeStamp;
-use DecodeHandleStrategy::*;
 
 use super::util::scan_executor::*;
 use crate::interface::*;
@@ -1061,14 +1061,15 @@ mod tests {
     use kvproto::coprocessor::KeyRange;
     use tidb_query_common::{storage::test_fixture::FixtureStorage, util::convert_to_prefix_next};
     use tidb_query_datatype::{
+        Collation, FieldTypeAccessor, FieldTypeTp,
         codec::{
+            Datum,
             data_type::*,
             datum,
             row::v2::encoder_for_test::{Column, RowEncoder},
-            table, Datum,
+            table,
         },
         expr::EvalConfig,
-        Collation, FieldTypeAccessor, FieldTypeTp,
     };
     use tipb::ColumnInfo;
 

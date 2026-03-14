@@ -44,7 +44,7 @@ use kvproto::{coprocessor as coppb, kvrpcpb};
 use lazy_static::lazy_static;
 use rand::prelude::*;
 use tidb_query_common::execute_stats::ExecSummary;
-use tikv_alloc::{mem_trace, Id, MemoryTrace, MemoryTraceGuard};
+use tikv_alloc::{Id, MemoryTrace, MemoryTraceGuard, mem_trace};
 use tikv_util::{deadline::Deadline, memory::HeapSize, time::Duration};
 use txn_types::TsSet;
 
@@ -52,7 +52,7 @@ pub use self::{
     endpoint::Endpoint,
     error::{Error, Result},
 };
-use crate::storage::{mvcc::TimeStamp, Statistics};
+use crate::storage::{Statistics, mvcc::TimeStamp};
 
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;

@@ -2,8 +2,8 @@
 
 use std::{borrow::ToOwned, str, string::ToString, sync::LazyLock, u64};
 
-use clap::{crate_authors, AppSettings};
-use engine_traits::{SstCompressionType, CF_DEFAULT};
+use clap::{AppSettings, crate_authors};
+use engine_traits::{CF_DEFAULT, SstCompressionType};
 use raft_engine::ReadableSize;
 use structopt::StructOpt;
 

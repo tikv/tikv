@@ -55,8 +55,6 @@
 //! storage engines, and that it be extracted into its own crate for use in
 //! TiKV, once the full requirements are better understood.
 
-#![feature(let_chains)]
-
 /// Types and constructors for the "raft" engine
 pub mod raft {
     #[cfg(feature = "test-engine-raft-panic")]
@@ -381,13 +379,12 @@ pub mod ctor {
 
     mod rocks {
         use engine_rocks::{
-            get_env,
+            RocksCfOptions, RocksDbOptions, RocksPersistenceListener, get_env,
             properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory},
-            util::{new_engine_opt as rocks_new_engine_opt, RangeCompactionFilterFactory},
-            RocksCfOptions, RocksDbOptions, RocksPersistenceListener,
+            util::{RangeCompactionFilterFactory, new_engine_opt as rocks_new_engine_opt},
         };
         use engine_traits::{
-            CfOptions as _, PersistenceListener, Result, TabletContext, CF_DEFAULT,
+            CF_DEFAULT, CfOptions as _, PersistenceListener, Result, TabletContext,
         };
 
         use super::{

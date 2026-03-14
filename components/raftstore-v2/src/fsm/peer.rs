@@ -10,21 +10,21 @@ use encryption_export::DataKeyManager;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use kvproto::{errorpb, raft_cmdpb::RaftCmdResponse};
 use raftstore::store::{Config, ReadCallback, TabletSnapManager, Transport};
-use slog::{debug, info, trace, Logger};
+use slog::{Logger, debug, info, trace};
 use tikv_util::{
     is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
     slog_panic,
-    time::{duration_to_sec, Instant},
+    time::{Instant, duration_to_sec},
 };
-use tracker::{TrackerToken, GLOBAL_TRACKERS};
+use tracker::{GLOBAL_TRACKERS, TrackerToken};
 
 use crate::{
+    Result,
     batch::StoreContext,
     operation::ReplayWatch,
     raft::{Peer, Storage},
     router::{PeerMsg, PeerTick, QueryResult},
-    Result,
 };
 
 pub type SenderFsmPair<EK, ER> = (LooseBoundedSender<PeerMsg>, Box<PeerFsm<EK, ER>>);

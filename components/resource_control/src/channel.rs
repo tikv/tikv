@@ -169,7 +169,7 @@ impl<T: Send + 'static> Receiver<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::{thread, usize};
+    use std::thread;
 
     use test::Bencher;
 

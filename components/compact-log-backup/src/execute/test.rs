@@ -4,8 +4,8 @@ use std::{
     collections::HashMap,
     future::Future,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
 };
 
@@ -17,6 +17,7 @@ use tokio::sync::mpsc::Sender;
 
 use super::{Execution, ExecutionConfig};
 use crate::{
+    ErrorKind,
     compaction::SubcompactionResult,
     errors::OtherErrExt,
     exec_hooks::{
@@ -25,8 +26,7 @@ use crate::{
     },
     execute::hooking::{CId, ExecHooks, SubcompactionFinishCtx},
     storage::LOCK_PREFIX,
-    test_util::{gen_step, CompactInMem, KvGen, LogFileBuilder, TmpStorage},
-    ErrorKind,
+    test_util::{CompactInMem, KvGen, LogFileBuilder, TmpStorage, gen_step},
 };
 
 #[derive(Clone)]

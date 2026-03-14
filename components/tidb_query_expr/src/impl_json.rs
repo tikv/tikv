@@ -6,8 +6,8 @@ use serde::de::IgnoredAny;
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::{
-    codec::{data_type::*, mysql::json::*},
     EvalType,
+    codec::{data_type::*, mysql::json::*},
 };
 
 #[rpn_fn]
@@ -387,10 +387,10 @@ fn json_with_path_validator(expr: &tipb::Expr) -> Result<()> {
 #[inline]
 fn json_keys(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     assert!(!args.is_empty() && args.len() <= 2);
-    if let Some(j) = args[0].as_json() {
-        if let Some(list) = parse_json_path_list(&args[1..])? {
-            return Ok(j.keys(&list)?);
-        }
+    if let Some(j) = args[0].as_json()
+        && let Some(list) = parse_json_path_list(&args[1..])?
+    {
+        return Ok(j.keys(&list)?);
     }
     Ok(None)
 }
@@ -854,10 +854,10 @@ mod tests {
             match output {
                 Ok(s) => {
                     assert_eq!(s, expect, "{:?}", arg);
-                    assert_eq!(success, true);
+                    assert!(success);
                 }
                 Err(_) => {
-                    assert_eq!(success, false);
+                    assert!(!success);
                 }
             }
         }

@@ -5,8 +5,8 @@
 use std::{
     cell::RefCell,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
 };
 

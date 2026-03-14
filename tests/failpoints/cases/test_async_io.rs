@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{atomic::AtomicBool, mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicBool, mpsc},
     time::Duration,
 };
 

@@ -2,7 +2,7 @@
 
 use std::str;
 
-use super::{super::Result, path_expr::PathExpression, Json, JsonRef, JsonType};
+use super::{super::Result, Json, JsonRef, JsonType, path_expr::PathExpression};
 
 impl<'a> JsonRef<'a> {
     /// Evaluates a (possibly empty) list of values and returns a JSON array

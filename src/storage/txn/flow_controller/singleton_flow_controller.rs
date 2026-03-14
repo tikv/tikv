@@ -3,9 +3,9 @@
 // #[PerformanceCriticalPath]
 use std::{
     sync::{
+        Arc,
         atomic::{AtomicU32, Ordering},
         mpsc::{self, Receiver, RecvTimeoutError, SyncSender},
-        Arc,
     },
     thread::{Builder, JoinHandle},
     time::Duration,
@@ -20,7 +20,7 @@ use online_config::{ConfigChange, OnlineConfig};
 use rand::Rng;
 use tikv_util::{
     config::VersionTrack,
-    smoother::{Smoother, Trend, SMOOTHER_STALE_RECORD_THRESHOLD, SMOOTHER_TIME_RANGE_THRESHOLD},
+    smoother::{SMOOTHER_STALE_RECORD_THRESHOLD, SMOOTHER_TIME_RANGE_THRESHOLD, Smoother, Trend},
     sys::thread::StdThreadBuildWrapper,
     time::{Instant, Limiter},
 };

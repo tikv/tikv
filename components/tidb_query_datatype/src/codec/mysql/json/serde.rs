@@ -17,6 +17,9 @@ use crate::codec::Error;
 #[derive(Clone, Debug)]
 pub struct MySqlFormatter {}
 
+#[derive(Clone, Debug)]
+pub struct CompactJsonFormatter {}
+
 impl serde_json::ser::Formatter for MySqlFormatter {
     #[inline]
     fn begin_object_value<W>(&mut self, writer: &mut W) -> std::io::Result<()>
@@ -49,11 +52,74 @@ impl serde_json::ser::Formatter for MySqlFormatter {
             writer.write_all(b", ")
         }
     }
+
+    #[inline]
+    fn write_f32<W>(&mut self, writer: &mut W, value: f32) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        let mut buffer = ryu::Buffer::new();
+        let formatted = buffer.format_finite(value);
+        Self::write_mysql_float(writer, formatted)
+    }
+
+    #[inline]
+    fn write_f64<W>(&mut self, writer: &mut W, value: f64) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        let mut buffer = ryu::Buffer::new();
+        let formatted = buffer.format_finite(value);
+        Self::write_mysql_float(writer, formatted)
+    }
 }
 
 impl MySqlFormatter {
     pub fn new() -> Self {
         MySqlFormatter {}
+    }
+
+    #[inline]
+    fn write_mysql_float<W>(writer: &mut W, formatted: &str) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        if let Some(exponent_idx) = formatted.find(['e', 'E']) {
+            let bytes = formatted.as_bytes();
+            if bytes.get(exponent_idx + 1) == Some(&b'+') {
+                writer.write_all(&bytes[..exponent_idx + 1])?;
+                return writer.write_all(&bytes[exponent_idx + 2..]);
+            }
+        }
+        writer.write_all(formatted.as_bytes())
+    }
+}
+
+impl serde_json::ser::Formatter for CompactJsonFormatter {
+    #[inline]
+    fn write_f32<W>(&mut self, writer: &mut W, value: f32) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        let mut buffer = ryu::Buffer::new();
+        let formatted = buffer.format_finite(value);
+        MySqlFormatter::write_mysql_float(writer, formatted)
+    }
+
+    #[inline]
+    fn write_f64<W>(&mut self, writer: &mut W, value: f64) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        let mut buffer = ryu::Buffer::new();
+        let formatted = buffer.format_finite(value);
+        MySqlFormatter::write_mysql_float(writer, formatted)
+    }
+}
+
+impl CompactJsonFormatter {
+    pub fn new() -> Self {
+        CompactJsonFormatter {}
     }
 }
 
@@ -63,6 +129,18 @@ impl<'a> ToString for JsonRef<'a> {
     fn to_string(&self) -> String {
         let mut writer = Vec::with_capacity(128);
         let mut ser = JsonSerializer::with_formatter(&mut writer, MySqlFormatter::new());
+        self.serialize(&mut ser).unwrap();
+        unsafe {
+            // serde_json will not emit invalid UTF-8
+            String::from_utf8_unchecked(writer)
+        }
+    }
+}
+
+impl<'a> JsonRef<'a> {
+    pub(crate) fn to_compact_string(&self) -> String {
+        let mut writer = Vec::with_capacity(128);
+        let mut ser = JsonSerializer::with_formatter(&mut writer, CompactJsonFormatter::new());
         self.serialize(&mut ser).unwrap();
         unsafe {
             // serde_json will not emit invalid UTF-8
@@ -141,12 +219,6 @@ impl<'a> Serialize for JsonRef<'a> {
                 serializer.serialize_str(&duration.to_string())
             }
         }
-    }
-}
-
-impl ToString for Json {
-    fn to_string(&self) -> String {
-        self.as_ref().to_string()
     }
 }
 
@@ -256,7 +328,7 @@ mod tests {
         let jstr1 = r#"{"a": [1, "2", {"aa": "bb"}, 4.0, null], "c": null,"b": true}"#;
         let j1: Json = jstr1.parse().unwrap();
         let jstr2 = j1.to_string();
-        let expect_str = r#"{"a": [1, "2", {"aa": "bb"}, 4.0, null], "b": true, "c": null}"#;
+        let expect_str = r#"{"a":[1,"2",{"aa":"bb"},4.0,null],"b":true,"c":null}"#;
         assert_eq!(jstr2, expect_str);
     }
 
@@ -313,7 +385,7 @@ mod tests {
                     Json::from_str_val("value").unwrap().as_ref(),
                 )])
                 .unwrap(),
-                r#"{"key": "value"}"#,
+                r#"{"key":"value"}"#,
             ),
             (
                 Json::from_array(vec![
@@ -321,7 +393,7 @@ mod tests {
                     Json::from_str_val("d2").unwrap(),
                 ])
                 .unwrap(),
-                r#"["d1", "d2"]"#,
+                r#"["d1","d2"]"#,
             ),
             (Json::from_i64(-3).unwrap(), r#"-3"#),
             (Json::from_i64(3).unwrap(), r#"3"#),
