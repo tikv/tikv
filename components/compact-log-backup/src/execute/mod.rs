@@ -119,6 +119,8 @@ pub struct Execution<DB: SstExt = RocksEngine> {
     pub max_concurrent_subcompaction: u64,
     /// The external storage for input and output.
     pub external_storage: StorageBackend,
+    /// Backend configuration for constructing external storage.
+    pub backend_config: BackendConfig,
     /// The RocksDB instance for creating `SstWriter`.
     /// By design little or no data will be written to the instance, for now
     /// this is only used for loading the user collected properties
@@ -260,7 +262,7 @@ impl Execution {
 
     pub fn run(self, mut hooks: impl ExecHooks) -> Result<()> {
         let storage =
-            external_storage::create_storage(&self.external_storage, BackendConfig::default())?;
+            external_storage::create_storage(&self.external_storage, self.backend_config.clone())?;
         let storage: Arc<dyn ExternalStorage> = Arc::from(storage);
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()

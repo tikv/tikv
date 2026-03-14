@@ -648,6 +648,10 @@ impl ConfigManager {
     fn set_num_threads(&self, num_threads: usize) {
         self.0.write().unwrap().num_threads = num_threads;
     }
+
+    fn set_gcs_v2_enable(&self, gcs_v2_enable: bool) {
+        self.0.write().unwrap().gcs_v2_enable = gcs_v2_enable;
+    }
 }
 
 /// SoftLimitKeeper can run in the background and adjust the number of threads
@@ -929,6 +933,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
     fn get_config(&self) -> BackendConfig {
         BackendConfig {
             s3_multi_part_size: self.config_manager.0.read().unwrap().s3_multi_part_size.0 as usize,
+            gcs_v2_enable: self.config_manager.0.read().unwrap().gcs_v2_enable,
             hdfs_config: HdfsConfig {
                 hadoop_home: self.config_manager.0.read().unwrap().hadoop.home.clone(),
                 linux_user: self
@@ -1575,6 +1580,15 @@ pub mod tests {
             endpoint.config_manager.0.read().unwrap().s3_multi_part_size,
             ReadableSize::mb(5)
         );
+    }
+
+    #[test]
+    fn test_gcs_v2_enable_online_config() {
+        let (_tmp, endpoint) = new_endpoint();
+        assert!(endpoint.get_config().gcs_v2_enable);
+
+        endpoint.config_manager.set_gcs_v2_enable(false);
+        assert!(!endpoint.get_config().gcs_v2_enable);
     }
 
     #[test]

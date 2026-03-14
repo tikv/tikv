@@ -1322,6 +1322,9 @@
 ## in order to reduce impact on the cluster's performance during back up.
 # enable-auto-tune = true
 
+## Enable GCS v2 external storage backend for backup/restore.
+# gcs-v2-enable = true
+
 [log-backup]
 ## Number of threads to perform backup stream tasks.
 ## The default value is CPU_NUM * 0.5, and limited to [2, 12].
@@ -1330,6 +1333,10 @@
 ## enable this feature. TiKV will starts watch related tasks in PD. and backup kv changes to storage accodring to task.
 ## The default value is false.
 # enable = true
+
+## Enable GCS v2 external storage backend for log-backup.
+## If not set, default is enabled.
+# gcs-v2-enable = true
 
 [backup.hadoop]
 ## let TiKV know how to find the hdfs shell command.

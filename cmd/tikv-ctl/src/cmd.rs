@@ -719,6 +719,15 @@ pub enum Cmd {
             help("specify the maximum count of spawning tasks to download a metadata")
         )]
         prefetch_buffer_count: u64,
+
+        #[structopt(
+            long = "gcs-v2-enable",
+            parse(try_from_str),
+            default_value = "true",
+            possible_values = &["true", "false"],
+            help("whether to enable GCS v2 external storage backend for compact-log-backup")
+        )]
+        gcs_v2_enable: bool,
     },
     /// Get the state of a region's RegionReadProgress.
     GetRegionReadProgress {
@@ -896,4 +905,53 @@ pub enum UnsafeRecoverCmd {
         /// Do the command for all regions
         all_regions: bool,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use structopt::StructOpt;
+
+    use super::{Cmd, Opt};
+
+    #[test]
+    fn compact_log_backup_gcs_v2_enable_default_true() {
+        let opt = Opt::from_iter_safe([
+            "tikv-ctl",
+            "compact-log-backup",
+            "--from",
+            "1",
+            "--until",
+            "2",
+            "--storage-base64",
+            "AA==",
+        ])
+        .unwrap();
+
+        match opt.cmd.unwrap() {
+            Cmd::CompactLogBackup { gcs_v2_enable, .. } => assert!(gcs_v2_enable),
+            cmd => panic!("unexpected command: {:?}", std::mem::discriminant(&cmd)),
+        }
+    }
+
+    #[test]
+    fn compact_log_backup_gcs_v2_enable_false() {
+        let opt = Opt::from_iter_safe([
+            "tikv-ctl",
+            "compact-log-backup",
+            "--from",
+            "1",
+            "--until",
+            "2",
+            "--storage-base64",
+            "AA==",
+            "--gcs-v2-enable",
+            "false",
+        ])
+        .unwrap();
+
+        match opt.cmd.unwrap() {
+            Cmd::CompactLogBackup { gcs_v2_enable, .. } => assert!(!gcs_v2_enable),
+            cmd => panic!("unexpected command: {:?}", std::mem::discriminant(&cmd)),
+        }
+    }
 }
