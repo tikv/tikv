@@ -233,6 +233,12 @@ make_static_metric! {
         reserve_log,
         compact_idx_too_small,
         threshold_limit,
+        force_compact,
+        //
+        gc_count_limit,
+        update_slowest_peer,
+        //
+        early_apply,
     }
 
     pub label_enum LoadBaseSplitEventType {
