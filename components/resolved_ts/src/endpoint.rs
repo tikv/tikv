@@ -11,6 +11,7 @@ use std::{
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
+use fail::fail_point;
 use futures::channel::oneshot::{channel, Receiver, Sender};
 use grpcio::Environment;
 use kvproto::{kvrpcpb::LeaderInfo, metapb::Region, raft_cmdpb::AdminCmdType};
@@ -26,6 +27,7 @@ use raftstore::{
         },
     },
 };
+use rand::Rng;
 use security::SecurityManager;
 use tikv::{config::ResolvedTsConfig, storage::txn::txn_status_cache::TxnStatusCache};
 use tikv_util::{
@@ -47,7 +49,6 @@ use crate::{
 
 /// grace period for identifying slow resolved-ts and safe-ts.
 const SLOW_LOG_GRACE_PERIOD_MS: u64 = 1000;
-const MEMORY_QUOTA_EXCEEDED_BACKOFF: Duration = Duration::from_secs(30);
 
 enum ResolverStatus {
     Pending {
@@ -409,6 +410,7 @@ pub struct Endpoint<T, E: KvEngine, S> {
     scheduler: Scheduler<Task>,
     advance_worker: AdvanceTsWorker,
     txn_status_cache: Arc<TxnStatusCache>,
+    last_active_memory_quota_check: std::time::Instant,
     _phantom: PhantomData<(T, E)>,
 }
 
@@ -689,6 +691,7 @@ where
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
         txn_status_cache: Arc<TxnStatusCache>,
+        memory_quota: Arc<MemoryQuota>,
     ) -> Self {
         let (region_read_progress, store_id) = {
             let meta = store_meta.lock().unwrap();
@@ -710,7 +713,7 @@ where
         let ep = Self {
             store_id: Some(store_id),
             cfg: cfg.clone(),
-            memory_quota: Arc::new(MemoryQuota::new(cfg.memory_quota.0 as usize)),
+            memory_quota,
             advance_notify: Arc::new(Notify::new()),
             scheduler,
             store_meta,
@@ -720,6 +723,7 @@ where
             scan_concurrency_semaphore,
             regions: HashMap::default(),
             txn_status_cache,
+            last_active_memory_quota_check: std::time::Instant::now(),
             _phantom: PhantomData,
         };
         ep.handle_advance_resolved_ts(leader_resolver);
@@ -733,7 +737,7 @@ where
             warn!("try register nonexistent region"; "region" => ?region);
             return;
         };
-        info!("register observe region"; "region" => ?region);
+        info!("register observe region"; "region" => ?region, "backoff" => ?backoff);
         let (cancelled_tx, cancelled_rx) = channel();
         let observe_region = ObserveRegion::new(
             region.clone(),
@@ -851,7 +855,7 @@ where
         &mut self,
         region_id: u64,
         observe_id: ObserveId,
-        cause: Error,
+        cause: Option<&str>,
         backoff: Option<Duration>,
     ) {
         if let Some(observe_region) = self.regions.get(&region_id) {
@@ -864,7 +868,7 @@ where
                 "register region again";
                 "region_id" => region_id,
                 "observe_id" => ?observe_id,
-                "cause" => ?cause
+                "cause" => ?cause,
             );
             self.deregister_region(region_id);
             let region;
@@ -876,6 +880,38 @@ where
                 }
             }
             self.register_region(region, backoff);
+        }
+    }
+
+    // Deregister all regions and try to register them again.
+    //
+    // This is useful when memory quota is exceeded, it means the endpoint is
+    // too busy to handle incoming change logs, or incoming change logs are too
+    // large to be handled, so we re-register all regions to drop all pending
+    // locks and change logs to free memory.
+    fn re_register_all_regions(&mut self, cause: Option<&str>) {
+        let region_ids: Vec<u64> = self.regions.keys().copied().collect();
+        warn!(
+            "resolved ts re-register all regions";
+            "region_count" => region_ids.len(),
+            "cause" => ?cause,
+        );
+        for region_id in region_ids {
+            if let Some(observe_region) = self.regions.get_mut(&region_id) {
+                // Random backoff to avoid all regions re-registering at the same time.
+                let backoff = self.cfg.memory_quota_exceeded_backoff_duration.0
+                    + Duration::from_millis(
+                        rand::thread_rng().gen_range(
+                            0..self
+                                .cfg
+                                .memory_quota_exceeded_backoff_duration
+                                .0
+                                .as_millis() as u64,
+                        ),
+                    );
+                let observe_id = observe_region.handle.id;
+                self.re_register_region(region_id, observe_id, cause, Some(backoff));
+            }
         }
     }
 
@@ -907,6 +943,7 @@ where
     #[allow(dropping_references)]
     fn handle_change_log(&mut self, cmd_batch: Vec<CmdBatch>) {
         let size = cmd_batch.iter().map(|b| b.size()).sum::<usize>();
+        self.memory_quota.free(size);
         RTS_CHANNEL_PENDING_CMD_BYTES.sub(size as i64);
         for batch in cmd_batch {
             if batch.is_empty() {
@@ -919,11 +956,19 @@ where
                     let logs = ChangeLog::encode_change_log(region_id, batch);
                     if let Err(e) = observe_region.track_change_log(&logs) {
                         drop(observe_region);
-                        let backoff = match e {
-                            Error::MemoryQuotaExceeded(_) => Some(MEMORY_QUOTA_EXCEEDED_BACKOFF),
-                            Error::Other(_) => None,
+                        match e {
+                            cause @ Error::MemoryQuotaExceeded(_) => {
+                                self.re_register_all_regions(Some(&cause.to_string()));
+                            }
+                            cause @ Error::Other(_) => {
+                                self.re_register_region(
+                                    region_id,
+                                    observe_id,
+                                    Some(&cause.to_string()),
+                                    None,
+                                );
+                            }
                         };
-                        self.re_register_region(region_id, observe_id, e, backoff);
                     }
                 } else {
                     debug!("resolved ts CmdBatch discarded";
@@ -934,6 +979,7 @@ where
                 }
             }
         }
+        fail_point!("resolved_ts_after_handle_change_log");
     }
 
     fn handle_scan_locks(
@@ -958,8 +1004,7 @@ where
                 "observe_id" => ?observe_id);
         }
         if let Some(e) = memory_quota_exceeded {
-            let backoff = Some(MEMORY_QUOTA_EXCEEDED_BACKOFF);
-            self.re_register_region(region_id, observe_id, e, backoff);
+            self.re_register_all_regions(Some(&e.to_string()));
         }
     }
 
@@ -1147,6 +1192,16 @@ where
 
     fn run(&mut self, task: Task) {
         debug!("run resolved-ts task"; "task" => ?task);
+        if self.last_active_memory_quota_check.elapsed()
+            >= self.cfg.memory_quota_active_check_interval.0
+        {
+            self.last_active_memory_quota_check = std::time::Instant::now();
+            // Check whether memory quota is exceeded actively.
+            if let Err(e) = self.memory_quota.alloc(0) {
+                self.re_register_all_regions(Some(&e.to_string()));
+            }
+        }
+
         match task {
             Task::RegionDestroyed(region) => self.region_destroyed(region),
             Task::RegionUpdated(region) => self.region_updated(region),
@@ -1156,7 +1211,7 @@ where
                 region_id,
                 observe_id,
                 cause,
-            } => self.re_register_region(region_id, observe_id, cause, None),
+            } => self.re_register_region(region_id, observe_id, Some(&cause.to_string()), None),
             Task::AdvanceResolvedTs { leader_resolver } => {
                 self.handle_advance_resolved_ts(leader_resolver)
             }
@@ -1165,7 +1220,9 @@ where
                 ts,
                 ts_source,
             } => self.handle_resolved_ts_advanced(regions, ts, ts_source),
-            Task::ChangeLog { cmd_batch } => self.handle_change_log(cmd_batch),
+            Task::ChangeLog { cmd_batch } => {
+                self.handle_change_log(cmd_batch);
+            }
             Task::ScanLocks {
                 region_id,
                 observe_id,

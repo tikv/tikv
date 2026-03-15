@@ -10,6 +10,7 @@ use std::{
 use futures::executor::block_on;
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
+use resolved_ts::Task;
 use test_raftstore::{new_peer, sleep_ms};
 pub use testsuite::*;
 use tikv_util::config::ReadableDuration;
@@ -18,6 +19,7 @@ use txn_types::TimeStamp;
 #[test]
 fn test_check_leader_timeout() {
     let mut suite = TestSuite::new(3);
+    suite.run();
     let region = suite.cluster.get_region(&[]);
 
     // Prewrite
@@ -63,6 +65,7 @@ fn test_report_min_resolved_ts() {
     fail::cfg("mock_collect_tick_interval", "return(0)").unwrap();
     fail::cfg("mock_min_resolved_ts_interval", "return(0)").unwrap();
     let mut suite = TestSuite::new(1);
+    suite.run();
     assert_eq!(
         suite
             .cluster
@@ -106,6 +109,7 @@ fn test_report_min_resolved_ts_disable() {
     fail::cfg("mock_collect_tick_interval", "return(0)").unwrap();
     fail::cfg("mock_min_resolved_ts_interval_disable", "return(0)").unwrap();
     let mut suite = TestSuite::new(1);
+    suite.run();
     let region = suite.cluster.get_region(&[]);
     let ts1 = suite.cluster.pd_client.get_min_resolved_ts();
 
@@ -150,6 +154,7 @@ fn test_pending_locks_memory_quota_exceeded() {
     .unwrap();
 
     let mut suite = TestSuite::new(1);
+    suite.run();
     let region = suite.cluster.get_region(&[]);
 
     // Must not trigger memory quota exceeded.
@@ -170,5 +175,97 @@ fn test_pending_locks_memory_quota_exceeded() {
 
     fail::remove("resolved_ts_after_scanner_get_snapshot");
     fail::remove("resolved_ts_on_pending_locks_memory_quota_exceeded");
+    suite.stop();
+}
+
+// Test that when the resolved-ts memory quota is exceeded, the resolved-ts
+// service will re-register regions (with backoff) and drain pending change-log
+// entries from its internal channel in a timely manner.
+#[test]
+fn test_change_log_task_channel_memory_quota_exceeded() {
+    let mut suite = TestSuite::new(1);
+    // Make the memory-quota active check run on every task handling.
+    suite
+        .cluster
+        .cfg
+        .resolved_ts
+        .memory_quota_active_check_interval = ReadableDuration::millis(0);
+    // Use a long backoff so re-registration won't retry quickly.
+    suite
+        .cluster
+        .cfg
+        .resolved_ts
+        .memory_quota_exceeded_backoff_duration = ReadableDuration::days(1);
+    suite.run();
+
+    let region = suite.cluster.get_region(&[]);
+    suite.cluster.must_split(&region, "b".as_bytes());
+    let region = suite.cluster.get_region(&[]);
+    let region_b = suite.cluster.get_region("b".as_bytes());
+
+    // Helper to prewrite a single key into a region.
+    let prewrite = |suite: &mut TestSuite, region_id: u64, prefix: &str, i: i32| {
+        let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+        let mut mutation = Mutation::default();
+        mutation.set_op(Op::Put);
+        mutation.key = format!("{}{:03}", prefix, i).into_bytes();
+        mutation.value = vec![b'z'; 128];
+        suite.must_kv_prewrite(region_id, vec![mutation], b"pk2".to_vec(), start_ts, false);
+    };
+
+    // Helper to query the number of locks via a diagnosis task.
+    let must_get_num_locks = |suite: &TestSuite, region_id: u64| -> u64 {
+        let (tx, rx) = channel();
+        suite.must_schedule_task(
+            1,
+            Task::GetDiagnosisInfo {
+                region_id,
+                log_locks: true,
+                min_start_ts: 0,
+                callback: Box::new(move |res| {
+                    tx.send(res).unwrap();
+                }),
+            },
+        );
+        let (_, _, _, num_locks, _) = rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+        num_locks
+    };
+
+    prewrite(&mut suite, region.id, "a", 0);
+    prewrite(&mut suite, region_b.id, "b", 0);
+
+    let num_locks = must_get_num_locks(&suite, region.id);
+    assert_ne!(num_locks, 0, "num_locks: {}", num_locks);
+    let num_locks = must_get_num_locks(&suite, region_b.id);
+    assert_ne!(num_locks, 0, "num_locks: {}", num_locks);
+
+    // Pause after handling change-log entries so pending entries accumulate.
+    fail::cfg("resolved_ts_after_handle_change_log", "pause").unwrap();
+    // Reduce memory quota to force quota-exceeded behavior.
+    suite.must_change_memory_quota(1, 10 * 1024); // 10 KB
+    for i in 1..300 {
+        prewrite(&mut suite, region.id, "a", i);
+    }
+
+    let pending_bytes = resolved_ts::RTS_CHANNEL_PENDING_CMD_BYTES.get();
+    assert!(
+        pending_bytes > 10 * 1024,
+        "pending_bytes: {}",
+        pending_bytes
+    );
+
+    // Removing the pause allows the active memory quota check to run and causes
+    // the resolved-ts service to re-register regions. Because we set a long
+    // backoff, the initial scans won't start immediately, so diagnosis requests
+    // should report zero locks.
+    fail::remove("resolved_ts_after_handle_change_log");
+    let num_locks = must_get_num_locks(&suite, region.id);
+    assert_eq!(num_locks, 0, "num_locks: {}", num_locks);
+    let num_locks = must_get_num_locks(&suite, region_b.id);
+    assert_eq!(num_locks, 0, "num_locks: {}", num_locks);
+
+    let pending_bytes = resolved_ts::RTS_CHANNEL_PENDING_CMD_BYTES.get();
+    assert_eq!(pending_bytes, 0, "pending_bytes: {}", pending_bytes);
+
     suite.stop();
 }
