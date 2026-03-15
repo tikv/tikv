@@ -834,6 +834,9 @@ where
         region_cpu_records_collector: &mut Option<CollectorGuard>,
         split_validator: &SplitValidator,
     ) {
+        if true {
+            return;
+        }
         let start_time = TiInstant::now();
         match auto_split_controller.refresh_and_check_cfg() {
             SplitConfigChange::UpdateRegionCpuCollector(is_register) => {
