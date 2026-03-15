@@ -206,7 +206,7 @@ impl S3Storage {
         credentials_provider: Creds,
     ) -> io::Result<Self>
     where
-        Http: HttpClient + 'static,
+        Http: HttpClient + Clone + 'static,
         Creds: ProvideCredentials + 'static,
     {
         if config.role_arn.is_some() {
@@ -225,15 +225,10 @@ impl S3Storage {
             if let Some(region) = &config.bucket.region {
                 builder = builder.region(Region::new(region.to_string()));
             }
-
-            let credentials_provider: io::Result<AssumeRoleProvider> = block_on(async {
-                let sdk_config =
-                    Self::load_sdk_config(&config, util::new_http_client(), credentials_provider)
-                        .await?;
-                builder = builder.configure(&sdk_config);
-                Ok(builder.build().await)
-            });
-            Self::new_with_creds_client(config, client, credentials_provider?)
+            let rt = tokio::runtime::Runtime::new()?;
+            let credentials_provider =
+                rt.block_on(async { builder.build_from_provider(credentials_provider).await });
+            Self::new_with_creds_client(config, client, credentials_provider)
         } else {
             // or just use original cred_provider to access s3.
             Self::new_with_creds_client(config, client, credentials_provider)
