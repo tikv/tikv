@@ -10,6 +10,12 @@ test-engine-kv-rocksdb = ["tikv/test-engine-kv-rocksdb", "engine_test/test-engin
 test-engine-raft-raft-engine = ["tikv/test-engine-raft-raft-engine", "engine_test/test-engine-raft-raft-engine"]
 test-engines-rocksdb = ["tikv/test-engines-rocksdb"]
 failpoints = ["tikv/failpoints", "fail/failpoints"]
+# Enable this if you cannot compile `grpcio` when running test cases in macOS.
+openssl-vendored = [
+  "openssl/vendored",
+  "grpcio/openssl-vendored",
+  "encryption_export/sm4",
+]
 backup-stream-debug = []
 
 [[test]]
