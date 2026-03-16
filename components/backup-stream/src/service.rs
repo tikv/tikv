@@ -2,13 +2,15 @@
 
 use std::collections::HashSet;
 
-use grpcio::RpcContext;
+use futures::future::FutureExt;
+use grpcio::{RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::{logbackuppb::*, metapb::Region};
-use tikv_util::{warn, worker::Scheduler};
+use tikv_util::{info, warn, worker::Scheduler};
 
 use crate::{
     checkpoint_manager::{GetCheckpointResult, RegionIdWithVersion},
     endpoint::{RegionCheckpointOperation, RegionSet},
+    router::TaskSelector,
     try_send, Task,
 };
 
@@ -40,6 +42,51 @@ impl From<RegionIdWithVersion> for RegionIdentity {
 }
 
 impl LogBackup for BackupStreamGrpcService {
+    fn flush_now(
+        &mut self,
+        ctx: grpcio::RpcContext<'_>,
+        _req: FlushNowRequest,
+        sink: grpcio::UnarySink<FlushNowResponse>,
+    ) {
+        info!("Client requests force flush."; "cli" => %ctx.peer());
+        let mut resp = FlushNowResponse::new();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let task = Task::ForceFlush(TaskSelector::All, tx);
+        if let Err(err) = self.endpoint.schedule(task) {
+            ctx.spawn(
+                sink.fail(RpcStatus::with_message(
+                    RpcStatusCode::INTERNAL,
+                    format!(
+                        "failed to schedule the command, maybe busy or shutting down: {}",
+                        err
+                    ),
+                ))
+                .map(|res| {
+                    if let Err(err) = res {
+                        warn!("flush_now: failed to send an error response to client"; "err" => %err)
+                    }
+                }),
+            );
+            return;
+        };
+
+        ctx.spawn(async move {
+            while let Some(item) = rx.recv().await {
+                let mut res = FlushResult::new();
+                res.set_success(item.error.is_none());
+                if let Some(err) = item.error {
+                    res.set_error_message(err.to_string());
+                }
+                res.set_task_name(item.task);
+                resp.results.push(res);
+            }
+
+            if let Err(err) = sink.success(resp.clone()).await {
+                warn!("flush_now: failed to send success response to client"; "err" => %err, "resp" => ?resp);
+            }
+        })
+    }
+
     fn get_last_flush_ts_of_region(
         &mut self,
         _ctx: RpcContext<'_>,

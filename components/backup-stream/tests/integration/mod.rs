@@ -12,7 +12,9 @@ mod all {
         time::{Duration, Instant},
     };
 
-    use backup_stream::{GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task};
+    use backup_stream::{
+        router::TaskSelector, GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task,
+    };
     use futures::{Stream, StreamExt};
     use kvproto::metapb::RegionEpoch;
     use pd_client::PdClient;
@@ -381,7 +383,10 @@ mod all {
             .get(&leader.store_id)
             .unwrap()
             .scheduler()
-            .schedule(Task::ForceFlush("r".to_owned()))
+            .schedule(Task::ForceFlush(
+                TaskSelector::All,
+                tokio::sync::mpsc::channel(1).0,
+            ))
             .unwrap();
         suite.sync();
         std::thread::sleep(Duration::from_secs(2));
