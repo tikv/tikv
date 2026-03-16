@@ -212,6 +212,8 @@ tame-oauth = { git = "https://github.com/tikv/tame-oauth", branch = "fips-0.9" }
 
 # remove this when https://github.com/danburkert/fs2-rs/pull/42 is merged.
 fs2 = { git = "https://github.com/tikv/fs2-rs", branch = "tikv" }
+# tempdir pulls in remove_dir_all 0.5.x via the benchmark-only perfcnt stack.
+tempdir = { path = "patches/tempdir" }
 
 # Remove this when a new version is release. We need to solve rust-lang/cmake-rs#143.
 cmake = { git = "https://github.com/rust-lang/cmake-rs" }
@@ -355,7 +357,7 @@ tikv_alloc = { path = "components/tikv_alloc" }
 tikv_kv = { path = "components/tikv_kv", default-features = false }
 tikv_util = { path = "components/tikv_util" }
 tipb_helper = { path = "components/tipb_helper" }
-time = { version = "0.1" }
+time = { version = "0.2.23" }
 tracker = { path = "components/tracker" }
 txn_types = { path = "components/txn_types" }
 # External libs

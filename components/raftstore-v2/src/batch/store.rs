@@ -53,12 +53,11 @@ use tikv_util::{
         PURGE_WORKER_THREAD, RAFTSTORE_THREAD, RAFTSTORE_V2_THREAD, REFRESH_CONFIG_WORKER_THREAD,
         STORE_BACKGROUND_WORKER_THREAD, TABLET_WORKER_THREAD,
     },
-    time::{Instant as TiInstant, Limiter, duration_to_sec, monotonic_raw_now},
+    time::{Instant as TiInstant, Limiter, Timespec, duration_to_sec, monotonic_raw_now},
     timer::{GLOBAL_TIMER_HANDLE, SteadyTimer},
     worker::{Builder, LazyWorker, Scheduler, Worker},
     yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
 };
-use time::Timespec;
 
 use crate::{
     Error, Result,

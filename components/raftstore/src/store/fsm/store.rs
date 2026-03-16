@@ -73,13 +73,15 @@ use tikv_util::{
         RAFTLOG_FETCH_WORKER_THREAD, RAFTSTORE_THREAD, REFRESH_CONFIG_WORKER_THREAD,
         REGION_WORKER_THREAD, SNAP_GENERATOR_THREAD, STORE_WRITER_THREAD,
     },
-    time::{Instant as TiInstant, SlowTimer, duration_to_sec, monotonic_raw_now},
+    time::{
+        Instant as TiInstant, SlowTimer, Timespec, duration_to_sec, get_time, monotonic_raw_now,
+    },
     timer::SteadyTimer,
     warn,
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
     yatp_pool::FuturePool,
 };
-use time::{self, Timespec};
+use time;
 
 use crate::{
     Error, Result, bytes_capacity,
@@ -957,7 +959,7 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             );
         }
         self.fsm.store.id = store.get_id();
-        self.fsm.store.start_time = Some(time::get_time());
+        self.fsm.store.start_time = Some(get_time());
         self.register_cleanup_import_sst_tick();
         self.register_full_compact_tick();
         self.register_load_metrics_window_tick();
@@ -2777,7 +2779,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
 
         let completed_apply_peers_count = completed_apply_peers_count.unwrap();
         let during_starting_stage = {
-            (time::get_time().sec as u32).saturating_sub(start_ts_sec)
+            (get_time().sec as u32).saturating_sub(start_ts_sec)
                 <= STORE_CHECK_PENDING_APPLY_DURATION.as_secs() as u32
         };
         // If the store is busy in handling applying logs when starting, it should not

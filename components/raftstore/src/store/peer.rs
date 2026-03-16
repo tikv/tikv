@@ -56,11 +56,11 @@ use tikv_util::{
     debug, error, info,
     store::{find_peer_by_id, is_learner},
     sys::disk::DiskUsage,
-    time::{Instant as TiInstant, InstantExt, duration_to_sec, monotonic_raw_now},
+    time::{Instant as TiInstant, InstantExt, Timespec, duration_to_sec, monotonic_raw_now},
     warn,
     worker::Scheduler,
 };
-use time::{Duration as TimeDuration, Timespec};
+use time::Duration as TimeDuration;
 use tracker::{GLOBAL_TRACKERS, TrackerTokenArray};
 use txn_types::{TimeStamp, WriteBatchFlags};
 use uuid::Uuid;

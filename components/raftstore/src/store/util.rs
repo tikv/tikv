@@ -34,9 +34,9 @@ use tikv_util::{
     codec::number::{NumberEncoder, decode_u64},
     debug, info,
     store::{find_peer_by_id, region},
-    time::{Instant, monotonic_raw_now},
+    time::{Instant, Timespec, monotonic_raw_now},
 };
-use time::{Duration, Timespec};
+use time::Duration;
 use tokio::sync::Notify;
 use txn_types::WriteBatchFlags;
 

@@ -15,7 +15,7 @@ use std::{
 };
 
 use async_speed_limit::clock::{BlockingClock, Clock, StandardClock};
-use time::{Duration as TimeDuration, Timespec};
+use time::Duration as TimeDuration;
 
 /// Returns the monotonic raw time since some unspecified starting point.
 pub use self::inner::monotonic_raw_now;
@@ -27,6 +27,61 @@ const MILLISECONDS_PER_SECOND: u64 = 1_000;
 const MICROSECONDS_PER_SECOND: u64 = 1_000_000;
 const NANOSECONDS_PER_MILLISECOND: u64 = 1_000_000;
 const NANOSECONDS_PER_MICROSECOND: u64 = 1_000;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct Timespec {
+    pub sec: i64,
+    pub nsec: i32,
+}
+
+impl Timespec {
+    pub fn new(sec: i64, nsec: i32) -> Self {
+        Self::from_total_nanos((sec as i128) * NANOSECONDS_PER_SECOND as i128 + nsec as i128)
+    }
+
+    fn from_total_nanos(total_nanos: i128) -> Self {
+        let sec = total_nanos.div_euclid(NANOSECONDS_PER_SECOND as i128);
+        let nsec = total_nanos.rem_euclid(NANOSECONDS_PER_SECOND as i128) as i32;
+        Self {
+            sec: sec as i64,
+            nsec,
+        }
+    }
+
+    fn total_nanos(self) -> i128 {
+        (self.sec as i128) * NANOSECONDS_PER_SECOND as i128 + self.nsec as i128
+    }
+}
+
+impl Add<TimeDuration> for Timespec {
+    type Output = Timespec;
+
+    fn add(self, rhs: TimeDuration) -> Self::Output {
+        let delta = rhs
+            .num_nanoseconds()
+            .expect("duration is too large to fit in nanoseconds") as i128;
+        Self::from_total_nanos(self.total_nanos() + delta)
+    }
+}
+
+impl Sub<TimeDuration> for Timespec {
+    type Output = Timespec;
+
+    fn sub(self, rhs: TimeDuration) -> Self::Output {
+        let delta = rhs
+            .num_nanoseconds()
+            .expect("duration is too large to fit in nanoseconds") as i128;
+        Self::from_total_nanos(self.total_nanos() - delta)
+    }
+}
+
+impl Sub<Timespec> for Timespec {
+    type Output = TimeDuration;
+
+    fn sub(self, rhs: Timespec) -> Self::Output {
+        TimeDuration::nanoseconds((self.total_nanos() - rhs.total_nanos()) as i64)
+    }
+}
 
 /// Converts Duration to milliseconds.
 #[inline]
@@ -59,6 +114,11 @@ pub fn duration_to_us(d: Duration) -> u64 {
 #[inline]
 pub fn timespec_to_ns(t: Timespec) -> u64 {
     (t.sec as u64) * NANOSECONDS_PER_SECOND + t.nsec as u64
+}
+
+pub fn get_time() -> Timespec {
+    let dur = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+    Timespec::new(dur.as_secs() as i64, dur.subsec_nanos() as i32)
 }
 
 /// Converts Duration to nanoseconds.
@@ -220,9 +280,9 @@ impl Drop for Monitor {
 
 #[cfg(not(target_os = "linux"))]
 mod inner {
-    use time::{self, Timespec};
+    use time;
 
-    use super::NANOSECONDS_PER_SECOND;
+    use super::{NANOSECONDS_PER_SECOND, Timespec};
 
     pub fn monotonic_raw_now() -> Timespec {
         // TODO Add monotonic raw clock time impl for macos and windows
@@ -248,7 +308,7 @@ mod inner {
 mod inner {
     use std::io;
 
-    use time::Timespec;
+    use super::Timespec;
 
     #[inline]
     pub fn monotonic_raw_now() -> Timespec {

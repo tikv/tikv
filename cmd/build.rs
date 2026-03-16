@@ -44,7 +44,8 @@ fn link_sys_lib(lib: &str, tool: &cc::Tool) {
 fn main() {
     println!(
         "cargo:rustc-env=TIKV_BUILD_TIME={}",
-        time::now_utc().strftime("%Y-%m-%d %H:%M:%S").unwrap()
+        time::OffsetDateTime::now_utc()
+            .format("%Y-%m-%d %H:%M:%S")
     );
 
     let tool = cc::Build::default().get_compiler();

@@ -26,9 +26,8 @@ use tikv_util::{
     debug, error,
     lru::LruCache,
     store::find_peer_by_id,
-    time::{ThreadReadId, monotonic_raw_now},
+    time::{ThreadReadId, Timespec, monotonic_raw_now},
 };
-use time::Timespec;
 use tracker::GLOBAL_TRACKERS;
 use txn_types::{TimeStamp, WriteBatchFlags};
 

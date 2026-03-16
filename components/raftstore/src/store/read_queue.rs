@@ -14,9 +14,8 @@ use tikv_util::{
     codec::number::{MAX_VAR_U64_LEN, NumberEncoder},
     debug, error,
     memory::HeapSize,
-    time::{duration_to_sec, monotonic_raw_now},
+    time::{Timespec, duration_to_sec, monotonic_raw_now},
 };
-use time::Timespec;
 use uuid::Uuid;
 
 use super::msg::ErrorCallback;

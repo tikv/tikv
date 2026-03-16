@@ -21,8 +21,7 @@ use raftstore::{
     },
 };
 use slog::debug;
-use tikv_util::time::monotonic_raw_now;
-use time::Timespec;
+use tikv_util::time::{Timespec, monotonic_raw_now};
 use tracker::GLOBAL_TRACKERS;
 
 use crate::{
