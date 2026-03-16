@@ -911,8 +911,8 @@ mod test {
     use tokio::io::{AsyncWriteExt, BufReader};
 
     use crate::utils::{
+        is_in_range, parse_backupmeta_filename, FutureWaitGroup, SegmentMap,
         BACKUP_META_MAX_TS_PREFIX, BACKUP_META_MIN_BEGIN_TS_PREFIX, BACKUP_META_MIN_TS_PREFIX,
-        FutureWaitGroup, SegmentMap, is_in_range, parse_backupmeta_filename,
     };
 
     #[test]
