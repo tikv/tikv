@@ -42,7 +42,9 @@ use tikv::{
         IoRateLimitConfig, MaxTsConfig,
     },
 };
-use tikv_util::config::{LogFormat, ReadableDuration, ReadableSchedule, ReadableSize};
+use tikv_util::config::{
+    LogFormat, ReadableDuration, ReadableSchedule, ReadableSize, ReadableSizeOrPercent,
+};
 
 mod dynamic;
 mod graceful_shutdown_config;
@@ -80,7 +82,7 @@ fn test_serde_custom_tikv_config() {
     value.slow_log_file = "slow_foo".to_owned();
     value.slow_log_threshold = ReadableDuration::secs(1);
     value.abort_on_panic = true;
-    value.memory_usage_limit = Some(ReadableSize::gb(10));
+    value.memory_usage_limit = Some(ReadableSizeOrPercent::gb(10));
     value.memory_usage_high_water = 0.65;
     value.memory.enable_heap_profiling = false;
     value.memory.profiling_sample_per_bytes = ReadableSize::mb(1);
@@ -756,7 +758,7 @@ fn test_serde_custom_tikv_config() {
         },
         block_cache: BlockCacheConfig {
             shared: None,
-            capacity: Some(ReadableSize::gb(40)),
+            capacity: Some(ReadableSizeOrPercent::gb(40)),
             num_shard_bits: 10,
             strict_capacity_limit: true,
             high_pri_pool_ratio: 0.8,

@@ -109,6 +109,39 @@ impl Tracker {
         detail.set_apply_write_wal_nanos(self.metrics.apply_write_wal_nanos);
         detail.set_apply_write_memtable_nanos(self.metrics.apply_write_memtable_nanos);
     }
+
+    pub fn write_ru_v2(&self, detail: &mut pb::Ruv2) {
+        detail.set_coprocessor_executor_iterations(self.metrics.coprocessor_executor_iterations);
+        detail.set_coprocessor_response_bytes(self.metrics.coprocessor_response_bytes);
+        detail.set_raftstore_store_write_trigger_wb_bytes(
+            self.metrics.raftstore_store_write_trigger_wb_bytes,
+        );
+        detail.set_storage_processed_keys_batch_get(self.metrics.storage_processed_keys_batch_get);
+        detail.set_storage_processed_keys_get(self.metrics.storage_processed_keys_get);
+
+        let executor_inputs = detail.mut_executor_inputs();
+        executor_inputs.set_tikv_coprocessor_executor_work_total_batch_index_scan(
+            self.metrics.executor_work_batch_index_scan,
+        );
+        executor_inputs.set_tikv_coprocessor_executor_work_total_batch_table_scan(
+            self.metrics.executor_work_batch_table_scan,
+        );
+        executor_inputs.set_tikv_coprocessor_executor_work_total_batch_selection(
+            self.metrics.executor_work_batch_selection,
+        );
+        executor_inputs.set_tikv_coprocessor_executor_work_total_batch_top_n(
+            self.metrics.executor_work_batch_top_n,
+        );
+        executor_inputs.set_tikv_coprocessor_executor_work_total_batch_limit(
+            self.metrics.executor_work_batch_limit,
+        );
+        executor_inputs.set_tikv_coprocessor_executor_work_total_batch_simple_aggr(
+            self.metrics.executor_work_batch_simple_aggr,
+        );
+        executor_inputs.set_tikv_coprocessor_executor_work_total_batch_fast_hash_aggr(
+            self.metrics.executor_work_batch_fast_hash_aggr,
+        );
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -217,6 +250,20 @@ pub struct RequestMetrics {
     pub apply_thread_wait_nanos: u64,
     pub apply_write_wal_nanos: u64,
     pub apply_write_memtable_nanos: u64,
+
+    // RU v2 metrics.
+    pub executor_work_batch_index_scan: u64,
+    pub executor_work_batch_table_scan: u64,
+    pub executor_work_batch_selection: u64,
+    pub executor_work_batch_top_n: u64,
+    pub executor_work_batch_limit: u64,
+    pub executor_work_batch_simple_aggr: u64,
+    pub executor_work_batch_fast_hash_aggr: u64,
+    pub coprocessor_executor_iterations: u64,
+    pub coprocessor_response_bytes: u64,
+    pub raftstore_store_write_trigger_wb_bytes: u64,
+    pub storage_processed_keys_batch_get: u64,
+    pub storage_processed_keys_get: u64,
 
     // recorded outside the read_pool thread, accessed inside the read_pool thread for topsql usage
     pub grpc_req_size: u64,

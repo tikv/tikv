@@ -94,7 +94,7 @@ impl TestEngineBuilder {
         let cfs = self.cfs.unwrap_or_else(|| ALL_CFS.to_vec());
         let mut cache_opt = BlockCacheConfig::default();
         if !enable_block_cache {
-            cache_opt.capacity = Some(ReadableSize::kb(0));
+            cache_opt.capacity = Some(ReadableSize::kb(0).into());
         }
         let shared =
             cfg_rocksdb.build_cf_resources(cache_opt.build_shared_cache(), Default::default());

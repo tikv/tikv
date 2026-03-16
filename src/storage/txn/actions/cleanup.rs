@@ -141,6 +141,8 @@ pub mod tests {
     #[cfg(test)]
     use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
     use txn_types::TimeStamp;
+    #[cfg(test)]
+    use txn_types::{Lock, LockType};
 
     use super::*;
     use crate::storage::{
@@ -240,6 +242,40 @@ pub mod tests {
                 .unwrap();
             must_not_have_write(engine, key, gc_fence);
         }
+    }
+
+    #[cfg(test)]
+    fn make_shared_sub_lock(primary: &[u8], start_ts: TimeStamp) -> Lock {
+        Lock::new(
+            LockType::Lock,
+            primary.to_vec(),
+            start_ts,
+            0,
+            None,
+            TimeStamp::zero(),
+            0,
+            TimeStamp::zero(),
+            false,
+        )
+    }
+
+    #[cfg(test)]
+    fn put_shared_lock<E: Engine>(engine: &mut E, key: &[u8], locks: Vec<Lock>) {
+        use txn_types::SharedLocks;
+
+        let lock_count = locks.len();
+        let mut shared_locks = SharedLocks::new();
+        for lock in locks {
+            shared_locks.insert_lock(lock).unwrap();
+        }
+        assert_eq!(shared_locks.len(), lock_count);
+
+        let mut txn = MvccTxn::new(
+            TimeStamp::zero(),
+            ConcurrencyManager::new_for_test(TimeStamp::zero()),
+        );
+        txn.put_shared_locks(Key::from_raw(key), &shared_locks, true);
+        write(engine, &Context::default(), txn.into_modifies());
     }
 
     #[test]
@@ -412,5 +448,78 @@ pub mod tests {
             assert!(released.pessimistic);
         }
         must_unlocked(&mut engine, shared_lock_key);
+    }
+
+    #[test]
+    fn test_cleanup_shared_lock_reads_pending_lock_bytes() {
+        use tikv_util::Either;
+
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+
+        let raw_key = b"shared-cleanup-pending";
+        let key = Key::from_raw(raw_key);
+        let start_ts_1 = TimeStamp::new(10);
+        let start_ts_2 = TimeStamp::new(20);
+
+        put_shared_lock(
+            &mut engine,
+            raw_key,
+            vec![
+                make_shared_sub_lock(b"pk1", start_ts_1),
+                make_shared_sub_lock(b"pk2", start_ts_2),
+            ],
+        );
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let cm = ConcurrencyManager::new_for_test(TimeStamp::new(50));
+        let mut txn = MvccTxn::new(TimeStamp::zero(), cm);
+        let mut reader = SnapshotReader::new(TimeStamp::zero(), snapshot, true);
+
+        txn.start_ts = start_ts_1;
+        reader.start_ts = start_ts_1;
+        assert!(
+            cleanup(&mut txn, &mut reader, key.clone(), TimeStamp::zero(), true,)
+                .unwrap()
+                .is_none()
+        );
+
+        let pending_lock_bytes = txn
+            .get_pending_lock_bytes(&key)
+            .and_then(|pending| pending)
+            .expect("missing pending shared lock after first cleanup");
+        let mut pending_shared_locks = match txn_types::parse_lock(pending_lock_bytes).unwrap() {
+            Either::Right(shared_locks) => shared_locks,
+            Either::Left(_) => panic!("expected shared lock state after first cleanup"),
+        };
+        assert_eq!(pending_shared_locks.len(), 1);
+        assert!(
+            pending_shared_locks
+                .get_lock(&start_ts_1)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            pending_shared_locks
+                .get_lock(&start_ts_2)
+                .unwrap()
+                .is_some()
+        );
+
+        txn.start_ts = start_ts_2;
+        reader.start_ts = start_ts_2;
+        let released = cleanup(&mut txn, &mut reader, key.clone(), TimeStamp::zero(), true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(released.key, key);
+        assert_eq!(released.start_ts, start_ts_2);
+        assert!(released.commit_ts.is_zero());
+        assert!(released.pessimistic);
+
+        assert!(matches!(txn.get_pending_lock_bytes(&key), Some(None)));
+
+        write(&engine, &Context::default(), txn.into_modifies());
+        must_get_rollback_ts(&mut engine, raw_key, start_ts_1);
+        must_get_rollback_ts(&mut engine, raw_key, start_ts_2);
+        must_unlocked(&mut engine, raw_key);
     }
 }
