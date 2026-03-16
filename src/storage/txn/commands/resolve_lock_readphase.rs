@@ -120,6 +120,7 @@ mod tests {
 
     use super::*;
     use crate::storage::{
+        TestEngineBuilder,
         kv::Engine,
         lock_manager::MockLockManager,
         mvcc::tests::{must_load_shared_lock, must_unlocked, write},
@@ -128,7 +129,6 @@ mod tests {
             tests::*,
             txn_status_cache::TxnStatusCache,
         },
-        TestEngineBuilder,
     };
 
     fn run_resolve_lock_read_phase<E: Engine>(
