@@ -13,12 +13,8 @@ mod all {
     };
 
     use backup_stream::{
-<<<<<<< HEAD
-        router::TaskSelector, GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task,
-=======
         GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task, router::TaskSelector,
         utils,
->>>>>>> d3d70c07b (backup-stream: ensure monotonically increasing flush_ts per store (#19407))
     };
     use futures::{Stream, StreamExt};
     use kvproto::metapb::RegionEpoch;
@@ -474,9 +470,6 @@ mod all {
             true
         });
     }
-<<<<<<< HEAD
-=======
-
     #[test]
     fn force_flush() {
         let mut suite = SuiteBuilder::new_named("force_flush").nodes(1).build();
@@ -648,7 +641,7 @@ mod all {
     /// lexicographically.
     fn collect_meta_filenames(root: &std::path::Path) -> Vec<String> {
         let meta_dir = root.join("v1/backupmeta");
-        let mut names: Vec<String> = WalkDir::new(&meta_dir)
+        let mut names: Vec<String> = WalkDir::new(meta_dir)
             .into_iter()
             .filter_map(|e| e.ok())
             .filter(|e| e.file_name().to_str().is_some_and(|n| n.ends_with(".meta")))
@@ -663,5 +656,4 @@ mod all {
         names.sort();
         names
     }
->>>>>>> d3d70c07b (backup-stream: ensure monotonically increasing flush_ts per store (#19407))
 }

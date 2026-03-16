@@ -925,36 +925,13 @@ where
 
     pub fn on_force_flush(&mut self, task: TaskSelectorRef<'_>, sender: Sender<FlushResult>) {
         let hnd = self.pool.handle().clone();
-<<<<<<< HEAD
-        hnd.block_on(async {
-            info!("Triggering force flush."; "selector" => ?task);
-            let task_names = self.range_router.select_task(task);
-            for task_name in task_names {
-                let Ok(hnd) = self.range_router.get_task_handler(&task_name) else {
-                    continue;
-                };
-                let (mts, flush_ts) = self.prepare_min_ts().await;
-                let sched = self.scheduler.clone();
-                let sender = sender.clone();
-                self.subscribe_flush_done(&hnd.task.info.name, sender);
-                match hnd.set_flushing_status_cas(false, true) {
-                    Ok(_) => {
-                        self.region_op(ObserveOp::ResolveRegions {
-                            callback: Box::new(move |res| {
-                                try_send!(
-                                    sched,
-                                    Task::ExecFlush(hnd.task.info.name.to_owned(), res, flush_ts)
-                                );
-                            }),
-                            min_ts: mts,
-                        })
-                        .await;
-                    }
-                    Err(_) => {
-                        info!("on_force_flush: a flush is on the way, waiting its finish..."; "task" => %hnd.task.info.name);
-=======
         info!("Triggering force flush."; "selector" => ?task);
-        let handlers: Vec<_> = self.range_router.select_task_handler(task).collect();
+        let handlers: Vec<_> = self
+            .range_router
+            .select_task(task)
+            .into_iter()
+            .filter_map(|task_name| self.range_router.get_task_handler(&task_name).ok())
+            .collect();
 
         let (mts, fts) = match self.prepare_min_ts_and_flush_ts() {
             Ok(v) => v,
@@ -978,7 +955,6 @@ where
                             info!("force flush result receiver is gone while reporting TSO error");
                             break;
                         }
->>>>>>> d3d70c07b (backup-stream: ensure monotonically increasing flush_ts per store (#19407))
                     }
                 });
                 return;

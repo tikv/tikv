@@ -910,14 +910,10 @@ mod test {
     use log_wrappers::RedactOption;
     use tokio::io::{AsyncWriteExt, BufReader};
 
-<<<<<<< HEAD
-    use crate::utils::{is_in_range, FutureWaitGroup, SegmentMap};
-=======
     use crate::utils::{
         BACKUP_META_MAX_TS_PREFIX, BACKUP_META_MIN_BEGIN_TS_PREFIX, BACKUP_META_MIN_TS_PREFIX,
         FutureWaitGroup, SegmentMap, is_in_range, parse_backupmeta_filename,
     };
->>>>>>> d3d70c07b (backup-stream: ensure monotonically increasing flush_ts per store (#19407))
 
     #[test]
     fn test_redact() {
