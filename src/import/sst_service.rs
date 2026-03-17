@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp::{Ord, Ordering, PartialOrd},
+    cmp::Ord,
     collections::{BTreeMap, HashMap, VecDeque},
     convert::identity,
     sync::{Arc, Mutex, RwLock},
@@ -211,22 +211,10 @@ pub struct ImportSstService<E: Engine> {
     force_partition_range_mgr: ForcePartitionRangeManager,
 }
 
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone)]
 struct DownloadSpeedLimit {
     speed_limit: u64,
     expire_at: Option<StdInstant>,
-}
-
-impl Ord for DownloadSpeedLimit {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.speed_limit.cmp(&other.speed_limit).reverse()
-    }
-}
-
-impl PartialOrd for DownloadSpeedLimit {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
 }
 
 struct DownloadSpeedLimitTreeWithEffectiveLimitExpireAtCache {
@@ -255,7 +243,7 @@ impl DownloadSpeedLimitManager {
         self.limiter.clone()
     }
 
-    pub fn update_from_request(&self, req: &SetDownloadSpeedLimitRequest) -> u64 {
+    pub fn update_from_request(&self, req: &SetDownloadSpeedLimitRequest) -> f64 {
         let task_key = req.get_task_id();
         let speed_limit = req.get_speed_limit();
         let ttl_seconds = req.get_ttl_seconds();
@@ -296,7 +284,7 @@ impl DownloadSpeedLimitManager {
         }
     }
 
-    fn sync_effective_limit(&self, now_instant: StdInstant) -> u64 {
+    fn sync_effective_limit(&self, now_instant: StdInstant) -> f64 {
         let mut task_limits = self.task_limits.write().unwrap();
         let mut effective_limit = f64::INFINITY;
         let mut effective_limit_expire_at = None;
@@ -319,7 +307,7 @@ impl DownloadSpeedLimitManager {
         });
         task_limits.effective_limit_expire_at = effective_limit_expire_at;
         self.limiter.set_speed_limit(effective_limit);
-        effective_limit as u64
+        effective_limit
     }
 }
 
@@ -2190,15 +2178,15 @@ mod test {
         let manager = DownloadSpeedLimitManager::new();
 
         let req_task_a = build_download_speed_limit_req("task-a", 128, 60);
-        assert_eq!(manager.update_from_request(&req_task_a), 128);
+        assert_eq!(manager.update_from_request(&req_task_a), 128.0);
         assert_eq!(manager.limiter().speed_limit(), 128.0);
 
         let req_task_b = build_download_speed_limit_req("task-b", 64, 60);
-        assert_eq!(manager.update_from_request(&req_task_b), 64);
+        assert_eq!(manager.update_from_request(&req_task_b), 64.0);
         assert_eq!(manager.limiter().speed_limit(), 64.0);
 
         let req_remove_task_b = build_download_speed_limit_req("task-b", 0, 60);
-        assert_eq!(manager.update_from_request(&req_remove_task_b), 128);
+        assert_eq!(manager.update_from_request(&req_remove_task_b), 128.0);
         assert_eq!(manager.limiter().speed_limit(), 128.0);
 
         let req_remove_task_a = build_download_speed_limit_req("task-a", 0, 60);
@@ -2218,7 +2206,7 @@ mod test {
 
         let now_plus_2s = std::time::Instant::now() + Duration::from_secs(2);
         let effective_limit = manager.sync_effective_limit(now_plus_2s);
-        assert_eq!(effective_limit, 128);
+        assert_eq!(effective_limit, 128.0);
         assert_eq!(manager.limiter().speed_limit(), 128.0);
     }
 
