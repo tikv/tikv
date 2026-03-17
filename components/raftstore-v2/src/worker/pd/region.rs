@@ -152,16 +152,13 @@ where
                 let total = ((Duration::from_millis(cpu_record.cpu_time_ms as u64).as_secs_f64()
                     * 100.0)
                     / interval_second as f64) as u64;
-                let unified_read = ((Duration::from_millis(
-                    cpu_record.unified_read_cpu_time_ms as u64,
-                )
-                .as_secs_f64()
-                    * 100.0)
-                    / interval_second as f64) as u64;
-                let scheduler = ((Duration::from_millis(
-                    cpu_record.scheduler_cpu_time_ms as u64,
-                )
-                .as_secs_f64()
+                let unified_read =
+                    ((Duration::from_millis(cpu_record.unified_read_cpu_time_ms as u64)
+                        .as_secs_f64()
+                        * 100.0)
+                        / interval_second as f64) as u64;
+                let scheduler = ((Duration::from_millis(cpu_record.scheduler_cpu_time_ms as u64)
+                    .as_secs_f64()
                     * 100.0)
                     / interval_second as f64) as u64;
                 let mut stats = pdpb::CpuStats::default();

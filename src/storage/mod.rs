@@ -94,8 +94,8 @@ use raftstore::store::{ReadStats, TxnExt, WriteStats, util::build_key_range};
 use rand::prelude::*;
 use resource_control::{ResourceController, ResourceGroupManager, ResourceLimiter, TaskMetadata};
 use resource_metering::{
-    FutureExt, ResourceTagFactory, record_logical_read_bytes, record_network_in_bytes,
-    record_network_out_bytes,
+    FutureExt, ResourceMeteringTag, ResourceTagFactory, record_logical_read_bytes,
+    record_network_in_bytes, record_network_out_bytes,
 };
 use tikv_kv::{OnAppliedCb, SnapshotExt};
 use tikv_util::{
@@ -1918,11 +1918,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
     // Schedule raw modify commands, which reuse the scheduler worker pool.
     // TODO: separate the txn and raw commands if needed in the future.
-    // TODO(Patch C): wrap `future` with `.in_resource_metering_tag(resource_tag)`
-    // so that raw write CPU on the scheduler pool is attributed to the region.
-    // This requires accepting a `&Context` parameter to create the tag.
     fn sched_raw_command<T>(
         &self,
+        resource_tag: ResourceMeteringTag,
         metadata: TaskMetadata<'_>,
         pri: CommandPri,
         tag: CommandKind,
@@ -1935,7 +1933,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         self.sched
             .get_sched_pool()
             // NOTE: we don't support background resource control for raw api.
-            .spawn("", metadata, pri, future)
+            .spawn("", metadata, pri, future.in_resource_metering_tag(resource_tag))
             .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
     }
 
@@ -2411,9 +2409,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let engine = self.engine.clone();
         let concurrency_manager = self.concurrency_manager.clone();
 
+        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
         let priority = ctx.get_priority();
         let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
-        self.sched_raw_command(metadata, priority, CMD, async move {
+        self.sched_raw_command(resource_tag, metadata, priority, CMD, async move {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
@@ -2523,9 +2522,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let engine = self.engine.clone();
         let concurrency_manager = self.concurrency_manager.clone();
         let deadline = Self::get_deadline(&ctx);
+        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
         let priority = ctx.get_priority();
         let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
-        self.sched_raw_command(metadata, priority, CMD, async move {
+        self.sched_raw_command(resource_tag, metadata, priority, CMD, async move {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
@@ -2588,9 +2588,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let engine = self.engine.clone();
         let concurrency_manager = self.concurrency_manager.clone();
         let deadline = Self::get_deadline(&ctx);
+        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
         let priority = ctx.get_priority();
         let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
-        self.sched_raw_command(metadata, priority, CMD, async move {
+        self.sched_raw_command(resource_tag, metadata, priority, CMD, async move {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
@@ -2649,9 +2650,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         let engine = self.engine.clone();
         let deadline = Self::get_deadline(&ctx);
+        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
         let priority = ctx.get_priority();
         let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
-        self.sched_raw_command(metadata, priority, CMD, async move {
+        self.sched_raw_command(resource_tag, metadata, priority, CMD, async move {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
@@ -2697,9 +2699,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let engine = self.engine.clone();
         let concurrency_manager = self.concurrency_manager.clone();
         let deadline = Self::get_deadline(&ctx);
+        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
         let priority = ctx.get_priority();
         let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
-        self.sched_raw_command(metadata, priority, CMD, async move {
+        self.sched_raw_command(resource_tag, metadata, priority, CMD, async move {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
@@ -3162,9 +3165,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             return Err(Error::from(ErrorInner::TtlNotEnabled));
         }
         let sched = self.get_scheduler();
+        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
         let priority = ctx.get_priority();
         let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
-        self.sched_raw_command(metadata, priority, CMD, async move {
+        self.sched_raw_command(resource_tag, metadata, priority, CMD, async move {
             let key = F::encode_raw_key_owned(key, None);
             let cmd = RawCompareAndSwap::new(cf, key, previous_value, value, ttl, api_version, ctx);
             Self::sched_raw_atomic_command(sched, cmd, Box::new(callback));
@@ -3191,9 +3195,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         Self::check_ttl_valid(pairs.len(), &ttls)?;
 
         let sched = self.get_scheduler();
+        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
         let priority = ctx.get_priority();
         let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
-        self.sched_raw_command(metadata, priority, CMD, async move {
+        self.sched_raw_command(resource_tag, metadata, priority, CMD, async move {
             let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls, None);
             let cmd = RawAtomicStore::new(cf, modifies, ctx);
             Self::sched_raw_atomic_command(sched, cmd, Box::new(callback));
@@ -3212,9 +3217,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         Self::check_api_version(self.api_version, ctx.api_version, CMD, &keys)?;
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         let sched = self.get_scheduler();
+        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
         let priority = ctx.get_priority();
         let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
-        self.sched_raw_command(metadata, priority, CMD, async move {
+        self.sched_raw_command(resource_tag, metadata, priority, CMD, async move {
             // Do NOT encode ts here as RawAtomicStore use key to gen lock
             let modifies = keys
                 .into_iter()
@@ -3361,6 +3367,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         callback: Callback<()>,
     ) -> Result<()> {
         const CMD: CommandKind = CommandKind::update_txn_status_cache;
+        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
         let priority = ctx.get_priority();
         let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
         let cache = self.get_scheduler().get_txn_status_cache();
@@ -3386,7 +3393,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             }
             callback(Ok(()));
         };
-        self.sched_raw_command(metadata, priority, CMD, f)
+        self.sched_raw_command(resource_tag, metadata, priority, CMD, f)
     }
 }
 
@@ -4377,13 +4384,19 @@ mod tests {
     use errors::extract_key_error;
     use futures::executor::block_on;
     use kvproto::{
-        kvrpcpb::{Assertion, AssertionLevel, CommandPri, Op, PrewriteRequestPessimisticAction::*},
+        kvrpcpb::{
+            Assertion, AssertionLevel, CommandPri, Op, PrewriteRequestPessimisticAction::*,
+            ResourceControlContext,
+        },
         metapb::RegionEpoch,
     };
     use parking_lot::Mutex;
+    use resource_control::TaskMetadata;
+    use resource_metering::{Collector, RawRecord, RawRecords, init_recorder};
     use tikv_util::config::ReadableSize;
     use tracker::INVALID_TRACKER_TOKEN;
     use txn_types::{LastChange, Mutation, PessimisticLock, SHORT_VALUE_MAX_LEN, WriteType};
+    use tikv_util::sys::thread as sys_thread;
 
     use super::{
         config::EngineType,
@@ -4417,6 +4430,63 @@ mod tests {
             types::{PessimisticLockKeyResult, PessimisticLockResults},
         },
     };
+
+    #[derive(Default, Clone)]
+    struct DummyCollector {
+        records: Arc<Mutex<HashMap<Vec<u8>, RawRecord>>>,
+    }
+
+    impl Collector for DummyCollector {
+        fn collect(&self, records: Arc<RawRecords>) {
+            let mut aggregated = self.records.lock();
+            for (tag, record) in &records.records {
+                aggregated
+                    .entry(tag.extra_attachment.as_ref().clone())
+                    .or_default()
+                    .merge(record);
+            }
+        }
+    }
+
+    impl DummyCollector {
+        fn cpu_time(&self, tag: &[u8]) -> u32 {
+            self.records
+                .lock()
+                .get(tag)
+                .map_or(0, |record| record.cpu_time)
+        }
+
+        fn wait_for_cpu_time(&self, tag: &[u8]) -> u32 {
+            for _ in 0..20 {
+                let cpu_time = self.cpu_time(tag);
+                if cpu_time > 0 {
+                    return cpu_time;
+                }
+                thread::sleep(Duration::from_millis(200));
+            }
+            panic!(
+                "resource metering cpu record for tag {} was not collected",
+                String::from_utf8_lossy(tag)
+            );
+        }
+    }
+
+    fn burn_cpu_ms(target_ms: u32) {
+        let begin = sys_thread::current_thread_stat().unwrap();
+        loop {
+            let m: u64 = rand::random();
+            let n: u64 = rand::random();
+            let _ = m
+                .wrapping_mul(n)
+                .wrapping_add(m ^ n)
+                .wrapping_sub(m & n)
+                .wrapping_add(m | n);
+            let now = sys_thread::current_thread_stat().unwrap();
+            if (now.total_cpu_time() - begin.total_cpu_time()) * 1_000. >= target_ms as f64 {
+                return;
+            }
+        }
+    }
 
     #[test]
     fn test_prewrite_blocks_read() {
@@ -6903,6 +6973,50 @@ mod tests {
             ))
             .unwrap(),
         );
+    }
+
+    #[test]
+    fn test_sched_raw_command_resource_metering_attribution() {
+        let (_cfg, collector_reg_handle, resource_tag_factory, recorder_worker) =
+            init_recorder(200, false);
+        let collector = DummyCollector::default();
+        let _collector_guard = collector_reg_handle.register(Box::new(collector.clone()), false);
+
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .set_resource_tag_factory(resource_tag_factory)
+            .build()
+            .unwrap();
+
+        let mut ctx = Context::default();
+        ctx.set_region_id(42);
+        ctx.set_resource_group_tag(b"raw-sched-metering".to_vec());
+        ctx.mut_peer().set_store_id(1);
+        ctx.mut_peer().set_id(1);
+
+        let resource_tag = storage.resource_tag_factory.new_tag(&ctx);
+        let resource_control_ctx = ResourceControlContext::default();
+        let metadata = TaskMetadata::from_ctx(&resource_control_ctx);
+        let (tx, rx) = channel();
+        storage
+            .sched_raw_command(
+                resource_tag,
+                metadata,
+                CommandPri::Normal,
+                CommandKind::raw_batch_put,
+                async move {
+                    burn_cpu_ms(300);
+                    tx.send(()).unwrap();
+                },
+            )
+            .unwrap();
+        rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        assert!(
+            collector.wait_for_cpu_time(b"raw-sched-metering") > 0,
+            "raw scheduler cpu should be attributed to the request tag"
+        );
+
+        recorder_worker.stop_worker();
     }
 
     #[test]

@@ -87,7 +87,9 @@ impl ResourceMeteringTag {
             // unexpected nested attachment
             if ls.is_set {
                 debug_assert!(false, "nested attachment is not allowed");
-                return Guard;
+                return Guard {
+                    should_detach: false,
+                };
             }
 
             let prev_tag = ls.attached_tag.swap(Some(self.infos.clone()));
@@ -95,7 +97,9 @@ impl ResourceMeteringTag {
             ls.is_set = true;
             ls.summary_cur_record.reset();
 
-            Guard
+            Guard {
+                should_detach: true,
+            }
         })
     }
 }
@@ -114,7 +118,9 @@ impl HeapSize for ResourceMeteringTag {
 ///
 /// [ResourceMeteringTag]: crate::ResourceMeteringTag
 /// [ResourceMeteringTag::attach]: crate::ResourceMeteringTag::attach
-pub struct Guard;
+pub struct Guard {
+    should_detach: bool,
+}
 
 // Unlike attached_tag in STORAGE, summary_records will continue to grow as the
 // request arrives. If the recorder thread is not working properly, these maps
@@ -123,6 +129,9 @@ const MAX_SUMMARY_RECORDS_LEN: usize = 1000;
 
 impl Drop for Guard {
     fn drop(&mut self) {
+        if !self.should_detach {
+            return;
+        }
         STORAGE.with(|s| {
             let mut ls = s.borrow_mut();
 
@@ -414,7 +423,10 @@ mod tests {
                     // During poll, the tag should be attached.
                     assert!(ls.is_set, "tag should be attached during poll");
                     let tag_infos = ls.attached_tag.swap(None);
-                    assert!(tag_infos.is_some(), "attached_tag should be Some during poll");
+                    assert!(
+                        tag_infos.is_some(),
+                        "attached_tag should be Some during poll"
+                    );
                     let infos = tag_infos.unwrap();
                     observed_clone.store(infos.region_id, SeqCst);
                     // Put it back so Guard::drop works correctly.
@@ -434,7 +446,10 @@ mod tests {
                 let ls = s.borrow();
                 assert!(!ls.is_set, "tag should be detached after future completes");
                 let local_tag = ls.attached_tag.swap(None);
-                assert!(local_tag.is_none(), "attached_tag should be None after future completes");
+                assert!(
+                    local_tag.is_none(),
+                    "attached_tag should be None after future completes"
+                );
             });
         })
         .join()
@@ -473,6 +488,9 @@ mod tests {
         })
         .join();
         // In debug mode, nested attachment panics via debug_assert!.
-        assert!(result.is_err(), "nested attachment should panic in debug mode");
+        assert!(
+            result.is_err(),
+            "nested attachment should panic in debug mode"
+        );
     }
 }

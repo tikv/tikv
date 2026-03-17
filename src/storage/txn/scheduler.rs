@@ -888,6 +888,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         new_acquired_locks: Vec<kvrpcpb::LockInfo>,
         known_txn_status: Vec<(TimeStamp, TimeStamp)>,
         tag: CommandKind,
+        ctx: &Context,
         request_source: &str,
         metadata: TaskMetadata<'_>,
         sched_details: &SchedulerDetails,
@@ -971,7 +972,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             assert!(pipelined || async_apply_prewrite);
         }
 
-        self.on_acquired_locks_finished(request_source, metadata, new_acquired_locks);
+        self.on_acquired_locks_finished(ctx, request_source, metadata, new_acquired_locks);
 
         if do_wake_up {
             let woken_up_resumable_lock_requests = tctx.woken_up_resumable_lock_requests;
@@ -1134,6 +1135,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
     fn on_acquired_locks_finished(
         &self,
+        ctx: &Context,
         request_source: &str,
         metadata: TaskMetadata<'_>,
         new_acquired_locks: Vec<kvrpcpb::LockInfo>,
@@ -1150,10 +1152,17 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 .update_lock_wait(new_acquired_locks);
         } else {
             let lock_wait_queues = self.inner.lock_wait_queues.clone();
+            let resource_tag = self.inner.resource_tag_factory.new_tag(ctx);
             self.get_sched_pool()
-                .spawn(request_source, metadata, CommandPri::High, async move {
-                    lock_wait_queues.update_lock_wait(new_acquired_locks);
-                })
+                .spawn(
+                    request_source,
+                    metadata,
+                    CommandPri::High,
+                    async move {
+                        lock_wait_queues.update_lock_wait(new_acquired_locks);
+                    }
+                    .in_resource_metering_tag(resource_tag),
+                )
                 .unwrap();
         }
     }
@@ -1170,9 +1179,13 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let self1 = self.clone();
         let metadata1 = metadata.deep_clone();
         let rsource = request_source.to_string();
+        let resource_tag_factory = self.inner.resource_tag_factory.clone();
         self.get_sched_pool()
             .spawn(request_source, metadata, CommandPri::High, async move {
                 for (lock_info, released_lock) in legacy_wake_up_list {
+                    let _guard = resource_tag_factory
+                        .new_tag(&lock_info.parameters.pb_ctx)
+                        .attach();
                     let cb = lock_info.key_cb.unwrap().into_inner();
                     let e = StorageError::from(Error::from(MvccError::from(
                         MvccErrorInner::WriteConflict {
@@ -1190,11 +1203,15 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 for f in delayed_wake_up_futures {
                     let self2 = self1.clone();
                     let metadata2 = metadata1.clone();
+                    let resource_tag_factory = resource_tag_factory.clone();
                     self1
                         .get_sched_pool()
                         .spawn(&rsource, metadata2, CommandPri::High, async move {
                             let res = f.await;
                             if let Some(resumable_lock_wait_entry) = res {
+                                let _guard = resource_tag_factory
+                                    .new_tag(&resumable_lock_wait_entry.parameters.pb_ctx)
+                                    .attach();
                                 self2.schedule_awakened_pessimistic_locks(
                                     None,
                                     None,
@@ -1246,9 +1263,8 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             return;
         }
 
-        // Resource metering tag is already attached by execute(), no need to
-        // wrap again here. The nested attachment protection in
-        // ResourceMeteringTag::attach() would skip it anyway.
+        // Resource metering tag is already attached by execute(), so keep this
+        // layer unwrapped and avoid relying on nested attachments.
         let tag = task.cmd().tag();
         fail_point!("scheduler_async_snapshot_finish");
         SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
@@ -1509,6 +1525,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 new_acquired_locks,
                 known_txn_status,
                 tag,
+                &ctx,
                 &ctx.request_source,
                 task_meta_data,
                 sched_details,
@@ -1559,6 +1576,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 new_acquired_locks,
                 known_txn_status,
                 tag,
+                &ctx,
                 &ctx.request_source,
                 task_meta_data,
                 sched_details,
@@ -1821,6 +1839,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         new_acquired_locks,
                         known_txn_status,
                         tag,
+                        &ctx,
                         &ctx.request_source,
                         task_meta_data,
                         sched_details,
@@ -2348,19 +2367,30 @@ impl SchedulerDetails {
 
 #[cfg(test)]
 mod tests {
-    use std::thread;
+    use std::{
+        sync::{
+            Arc,
+            mpsc::{channel, RecvTimeoutError},
+        },
+        thread,
+        time::Duration,
+    };
 
+    use collections::HashMap;
     use futures_executor::block_on;
     use kvproto::kvrpcpb::{
         BatchRollbackRequest, CheckSecondaryLocksRequest, CheckTxnStatusRequest, Context,
         ResourceControlContext,
     };
     use raftstore::store::{LocksStatus, ReadStats, WriteStats};
+    use resource_control::TaskMetadata;
+    use resource_metering::{Collector, RawRecord, RawRecords, init_recorder};
     use tikv_util::{
         Either,
         config::ReadableSize,
         future::{block_on_timeout, paired_future_callback},
         memory::HeapSize,
+        sys::thread as sys_thread,
     };
     use txn_types::{Key, LockType, SharedLocks, TimeStamp};
 
@@ -2368,9 +2398,14 @@ mod tests {
     use crate::storage::{
         RocksEngine, SecondaryLocksStatus, TestEngineBuilder, TxnStatus,
         kv::{Error as KvError, ErrorInner as KvErrorInner},
-        lock_manager::{MockLockManager, WaitTimeout},
+        lock_manager::{
+            LockWaitToken, MockLockManager, WaitTimeout,
+            lock_wait_context::{LockWaitContextSharedState, PessimisticLockKeyCallback},
+            lock_waiting_queue::LockWaitEntry,
+        },
         mvcc::{self, Mutation},
         test_util::latest_feature_gate,
+        types::PessimisticLockParameters,
         txn::{
             commands,
             commands::TypedCommand,
@@ -2387,6 +2422,63 @@ mod tests {
         fn report_write_stats(&self, _write_stats: WriteStats) {}
     }
 
+    #[derive(Default, Clone)]
+    struct DummyCollector {
+        records: Arc<Mutex<HashMap<Vec<u8>, RawRecord>>>,
+    }
+
+    impl Collector for DummyCollector {
+        fn collect(&self, records: Arc<RawRecords>) {
+            let mut aggregated = self.records.lock();
+            for (tag, record) in &records.records {
+                aggregated
+                    .entry(tag.extra_attachment.as_ref().clone())
+                    .or_default()
+                    .merge(record);
+            }
+        }
+    }
+
+    impl DummyCollector {
+        fn cpu_time(&self, tag: &[u8]) -> u32 {
+            self.records
+                .lock()
+                .get(tag)
+                .map_or(0, |record| record.cpu_time)
+        }
+
+        fn wait_for_cpu_time(&self, tag: &[u8]) -> u32 {
+            for _ in 0..20 {
+                let cpu_time = self.cpu_time(tag);
+                if cpu_time > 0 {
+                    return cpu_time;
+                }
+                thread::sleep(Duration::from_millis(200));
+            }
+            panic!(
+                "resource metering cpu record for tag {} was not collected",
+                String::from_utf8_lossy(tag)
+            );
+        }
+    }
+
+    fn burn_cpu_ms(target_ms: u32) {
+        let begin = sys_thread::current_thread_stat().unwrap();
+        loop {
+            let m: u64 = rand::random();
+            let n: u64 = rand::random();
+            let _ = m
+                .wrapping_mul(n)
+                .wrapping_add(m ^ n)
+                .wrapping_sub(m & n)
+                .wrapping_add(m | n);
+            let now = sys_thread::current_thread_stat().unwrap();
+            if (now.total_cpu_time() - begin.total_cpu_time()) * 1_000. >= target_ms as f64 {
+                return;
+            }
+        }
+    }
+
     // TODO(cosven): use this in the following test cases to reduce duplicate code.
     fn new_test_scheduler() -> (TxnScheduler<RocksEngine, MockLockManager>, RocksEngine) {
         let config = Config {
@@ -2397,6 +2489,46 @@ mod tests {
             ..Default::default()
         };
         new_test_scheduler_with_config(config)
+    }
+
+    fn new_test_scheduler_with_resource_tag_factory(
+        resource_tag_factory: ResourceTagFactory,
+    ) -> (TxnScheduler<RocksEngine, MockLockManager>, RocksEngine) {
+        let config = Config {
+            scheduler_concurrency: 1024,
+            scheduler_worker_pool_size: 1,
+            scheduler_pending_write_threshold: ReadableSize(100 * 1024 * 1024),
+            enable_async_apply_prewrite: false,
+            ..Default::default()
+        };
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let resource_manager = Arc::new(ResourceGroupManager::default());
+        let controller = resource_manager.derive_controller("test".into(), false);
+        (
+            TxnScheduler::new(
+                engine.clone(),
+                MockLockManager::new(),
+                ConcurrencyManager::new_for_test(1.into()),
+                &config,
+                DynamicConfigs {
+                    pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
+                    in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
+                    wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
+                    in_memory_peer_size_limit: Arc::new(AtomicU64::new(512 << 10)),
+                    in_memory_instance_size_limit: Arc::new(AtomicU64::new(100 << 20)),
+                },
+                Arc::new(FlowController::Singleton(EngineFlowController::empty())),
+                None,
+                DummyReporter,
+                resource_tag_factory,
+                Arc::new(QuotaLimiter::default()),
+                latest_feature_gate(),
+                Some(controller),
+                Some(resource_manager),
+                Arc::new(TxnStatusCache::new_for_test()),
+            ),
+            engine,
+        )
     }
 
     fn new_test_scheduler_with_config(
@@ -3059,5 +3191,98 @@ mod tests {
             Err(StorageError(box StorageErrorInner::DeadlineExceeded))
         ));
         scheduler.release_latches(lock, cid, None);
+    }
+
+    fn new_test_lock_wait_entry(
+        tag: &[u8],
+        start_ts: u64,
+        cb: PessimisticLockKeyCallback,
+    ) -> Box<LockWaitEntry> {
+        let lock_wait_token = LockWaitToken(Some(start_ts));
+        let key = Key::from_raw(format!("k{:04}", start_ts).as_bytes());
+        let mut pb_ctx = Context::default();
+        pb_ctx.set_region_id(88);
+        pb_ctx.set_resource_group_tag(tag.to_vec());
+        pb_ctx.mut_peer().set_store_id(1);
+        pb_ctx.mut_peer().set_id(1);
+        Box::new(LockWaitEntry {
+            key: key.clone(),
+            lock_hash: start_ts,
+            parameters: PessimisticLockParameters {
+                pb_ctx,
+                primary: b"p".to_vec(),
+                start_ts: start_ts.into(),
+                lock_ttl: 3000,
+                for_update_ts: (start_ts + 1).into(),
+                wait_timeout: Some(WaitTimeout::Default),
+                return_values: false,
+                min_commit_ts: TimeStamp::zero(),
+                check_existence: false,
+                is_first_lock: false,
+                lock_only_if_exists: false,
+                allow_lock_with_conflict: false,
+            },
+            should_not_exist: false,
+            is_shared_lock: false,
+            lock_wait_token,
+            req_states: Arc::new(LockWaitContextSharedState::new_dummy(lock_wait_token, key)),
+            legacy_wake_up_index: None,
+            key_cb: Some(cb.into()),
+        })
+    }
+
+    #[test]
+    fn test_wake_up_legacy_pessimistic_locks_resource_metering_attribution() {
+        let (_cfg, collector_reg_handle, resource_tag_factory, recorder_worker) =
+            init_recorder(200, false);
+        let collector = DummyCollector::default();
+        let _collector_guard = collector_reg_handle.register(Box::new(collector.clone()), false);
+        let (scheduler, _engine) =
+            new_test_scheduler_with_resource_tag_factory(resource_tag_factory);
+
+        let tag = b"pessimistic-wakeup-metering";
+        let (tx, rx) = channel();
+        let legacy_wake_up_list: Vec<_> = (0..4u64)
+            .map(|i| {
+                let tx = tx.clone();
+                let cb: PessimisticLockKeyCallback = Box::new(move |res, is_canceled| {
+                    assert!(res.is_err());
+                    assert!(!is_canceled);
+                    burn_cpu_ms(120);
+                    tx.send(()).unwrap();
+                });
+                (
+                    new_test_lock_wait_entry(tag, 10 + i, cb),
+                    ReleasedLock::new(1.into(), 2.into(), Key::from_raw(b"conflict"), true),
+                )
+            })
+            .collect();
+        drop(tx);
+
+        let resource_control_ctx = ResourceControlContext::default();
+        let metadata = TaskMetadata::from_ctx(&resource_control_ctx);
+        scheduler.wake_up_legacy_pessimistic_locks(
+            "",
+            metadata,
+            legacy_wake_up_list,
+            Vec::<DelayedNotifyAllFuture>::new(),
+        );
+
+        for _ in 0..4 {
+            match rx.recv_timeout(Duration::from_secs(5)) {
+                Ok(()) => {}
+                Err(RecvTimeoutError::Timeout) => panic!("timed out waiting for wake-up callback"),
+                Err(RecvTimeoutError::Disconnected) => {
+                    panic!("wake-up callback channel disconnected unexpectedly")
+                }
+            }
+        }
+
+        assert!(
+            collector.wait_for_cpu_time(tag) > 0,
+            "wake-up cpu should be attributed to the waiting request tag"
+        );
+
+        recorder_worker.stop_worker();
     }
 }
