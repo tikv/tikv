@@ -556,6 +556,7 @@ impl CpuThrottleManager {
         let cpu_cores = SysQuota::cpu_cores_quota().max(1.0);
         let global_capacity_us =
             (cpu_cores * config.max_read_cpu_ratio * refill_interval_ms as f64 * 1000.0) as u64;
+        // Keep the normalization denominator non-zero for dynamic adjustment.
         let global_capacity_us = global_capacity_us.max(1);
 
         let global_bucket = Arc::new(CpuTokenBucket::new(
@@ -691,13 +692,6 @@ impl CpuThrottleManager {
             CPU_USAGE_MONITOR_RESOURCE_GROUP_DAG_RATIO
                 .with_label_values(&[entry.key().as_str()])
                 .set(ratio);
-        }
-        for (resource_group, ratio) in &per_resource_group_dag_ratios {
-            if !self.resource_group_buckets.contains_key(resource_group) {
-                CPU_USAGE_MONITOR_RESOURCE_GROUP_DAG_RATIO
-                    .with_label_values(&[resource_group.as_str()])
-                    .set(*ratio);
-            }
         }
         for resource_group in previous_resource_groups {
             if !per_resource_group_dag_ratios.contains_key(&resource_group) {
@@ -1030,6 +1024,9 @@ impl CpuThrottleManager {
             } else {
                 None
             },
+            // Per-resource-group DAG CPU ratios intentionally only cover groups
+            // that participate in CPU throttling. The default group is excluded
+            // unless throttle_default_group is enabled.
             per_resource_group_dag_cpu_accum: if self.should_throttle_group(resource_group) {
                 Some(self.resource_group_dag_cpu_accum.clone())
             } else {

@@ -32,6 +32,10 @@ impl ThreadCollector {
     }
 
     fn collect_delta_cpu_time(&mut self) -> f64 {
+        self.collect_delta_from_snapshot(self.collect_current_per_thread_cpu())
+    }
+
+    fn collect_current_per_thread_cpu(&self) -> HashMap<Pid, f64> {
         let thread_name_map = THREAD_NAME_HASHMAP.lock().unwrap();
         let current_tids: Vec<Pid> = thread_name_map
             .iter()
@@ -46,7 +50,10 @@ impl ThreadCollector {
                 current_per_thread_cpu.insert(tid, stat.total_cpu_time());
             }
         }
+        current_per_thread_cpu
+    }
 
+    fn collect_delta_from_snapshot(&mut self, current_per_thread_cpu: HashMap<Pid, f64>) -> f64 {
         let mut delta_cpu_sec = 0.0;
         for (tid, current_cpu_sec) in &current_per_thread_cpu {
             if let Some(previous_cpu_sec) = self.last_per_thread_cpu.get(tid) {
@@ -136,6 +143,9 @@ struct CpuUsageMonitor {
 impl CpuUsageMonitor {
     fn new(manager: Arc<CpuThrottleManager>) -> Self {
         let window_size = manager.window_size();
+        // The current CPU throttle config is startup-static. If max_read_cpu_ratio
+        // or window_size become hot-updatable in the future, this cached divisor
+        // needs to be recomputed from the latest config.
         let max_cpu_time_window_sec = (SysQuota::cpu_cores_quota().max(1.0)
             * manager.max_read_cpu_ratio()
             * window_size.as_secs_f64())
@@ -191,6 +201,49 @@ pub fn start_cpu_throttle_monitor(bg_worker: &Worker, manager: Arc<CpuThrottleMa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_thread_collector_returns_zero_before_threads_exist() {
+        let mut collector = ThreadCollector::new("unified-read-pool");
+
+        assert_eq!(collector.collect_delta_from_snapshot(HashMap::new()), 0.0);
+        assert!(collector.last_per_thread_cpu.is_empty());
+    }
+
+    #[test]
+    fn test_thread_collector_picks_up_scale_out_threads_on_next_tick() {
+        let mut collector = ThreadCollector::new("unified-read-pool");
+
+        assert_eq!(
+            collector.collect_delta_from_snapshot(HashMap::from([(1 as Pid, 1.0)])),
+            0.0
+        );
+        assert_eq!(
+            collector
+                .collect_delta_from_snapshot(HashMap::from([(1 as Pid, 2.0), (2 as Pid, 5.0),])),
+            1.0
+        );
+        assert_eq!(
+            collector
+                .collect_delta_from_snapshot(HashMap::from([(1 as Pid, 3.0), (2 as Pid, 7.0),])),
+            3.0
+        );
+    }
+
+    #[test]
+    fn test_thread_collector_clamps_scale_in_to_non_negative_delta() {
+        let mut collector = ThreadCollector::new("unified-read-pool");
+
+        assert_eq!(
+            collector
+                .collect_delta_from_snapshot(HashMap::from([(1 as Pid, 2.0), (2 as Pid, 4.0),])),
+            0.0
+        );
+        assert_eq!(
+            collector.collect_delta_from_snapshot(HashMap::from([(1 as Pid, 3.5)])),
+            1.5
+        );
+    }
 
     #[test]
     fn test_cpu_sample_window_evicts_old_samples() {
