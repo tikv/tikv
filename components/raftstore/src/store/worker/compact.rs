@@ -478,7 +478,7 @@ pub fn need_compact(
             if tracker.is_enabled() {
                 let mvcc_versions_per_sec = tracker.get_mvcc_versions_scanned(rid);
                 let tracked_regions = tracker.tracked_region_count();
-                info!(
+                debug!(
                     "checking MVCC read stats for compaction";
                     "region_id" => rid,
                     "mvcc_versions_per_sec" => mvcc_versions_per_sec,
