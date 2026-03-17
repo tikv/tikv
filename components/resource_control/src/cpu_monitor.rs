@@ -6,11 +6,13 @@ use std::{
     time::{Duration, Instant},
 };
 
+use futures::compat::Future01CompatExt;
 use tikv_util::{
     sys::{
         thread::{self, Pid, THREAD_NAME_HASHMAP},
         SysQuota,
     },
+    timer::GLOBAL_TIMER_HANDLE,
     worker::Worker,
 };
 
@@ -131,35 +133,36 @@ impl CpuSampleWindow {
             }
         }
     }
+
+    fn update_window_size(&mut self, window_size: Duration, now: Instant) {
+        if self.window_size == window_size {
+            return;
+        }
+        self.window_size = window_size;
+        self.evict_old(now);
+    }
 }
 
 struct CpuUsageMonitor {
     thread_collector: ThreadCollector,
     window: CpuSampleWindow,
-    max_cpu_time_window_sec: f64,
     manager: Arc<CpuThrottleManager>,
 }
 
 impl CpuUsageMonitor {
     fn new(manager: Arc<CpuThrottleManager>) -> Self {
         let window_size = manager.window_size();
-        // The current CPU throttle config is startup-static. If max_read_cpu_ratio
-        // or window_size become hot-updatable in the future, this cached divisor
-        // needs to be recomputed from the latest config.
-        let max_cpu_time_window_sec = (SysQuota::cpu_cores_quota().max(1.0)
-            * manager.max_read_cpu_ratio()
-            * window_size.as_secs_f64())
-        .max(f64::EPSILON);
         Self {
             thread_collector: ThreadCollector::new("unified-read-pool"),
             window: CpuSampleWindow::new(window_size),
-            max_cpu_time_window_sec,
             manager,
         }
     }
 
     fn tick(&mut self) {
         let start = Instant::now();
+        self.window
+            .update_window_size(self.manager.window_size(), start);
         let global_delta_cpu_sec = self.thread_collector.collect_delta_cpu_time();
         let per_resource_group_dag_delta_cpu_us =
             self.manager.take_per_resource_group_dag_cpu_deltas();
@@ -170,7 +173,11 @@ impl CpuUsageMonitor {
             per_resource_group_dag_delta_cpu_us,
         });
 
-        let global_ratio = self.window.global_sum_cpu_sec / self.max_cpu_time_window_sec;
+        let max_cpu_time_window_sec = (SysQuota::cpu_cores_quota().max(1.0)
+            * self.manager.max_read_cpu_ratio()
+            * self.window.window_size.as_secs_f64())
+        .max(f64::EPSILON);
+        let global_ratio = self.window.global_sum_cpu_sec / max_cpu_time_window_sec;
         let per_resource_group_dag_ratios = self
             .window
             .per_resource_group_dag_sum_cpu_us
@@ -178,7 +185,7 @@ impl CpuUsageMonitor {
             .map(|(resource_group, cpu_us)| {
                 (
                     resource_group.clone(),
-                    *cpu_us as f64 / (self.max_cpu_time_window_sec * 1_000_000.0),
+                    *cpu_us as f64 / (max_cpu_time_window_sec * 1_000_000.0),
                 )
             })
             .collect();
@@ -191,10 +198,21 @@ impl CpuUsageMonitor {
     }
 }
 
+async fn sleep_async(duration: Duration) {
+    let _ = GLOBAL_TIMER_HANDLE
+        .delay(std::time::Instant::now() + duration)
+        .compat()
+        .await;
+}
+
 pub fn start_cpu_throttle_monitor(bg_worker: &Worker, manager: Arc<CpuThrottleManager>) {
     let mut monitor = CpuUsageMonitor::new(manager.clone());
-    bg_worker.spawn_interval_task(manager.stats_interval(), move || {
+    bg_worker.spawn_async_task(async move {
         monitor.tick();
+        loop {
+            sleep_async(manager.stats_interval()).await;
+            monitor.tick();
+        }
     });
 }
 

@@ -28,8 +28,8 @@ use tikv_util::{
 use yatp::queue::priority::TaskPriorityProvider;
 
 use crate::{
-    config::Config, metrics::deregister_metrics, resource_limiter::ResourceLimiter,
-    CpuThrottleManager,
+    config::Config, cpu_config::CpuThrottleConfig, metrics::deregister_metrics,
+    resource_limiter::ResourceLimiter, CpuThrottleManager,
 };
 
 // a read task cost at least 50us.
@@ -254,11 +254,14 @@ impl ResourceGroupManager {
 
     pub fn set_cpu_throttle_manager(&self, mgr: Arc<CpuThrottleManager>) {
         *self.cpu_throttle.write() = Some(mgr.clone());
-        for entry in self.resource_groups.iter() {
-            let ru = Self::get_ru_setting(&entry.value().group, true);
-            mgr.on_resource_group_changed(entry.key(), ru);
+        mgr.sync_resource_groups(self.collect_cpu_throttle_resource_groups());
+    }
+
+    pub fn refresh_cpu_throttle_config(&self, config: CpuThrottleConfig) {
+        if let Some(ref mgr) = *self.cpu_throttle.read() {
+            mgr.refresh_config(config);
+            mgr.sync_resource_groups(self.collect_cpu_throttle_resource_groups());
         }
-        mgr.recalculate_all_quotas();
     }
 
     pub fn get_all_resource_groups(&self) -> Vec<PbResourceGroup> {
@@ -276,6 +279,18 @@ impl ResourceGroupManager {
             controller.add_resource_group(g.key().clone().into_bytes(), ru_quota, g.group.priority);
         }
         controller
+    }
+
+    fn collect_cpu_throttle_resource_groups(&self) -> Vec<(String, u64)> {
+        self.resource_groups
+            .iter()
+            .map(|entry| {
+                (
+                    entry.key().clone(),
+                    Self::get_ru_setting(&entry.value().group, true),
+                )
+            })
+            .collect()
     }
 
     pub fn advance_min_virtual_time(&self) {
