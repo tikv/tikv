@@ -251,7 +251,7 @@ pub struct CpuTokenBucket {
     available_tokens: AtomicU64,
     base_refill_rate_us: AtomicU64,
     current_refill_rate_us: AtomicU64,
-    refill_interval: Duration,
+    refill_interval_ms: AtomicU64,
     last_refill: RwLock<Instant>,
 }
 
@@ -262,7 +262,7 @@ impl CpuTokenBucket {
             available_tokens: AtomicU64::new(capacity_us),
             base_refill_rate_us: AtomicU64::new(refill_rate_us),
             current_refill_rate_us: AtomicU64::new(refill_rate_us),
-            refill_interval,
+            refill_interval_ms: AtomicU64::new((refill_interval.as_millis() as u64).max(1)),
             last_refill: RwLock::new(Instant::now()),
         }
     }
@@ -304,7 +304,7 @@ impl CpuTokenBucket {
     }
 
     pub fn refill(&self) {
-        let interval_ms = self.refill_interval.as_millis() as u64;
+        let interval_ms = self.refill_interval_ms();
         if interval_ms == 0 {
             return;
         }
@@ -352,9 +352,19 @@ impl CpuTokenBucket {
         self.current_refill_rate_us.load(Ordering::Acquire)
     }
 
+    pub fn refill_interval_ms(&self) -> u64 {
+        self.refill_interval_ms.load(Ordering::Acquire).max(1)
+    }
+
     pub fn set_refill_rate(&self, new_refill_rate_us: u64) {
         self.current_refill_rate_us
             .store(new_refill_rate_us.max(1), Ordering::Release);
+    }
+
+    pub fn set_refill_interval_ms(&self, new_refill_interval_ms: u64) {
+        self.refill_interval_ms
+            .store(new_refill_interval_ms.max(1), Ordering::Release);
+        self.reset_last_refill();
     }
 
     pub fn restore_base_rate(&self) {
@@ -364,7 +374,10 @@ impl CpuTokenBucket {
 
     pub fn update_quota(&self, new_capacity_us: u64, new_refill_rate_us: u64) {
         let old_capacity = self.capacity();
+        let old_base_refill_rate = self.base_refill_rate();
+        let old_current_refill_rate = self.current_refill_rate();
         let current_available = self.available();
+        let new_base_refill_rate = new_refill_rate_us.max(1);
         let new_available = if new_capacity_us >= old_capacity {
             current_available
                 .saturating_add(new_capacity_us - old_capacity)
@@ -372,18 +385,36 @@ impl CpuTokenBucket {
         } else {
             current_available.saturating_sub(old_capacity - new_capacity_us)
         };
+        // Preserve the dynamic refill-rate reduction across quota refreshes so a
+        // config change does not immediately snap throttling back to the base
+        // rate and create a transient CPU spike. If the bucket is currently at
+        // base rate, this naturally keeps it at the new base rate as well.
+        let new_current_refill_rate = if old_current_refill_rate >= old_base_refill_rate {
+            new_base_refill_rate
+        } else {
+            ((old_current_refill_rate as u128 * new_base_refill_rate as u128
+                + old_base_refill_rate as u128
+                - 1)
+                / old_base_refill_rate as u128) as u64
+        }
+        .clamp(1, new_base_refill_rate);
         self.capacity_us.store(new_capacity_us, Ordering::Release);
         self.base_refill_rate_us
-            .store(new_refill_rate_us.max(1), Ordering::Release);
+            .store(new_base_refill_rate, Ordering::Release);
         self.current_refill_rate_us
-            .store(new_refill_rate_us.max(1), Ordering::Release);
+            .store(new_current_refill_rate, Ordering::Release);
         self.available_tokens
             .store(new_available, Ordering::Release);
+        self.reset_last_refill();
     }
 
     fn set_available(&self, available_tokens: u64) {
         self.available_tokens
             .store(available_tokens, Ordering::Release);
+    }
+
+    fn reset_last_refill(&self) {
+        *self.last_refill.write().unwrap() = Instant::now();
     }
 }
 
@@ -566,11 +597,10 @@ pub struct CpuThrottleManager {
     resource_group_buckets: Arc<DashMap<String, Arc<CpuTokenBucket>>>,
     resource_group_weights: Arc<DashMap<String, u64>>,
     resource_group_inflight_allocated_us: Arc<DashMap<String, AtomicU64>>,
-    config: Arc<CpuThrottleConfig>,
-    refill_interval: Duration,
-    global_capacity_us: u64,
-    resource_group_estimated_cpu_per_request_us: Arc<HashMap<String, u64>>,
-    adaptive_estimator: Option<Arc<AdaptiveEstimator>>,
+    config: RwLock<Arc<CpuThrottleConfig>>,
+    global_capacity_us: AtomicU64,
+    resource_group_estimated_cpu_per_request_us: RwLock<HashMap<String, u64>>,
+    adaptive_estimator: RwLock<Option<Arc<AdaptiveEstimator>>>,
     resource_group_dag_cpu_accum: Arc<DashMap<String, AtomicU64>>,
     usage_state: RwLock<CpuUsageState>,
 }
@@ -583,11 +613,7 @@ impl CpuThrottleManager {
         );
         let refill_interval_ms = config.refill_interval_ms.max(1);
         let refill_interval = Duration::from_millis(refill_interval_ms);
-        let cpu_cores = SysQuota::cpu_cores_quota().max(1.0);
-        let global_capacity_us =
-            (cpu_cores * config.max_read_cpu_ratio * refill_interval_ms as f64 * 1000.0) as u64;
-        // Keep the normalization denominator non-zero for dynamic adjustment.
-        let global_capacity_us = global_capacity_us.max(1);
+        let global_capacity_us = Self::calculate_global_capacity_us(&config);
 
         let global_bucket = Arc::new(CpuTokenBucket::new(
             global_capacity_us,
@@ -625,18 +651,17 @@ impl CpuThrottleManager {
             resource_group_buckets: Arc::new(DashMap::new()),
             resource_group_weights: Arc::new(DashMap::new()),
             resource_group_inflight_allocated_us: Arc::new(DashMap::new()),
-            refill_interval,
-            global_capacity_us,
-            resource_group_estimated_cpu_per_request_us: Arc::new(estimated_overrides),
-            adaptive_estimator,
+            global_capacity_us: AtomicU64::new(global_capacity_us),
+            resource_group_estimated_cpu_per_request_us: RwLock::new(estimated_overrides),
+            adaptive_estimator: RwLock::new(adaptive_estimator),
             resource_group_dag_cpu_accum: Arc::new(DashMap::new()),
             usage_state: RwLock::new(CpuUsageState::new()),
-            config: Arc::new(config),
+            config: RwLock::new(Arc::new(config)),
         }
     }
 
     pub fn is_enabled(&self) -> bool {
-        self.config.enabled
+        self.current_config().enabled
     }
 
     pub fn canonicalize_group_name(name: &str) -> String {
@@ -644,19 +669,111 @@ impl CpuThrottleManager {
     }
 
     pub fn stats_interval(&self) -> Duration {
-        Duration::from_millis(self.config.stats_interval_ms.max(1))
+        Duration::from_millis(self.current_config().stats_interval_ms.max(1))
     }
 
     pub fn window_size(&self) -> Duration {
-        Duration::from_millis(
-            self.config
-                .window_size_ms
-                .max(self.config.stats_interval_ms.max(1)),
-        )
+        let config = self.current_config();
+        Duration::from_millis(config.window_size_ms.max(config.stats_interval_ms.max(1)))
     }
 
     pub fn max_read_cpu_ratio(&self) -> f64 {
-        self.config.max_read_cpu_ratio
+        self.current_config().max_read_cpu_ratio
+    }
+
+    pub fn global_capacity_us(&self) -> u64 {
+        self.global_capacity_us.load(Ordering::Acquire)
+    }
+
+    pub fn refill_interval_ms(&self) -> u64 {
+        self.global_bucket.refill_interval_ms()
+    }
+
+    pub fn has_resource_group_bucket(&self, resource_group: &str) -> bool {
+        self.resource_group_buckets
+            .contains_key(Self::canonicalize_group_name(resource_group).as_str())
+    }
+
+    pub fn refresh_config(&self, config: CpuThrottleConfig) {
+        assert!(
+            !config.throttle_default_group || config.default_group_weight.unwrap_or(0) > 0,
+            "cpu throttle config invariant violated: default_group_weight must be set when throttle_default_group is enabled",
+        );
+
+        let refill_interval_ms = config.refill_interval_ms.max(1);
+        let new_global_capacity_us = Self::calculate_global_capacity_us(&config);
+        let estimated_overrides =
+            CpuThrottleConfig::parse_resource_group_estimated_cpu_per_request_us(
+                &config.resource_group_estimated_cpu_per_request_us,
+            );
+        let adaptive_estimator = if config.enable_adaptive_estimated_cpu_per_request_us {
+            Some(Arc::new(AdaptiveEstimator::new(
+                config.estimated_cpu_per_request_us,
+                config.stats_interval_ms.max(1),
+                estimated_overrides.clone(),
+            )))
+        } else {
+            None
+        };
+
+        *self.config.write().unwrap() = Arc::new(config);
+        self.global_capacity_us
+            .store(new_global_capacity_us, Ordering::Release);
+        *self
+            .resource_group_estimated_cpu_per_request_us
+            .write()
+            .unwrap() = estimated_overrides;
+        *self.adaptive_estimator.write().unwrap() = adaptive_estimator;
+
+        self.global_bucket
+            .set_refill_interval_ms(refill_interval_ms);
+        self.global_bucket
+            .update_quota(new_global_capacity_us, new_global_capacity_us);
+        for entry in self.resource_group_buckets.iter() {
+            entry.value().set_refill_interval_ms(refill_interval_ms);
+        }
+
+        CPU_THROTTLE_GLOBAL_BUCKET_CAPACITY.set(clamp_gauge_value(new_global_capacity_us));
+        CPU_THROTTLE_GLOBAL_BUCKET_AVAILABLE.set(clamp_gauge_value(self.global_bucket.available()));
+        CPU_THROTTLE_GLOBAL_REFILL_RATE
+            .set(clamp_gauge_value(self.global_bucket.current_refill_rate()));
+
+        info!(
+            "refresh cpu throttle config";
+            "global_capacity_us" => new_global_capacity_us,
+            "refill_interval_ms" => refill_interval_ms,
+        );
+    }
+
+    pub fn sync_resource_groups(&self, resource_groups: Vec<(String, u64)>) {
+        let mut next_weights = HashMap::new();
+        for (resource_group, ru_quota) in resource_groups {
+            let resource_group = Self::canonicalize_group_name(&resource_group);
+            if self.should_throttle_group(&resource_group) {
+                next_weights.insert(
+                    resource_group.clone(),
+                    self.weight_for_group(&resource_group, ru_quota),
+                );
+            }
+        }
+
+        let existing: Vec<String> = self
+            .resource_group_weights
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect();
+        for resource_group in existing {
+            if !next_weights.contains_key(&resource_group) {
+                self.resource_group_weights.remove(&resource_group);
+                self.remove_resource_group_bucket(&resource_group);
+            }
+        }
+
+        for (resource_group, weight) in next_weights {
+            self.resource_group_weights.insert(resource_group, weight);
+        }
+
+        self.recalculate_all_quotas();
     }
 
     pub fn take_per_resource_group_dag_cpu_deltas(&self) -> HashMap<String, u64> {
@@ -733,7 +850,8 @@ impl CpuThrottleManager {
     }
 
     pub fn adjust_refill_rates(&self) {
-        if !self.config.enable_dynamic_adjustment {
+        let config = self.current_config();
+        if !config.enable_dynamic_adjustment {
             return;
         }
 
@@ -744,8 +862,8 @@ impl CpuThrottleManager {
                 usage_state.per_resource_group_dag_ratios.clone(),
             )
         };
-        let high_watermark = self.config.high_watermark;
-        let low_watermark = self.config.low_watermark;
+        let high_watermark = config.high_watermark;
+        let low_watermark = config.low_watermark;
 
         if let Some((new_rate, direction)) = next_refill_rate(
             self.global_bucket.base_refill_rate(),
@@ -773,7 +891,7 @@ impl CpuThrottleManager {
                 .get(resource_group.as_str())
                 .copied()
                 .unwrap_or(0.0);
-            let quota_ratio = bucket.capacity() as f64 / self.global_capacity_us as f64;
+            let quota_ratio = bucket.capacity() as f64 / self.global_capacity_us() as f64;
             if quota_ratio <= 0.0 {
                 continue;
             }
@@ -829,7 +947,7 @@ impl CpuThrottleManager {
         }
 
         for (resource_group, weight) in weights {
-            let quota_us = ((self.global_capacity_us as u128 * weight as u128)
+            let quota_us = ((self.global_capacity_us() as u128 * weight as u128)
                 / sum_weights as u128)
                 .max(1) as u64;
             let bucket = if let Some(entry) = self.resource_group_buckets.get(&resource_group) {
@@ -840,7 +958,7 @@ impl CpuThrottleManager {
                 let bucket = Arc::new(CpuTokenBucket::new(
                     quota_us,
                     quota_us,
-                    self.refill_interval,
+                    Duration::from_millis(self.global_bucket.refill_interval_ms()),
                 ));
                 self.resource_group_buckets
                     .insert(resource_group.clone(), bucket.clone());
@@ -978,7 +1096,9 @@ impl CpuThrottleManager {
                     sleep_async(
                         request_deadline
                             .saturating_duration_since(Instant::now())
-                            .min(self.refill_interval),
+                            .min(Duration::from_millis(
+                                self.global_bucket.refill_interval_ms(),
+                            )),
                     )
                     .await;
                 }
@@ -989,13 +1109,17 @@ impl CpuThrottleManager {
 
     pub fn get_estimated_cpu_per_request_us(&self, resource_group: &str) -> u64 {
         let resource_group = Self::canonicalize_group_name(resource_group);
-        let estimated = if let Some(estimator) = &self.adaptive_estimator {
+        let config = self.current_config();
+        let adaptive_estimator = self.adaptive_estimator.read().unwrap().clone();
+        let estimated = if let Some(estimator) = adaptive_estimator {
             estimator.get(&resource_group)
         } else {
             self.resource_group_estimated_cpu_per_request_us
+                .read()
+                .unwrap()
                 .get(&resource_group)
                 .copied()
-                .unwrap_or(self.config.estimated_cpu_per_request_us)
+                .unwrap_or(config.estimated_cpu_per_request_us)
         };
         let cap = self.get_capacity_cap(&resource_group);
         estimated.min(cap).max(1)
@@ -1007,6 +1131,7 @@ impl CpuThrottleManager {
         estimated_cpu_us: u64,
         request_deadline: Instant,
     ) -> Result<CpuTokenHandle, ThrottleError> {
+        let config = self.current_config();
         self.global_bucket.refill();
         let resource_group_bucket = self
             .resource_group_buckets
@@ -1025,7 +1150,7 @@ impl CpuThrottleManager {
         if let Some(bucket) = &resource_group_bucket {
             if bucket.try_allocate(estimated_cpu_us) {
                 resource_group_allocated_us = estimated_cpu_us;
-            } else if self.config.enable_burst {
+            } else if config.enable_burst {
                 is_burst = true;
             } else {
                 self.global_bucket.release(estimated_cpu_us);
@@ -1056,8 +1181,8 @@ impl CpuThrottleManager {
                 None
             },
             request_deadline,
-            config: self.config.clone(),
-            adaptive_estimator: self.adaptive_estimator.clone(),
+            config,
+            adaptive_estimator: self.adaptive_estimator.read().unwrap().clone(),
             is_burst: AtomicBool::new(is_burst),
         };
         if resource_group_allocated_us > 0 {
@@ -1068,7 +1193,9 @@ impl CpuThrottleManager {
     }
 
     fn get_capacity_cap(&self, resource_group: &str) -> u64 {
-        let divisor = if self.config.enable_runtime_token_management {
+        let config = self.current_config();
+        let global_capacity_us = self.global_capacity_us();
+        let divisor = if config.enable_runtime_token_management {
             10
         } else {
             1
@@ -1077,12 +1204,13 @@ impl CpuThrottleManager {
             .resource_group_buckets
             .get(resource_group)
             .map(|bucket| bucket.capacity() / divisor)
-            .unwrap_or(self.global_capacity_us / divisor);
-        group_cap.min(self.global_capacity_us / divisor).max(1)
+            .unwrap_or(global_capacity_us / divisor);
+        group_cap.min(global_capacity_us / divisor).max(1)
     }
 
     fn should_throttle_group(&self, resource_group: &str) -> bool {
-        resource_group != DEFAULT_RESOURCE_GROUP_NAME || self.config.throttle_default_group
+        resource_group != DEFAULT_RESOURCE_GROUP_NAME
+            || self.current_config().throttle_default_group
     }
 
     fn is_unknown_group(&self, resource_group: &str) -> bool {
@@ -1092,8 +1220,9 @@ impl CpuThrottleManager {
     }
 
     fn weight_for_group(&self, resource_group: &str, ru_quota: u64) -> u64 {
-        if resource_group == DEFAULT_RESOURCE_GROUP_NAME && self.config.throttle_default_group {
-            self.config.default_group_weight()
+        let config = self.current_config();
+        if resource_group == DEFAULT_RESOURCE_GROUP_NAME && config.throttle_default_group {
+            config.default_group_weight()
         } else {
             ru_quota.max(1)
         }
@@ -1104,7 +1233,22 @@ impl CpuThrottleManager {
         self.resource_group_inflight_allocated_us
             .remove(resource_group);
         self.resource_group_dag_cpu_accum.remove(resource_group);
+        self.usage_state
+            .write()
+            .unwrap()
+            .per_resource_group_dag_ratios
+            .remove(resource_group);
         deregister_cpu_throttle_metrics(resource_group);
+    }
+
+    fn current_config(&self) -> Arc<CpuThrottleConfig> {
+        self.config.read().unwrap().clone()
+    }
+
+    fn calculate_global_capacity_us(config: &CpuThrottleConfig) -> u64 {
+        let refill_interval_ms = config.refill_interval_ms.max(1);
+        let cpu_cores = SysQuota::cpu_cores_quota().max(1.0);
+        ((cpu_cores * config.max_read_cpu_ratio * refill_interval_ms as f64 * 1000.0) as u64).max(1)
     }
 }
 
@@ -1143,7 +1287,10 @@ mod tests {
         let rg1 = manager.resource_group_buckets.get("rg1").unwrap();
         let rg2 = manager.resource_group_buckets.get("rg2").unwrap();
         assert!(rg2.capacity() > rg1.capacity());
-        assert_eq!(rg1.capacity() + rg2.capacity(), manager.global_capacity_us);
+        assert_eq!(
+            rg1.capacity() + rg2.capacity(),
+            manager.global_capacity_us()
+        );
     }
 
     #[test]
@@ -1226,7 +1373,7 @@ mod tests {
         let before = allocation_metric_value("global-timeout", "global_exhausted");
         let _handle = block_on(manager.allocate_with_wait(
             "global-timeout",
-            manager.global_capacity_us,
+            manager.global_capacity_us(),
             Instant::now() + Duration::from_millis(50),
         ))
         .unwrap();
@@ -1284,6 +1431,17 @@ mod tests {
         assert_eq!(bucket.current_refill_rate(), 250);
 
         bucket.restore_base_rate();
+        assert_eq!(bucket.current_refill_rate(), 500);
+    }
+
+    #[test]
+    fn test_cpu_token_bucket_update_quota_preserves_dynamic_scaling() {
+        let bucket = CpuTokenBucket::new(1_000, 1_000, Duration::from_millis(100));
+
+        bucket.set_refill_rate(250);
+        bucket.update_quota(2_000, 2_000);
+
+        assert_eq!(bucket.base_refill_rate(), 2_000);
         assert_eq!(bucket.current_refill_rate(), 500);
     }
 
@@ -1423,5 +1581,96 @@ mod tests {
 
         assert!(recovered_once > reduced_rate);
         assert!(recovered_once < base_rate);
+    }
+
+    #[test]
+    fn test_refresh_config_updates_runtime_state() {
+        let manager = CpuThrottleManager::new(test_config());
+        manager.sync_resource_groups(vec![
+            (DEFAULT_RESOURCE_GROUP_NAME.to_owned(), u64::MAX),
+            ("rg1".to_owned(), 100),
+        ]);
+
+        let original_capacity = manager.global_capacity_us();
+        assert!(!manager.has_resource_group_bucket(DEFAULT_RESOURCE_GROUP_NAME));
+
+        let mut updated = test_config();
+        updated.enabled = false;
+        updated.max_read_cpu_ratio = 0.2;
+        updated.refill_interval_ms = 250;
+        updated.throttle_default_group = true;
+        updated.default_group_weight = Some(200);
+
+        manager.refresh_config(updated);
+        manager.sync_resource_groups(vec![
+            (DEFAULT_RESOURCE_GROUP_NAME.to_owned(), u64::MAX),
+            ("rg1".to_owned(), 100),
+        ]);
+
+        assert!(!manager.is_enabled());
+        assert_eq!(manager.refill_interval_ms(), 250);
+        assert!(manager.global_capacity_us() > original_capacity);
+        assert!(manager.has_resource_group_bucket(DEFAULT_RESOURCE_GROUP_NAME));
+        assert_eq!(
+            manager
+                .resource_group_buckets
+                .get(DEFAULT_RESOURCE_GROUP_NAME)
+                .unwrap()
+                .refill_interval_ms(),
+            250
+        );
+    }
+
+    #[test]
+    fn test_refresh_config_preserves_global_dynamic_refill_scaling() {
+        let mut config = test_config();
+        config.enable_dynamic_adjustment = true;
+        let manager = CpuThrottleManager::new(config);
+
+        manager.update_usage(0.95, HashMap::new());
+        manager.adjust_refill_rates();
+
+        let old_base = manager.global_bucket.base_refill_rate();
+        let old_current = manager.global_bucket.current_refill_rate();
+        assert!(old_current < old_base);
+
+        let mut updated = test_config();
+        updated.enable_dynamic_adjustment = true;
+        updated.max_read_cpu_ratio = 0.2;
+        manager.refresh_config(updated);
+
+        let new_base = manager.global_bucket.base_refill_rate();
+        let new_current = manager.global_bucket.current_refill_rate();
+        assert!(new_base > old_base);
+        assert!(new_current < new_base);
+        assert_eq!(
+            new_current,
+            ((old_current as u128 * new_base as u128 + old_base as u128 - 1) / old_base as u128)
+                as u64
+        );
+    }
+
+    #[test]
+    fn test_sync_resource_groups_removes_default_bucket_when_disabled() {
+        let mut config = test_config();
+        config.throttle_default_group = true;
+        config.default_group_weight = Some(100);
+        let manager = CpuThrottleManager::new(config);
+
+        manager.sync_resource_groups(vec![
+            (DEFAULT_RESOURCE_GROUP_NAME.to_owned(), u64::MAX),
+            ("rg1".to_owned(), 100),
+        ]);
+        assert!(manager.has_resource_group_bucket(DEFAULT_RESOURCE_GROUP_NAME));
+
+        let mut updated = test_config();
+        updated.throttle_default_group = false;
+        manager.refresh_config(updated);
+        manager.sync_resource_groups(vec![
+            (DEFAULT_RESOURCE_GROUP_NAME.to_owned(), u64::MAX),
+            ("rg1".to_owned(), 100),
+        ]);
+
+        assert!(!manager.has_resource_group_bucket(DEFAULT_RESOURCE_GROUP_NAME));
     }
 }

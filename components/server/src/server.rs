@@ -401,11 +401,11 @@ where
 
         let resource_manager = if config.resource_control.enabled {
             let mgr = Arc::new(ResourceGroupManager::new(config.resource_control.clone()));
-            if config.resource_control.get_cpu_throttle_enabled() {
-                mgr.set_cpu_throttle_manager(Arc::new(CpuThrottleManager::new(
-                    config.resource_control.to_cpu_throttle_config(),
-                )));
-            }
+            // Keep the throttle manager available even when disabled so
+            // online config updates can enable it without a restart.
+            mgr.set_cpu_throttle_manager(Arc::new(CpuThrottleManager::new(
+                config.resource_control.to_cpu_throttle_config(),
+            )));
             let io_bandwidth = config.storage.io_rate_limit.max_bytes_per_sec.0;
             resource_control::start_periodic_tasks(
                 &mgr,
@@ -701,7 +701,7 @@ where
         if let Some(resource_ctl) = &self.resource_manager {
             cfg_controller.register(
                 tikv::config::Module::ResourceControl,
-                Box::new(ResourceContrlCfgMgr::new(resource_ctl.get_config().clone())),
+                Box::new(ResourceContrlCfgMgr::new(resource_ctl.clone())),
             );
         }
 

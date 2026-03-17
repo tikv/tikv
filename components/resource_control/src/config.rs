@@ -8,7 +8,7 @@ use tikv_util::{
     info,
 };
 
-use crate::cpu_config::CpuThrottleConfig;
+use crate::{cpu_config::CpuThrottleConfig, ResourceGroupManager};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
@@ -260,18 +260,23 @@ impl TryFrom<ConfigValue> for PriorityCtlStrategy {
 }
 
 pub struct ResourceContrlCfgMgr {
+    resource_manager: Arc<ResourceGroupManager>,
     config: Arc<VersionTrack<Config>>,
 }
 
 impl ResourceContrlCfgMgr {
-    pub fn new(config: Arc<VersionTrack<Config>>) -> Self {
-        Self { config }
+    pub fn new(resource_manager: Arc<ResourceGroupManager>) -> Self {
+        Self {
+            config: resource_manager.get_config().clone(),
+            resource_manager,
+        }
     }
 }
 
 impl ConfigManager for ResourceContrlCfgMgr {
     fn dispatch(&mut self, change: online_config::ConfigChange) -> online_config::Result<()> {
         let cfg_str = format!("{:?}", change);
+        let old_cpu_config = self.config.value().to_cpu_throttle_config();
         let res = self.config.update(|current| {
             let mut new_config = current.clone();
             new_config.update(change)?;
@@ -280,6 +285,11 @@ impl ConfigManager for ResourceContrlCfgMgr {
             Ok(())
         });
         if res.is_ok() {
+            let new_cpu_config = self.config.value().to_cpu_throttle_config();
+            if old_cpu_config != new_cpu_config {
+                self.resource_manager
+                    .refresh_cpu_throttle_config(new_cpu_config);
+            }
             info!("update resource control config"; "change" => cfg_str);
         }
         res
@@ -291,9 +301,10 @@ mod tests {
     use std::sync::Arc;
 
     use online_config::{ConfigManager as _, OnlineConfig};
-    use tikv_util::config::{ReadableDuration, VersionTrack};
+    use tikv_util::config::ReadableDuration;
 
     use super::{Config, ResourceContrlCfgMgr};
+    use crate::{CpuThrottleManager, ResourceGroupManager};
 
     #[test]
     fn test_validate_max_read_cpu_ratio_bounds() {
@@ -310,8 +321,12 @@ mod tests {
 
     #[test]
     fn test_config_manager_rejects_invalid_default_group_weight_update() {
-        let config = Arc::new(VersionTrack::new(Config::default()));
-        let mut manager = ResourceContrlCfgMgr::new(config.clone());
+        let resource_manager = Arc::new(ResourceGroupManager::new(Config::default()));
+        resource_manager.set_cpu_throttle_manager(Arc::new(CpuThrottleManager::new(
+            Config::default().to_cpu_throttle_config(),
+        )));
+        let config = resource_manager.get_config().clone();
+        let mut manager = ResourceContrlCfgMgr::new(resource_manager);
         let mut updated = Config::default();
         updated.cpu_throttle.enabled = true;
         updated.cpu_throttle.throttle_default_group = true;
@@ -330,5 +345,37 @@ mod tests {
         config.cpu_throttle.window_size = ReadableDuration::secs(1);
 
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_config_manager_refreshes_cpu_throttle_manager() {
+        let resource_manager = Arc::new(ResourceGroupManager::new(Config::default()));
+        resource_manager.set_cpu_throttle_manager(Arc::new(CpuThrottleManager::new(
+            Config::default().to_cpu_throttle_config(),
+        )));
+        let mut manager = ResourceContrlCfgMgr::new(resource_manager.clone());
+
+        let mut updated = Config::default();
+        updated.max_read_cpu_ratio = 0.3;
+        updated.cpu_throttle.enabled = true;
+        updated.cpu_throttle.refill_interval = ReadableDuration::millis(250);
+        updated.cpu_throttle.throttle_default_group = true;
+        updated.cpu_throttle.default_group_weight = Some(200);
+
+        manager.dispatch(Config::default().diff(&updated)).unwrap();
+
+        let cpu_throttle_manager = resource_manager.get_cpu_throttle_manager().unwrap();
+        assert!(cpu_throttle_manager.is_enabled());
+        assert_eq!(
+            cpu_throttle_manager.stats_interval(),
+            ReadableDuration::secs(1).0
+        );
+        assert_eq!(cpu_throttle_manager.refill_interval_ms(), 250);
+        assert!(cpu_throttle_manager.global_capacity_us() > 0);
+        assert!(
+            cpu_throttle_manager.has_resource_group_bucket(
+                tikv_util::resource_control::DEFAULT_RESOURCE_GROUP_NAME
+            )
+        );
     }
 }
