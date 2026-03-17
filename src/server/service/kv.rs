@@ -2291,7 +2291,6 @@ fn future_raw_compare_and_swap<E: Engine, L: LockManager, F: KvFormat>(
     } else {
         Some(req.take_previous_value())
     };
-
     let res = storage.raw_compare_and_swap_atomic(
         req.take_context(),
         req.take_cf(),
@@ -2300,7 +2299,6 @@ fn future_raw_compare_and_swap<E: Engine, L: LockManager, F: KvFormat>(
         req.take_value(),
         req.get_ttl(),
         cb,
-        req.get_delete(),
     );
     async move {
         let v = match res {
