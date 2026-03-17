@@ -215,6 +215,10 @@ mod tests {
         test_kv_format_impl!(test_cad_basic_impl);
     }
 
+    /// Note: for API V2, TestEngine don't support MVCC reading, so
+    /// `pre_propose` observer is ignored, and no timestamp will be append
+    /// to key. The full test of `RawCompareAndSwap` is in
+    /// `src/storage/mod.rs`.
     fn test_cad_basic_impl<F: KvFormat>() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let ts_provider = super::super::test_util::gen_ts_provider(F::TAG);
@@ -234,8 +238,8 @@ mod tests {
             Context::default(),
         );
         let (prev_val, succeed) =
-            sched_cas_command(&mut engine, cm.clone(), cas_cmd, ts_provider.clone()).unwrap();
-        assert!(prev_val.is_none());
+            sched_cas_command(&mut engine, cm.clone(), cas_cmd,
+        ts_provider.clone()).unwrap(); assert!(prev_val.is_none());
         assert!(succeed);
 
         // Attempt to delete with wrong previous_value — should fail.
@@ -247,9 +251,9 @@ mod tests {
             Context::default(),
         );
         let (prev_val, succeed) =
-            sched_cad_command(&mut engine, cm.clone(), cmd, ts_provider.clone()).unwrap();
-        assert_eq!(prev_val, Some(b"v1".to_vec()));
-        assert!(!succeed);
+            sched_cad_command(&mut engine, cm.clone(), cmd,
+        ts_provider.clone()).unwrap(); assert_eq!(prev_val,
+        Some(b"v1".to_vec())); assert!(!succeed);
 
         // Delete with correct previous_value — should succeed.
         let cmd = RawCompareAndDelete::new(
@@ -260,9 +264,9 @@ mod tests {
             Context::default(),
         );
         let (prev_val, succeed) =
-            sched_cad_command(&mut engine, cm.clone(), cmd, ts_provider.clone()).unwrap();
-        assert_eq!(prev_val, Some(b"v1".to_vec()));
-        assert!(succeed);
+            sched_cad_command(&mut engine, cm.clone(), cmd,
+        ts_provider.clone()).unwrap(); assert_eq!(prev_val,
+        Some(b"v1".to_vec())); assert!(succeed);
 
         // Attempt to delete again — key no longer exists, should fail.
         let cmd = RawCompareAndDelete::new(
@@ -273,8 +277,8 @@ mod tests {
             Context::default(),
         );
         let (prev_val, succeed) =
-            sched_cad_command(&mut engine, cm.clone(), cmd, ts_provider.clone()).unwrap();
-        assert!(prev_val.is_none());
+            sched_cad_command(&mut engine, cm.clone(), cmd,
+        ts_provider.clone()).unwrap(); assert!(prev_val.is_none());
         assert!(!succeed);
 
         // Insert a key with an empty value
@@ -316,17 +320,10 @@ mod tests {
     ///
     /// Specifically:
     /// - For V1/V1Ttl: a `Modify::Delete` at the plain (untimstamped) key.
-    /// - For V2: a `Modify::Put` at `key@ts` containing
-    ///   `ENCODED_LOGICAL_DELETE`, plus exactly one lock guard at
-    ///   `RAW_KEY_PREFIX@key_guard_ts`.
-    ///
-    /// Note: for API V2, TestEngine doesn't support MVCC reading, so the
-    /// `pre_propose` observer is ignored and no timestamp is appended to the
-    /// key during the setup CAS. The full integration test is in
-    /// `src/storage/mod.rs`.
+    /// - For V2: a `Modify::Put` at `key@ts` containing `ENCODED_LOGICAL_DELETE`,
+    ///   plus exactly one lock guard at `RAW_KEY_PREFIX@key_guard_ts`.
     fn test_cad_process_write_impl<F: KvFormat>() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
-        // ts_provider starts at 100 for V2; None for V1/V1Ttl.
         let ts_provider = super::super::test_util::gen_ts_provider(F::TAG);
         let cm = concurrency_manager::ConcurrencyManager::new_for_test(1.into());
         let raw_key = b"rk";
@@ -387,8 +384,10 @@ mod tests {
             );
         } else {
             // V1/V1Ttl: plain Delete at the untimstamped key, no lock guards.
-            let expected_modifies =
-                vec![Modify::Delete(CF_DEFAULT, F::encode_raw_key(raw_key, None))];
+            let expected_modifies = vec![Modify::Delete(
+                CF_DEFAULT,
+                F::encode_raw_key(raw_key, None),
+            )];
             assert_eq!(write_result.to_be_write.modifies, expected_modifies);
             assert!(write_result.lock_guards.is_empty());
         }

@@ -8056,6 +8056,161 @@ mod tests {
     }
 
     #[test]
+    fn test_raw_compare_and_delete() {
+        test_kv_format_impl!(test_raw_compare_and_delete_impl);
+    }
+
+    fn test_raw_compare_and_delete_impl<F: KvFormat>() {
+        let storage = TestStorageBuilder::<_, _, F>::new(MockLockManager::new())
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+        let ctx = Context {
+            api_version: F::CLIENT_TAG,
+            ..Default::default()
+        };
+
+        let key = b"r\0delete_key";
+
+        // Test 1: delete existing key with matching previous_value — should succeed.
+        // Setup: put "v1".
+        let expected = (None, true);
+        storage
+            .raw_compare_and_swap_atomic(
+                ctx.clone(),
+                "".to_string(),
+                key.to_vec(),
+                None,
+                b"v1".to_vec(),
+                0,
+                expect_value_callback(tx.clone(), 0, expected),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Delete "v1" — previous_value matches, should succeed.
+        let expected = (Some(b"v1".to_vec()), true);
+        storage
+            .raw_compare_and_delete_atomic(
+                ctx.clone(),
+                "".to_string(),
+                key.to_vec(),
+                b"v1".to_vec(),
+                expect_value_callback(tx.clone(), 0, expected),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            storage
+                .get_concurrency_manager()
+                .global_min_lock_ts()
+                .is_none()
+        );
+
+        // Verify key is deleted.
+        expect_none(
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), key.to_vec())).unwrap(),
+        );
+        expect_multi_values(
+            vec![],
+            block_on(storage.raw_scan(
+                ctx.clone(),
+                "".to_string(),
+                b"r".to_vec(),
+                Some(b"rz".to_vec()),
+                20,
+                false,
+                false,
+            ))
+            .unwrap(),
+        );
+
+        // Test 2: delete existing key with wrong previous_value — should fail.
+        // Setup: put "v2".
+        let expected = (None, true);
+        storage
+            .raw_compare_and_swap_atomic(
+                ctx.clone(),
+                "".to_string(),
+                key.to_vec(),
+                None,
+                b"v2".to_vec(),
+                0,
+                expect_value_callback(tx.clone(), 0, expected),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Attempt delete with wrong previous_value "v1" — should fail.
+        let expected = (Some(b"v2".to_vec()), false);
+        storage
+            .raw_compare_and_delete_atomic(
+                ctx.clone(),
+                "".to_string(),
+                key.to_vec(),
+                b"v1".to_vec(),
+                expect_value_callback(tx.clone(), 0, expected),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            storage
+                .get_concurrency_manager()
+                .global_min_lock_ts()
+                .is_none()
+        );
+
+        // Verify key still has "v2".
+        expect_value(
+            b"v2".to_vec(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), key.to_vec())).unwrap(),
+        );
+
+        // Test 3: delete key whose value is an empty byte string — should succeed.
+        // Setup: overwrite with empty value via CAS.
+        let expected = (Some(b"v2".to_vec()), true);
+        storage
+            .raw_compare_and_swap_atomic(
+                ctx.clone(),
+                "".to_string(),
+                key.to_vec(),
+                Some(b"v2".to_vec()),
+                b"".to_vec(),
+                0,
+                expect_value_callback(tx.clone(), 0, expected),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Delete with matching empty previous_value — should succeed.
+        let expected = (Some(b"".to_vec()), true);
+        storage
+            .raw_compare_and_delete_atomic(
+                ctx.clone(),
+                "".to_string(),
+                key.to_vec(),
+                b"".to_vec(),
+                expect_value_callback(tx, 0, expected),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            storage
+                .get_concurrency_manager()
+                .global_min_lock_ts()
+                .is_none()
+        );
+
+        // Verify key is gone.
+        expect_none(
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), key.to_vec())).unwrap(),
+        );
+    }
+
+    #[test]
     fn test_scan_lock_with_memory_lock() {
         for in_memory_pessimistic_lock_enabled in [false, true] {
             let txn_ext = Arc::new(TxnExt::default());
