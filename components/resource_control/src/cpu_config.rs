@@ -16,6 +16,7 @@ pub struct CpuThrottleConfig {
     pub resource_group_estimated_cpu_per_request_us: String,
     pub enable_adaptive_estimated_cpu_per_request_us: bool,
     pub stats_interval_ms: u64,
+    pub window_size_ms: u64,
     pub refill_interval_ms: u64,
     pub enable_dynamic_adjustment: bool,
     pub high_watermark: f64,

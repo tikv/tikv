@@ -72,7 +72,10 @@ use raftstore_v2::{
     StateStorage,
 };
 use resolved_ts::Task;
-use resource_control::{config::ResourceContrlCfgMgr, CpuThrottleManager, ResourceGroupManager};
+use resource_control::{
+    config::ResourceContrlCfgMgr, start_cpu_throttle_monitor, CpuThrottleManager,
+    ResourceGroupManager,
+};
 use security::SecurityManager;
 use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use tikv::{
@@ -514,6 +517,13 @@ where
                     handle.update_ewma_time_slice();
                 },
             );
+            if let Some(cpu_throttle_manager) = self
+                .resource_manager
+                .as_ref()
+                .and_then(|manager| manager.get_cpu_throttle_manager())
+            {
+                start_cpu_throttle_monitor(&self.core.background_worker, cpu_throttle_manager);
+            }
         }
 
         // The `DebugService` and `DiagnosticsService` will share the same thread pool

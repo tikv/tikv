@@ -64,6 +64,11 @@ lazy_static! {
         "Capacity of global CPU token bucket"
     )
     .unwrap();
+    pub static ref CPU_THROTTLE_GLOBAL_REFILL_RATE: IntGauge = register_int_gauge!(
+        "tikv_cpu_throttle_global_refill_rate_us",
+        "Current refill rate of the global CPU token bucket"
+    )
+    .unwrap();
     pub static ref CPU_THROTTLE_GROUP_BUCKET_AVAILABLE: IntGaugeVec = register_int_gauge_vec!(
         "tikv_cpu_throttle_group_bucket_available_us",
         "Available CPU tokens in each resource group bucket",
@@ -74,6 +79,18 @@ lazy_static! {
         "tikv_cpu_throttle_group_bucket_capacity_us",
         "Capacity of each resource group CPU token bucket",
         &["resource_group"]
+    )
+    .unwrap();
+    pub static ref CPU_THROTTLE_GROUP_REFILL_RATE: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_cpu_throttle_group_refill_rate_us",
+        "Current refill rate of each resource group CPU token bucket",
+        &["resource_group"]
+    )
+    .unwrap();
+    pub static ref CPU_THROTTLE_REFILL_RATE_ADJUSTMENTS: IntCounterVec = register_int_counter_vec!(
+        "tikv_cpu_throttle_refill_rate_adjustments_total",
+        "Total CPU throttle refill rate adjustments",
+        &["level", "direction"]
     )
     .unwrap();
     pub static ref CPU_THROTTLE_TOKEN_WAIT_DURATION: HistogramVec = register_histogram_vec!(
@@ -111,6 +128,24 @@ lazy_static! {
             exponential_buckets(0.125, 2.0, 12).unwrap()
         )
         .unwrap();
+    pub static ref CPU_USAGE_MONITOR_GLOBAL_RATIO: Gauge = register_gauge!(
+        "tikv_cpu_usage_monitor_global_ratio",
+        "Sliding-window CPU usage ratio for the unified read pool"
+    )
+    .unwrap();
+    pub static ref CPU_USAGE_MONITOR_RESOURCE_GROUP_DAG_RATIO: GaugeVec =
+        register_gauge_vec!(
+            "tikv_cpu_usage_monitor_resource_group_dag_ratio",
+            "Sliding-window DAG CPU usage ratio for each resource group",
+            &["resource_group"]
+        )
+        .unwrap();
+    pub static ref CPU_USAGE_MONITOR_COLLECT_DURATION: Histogram = register_histogram!(
+        "tikv_cpu_usage_monitor_collect_duration_seconds",
+        "Histogram of CPU usage monitor collection duration",
+        exponential_buckets(1e-6, 2.0, 20).unwrap()
+    )
+    .unwrap();
 }
 
 pub fn deregister_metrics(name: &str) {
@@ -138,6 +173,8 @@ pub fn deregister_cpu_throttle_metrics(resource_group: &str) {
     }
     _ = CPU_THROTTLE_GROUP_BUCKET_AVAILABLE.remove_label_values(&[resource_group]);
     _ = CPU_THROTTLE_GROUP_BUCKET_CAPACITY.remove_label_values(&[resource_group]);
+    _ = CPU_THROTTLE_GROUP_REFILL_RATE.remove_label_values(&[resource_group]);
     _ = CPU_THROTTLE_REQUEST_CPU_TIME.remove_label_values(&[resource_group]);
     _ = CPU_THROTTLE_REQUEST_ACTUAL_TO_ESTIMATED_RATIO.remove_label_values(&[resource_group]);
+    _ = CPU_USAGE_MONITOR_RESOURCE_GROUP_DAG_RATIO.remove_label_values(&[resource_group]);
 }
