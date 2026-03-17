@@ -116,6 +116,36 @@ fn accumulate_dag_cpu_usage(
     entry.fetch_add(delta_us, Ordering::AcqRel);
 }
 
+fn next_refill_rate(
+    base_rate: u64,
+    current_rate: u64,
+    usage_ratio: f64,
+    low_watermark: f64,
+    high_watermark: f64,
+) -> Option<(u64, &'static str)> {
+    if !usage_ratio.is_finite() {
+        return None;
+    }
+
+    if usage_ratio > high_watermark {
+        let reduction = ((usage_ratio - high_watermark) / (1.0 - high_watermark)).clamp(0.0, 1.0);
+        let new_rate = (base_rate as f64 * (1.0 - reduction * 0.5)) as u64;
+        let new_rate = new_rate.max(1);
+        (new_rate != current_rate).then_some((new_rate, "decrease"))
+    } else if usage_ratio < low_watermark && current_rate < base_rate {
+        let recovery =
+            ((low_watermark - usage_ratio) / low_watermark.max(f64::EPSILON)).clamp(0.0, 1.0);
+        let recovery_step = ((base_rate - current_rate) as f64 * recovery * 0.5).ceil() as u64;
+        let new_rate = current_rate
+            .saturating_add(recovery_step.max(1))
+            .min(base_rate)
+            .max(1);
+        (new_rate != current_rate).then_some((new_rate, "increase"))
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct AdaptiveEstimateEntry {
     estimate_us: u64,
@@ -556,6 +586,7 @@ impl CpuThrottleManager {
         let cpu_cores = SysQuota::cpu_cores_quota().max(1.0);
         let global_capacity_us =
             (cpu_cores * config.max_read_cpu_ratio * refill_interval_ms as f64 * 1000.0) as u64;
+        // Keep the normalization denominator non-zero for dynamic adjustment.
         let global_capacity_us = global_capacity_us.max(1);
 
         let global_bucket = Arc::new(CpuTokenBucket::new(
@@ -692,13 +723,6 @@ impl CpuThrottleManager {
                 .with_label_values(&[entry.key().as_str()])
                 .set(ratio);
         }
-        for (resource_group, ratio) in &per_resource_group_dag_ratios {
-            if !self.resource_group_buckets.contains_key(resource_group) {
-                CPU_USAGE_MONITOR_RESOURCE_GROUP_DAG_RATIO
-                    .with_label_values(&[resource_group.as_str()])
-                    .set(*ratio);
-            }
-        }
         for resource_group in previous_resource_groups {
             if !per_resource_group_dag_ratios.contains_key(&resource_group) {
                 CPU_USAGE_MONITOR_RESOURCE_GROUP_DAG_RATIO
@@ -723,24 +747,20 @@ impl CpuThrottleManager {
         let high_watermark = self.config.high_watermark;
         let low_watermark = self.config.low_watermark;
 
-        if global_ratio > high_watermark {
-            let reduction =
-                ((global_ratio - high_watermark) / (1.0 - high_watermark)).clamp(0.0, 1.0);
-            let new_rate =
-                (self.global_bucket.base_refill_rate() as f64 * (1.0 - reduction * 0.5)) as u64;
-            let new_rate = new_rate.max(1);
-            if new_rate != self.global_bucket.current_refill_rate() {
+        if let Some((new_rate, direction)) = next_refill_rate(
+            self.global_bucket.base_refill_rate(),
+            self.global_bucket.current_refill_rate(),
+            global_ratio,
+            low_watermark,
+            high_watermark,
+        ) {
+            if new_rate == self.global_bucket.base_refill_rate() {
+                self.global_bucket.restore_base_rate();
+            } else {
                 self.global_bucket.set_refill_rate(new_rate);
-                CPU_THROTTLE_REFILL_RATE_ADJUSTMENTS
-                    .with_label_values(&["global", "decrease"])
-                    .inc();
             }
-        } else if global_ratio < low_watermark
-            && self.global_bucket.current_refill_rate() != self.global_bucket.base_refill_rate()
-        {
-            self.global_bucket.restore_base_rate();
             CPU_THROTTLE_REFILL_RATE_ADJUSTMENTS
-                .with_label_values(&["global", "increase"])
+                .with_label_values(&["global", direction])
                 .inc();
         }
         CPU_THROTTLE_GLOBAL_REFILL_RATE
@@ -758,23 +778,20 @@ impl CpuThrottleManager {
                 continue;
             }
             let normalized_ratio = ratio / quota_ratio;
-            if normalized_ratio > high_watermark {
-                let reduction =
-                    ((normalized_ratio - high_watermark) / (1.0 - high_watermark)).clamp(0.0, 1.0);
-                let new_rate = (bucket.base_refill_rate() as f64 * (1.0 - reduction * 0.5)) as u64;
-                let new_rate = new_rate.max(1);
-                if new_rate != bucket.current_refill_rate() {
+            if let Some((new_rate, direction)) = next_refill_rate(
+                bucket.base_refill_rate(),
+                bucket.current_refill_rate(),
+                normalized_ratio,
+                low_watermark,
+                high_watermark,
+            ) {
+                if new_rate == bucket.base_refill_rate() {
+                    bucket.restore_base_rate();
+                } else {
                     bucket.set_refill_rate(new_rate);
-                    CPU_THROTTLE_REFILL_RATE_ADJUSTMENTS
-                        .with_label_values(&["resource_group", "decrease"])
-                        .inc();
                 }
-            } else if normalized_ratio < low_watermark
-                && bucket.current_refill_rate() != bucket.base_refill_rate()
-            {
-                bucket.restore_base_rate();
                 CPU_THROTTLE_REFILL_RATE_ADJUSTMENTS
-                    .with_label_values(&["resource_group", "increase"])
+                    .with_label_values(&["resource_group", direction])
                     .inc();
             }
             CPU_THROTTLE_GROUP_REFILL_RATE
@@ -1030,6 +1047,9 @@ impl CpuThrottleManager {
             } else {
                 None
             },
+            // Per-resource-group DAG CPU ratios intentionally only cover groups
+            // that participate in CPU throttling. The default group is excluded
+            // unless throttle_default_group is enabled.
             per_resource_group_dag_cpu_accum: if self.should_throttle_group(resource_group) {
                 Some(self.resource_group_dag_cpu_accum.clone())
             } else {
@@ -1316,5 +1336,92 @@ mod tests {
                 .copied(),
             Some(0.1)
         );
+    }
+
+    #[test]
+    fn test_cpu_token_handle_drop_accumulates_actual_usage_for_resource_group() {
+        let manager = CpuThrottleManager::new(test_config());
+        manager.on_resource_group_changed("rg1", 100);
+
+        let handle = block_on(manager.allocate_with_wait(
+            "rg1",
+            1_000,
+            Instant::now() + Duration::from_millis(50),
+        ))
+        .unwrap();
+        handle.record_actual_usage(321);
+        drop(handle);
+
+        let deltas = manager.take_per_resource_group_dag_cpu_deltas();
+        assert_eq!(deltas.get("rg1").copied(), Some(321));
+    }
+
+    #[test]
+    fn test_cpu_token_handle_drop_skips_non_throttled_default_group() {
+        let manager = CpuThrottleManager::new(test_config());
+
+        let handle = block_on(manager.allocate_with_wait(
+            DEFAULT_RESOURCE_GROUP_NAME,
+            1_000,
+            Instant::now() + Duration::from_millis(50),
+        ))
+        .unwrap();
+        handle.record_actual_usage(321);
+        drop(handle);
+
+        let deltas = manager.take_per_resource_group_dag_cpu_deltas();
+        assert!(deltas.is_empty());
+    }
+
+    #[test]
+    fn test_adjust_refill_rates_recovers_global_bucket_gradually() {
+        let mut config = test_config();
+        config.enable_dynamic_adjustment = true;
+        let manager = CpuThrottleManager::new(config);
+
+        let base_rate = manager.global_bucket.base_refill_rate();
+        manager.update_usage(0.95, HashMap::new());
+        manager.adjust_refill_rates();
+        let reduced_rate = manager.global_bucket.current_refill_rate();
+
+        assert!(reduced_rate < base_rate);
+
+        manager.update_usage(0.0, HashMap::new());
+        manager.adjust_refill_rates();
+        let recovered_once = manager.global_bucket.current_refill_rate();
+
+        assert!(recovered_once > reduced_rate);
+        assert!(recovered_once < base_rate);
+
+        manager.update_usage(0.0, HashMap::new());
+        manager.adjust_refill_rates();
+        let recovered_twice = manager.global_bucket.current_refill_rate();
+
+        assert!(recovered_twice > recovered_once);
+        assert!(recovered_twice <= base_rate);
+    }
+
+    #[test]
+    fn test_adjust_refill_rates_recovers_resource_group_bucket_gradually() {
+        let mut config = test_config();
+        config.enable_dynamic_adjustment = true;
+        let manager = CpuThrottleManager::new(config);
+        manager.on_resource_group_changed("rg1", 100);
+
+        let bucket = manager.resource_group_buckets.get("rg1").unwrap().clone();
+        let base_rate = bucket.base_refill_rate();
+
+        manager.update_usage(0.0, HashMap::from([(String::from("rg1"), 0.95)]));
+        manager.adjust_refill_rates();
+        let reduced_rate = bucket.current_refill_rate();
+
+        assert!(reduced_rate < base_rate);
+
+        manager.update_usage(0.0, HashMap::from([(String::from("rg1"), 0.0)]));
+        manager.adjust_refill_rates();
+        let recovered_once = bucket.current_refill_rate();
+
+        assert!(recovered_once > reduced_rate);
+        assert!(recovered_once < base_rate);
     }
 }
