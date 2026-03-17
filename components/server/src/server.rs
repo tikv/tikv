@@ -88,7 +88,7 @@ use raftstore::{
     RaftRouterCompactedEventSender,
 };
 use resolved_ts::{LeadershipResolver, Task};
-use resource_control::{config::ResourceContrlCfgMgr, ResourceGroupManager};
+use resource_control::{config::ResourceContrlCfgMgr, CpuThrottleManager, ResourceGroupManager};
 use security::SecurityManager;
 use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use snap_recovery::RecoveryService;
@@ -398,6 +398,11 @@ where
 
         let resource_manager = if config.resource_control.enabled {
             let mgr = Arc::new(ResourceGroupManager::new(config.resource_control.clone()));
+            if config.resource_control.get_cpu_throttle_enabled() {
+                mgr.set_cpu_throttle_manager(Arc::new(CpuThrottleManager::new(
+                    config.resource_control.to_cpu_throttle_config(),
+                )));
+            }
             let io_bandwidth = config.storage.io_rate_limit.max_bytes_per_sec.0;
             resource_control::start_periodic_tasks(
                 &mgr,

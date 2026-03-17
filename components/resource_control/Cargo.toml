@@ -10,6 +10,7 @@ failpoints = ["fail/failpoints"]
 
 [dependencies]
 collections = { workspace = true }
+cpu-time = "1.0"
 crossbeam = { workspace = true }
 dashmap = "5.1"
 fail = "0.5"

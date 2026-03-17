@@ -10268,6 +10268,132 @@ def ResourceControl() -> RowPanel:
             ),
         ]
     )
+    layout.row(
+        [
+            graph_panel(
+                title="CPU Throttle Allocations",
+                description="CPU throttle token allocations grouped by resource group and result.",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_cpu_throttle_allocations_total",
+                            by_labels=["resource_group", "result"],
+                        ),
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="CPU Throttle Unknown Group",
+                description="Requests throttled with an unknown resource group name.",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_cpu_throttle_unknown_group_total",
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="CPU Throttle Global Bucket Available",
+                description="Available CPU tokens in the global bucket.",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_cpu_throttle_global_bucket_available_us",
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="CPU Throttle Global Bucket Capacity",
+                description="Capacity of the global CPU token bucket.",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_cpu_throttle_global_bucket_capacity_us",
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="CPU Throttle Group Bucket Available",
+                description="Available CPU tokens in each resource group bucket.",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_cpu_throttle_group_bucket_available_us",
+                            by_labels=["resource_group"],
+                        ),
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="CPU Throttle Group Bucket Capacity",
+                description="Capacity of each resource group CPU token bucket.",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_cpu_throttle_group_bucket_capacity_us",
+                            by_labels=["resource_group"],
+                        ),
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="CPU Throttle Token Wait Duration",
+                description="Wait duration for CPU token allocation.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_cpu_throttle_token_wait_duration_seconds",
+                by_labels=["resource_group", "result"],
+            ),
+            graph_panel_histogram_quantiles(
+                title="CPU Throttle Runtime Token Wait Duration",
+                description="Wait duration for runtime CPU token allocation.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_cpu_throttle_runtime_token_wait_duration_seconds",
+                by_labels=["resource_group", "result"],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="CPU Throttle Request CPU Time",
+                description="Measured CPU time per throttled request.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_cpu_throttle_request_cpu_time_seconds",
+                by_labels=["resource_group"],
+            ),
+            graph_panel_histogram_quantiles(
+                title="CPU Throttle Actual to Estimated Ratio",
+                description="Actual CPU time divided by estimated CPU time.",
+                yaxes=yaxes(left_format=UNITS.NONE_FORMAT),
+                metric="tikv_cpu_throttle_request_actual_to_estimated_ratio",
+                by_labels=["resource_group"],
+            ),
+        ]
+    )
     return layout.row_panel
 
 
