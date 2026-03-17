@@ -1,21 +1,22 @@
 // Copyright 2026 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp, future::Future, io};
-use std::pin::Pin;
+use std::{cmp, future::Future, io, pin::Pin};
 
 use async_trait::async_trait;
-use cloud::blob::{
-    BlobConfig, BlobObject, BlobStorage, BlobStream, DeletableStorage, IterableStorage, PutResource,
+use cloud::{
+    blob::{
+        BlobConfig, BlobObject, BlobStorage, BlobStream, DeletableStorage, IterableStorage,
+        PutResource,
+    },
+    metrics,
 };
-use cloud::metrics;
-use futures::future::LocalBoxFuture;
-use futures::stream::Stream;
-use futures_util::io::AsyncReadExt as _;
-use futures_util::stream::StreamExt;
-use futures_util::TryStreamExt;
-use google_cloud_storage::client::{Storage, StorageControl};
-use google_cloud_storage::model_ext::ReadRange;
-use google_cloud_storage::streaming_source::{SizeHint, StreamingSource};
+use futures::{future::LocalBoxFuture, stream::Stream};
+use futures_util::{TryStreamExt, io::AsyncReadExt as _, stream::StreamExt};
+use google_cloud_storage::{
+    client::{Storage, StorageControl},
+    model_ext::ReadRange,
+    streaming_source::{SizeHint, StreamingSource},
+};
 use kvproto::brpb::Gcs as InputConfig;
 use tikv_util::{error, info, time::Instant};
 use tokio::sync::{Mutex, OnceCell};
@@ -65,7 +66,9 @@ impl GcsApiError {
             (None, Some(google_cloud_gax::error::rpc::Code::Unavailable))
             | (None, Some(google_cloud_gax::error::rpc::Code::ResourceExhausted))
             | (None, Some(google_cloud_gax::error::rpc::Code::Aborted))
-            | (None, Some(google_cloud_gax::error::rpc::Code::Internal)) => io::ErrorKind::Interrupted,
+            | (None, Some(google_cloud_gax::error::rpc::Code::Internal)) => {
+                io::ErrorKind::Interrupted
+            }
 
             (None, None) if self.source.is_timeout() => io::ErrorKind::TimedOut,
             (None, None) if self.source.is_transport() => io::ErrorKind::Interrupted,
@@ -122,7 +125,12 @@ impl std::fmt::Display for GcsApiError {
                 err = self.source
             );
         }
-        write!(f, "gcs_v2 {op} failed: {err}", op = self.op, err = self.source)
+        write!(
+            f,
+            "gcs_v2 {op} failed: {err}",
+            op = self.op,
+            err = self.source
+        )
     }
 }
 
@@ -140,9 +148,9 @@ struct PutResourceSource {
 }
 
 impl PutResourceSource {
-    fn new(reader: PutResource<'_>, exact_size: u64) -> Self {
+    fn new(reader: PutResource<'static>, exact_size: u64) -> Self {
         Self {
-            reader: Mutex::new(into_static_put_resource(reader)),
+            reader: Mutex::new(reader),
             exact_size,
         }
     }
@@ -166,15 +174,6 @@ impl StreamingSource for PutResourceSource {
     fn size_hint(&self) -> impl Future<Output = Result<SizeHint, Self::Error>> + Send {
         std::future::ready(Ok(SizeHint::with_exact(self.exact_size)))
     }
-}
-
-fn into_static_put_resource(reader: PutResource<'_>) -> PutResource<'static> {
-    // SAFETY: `put()` awaits `write_object(...).send_buffered()` to completion
-    // before returning, so the widened lifetime never outlives the original
-    // `reader`. In google-cloud-storage 1.0.0, the buffered upload path
-    // consumes the payload inside that future and does not detach it into a
-    // background task.
-    unsafe { std::mem::transmute::<PutResource<'_>, PutResource<'static>>(reader) }
 }
 
 #[derive(Clone, Debug)]
@@ -202,8 +201,8 @@ impl BlobConfig for Config {
             ));
             Ok(u)
         } else {
-            let mut url = Url::parse("gcs://")
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+            let mut url =
+                Url::parse("gcs://").map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
             url.set_host(Some(&self.bucket))
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
             if !self.url_prefix.is_empty() {
@@ -337,14 +336,19 @@ impl GcsStorage {
         let bucket = input.bucket.clone();
         let url_prefix = input.prefix.clone();
         let prefix = url_prefix.trim_end_matches(DEFAULT_SEP).to_owned();
-        let endpoint = if input.endpoint.is_empty() { None } else { Some(input.endpoint.clone()) };
+        let endpoint = if input.endpoint.is_empty() {
+            None
+        } else {
+            Some(input.endpoint.clone())
+        };
         let storage_class = Self::parse_storage_class(&input.storage_class)?;
         let predefined_acl = Self::parse_predefined_acl(&input.predefined_acl)?;
 
-        // CRITICAL FIX: Store credential mode instead of building Credentials object
-        // google_cloud_auth::credentials::Builder::build() may call tokio::spawn internally,
-        // which will panic if called from a non-Tokio thread (like Backup-Worker thread).
-        // We defer the credential building to async context in get_data_client/get_control_client.
+        // Store credential mode instead of building a Credentials object here.
+        // google_cloud_auth::credentials::Builder::build() may call tokio::spawn
+        // internally, which will panic if called from a non-Tokio thread (like
+        // Backup-Worker thread). We defer the credential building to async
+        // context in get_data_client/get_control_client.
         let creds_mode = if !input.credentials_blob.is_empty() {
             // Validate JSON format but don't build credentials yet
             validate_credentials_json(&input.credentials_blob)?;
@@ -440,7 +444,7 @@ impl GcsStorage {
         }
         key
     }
-    
+
     fn bucket_resource_name(&self) -> String {
         let bucket = self.inner.config.bucket.as_str();
         if bucket.starts_with("projects/") {
@@ -457,21 +461,37 @@ impl BlobStorage for GcsStorage {
         Box::new(self.inner.config.clone())
     }
 
-    async fn put(&self, name: &str, reader: PutResource<'_>, content_length: u64) -> io::Result<()> {
+    async fn put(
+        &self,
+        name: &str,
+        reader: PutResource<'_>,
+        content_length: u64,
+    ) -> io::Result<()> {
         let full_name = self.full_path(name);
 
         let bucket = self.bucket_resource_name();
         let client = self.get_data_client().await?;
+        // SAFETY: `put()` awaits `write_object(...).send_buffered()` to
+        // completion before returning, so the widened lifetime never outlives
+        // the original `reader`. In google-cloud-storage 1.0.0, the buffered
+        // upload path consumes the payload inside that future and does not
+        // detach it into a background task.
+        let reader =
+            unsafe { std::mem::transmute::<PutResource<'_>, PutResource<'static>>(reader) };
         let payload = PutResourceSource::new(reader, content_length);
         let storage_class = self.inner.config.storage_class.clone();
         let predefined_acl = self.inner.config.predefined_acl.clone();
         let begin = Instant::now_coarse();
         let mut builder = client
             .write_object(bucket, full_name, payload)
-            // TiKV's upload source is single-pass. Force resumable uploads so
-            // google-cloud-storage keeps retry/continue behavior even for
-            // small objects, instead of falling back to non-idempotent
-            // single-shot uploads.
+            // TiKV's upload source is single-pass. In
+            // `google-cloud-storage` 1.0.0, the doc comments for
+            // `with_resumable_upload_threshold()` in
+            // `src/storage/client.rs` and `src/storage/write_object.rs` say
+            // smaller uploads use single-shot uploads for better performance.
+            //
+            // We still force resumable uploads here because backup writes favor
+            // retry/continue behavior over the extra RPCs for small objects.
             .with_resumable_upload_threshold(0_usize);
         if let Some(storage_class) = storage_class.as_ref() {
             builder = builder.set_storage_class(storage_class.clone());
@@ -574,7 +594,7 @@ impl IterableStorage for GcsStorage {
                 page_token = resp.next_page_token;
             }
         };
-        
+
         Box::pin(stream)
     }
 }

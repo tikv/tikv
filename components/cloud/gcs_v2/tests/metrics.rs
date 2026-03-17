@@ -1,38 +1,23 @@
-use cloud::blob::{BlobStorage, PutResource};
+use std::{
+    io,
+    sync::{Arc, Mutex},
+};
+
+use cloud::{
+    blob::{BlobStorage, PutResource},
+    metrics::CLOUD_REQUEST_HISTOGRAM_VEC,
+};
 use kvproto::brpb::Gcs;
-use prometheus::proto::MetricType;
-use std::io;
-use std::sync::{Arc, Mutex};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::oneshot;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    sync::oneshot,
+};
 
 fn histogram_sample_count(cloud: &str, req: &str) -> u64 {
-    let families = prometheus::gather();
-    for mf in families {
-        if mf.get_name() != "tikv_cloud_request_duration_seconds" {
-            continue;
-        }
-        if mf.get_field_type() != MetricType::HISTOGRAM {
-            continue;
-        }
-        for m in mf.get_metric() {
-            let mut cloud_ok = false;
-            let mut req_ok = false;
-            for lp in m.get_label() {
-                if lp.get_name() == "cloud" && lp.get_value() == cloud {
-                    cloud_ok = true;
-                }
-                if lp.get_name() == "req" && lp.get_value() == req {
-                    req_ok = true;
-                }
-            }
-            if cloud_ok && req_ok {
-                return m.get_histogram().get_sample_count();
-            }
-        }
-        return 0;
-    }
-    0
+    CLOUD_REQUEST_HISTOGRAM_VEC
+        .get_metric_with_label_values(&[cloud, req])
+        .unwrap()
+        .get_sample_count()
 }
 
 fn build_http_response(body: &str, extra_headers: &[(&str, &str)]) -> Vec<u8> {
@@ -127,7 +112,13 @@ async fn start_server() -> io::Result<(String, oneshot::Sender<()>, Arc<Mutex<Ve
     Ok((format!("http://{addr}"), shutdown_tx, captured))
 }
 
-fn make_cfg(endpoint: &str, bucket: &str, prefix: &str, storage_class: &str, predefined_acl: &str) -> Gcs {
+fn make_cfg(
+    endpoint: &str,
+    bucket: &str,
+    prefix: &str,
+    storage_class: &str,
+    predefined_acl: &str,
+) -> Gcs {
     let mut cfg = Gcs::default();
     cfg.endpoint = endpoint.to_string();
     cfg.bucket = bucket.to_string();
@@ -140,7 +131,13 @@ fn make_cfg(endpoint: &str, bucket: &str, prefix: &str, storage_class: &str, pre
 #[tokio::test]
 async fn gcs_v2_put_emits_metrics() -> Result<(), Box<dyn std::error::Error>> {
     let (endpoint, shutdown, captured) = start_server().await?;
-    let cfg = make_cfg(&endpoint, "test-bucket", "pfx", "COLDLINE", "projectPrivate");
+    let cfg = make_cfg(
+        &endpoint,
+        "test-bucket",
+        "pfx",
+        "COLDLINE",
+        "projectPrivate",
+    );
     let s = gcs_v2::GcsStorage::from_input(cfg)?;
 
     let before_insert = histogram_sample_count("gcp", "insert_multipart");
@@ -181,9 +178,16 @@ async fn gcs_v2_put_emits_metrics() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio::test]
-async fn gcs_v2_zero_length_put_is_accounted_as_resumable() -> Result<(), Box<dyn std::error::Error>> {
+async fn gcs_v2_zero_length_put_is_accounted_as_resumable() -> Result<(), Box<dyn std::error::Error>>
+{
     let (endpoint, shutdown, captured) = start_server().await?;
-    let cfg = make_cfg(&endpoint, "test-bucket", "pfx", "COLDLINE", "projectPrivate");
+    let cfg = make_cfg(
+        &endpoint,
+        "test-bucket",
+        "pfx",
+        "COLDLINE",
+        "projectPrivate",
+    );
     let s = gcs_v2::GcsStorage::from_input(cfg)?;
 
     let before_multipart = histogram_sample_count("gcp", "insert_multipart");

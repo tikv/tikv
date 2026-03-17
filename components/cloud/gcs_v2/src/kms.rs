@@ -1,18 +1,17 @@
 // Copyright 2026 TiKV Project Authors. Licensed under Apache-2.0.
 
 use cloud::{
+    STORAGE_VENDOR_NAME_GCP_V2,
     error::{Error as CloudError, KmsError, Result},
     kms::{Config, CryptographyType, DataKeyPair, EncryptedKey, KmsProvider, PlainKey},
-    metrics, STORAGE_VENDOR_NAME_GCP_V2,
+    metrics,
 };
 use google_cloud_gax::{
     client_builder::Error as GaxBuildError,
     error::{Error as GaxError, rpc::Code as RpcCode},
 };
 use google_cloud_kms_v1::{client::KeyManagementService, model::ProtectionLevel};
-use tikv_util::box_err;
-use tikv_util::stream::RetryError;
-use tikv_util::time::Instant;
+use tikv_util::{box_err, stream::RetryError, time::Instant};
 use tokio::sync::OnceCell;
 
 use crate::credentials::{CredentialsMode, build_credentials, validate_credentials_json};
@@ -38,10 +37,9 @@ impl std::fmt::Debug for GcpKms {
 
 impl GcpKms {
     fn map_credential_error(e: std::io::Error) -> CloudError {
-        CloudError::KmsError(KmsError::Other(cloud::error::OtherError::from_box(box_err!(
-            "build credentials: {}",
-            e
-        ))))
+        CloudError::KmsError(KmsError::Other(cloud::error::OtherError::from_box(
+            box_err!("build credentials: {}", e),
+        )))
     }
 
     pub fn new(mut config: Config) -> Result<Self> {
@@ -64,8 +62,11 @@ impl GcpKms {
             Some(config.location.endpoint.clone())
         };
 
-        let credentials_mode =
-            match config.gcp.as_ref().and_then(|c| c.credential_file_path.as_deref()) {
+        let credentials_mode = match config
+            .gcp
+            .as_ref()
+            .and_then(|c| c.credential_file_path.as_deref())
+        {
             Some(path) => {
                 let json_data = std::fs::read(path).map_err(|e| {
                     CloudError::KmsError(KmsError::Other(cloud::error::OtherError::from_box(
@@ -73,10 +74,10 @@ impl GcpKms {
                     )))
                 })?;
                 let json_string = String::from_utf8(json_data).map_err(|e| {
-                        CloudError::KmsError(KmsError::Other(cloud::error::OtherError::from_box(
-                            box_err!("credential file is not valid utf-8: {}", e),
-                        )))
-                    })?;
+                    CloudError::KmsError(KmsError::Other(cloud::error::OtherError::from_box(
+                        box_err!("credential file is not valid utf-8: {}", e),
+                    )))
+                })?;
                 validate_credentials_json(&json_string).map_err(Self::map_credential_error)?;
                 CredentialsMode::Json(json_string)
             }
@@ -94,24 +95,23 @@ impl GcpKms {
     }
 
     async fn get_client(&self) -> Result<KeyManagementService> {
-        let client = self
-            .client
-            .get_or_try_init(|| async {
-                let mut builder = KeyManagementService::builder();
-                if let Some(ep) = self.endpoint.as_ref() {
-                    builder = builder.with_endpoint(ep);
-                }
-                if let Some(creds) =
-                    build_credentials(&self.credentials_mode).map_err(Self::map_credential_error)?
-                {
-                    builder = builder.with_credentials(creds);
-                }
-                builder
-                    .build()
-                    .await
-                    .map_err(|e| CloudError::KmsError(KmsError::Other(GaxBuildKmsError(e).into())))
-            })
-            .await?;
+        let client =
+            self.client
+                .get_or_try_init(|| async {
+                    let mut builder = KeyManagementService::builder();
+                    if let Some(ep) = self.endpoint.as_ref() {
+                        builder = builder.with_endpoint(ep);
+                    }
+                    if let Some(creds) = build_credentials(&self.credentials_mode)
+                        .map_err(Self::map_credential_error)?
+                    {
+                        builder = builder.with_credentials(creds);
+                    }
+                    builder.build().await.map_err(|e| {
+                        CloudError::KmsError(KmsError::Other(GaxBuildKmsError(e).into()))
+                    })
+                })
+                .await?;
         Ok(client.clone())
     }
 }
@@ -157,8 +157,7 @@ impl KmsProvider for GcpKms {
             .with_label_values(&["gcp", "decrypt"])
             .observe(begin.saturating_elapsed_secs());
 
-        check_crc32(resp.plaintext.as_ref(), resp.plaintext_crc32c)
-            .map_err(CloudError::from)?;
+        check_crc32(resp.plaintext.as_ref(), resp.plaintext_crc32c).map_err(CloudError::from)?;
         Ok(resp.plaintext.to_vec())
     }
 
@@ -333,12 +332,27 @@ impl RetryError for GaxBuildKmsError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use base64::Engine as _;
+    use std::future::{self, Future};
+
+    use google_cloud_gax::{
+        error::{Error as GaxError, rpc::Status},
+        options::RequestOptions,
+        response::Response,
+    };
+    use google_cloud_kms_v1::{
+        model::{
+            DecryptRequest, DecryptResponse, EncryptRequest, EncryptResponse,
+            GenerateRandomBytesRequest, GenerateRandomBytesResponse,
+        },
+        stub,
+    };
     use prometheus::proto::MetricType;
-    use std::io;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::sync::oneshot;
+
+    use super::*;
+
+    const TEST_KEY_ID: &str = "projects/p/locations/l/keyRings/r/cryptoKeys/k";
+    const TEST_LOCATION: &str = "projects/p/locations/l";
+    const TEST_CIPHERTEXT_PREFIX: &[u8] = b"stub-kms:";
 
     fn histogram_sample_count(cloud: &str, req: &str) -> u64 {
         let families = prometheus::gather();
@@ -369,108 +383,12 @@ mod tests {
         0
     }
 
-    fn build_http_response(body: &str) -> Vec<u8> {
-        let body_bytes = body.as_bytes();
-        format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            body_bytes.len()
-        )
-        .into_bytes()
-        .into_iter()
-        .chain(body_bytes.iter().copied())
-        .collect()
-    }
-
-    fn build_http_404() -> Vec<u8> {
-        b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec()
-    }
-
-    fn response_for_target(target: &str) -> Vec<u8> {
-        if target.contains(":generateRandomBytes") {
-            let data = vec![0x42_u8; DEFAULT_DATAKEY_SIZE];
-            let crc = crc32c::crc32c(&data) as i64;
-            let body = serde_json::json!({
-                "data": base64::engine::general_purpose::STANDARD.encode(&data),
-                "dataCrc32c": crc.to_string(),
-            });
-            return build_http_response(&body.to_string());
-        }
-        if target.contains(":encrypt") {
-            let ciphertext = b"ciphertext".to_vec();
-            let crc = crc32c::crc32c(&ciphertext) as i64;
-            let body = serde_json::json!({
-                "ciphertext": base64::engine::general_purpose::STANDARD.encode(&ciphertext),
-                "ciphertextCrc32c": crc.to_string(),
-                "verifiedPlaintextCrc32c": true,
-            });
-            return build_http_response(&body.to_string());
-        }
-        if target.contains(":decrypt") {
-            let plaintext = vec![0x42_u8; DEFAULT_DATAKEY_SIZE];
-            let crc = crc32c::crc32c(&plaintext) as i64;
-            let body = serde_json::json!({
-                "plaintext": base64::engine::general_purpose::STANDARD.encode(&plaintext),
-                "plaintextCrc32c": crc.to_string(),
-            });
-            return build_http_response(&body.to_string());
-        }
-        build_http_404()
-    }
-
-    async fn start_server() -> io::Result<(String, oneshot::Sender<()>)> {
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
-        let addr = listener.local_addr()?;
-        let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
-
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    _ = &mut shutdown_rx => { break; }
-                    res = listener.accept() => {
-                        let Ok((mut socket, _)) = res else { break; };
-                        tokio::spawn(async move {
-                            let mut buf = Vec::with_capacity(4096);
-                            let mut tmp = [0u8; 1024];
-                            loop {
-                                let Ok(n) = socket.read(&mut tmp).await else { return; };
-                                if n == 0 { return; }
-                                buf.extend_from_slice(&tmp[..n]);
-                                if buf.windows(4).any(|w| w == b"\r\n\r\n") { break; }
-                                if buf.len() > 64 * 1024 { return; }
-                            }
-
-                            let request = match std::str::from_utf8(&buf) {
-                                Ok(s) => s,
-                                Err(_) => return,
-                            };
-                            let mut lines = request.lines();
-                            let Some(first) = lines.next() else { return; };
-                            let mut parts = first.split_whitespace();
-                            let _method = parts.next();
-                            let target = parts.next().unwrap_or("/");
-
-                            let response = response_for_target(target);
-                            let _ = socket.write_all(&response).await;
-                            let _ = socket.shutdown().await;
-                        });
-                    }
-                }
-            }
-        });
-
-        Ok((format!("http://{addr}"), shutdown_tx))
-    }
-
-    #[tokio::test]
-    async fn roundtrip_generate_and_decrypt() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let (endpoint, shutdown) = start_server().await?;
-        let cfg = cloud::kms::Config {
-            key_id: cloud::KeyId::new(
-                "projects/p/locations/l/keyRings/r/cryptoKeys/k".to_string(),
-            )?,
+    fn test_config() -> std::result::Result<cloud::kms::Config, Box<dyn std::error::Error>> {
+        Ok(cloud::kms::Config {
+            key_id: cloud::KeyId::new(TEST_KEY_ID.to_string())?,
             location: cloud::kms::Location {
                 region: "l".to_string(),
-                endpoint,
+                endpoint: String::new(),
             },
             vendor: "gcp".to_string(),
             azure: None,
@@ -478,9 +396,126 @@ mod tests {
                 credential_file_path: None,
             }),
             aws: None,
-        };
+        })
+    }
 
-        let kms = GcpKms::new(cfg)?;
+    fn kms_with_stub<T>(stub: T) -> std::result::Result<GcpKms, Box<dyn std::error::Error>>
+    where
+        T: stub::KeyManagementService + 'static,
+    {
+        let kms = GcpKms::new(test_config()?)?;
+        kms.client
+            .set(KeyManagementService::from_stub(stub))
+            .unwrap();
+        Ok(kms)
+    }
+
+    fn wrap_ciphertext(plaintext: &[u8]) -> Vec<u8> {
+        let mut ciphertext = TEST_CIPHERTEXT_PREFIX.to_vec();
+        ciphertext.extend(plaintext.iter().rev().copied());
+        ciphertext
+    }
+
+    fn unwrap_ciphertext(ciphertext: &[u8]) -> Vec<u8> {
+        ciphertext
+            .strip_prefix(TEST_CIPHERTEXT_PREFIX)
+            .expect("ciphertext should be produced by the test KMS stub")
+            .iter()
+            .rev()
+            .copied()
+            .collect()
+    }
+
+    #[derive(Debug)]
+    struct RoundTripKmsStub;
+
+    impl stub::KeyManagementService for RoundTripKmsStub {
+        fn generate_random_bytes(
+            &self,
+            req: GenerateRandomBytesRequest,
+            _options: RequestOptions,
+        ) -> impl Future<
+            Output = google_cloud_kms_v1::Result<Response<GenerateRandomBytesResponse>>,
+        > + Send {
+            assert_eq!(req.location, TEST_LOCATION);
+            assert_eq!(req.length_bytes, DEFAULT_DATAKEY_SIZE as i32);
+            assert_eq!(req.protection_level, ProtectionLevel::Hsm);
+
+            let data = vec![0x42_u8; DEFAULT_DATAKEY_SIZE];
+            let response = GenerateRandomBytesResponse::new()
+                .set_data(data.clone())
+                .set_data_crc32c(crc32c::crc32c(&data) as i64);
+            future::ready(Ok(Response::from(response)))
+        }
+
+        fn encrypt(
+            &self,
+            req: EncryptRequest,
+            _options: RequestOptions,
+        ) -> impl Future<Output = google_cloud_kms_v1::Result<Response<EncryptResponse>>> + Send
+        {
+            assert_eq!(req.name, TEST_KEY_ID);
+            assert_eq!(
+                req.plaintext_crc32c,
+                Some(crc32c::crc32c(req.plaintext.as_ref()) as i64)
+            );
+
+            let ciphertext = wrap_ciphertext(req.plaintext.as_ref());
+            let response = EncryptResponse::new()
+                .set_name(format!("{TEST_KEY_ID}/cryptoKeyVersions/1"))
+                .set_ciphertext(ciphertext.clone())
+                .set_ciphertext_crc32c(crc32c::crc32c(&ciphertext) as i64)
+                .set_verified_plaintext_crc32c(true)
+                .set_protection_level(ProtectionLevel::Hsm);
+            future::ready(Ok(Response::from(response)))
+        }
+
+        fn decrypt(
+            &self,
+            req: DecryptRequest,
+            _options: RequestOptions,
+        ) -> impl Future<Output = google_cloud_kms_v1::Result<Response<DecryptResponse>>> + Send
+        {
+            assert_eq!(req.name, TEST_KEY_ID);
+            assert_eq!(
+                req.ciphertext_crc32c,
+                Some(crc32c::crc32c(req.ciphertext.as_ref()) as i64)
+            );
+
+            let plaintext = unwrap_ciphertext(req.ciphertext.as_ref());
+            let response = DecryptResponse::new()
+                .set_plaintext(plaintext.clone())
+                .set_plaintext_crc32c(crc32c::crc32c(&plaintext) as i64)
+                .set_used_primary(true)
+                .set_protection_level(ProtectionLevel::Hsm);
+            future::ready(Ok(Response::from(response)))
+        }
+    }
+
+    #[derive(Debug)]
+    struct UnauthorizedKmsStub;
+
+    impl stub::KeyManagementService for UnauthorizedKmsStub {
+        fn generate_random_bytes(
+            &self,
+            _req: GenerateRandomBytesRequest,
+            _options: RequestOptions,
+        ) -> impl Future<
+            Output = google_cloud_kms_v1::Result<Response<GenerateRandomBytesResponse>>,
+        > + Send {
+            let error = GaxError::service(
+                Status::default()
+                    .set_code(google_cloud_gax::error::rpc::Code::PermissionDenied)
+                    .set_message("permission denied"),
+            );
+            future::ready(Err(error))
+        }
+    }
+
+    #[tokio::test]
+    async fn roundtrip_generate_and_decrypt() -> std::result::Result<(), Box<dyn std::error::Error>>
+    {
+        let kms = kms_with_stub(RoundTripKmsStub)?;
         let before_generate = histogram_sample_count("gcp", "generateRandomBytes");
         let before_encrypt = histogram_sample_count("gcp", "encrypt");
         let before_decrypt = histogram_sample_count("gcp", "decrypt");
@@ -493,70 +528,18 @@ mod tests {
         assert!(after_generate >= before_generate + 1);
         assert!(after_encrypt >= before_encrypt + 1);
         assert!(after_decrypt >= before_decrypt + 1);
-
-        let _ = shutdown.send(());
         Ok(())
     }
 
-    fn build_http_unauthorized() -> Vec<u8> {
-        b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec()
-    }
-
-    async fn start_unauthorized_server() -> io::Result<(String, oneshot::Sender<()>)> {
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
-        let addr = listener.local_addr()?;
-        let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
-
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    _ = &mut shutdown_rx => { break; }
-                    res = listener.accept() => {
-                        let Ok((mut socket, _)) = res else { break; };
-                        tokio::spawn(async move {
-                            let mut buf = Vec::with_capacity(4096);
-                            let mut tmp = [0u8; 1024];
-                            loop {
-                                let Ok(n) = socket.read(&mut tmp).await else { return; };
-                                if n == 0 { return; }
-                                buf.extend_from_slice(&tmp[..n]);
-                                if buf.windows(4).any(|w| w == b"\r\n\r\n") { break; }
-                                if buf.len() > 64 * 1024 { return; }
-                            }
-                            let _ = socket.write_all(&build_http_unauthorized()).await;
-                            let _ = socket.shutdown().await;
-                        });
-                    }
-                }
-            }
-        });
-
-        Ok((format!("http://{addr}"), shutdown_tx))
-    }
-
     #[tokio::test]
-    async fn unauthenticated_maps_to_wrong_master_key() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let (endpoint, shutdown) = start_unauthorized_server().await?;
-        let cfg = cloud::kms::Config {
-            key_id: cloud::KeyId::new(
-                "projects/p/locations/l/keyRings/r/cryptoKeys/k".to_string(),
-            )?,
-            location: cloud::kms::Location {
-                region: "l".to_string(),
-                endpoint,
-            },
-            vendor: "gcp".to_string(),
-            azure: None,
-            gcp: Some(cloud::kms::SubConfigGcp {
-                credential_file_path: None,
-            }),
-            aws: None,
-        };
-
-        let kms = GcpKms::new(cfg)?;
+    async fn unauthenticated_maps_to_wrong_master_key()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let kms = kms_with_stub(UnauthorizedKmsStub)?;
         let err = kms.generate_data_key().await.unwrap_err();
-        assert!(matches!(err, CloudError::KmsError(KmsError::WrongMasterKey(_))), "err={err:?}");
-        let _ = shutdown.send(());
+        assert!(
+            matches!(err, CloudError::KmsError(KmsError::WrongMasterKey(_))),
+            "err={err:?}"
+        );
         Ok(())
     }
 
@@ -565,9 +548,9 @@ mod tests {
         let creds = serde_json::json!({
             "type": "external_account",
         });
-        let err = crate::credentials::build_credentials(&crate::credentials::CredentialsMode::Json(
-            creds.to_string(),
-        ))
+        let err = crate::credentials::build_credentials(
+            &crate::credentials::CredentialsMode::Json(creds.to_string()),
+        )
         .unwrap_err();
         let msg = err.to_string();
         assert!(

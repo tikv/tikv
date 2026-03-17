@@ -79,7 +79,7 @@ fn create_backend(
             } else {
                 blob_store(GcsStorage::from_input(config.clone())?)
             }
-        },
+        }
         Backend::AzureBlobStorage(config) => blob_store(AzureStorage::from_input(config.clone())?),
         Backend::CloudDynamic(dyn_backend) => {
             // CloudDynamic backend is no longer supported.

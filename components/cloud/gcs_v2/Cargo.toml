@@ -28,5 +28,4 @@ async-stream = "0.3"
 crc32c = "0.6"
 
 [dev-dependencies]
-base64 = "0.22"
 prometheus = "0.13"

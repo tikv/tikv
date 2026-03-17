@@ -2932,6 +2932,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "gcs_v2"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "async-stream 0.3.6",
+ "async-trait",
+ "bytes",
+ "cloud",
+ "crc32c",
+ "futures 0.3.15",
+ "futures-util",
+ "google-cloud-auth",
+ "google-cloud-gax",
+ "google-cloud-kms-v1",
+ "google-cloud-storage",
+ "kvproto",
+ "prometheus",
+ "serde_json",
+ "slog",
+ "slog-global",
+ "tikv_util",
+ "tokio",
+ "tokio-util",
+ "url",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7370,11 +7397,7 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.40",
  "tikv_util",
-<<<<<<< HEAD
  "time 0.2.27",
-=======
- "time 0.1.43",
->>>>>>> b5ad953f0 (cargo.lock: update lockfile)
  "tracker",
  "yatp",
 ]

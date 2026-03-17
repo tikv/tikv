@@ -20,8 +20,8 @@ impl std::fmt::Debug for CredentialsMode {
 }
 
 pub(crate) fn validate_credentials_json(creds_json: &str) -> io::Result<()> {
-    let _: serde_json::Value =
-        serde_json::from_str(creds_json).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    let _: serde_json::Value = serde_json::from_str(creds_json)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
     Ok(())
 }
 
@@ -30,9 +30,9 @@ pub(crate) fn build_credentials(
 ) -> io::Result<Option<google_cloud_auth::credentials::Credentials>> {
     match mode {
         CredentialsMode::Default => Ok(None),
-        CredentialsMode::Anonymous => {
-            Ok(Some(google_cloud_auth::credentials::anonymous::Builder::new().build()))
-        }
+        CredentialsMode::Anonymous => Ok(Some(
+            google_cloud_auth::credentials::anonymous::Builder::new().build(),
+        )),
         CredentialsMode::Json(creds_json) => {
             let creds_value: serde_json::Value = serde_json::from_str(creds_json)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
@@ -40,7 +40,10 @@ pub(crate) fn build_credentials(
                 .get("type")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidInput, "missing `type` in credentials_blob")
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "missing `type` in credentials_blob",
+                    )
                 })?;
 
             let creds = match creds_type {
