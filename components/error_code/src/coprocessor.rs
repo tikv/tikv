@@ -7,6 +7,7 @@ define_error_codes!(
     DEADLINE_EXCEEDED => ("DeadlineExceeded", "", ""),
     MAX_PENDING_TASKS_EXCEEDED => ("MaxPendingTasksExceeded", "", ""),
     MEMORY_QUOTA_EXCEEDED => ("MemoryQuotaExceeded", "", ""),
+    CPU_THROTTLED => ("CpuThrottled", "", ""),
 
     INVALID_DATA_TYPE => ("InvalidDataType", "", ""),
     ENCODING => ("Encoding", "", ""),

@@ -27,7 +27,10 @@ use tikv_util::{
 };
 use yatp::queue::priority::TaskPriorityProvider;
 
-use crate::{config::Config, metrics::deregister_metrics, resource_limiter::ResourceLimiter};
+use crate::{
+    config::Config, metrics::deregister_metrics, resource_limiter::ResourceLimiter,
+    CpuThrottleManager,
+};
 
 // a read task cost at least 50us.
 const DEFAULT_PRIORITY_PER_READ_TASK: u64 = 50;
@@ -69,6 +72,7 @@ pub struct ResourceGroupManager {
     priority_limiters: [Arc<ResourceLimiter>; TaskPriority::PRIORITY_COUNT],
     // lastest config.
     config: Arc<VersionTrack<Config>>,
+    cpu_throttle: RwLock<Option<Arc<CpuThrottleManager>>>,
 }
 
 impl Default for ResourceGroupManager {
@@ -95,6 +99,7 @@ impl ResourceGroupManager {
             version_generator: AtomicU64::new(0),
             priority_limiters,
             config: Arc::new(VersionTrack::new(config)),
+            cpu_throttle: RwLock::new(None),
         };
 
         // init the default resource group by default.
@@ -117,7 +122,7 @@ impl ResourceGroupManager {
         self.group_count.load(Ordering::Relaxed)
     }
 
-    fn get_ru_setting(rg: &PbResourceGroup, is_read: bool) -> u64 {
+    pub(crate) fn get_ru_setting(rg: &PbResourceGroup, is_read: bool) -> u64 {
         match (rg.get_mode(), is_read) {
             // RU mode, read and write use the same setting.
             (GroupMode::RuMode, _) => rg
@@ -144,6 +149,7 @@ impl ResourceGroupManager {
 
     pub fn add_resource_group(&self, rg: PbResourceGroup) {
         let group_name = rg.get_name().to_ascii_lowercase();
+        let cpu_ru_quota = Self::get_ru_setting(&rg, true);
         self.registry.read().iter().for_each(|controller| {
             let ru_quota = Self::get_ru_setting(&rg, controller.is_read);
             controller.add_resource_group(group_name.clone().into_bytes(), ru_quota, rg.priority);
@@ -158,10 +164,13 @@ impl ResourceGroupManager {
 
         if self
             .resource_groups
-            .insert(group_name, ResourceGroup::new(rg, limiter))
+            .insert(group_name.clone(), ResourceGroup::new(rg, limiter))
             .is_none()
         {
             self.group_count.fetch_add(1, Ordering::Relaxed);
+        }
+        if let Some(ref mgr) = *self.cpu_throttle.read() {
+            mgr.on_resource_group_changed(&group_name, cpu_ru_quota);
         }
     }
 
@@ -195,6 +204,9 @@ impl ResourceGroupManager {
             deregister_metrics(name);
             info!("remove resource group"; "name"=> name);
             self.group_count.fetch_sub(1, Ordering::Relaxed);
+            if let Some(ref mgr) = *self.cpu_throttle.read() {
+                mgr.on_resource_group_removed(&group_name);
+            }
         }
     }
 
@@ -220,6 +232,11 @@ impl ResourceGroupManager {
             });
             self.group_count
                 .fetch_sub(removed_names.len() as u64, Ordering::Relaxed);
+            if let Some(ref mgr) = *self.cpu_throttle.read() {
+                for name in &removed_names {
+                    mgr.on_resource_group_removed(name);
+                }
+            }
         }
     }
 
@@ -229,6 +246,19 @@ impl ResourceGroupManager {
 
     pub fn get_config(&self) -> &Arc<VersionTrack<Config>> {
         &self.config
+    }
+
+    pub fn get_cpu_throttle_manager(&self) -> Option<Arc<CpuThrottleManager>> {
+        self.cpu_throttle.read().clone()
+    }
+
+    pub fn set_cpu_throttle_manager(&self, mgr: Arc<CpuThrottleManager>) {
+        *self.cpu_throttle.write() = Some(mgr.clone());
+        for entry in self.resource_groups.iter() {
+            let ru = Self::get_ru_setting(&entry.value().group, true);
+            mgr.on_resource_group_changed(entry.key(), ru);
+        }
+        mgr.recalculate_all_quotas();
     }
 
     pub fn get_all_resource_groups(&self) -> Vec<PbResourceGroup> {

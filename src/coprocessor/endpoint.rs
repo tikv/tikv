@@ -21,7 +21,9 @@ use futures::{
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri, metapb};
 use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
-use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
+use resource_control::{
+    CpuThrottleManager, CpuTokenCheckFuture, ResourceGroupManager, ResourceLimiter, TaskMetadata,
+};
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
 use tidb_query_common::{
     error::StorageError,
@@ -94,6 +96,7 @@ pub struct Endpoint<E: Engine> {
 
     quota_limiter: Arc<QuotaLimiter>,
     resource_ctl: Option<Arc<ResourceGroupManager>>,
+    cpu_throttle_manager: Option<Arc<CpuThrottleManager>>,
 
     _phantom: PhantomData<E>,
 }
@@ -102,6 +105,7 @@ pub struct Endpoint<E: Engine> {
 pub struct ParseCopRequestResult<Snap> {
     req_tag: ReqTag,
     req_ctx: ReqContext,
+    is_dag: bool,
     handler_builder: RequestHandlerBuilder<Snap>,
 }
 
@@ -111,6 +115,7 @@ impl<Snap> ParseCopRequestResult<Snap> {
         Self {
             req_tag: ReqTag::test,
             req_ctx: ReqContext::default_for_test(),
+            is_dag: false,
             handler_builder,
         }
     }
@@ -149,6 +154,9 @@ impl<E: Engine> Endpoint<E> {
             max_handle_duration: cfg.end_point_request_max_handle_duration().0,
             slow_log_threshold: cfg.end_point_slow_log_threshold.0,
             quota_limiter,
+            cpu_throttle_manager: resource_ctl
+                .as_ref()
+                .and_then(|mgr| mgr.get_cpu_throttle_manager()),
             resource_ctl,
             _phantom: Default::default(),
         }
@@ -209,8 +217,10 @@ impl<E: Engine> Endpoint<E> {
         let req_ctx: ReqContext;
         let handler_builder: RequestHandlerBuilder<E::IMSnap>;
         let req_tag: ReqTag;
+        let is_dag: bool;
         match req.get_tp() {
             REQ_TYPE_DAG => {
+                is_dag = true;
                 let mut dag = DagRequest::default();
                 box_try!(dag.merge_from(&mut input));
                 let mut table_scan = false;
@@ -288,6 +298,7 @@ impl<E: Engine> Endpoint<E> {
                 });
             }
             REQ_TYPE_ANALYZE => {
+                is_dag = false;
                 let mut analyze = AnalyzeReq::default();
                 box_try!(analyze.merge_from(&mut input));
                 if start_ts == 0 {
@@ -333,6 +344,7 @@ impl<E: Engine> Endpoint<E> {
                 });
             }
             REQ_TYPE_CHECKSUM => {
+                is_dag = false;
                 let mut checksum = ChecksumRequest::default();
                 box_try!(checksum.merge_from(&mut input));
                 let table_scan = checksum.get_scan_on() == ChecksumScanOn::Table;
@@ -383,6 +395,7 @@ impl<E: Engine> Endpoint<E> {
         Ok(ParseCopRequestResult {
             req_tag,
             req_ctx,
+            is_dag,
             handler_builder,
         })
     }
@@ -432,6 +445,8 @@ impl<E: Engine> Endpoint<E> {
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::IMSnap>,
+        cpu_throttle_manager: Option<Arc<CpuThrottleManager>>,
+        is_dag: bool,
     ) -> Result<MemoryTraceGuard<coppb::Response>> {
         // When this function is being executed, it may be queued for a long time, so
         // that deadline may exceed.
@@ -479,8 +494,56 @@ impl<E: Engine> Endpoint<E> {
 
         tracker.on_begin_all_items();
 
+        let cpu_token_handle = if is_dag {
+            if let Some(ref throttle) = cpu_throttle_manager {
+                if throttle.is_enabled() {
+                    let resource_group_name = tracker
+                        .req_ctx
+                        .context
+                        .get_resource_control_context()
+                        .get_resource_group_name();
+                    let estimated_cpu_us =
+                        throttle.get_estimated_cpu_per_request_us(resource_group_name);
+                    let request_deadline = tracker.req_ctx.deadline.to_std_instant();
+                    Some(Arc::new(
+                        throttle
+                            .allocate_with_wait(
+                                resource_group_name,
+                                estimated_cpu_us,
+                                request_deadline,
+                            )
+                            .await?,
+                    ))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let deadline = tracker.req_ctx.deadline;
-        let handle_request_future = check_deadline(handler.handle_request(), deadline);
+        let request_future = handler.handle_request();
+        let handle_request_future = if let Some(cpu_token_handle) = cpu_token_handle {
+            Either::Left(async {
+                let result = check_deadline(
+                    CpuTokenCheckFuture::new(request_future, cpu_token_handle),
+                    deadline,
+                )
+                .await
+                .map_err(Error::from)?;
+                let result = result.map_err(Error::from)?;
+                result
+            })
+        } else {
+            Either::Right(async {
+                check_deadline(request_future, deadline)
+                    .await
+                    .map_err(Error::from)?
+            })
+        };
         let handle_request_future = track(handle_request_future, &mut tracker);
 
         let deadline_res = if let Some(semaphore) = &semaphore {
@@ -488,7 +551,7 @@ impl<E: Engine> Endpoint<E> {
         } else {
             handle_request_future.await
         };
-        let result = deadline_res.map_err(Error::from).and_then(|res| res);
+        let result = deadline_res;
 
         // There might be errors when handling requests. In this case, we still need its
         // execution metrics.
@@ -554,12 +617,17 @@ impl<E: Engine> Endpoint<E> {
         allocated_bytes += tracker.approximate_mem_size();
 
         let (tx, rx) = oneshot::channel();
-        let future =
-            Self::handle_unary_request_impl(self.semaphore.clone(), tracker, r.handler_builder)
-                .in_resource_metering_tag(resource_tag)
-                .map(|res| {
-                    let _ = tx.send(res);
-                });
+        let future = Self::handle_unary_request_impl(
+            self.semaphore.clone(),
+            tracker,
+            r.handler_builder,
+            self.cpu_throttle_manager.clone(),
+            r.is_dag,
+        )
+        .in_resource_metering_tag(resource_tag)
+        .map(|res| {
+            let _ = tx.send(res);
+        });
         let res = self.read_pool_spawn_with_memory_quota_check(
             allocated_bytes,
             future,
@@ -722,6 +790,8 @@ impl<E: Engine> Endpoint<E> {
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::IMSnap>,
+        cpu_throttle_manager: Option<Arc<CpuThrottleManager>>,
+        is_dag: bool,
     ) -> impl futures::stream::Stream<Item = Result<coppb::Response>> {
         try_stream! {
             let _permit = if let Some(semaphore) = semaphore.as_ref() {
@@ -749,11 +819,52 @@ impl<E: Engine> Endpoint<E> {
 
             tracker.on_begin_all_items();
 
+            let cpu_token_handle = if is_dag {
+                if let Some(ref throttle) = cpu_throttle_manager {
+                    if throttle.is_enabled() {
+                        let resource_group_name = tracker
+                            .req_ctx
+                            .context
+                            .get_resource_control_context()
+                            .get_resource_group_name();
+                        let estimated_cpu_us =
+                            throttle.get_estimated_cpu_per_request_us(resource_group_name);
+                        let request_deadline = tracker.req_ctx.deadline.to_std_instant();
+                        Some(Arc::new(
+                            throttle
+                                .allocate_with_wait(
+                                    resource_group_name,
+                                    estimated_cpu_us,
+                                    request_deadline,
+                                )
+                                .await?,
+                        ))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
             loop {
                 let result = {
                     tracker.on_begin_item();
 
-                    let result = handler.handle_streaming_request().await;
+                    let request_future = handler.handle_streaming_request();
+                    let result = if let Some(cpu_token_handle) = cpu_token_handle.clone() {
+                        let result = check_deadline(
+                            CpuTokenCheckFuture::new(request_future, cpu_token_handle),
+                            tracker.req_ctx.deadline,
+                        )
+                        .await
+                        .map_err(Error::from)?;
+                        result.map_err(Error::from)?
+                    } else {
+                        request_future.await
+                    };
 
                     let mut storage_stats = Statistics::default();
                     handler.collect_scan_statistics(&mut storage_stats);
@@ -827,14 +938,19 @@ impl<E: Engine> Endpoint<E> {
         let tracker = Box::new(Tracker::new(req_ctx, r.req_tag, self.slow_log_threshold));
         allocated_bytes += tracker.approximate_mem_size();
 
-        let future =
-            Self::handle_stream_request_impl(self.semaphore.clone(), tracker, r.handler_builder)
-                .in_resource_metering_tag(resource_tag)
-                .then(futures::future::ok::<_, mpsc::SendError>)
-                .forward(tx)
-                .unwrap_or_else(|e| {
-                    warn!("coprocessor stream send error"; "error" => %e);
-                });
+        let future = Self::handle_stream_request_impl(
+            self.semaphore.clone(),
+            tracker,
+            r.handler_builder,
+            self.cpu_throttle_manager.clone(),
+            r.is_dag,
+        )
+        .in_resource_metering_tag(resource_tag)
+        .then(futures::future::ok::<_, mpsc::SendError>)
+        .forward(tx)
+        .unwrap_or_else(|e| {
+            warn!("coprocessor stream send error"; "error" => %e);
+        });
 
         self.read_pool_spawn_with_memory_quota_check(
             allocated_bytes,
@@ -961,6 +1077,15 @@ macro_rules! make_error_response_common {
                 $tag = "memory_quota_exceeded";
                 let mut server_is_busy_err = errorpb::ServerIsBusy::default();
                 server_is_busy_err.set_reason($e.to_string());
+                let mut errorpb = errorpb::Error::default();
+                errorpb.set_message($e.to_string());
+                errorpb.set_server_is_busy(server_is_busy_err);
+                $resp.set_region_error(errorpb);
+            }
+            Error::CpuThrottled(ref reason) => {
+                $tag = "cpu_throttled";
+                let mut server_is_busy_err = errorpb::ServerIsBusy::default();
+                server_is_busy_err.set_reason(reason.clone());
                 let mut errorpb = errorpb::Error::default();
                 errorpb.set_message($e.to_string());
                 errorpb.set_server_is_busy(server_is_busy_err);

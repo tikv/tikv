@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
+use resource_control::{CpuTokenError, ThrottleError};
 use thiserror::Error;
 use tikv_util::memory::MemoryQuotaExceeded;
 
@@ -29,6 +30,9 @@ pub enum Error {
 
     #[error("Coprocessor task canceled due to exceeding memory quota")]
     MemoryQuotaExceeded,
+
+    #[error("Coprocessor task canceled by cpu throttle: {0}")]
+    CpuThrottled(String),
 
     #[error("{0}")]
     InvalidMaxTsUpdate(#[from] concurrency_manager::InvalidMaxTsUpdate),
@@ -130,6 +134,18 @@ impl From<MemoryQuotaExceeded> for Error {
     }
 }
 
+impl From<ThrottleError> for Error {
+    fn from(err: ThrottleError) -> Self {
+        Error::CpuThrottled(err.to_string())
+    }
+}
+
+impl From<CpuTokenError> for Error {
+    fn from(err: CpuTokenError) -> Self {
+        Error::CpuThrottled(err.to_string())
+    }
+}
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl ErrorCodeExt for Error {
@@ -140,6 +156,7 @@ impl ErrorCodeExt for Error {
             Error::DeadlineExceeded => error_code::coprocessor::DEADLINE_EXCEEDED,
             Error::MaxPendingTasksExceeded => error_code::coprocessor::MAX_PENDING_TASKS_EXCEEDED,
             Error::MemoryQuotaExceeded => error_code::coprocessor::MEMORY_QUOTA_EXCEEDED,
+            Error::CpuThrottled(_) => error_code::coprocessor::CPU_THROTTLED,
             Error::InvalidMaxTsUpdate(_) => error_code::coprocessor::INVALID_MAX_TS_UPDATE,
             Error::Other(_) => error_code::UNKNOWN,
         }
