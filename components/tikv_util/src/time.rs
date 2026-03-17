@@ -57,9 +57,7 @@ impl Add<TimeDuration> for Timespec {
     type Output = Timespec;
 
     fn add(self, rhs: TimeDuration) -> Self::Output {
-        let delta = rhs
-            .num_nanoseconds()
-            .expect("duration is too large to fit in nanoseconds") as i128;
+        let delta = rhs.whole_nanoseconds();
         Self::from_total_nanos(self.total_nanos() + delta)
     }
 }
@@ -68,9 +66,7 @@ impl Sub<TimeDuration> for Timespec {
     type Output = Timespec;
 
     fn sub(self, rhs: TimeDuration) -> Self::Output {
-        let delta = rhs
-            .num_nanoseconds()
-            .expect("duration is too large to fit in nanoseconds") as i128;
+        let delta = rhs.whole_nanoseconds();
         Self::from_total_nanos(self.total_nanos() - delta)
     }
 }
@@ -119,6 +115,14 @@ pub fn timespec_to_ns(t: Timespec) -> u64 {
 pub fn get_time() -> Timespec {
     let dur = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
     Timespec::new(dur.as_secs() as i64, dur.subsec_nanos() as i32)
+}
+
+fn to_std_duration(duration: TimeDuration) -> Duration {
+    duration.try_into().unwrap()
+}
+
+fn to_time_duration(duration: Duration) -> TimeDuration {
+    duration.try_into().unwrap()
 }
 
 /// Converts Duration to nanoseconds.
@@ -424,7 +428,7 @@ impl Instant {
 
     pub(crate) fn elapsed_duration(later: Timespec, earlier: Timespec) -> Duration {
         if later >= earlier {
-            (later - earlier).to_std().unwrap()
+            to_std_duration(later - earlier)
         } else {
             panic!(
                 "monotonic time jumped back, {:.9} -> {:.9}",
@@ -436,7 +440,7 @@ impl Instant {
 
     pub(crate) fn saturating_elapsed_duration(later: Timespec, earlier: Timespec) -> Duration {
         if later >= earlier {
-            (later - earlier).to_std().unwrap()
+            to_std_duration(later - earlier)
         } else {
             error!(
                 "monotonic time jumped back, {:.3} -> {:.3}",
@@ -502,10 +506,8 @@ impl Add<Duration> for Instant {
 
     fn add(self, other: Duration) -> Instant {
         match self {
-            Instant::Monotonic(t) => Instant::Monotonic(t + TimeDuration::from_std(other).unwrap()),
-            Instant::MonotonicCoarse(t) => {
-                Instant::MonotonicCoarse(t + TimeDuration::from_std(other).unwrap())
-            }
+            Instant::Monotonic(t) => Instant::Monotonic(t + to_time_duration(other)),
+            Instant::MonotonicCoarse(t) => Instant::MonotonicCoarse(t + to_time_duration(other)),
         }
     }
 }
@@ -521,10 +523,8 @@ impl Sub<Duration> for Instant {
 
     fn sub(self, other: Duration) -> Instant {
         match self {
-            Instant::Monotonic(t) => Instant::Monotonic(t - TimeDuration::from_std(other).unwrap()),
-            Instant::MonotonicCoarse(t) => {
-                Instant::MonotonicCoarse(t - TimeDuration::from_std(other).unwrap())
-            }
+            Instant::Monotonic(t) => Instant::Monotonic(t - to_time_duration(other)),
+            Instant::MonotonicCoarse(t) => Instant::MonotonicCoarse(t - to_time_duration(other)),
         }
     }
 }
