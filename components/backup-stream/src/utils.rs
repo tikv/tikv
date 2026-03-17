@@ -75,6 +75,92 @@ pub fn redact(key: &impl AsRef<[u8]>) -> log_wrappers::Value<'_> {
     log_wrappers::Value::key(key.as_ref())
 }
 
+pub const BACKUP_META_MIN_BEGIN_TS_PREFIX: char = 'd';
+pub const BACKUP_META_MIN_TS_PREFIX: char = 'l';
+pub const BACKUP_META_MAX_TS_PREFIX: char = 'u';
+
+#[derive(Debug, Clone, Copy)]
+pub struct ParsedBackupMetaFileName {
+    pub flush_ts: u64,
+    pub store_id: u64,
+    pub min_begin_ts: u64,
+    pub min_ts: u64,
+    pub max_ts: u64,
+}
+
+pub fn parse_backupmeta_filename(
+    name: &str,
+) -> std::result::Result<ParsedBackupMetaFileName, String> {
+    fn parse_hex_u64(name: &str, part: &str, label: &str) -> std::result::Result<u64, String> {
+        if part.len() != 16 {
+            return Err(format!(
+                "{label} must be 16 hex digits, got {} in {name}",
+                part.len()
+            ));
+        }
+        u64::from_str_radix(part, 16)
+            .map_err(|e| format!("failed to parse {label} as hex u64 in {name}: {e}"))
+    }
+
+    if !name.bytes().all(|c| c.is_ascii()) {
+        return Err(format!("name must be ascii in {name}"));
+    }
+
+    let (prefix, suffix) = name
+        .split_once('-')
+        .ok_or_else(|| format!("backupmeta name missing '-' separator: {name}"))?;
+    if prefix.len() != 32 {
+        return Err(format!(
+            "expected flush_ts+store_id (32 hex digits) in {name}"
+        ));
+    }
+    if !prefix.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!(
+            "expected flush_ts+store_id to be hex digits in {name}"
+        ));
+    }
+
+    const TAG_VALUE_LEN: usize = 17;
+    let mut tagged_values: BTreeMap<char, u64> = BTreeMap::new();
+    let suffix_bytes = suffix.as_bytes();
+    let mut pos = 0;
+    while pos < suffix_bytes.len() {
+        let remain = suffix_bytes.len() - pos;
+        if remain < TAG_VALUE_LEN {
+            return Err(format!(
+                "incomplete tag segment in {name}, remaining bytes: {remain}"
+            ));
+        }
+        let tag = suffix_bytes[pos] as char;
+        if !tag.is_ascii_alphanumeric() {
+            return Err(format!("invalid suffix tag '{tag}' in {name}"));
+        }
+        let hex = &suffix[pos + 1..pos + TAG_VALUE_LEN];
+        let value = parse_hex_u64(name, hex, &format!("tag[{tag}]"))?;
+        if tagged_values.insert(tag, value).is_some() {
+            return Err(format!("duplicate suffix tag '{tag}' in {name}"));
+        }
+        pos += TAG_VALUE_LEN;
+    }
+    let get_val = |tag| {
+        tagged_values
+            .get(&tag)
+            .copied()
+            .ok_or_else(|| format!("missing '{}' in backupmeta suffix: {name}", tag))
+    };
+    let min_begin_ts = get_val(BACKUP_META_MIN_BEGIN_TS_PREFIX)?;
+    let min_ts = get_val(BACKUP_META_MIN_TS_PREFIX)?;
+    let max_ts = get_val(BACKUP_META_MAX_TS_PREFIX)?;
+
+    Ok(ParsedBackupMetaFileName {
+        flush_ts: parse_hex_u64(name, &prefix[..16], "flush_ts")?,
+        store_id: parse_hex_u64(name, &prefix[16..], "store_id")?,
+        min_begin_ts,
+        min_ts,
+        max_ts,
+    })
+}
+
 /// StopWatch is a utility for record time cost in multi-stage tasks.
 /// NOTE: Maybe it should be generic over somewhat Clock type?
 pub struct StopWatch(Instant);
@@ -823,7 +909,10 @@ mod test {
     use log_wrappers::RedactOption;
     use tokio::io::{AsyncWriteExt, BufReader};
 
-    use crate::utils::{FutureWaitGroup, SegmentMap, is_in_range};
+    use crate::utils::{
+        BACKUP_META_MAX_TS_PREFIX, BACKUP_META_MIN_BEGIN_TS_PREFIX, BACKUP_META_MIN_TS_PREFIX,
+        FutureWaitGroup, SegmentMap, is_in_range, parse_backupmeta_filename,
+    };
 
     #[test]
     fn test_redact() {
@@ -898,6 +987,30 @@ mod test {
                 case
             );
         }
+    }
+
+    #[test]
+    fn test_parse_backupmeta_filename_accepts_reordered_and_new_tags() {
+        let name = "000000000000000A000000000000000B-u0000000000000004x0000000000000009d0000000000000002l0000000000000003";
+        let parsed = parse_backupmeta_filename(name).unwrap();
+        assert_eq!(parsed.flush_ts, 0xA);
+        assert_eq!(parsed.store_id, 0xB);
+        assert_eq!(parsed.min_begin_ts, 0x2);
+        assert_eq!(parsed.min_ts, 0x3);
+        assert_eq!(parsed.max_ts, 0x4);
+    }
+
+    #[test]
+    fn test_parse_backupmeta_filename_rejects_incomplete_tag_segment() {
+        let name = format!(
+            "000000000000000A000000000000000B-{}0000000000000002{}0000000000000003{}00000000000000",
+            BACKUP_META_MIN_BEGIN_TS_PREFIX, BACKUP_META_MIN_TS_PREFIX, BACKUP_META_MAX_TS_PREFIX
+        );
+        let err = parse_backupmeta_filename(&name).unwrap_err();
+        assert!(
+            err.contains("incomplete tag segment"),
+            "unexpected parse error: {err}"
+        );
     }
 
     #[test]
