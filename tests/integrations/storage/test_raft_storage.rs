@@ -422,6 +422,24 @@ fn test_atomic_basic() {
         .raw_get(ctx.clone(), "default".to_string(), b"k1".to_vec())
         .unwrap();
     assert_eq!(b"v2".to_vec(), value.unwrap());
+
+    // Test compare_and_delete_atomic
+    let (prev_val, succeed) = storage
+        .raw_compare_and_delete_atomic(
+            ctx.clone(),
+            "default".to_string(),
+            b"k1".to_vec(),
+            b"v2".to_vec(),
+        )
+        .unwrap();
+
+    assert!(succeed);
+    assert_eq!(prev_val, Some(b"v2".to_vec()));
+    let value = storage
+        .raw_get(ctx.clone(), "default".to_string(), b"k1".to_vec())
+        .unwrap();
+    assert!(value.is_none());
+
     storage
         .raw_batch_delete_atomic(ctx.clone(), "default".to_string(), vec![b"k1".to_vec()])
         .unwrap();

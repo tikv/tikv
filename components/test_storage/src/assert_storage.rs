@@ -1047,6 +1047,31 @@ impl<E: Engine, F: KvFormat> AssertionStorage<E, F> {
             .unwrap_err();
     }
 
+    pub fn raw_compare_and_delete_atomic_ok(
+        &self,
+        cf: String,
+        key: Vec<u8>,
+        previous_value: Vec<u8>,
+        expect: (Option<Vec<u8>>, bool),
+    ) {
+        let result = self
+            .store
+            .raw_compare_and_delete_atomic(self.ctx.clone(), cf, key, previous_value)
+            .unwrap();
+        assert_eq!(result, expect);
+    }
+
+    pub fn raw_compare_and_delete_atomic_err(
+        &self,
+        cf: String,
+        key: Vec<u8>,
+        previous_value: Vec<u8>,
+    ) {
+        self.store
+            .raw_compare_and_delete_atomic(self.ctx.clone(), cf, key, previous_value)
+            .unwrap_err();
+    }
+
     pub fn raw_batch_put_atomic_ok(&self, cf: String, pairs: Vec<KvPair>) {
         let ttls = vec![0; pairs.len()];
         self.store

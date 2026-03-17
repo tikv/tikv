@@ -503,6 +503,19 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
         .unwrap()
     }
 
+    pub fn raw_compare_and_delete_atomic(
+        &self,
+        ctx: Context,
+        cf: String,
+        key: Vec<u8>,
+        previous_value: Vec<u8>,
+    ) -> Result<(Option<Vec<u8>>, bool)> {
+        wait_op!(|cb| self
+            .store
+            .raw_compare_and_delete_atomic(ctx, cf, key, previous_value, cb))
+        .unwrap()
+    }
+
     pub fn raw_batch_put_atomic(
         &self,
         ctx: Context,

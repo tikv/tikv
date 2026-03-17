@@ -1,7 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use api_version::{ApiV2, KvFormat};
+use api_version::ApiV2;
 use engine_traits::CfName;
 use kvproto::kvrpcpb::ApiVersion;
 use raw::RawStore;
@@ -238,8 +238,8 @@ mod tests {
             Context::default(),
         );
         let (prev_val, succeed) =
-            sched_cas_command(&mut engine, cm.clone(), cas_cmd,
-        ts_provider.clone()).unwrap(); assert!(prev_val.is_none());
+            sched_cas_command(&mut engine, cm.clone(), cas_cmd, ts_provider.clone()).unwrap();
+        assert!(prev_val.is_none());
         assert!(succeed);
 
         // Attempt to delete with wrong previous_value — should fail.
@@ -251,9 +251,9 @@ mod tests {
             Context::default(),
         );
         let (prev_val, succeed) =
-            sched_cad_command(&mut engine, cm.clone(), cmd,
-        ts_provider.clone()).unwrap(); assert_eq!(prev_val,
-        Some(b"v1".to_vec())); assert!(!succeed);
+            sched_cad_command(&mut engine, cm.clone(), cmd, ts_provider.clone()).unwrap();
+        assert_eq!(prev_val, Some(b"v1".to_vec()));
+        assert!(!succeed);
 
         // Delete with correct previous_value — should succeed.
         let cmd = RawCompareAndDelete::new(
@@ -264,9 +264,9 @@ mod tests {
             Context::default(),
         );
         let (prev_val, succeed) =
-            sched_cad_command(&mut engine, cm.clone(), cmd,
-        ts_provider.clone()).unwrap(); assert_eq!(prev_val,
-        Some(b"v1".to_vec())); assert!(succeed);
+            sched_cad_command(&mut engine, cm.clone(), cmd, ts_provider.clone()).unwrap();
+        assert_eq!(prev_val, Some(b"v1".to_vec()));
+        assert!(succeed);
 
         // Attempt to delete again — key no longer exists, should fail.
         let cmd = RawCompareAndDelete::new(
@@ -277,8 +277,8 @@ mod tests {
             Context::default(),
         );
         let (prev_val, succeed) =
-            sched_cad_command(&mut engine, cm.clone(), cmd,
-        ts_provider.clone()).unwrap(); assert!(prev_val.is_none());
+            sched_cad_command(&mut engine, cm.clone(), cmd, ts_provider.clone()).unwrap();
+        assert!(prev_val.is_none());
         assert!(!succeed);
 
         // Insert a key with an empty value
@@ -320,8 +320,9 @@ mod tests {
     ///
     /// Specifically:
     /// - For V1/V1Ttl: a `Modify::Delete` at the plain (untimstamped) key.
-    /// - For V2: a `Modify::Put` at `key@ts` containing `ENCODED_LOGICAL_DELETE`,
-    ///   plus exactly one lock guard at `RAW_KEY_PREFIX@key_guard_ts`.
+    /// - For V2: a `Modify::Put` at `key@ts` containing
+    ///   `ENCODED_LOGICAL_DELETE`, plus exactly one lock guard at
+    ///   `RAW_KEY_PREFIX@key_guard_ts`.
     fn test_cad_process_write_impl<F: KvFormat>() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let ts_provider = super::super::test_util::gen_ts_provider(F::TAG);
@@ -384,10 +385,8 @@ mod tests {
             );
         } else {
             // V1/V1Ttl: plain Delete at the untimstamped key, no lock guards.
-            let expected_modifies = vec![Modify::Delete(
-                CF_DEFAULT,
-                F::encode_raw_key(raw_key, None),
-            )];
+            let expected_modifies =
+                vec![Modify::Delete(CF_DEFAULT, F::encode_raw_key(raw_key, None))];
             assert_eq!(write_result.to_be_write.modifies, expected_modifies);
             assert!(write_result.lock_guards.is_empty());
         }
