@@ -552,7 +552,7 @@ where
                 cfg.raft_election_timeout_ticks as u32
             };
         let unsafe_vote_deadline =
-            Some(self.node_start_time + time::Duration::from_std(election_timeout).unwrap());
+            Some(self.node_start_time + time::Duration::try_from(election_timeout).unwrap());
         let mut poll_ctx = StoreContext {
             logger: self.logger.clone(),
             store_id: self.store_id,

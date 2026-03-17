@@ -1926,7 +1926,7 @@ mod tests {
         fn sleep_test(duration: TimeDuration, lease: &Lease, state: LeaseState) {
             // In linux, lease uses CLOCK_MONOTONIC_RAW, while sleep uses CLOCK_MONOTONIC
             let monotonic_raw_start = monotonic_raw_now();
-            thread::sleep(duration.to_std().unwrap());
+            thread::sleep(std::time::Duration::try_from(duration).unwrap());
             let mut monotonic_raw_end = monotonic_raw_now();
             // spin wait to make sure pace is aligned with MONOTONIC_RAW clock
             while monotonic_raw_end - monotonic_raw_start < duration {

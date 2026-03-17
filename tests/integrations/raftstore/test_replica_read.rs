@@ -558,12 +558,7 @@ fn test_malformed_read_index() {
 
     // Wait till lease expires.
     std::thread::sleep(
-        cluster
-            .cfg
-            .raft_store
-            .raft_store_max_leader_lease()
-            .to_std()
-            .unwrap(),
+        Duration::try_from(cluster.cfg.raft_store.raft_store_max_leader_lease()).unwrap(),
     );
     let region = cluster.get_region(b"k1");
     // Send a malformed request to leader

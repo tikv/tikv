@@ -80,7 +80,7 @@ impl<C> ReadIndexRequest<C> {
 
 impl<C> Drop for ReadIndexRequest<C> {
     fn drop(&mut self) {
-        let dur = (monotonic_raw_now() - self.propose_time).to_std().unwrap();
+        let dur = std::time::Duration::try_from(monotonic_raw_now() - self.propose_time).unwrap();
         RAFT_READ_INDEX_PENDING_DURATION.observe(duration_to_sec(dur));
     }
 }
