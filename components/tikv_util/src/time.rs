@@ -75,7 +75,14 @@ impl Sub<Timespec> for Timespec {
     type Output = TimeDuration;
 
     fn sub(self, rhs: Timespec) -> Self::Output {
-        TimeDuration::nanoseconds((self.total_nanos() - rhs.total_nanos()) as i64)
+        let sec = self
+            .sec
+            .checked_sub(rhs.sec)
+            .expect("overflow when subtracting timespec seconds");
+        let nsec = i64::from(self.nsec) - i64::from(rhs.nsec);
+        TimeDuration::seconds(sec)
+            .checked_add(TimeDuration::nanoseconds(nsec))
+            .expect("overflow when subtracting timespecs")
     }
 }
 
@@ -284,27 +291,36 @@ impl Drop for Monitor {
 
 #[cfg(not(target_os = "linux"))]
 mod inner {
-    use time;
+    use std::{sync::OnceLock, time::Instant};
 
-    use super::{NANOSECONDS_PER_SECOND, Timespec};
+    use super::Timespec;
+
+    #[inline]
+    fn monotonic_elapsed() -> Timespec {
+        static MONOTONIC_ORIGIN: OnceLock<Instant> = OnceLock::new();
+
+        // `time::precise_time_ns()` became a `SystemTime` compatibility shim in
+        // time 0.2, so keep a process-local monotonic origin on non-Linux.
+        let elapsed = MONOTONIC_ORIGIN.get_or_init(Instant::now).elapsed();
+        Timespec::new(
+            i64::try_from(elapsed.as_secs()).expect("monotonic clock overflow"),
+            elapsed.subsec_nanos() as i32,
+        )
+    }
 
     pub fn monotonic_raw_now() -> Timespec {
         // TODO Add monotonic raw clock time impl for macos and windows
-        // Currently use `time::get_precise_ns()` instead.
-        let ns = time::precise_time_ns();
-        let s = ns / NANOSECONDS_PER_SECOND;
-        let ns = ns % NANOSECONDS_PER_SECOND;
-        Timespec::new(s as i64, ns as i32)
+        monotonic_elapsed()
     }
 
     pub fn monotonic_now() -> Timespec {
         // TODO Add monotonic clock time impl for macos and windows
-        monotonic_raw_now()
+        monotonic_elapsed()
     }
 
     pub fn monotonic_coarse_now() -> Timespec {
         // TODO Add monotonic coarse clock time impl for macos and windows
-        monotonic_raw_now()
+        monotonic_elapsed()
     }
 }
 
@@ -712,6 +728,15 @@ mod tests {
         assert_eq!(nanos_to_secs(1_500_000_000), 1.5);
         // Test with a large number of nanoseconds (e.g., 10 billion ns = 10 seconds)
         assert_eq!(nanos_to_secs(10 * NANOSECONDS_PER_SECOND), 10.0);
+    }
+
+    #[test]
+    fn test_timespec_sub_large_span() {
+        let later = Timespec::new(10_000_000_000, 123);
+        let earlier = Timespec::new(0, 456);
+        let expected =
+            TimeDuration::seconds(9_999_999_999) + TimeDuration::nanoseconds(999_999_667);
+        assert_eq!(later - earlier, expected);
     }
 
     #[test]
