@@ -49,11 +49,42 @@ impl serde_json::ser::Formatter for MySqlFormatter {
             writer.write_all(b", ")
         }
     }
+
+    #[inline]
+    fn write_f32<W>(&mut self, writer: &mut W, value: f32) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        write_mysql_finite_float(writer, value as f64)
+    }
+
+    #[inline]
+    fn write_f64<W>(&mut self, writer: &mut W, value: f64) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        write_mysql_finite_float(writer, value)
+    }
 }
 
 impl MySqlFormatter {
     pub fn new() -> Self {
         MySqlFormatter {}
+    }
+}
+
+fn write_mysql_finite_float<W>(writer: &mut W, value: f64) -> std::io::Result<()>
+where
+    W: ?Sized + std::io::Write,
+{
+    let mut buffer = zmij::Buffer::new();
+    let s = buffer.format_finite(value);
+    if let Some((mantissa, exponent)) = s.split_once("e+") {
+        writer.write_all(mantissa.as_bytes())?;
+        writer.write_all(b"e")?;
+        writer.write_all(exponent.as_bytes())
+    } else {
+        writer.write_all(s.as_bytes())
     }
 }
 
