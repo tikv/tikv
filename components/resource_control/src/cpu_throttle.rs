@@ -22,10 +22,13 @@ use crate::{
     metrics::{
         deregister_cpu_throttle_metrics, CPU_THROTTLE_ALLOCATIONS,
         CPU_THROTTLE_GLOBAL_BUCKET_AVAILABLE, CPU_THROTTLE_GLOBAL_BUCKET_CAPACITY,
-        CPU_THROTTLE_GROUP_BUCKET_AVAILABLE, CPU_THROTTLE_GROUP_BUCKET_CAPACITY,
-        CPU_THROTTLE_REQUEST_ACTUAL_TO_ESTIMATED_RATIO, CPU_THROTTLE_REQUEST_CPU_TIME,
-        CPU_THROTTLE_RUNTIME_TOKEN_WAIT_DURATION, CPU_THROTTLE_TOKEN_WAIT_DURATION,
-        CPU_THROTTLE_UNKNOWN_GROUP,
+        CPU_THROTTLE_GLOBAL_REFILL_RATE, CPU_THROTTLE_GROUP_BUCKET_AVAILABLE,
+        CPU_THROTTLE_GROUP_BUCKET_CAPACITY, CPU_THROTTLE_GROUP_REFILL_RATE,
+        CPU_THROTTLE_REFILL_RATE_ADJUSTMENTS, CPU_THROTTLE_REQUEST_ACTUAL_TO_ESTIMATED_RATIO,
+        CPU_THROTTLE_REQUEST_CPU_TIME, CPU_THROTTLE_RUNTIME_TOKEN_WAIT_DURATION,
+        CPU_THROTTLE_TOKEN_WAIT_DURATION, CPU_THROTTLE_UNKNOWN_GROUP,
+        CPU_USAGE_MONITOR_COLLECT_DURATION, CPU_USAGE_MONITOR_GLOBAL_RATIO,
+        CPU_USAGE_MONITOR_RESOURCE_GROUP_DAG_RATIO,
     },
 };
 
@@ -100,6 +103,17 @@ fn inflight_sub(inflight: &DashMap<String, AtomicU64>, resource_group: &str, del
             return new_value;
         }
     }
+}
+
+fn accumulate_dag_cpu_usage(
+    accum: &DashMap<String, AtomicU64>,
+    resource_group: &str,
+    delta_us: u64,
+) {
+    let entry = accum
+        .entry(resource_group.to_owned())
+        .or_insert_with(|| AtomicU64::new(0));
+    entry.fetch_add(delta_us, Ordering::AcqRel);
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -185,10 +199,28 @@ impl AdaptiveEstimator {
 }
 
 #[derive(Debug)]
+struct CpuUsageState {
+    global_ratio: f64,
+    per_resource_group_dag_ratios: HashMap<String, f64>,
+    last_update: Instant,
+}
+
+impl CpuUsageState {
+    fn new() -> Self {
+        Self {
+            global_ratio: 0.0,
+            per_resource_group_dag_ratios: HashMap::new(),
+            last_update: Instant::now(),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct CpuTokenBucket {
     capacity_us: AtomicU64,
     available_tokens: AtomicU64,
-    refill_rate_us: AtomicU64,
+    base_refill_rate_us: AtomicU64,
+    current_refill_rate_us: AtomicU64,
     refill_interval: Duration,
     last_refill: RwLock<Instant>,
 }
@@ -198,7 +230,8 @@ impl CpuTokenBucket {
         Self {
             capacity_us: AtomicU64::new(capacity_us),
             available_tokens: AtomicU64::new(capacity_us),
-            refill_rate_us: AtomicU64::new(refill_rate_us),
+            base_refill_rate_us: AtomicU64::new(refill_rate_us),
+            current_refill_rate_us: AtomicU64::new(refill_rate_us),
             refill_interval,
             last_refill: RwLock::new(Instant::now()),
         }
@@ -254,7 +287,7 @@ impl CpuTokenBucket {
         }
 
         let intervals = elapsed_ms / interval_ms;
-        let refill_rate = self.refill_rate_us.load(Ordering::Acquire);
+        let refill_rate = self.current_refill_rate_us.load(Ordering::Acquire);
         let tokens_to_add = refill_rate.saturating_mul(intervals);
         let capacity = self.capacity_us.load(Ordering::Acquire);
 
@@ -281,6 +314,24 @@ impl CpuTokenBucket {
         self.capacity_us.load(Ordering::Acquire)
     }
 
+    pub fn base_refill_rate(&self) -> u64 {
+        self.base_refill_rate_us.load(Ordering::Acquire)
+    }
+
+    pub fn current_refill_rate(&self) -> u64 {
+        self.current_refill_rate_us.load(Ordering::Acquire)
+    }
+
+    pub fn set_refill_rate(&self, new_refill_rate_us: u64) {
+        self.current_refill_rate_us
+            .store(new_refill_rate_us.max(1), Ordering::Release);
+    }
+
+    pub fn restore_base_rate(&self) {
+        self.current_refill_rate_us
+            .store(self.base_refill_rate(), Ordering::Release);
+    }
+
     pub fn update_quota(&self, new_capacity_us: u64, new_refill_rate_us: u64) {
         let old_capacity = self.capacity();
         let current_available = self.available();
@@ -292,8 +343,10 @@ impl CpuTokenBucket {
             current_available.saturating_sub(old_capacity - new_capacity_us)
         };
         self.capacity_us.store(new_capacity_us, Ordering::Release);
-        self.refill_rate_us
-            .store(new_refill_rate_us, Ordering::Release);
+        self.base_refill_rate_us
+            .store(new_refill_rate_us.max(1), Ordering::Release);
+        self.current_refill_rate_us
+            .store(new_refill_rate_us.max(1), Ordering::Release);
         self.available_tokens
             .store(new_available, Ordering::Release);
     }
@@ -315,6 +368,7 @@ pub struct CpuTokenHandle {
     pub(crate) global_bucket: Arc<CpuTokenBucket>,
     pub(crate) resource_group_bucket: Option<Arc<CpuTokenBucket>>,
     pub(crate) resource_group_inflight_allocated_us: Option<Arc<DashMap<String, AtomicU64>>>,
+    pub(crate) per_resource_group_dag_cpu_accum: Option<Arc<DashMap<String, AtomicU64>>>,
     pub(crate) request_deadline: Instant,
     pub(crate) config: Arc<CpuThrottleConfig>,
     adaptive_estimator: Option<Arc<AdaptiveEstimator>>,
@@ -448,6 +502,11 @@ impl Drop for CpuTokenHandle {
         if let Some(estimator) = &self.adaptive_estimator {
             estimator.observe(&self.resource_group, actual_used);
         }
+        if actual_used > 0 {
+            if let Some(accum) = &self.per_resource_group_dag_cpu_accum {
+                accumulate_dag_cpu_usage(accum, &self.resource_group, actual_used);
+            }
+        }
 
         if actual_used < global_allocated {
             self.global_bucket.release(global_allocated - actual_used);
@@ -482,6 +541,8 @@ pub struct CpuThrottleManager {
     global_capacity_us: u64,
     resource_group_estimated_cpu_per_request_us: Arc<HashMap<String, u64>>,
     adaptive_estimator: Option<Arc<AdaptiveEstimator>>,
+    resource_group_dag_cpu_accum: Arc<DashMap<String, AtomicU64>>,
+    usage_state: RwLock<CpuUsageState>,
 }
 
 impl CpuThrottleManager {
@@ -505,6 +566,7 @@ impl CpuThrottleManager {
 
         CPU_THROTTLE_GLOBAL_BUCKET_CAPACITY.set(clamp_gauge_value(global_capacity_us));
         CPU_THROTTLE_GLOBAL_BUCKET_AVAILABLE.set(clamp_gauge_value(global_bucket.available()));
+        CPU_THROTTLE_GLOBAL_REFILL_RATE.set(clamp_gauge_value(global_bucket.current_refill_rate()));
 
         let estimated_overrides =
             CpuThrottleConfig::parse_resource_group_estimated_cpu_per_request_us(
@@ -536,6 +598,8 @@ impl CpuThrottleManager {
             global_capacity_us,
             resource_group_estimated_cpu_per_request_us: Arc::new(estimated_overrides),
             adaptive_estimator,
+            resource_group_dag_cpu_accum: Arc::new(DashMap::new()),
+            usage_state: RwLock::new(CpuUsageState::new()),
             config: Arc::new(config),
         }
     }
@@ -546,6 +610,181 @@ impl CpuThrottleManager {
 
     pub fn canonicalize_group_name(name: &str) -> String {
         CpuThrottleConfig::canonicalize_group_name(name)
+    }
+
+    pub fn stats_interval(&self) -> Duration {
+        Duration::from_millis(self.config.stats_interval_ms.max(1))
+    }
+
+    pub fn window_size(&self) -> Duration {
+        Duration::from_millis(
+            self.config
+                .window_size_ms
+                .max(self.config.stats_interval_ms.max(1)),
+        )
+    }
+
+    pub fn max_read_cpu_ratio(&self) -> f64 {
+        self.config.max_read_cpu_ratio
+    }
+
+    pub fn take_per_resource_group_dag_cpu_deltas(&self) -> HashMap<String, u64> {
+        let mut deltas = HashMap::new();
+        let mut stale_resource_groups = Vec::new();
+        for entry in self.resource_group_dag_cpu_accum.iter() {
+            let resource_group = entry.key().clone();
+            let delta = entry.value().swap(0, Ordering::AcqRel);
+            if self
+                .resource_group_buckets
+                .contains_key(resource_group.as_str())
+            {
+                if delta > 0 {
+                    deltas.insert(resource_group, delta);
+                }
+            } else {
+                stale_resource_groups.push(resource_group);
+            }
+        }
+        for resource_group in stale_resource_groups {
+            self.resource_group_dag_cpu_accum.remove(&resource_group);
+        }
+        deltas
+    }
+
+    pub fn update_usage(
+        &self,
+        global_ratio: f64,
+        per_resource_group_dag_ratios: HashMap<String, f64>,
+    ) {
+        let global_ratio = global_ratio.max(0.0);
+        let per_resource_group_dag_ratios: HashMap<String, f64> = per_resource_group_dag_ratios
+            .into_iter()
+            .map(|(resource_group, ratio)| {
+                (
+                    Self::canonicalize_group_name(&resource_group),
+                    ratio.max(0.0),
+                )
+            })
+            .filter(|(resource_group, _)| self.resource_group_buckets.contains_key(resource_group))
+            .collect();
+        let previous_resource_groups = {
+            let usage_state = self.usage_state.read().unwrap();
+            usage_state
+                .per_resource_group_dag_ratios
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        {
+            let mut usage_state = self.usage_state.write().unwrap();
+            usage_state.global_ratio = global_ratio;
+            usage_state.per_resource_group_dag_ratios = per_resource_group_dag_ratios.clone();
+            usage_state.last_update = Instant::now();
+        }
+
+        CPU_USAGE_MONITOR_GLOBAL_RATIO.set(global_ratio);
+        for entry in self.resource_group_buckets.iter() {
+            let ratio = per_resource_group_dag_ratios
+                .get(entry.key())
+                .copied()
+                .unwrap_or(0.0);
+            CPU_USAGE_MONITOR_RESOURCE_GROUP_DAG_RATIO
+                .with_label_values(&[entry.key().as_str()])
+                .set(ratio);
+        }
+        for (resource_group, ratio) in &per_resource_group_dag_ratios {
+            if !self.resource_group_buckets.contains_key(resource_group) {
+                CPU_USAGE_MONITOR_RESOURCE_GROUP_DAG_RATIO
+                    .with_label_values(&[resource_group.as_str()])
+                    .set(*ratio);
+            }
+        }
+        for resource_group in previous_resource_groups {
+            if !per_resource_group_dag_ratios.contains_key(&resource_group) {
+                CPU_USAGE_MONITOR_RESOURCE_GROUP_DAG_RATIO
+                    .with_label_values(&[resource_group.as_str()])
+                    .set(0.0);
+            }
+        }
+    }
+
+    pub fn adjust_refill_rates(&self) {
+        if !self.config.enable_dynamic_adjustment {
+            return;
+        }
+
+        let (global_ratio, per_resource_group_dag_ratios) = {
+            let usage_state = self.usage_state.read().unwrap();
+            (
+                usage_state.global_ratio,
+                usage_state.per_resource_group_dag_ratios.clone(),
+            )
+        };
+        let high_watermark = self.config.high_watermark;
+        let low_watermark = self.config.low_watermark;
+
+        if global_ratio > high_watermark {
+            let reduction =
+                ((global_ratio - high_watermark) / (1.0 - high_watermark)).clamp(0.0, 1.0);
+            let new_rate =
+                (self.global_bucket.base_refill_rate() as f64 * (1.0 - reduction * 0.5)) as u64;
+            let new_rate = new_rate.max(1);
+            if new_rate != self.global_bucket.current_refill_rate() {
+                self.global_bucket.set_refill_rate(new_rate);
+                CPU_THROTTLE_REFILL_RATE_ADJUSTMENTS
+                    .with_label_values(&["global", "decrease"])
+                    .inc();
+            }
+        } else if global_ratio < low_watermark
+            && self.global_bucket.current_refill_rate() != self.global_bucket.base_refill_rate()
+        {
+            self.global_bucket.restore_base_rate();
+            CPU_THROTTLE_REFILL_RATE_ADJUSTMENTS
+                .with_label_values(&["global", "increase"])
+                .inc();
+        }
+        CPU_THROTTLE_GLOBAL_REFILL_RATE
+            .set(clamp_gauge_value(self.global_bucket.current_refill_rate()));
+
+        for entry in self.resource_group_buckets.iter() {
+            let resource_group = entry.key();
+            let bucket = entry.value();
+            let ratio = per_resource_group_dag_ratios
+                .get(resource_group.as_str())
+                .copied()
+                .unwrap_or(0.0);
+            let quota_ratio = bucket.capacity() as f64 / self.global_capacity_us as f64;
+            if quota_ratio <= 0.0 {
+                continue;
+            }
+            let normalized_ratio = ratio / quota_ratio;
+            if normalized_ratio > high_watermark {
+                let reduction =
+                    ((normalized_ratio - high_watermark) / (1.0 - high_watermark)).clamp(0.0, 1.0);
+                let new_rate = (bucket.base_refill_rate() as f64 * (1.0 - reduction * 0.5)) as u64;
+                let new_rate = new_rate.max(1);
+                if new_rate != bucket.current_refill_rate() {
+                    bucket.set_refill_rate(new_rate);
+                    CPU_THROTTLE_REFILL_RATE_ADJUSTMENTS
+                        .with_label_values(&["resource_group", "decrease"])
+                        .inc();
+                }
+            } else if normalized_ratio < low_watermark
+                && bucket.current_refill_rate() != bucket.base_refill_rate()
+            {
+                bucket.restore_base_rate();
+                CPU_THROTTLE_REFILL_RATE_ADJUSTMENTS
+                    .with_label_values(&["resource_group", "increase"])
+                    .inc();
+            }
+            CPU_THROTTLE_GROUP_REFILL_RATE
+                .with_label_values(&[resource_group.as_str()])
+                .set(clamp_gauge_value(bucket.current_refill_rate()));
+        }
+    }
+
+    pub fn observe_cpu_monitor_collect_duration(&self, duration: Duration) {
+        CPU_USAGE_MONITOR_COLLECT_DURATION.observe(duration.as_secs_f64());
     }
 
     pub fn recalculate_all_quotas(&self) {
@@ -604,6 +843,9 @@ impl CpuThrottleManager {
             CPU_THROTTLE_GROUP_BUCKET_AVAILABLE
                 .with_label_values(&[resource_group.as_str()])
                 .set(clamp_gauge_value(bucket.available()));
+            CPU_THROTTLE_GROUP_REFILL_RATE
+                .with_label_values(&[resource_group.as_str()])
+                .set(clamp_gauge_value(bucket.current_refill_rate()));
         }
 
         let stale_groups: Vec<String> = self
@@ -648,6 +890,12 @@ impl CpuThrottleManager {
     pub fn on_resource_group_removed(&self, resource_group: &str) {
         let resource_group = Self::canonicalize_group_name(resource_group);
         self.remove_resource_group_bucket(&resource_group);
+        self.resource_group_dag_cpu_accum.remove(&resource_group);
+        self.usage_state
+            .write()
+            .unwrap()
+            .per_resource_group_dag_ratios
+            .remove(&resource_group);
         if self
             .resource_group_weights
             .remove(&resource_group)
@@ -782,6 +1030,11 @@ impl CpuThrottleManager {
             } else {
                 None
             },
+            per_resource_group_dag_cpu_accum: if self.should_throttle_group(resource_group) {
+                Some(self.resource_group_dag_cpu_accum.clone())
+            } else {
+                None
+            },
             request_deadline,
             config: self.config.clone(),
             adaptive_estimator: self.adaptive_estimator.clone(),
@@ -830,6 +1083,7 @@ impl CpuThrottleManager {
         self.resource_group_buckets.remove(resource_group);
         self.resource_group_inflight_allocated_us
             .remove(resource_group);
+        self.resource_group_dag_cpu_accum.remove(resource_group);
         deregister_cpu_throttle_metrics(resource_group);
     }
 }
@@ -995,6 +1249,72 @@ mod tests {
         assert_eq!(
             allocation_metric_value("rg-timeout", "resource_group_exhausted"),
             before + 1
+        );
+    }
+
+    #[test]
+    fn test_cpu_token_bucket_can_override_and_restore_refill_rate() {
+        let bucket = CpuTokenBucket::new(1_000, 500, Duration::from_millis(100));
+
+        assert_eq!(bucket.base_refill_rate(), 500);
+        assert_eq!(bucket.current_refill_rate(), 500);
+
+        bucket.set_refill_rate(250);
+        assert_eq!(bucket.base_refill_rate(), 500);
+        assert_eq!(bucket.current_refill_rate(), 250);
+
+        bucket.restore_base_rate();
+        assert_eq!(bucket.current_refill_rate(), 500);
+    }
+
+    #[test]
+    fn test_take_per_resource_group_dag_cpu_deltas_resets_accumulator() {
+        let manager = CpuThrottleManager::new(test_config());
+        manager.on_resource_group_changed("rg1", 100);
+
+        accumulate_dag_cpu_usage(&manager.resource_group_dag_cpu_accum, "rg1", 123);
+        let deltas = manager.take_per_resource_group_dag_cpu_deltas();
+        assert_eq!(deltas.get("rg1").copied(), Some(123));
+
+        let second = manager.take_per_resource_group_dag_cpu_deltas();
+        assert!(second.is_empty());
+    }
+
+    #[test]
+    fn test_take_per_resource_group_dag_cpu_deltas_drops_removed_group() {
+        let manager = CpuThrottleManager::new(test_config());
+        manager.on_resource_group_changed("rg1", 100);
+        manager.on_resource_group_removed("rg1");
+
+        accumulate_dag_cpu_usage(&manager.resource_group_dag_cpu_accum, "rg1", 123);
+
+        let deltas = manager.take_per_resource_group_dag_cpu_deltas();
+        assert!(deltas.is_empty());
+        assert!(manager.resource_group_dag_cpu_accum.get("rg1").is_none());
+    }
+
+    #[test]
+    fn test_update_usage_filters_unmanaged_groups() {
+        let manager = CpuThrottleManager::new(test_config());
+        manager.on_resource_group_changed("rg1", 100);
+
+        manager.update_usage(
+            0.5,
+            HashMap::from([
+                (String::from("rg1"), 0.1),
+                (String::from("removed-rg"), 0.2),
+            ]),
+        );
+
+        let usage_state = manager.usage_state.read().unwrap();
+        assert_eq!(usage_state.global_ratio, 0.5);
+        assert_eq!(usage_state.per_resource_group_dag_ratios.len(), 1);
+        assert_eq!(
+            usage_state
+                .per_resource_group_dag_ratios
+                .get("rg1")
+                .copied(),
+            Some(0.1)
         );
     }
 }

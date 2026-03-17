@@ -19,6 +19,7 @@ pub struct CpuThrottleSettings {
     pub resource_group_estimated_cpu_per_request_us: String,
     pub enable_adaptive_estimated_cpu_per_request_us: bool,
     pub stats_interval: ReadableDuration,
+    pub window_size: ReadableDuration,
     pub refill_interval: ReadableDuration,
     pub enable_dynamic_adjustment: bool,
     pub high_watermark: f64,
@@ -44,6 +45,7 @@ impl Default for CpuThrottleSettings {
             resource_group_estimated_cpu_per_request_us: String::new(),
             enable_adaptive_estimated_cpu_per_request_us: true,
             stats_interval: ReadableDuration::secs(1),
+            window_size: ReadableDuration::minutes(1),
             refill_interval: ReadableDuration::millis(100),
             enable_dynamic_adjustment: false,
             high_watermark: 0.8,
@@ -100,6 +102,16 @@ impl Config {
             if self.cpu_throttle.stats_interval.0 < Duration::from_millis(1) {
                 return Err(
                     "resource-control.cpu-throttle.stats-interval must be at least 1ms".into(),
+                );
+            }
+            if self.cpu_throttle.window_size.0 < Duration::from_millis(1) {
+                return Err(
+                    "resource-control.cpu-throttle.window-size must be at least 1ms".into(),
+                );
+            }
+            if self.cpu_throttle.window_size.0 < self.cpu_throttle.stats_interval.0 {
+                return Err(
+                    "resource-control.cpu-throttle.window-size must be >= stats-interval".into(),
                 );
             }
             if self.cpu_throttle.estimated_cpu_per_request_us == 0 {
@@ -167,6 +179,7 @@ impl Config {
                 .cpu_throttle
                 .enable_adaptive_estimated_cpu_per_request_us,
             stats_interval_ms: self.cpu_throttle.stats_interval.as_millis() as u64,
+            window_size_ms: self.cpu_throttle.window_size.as_millis() as u64,
             refill_interval_ms: self.cpu_throttle.refill_interval.as_millis() as u64,
             enable_dynamic_adjustment: self.cpu_throttle.enable_dynamic_adjustment,
             high_watermark: self.cpu_throttle.high_watermark,
@@ -278,7 +291,7 @@ mod tests {
     use std::sync::Arc;
 
     use online_config::{ConfigManager as _, OnlineConfig};
-    use tikv_util::config::VersionTrack;
+    use tikv_util::config::{ReadableDuration, VersionTrack};
 
     use super::{Config, ResourceContrlCfgMgr};
 
@@ -307,5 +320,15 @@ mod tests {
         assert!(result.is_err());
         assert!(!config.value().cpu_throttle.enabled);
         assert!(!config.value().cpu_throttle.throttle_default_group);
+    }
+
+    #[test]
+    fn test_validate_rejects_window_size_smaller_than_stats_interval() {
+        let mut config = Config::default();
+        config.cpu_throttle.enabled = true;
+        config.cpu_throttle.stats_interval = ReadableDuration::secs(5);
+        config.cpu_throttle.window_size = ReadableDuration::secs(1);
+
+        assert!(config.validate().is_err());
     }
 }

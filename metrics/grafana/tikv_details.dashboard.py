@@ -10360,6 +10360,143 @@ def ResourceControl() -> RowPanel:
     )
     layout.row(
         [
+            graph_panel(
+                title="Global CPU Usage Ratio",
+                description="Sliding-window unified read-pool CPU usage ratio used for global dynamic adjustment. Threshold lines use the default low/high watermarks: 0.5 and 0.8.",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "tikv_cpu_usage_monitor_global_ratio",
+                        ),
+                    ),
+                ],
+                thresholds=[
+                    GraphThreshold(value=0.5),
+                    GraphThreshold(value=0.8),
+                ],
+            ),
+            graph_panel(
+                title="Per-Resource-Group DAG CPU Usage Ratio",
+                description="Sliding-window DAG CPU usage ratio used for per-resource-group dynamic adjustment. This metric only covers DAG cop traffic. Threshold lines use the default low/high watermarks: 0.5 and 0.8.",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "tikv_cpu_usage_monitor_resource_group_dag_ratio",
+                            by_labels=["resource_group"],
+                        ),
+                        additional_groupby=True,
+                    ),
+                ],
+                thresholds=[
+                    GraphThreshold(value=0.5),
+                    GraphThreshold(value=0.8),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Global Token Bucket Availability Ratio",
+                description="Available tokens divided by capacity for the global CPU token bucket.",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_operator(
+                            expr_avg(
+                                "tikv_cpu_throttle_global_bucket_available_us",
+                            ),
+                            "/",
+                            expr_avg(
+                                "tikv_cpu_throttle_global_bucket_capacity_us",
+                            ),
+                        ),
+                        legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Resource Group Token Bucket Availability Ratio",
+                description="Available tokens divided by capacity for each resource group CPU token bucket.",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_operator(
+                            expr_avg(
+                                "tikv_cpu_throttle_group_bucket_available_us",
+                                by_labels=["resource_group"],
+                            ),
+                            "/",
+                            expr_avg(
+                                "tikv_cpu_throttle_group_bucket_capacity_us",
+                                by_labels=["resource_group"],
+                            ),
+                        ),
+                        legend_format="{{resource_group}}",
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Global Token Bucket Refill Rate",
+                description="Current refill rate of the global CPU token bucket.",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_cpu_throttle_global_refill_rate_us",
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Resource Group Token Bucket Refill Rate",
+                description="Current refill rate of each resource group CPU token bucket.",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_cpu_throttle_group_refill_rate_us",
+                            by_labels=["resource_group"],
+                        ),
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="CPU Throttle Refill Rate Adjustments",
+                description="Rate of refill rate adjustments grouped by level and direction.",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_cpu_throttle_refill_rate_adjustments_total",
+                            by_labels=["level", "direction"],
+                        ),
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+            graph_panel_histogram_quantiles(
+                title="CPU Usage Monitor Collect Duration",
+                description="Duration of each CPU usage monitor collection tick.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_cpu_usage_monitor_collect_duration_seconds",
+            ),
+        ]
+    )
+    layout.row(
+        [
             graph_panel_histogram_quantiles(
                 title="CPU Throttle Token Wait Duration",
                 description="Wait duration for CPU token allocation.",
