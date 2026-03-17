@@ -166,6 +166,7 @@ make_auto_flush_static_metric! {
         raw_batch_delete,
         raw_get_key_ttl,
         raw_compare_and_swap,
+        raw_compare_and_delete,
         raw_atomic_store,
         raw_checksum,
     }

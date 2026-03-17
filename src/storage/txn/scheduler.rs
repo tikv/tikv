@@ -2270,7 +2270,9 @@ pub async fn get_raw_ext(
 ) -> Result<Option<RawExt>, Error> {
     if causal_ts_provider.is_some() {
         match cmd {
-            Command::RawCompareAndSwap(_) | Command::RawAtomicStore(_) => {
+            Command::RawCompareAndSwap(_)
+            | Command::RawAtomicStore(_)
+            | Command::RawCompareAndDelete(_) => {
                 if !max_ts_synced {
                     return Err(ErrorInner::RawKvMaxTimestampNotSynced {
                         region_id: cmd.ctx().get_region_id(),

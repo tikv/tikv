@@ -138,7 +138,7 @@ use crate::{
         test_util::latest_feature_gate,
         txn::{
             Command, Error as TxnError, ErrorInner as TxnErrorInner,
-            commands::{RawAtomicStore, RawCompareAndSwap, TypedCommand},
+            commands::{RawAtomicStore, RawCompareAndDelete, RawCompareAndSwap, TypedCommand},
             flow_controller::{EngineFlowController, FlowController},
             scheduler::TxnScheduler,
             txn_status_cache::{TxnState, TxnStatusCache},
@@ -449,6 +449,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 | CommandKind::raw_batch_delete
                 | CommandKind::raw_get_key_ttl
                 | CommandKind::raw_compare_and_swap
+                | CommandKind::raw_compare_and_delete
                 | CommandKind::raw_atomic_store
                 | CommandKind::raw_checksum
         )
@@ -3190,6 +3191,29 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         self.sched_raw_command(metadata, priority, CMD, async move {
             let key = F::encode_raw_key_owned(key, None);
             let cmd = RawCompareAndSwap::new(cf, key, previous_value, value, ttl, api_version, ctx);
+            Self::sched_raw_atomic_command(sched, cmd, Box::new(callback));
+        })
+    }
+
+    pub fn raw_compare_and_delete_atomic(
+        &self,
+        ctx: Context,
+        cf: String,
+        key: Vec<u8>,
+        previous_value: Vec<u8>,
+        callback: Callback<(Option<Value>, bool)>,
+    ) -> Result<()> {
+        const CMD: CommandKind = CommandKind::raw_compare_and_delete;
+        let api_version = self.api_version;
+        Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
+        let cf = Self::rawkv_cf(&cf, api_version)?;
+
+        let sched = self.get_scheduler();
+        let priority = ctx.get_priority();
+        let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
+        self.sched_raw_command(metadata, priority, CMD, async move {
+            let key = F::encode_raw_key_owned(key, None);
+            let cmd = RawCompareAndDelete::new(cf, key, previous_value, api_version, ctx);
             Self::sched_raw_atomic_command(sched, cmd, Box::new(callback));
         })
     }
