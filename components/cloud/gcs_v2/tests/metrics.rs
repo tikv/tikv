@@ -3,22 +3,12 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use cloud::{
-    blob::{BlobStorage, PutResource},
-    metrics::CLOUD_REQUEST_HISTOGRAM_VEC,
-};
+use cloud::blob::{BlobStorage, PutResource};
 use kvproto::brpb::Gcs;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     sync::oneshot,
 };
-
-fn histogram_sample_count(cloud: &str, req: &str) -> u64 {
-    CLOUD_REQUEST_HISTOGRAM_VEC
-        .get_metric_with_label_values(&[cloud, req])
-        .unwrap()
-        .get_sample_count()
-}
 
 fn build_http_response(body: &str, extra_headers: &[(&str, &str)]) -> Vec<u8> {
     let body_bytes = body.as_bytes();
@@ -129,7 +119,8 @@ fn make_cfg(
 }
 
 #[tokio::test]
-async fn gcs_v2_put_emits_metrics() -> Result<(), Box<dyn std::error::Error>> {
+async fn gcs_v2_put_uses_resumable_upload_with_requested_options()
+-> Result<(), Box<dyn std::error::Error>> {
     let (endpoint, shutdown, captured) = start_server().await?;
     let cfg = make_cfg(
         &endpoint,
@@ -140,18 +131,12 @@ async fn gcs_v2_put_emits_metrics() -> Result<(), Box<dyn std::error::Error>> {
     );
     let s = gcs_v2::GcsStorage::from_input(cfg)?;
 
-    let before_insert = histogram_sample_count("gcp", "insert_multipart");
-
     s.put(
         "a",
         PutResource(Box::new(futures::io::Cursor::new(b"alpha".to_vec()))),
         5,
     )
     .await?;
-
-    let after_insert = histogram_sample_count("gcp", "insert_multipart");
-
-    assert!(after_insert >= before_insert + 1);
 
     let captured = captured.lock().unwrap();
     let mut saw_predefined = false;
@@ -178,8 +163,7 @@ async fn gcs_v2_put_emits_metrics() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio::test]
-async fn gcs_v2_zero_length_put_is_accounted_as_resumable() -> Result<(), Box<dyn std::error::Error>>
-{
+async fn gcs_v2_zero_length_put_uses_resumable_upload() -> Result<(), Box<dyn std::error::Error>> {
     let (endpoint, shutdown, captured) = start_server().await?;
     let cfg = make_cfg(
         &endpoint,
@@ -190,20 +174,12 @@ async fn gcs_v2_zero_length_put_is_accounted_as_resumable() -> Result<(), Box<dy
     );
     let s = gcs_v2::GcsStorage::from_input(cfg)?;
 
-    let before_multipart = histogram_sample_count("gcp", "insert_multipart");
-    let before_simple = histogram_sample_count("gcp", "insert_simple");
-
     s.put(
         "zero",
         PutResource(Box::new(futures::io::Cursor::new(Vec::<u8>::new()))),
         0,
     )
     .await?;
-
-    let after_multipart = histogram_sample_count("gcp", "insert_multipart");
-    let after_simple = histogram_sample_count("gcp", "insert_simple");
-    assert!(after_multipart >= before_multipart + 1);
-    assert_eq!(after_simple, before_simple);
 
     let captured = captured.lock().unwrap();
     assert!(

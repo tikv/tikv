@@ -16,6 +16,7 @@ use google_cloud_storage::{
     client::{Storage, StorageControl},
     model_ext::ReadRange,
     streaming_source::{SizeHint, StreamingSource},
+    stub::Storage as StorageStub,
 };
 use kvproto::brpb::Gcs as InputConfig;
 use tikv_util::{error, info, time::Instant};
@@ -455,6 +456,56 @@ impl GcsStorage {
     }
 }
 
+async fn put_with_client<S>(
+    client: &google_cloud_storage::client::Storage<S>,
+    bucket: String,
+    full_name: String,
+    reader: PutResource<'_>,
+    content_length: u64,
+    storage_class: Option<String>,
+    predefined_acl: Option<String>,
+) -> io::Result<()>
+where
+    S: StorageStub + 'static,
+{
+    // SAFETY: `put()` awaits `write_object(...).send_buffered()` to
+    // completion before returning, so the widened lifetime never outlives
+    // the original `reader`. In google-cloud-storage 1.0.0, the buffered
+    // upload path consumes the payload inside that future and does not
+    // detach it into a background task.
+    let reader = unsafe { std::mem::transmute::<PutResource<'_>, PutResource<'static>>(reader) };
+    let payload = PutResourceSource::new(reader, content_length);
+    let begin = Instant::now_coarse();
+    let mut builder = client
+        .write_object(bucket, full_name, payload)
+        // TiKV's upload source is single-pass. In
+        // `google-cloud-storage` 1.0.0, the doc comments for
+        // `with_resumable_upload_threshold()` in
+        // `src/storage/client.rs` and `src/storage/write_object.rs` say
+        // smaller uploads use single-shot uploads for better performance.
+        //
+        // We still force resumable uploads here because backup writes favor
+        // retry/continue behavior over the extra RPCs for small objects.
+        .with_resumable_upload_threshold(0_usize);
+    if let Some(storage_class) = storage_class.as_ref() {
+        builder = builder.set_storage_class(storage_class.clone());
+    }
+    if let Some(predefined_acl) = predefined_acl.as_ref() {
+        builder = builder.set_predefined_acl(predefined_acl.clone());
+    }
+    builder
+        .send_buffered()
+        .await
+        .map(|_| ())
+        .map_err(|e| GcsApiError::new("write_object", e).into_io_error())?;
+    metrics::CLOUD_REQUEST_HISTOGRAM_VEC
+        // Keep metric labels aligned with the actual upload API used above.
+        .with_label_values(&["gcp", "insert_multipart"])
+        .observe(begin.saturating_elapsed_secs());
+
+    Ok(())
+}
+
 #[async_trait]
 impl BlobStorage for GcsStorage {
     fn config(&self) -> Box<dyn BlobConfig> {
@@ -471,45 +522,18 @@ impl BlobStorage for GcsStorage {
 
         let bucket = self.bucket_resource_name();
         let client = self.get_data_client().await?;
-        // SAFETY: `put()` awaits `write_object(...).send_buffered()` to
-        // completion before returning, so the widened lifetime never outlives
-        // the original `reader`. In google-cloud-storage 1.0.0, the buffered
-        // upload path consumes the payload inside that future and does not
-        // detach it into a background task.
-        let reader =
-            unsafe { std::mem::transmute::<PutResource<'_>, PutResource<'static>>(reader) };
-        let payload = PutResourceSource::new(reader, content_length);
         let storage_class = self.inner.config.storage_class.clone();
         let predefined_acl = self.inner.config.predefined_acl.clone();
-        let begin = Instant::now_coarse();
-        let mut builder = client
-            .write_object(bucket, full_name, payload)
-            // TiKV's upload source is single-pass. In
-            // `google-cloud-storage` 1.0.0, the doc comments for
-            // `with_resumable_upload_threshold()` in
-            // `src/storage/client.rs` and `src/storage/write_object.rs` say
-            // smaller uploads use single-shot uploads for better performance.
-            //
-            // We still force resumable uploads here because backup writes favor
-            // retry/continue behavior over the extra RPCs for small objects.
-            .with_resumable_upload_threshold(0_usize);
-        if let Some(storage_class) = storage_class.as_ref() {
-            builder = builder.set_storage_class(storage_class.clone());
-        }
-        if let Some(predefined_acl) = predefined_acl.as_ref() {
-            builder = builder.set_predefined_acl(predefined_acl.clone());
-        }
-        builder
-            .send_buffered()
-            .await
-            .map(|_| ())
-            .map_err(|e| GcsApiError::new("write_object", e).into_io_error())?;
-        metrics::CLOUD_REQUEST_HISTOGRAM_VEC
-            // Keep metric labels aligned with the actual upload API used above.
-            .with_label_values(&["gcp", "insert_multipart"])
-            .observe(begin.saturating_elapsed_secs());
-
-        Ok(())
+        put_with_client(
+            &client,
+            bucket,
+            full_name,
+            reader,
+            content_length,
+            storage_class,
+            predefined_acl,
+        )
+        .await
     }
 
     fn get(&self, name: &str) -> BlobStream<'_> {
@@ -637,7 +661,46 @@ impl DeletableStorage for GcsStorage {
 
 #[cfg(test)]
 mod tests {
+    use std::future::{self, Future};
+
+    use google_cloud_storage::{
+        model::Object, model_ext::WriteObjectRequest, request_options::RequestOptions,
+    };
+
     use super::*;
+
+    fn histogram_sample_count(cloud: &str, req: &str) -> u64 {
+        metrics::CLOUD_REQUEST_HISTOGRAM_VEC
+            .get_metric_with_label_values(&[cloud, req])
+            .unwrap()
+            .get_sample_count()
+    }
+
+    fn make_test_storage(storage_class: &str, predefined_acl: &str) -> io::Result<GcsStorage> {
+        let mut input = InputConfig::default();
+        input.bucket = "test-bucket".to_string();
+        input.prefix = "pfx".to_string();
+        input.storage_class = storage_class.to_string();
+        input.predefined_acl = predefined_acl.to_string();
+        GcsStorage::from_input(input)
+    }
+
+    #[derive(Debug)]
+    struct SuccessfulWriteStorageStub;
+
+    impl google_cloud_storage::stub::Storage for SuccessfulWriteStorageStub {
+        fn write_object_buffered<P>(
+            &self,
+            _payload: P,
+            _req: WriteObjectRequest,
+            _options: RequestOptions,
+        ) -> impl Future<Output = google_cloud_storage::Result<Object>> + Send
+        where
+            P: google_cloud_storage::streaming_source::StreamingSource + Send + Sync + 'static,
+        {
+            future::ready(Ok(Object::new()))
+        }
+    }
 
     #[test]
     fn gax_grpc_code_maps_to_io_kind() {
@@ -672,6 +735,53 @@ mod tests {
             s.config().url()?.to_string(),
             "http://endpoint.com/bucket/backup%2001/prefix/"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn put_emits_insert_multipart_metrics_without_network() -> io::Result<()> {
+        let storage = make_test_storage("COLDLINE", "projectPrivate")?;
+        let client = google_cloud_storage::client::Storage::from_stub(SuccessfulWriteStorageStub);
+        let before_insert = histogram_sample_count("gcp", "insert_multipart");
+
+        put_with_client(
+            &client,
+            storage.bucket_resource_name(),
+            storage.full_path("a"),
+            PutResource(Box::new(futures::io::Cursor::new(b"alpha".to_vec()))),
+            5,
+            storage.inner.config.storage_class.clone(),
+            storage.inner.config.predefined_acl.clone(),
+        )
+        .await?;
+
+        let after_insert = histogram_sample_count("gcp", "insert_multipart");
+        assert!(after_insert >= before_insert + 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn zero_length_put_uses_insert_multipart_metrics_without_network() -> io::Result<()> {
+        let storage = make_test_storage("COLDLINE", "projectPrivate")?;
+        let client = google_cloud_storage::client::Storage::from_stub(SuccessfulWriteStorageStub);
+        let before_multipart = histogram_sample_count("gcp", "insert_multipart");
+        let before_simple = histogram_sample_count("gcp", "insert_simple");
+
+        put_with_client(
+            &client,
+            storage.bucket_resource_name(),
+            storage.full_path("zero"),
+            PutResource(Box::new(futures::io::Cursor::new(Vec::<u8>::new()))),
+            0,
+            storage.inner.config.storage_class.clone(),
+            storage.inner.config.predefined_acl.clone(),
+        )
+        .await?;
+
+        let after_multipart = histogram_sample_count("gcp", "insert_multipart");
+        let after_simple = histogram_sample_count("gcp", "insert_simple");
+        assert!(after_multipart >= before_multipart + 1);
+        assert_eq!(after_simple, before_simple);
         Ok(())
     }
 }
