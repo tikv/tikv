@@ -216,7 +216,7 @@ mod tests {
     }
 
     /// Note: for API V2, TestEngine don't support MVCC reading, so
-    /// `pre_propose` observer is ignored, and no timestamp will be append
+    /// `pre_propose` observer is ignored, and no timestamp will be appended
     /// to key. The full test of `RawCompareAndSwap` is in
     /// `src/storage/mod.rs`.
     fn test_cad_basic_impl<F: KvFormat>() {
@@ -384,7 +384,6 @@ mod tests {
                 &encoded_lock_key
             );
         } else {
-            // V1/V1Ttl: plain Delete at the untimstamped key, no lock guards.
             let expected_modifies =
                 vec![Modify::Delete(CF_DEFAULT, F::encode_raw_key(raw_key, None))];
             assert_eq!(write_result.to_be_write.modifies, expected_modifies);
