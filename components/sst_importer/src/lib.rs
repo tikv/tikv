@@ -3,6 +3,11 @@
 //! Importing RocksDB SST files into TiKV
 #![feature(min_specialization)]
 #![feature(error_reporter)]
+#![allow(
+    clippy::enum_variant_names,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 
 #[macro_use]
 extern crate serde_derive;

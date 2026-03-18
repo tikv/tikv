@@ -18,6 +18,7 @@ pub trait RetryCodedError: Debug + Display + ErrorCodeExt + RetryError + Send + 
 
 /// The error type for encryption.
 #[derive(Debug, Error)]
+#[allow(clippy::enum_variant_names)]
 pub enum Error {
     #[error("Other error {0}")]
     Other(#[from] Box<dyn error::Error + Sync + Send>),

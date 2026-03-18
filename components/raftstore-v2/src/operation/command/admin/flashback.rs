@@ -90,11 +90,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         #[allow(unused_mut)] mut res: FlashbackResult,
     ) {
-        (|| {
-            fail_point!("keep_peer_fsm_flashback_state_false", |_| {
-                res.region_state.mut_region().set_is_in_flashback(false);
-            })
-        })();
+        fail_point!("keep_peer_fsm_flashback_state_false", |_| {
+            res.region_state.mut_region().set_is_in_flashback(false);
+        });
         slog::debug!(
             self.logger,
             "flashback update region";

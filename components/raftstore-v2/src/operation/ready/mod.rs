@@ -242,10 +242,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     pub fn on_store_unreachable(&mut self, to_store_id: u64) {
-        if self.is_leader() {
-            if let Some(peer_id) = find_peer(self.region(), to_store_id).map(|p| p.get_id()) {
-                self.raft_group_mut().report_unreachable(peer_id);
-            }
+        if self.is_leader()
+            && let Some(peer_id) = find_peer(self.region(), to_store_id).map(|p| p.get_id())
+        {
+            self.raft_group_mut().report_unreachable(peer_id);
         }
     }
 
@@ -637,33 +637,32 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         msg: RaftMessage,
     ) {
         let message = msg.get_message();
-        if message.get_msg_type() == MessageType::MsgAppend {
-            if let (Some(fe), Some(le)) =
+        if message.get_msg_type() == MessageType::MsgAppend
+            && let (Some(fe), Some(le)) =
                 (message.get_entries().first(), message.get_entries().last())
-            {
-                let last = (le.get_term(), le.get_index());
-                let first = (fe.get_term(), fe.get_index());
-                let now = Instant::now();
-                let queue = self.proposals_mut().queue_mut();
-                // Proposals are batched up, so it will liely hit after one or two steps.
-                for p in queue.iter_mut().rev() {
-                    if p.sent {
-                        break;
-                    }
-                    let cur = (p.term, p.index);
-                    if cur > last {
-                        continue;
-                    }
-                    if cur < first {
-                        break;
-                    }
-                    for tracker in p.cb.write_trackers() {
-                        tracker.observe(now, &ctx.raft_metrics.wf_send_proposal, |t| {
-                            &mut t.metrics.wf_send_proposal_nanos
-                        });
-                    }
-                    p.sent = true;
+        {
+            let last = (le.get_term(), le.get_index());
+            let first = (fe.get_term(), fe.get_index());
+            let now = Instant::now();
+            let queue = self.proposals_mut().queue_mut();
+            // Proposals are batched up, so it will liely hit after one or two steps.
+            for p in queue.iter_mut().rev() {
+                if p.sent {
+                    break;
                 }
+                let cur = (p.term, p.index);
+                if cur > last {
+                    continue;
+                }
+                if cur < first {
+                    break;
+                }
+                for tracker in p.cb.write_trackers() {
+                    tracker.observe(now, &ctx.raft_metrics.wf_send_proposal, |t| {
+                        &mut t.metrics.wf_send_proposal_nanos
+                    });
+                }
+                p.sent = true;
             }
         }
         if message.get_msg_type() == MessageType::MsgTimeoutNow {
@@ -973,13 +972,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         let now = Instant::now();
         for i in old_index + 1..=new_index {
-            if let Some((term, trackers)) = self.proposals().find_trackers(i) {
-                if self.entry_storage().term(i) == Ok(term) {
-                    for tracker in trackers {
-                        tracker.observe(now, &ctx.raft_metrics.wf_persist_log, |t| {
-                            &mut t.metrics.wf_persist_log_nanos
-                        });
-                    }
+            if let Some((term, trackers)) = self.proposals().find_trackers(i)
+                && self.entry_storage().term(i) == Ok(term)
+            {
+                for tracker in trackers {
+                    tracker.observe(now, &ctx.raft_metrics.wf_persist_log, |t| {
+                        &mut t.metrics.wf_persist_log_nanos
+                    });
                 }
             }
         }
@@ -998,23 +997,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let now = Instant::now();
         let health_stats = &mut ctx.raft_metrics.health_stats;
         for i in old_index + 1..=new_index {
-            if let Some((term, trackers)) = self.proposals().find_trackers(i) {
-                if self.entry_storage().term(i) == Ok(term) {
-                    let commit_persisted = i <= self.persisted_index();
-                    let hist = if commit_persisted {
-                        &ctx.raft_metrics.wf_commit_log
-                    } else {
-                        &ctx.raft_metrics.wf_commit_not_persist_log
-                    };
-                    for tracker in trackers {
-                        // Collect the metrics related to commit_log
-                        // durations.
-                        let duration = tracker.observe(now, hist, |t| {
-                            t.metrics.commit_not_persisted = !commit_persisted;
-                            &mut t.metrics.wf_commit_log_nanos
-                        });
-                        health_stats.observe(Duration::from_nanos(duration), IoType::Network);
-                    }
+            if let Some((term, trackers)) = self.proposals().find_trackers(i)
+                && self.entry_storage().term(i) == Ok(term)
+            {
+                let commit_persisted = i <= self.persisted_index();
+                let hist = if commit_persisted {
+                    &ctx.raft_metrics.wf_commit_log
+                } else {
+                    &ctx.raft_metrics.wf_commit_not_persist_log
+                };
+                for tracker in trackers {
+                    // Collect the metrics related to commit_log
+                    // durations.
+                    let duration = tracker.observe(now, hist, |t| {
+                        t.metrics.commit_not_persisted = !commit_persisted;
+                        &mut t.metrics.wf_commit_log_nanos
+                    });
+                    health_stats.observe(Duration::from_nanos(duration), IoType::Network);
                 }
             }
         }
@@ -1032,14 +1031,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         let now = Instant::now();
         for entry in entries {
-            if let Some((term, trackers)) = self.proposals().find_trackers(entry.index) {
-                if entry.term == term {
-                    for tracker in trackers {
-                        write_task.trackers.push(*tracker);
-                        tracker.observe(now, &ctx.raft_metrics.wf_send_to_queue, |t| {
-                            &mut t.metrics.wf_send_to_queue_nanos
-                        });
-                    }
+            if let Some((term, trackers)) = self.proposals().find_trackers(entry.index)
+                && entry.term == term
+            {
+                for tracker in trackers {
+                    write_task.trackers.push(*tracker);
+                    tracker.observe(now, &ctx.raft_metrics.wf_send_to_queue, |t| {
+                        &mut t.metrics.wf_send_to_queue_nanos
+                    });
                 }
             }
         }
@@ -1304,16 +1303,16 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let prev_raft_state = self.entry_storage().raft_state().clone();
         let prev_ever_persisted = self.ever_persisted();
 
-        if !ready.snapshot().is_empty() {
-            if let Err(e) = self.apply_snapshot(
+        if !ready.snapshot().is_empty()
+            && let Err(e) = self.apply_snapshot(
                 ready.snapshot(),
                 write_task,
                 &ctx.snap_mgr,
                 &ctx.tablet_registry,
-            ) {
-                SNAP_COUNTER.apply.fail.inc();
-                error!(self.logger(),"failed to apply snapshot";"error" => ?e)
-            }
+            )
+        {
+            SNAP_COUNTER.apply.fail.inc();
+            error!(self.logger(),"failed to apply snapshot";"error" => ?e)
         }
 
         if !ready.entries().is_empty() {

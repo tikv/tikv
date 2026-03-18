@@ -49,6 +49,7 @@ pub enum SubCode {
 
 #[repr(u8)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq)]
+#[allow(clippy::enum_variant_names)]
 pub enum Severity {
     NoError = 0,
     SoftError = 1,

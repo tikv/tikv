@@ -11,6 +11,7 @@ use crate::{
 };
 
 #[derive(Clone, Debug)]
+#[allow(clippy::enum_variant_names)]
 pub enum DeleteStrategy {
     /// Delete the SST files that are fullly fit in range. However, the SST
     /// files that are partially overlapped with the range will not be

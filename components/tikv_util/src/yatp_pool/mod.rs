@@ -29,6 +29,8 @@ const DEFAULT_CLEANUP_INTERVAL: Duration = if cfg!(test) {
     Duration::from_secs(10)
 };
 
+type MetricIdxFromTaskMeta = dyn Fn(&[u8]) -> usize + Send + Sync;
+
 fn background_cleanup_task<F>(cleanup: F) -> TaskCell
 where
     F: Fn() -> Option<std::time::Instant> + Send + 'static,
@@ -320,7 +322,7 @@ pub struct YatpPoolBuilder<T: PoolTicker> {
     // whether to tracker task scheduling wait/exec duration
     enable_task_wait_metrics: bool,
     enable_task_exec_metrics: bool,
-    metric_idx_from_task_meta: Option<Arc<dyn Fn(&[u8]) -> usize + Send + Sync>>,
+    metric_idx_from_task_meta: Option<Arc<MetricIdxFromTaskMeta>>,
 
     #[cfg(test)]
     background_cleanup_hook: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -424,10 +426,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         self
     }
 
-    pub fn metric_idx_from_task_meta(
-        mut self,
-        f: Arc<dyn Fn(&[u8]) -> usize + Send + Sync>,
-    ) -> Self {
+    pub fn metric_idx_from_task_meta(mut self, f: Arc<MetricIdxFromTaskMeta>) -> Self {
         self.metric_idx_from_task_meta = Some(f);
         self
     }

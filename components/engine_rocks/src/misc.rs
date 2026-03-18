@@ -75,10 +75,10 @@ impl RocksEngine {
                 } else {
                     data.push(it.key().to_vec());
                 }
-                let max_delete_count_by_key = (|| {
+                let max_delete_count_by_key = {
                     fail_point!("manually_set_max_delete_count_by_key", |_| { 0 });
                     MAX_DELETE_COUNT_BY_KEY
-                })();
+                };
                 if data.len() > max_delete_count_by_key {
                     let builder = RocksSstWriterBuilder::new().set_db(self).set_cf(cf);
                     let mut writer = builder.build(sst_path.as_str())?;

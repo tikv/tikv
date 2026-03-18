@@ -803,10 +803,7 @@ mod tests {
             req.get_requests()[0].get_delete_range().get_end_key(),
             b"end"
         );
-        assert_eq!(
-            req.get_requests()[0].get_delete_range().get_notify_only(),
-            true
-        );
+        assert!(req.get_requests()[0].get_delete_range().get_notify_only());
 
         // Test ingest.
         let mut encoder = SimpleWriteEncoder::with_capacity(512);

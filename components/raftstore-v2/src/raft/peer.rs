@@ -194,7 +194,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             peer_cache: vec![],
             peer_heartbeats: HashMap::default(),
             compact_log_context: CompactLogContext::new(applied_index, persisted_applied),
-            merge_context: merge_context.map(|c| Box::new(c)),
+            merge_context: merge_context.map(Box::new),
             last_sent_snapshot_index: 0,
             raw_write_encoder: None,
             proposals: ProposalQueue::new(region_id, raft_group.raft.id),
@@ -989,18 +989,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .retain_pending_peers(|(peer_id, pending_after)| {
                 // TODO check wait data peers here
                 let truncated_idx = self.raft_group.store().entry_storage().truncated_index();
-                if let Some(progress) = self.raft_group.raft.prs().get(*peer_id) {
-                    if progress.matched >= truncated_idx {
-                        let elapsed = duration_to_sec(pending_after.saturating_elapsed());
-                        RAFT_PEER_PENDING_DURATION.observe(elapsed);
-                        debug!(
-                            logger,
-                            "peer has caught up logs";
-                            "from_peer_id" => %from_peer_id,
-                            "takes" => %elapsed,
-                        );
-                        return false;
-                    }
+                if let Some(progress) = self.raft_group.raft.prs().get(*peer_id)
+                    && progress.matched >= truncated_idx
+                {
+                    let elapsed = duration_to_sec(pending_after.saturating_elapsed());
+                    RAFT_PEER_PENDING_DURATION.observe(elapsed);
+                    debug!(
+                        logger,
+                        "peer has caught up logs";
+                        "from_peer_id" => %from_peer_id,
+                        "takes" => %elapsed,
+                    );
+                    return false;
                 }
                 true
             })

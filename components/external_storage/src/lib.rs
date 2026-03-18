@@ -67,6 +67,7 @@ impl<'a, R: AsyncRead + Unpin + Send + 'a> From<R> for UnpinReader<'a> {
 }
 
 pub type ExternalData<'a> = Box<dyn AsyncRead + Unpin + Send + 'a>;
+type ChecksummedExternalData<'a> = (ExternalData<'a>, Option<Arc<Mutex<Hasher>>>);
 
 #[derive(Debug, Default)]
 pub struct BackendConfig {
@@ -338,6 +339,7 @@ pub fn encrypt_wrap_reader(
     Ok(input)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn read_external_storage_into_file<In, Out>(
     mut input: In,
     mut output: Out,
@@ -544,7 +546,7 @@ fn calc_and_compare_checksums(
 pub fn wrap_with_checksum_reader_if_needed(
     contains_checksum: bool,
     encrypted_reader: ExternalData<'_>,
-) -> Result<(ExternalData<'_>, Option<Arc<Mutex<Hasher>>>), io::Error> {
+) -> Result<ChecksummedExternalData<'_>, io::Error> {
     if contains_checksum {
         let (checksum_reader, hasher) = Sha256Reader::new(encrypted_reader.compat())?;
         Ok((Box::new(checksum_reader.compat()), Some(hasher)))

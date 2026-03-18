@@ -56,8 +56,8 @@ impl TaskMetadata<'_> {
         }
     }
 
-    pub fn to_vec(self) -> Vec<u8> {
-        self.metadata.into_owned()
+    pub fn to_vec(&self) -> Vec<u8> {
+        self.metadata.to_vec()
     }
 
     pub fn override_priority(&self) -> u32 {

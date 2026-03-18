@@ -15,6 +15,8 @@ use crate::{
     worker::{LazyWorker, Runnable},
 };
 
+type RenameFn = dyn Send + Fn(&Path) -> io::Result<PathBuf>;
+
 /// Opens log file with append mode. Creates a new log file if it doesn't exist.
 fn open_log_file(path: impl AsRef<Path>) -> io::Result<File> {
     let path = path.as_ref();
@@ -57,7 +59,7 @@ pub trait Rotator: Send {
 pub struct RotatingFileLogger {
     path: PathBuf,
     file: File,
-    rename: Box<dyn Send + Fn(&Path) -> io::Result<PathBuf>>,
+    rename: Box<RenameFn>,
     rotators: Vec<Box<dyn Rotator>>,
     archive_worker: LazyWorker<Task>,
 }
@@ -66,7 +68,7 @@ pub struct RotatingFileLogger {
 pub struct RotatingFileLoggerBuilder {
     rotators: Vec<Box<dyn Rotator>>,
     path: PathBuf,
-    rename: Box<dyn Send + Fn(&Path) -> io::Result<PathBuf>>,
+    rename: Box<RenameFn>,
     max_backups: usize,
     max_days: ReadableDuration,
 }
@@ -262,7 +264,7 @@ impl Runner {
                 logs.push(LogInfo { f, dt });
             }
         }
-        logs.sort_by(|l1, l2| l2.dt.cmp(&l1.dt));
+        logs.sort_by_key(|log| std::cmp::Reverse(log.dt));
         Ok(logs)
     }
 }

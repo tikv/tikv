@@ -479,10 +479,10 @@ where
             }
         }
 
-        if let Some(batch_req) = self.request.as_ref() {
-            if batch_req.get_header() != req.get_header() {
-                return false;
-            }
+        if let Some(batch_req) = self.request.as_ref()
+            && batch_req.get_header() != req.get_header()
+        {
+            return false;
         }
         true
     }
@@ -847,21 +847,20 @@ where
         } else {
             if self.fsm.batch_req_builder.has_proposed_cb
                 && self.fsm.batch_req_builder.propose_checked.is_none()
+                && let Some(cmd) = self.fsm.batch_req_builder.request.take()
             {
-                if let Some(cmd) = self.fsm.batch_req_builder.request.take() {
-                    // We are delaying these requests to next loop. Try to fulfill their
-                    // proposed callback early.
-                    self.fsm.batch_req_builder.propose_checked = Some(false);
-                    if let Ok(None) = self.pre_propose_raft_command(&cmd) {
-                        if self.fsm.peer.will_likely_propose(&cmd) {
-                            self.fsm.batch_req_builder.propose_checked = Some(true);
-                            for cb in &mut self.fsm.batch_req_builder.callbacks {
-                                cb.invoke_proposed();
-                            }
-                        }
+                // We are delaying these requests to next loop. Try to fulfill their
+                // proposed callback early.
+                self.fsm.batch_req_builder.propose_checked = Some(false);
+                if let Ok(None) = self.pre_propose_raft_command(&cmd)
+                    && self.fsm.peer.will_likely_propose(&cmd)
+                {
+                    self.fsm.batch_req_builder.propose_checked = Some(true);
+                    for cb in &mut self.fsm.batch_req_builder.callbacks {
+                        cb.invoke_proposed();
                     }
-                    self.fsm.batch_req_builder.request = Some(cmd);
                 }
+                self.fsm.batch_req_builder.request = Some(cmd);
             }
             if self.fsm.batch_req_builder.request.is_some() {
                 self.ctx.raft_metrics.ready.propose_delay.inc();
@@ -901,17 +900,17 @@ where
         syncer: UnsafeRecoveryExecutePlanSyncer,
         failed_voters: Vec<metapb::Peer>,
     ) {
-        if let Some(state) = &self.fsm.peer.unsafe_recovery_state {
-            if !state.is_abort() {
-                warn!(
-                    "Unsafe recovery, demote failed voters has already been initiated";
-                    "region_id" => self.region().get_id(),
-                    "peer_id" => self.fsm.peer.peer.get_id(),
-                    "state" => ?state,
-                );
-                syncer.abort();
-                return;
-            }
+        if let Some(state) = &self.fsm.peer.unsafe_recovery_state
+            && !state.is_abort()
+        {
+            warn!(
+                "Unsafe recovery, demote failed voters has already been initiated";
+                "region_id" => self.region().get_id(),
+                "peer_id" => self.fsm.peer.peer.get_id(),
+                "state" => ?state,
+            );
+            syncer.abort();
+            return;
         }
 
         if !self.fsm.peer.is_in_force_leader() {
@@ -1009,17 +1008,17 @@ where
     }
 
     fn on_unsafe_recovery_destroy(&mut self, syncer: UnsafeRecoveryExecutePlanSyncer) {
-        if let Some(state) = &self.fsm.peer.unsafe_recovery_state {
-            if !state.is_abort() {
-                warn!(
-                    "Unsafe recovery, can't destroy, another plan is executing in progress";
-                    "region_id" => self.region_id(),
-                    "peer_id" => self.fsm.peer_id(),
-                    "state" => ?state,
-                );
-                syncer.abort();
-                return;
-            }
+        if let Some(state) = &self.fsm.peer.unsafe_recovery_state
+            && !state.is_abort()
+        {
+            warn!(
+                "Unsafe recovery, can't destroy, another plan is executing in progress";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "state" => ?state,
+            );
+            syncer.abort();
+            return;
         }
         self.fsm.peer.unsafe_recovery_state = Some(UnsafeRecoveryState::Destroy(syncer));
         self.handle_destroy_peer(DestroyPeerJob {
@@ -1030,17 +1029,17 @@ where
     }
 
     fn on_unsafe_recovery_wait_apply(&mut self, syncer: UnsafeRecoveryWaitApplySyncer) {
-        if let Some(state) = &self.fsm.peer.unsafe_recovery_state {
-            if !state.is_abort() {
-                warn!(
-                    "Unsafe recovery, can't wait apply, another plan is executing in progress";
-                    "region_id" => self.region_id(),
-                    "peer_id" => self.fsm.peer_id(),
-                    "state" => ?state,
-                );
-                syncer.abort();
-                return;
-            }
+        if let Some(state) = &self.fsm.peer.unsafe_recovery_state
+            && !state.is_abort()
+        {
+            warn!(
+                "Unsafe recovery, can't wait apply, another plan is executing in progress";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "state" => ?state,
+            );
+            syncer.abort();
+            return;
         }
         let target_index = if self.fsm.peer.force_leader.is_some() {
             // For regions that lose quorum (or regions have force leader), whatever has
@@ -1087,17 +1086,17 @@ where
         let target_index = self.fsm.peer.raft_group.raft.raft_log.last_index();
         let applied_index = self.fsm.peer.raft_group.raft.raft_log.applied;
         let term = self.fsm.peer.raft_group.raft.term;
-        if let Some(e) = &req.expected_epoch {
-            if let Err(err) = compare_region_epoch(e, self.region(), true, true, true) {
-                warn!("epoch not match for wait apply, aborting.";
+        if let Some(e) = &req.expected_epoch
+            && let Err(err) = compare_region_epoch(e, self.region(), true, true, true)
+        {
+            warn!("epoch not match for wait apply, aborting.";
                     "err" => %err,
                     "peer" => self.fsm.peer.peer_id(),
                     "region" => self.fsm.peer.region().get_id());
-                let mut pberr = errorpb::Error::from(err);
-                req.syncer
-                    .abort(AbortReason::EpochNotMatch(pberr.take_epoch_not_match()));
-                return;
-            }
+            let mut pberr = errorpb::Error::from(err);
+            req.syncer
+                .abort(AbortReason::EpochNotMatch(pberr.take_epoch_not_match()));
+            return;
         }
 
         // trivial case: no need to wait apply -- already the latest.
@@ -1523,16 +1522,16 @@ where
                             continue;
                         }
                     };
-                    if let Ok(elapsed) = modified.elapsed() {
-                        if elapsed > self.ctx.cfg.snap_gc_timeout.0 {
-                            info!(
-                                "deleting expired snap file";
-                                "region_id" => self.fsm.region_id(),
-                                "peer_id" => self.fsm.peer_id(),
-                                "snap_file" => %key,
-                            );
-                            schedule_delete_snapshot_files(key, s);
-                        }
+                    if let Ok(elapsed) = modified.elapsed()
+                        && elapsed > self.ctx.cfg.snap_gc_timeout.0
+                    {
+                        info!(
+                            "deleting expired snap file";
+                            "region_id" => self.fsm.region_id(),
+                            "peer_id" => self.fsm.peer_id(),
+                            "snap_file" => %key,
+                        );
+                        schedule_delete_snapshot_files(key, s);
                     }
                 }
             } else if key.term <= compacted_term
@@ -1970,17 +1969,15 @@ where
         if self.fsm.peer.force_leader.is_none() {
             return;
         }
-        if !force {
-            if let Some(UnsafeRecoveryState::Failed) = self.fsm.peer.unsafe_recovery_state {
-                // Skip force leader if the plan failed, so wait for the next retry of plan with
-                // force leader state holding
-                info!(
-                    "skip exiting force leader state";
-                    "region_id" => self.fsm.region_id(),
-                    "peer_id" => self.fsm.peer_id(),
-                );
-                return;
-            }
+        if !force && let Some(UnsafeRecoveryState::Failed) = self.fsm.peer.unsafe_recovery_state {
+            // Skip force leader if the plan failed, so wait for the next retry of plan with
+            // force leader state holding
+            info!(
+                "skip exiting force leader state";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
+            return;
         }
 
         info!(
@@ -2206,12 +2203,11 @@ where
 
         self.fsm.has_ready = true;
 
-        if let Some(delay) = self.fsm.delayed_destroy {
-            if delay.reason == DelayReason::UnPersistedReady
-                && !self.fsm.peer.has_unpersisted_ready()
-            {
-                self.destroy_peer(delay.merged_by_target);
-            }
+        if let Some(delay) = self.fsm.delayed_destroy
+            && delay.reason == DelayReason::UnPersistedReady
+            && !self.fsm.peer.has_unpersisted_ready()
+        {
+            self.destroy_peer(delay.merged_by_target);
         }
     }
 
@@ -3304,16 +3300,14 @@ where
                     "receiver_store_id" => msg.get_from_peer().get_store_id(),
                     "ignored" => !self.fsm.peer.get_store().has_gen_snap_task(),
                 );
-                if passed {
-                    if let Some(gen_task) = self.fsm.peer.mut_store().take_gen_snap_task() {
-                        self.fsm
-                            .peer
-                            .pending_request_snapshot_count
-                            .fetch_add(1, Ordering::SeqCst);
-                        self.ctx
-                            .apply_router
-                            .schedule_task(self.region_id(), ApplyTask::Snapshot(gen_task));
-                    }
+                if passed && let Some(gen_task) = self.fsm.peer.mut_store().take_gen_snap_task() {
+                    self.fsm
+                        .peer
+                        .pending_request_snapshot_count
+                        .fetch_add(1, Ordering::SeqCst);
+                    self.ctx
+                        .apply_router
+                        .schedule_task(self.region_id(), ApplyTask::Snapshot(gen_task));
                 }
             }
             ExtraMessageType::MsgPreLoadRegionRequest => {
@@ -4233,13 +4227,13 @@ where
                 .snapshot_recovery_maybe_finish_wait_apply(/* force= */ true);
         }
 
-        (|| {
+        {
             fail_point!(
                 "before_destroy_peer_on_peer_1003",
                 self.fsm.peer.peer_id() == 1003,
                 |_| {}
             );
-        })();
+        };
         let mut meta = self.ctx.store_meta.lock().unwrap();
         meta.damaged_regions.remove(&self.fsm.region_id());
         meta.damaged_regions.shrink_to_fit();
@@ -4397,21 +4391,21 @@ where
         }
 
         meta.pending_merge_targets.remove(&region_id);
-        if let Some(target) = meta.targets_map.remove(&region_id) {
-            if meta.pending_merge_targets.contains_key(&target) {
-                meta.pending_merge_targets
-                    .get_mut(&target)
-                    .unwrap()
-                    .remove(&region_id);
-                // When the target doesn't exist(add peer but the store is isolated), source
-                // peer decide to destroy by itself. Without target, the
-                // `pending_merge_targets` for target won't be removed, so here source peer help
-                // target to clear.
-                if !meta.regions.contains_key(&target)
-                    && meta.pending_merge_targets.get(&target).unwrap().is_empty()
-                {
-                    meta.pending_merge_targets.remove(&target);
-                }
+        if let Some(target) = meta.targets_map.remove(&region_id)
+            && meta.pending_merge_targets.contains_key(&target)
+        {
+            meta.pending_merge_targets
+                .get_mut(&target)
+                .unwrap()
+                .remove(&region_id);
+            // When the target doesn't exist(add peer but the store is isolated), source
+            // peer decide to destroy by itself. Without target, the
+            // `pending_merge_targets` for target won't be removed, so here source peer help
+            // target to clear.
+            if !meta.regions.contains_key(&target)
+                && meta.pending_merge_targets.get(&target).unwrap().is_empty()
+            {
+                meta.pending_merge_targets.remove(&target);
             }
         }
 
@@ -4607,10 +4601,10 @@ where
     fn on_ready_compact_log(&mut self, first_index: u64, state: RaftTruncatedState) {
         // Since this peer may be warming up the entry cache, log compaction should be
         // temporarily skipped. Otherwise, the warmup task may fail.
-        if let Some(state) = &mut self.fsm.peer.transfer_leader_state.cache_warmup_state {
-            if !state.check_stale() {
-                return;
-            }
+        if let Some(state) = &mut self.fsm.peer.transfer_leader_state.cache_warmup_state
+            && !state.check_stale()
+        {
+            return;
         }
 
         let total_cnt = self.fsm.peer.last_applying_idx - first_index;
@@ -5227,20 +5221,20 @@ where
         self.fsm.peer.pending_merge_state = Some(state);
         let state = self.fsm.peer.pending_merge_state.as_ref().unwrap();
 
-        if let Some(ref catch_up_logs) = self.fsm.peer.catch_up_logs {
-            if state.get_commit() == catch_up_logs.merge.get_commit() {
-                assert_eq!(state.get_target().get_id(), catch_up_logs.target_region_id);
-                // Indicate that `on_catch_up_logs_for_merge` has already executed.
-                // Mark pending_remove because its apply fsm will be destroyed.
-                self.fsm.peer.pending_remove = Some(PendingRemoveReason::Merge);
-                // Send CatchUpLogs back to destroy source apply fsm,
-                // then it will send `Noop` to trigger target apply fsm.
-                self.ctx.apply_router.schedule_task(
-                    self.fsm.region_id(),
-                    ApplyTask::LogsUpToDate(self.fsm.peer.catch_up_logs.take().unwrap()),
-                );
-                return;
-            }
+        if let Some(ref catch_up_logs) = self.fsm.peer.catch_up_logs
+            && state.get_commit() == catch_up_logs.merge.get_commit()
+        {
+            assert_eq!(state.get_target().get_id(), catch_up_logs.target_region_id);
+            // Indicate that `on_catch_up_logs_for_merge` has already executed.
+            // Mark pending_remove because its apply fsm will be destroyed.
+            self.fsm.peer.pending_remove = Some(PendingRemoveReason::Merge);
+            // Send CatchUpLogs back to destroy source apply fsm,
+            // then it will send `Noop` to trigger target apply fsm.
+            self.ctx.apply_router.schedule_task(
+                self.fsm.region_id(),
+                ApplyTask::LogsUpToDate(self.fsm.peer.catch_up_logs.take().unwrap()),
+            );
+            return;
         }
 
         self.on_check_merge();
@@ -5257,24 +5251,24 @@ where
             )
         }
 
-        if let Some(ref pending_merge_state) = self.fsm.peer.pending_merge_state {
-            if pending_merge_state.get_commit() == catch_up_logs.merge.get_commit() {
-                assert_eq!(
-                    pending_merge_state.get_target().get_id(),
-                    catch_up_logs.target_region_id
-                );
-                // Indicate that `on_ready_prepare_merge` has already executed.
-                // Mark pending_remove because its apply fsm will be destroyed.
-                self.fsm.peer.pending_remove = Some(PendingRemoveReason::Merge);
-                // Just for saving memory.
-                catch_up_logs.merge.clear_entries();
-                // Send CatchUpLogs back to destroy source apply fsm,
-                // then it will send `Noop` to trigger target apply fsm.
-                self.ctx
-                    .apply_router
-                    .schedule_task(region_id, ApplyTask::LogsUpToDate(catch_up_logs));
-                return;
-            }
+        if let Some(ref pending_merge_state) = self.fsm.peer.pending_merge_state
+            && pending_merge_state.get_commit() == catch_up_logs.merge.get_commit()
+        {
+            assert_eq!(
+                pending_merge_state.get_target().get_id(),
+                catch_up_logs.target_region_id
+            );
+            // Indicate that `on_ready_prepare_merge` has already executed.
+            // Mark pending_remove because its apply fsm will be destroyed.
+            self.fsm.peer.pending_remove = Some(PendingRemoveReason::Merge);
+            // Just for saving memory.
+            catch_up_logs.merge.clear_entries();
+            // Send CatchUpLogs back to destroy source apply fsm,
+            // then it will send `Noop` to trigger target apply fsm.
+            self.ctx
+                .apply_router
+                .schedule_task(region_id, ApplyTask::LogsUpToDate(catch_up_logs));
+            return;
         }
 
         // Directly append these logs to raft log and then commit them.
@@ -5597,11 +5591,10 @@ where
         // which are added before applying snapshot
         if let Some(wait_destroy_regions) = meta.atomic_snap_regions.remove(&self.fsm.region_id()) {
             for (source_region_id, _) in wait_destroy_regions {
-                assert_eq!(
+                assert!(
                     meta.destroyed_region_for_snap
                         .remove(&source_region_id)
-                        .is_some(),
-                    true
+                        .is_some()
                 );
             }
         }
@@ -6274,14 +6267,14 @@ where
             if replicated_idx > p.matched {
                 replicated_idx = p.matched;
             }
-            if let Some(last_heartbeat) = self.fsm.peer.peer_heartbeats.get(peer_id) {
-                if *last_heartbeat > cache_alive_limit {
-                    if alive_cache_idx > p.matched && p.matched >= truncated_idx {
-                        alive_cache_idx = p.matched;
-                    } else if p.matched == 0 {
-                        // the new peer is still applying snapshot, do not compact cache now
-                        alive_cache_idx = 0;
-                    }
+            if let Some(last_heartbeat) = self.fsm.peer.peer_heartbeats.get(peer_id)
+                && *last_heartbeat > cache_alive_limit
+            {
+                if alive_cache_idx > p.matched && p.matched >= truncated_idx {
+                    alive_cache_idx = p.matched;
+                } else if p.matched == 0 {
+                    // the new peer is still applying snapshot, do not compact cache now
+                    alive_cache_idx = 0;
                 }
             }
         }
@@ -7380,15 +7373,7 @@ where
 
     fn on_set_flashback_state(&mut self, region: metapb::Region) {
         // Update the region meta.
-        self.update_region((|| {
-            #[cfg(feature = "failpoints")]
-            fail_point!("keep_peer_fsm_flashback_state_false", |_| {
-                let mut region = region.clone();
-                region.is_in_flashback = false;
-                region
-            });
-            region
-        })());
+        self.update_region(region);
         // Let the leader lease to None to ensure that local reads are not executed.
         self.fsm.peer.leader_lease_mut().expire_remote_lease();
         let mut pessimistic_locks = self.fsm.peer.txn_ext.pessimistic_locks.write();
@@ -7552,30 +7537,30 @@ pub fn maybe_destroy_source(
     source_region_id: u64,
     region_epoch: RegionEpoch,
 ) -> (bool, bool) {
-    if let Some(merge_targets) = meta.pending_merge_targets.get(&target_region_id) {
-        if let Some(target_region) = merge_targets.get(&source_region_id) {
-            info!(
-                "[region {}] checking source {} epoch: {:?}, merge target epoch: {:?}",
-                target_region_id,
-                source_region_id,
-                region_epoch,
-                target_region.get_region_epoch(),
+    if let Some(merge_targets) = meta.pending_merge_targets.get(&target_region_id)
+        && let Some(target_region) = merge_targets.get(&source_region_id)
+    {
+        info!(
+            "[region {}] checking source {} epoch: {:?}, merge target epoch: {:?}",
+            target_region_id,
+            source_region_id,
+            region_epoch,
+            target_region.get_region_epoch(),
+        );
+        // The target peer will move on, namely, it will apply a snapshot generated
+        // after merge, so destroy source peer.
+        if region_epoch.get_version() > target_region.get_region_epoch().get_version() {
+            return (
+                true,
+                target_peer_id
+                    == find_peer(target_region, meta.store_id.unwrap())
+                        .unwrap()
+                        .get_id(),
             );
-            // The target peer will move on, namely, it will apply a snapshot generated
-            // after merge, so destroy source peer.
-            if region_epoch.get_version() > target_region.get_region_epoch().get_version() {
-                return (
-                    true,
-                    target_peer_id
-                        == find_peer(target_region, meta.store_id.unwrap())
-                            .unwrap()
-                            .get_id(),
-                );
-            }
-            // Wait till the target peer has caught up logs and source peer will be
-            // destroyed at that time.
-            return (false, false);
         }
+        // Wait till the target peer has caught up logs and source peer will be
+        // destroyed at that time.
+        return (false, false);
     }
     (false, false)
 }

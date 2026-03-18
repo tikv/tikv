@@ -221,6 +221,7 @@ fn string_to_option(string: String) -> Option<String> {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "kebab-case", tag = "type")]
 #[derive(Default)]
+#[allow(clippy::large_enum_variant)]
 pub enum MasterKeyConfig {
     // Store encryption metadata as plaintext. Data still get encrypted. Not allowed to use if
     // encryption is enabled. (i.e. when encryption_config.method != Plaintext).

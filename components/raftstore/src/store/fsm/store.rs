@@ -1126,10 +1126,11 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         delegate.handle_msgs(&mut self.peer_msg_buf);
         // No readiness is generated and using sync write, skipping calling ready and
         // release early.
-        if !delegate.collect_ready() && self.poll_ctx.sync_write_worker.is_some() {
-            if let HandleResult::StopAt { skip_end, .. } = &mut handle_result {
-                *skip_end = true;
-            }
+        if !delegate.collect_ready()
+            && self.poll_ctx.sync_write_worker.is_some()
+            && let HandleResult::StopAt { skip_end, .. } = &mut handle_result
+        {
+            *skip_end = true;
         }
 
         handle_result
@@ -2227,22 +2228,22 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         // In this case, the local epoch is stale and the local peer can be found from
         // region. We can compare the local peer id with to_peer_id to verify whether it
         // is correct to create a new peer.
-        if let Some(local_peer_id) = find_peer(region, self.ctx.store_id()).map(|r| r.get_id()) {
-            if to_peer_id <= local_peer_id {
-                self.ctx
-                    .raft_metrics
-                    .message_dropped
-                    .region_tombstone_peer
-                    .inc();
-                info!(
-                    "tombstone peer receives a stale message, local_peer_id >= to_peer_id in msg";
-                    "region_id" => region_id,
-                    "local_peer_id" => local_peer_id,
-                    "to_peer_id" => to_peer_id,
-                    "msg_type" => %util::MsgType(msg),
-                );
-                return Ok(CheckMsgStatus::DropMsg);
-            }
+        if let Some(local_peer_id) = find_peer(region, self.ctx.store_id()).map(|r| r.get_id())
+            && to_peer_id <= local_peer_id
+        {
+            self.ctx
+                .raft_metrics
+                .message_dropped
+                .region_tombstone_peer
+                .inc();
+            info!(
+                "tombstone peer receives a stale message, local_peer_id >= to_peer_id in msg";
+                "region_id" => region_id,
+                "local_peer_id" => local_peer_id,
+                "to_peer_id" => to_peer_id,
+                "msg_type" => %util::MsgType(msg),
+            );
+            return Ok(CheckMsgStatus::DropMsg);
         }
         Ok(CheckMsgStatus::NewPeer)
     }
@@ -2415,10 +2416,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         // `pending_create_peers`.
         if res.as_ref().map_or(true, |b| !*b) && is_local_first {
             let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
-            if let Some(status) = pending_create_peers.get(&region_id) {
-                if *status == (msg.get_to_peer().get_id(), false) {
-                    pending_create_peers.remove(&region_id);
-                }
+            if let Some(status) = pending_create_peers.get(&region_id)
+                && *status == (msg.get_to_peer().get_id(), false)
+            {
+                pending_create_peers.remove(&region_id);
             }
         }
         res
@@ -2787,13 +2788,13 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         // almost idle (no more pending regions on applying logs), it can be
         // regarded as the candidate for balancing leaders.
         if during_starting_stage {
-            let completed_target_count = (|| {
+            let completed_target_count = {
                 fail_point!("on_mock_store_completed_target_count", |_| 0);
                 std::cmp::max(
                     1,
                     STORE_CHECK_COMPLETE_APPLY_REGIONS_PERCENT * region_count / 100,
                 )
-            })();
+            };
             // If the number of regions on completing applying logs does not occupy the
             // majority of regions, the store is regarded as busy.
             if completed_apply_peers_count < completed_target_count {
@@ -3135,15 +3136,15 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
                     // in the old protocol, we can't easily know if the SST will be used in the
                     // committed raft log, so we only delete the SST
                     // files that has not be modified for 1 week.
-                    if let Ok(duration) = now.duration_since(sst.2) {
-                        if duration > VERSION_1_SST_CLEANUP_DURATION {
-                            warn!(
-                                "found 1-week old SST file of version 1, will delete it";
-                                "sst_meta" => ?sst.0,
-                                "last_modified" => ?sst.2
-                            );
-                            delete_ssts.push(sst.0);
-                        }
+                    if let Ok(duration) = now.duration_since(sst.2)
+                        && duration > VERSION_1_SST_CLEANUP_DURATION
+                    {
+                        warn!(
+                            "found 1-week old SST file of version 1, will delete it";
+                            "sst_meta" => ?sst.0,
+                            "last_modified" => ?sst.2
+                        );
+                        delete_ssts.push(sst.0);
                     }
                 }
             }

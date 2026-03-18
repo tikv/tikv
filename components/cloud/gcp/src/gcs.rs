@@ -435,7 +435,7 @@ impl GcsPrefixIter<'_> {
             .cli
             .make_request(req.map(|_e| Body::empty()), tame_gcs::Scopes::ReadOnly)
             .await
-            .map_err(|err| io::Error::other(err))?;
+            .map_err(io::Error::other)?;
         let resp = utils::read_from_http_body::<ListResponse>(res).await?;
         metrics::CLOUD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["gcp", "list"])

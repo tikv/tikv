@@ -527,24 +527,24 @@ impl Snapshot {
         }
 
         // load snapshot meta if meta_file exists
-        if file_exists(&s.meta_file.path) {
-            if let Err(e) = s.load_snapshot_meta() {
-                if check_policy == CheckPolicy::ErrNotAllowed {
-                    return Err(e);
-                }
+        if file_exists(&s.meta_file.path)
+            && let Err(e) = s.load_snapshot_meta()
+        {
+            if check_policy == CheckPolicy::ErrNotAllowed {
+                return Err(e);
+            }
+            warn!(
+                "failed to load existent snapshot meta when try to build snapshot";
+                "snapshot" => %s.path(),
+                "err" => ?e,
+                "error_code" => %e.error_code(),
+            );
+            if !retry_delete_snapshot(mgr, key, &s) {
                 warn!(
-                    "failed to load existent snapshot meta when try to build snapshot";
+                    "failed to delete snapshot because it's already registered elsewhere";
                     "snapshot" => %s.path(),
-                    "err" => ?e,
-                    "error_code" => %e.error_code(),
                 );
-                if !retry_delete_snapshot(mgr, key, &s) {
-                    warn!(
-                        "failed to delete snapshot because it's already registered elsewhere";
-                        "snapshot" => %s.path(),
-                    );
-                    return Err(e);
-                }
+                return Err(e);
             }
         }
         Ok(s)
@@ -1024,10 +1024,10 @@ impl Snapshot {
                 }
             }
         }
-        if let Some(ref meta) = self.meta_file.meta {
-            if !meta.tablet_snap_path.is_empty() {
-                delete_dir_if_exist(&meta.tablet_snap_path).unwrap();
-            }
+        if let Some(ref meta) = self.meta_file.meta
+            && !meta.tablet_snap_path.is_empty()
+        {
+            delete_dir_if_exist(&meta.tablet_snap_path).unwrap();
         }
         delete_file_if_exist(&self.meta_file.path).unwrap();
         if self.hold_tmp_files {
@@ -1515,12 +1515,11 @@ impl SnapManager {
         }
         for f in file_system::read_dir(path)? {
             let p = f?;
-            if p.file_type()?.is_file() {
-                if let Some(s) = p.file_name().to_str() {
-                    if s.ends_with(TMP_FILE_SUFFIX) {
-                        file_system::remove_file(p.path())?;
-                    }
-                }
+            if p.file_type()?.is_file()
+                && let Some(s) = p.file_name().to_str()
+                && s.ends_with(TMP_FILE_SUFFIX)
+            {
+                file_system::remove_file(p.path())?;
             }
         }
 
@@ -1985,15 +1984,15 @@ impl SnapManagerCore {
     fn delete_snapshot(&self, key: &SnapKey, snap: &Snapshot, check_entry: bool) -> bool {
         let registry = self.registry.rl();
         if check_entry {
-            if let Some(e) = registry.get(key) {
-                if e.len() > 1 {
-                    info!(
-                        "skip to delete snapshot since it's registered more than once";
-                        "snapshot" => %snap.path(),
-                        "registered_entries" => ?e,
-                    );
-                    return false;
-                }
+            if let Some(e) = registry.get(key)
+                && e.len() > 1
+            {
+                info!(
+                    "skip to delete snapshot since it's registered more than once";
+                    "snapshot" => %snap.path(),
+                    "registered_entries" => ?e,
+                );
+                return false;
             }
         } else if registry.contains_key(key) {
             info!(
@@ -2422,15 +2421,15 @@ impl TabletSnapManager {
     pub fn delete_snapshot(&self, key: &TabletSnapKey) -> bool {
         let path = self.tablet_gen_path(key);
         debug!("delete tablet snapshot file";"path" => %path.display());
-        if path.exists() {
-            if let Err(e) = encryption::trash_dir_all(&path, self.key_manager.as_deref()) {
-                error!(
-                    "delete snapshot failed";
-                    "path" => %path.display(),
-                    "err" => ?e,
-                );
-                return false;
-            }
+        if path.exists()
+            && let Err(e) = encryption::trash_dir_all(&path, self.key_manager.as_deref())
+        {
+            error!(
+                "delete snapshot failed";
+                "path" => %path.display(),
+                "err" => ?e,
+            );
+            return false;
         }
         true
     }
@@ -2788,7 +2787,7 @@ pub mod tests {
         };
         let key_manager = data_key_manager_from_config(&enc_cfg, &dict_path)
             .unwrap()
-            .map(|x| Arc::new(x));
+            .map(Arc::new);
         (dir, key_manager.unwrap())
     }
 
@@ -3017,39 +3016,38 @@ pub mod tests {
         let mut res = Vec::new();
         let read_dir = file_system::read_dir(dir_path).unwrap();
         for p in read_dir {
-            if let Ok(e) = &p {
-                if e.file_name()
+            if let Ok(e) = &p
+                && e.file_name()
                     .into_string()
                     .unwrap()
                     .ends_with(META_FILE_SUFFIX)
+            {
+                let mut snapshot_meta = SnapshotMeta::default();
+                let mut buf = Vec::with_capacity(TEST_META_FILE_BUFFER_SIZE);
                 {
-                    let mut snapshot_meta = SnapshotMeta::default();
-                    let mut buf = Vec::with_capacity(TEST_META_FILE_BUFFER_SIZE);
-                    {
-                        let mut f = OpenOptions::new().read(true).open(e.path()).unwrap();
-                        f.read_to_end(&mut buf).unwrap();
-                    }
-
-                    snapshot_meta.merge_from_bytes(&buf).unwrap();
-
-                    for cf in snapshot_meta.mut_cf_files().iter_mut() {
-                        let corrupted_checksum = cf.get_checksum() + 100;
-                        cf.set_checksum(corrupted_checksum);
-                    }
-
-                    let buf = snapshot_meta.write_to_bytes().unwrap();
-                    {
-                        let mut f = OpenOptions::new()
-                            .write(true)
-                            .truncate(true)
-                            .open(e.path())
-                            .unwrap();
-                        f.write_all(&buf[..]).unwrap();
-                        f.flush().unwrap();
-                    }
-
-                    res.push(snapshot_meta);
+                    let mut f = OpenOptions::new().read(true).open(e.path()).unwrap();
+                    f.read_to_end(&mut buf).unwrap();
                 }
+
+                snapshot_meta.merge_from_bytes(&buf).unwrap();
+
+                for cf in snapshot_meta.mut_cf_files().iter_mut() {
+                    let corrupted_checksum = cf.get_checksum() + 100;
+                    cf.set_checksum(corrupted_checksum);
+                }
+
+                let buf = snapshot_meta.write_to_bytes().unwrap();
+                {
+                    let mut f = OpenOptions::new()
+                        .write(true)
+                        .truncate(true)
+                        .open(e.path())
+                        .unwrap();
+                    f.write_all(&buf[..]).unwrap();
+                    f.flush().unwrap();
+                }
+
+                res.push(snapshot_meta);
             }
         }
         res
@@ -3062,28 +3060,27 @@ pub mod tests {
         let dir_path = dir.into();
         let read_dir = file_system::read_dir(dir_path).unwrap();
         for p in read_dir {
-            if let Ok(e) = &p {
-                if e.file_name()
+            if let Ok(e) = &p
+                && e.file_name()
                     .into_string()
                     .unwrap()
                     .ends_with(META_FILE_SUFFIX)
-                {
-                    let mut f = OpenOptions::new()
-                        .read(true)
-                        .write(true)
-                        .open(e.path())
-                        .unwrap();
-                    // Make the last byte of the meta file corrupted
-                    // by turning over all bits of it
-                    let pos = SeekFrom::End(-(BYTE_SIZE as i64));
-                    f.seek(pos).unwrap();
-                    let mut buf = [0; BYTE_SIZE];
-                    f.read_exact(&mut buf[..]).unwrap();
-                    buf[0] ^= u8::MAX;
-                    f.seek(pos).unwrap();
-                    f.write_all(&buf[..]).unwrap();
-                    total += 1;
-                }
+            {
+                let mut f = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(e.path())
+                    .unwrap();
+                // Make the last byte of the meta file corrupted
+                // by turning over all bits of it
+                let pos = SeekFrom::End(-(BYTE_SIZE as i64));
+                f.seek(pos).unwrap();
+                let mut buf = [0; BYTE_SIZE];
+                f.read_exact(&mut buf[..]).unwrap();
+                buf[0] ^= u8::MAX;
+                f.seek(pos).unwrap();
+                f.write_all(&buf[..]).unwrap();
+                total += 1;
             }
         }
         total

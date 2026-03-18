@@ -153,15 +153,15 @@ impl PendingDeleteRanges {
         let mut ranges = Vec::new();
         // find the first range that may overlap with [start_key, end_key)
         let sub_range = self.ranges.range((Unbounded, Excluded(start_key.to_vec())));
-        if let Some((s_key, peer_info)) = sub_range.last() {
-            if peer_info.end_key > start_key.to_vec() {
-                ranges.push((
-                    peer_info.region_id,
-                    s_key.clone(),
-                    peer_info.end_key.clone(),
-                    peer_info.stale_sequence,
-                ));
-            }
+        if let Some((s_key, peer_info)) = sub_range.last()
+            && peer_info.end_key > start_key.to_vec()
+        {
+            ranges.push((
+                peer_info.region_id,
+                s_key.clone(),
+                peer_info.end_key.clone(),
+                peer_info.stale_sequence,
+            ));
         }
 
         // find the rest ranges that overlap with [start_key, end_key)

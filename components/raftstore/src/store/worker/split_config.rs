@@ -56,12 +56,11 @@ lazy_static! {
 }
 
 pub fn get_sample_num() -> usize {
-    let sample_num = if let Some(ref config) = *SPLIT_CONFIG.lock() {
+    if let Some(ref config) = *SPLIT_CONFIG.lock() {
         config.value().sample_num
     } else {
         DEFAULT_SAMPLE_NUM
-    };
-    sample_num
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]

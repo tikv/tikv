@@ -9,6 +9,15 @@
 #![feature(str_internals)]
 #![feature(core_intrinsics)]
 #![feature(bool_to_result)]
+#![allow(
+    clippy::enum_variant_names,
+    clippy::module_inception,
+    clippy::needless_range_loop,
+    clippy::non_canonical_partial_ord_impl,
+    clippy::redundant_closure,
+    clippy::should_implement_trait,
+    clippy::wrong_self_convention
+)]
 
 #[macro_use]
 extern crate num_derive;

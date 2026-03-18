@@ -18,6 +18,8 @@ use tokio::runtime::Builder;
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(32);
 const MAX_RETRY_TIMES: usize = 14;
 
+type FailureHook<E> = dyn FnMut(&E) + Send + Sync + 'static;
+
 /// Wrapper of an `AsyncRead` instance, exposed as a `Sync` `Stream` of `Bytes`.
 pub struct AsyncReadAsSyncStreamOfBytes<R> {
     // we need this Mutex to ensure the type is Sync (provided R is Send).
@@ -106,7 +108,7 @@ where
 
 /// The extra configuration for retry.
 pub struct RetryExt<E> {
-    pub on_failure: Option<Box<dyn FnMut(&E) + Send + Sync + 'static>>,
+    pub on_failure: Option<Box<FailureHook<E>>>,
     pub max_retry_times: usize,
     pub max_retry_delay: Duration,
 }
@@ -237,12 +239,12 @@ where
     F: Future<Output = Result<T, E>>,
     E: RetryError,
 {
-    ext.max_retry_times = (|| {
+    ext.max_retry_times = {
         fail::fail_point!("retry_count", |t| t
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(ext.max_retry_times));
         ext.max_retry_times
-    })();
+    };
 
     retry_expr!(action(), ext).await
 }

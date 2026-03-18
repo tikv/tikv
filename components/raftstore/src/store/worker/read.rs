@@ -516,10 +516,10 @@ impl ReadDelegate {
                 self.leader_lease = leader_lease;
             }
             Progress::RegionBuckets(bucket_meta) => {
-                if let Some(meta) = &self.bucket_meta {
-                    if meta.version >= bucket_meta.version {
-                        return;
-                    }
+                if let Some(meta) = &self.bucket_meta
+                    && meta.version >= bucket_meta.version
+                {
+                    return;
                 }
                 self.bucket_meta = Some(bucket_meta);
             }
@@ -1084,14 +1084,12 @@ where
         snap_updated: &mut bool,
         last_valid_ts: Timespec,
     ) -> Option<ReadResponse<E::Snapshot>> {
-        if let Ok(read_ts) = decode_u64(&mut req.get_header().get_flag_data()) {
-            if read_ts != 0 {
-                if let Ok(read_resp) =
-                    self.try_local_stale_read(ctx, req, delegate, snap_updated, last_valid_ts)
-                {
-                    return Some(read_resp);
-                }
-            }
+        if let Ok(read_ts) = decode_u64(&mut req.get_header().get_flag_data())
+            && read_ts != 0
+            && let Ok(read_resp) =
+                self.try_local_stale_read(ctx, req, delegate, snap_updated, last_valid_ts)
+        {
+            return Some(read_resp);
         }
         None
     }
@@ -2346,11 +2344,11 @@ mod tests {
         let (notify_tx, notify_rx) = channel();
         let (wait_spawn_tx, wait_spawn_rx) = channel();
         let runtime = tokio::runtime::Runtime::new().unwrap();
-        let _ = runtime.spawn(async move {
+        drop(runtime.spawn(async move {
             wait_spawn_tx.send(()).unwrap();
             notify.notified().await;
             notify_tx.send(()).unwrap();
-        });
+        }));
         wait_spawn_rx.recv().unwrap();
         thread::sleep(std::time::Duration::from_millis(500)); // Prevent lost notify.
         must_not_redirect(&mut reader, &rx, task);

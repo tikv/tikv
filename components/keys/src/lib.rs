@@ -291,6 +291,7 @@ pub fn next_key(key: &[u8]) -> Vec<u8> {
 }
 
 #[derive(Debug, Error)]
+#[allow(clippy::enum_variant_names)]
 pub enum Error {
     #[error("{} is not a valid raft log key", log_wrappers::Value(.0))]
     InvalidRaftLogKey(Vec<u8>),

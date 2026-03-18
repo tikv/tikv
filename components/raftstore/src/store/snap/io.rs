@@ -164,7 +164,7 @@ where
                              key_mgr: Option<Arc<DataKeyManager>>|
      -> Result<u64, Error> {
         let info = sst_writer.finish()?;
-        (|| {
+        {
             fail_point!("inject_sst_file_corruption", |_| {
                 static CALLED: std::sync::atomic::AtomicBool =
                     std::sync::atomic::AtomicBool::new(false);
@@ -183,7 +183,7 @@ where
                 let mut f = OpenOptions::new().write(true).open(&path).unwrap();
                 f.write_all(b"x").unwrap();
             });
-        })();
+        };
 
         let sst_reader = E::SstReader::open(&path, key_mgr)?;
         if let Err(e) = sst_reader.verify_checksum() {

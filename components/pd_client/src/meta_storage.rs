@@ -124,6 +124,7 @@ impl Watch {
     }
 
     /// Enhance the request to make it watch from a specified revision.
+    #[allow(clippy::wrong_self_convention)]
     pub fn from_rev(mut self, rev: i64) -> Self {
         self.inner.set_start_revision(rev);
         self

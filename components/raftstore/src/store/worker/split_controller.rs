@@ -464,27 +464,27 @@ impl ReadStats {
         region_info.cop_detail.add(write_cf_cop_detail);
         // the bucket of the follower only have the version info and not needs to be
         // recorded the hot bucket.
-        if let Some(buckets) = buckets {
-            if !buckets.sizes.is_empty() {
-                let bucket_stat = self
-                    .region_buckets
-                    .entry(region_id)
-                    .and_modify(|current| {
-                        if current.meta < *buckets {
-                            let mut new = BucketStat::from_meta(buckets.clone());
-                            std::mem::swap(current, &mut new);
-                            current.merge(&new);
-                        }
-                    })
-                    .or_insert_with(|| BucketStat::from_meta(buckets.clone()));
-                let mut delta = metapb::BucketStats::default();
-                delta.set_read_bytes(vec![(write.read_bytes + data.read_bytes) as u64]);
-                delta.set_read_keys(vec![(write.read_keys + data.read_keys) as u64]);
-                bucket_stat.add_flows(
-                    &[start.unwrap_or_default(), end.unwrap_or_default()],
-                    &delta,
-                );
-            }
+        if let Some(buckets) = buckets
+            && !buckets.sizes.is_empty()
+        {
+            let bucket_stat = self
+                .region_buckets
+                .entry(region_id)
+                .and_modify(|current| {
+                    if current.meta < *buckets {
+                        let mut new = BucketStat::from_meta(buckets.clone());
+                        std::mem::swap(current, &mut new);
+                        current.merge(&new);
+                    }
+                })
+                .or_insert_with(|| BucketStat::from_meta(buckets.clone()));
+            let mut delta = metapb::BucketStats::default();
+            delta.set_read_bytes(vec![(write.read_bytes + data.read_bytes) as u64]);
+            delta.set_read_keys(vec![(write.read_keys + data.read_keys) as u64]);
+            bucket_stat.add_flows(
+                &[start.unwrap_or_default(), end.unwrap_or_default()],
+                &delta,
+            );
         }
     }
 
@@ -956,10 +956,10 @@ impl AutoSplitController {
             self.cfg = incoming.clone();
         }
         // Adjust with the size change of the Unified Read Pool.
-        if let Some(rx) = &self.unified_read_pool_scale_receiver {
-            if let Ok(max_thread_count) = rx.try_recv() {
-                self.max_unified_read_pool_thread_count = max_thread_count;
-            }
+        if let Some(rx) = &self.unified_read_pool_scale_receiver
+            && let Ok(max_thread_count) = rx.try_recv()
+        {
+            self.max_unified_read_pool_thread_count = max_thread_count;
         }
         cfg_change
     }
@@ -2083,10 +2083,10 @@ mod tests {
         b.iter(|| {
             if let Ok(start_key) = start_key.to_owned().into_raw() {
                 let mut key = vec![];
-                if let Some(end_key) = &end_key {
-                    if let Ok(end_key) = end_key.to_owned().into_raw() {
-                        key = end_key;
-                    }
+                if let Some(end_key) = &end_key
+                    && let Ok(end_key) = end_key.to_owned().into_raw()
+                {
+                    key = end_key;
                 }
                 qps_stats.add_query_num(
                     1,

@@ -1347,16 +1347,16 @@ where
             }
         }
 
-        if let Some(snap_ctx) = self.apply_snap_ctx.as_mut() {
-            if !snap_ctx.scheduled {
-                info!(
-                    "stale peer is persisting snapshot, will destroy next time";
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
-                );
-                snap_ctx.destroy_peer_after_apply = true;
-                return None;
-            }
+        if let Some(snap_ctx) = self.apply_snap_ctx.as_mut()
+            && !snap_ctx.scheduled
+        {
+            info!(
+                "stale peer is persisting snapshot, will destroy next time";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
+            snap_ctx.destroy_peer_after_apply = true;
+            return None;
         }
 
         if self.get_store().is_applying_snapshot() && !self.mut_store().cancel_applying_snap() {
@@ -2061,15 +2061,15 @@ where
         self.report_commit_log_duration(pre_commit_index, &mut ctx.raft_metrics);
 
         let mut for_balance = false;
-        if !has_snap_task && self.get_store().has_gen_snap_task() {
-            if let Some(progress) = self.raft_group.status().progress {
-                if let Some(pr) = progress.get(from_id) {
-                    // When a peer is uninitialized (e.g. created by load balance),
-                    // the last index of the peer is 0 which makes the matched index to be 0.
-                    if pr.matched == 0 {
-                        for_balance = true;
-                    }
-                }
+        if !has_snap_task
+            && self.get_store().has_gen_snap_task()
+            && let Some(progress) = self.raft_group.status().progress
+            && let Some(pr) = progress.get(from_id)
+        {
+            // When a peer is uninitialized (e.g. created by load balance),
+            // the last index of the peer is 0 which makes the matched index to be 0.
+            if pr.matched == 0 {
+                for_balance = true;
             }
         }
         if for_balance {
@@ -2084,18 +2084,17 @@ where
         }
         let now = Instant::now();
         for index in pre_persist_index + 1..=self.raft_group.raft.raft_log.persisted {
-            if let Some((term, trackers)) = self.proposals.find_trackers(index) {
-                if self
+            if let Some((term, trackers)) = self.proposals.find_trackers(index)
+                && self
                     .get_store()
                     .term(index)
                     .map(|t| t == term)
                     .unwrap_or(false)
-                {
-                    for tracker in trackers {
-                        tracker.observe(now, &metrics.wf_persist_log, |t| {
-                            &mut t.metrics.wf_persist_log_nanos
-                        });
-                    }
+            {
+                for tracker in trackers {
+                    tracker.observe(now, &metrics.wf_persist_log, |t| {
+                        &mut t.metrics.wf_persist_log_nanos
+                    });
                 }
             }
         }
@@ -2107,36 +2106,35 @@ where
         }
         let now = Instant::now();
         for index in pre_commit_index + 1..=self.raft_group.raft.raft_log.committed {
-            if let Some((term, trackers)) = self.proposals.find_trackers(index) {
-                if self
+            if let Some((term, trackers)) = self.proposals.find_trackers(index)
+                && self
                     .get_store()
                     .term(index)
                     .map(|t| t == term)
                     .unwrap_or(false)
-                {
-                    let commit_persisted = index <= self.raft_group.raft.raft_log.persisted;
-                    let hist = if commit_persisted {
-                        &metrics.wf_commit_log
-                    } else {
-                        &metrics.wf_commit_not_persist_log
-                    };
-                    for tracker in trackers {
-                        // Collect the metrics related to commit_log
-                        // durations.
-                        let duration = tracker.observe(now, hist, |t| {
-                            t.metrics.commit_not_persisted = !commit_persisted;
-                            &mut t.metrics.wf_commit_log_nanos
-                        });
-                        // Normally, commit_log_duration both contains the duraiton on persisting
-                        // raft logs and transferring raft logs to other nodes. Therefore, it can
-                        // reflects slowness of the node on I/Os, whatever the reason is.
-                        // Here, health_stats uses the recorded commit_log_duration as the
-                        // latency to perspect whether there exists jitters on network. It's not
-                        // accurate, but it's proved that it's a good approximation.
-                        metrics
-                            .health_stats
-                            .observe(Duration::from_nanos(duration), IoType::Network);
-                    }
+            {
+                let commit_persisted = index <= self.raft_group.raft.raft_log.persisted;
+                let hist = if commit_persisted {
+                    &metrics.wf_commit_log
+                } else {
+                    &metrics.wf_commit_not_persist_log
+                };
+                for tracker in trackers {
+                    // Collect the metrics related to commit_log
+                    // durations.
+                    let duration = tracker.observe(now, hist, |t| {
+                        t.metrics.commit_not_persisted = !commit_persisted;
+                        &mut t.metrics.wf_commit_log_nanos
+                    });
+                    // Normally, commit_log_duration both contains the duraiton on persisting
+                    // raft logs and transferring raft logs to other nodes. Therefore, it can
+                    // reflects slowness of the node on I/Os, whatever the reason is.
+                    // Here, health_stats uses the recorded commit_log_duration as the
+                    // latency to perspect whether there exists jitters on network. It's not
+                    // accurate, but it's proved that it's a good approximation.
+                    metrics
+                        .health_stats
+                        .observe(Duration::from_nanos(duration), IoType::Network);
                 }
             }
         }
@@ -2307,19 +2305,19 @@ where
                 continue;
             }
             let truncated_idx = self.raft_group.store().truncated_index();
-            if let Some(progress) = self.raft_group.raft.prs().get(peer_id) {
-                if progress.matched >= truncated_idx {
-                    let (_, pending_after) = self.peers_start_pending_time.swap_remove(i);
-                    let elapsed = duration_to_sec(pending_after.saturating_elapsed());
-                    RAFT_PEER_PENDING_DURATION.observe(elapsed);
-                    debug!(
-                        "peer has caught up logs";
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer.get_id(),
-                        "takes" => elapsed,
-                    );
-                    return true;
-                }
+            if let Some(progress) = self.raft_group.raft.prs().get(peer_id)
+                && progress.matched >= truncated_idx
+            {
+                let (_, pending_after) = self.peers_start_pending_time.swap_remove(i);
+                let elapsed = duration_to_sec(pending_after.saturating_elapsed());
+                RAFT_PEER_PENDING_DURATION.observe(elapsed);
+                debug!(
+                    "peer has caught up logs";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "takes" => elapsed,
+                );
+                return true;
             }
         }
         if self.down_peer_ids.contains(&peer_id) {
@@ -2503,10 +2501,10 @@ where
                 },
             );
             self.cmd_epoch_checker.maybe_update_term(self.term());
-        } else if let Some(hs) = ready.hs() {
-            if hs.get_term() != self.get_store().hard_state().get_term() {
-                self.on_leader_changed(self.leader_id(), hs.get_term());
-            }
+        } else if let Some(hs) = ready.hs()
+            && hs.get_term() != self.get_store().hard_state().get_term()
+        {
+            self.on_leader_changed(self.leader_id(), hs.get_term());
         }
         self.transfer_leader_state.leader_transferee =
             self.raft_group.raft.lead_transferee.unwrap_or_default();
@@ -2555,20 +2553,21 @@ where
             let last_prepare_merge_idx = self
                 .cmd_epoch_checker
                 .last_cmd_index(AdminCmdType::PrepareMerge);
-            if let Some(idx) = last_prepare_merge_idx {
-                if idx > pre_commit_index && idx <= commit_index {
-                    // We committed prepare merge, to prevent unsafe read index,
-                    // we must record its index.
-                    self.last_committed_prepare_merge_idx = idx;
-                    // After prepare_merge is committed and the leader broadcasts commit
-                    // index to followers, the leader can not know when the target region
-                    // merges majority of this region, also it can not know when the target
-                    // region writes new values.
-                    // To prevent unsafe local read, we suspect its leader lease.
-                    self.leader_lease.suspect(monotonic_raw_now());
-                    // Stop updating `safe_ts`
-                    self.read_progress.discard();
-                }
+            if let Some(idx) = last_prepare_merge_idx
+                && idx > pre_commit_index
+                && idx <= commit_index
+            {
+                // We committed prepare merge, to prevent unsafe read index,
+                // we must record its index.
+                self.last_committed_prepare_merge_idx = idx;
+                // After prepare_merge is committed and the leader broadcasts commit
+                // index to followers, the leader can not know when the target region
+                // merges majority of this region, also it can not know when the target
+                // region writes new values.
+                // To prevent unsafe local read, we suspect its leader lease.
+                self.leader_lease.suspect(monotonic_raw_now());
+                // Stop updating `safe_ts`
+                self.read_progress.discard();
             }
         }
     }
@@ -2701,13 +2700,13 @@ where
     /// - Wait for applying snapshot to complete(`check_snap_status`) Then it's
     ///   valid to handle the next ready.
     fn check_snap_status<T: Transport>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> bool {
-        if let Some(snap_ctx) = self.apply_snap_ctx.as_ref() {
-            if !snap_ctx.scheduled {
-                // There is a snapshot from ready but it is not scheduled because the ready has
-                // not been persisted yet. We should wait for the notification of persisting
-                // ready and do not get a new ready.
-                return false;
-            }
+        if let Some(snap_ctx) = self.apply_snap_ctx.as_ref()
+            && !snap_ctx.scheduled
+        {
+            // There is a snapshot from ready but it is not scheduled because the ready has
+            // not been persisted yet. We should wait for the notification of persisting
+            // ready and do not get a new ready.
+            return false;
         }
 
         match self.mut_store().check_applying_snap() {
@@ -3019,14 +3018,14 @@ where
         if ctx.raft_metrics.waterfall_metrics {
             let now = Instant::now();
             for entry in ready.entries() {
-                if let Some((term, times)) = self.proposals.find_trackers(entry.get_index()) {
-                    if entry.term == term {
-                        for tracker in times {
-                            trackers.push(*tracker);
-                            tracker.observe(now, &ctx.raft_metrics.wf_send_to_queue, |t| {
-                                &mut t.metrics.wf_send_to_queue_nanos
-                            });
-                        }
+                if let Some((term, times)) = self.proposals.find_trackers(entry.get_index())
+                    && entry.term == term
+                {
+                    for tracker in times {
+                        trackers.push(*tracker);
+                        tracker.observe(now, &ctx.raft_metrics.wf_send_to_queue, |t| {
+                            &mut t.metrics.wf_send_to_queue_nanos
+                        });
                     }
                 }
             }
@@ -4964,11 +4963,11 @@ where
                 low = self.last_compacted_idx
             };
             // Check if the entry cache is already warmed up.
-            if let Some(first_index) = self.get_store().entry_cache_first_index() {
-                if low >= first_index {
-                    fail_point!("entry_cache_already_warmed_up");
-                    should_ack_now = true;
-                }
+            if let Some(first_index) = self.get_store().entry_cache_first_index()
+                && low >= first_index
+            {
+                fail_point!("entry_cache_already_warmed_up");
+                should_ack_now = true;
             }
         }
 
@@ -5266,17 +5265,15 @@ where
         read_index: Option<u64>,
     ) -> ReadResponse<EK::Snapshot> {
         let region = self.region().clone();
-        if check_epoch {
-            if let Err(e) = check_req_region_epoch(&req, &region, true) {
-                debug!("epoch not match"; "region_id" => region.get_id(), "err" => ?e);
-                let mut response = cmd_resp::new_error(e);
-                cmd_resp::bind_term(&mut response, self.term());
-                return ReadResponse {
-                    response,
-                    snapshot: None,
-                    txn_extra_op: TxnExtraOp::Noop,
-                };
-            }
+        if check_epoch && let Err(e) = check_req_region_epoch(&req, &region, true) {
+            debug!("epoch not match"; "region_id" => region.get_id(), "err" => ?e);
+            let mut response = cmd_resp::new_error(e);
+            cmd_resp::bind_term(&mut response, self.term());
+            return ReadResponse {
+                response,
+                snapshot: None,
+                txn_extra_op: TxnExtraOp::Noop,
+            };
         }
         let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
         if flags.contains(WriteBatchFlags::STALE_READ) {
@@ -5355,10 +5352,10 @@ where
         if !self.is_leader() {
             return;
         }
-        if let Some(ref state) = self.pending_merge_state {
-            if state.get_commit() == extra_msg.get_index() {
-                self.add_want_rollback_merge_peer(peer_id);
-            }
+        if let Some(ref state) = self.pending_merge_state
+            && state.get_commit() == extra_msg.get_index()
+        {
+            self.add_want_rollback_merge_peer(peer_id);
         }
     }
 
@@ -5597,19 +5594,18 @@ where
     }
 
     pub fn maybe_gen_approximate_buckets<T>(&self, ctx: &PollContext<EK, ER, T>) {
-        if ctx.coprocessor_host.cfg.enable_region_bucket() && !self.region().get_peers().is_empty()
-        {
-            if let Err(e) = ctx
+        if ctx.coprocessor_host.cfg.enable_region_bucket()
+            && !self.region().get_peers().is_empty()
+            && let Err(e) = ctx
                 .split_check_scheduler
                 .schedule(SplitCheckTask::ApproximateBuckets(self.region().clone()))
-            {
-                error!(
-                    "failed to schedule check approximate buckets";
-                    "region_id" => self.region().get_id(),
-                    "peer_id" => self.peer_id(),
-                    "err" => %e,
-                );
-            }
+        {
+            error!(
+                "failed to schedule check approximate buckets";
+                "region_id" => self.region().get_id(),
+                "peer_id" => self.peer_id(),
+                "err" => %e,
+            );
         }
     }
 
@@ -5624,20 +5620,19 @@ where
     pub fn unsafe_recovery_maybe_finish_wait_apply(&mut self, force: bool) {
         if let Some(UnsafeRecoveryState::WaitApply { target_index, .. }) =
             &self.unsafe_recovery_state
+            && (self.raft_group.raft.raft_log.applied >= *target_index || force)
         {
-            if self.raft_group.raft.raft_log.applied >= *target_index || force {
-                if self.is_in_force_leader() {
-                    info!(
-                        "Unsafe recovery, finish wait apply";
-                        "region_id" => self.region().get_id(),
-                        "peer_id" => self.peer_id(),
-                        "target_index" => target_index,
-                        "applied" =>  self.raft_group.raft.raft_log.applied,
-                        "force" => force,
-                    );
-                }
-                self.unsafe_recovery_state = None;
+            if self.is_in_force_leader() {
+                info!(
+                    "Unsafe recovery, finish wait apply";
+                    "region_id" => self.region().get_id(),
+                    "peer_id" => self.peer_id(),
+                    "target_index" => target_index,
+                    "applied" =>  self.raft_group.raft.raft_log.applied,
+                    "force" => force,
+                );
             }
+            self.unsafe_recovery_state = None;
         }
     }
 
