@@ -15,7 +15,6 @@ use futures_util::{
     future::{FutureExt, LocalBoxFuture},
     stream::TryStreamExt,
 };
-use rand::Rng;
 use tikv_util::stream::error_stream;
 use tokio::fs::{self, File};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
@@ -35,22 +34,25 @@ pub struct LocalStorage {
 
 impl LocalStorage {
     /// Create a new local storage in the given path.
+    #[allow(clippy::redundant_closure_call)]
     pub fn new(base: &Path) -> io::Result<LocalStorage> {
         info!("create local storage"; "base" => base.display());
-        fail::fail_point!("create_local_storage_yield", |v| {
-            info!("inject create storage sleep time: {:?}ms", v);
-            let v = v.unwrap().parse::<u64>().unwrap();
-            // Using block_in_place to execute a sleep in the current runtime.
-            // This simulates a task yielding execution,
-            // and allowing other tasks to run on this thread,
-            // which helps test potential deadlock scenarios when multiple tasks
-            // compete for the same resources.
-            tokio::task::block_in_place(move || {
-                tokio::runtime::Handle::current().block_on(async move {
-                    tokio::time::sleep(std::time::Duration::from_millis(v)).await;
-                })
-            });
-        });
+        (|| {
+            fail::fail_point!("create_local_storage_yield", |v| {
+                info!("inject create storage sleep time: {:?}ms", v);
+                let v = v.unwrap().parse::<u64>().unwrap();
+                // Using block_in_place to execute a sleep in the current runtime.
+                // This simulates a task yielding execution,
+                // and allowing other tasks to run on this thread,
+                // which helps test potential deadlock scenarios when multiple tasks
+                // compete for the same resources.
+                tokio::task::block_in_place(move || {
+                    tokio::runtime::Handle::current().block_on(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(v)).await;
+                    })
+                });
+            })
+        })();
         let base_dir = Arc::new(File::from_std(StdFile::open(base)?));
         Ok(LocalStorage {
             base: base.to_owned(),
@@ -59,7 +61,7 @@ impl LocalStorage {
     }
 
     fn tmp_path(&self, path: &Path) -> PathBuf {
-        let uid: u64 = rand::thread_rng().random();
+        let uid: u64 = rand::random();
         let tmp_suffix = format!("{}{:016x}", LOCAL_STORAGE_TMP_FILE_SUFFIX, uid);
         // Save tmp files in base directory.
         self.base.join(path).with_extension(tmp_suffix)

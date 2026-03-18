@@ -18,7 +18,6 @@ use external_storage::make_local_backend;
 use futures::{channel::mpsc as future_mpsc, executor::block_on};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{brpb::*, kvrpcpb::*, tikvpb::TikvClient};
-use rand::Rng;
 use test_raftstore::*;
 use tidb_query_common::storage::{
     IntervalRange, Range,
@@ -445,7 +444,7 @@ pub fn name_to_cf(name: &str) -> CfName {
 }
 
 pub fn make_unique_dir(path: &Path) -> PathBuf {
-    let uid: u64 = rand::thread_rng().random();
+    let uid: u64 = rand::random();
     let tmp_suffix = format!("{:016x}", uid);
     let unique = path.join(tmp_suffix);
     fs::create_dir_all(&unique).unwrap();

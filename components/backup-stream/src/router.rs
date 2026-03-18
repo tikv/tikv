@@ -1991,7 +1991,6 @@ mod tests {
         encryptionpb::EncryptionMethod,
     };
     use online_config::{ConfigManager, OnlineConfig};
-    use rand::Rng;
     use tempfile::TempDir;
     use tikv_util::{
         codec::{
@@ -3077,7 +3076,7 @@ mod tests {
     async fn test_encryption_plaintext_data_key() -> Result<()> {
         // set up plaintext data key
         //
-        let data_key: [u8; 32] = rand::thread_rng().random();
+        let data_key: [u8; 32] = rand::random();
         let mut cipher = CipherInfo::new();
         cipher.set_cipher_key(data_key.to_vec());
         cipher.set_cipher_type(EncryptionMethod::Aes256Ctr);

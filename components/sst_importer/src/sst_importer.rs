@@ -2193,7 +2193,6 @@ mod tests {
     };
     use online_config::{ConfigManager, OnlineConfig};
     use openssl::hash::{Hasher, MessageDigest};
-    use rand::Rng;
     use tempfile::{Builder, TempDir};
     use test_sst_importer::*;
     use test_util::new_test_key_manager;
@@ -4358,7 +4357,7 @@ mod tests {
 
     #[test]
     fn test_download_kv_with_plaintext_data_key() {
-        let data_key: [u8; 32] = rand::thread_rng().random();
+        let data_key: [u8; 32] = rand::random();
         let mut cipher = CipherInfo::new();
         cipher.set_cipher_key(data_key.to_vec());
         cipher.set_cipher_type(EncryptionMethod::Aes256Ctr);
