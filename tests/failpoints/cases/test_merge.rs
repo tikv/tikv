@@ -3,14 +3,14 @@
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc::{channel, sync_channel, Sender},
+        mpsc::{Sender, channel, sync_channel},
         *,
     },
     thread,
     time::Duration,
 };
 
-use engine_traits::{Peekable, CF_DEFAULT, CF_RAFT};
+use engine_traits::{CF_DEFAULT, CF_RAFT, Peekable};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
@@ -24,8 +24,8 @@ use raftstore::{router::RaftStoreRouter, store::*};
 use raftstore_v2::router::{PeerMsg, PeerTick};
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use tikv::storage::{kv::SnapshotExt, Snapshot};
-use tikv_util::{config::*, future::block_on_timeout, time::Instant, HandyRwLock};
+use tikv::storage::{Snapshot, kv::SnapshotExt};
+use tikv_util::{HandyRwLock, config::*, future::block_on_timeout, time::Instant};
 use txn_types::{Key, LastChange, PessimisticLock};
 
 /// Test if merge is rollback as expected.

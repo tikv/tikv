@@ -58,8 +58,8 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{
-        atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -74,15 +74,15 @@ use tikv_util::{time::InstantExt, timer::GLOBAL_TIMER_HANDLE};
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
+    Error as StorageError, ErrorInner as StorageErrorInner,
     lock_manager::{
-        lock_wait_context::{LockWaitContextSharedState, PessimisticLockKeyCallback},
         KeyLockWaitInfo, LockDigest, LockManager, LockWaitToken, UpdateWaitForEvent,
+        lock_wait_context::{LockWaitContextSharedState, PessimisticLockKeyCallback},
     },
     metrics::*,
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     txn::{Error as TxnError, ErrorInner as TxnErrorInner},
     types::PessimisticLockParameters,
-    Error as StorageError, ErrorInner as StorageErrorInner,
 };
 
 /// Represents an `AcquirePessimisticLock` request that's waiting for a lock,
@@ -705,16 +705,16 @@ impl<L: LockManager> LockWaitQueues<L> {
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::mpsc::{channel, Receiver, RecvTimeoutError},
+        sync::mpsc::{Receiver, RecvTimeoutError, channel},
         time::Duration,
     };
 
     use super::*;
     use crate::storage::{
-        errors::SharedError,
-        lock_manager::{lock_wait_context::LockWaitContext, MockLockManager, WaitTimeout},
-        txn::ErrorInner as TxnErrorInner,
         ErrorInner as StorageErrorInner, PessimisticLockKeyResult, StorageCallback,
+        errors::SharedError,
+        lock_manager::{MockLockManager, WaitTimeout, lock_wait_context::LockWaitContext},
+        txn::ErrorInner as TxnErrorInner,
     };
 
     struct TestLockWaitEntryHandle {

@@ -200,7 +200,7 @@
 //! ```
 use heck::CamelCase;
 use proc_macro2::{Span, TokenStream};
-use quote::{quote, ToTokens};
+use quote::{ToTokens, quote};
 use syn::{punctuated::Punctuated, *};
 
 /// Entry point for the `rpn_fn` attribute.

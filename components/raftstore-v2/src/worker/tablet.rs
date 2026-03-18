@@ -9,21 +9,21 @@ use std::{
 
 use collections::HashMap;
 use engine_traits::{
-    CfName, DeleteStrategy, KvEngine, ManualCompactionOptions, Range, TabletContext,
-    TabletRegistry, WriteOptions, DATA_CFS,
+    CfName, DATA_CFS, DeleteStrategy, KvEngine, ManualCompactionOptions, Range, TabletContext,
+    TabletRegistry, WriteOptions,
 };
 use fail::fail_point;
 use kvproto::{import_sstpb::SstMeta, metapb::Region};
 use raftstore::store::{TabletSnapKey, TabletSnapManager};
-use slog::{debug, error, info, warn, Logger};
+use slog::{Logger, debug, error, info, warn};
 use sst_importer::SstImporter;
 use tikv_util::{
+    Either,
     config::ReadableDuration,
     slog_panic,
     time::Instant,
     worker::{Runnable, RunnableWithTimer},
     yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
-    Either,
 };
 
 const DEFAULT_HIGH_PRI_POOL_SIZE: usize = 2;
@@ -658,8 +658,10 @@ where
     fn on_timeout(&mut self) {
         self.pending_destroy_tasks.retain_mut(|(path, cb)| {
             let r = Self::process_destroy_task(&self.logger, &self.tablet_registry, path);
-            if r && let Some(cb) = cb.take() {
-                cb();
+            if r {
+                if let Some(cb) = cb.take() {
+                    cb();
+                }
             }
             !r
         });

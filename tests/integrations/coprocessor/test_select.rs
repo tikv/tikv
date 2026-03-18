@@ -15,20 +15,20 @@ use test_raftstore::*;
 use test_raftstore_macro::test_case;
 use test_storage::*;
 use tidb_query_datatype::{
-    codec::{datum, table::encode_row_key, Datum},
-    expr::EvalContext,
     FieldTypeTp,
+    codec::{Datum, datum, table::encode_row_key},
+    expr::EvalContext,
 };
 use tikv::{
     coprocessor::{REQ_TYPE_ANALYZE, REQ_TYPE_CHECKSUM},
     server::Config,
     storage::TestEngineBuilder,
 };
-use tikv_kv::{destroy_tls_engine, set_tls_engine, with_tls_engine, RocksEngine};
+use tikv_kv::{RocksEngine, destroy_tls_engine, set_tls_engine, with_tls_engine};
 use tikv_util::{
+    HandyRwLock,
     codec::number::*,
     config::{ReadableDuration, ReadableSize},
-    HandyRwLock,
 };
 use tipb::{
     AnalyzeColumnsReq, AnalyzeReq, AnalyzeType, ChecksumRequest, Chunk, Expr, ExprType,

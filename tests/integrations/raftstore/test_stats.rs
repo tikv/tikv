@@ -6,9 +6,9 @@ use std::{
     time::Duration,
 };
 
-use api_version::{test_kv_format_impl, KvFormat};
+use api_version::{KvFormat, test_kv_format_impl};
 use engine_traits::MiscExt;
-use futures::{executor::block_on, SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt, executor::block_on};
 use grpcio::*;
 use kvproto::{kvrpcpb::*, pdpb::QueryKind, tikvpb::*, tikvpb_grpc::TikvClient};
 use pd_client::PdClient;

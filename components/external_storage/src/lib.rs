@@ -23,7 +23,7 @@ use encryption::{DecrypterReader, FileEncryptionInfo, Iv};
 use file_system::{File, Sha256Reader};
 use futures::io::BufReader;
 use futures_io::AsyncRead;
-use futures_util::{future::LocalBoxFuture, stream::LocalBoxStream, AsyncReadExt};
+use futures_util::{AsyncReadExt, future::LocalBoxFuture, stream::LocalBoxStream};
 use kvproto::brpb::CompressionType;
 use openssl::hash::{Hasher, MessageDigest};
 use tikv_util::{

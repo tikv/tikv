@@ -37,7 +37,7 @@ pub use self::{
     config::Config,
     errors::{Error, Result},
     feature_gate::{Feature, FeatureGate},
-    util::{merge_bucket_stats, new_bucket_stats, PdConnector, REQUEST_RECONNECT_INTERVAL},
+    util::{PdConnector, REQUEST_RECONNECT_INTERVAL, merge_bucket_stats, new_bucket_stats},
 };
 
 pub type Key = Vec<u8>;

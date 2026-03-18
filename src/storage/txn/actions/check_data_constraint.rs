@@ -4,8 +4,8 @@
 use txn_types::{Key, TimeStamp, Write, WriteType};
 
 use crate::storage::{
-    mvcc::{ErrorInner, Result as MvccResult, SnapshotReader},
     Snapshot,
+    mvcc::{ErrorInner, Result as MvccResult, SnapshotReader},
 };
 
 /// Checks the existence of the key according to `should_not_exist`.
@@ -56,8 +56,8 @@ mod tests {
 
     use super::*;
     use crate::storage::{
-        mvcc::{tests::write, MvccTxn},
         Engine, TestEngineBuilder,
+        mvcc::{MvccTxn, tests::write},
     };
 
     #[test]

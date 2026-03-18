@@ -7,18 +7,18 @@ use byteorder::ReadBytesExt;
 use collections::HashMap;
 use kvproto::kvrpcpb::{IsolationLevel, LockInfo, Op, WriteConflictReason};
 use tikv_util::{
+    Either,
     codec::{
         bytes::{self, BytesEncoder},
-        number::{self, NumberEncoder, MAX_VAR_I64_LEN, MAX_VAR_U64_LEN},
+        number::{self, MAX_VAR_I64_LEN, MAX_VAR_U64_LEN, NumberEncoder},
     },
     memory::HeapSize,
-    Either,
 };
 
 use crate::{
-    timestamp::{TimeStamp, TsSet},
-    types::{Key, Mutation, Value, SHORT_VALUE_PREFIX},
     Error, ErrorInner, LastChange, Result,
+    timestamp::{TimeStamp, TsSet},
+    types::{Key, Mutation, SHORT_VALUE_PREFIX, Value},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]

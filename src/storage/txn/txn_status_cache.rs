@@ -132,7 +132,7 @@
 //! evicting information about transactions of the other type.
 use std::{
     cmp::max,
-    sync::{atomic::AtomicU64, Arc},
+    sync::{Arc, atomic::AtomicU64},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -605,13 +605,13 @@ impl TxnStatusCache {
 mod tests {
     use std::{
         sync::{
-            atomic::{AtomicU64, Ordering},
             Arc,
+            atomic::{AtomicU64, Ordering},
         },
         time::{Duration, Instant, SystemTime},
     };
 
-    use rand::{prelude::SliceRandom, Rng};
+    use rand::{Rng, prelude::SliceRandom};
 
     use super::*;
 

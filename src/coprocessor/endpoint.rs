@@ -6,10 +6,10 @@ use std::{
 };
 
 use ::tracker::{
-    set_tls_tracker_token, with_tls_tracker, RequestInfo, RequestType, GLOBAL_TRACKERS,
+    GLOBAL_TRACKERS, RequestInfo, RequestType, set_tls_tracker_token, with_tls_tracker,
 };
 use anyhow::anyhow;
-use api_version::{dispatch_api_version, KvFormat};
+use api_version::{KvFormat, dispatch_api_version};
 use async_stream::try_stream;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::PerfLevel;
@@ -23,8 +23,8 @@ use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
 use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
 use resource_metering::{
-    record_logical_read_bytes, record_network_in_bytes, record_network_out_bytes, FutureExt,
-    ResourceTagFactory, StreamExt,
+    FutureExt, ResourceTagFactory, StreamExt, record_logical_read_bytes, record_network_in_bytes,
+    record_network_out_bytes,
 };
 use tidb_query_common::{
     error::StorageError,
@@ -53,10 +53,10 @@ use crate::{
     read_pool::ReadPoolHandle,
     server::Config,
     storage::{
-        self,
-        kv::{self, with_tls_engine, SnapContext},
+        self, Engine, Snapshot, SnapshotStore,
+        kv::{self, SnapContext, with_tls_engine},
         mvcc::Error as MvccError,
-        need_check_locks, need_check_locks_in_replica_read, Engine, Snapshot, SnapshotStore,
+        need_check_locks, need_check_locks_in_replica_read,
     },
 };
 
@@ -486,16 +486,17 @@ impl<E: Engine> Endpoint<E> {
 
         // Check if the buckets version is latest.
         // skip if request don't carry this bucket version.
-        if let Some(ref buckets) = latest_buckets
-            && buckets.version > tracker.req_ctx.context.buckets_version
-            && tracker.req_ctx.context.buckets_version != 0
-        {
-            let mut bucket_not_match = errorpb::BucketVersionNotMatch::default();
-            bucket_not_match.set_version(buckets.version);
-            bucket_not_match.set_keys(buckets.keys.clone().into());
-            let mut err = errorpb::Error::default();
-            err.set_bucket_version_not_match(bucket_not_match);
-            return Err(Error::Region(err));
+        if let Some(ref buckets) = latest_buckets {
+            if buckets.version > tracker.req_ctx.context.buckets_version
+                && tracker.req_ctx.context.buckets_version != 0
+            {
+                let mut bucket_not_match = errorpb::BucketVersionNotMatch::default();
+                bucket_not_match.set_version(buckets.version);
+                bucket_not_match.set_keys(buckets.keys.clone().into());
+                let mut err = errorpb::Error::default();
+                err.set_bucket_version_not_match(bucket_not_match);
+                return Err(Error::Region(err));
+            }
         }
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
@@ -1216,7 +1217,7 @@ impl<E: Engine> RegionStorageAccessor for ExtraSnapStoreAccessor<E> {
 mod tests {
     use std::{
         assert_matches::assert_matches,
-        sync::{atomic, mpsc, Mutex},
+        sync::{Mutex, atomic, mpsc},
         thread, vec,
     };
 
@@ -1226,7 +1227,7 @@ mod tests {
     use raft::StateRole;
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use tidb_query_common::storage::Storage;
-    use tikv_kv::{destroy_tls_engine, set_tls_engine, MockEngine, MockEngineBuilder};
+    use tikv_kv::{MockEngine, MockEngineBuilder, destroy_tls_engine, set_tls_engine};
     use tipb::{Executor, Expr};
     use txn_types::{Key, LockType};
 
@@ -1235,7 +1236,7 @@ mod tests {
         config::CoprReadPoolConfig,
         coprocessor::readpool_impl::build_read_pool_for_test,
         read_pool::ReadPool,
-        storage::{kv::RocksEngine, Store, TestEngineBuilder},
+        storage::{Store, TestEngineBuilder, kv::RocksEngine},
     };
 
     /// A unary `RequestHandler` that always produces a fixture.

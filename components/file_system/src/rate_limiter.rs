@@ -3,8 +3,8 @@
 use std::{
     str::FromStr,
     sync::{
-        atomic::{AtomicU32, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicU32, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -16,8 +16,8 @@ use strum::EnumCount;
 use tikv_util::time::Instant;
 
 use super::{
-    metrics::{tls_collect_rate_limiter_request_wait, RATE_LIMITER_MAX_BYTES_PER_SEC},
     IoOp, IoPriority, IoType,
+    metrics::{RATE_LIMITER_MAX_BYTES_PER_SEC, tls_collect_rate_limiter_request_wait},
 };
 
 const DEFAULT_REFILL_PERIOD: Duration = Duration::from_millis(50);

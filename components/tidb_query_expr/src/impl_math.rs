@@ -7,13 +7,13 @@ use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::{
     codec::{
-        self,
+        self, Error,
         data_type::*,
-        mysql::{RoundMode, DEFAULT_FSP},
-        Error,
+        mysql::{DEFAULT_FSP, RoundMode},
     },
     expr::EvalContext,
 };
+use tikv_util::time::get_time;
 
 const MAX_I64_DIGIT_LENGTH: i64 = 19;
 const MAX_U64_DIGIT_LENGTH: i64 = 20;
@@ -694,7 +694,7 @@ pub struct MySqlRng {
 
 impl MySqlRng {
     fn new() -> Self {
-        let current_time = time::get_time();
+        let current_time = get_time();
         let nsec = i64::from(current_time.nsec);
         Self::new_with_seed(nsec)
     }
@@ -722,7 +722,7 @@ impl Default for MySqlRng {
 mod tests {
     use std::{f64, i64, str::FromStr};
 
-    use tidb_query_datatype::{builder::FieldTypeBuilder, FieldTypeFlag, FieldTypeTp};
+    use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp, builder::FieldTypeBuilder};
     use tipb::ScalarFuncSig;
 
     use super::*;

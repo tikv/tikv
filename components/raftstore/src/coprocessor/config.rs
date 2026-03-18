@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{perf_level_serde, KvEngine, PerfLevel};
+use engine_traits::{KvEngine, PerfLevel, perf_level_serde};
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 use serde::{Deserialize, Serialize};
 use tikv_util::{box_err, config::ReadableSize, worker::Scheduler};
@@ -203,16 +203,18 @@ impl Config {
         let res = self.validate_bucket_size();
         // If it's OK to enable bucket, we will prefer to enable it if useful for
         // raftstore-v2.
-        if let Ok(()) = res
-            && self.enable_region_bucket.is_none()
-            && raft_kv_v2
-        {
-            let useful = self.region_split_size() >= self.region_bucket_size * 2;
-            self.enable_region_bucket = Some(useful);
-        } else if let Err(e) = res
-            && self.enable_region_bucket()
-        {
-            return Err(e);
+        match res {
+            Ok(()) => {
+                if self.enable_region_bucket.is_none() && raft_kv_v2 {
+                    let useful = self.region_split_size() >= self.region_bucket_size * 2;
+                    self.enable_region_bucket = Some(useful);
+                }
+            }
+            Err(e) => {
+                if self.enable_region_bucket() {
+                    return Err(e);
+                }
+            }
         }
         Ok(())
     }

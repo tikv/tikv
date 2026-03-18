@@ -3,7 +3,7 @@
 #[path = "../mod.rs"]
 mod testsuite;
 use std::{
-    sync::{mpsc::channel, Mutex},
+    sync::{Mutex, mpsc::channel},
     time::Duration,
 };
 

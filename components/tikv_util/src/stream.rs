@@ -149,9 +149,9 @@ impl<E> Default for RetryExt<E> {
 #[doc(hidden)]
 pub mod __macro_helper {
     #[doc(hidden)]
-    pub use rand::thread_rng as __thread_rng;
-    #[doc(hidden)]
     pub use rand::Rng as __rand_Rng;
+    #[doc(hidden)]
+    pub use rand::thread_rng as __thread_rng;
     #[doc(hidden)]
     pub use tokio::time::sleep as __tokio_sleep;
 }
@@ -182,7 +182,7 @@ macro_rules! retry_expr {
     };
     ($action:expr, $ext:expr) => {
         async {
-            use $crate::stream::{RetryError, __macro_helper};
+            use $crate::stream::{__macro_helper, RetryError};
 
             let mut ext: $crate::stream::RetryExt<_> = $ext;
             let max_retry_times = ext.max_retry_times;

@@ -12,14 +12,14 @@ use std::{
 
 use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
 use encryption::{DataKeyManager, EncrypterWriter};
-use engine_traits::{iter_option, Iterator, KvEngine, RefIterable, SstMetaInfo, SstReader};
-use file_system::{sync_dir, File, OpenOptions};
+use engine_traits::{Iterator, KvEngine, RefIterable, SstMetaInfo, SstReader, iter_option};
+use file_system::{File, OpenOptions, sync_dir};
 use keys::data_key;
 use kvproto::{import_sstpb::*, kvrpcpb::ApiVersion};
 use tikv_util::time::Instant;
 use uuid::{Builder as UuidBuilder, Uuid};
 
-use crate::{metrics::*, Error, Result};
+use crate::{Error, Result, metrics::*};
 
 // `SyncableWrite` extends io::Write with sync
 trait SyncableWrite: io::Write + Send {

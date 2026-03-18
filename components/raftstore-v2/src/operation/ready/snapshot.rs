@@ -19,43 +19,42 @@
 //!   peer fsm, then Raft will get the snapshot.
 
 use std::{
-    assert_matches::assert_matches,
     fmt::{self, Debug},
     fs,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 
 use encryption_export::DataKeyManager;
-use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry, ALL_CFS};
+use engine_traits::{ALL_CFS, KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry};
 use fail::fail_point;
 use kvproto::{
     metapb::PeerRole,
     raft_serverpb::{PeerState, RaftSnapshotData},
 };
 use protobuf::Message;
-use raft::{eraftpb::Snapshot, StateRole};
+use raft::{StateRole, eraftpb::Snapshot};
 use raftstore::{
     coprocessor::RegionChangeEvent,
     store::{
+        GenSnapRes, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM, ReadTask, TabletSnapKey,
+        TabletSnapManager, Transport, WriteTask,
         metrics::STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER, worker_metrics::SNAP_COUNTER,
-        GenSnapRes, ReadTask, TabletSnapKey, TabletSnapManager, Transport, WriteTask,
-        RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
     },
 };
 use slog::{debug, error, info, warn};
 use tikv_util::{box_err, log::SlogFormat, slog_panic, store::find_peer_by_id};
 
 use crate::{
+    Result, StoreContext,
     fsm::ApplyResReporter,
-    operation::{command::temp_split_path, SharedReadTablet},
+    operation::{SharedReadTablet, command::temp_split_path},
     raft::{Apply, Peer, Storage},
     router::ApplyTask,
     worker::tablet,
-    Result, StoreContext,
 };
 
 /// Snapshot generating task state.
@@ -156,9 +155,8 @@ pub fn install_tablet<EK: KvEngine>(
         return false;
     }
     let target_path = registry.tablet_path(region_id, tablet_index);
-    assert_matches!(
-        EK::locked(source.to_str().unwrap()),
-        Ok(false),
+    assert!(
+        matches!(EK::locked(source.to_str().unwrap()), Ok(false)),
         "source is locked: {} => {}",
         source.display(),
         target_path.display()
@@ -546,16 +544,16 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     pub fn cancel_generating_snap(&self, to_peer: Option<u64>) {
         if let Some(id) = to_peer {
             let mut states = self.snap_states.borrow_mut();
-            if let Some(state) = states.get(&id)
-                && matches!(*state, SnapState::Generating { .. })
-            {
-                info!(
-                    self.logger(),
-                    "snapshot is canceled";
-                    "to_peer" => to_peer,
-                );
-                self.cancel_snap_task(to_peer);
-                states.remove(&id);
+            if let Some(state) = states.get(&id) {
+                if matches!(*state, SnapState::Generating { .. }) {
+                    info!(
+                        self.logger(),
+                        "snapshot is canceled";
+                        "to_peer" => to_peer,
+                    );
+                    self.cancel_snap_task(to_peer);
+                    states.remove(&id);
+                }
             }
         } else {
             self.cancel_snap_task(to_peer);
@@ -612,13 +610,13 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             // Set commit index for learner snapshots. It's needed to address
             // compatibility issues between v1 and v2 snapshots.
             // See https://github.com/pingcap/tiflash/issues/7568#issuecomment-1576382311
-            if let Some(p) = find_peer_by_id(self.region(), to_peer_id)
-                && p.get_role() == PeerRole::Learner
-            {
-                let mut snapshot_data = RaftSnapshotData::default();
-                if snapshot_data.merge_from_bytes(snapshot.get_data()).is_ok() {
-                    snapshot_data.mut_meta().set_commit_index_hint(commit_index);
-                    snapshot.set_data(snapshot_data.write_to_bytes().unwrap().into());
+            if let Some(p) = find_peer_by_id(self.region(), to_peer_id) {
+                if p.get_role() == PeerRole::Learner {
+                    let mut snapshot_data = RaftSnapshotData::default();
+                    if snapshot_data.merge_from_bytes(snapshot.get_data()).is_ok() {
+                        snapshot_data.mut_meta().set_commit_index_hint(commit_index);
+                        snapshot.set_data(snapshot_data.write_to_bytes().unwrap().into());
+                    }
                 }
             }
             *state = SnapState::Generated(Box::new(snapshot));

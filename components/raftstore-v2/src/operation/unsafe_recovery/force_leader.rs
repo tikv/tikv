@@ -4,9 +4,9 @@ use std::mem;
 
 use collections::HashSet;
 use engine_traits::{KvEngine, RaftEngine};
-use raft::{eraftpb::MessageType, StateRole, Storage};
+use raft::{StateRole, Storage, eraftpb::MessageType};
 use raftstore::store::{
-    util::LeaseState, ForceLeaderState, UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryState,
+    ForceLeaderState, UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryState, util::LeaseState,
 };
 use slog::{info, warn};
 use tikv_util::time::Instant as TiInstant;
@@ -191,13 +191,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
 
-        if let Some(UnsafeRecoveryState::Failed) = self.unsafe_recovery_state()
-            && !force
-        {
-            // Skip force leader if the plan failed, so wait for the next retry of plan with
-            // force leader state holding
-            info!(self.logger, "skip exiting force leader state");
-            return;
+        if !force {
+            if let Some(UnsafeRecoveryState::Failed) = self.unsafe_recovery_state() {
+                // Skip force leader if the plan failed, so wait for the next retry of plan with
+                // force leader state holding
+                info!(self.logger, "skip exiting force leader state");
+                return;
+            }
         }
 
         info!(self.logger, "exit force leader state");

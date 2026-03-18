@@ -16,8 +16,8 @@
 use std::{
     path::PathBuf,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
 };
 
@@ -25,11 +25,11 @@ use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, RaftCmdRequest};
 use protobuf::Message;
 use raftstore::{
-    store::{
-        fsm::new_admin_request, metrics::REGION_MAX_LOG_LAG, needs_evict_entry_cache, Transport,
-        WriteTask, RAFT_INIT_LOG_INDEX,
-    },
     Result,
+    store::{
+        RAFT_INIT_LOG_INDEX, Transport, WriteTask, fsm::new_admin_request,
+        metrics::REGION_MAX_LOG_LAG, needs_evict_entry_cache,
+    },
 };
 use slog::{debug, error, info};
 use tikv_util::{box_err, log::SlogFormat};
@@ -468,16 +468,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         mut res: CompactLogResult,
     ) {
         let first_index = self.entry_storage().first_index();
-        if let Some(i) = self.merge_context().and_then(|c| c.max_compact_log_index())
-            && res.compact_index > i
-        {
-            info!(
-                self.logger,
-                "in merging mode, adjust compact index";
-                "old_index" => res.compact_index,
-                "new_index" => i,
-            );
-            res.compact_index = i;
+        if let Some(i) = self.merge_context().and_then(|c| c.max_compact_log_index()) {
+            if res.compact_index > i {
+                info!(
+                    self.logger,
+                    "in merging mode, adjust compact index";
+                    "old_index" => res.compact_index,
+                    "new_index" => i,
+                );
+                res.compact_index = i;
+            }
         }
         if res.compact_index <= first_index {
             debug!(
@@ -529,19 +529,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         // All logs < persisted_apply will be deleted.
         let prev_first_index = first_index;
-        if prev_first_index < self.storage().apply_trace().persisted_apply_index()
-            && let Some(index) = self.compact_log_index()
-        {
-            // Raft Engine doesn't care about first index.
-            if let Err(e) =
-                store_ctx
-                    .engine
-                    .gc(self.region_id(), 0, index, self.state_changes_mut())
-            {
-                error!(self.logger, "failed to compact raft logs"; "err" => ?e);
+        if prev_first_index < self.storage().apply_trace().persisted_apply_index() {
+            if let Some(index) = self.compact_log_index() {
+                // Raft Engine doesn't care about first index.
+                if let Err(e) =
+                    store_ctx
+                        .engine
+                        .gc(self.region_id(), 0, index, self.state_changes_mut())
+                {
+                    error!(self.logger, "failed to compact raft logs"; "err" => ?e);
+                }
+                self.compact_log_context_mut().set_last_compacted_idx(index);
+                // Extra write set right above.
             }
-            self.compact_log_context_mut().set_last_compacted_idx(index);
-            // Extra write set right above.
         }
 
         let context = self.compact_log_context_mut();
@@ -574,16 +574,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 error!(self.logger, "failed to delete raft states"; "err" => ?e);
             }
             // If it's snapshot, logs are gc already.
-            if !task.has_snapshot
-                && old_persisted < self.entry_storage().truncated_index() + 1
-                && let Some(index) = self.compact_log_index()
-            {
-                let batch = task
-                    .extra_write
-                    .ensure_v2(|| self.entry_storage().raft_engine().log_batch(0));
-                // Raft Engine doesn't care about first index.
-                if let Err(e) = store_ctx.engine.gc(self.region_id(), 0, index, batch) {
-                    error!(self.logger, "failed to compact raft logs"; "err" => ?e);
+            if !task.has_snapshot && old_persisted < self.entry_storage().truncated_index() + 1 {
+                if let Some(index) = self.compact_log_index() {
+                    let batch = task
+                        .extra_write
+                        .ensure_v2(|| self.entry_storage().raft_engine().log_batch(0));
+                    // Raft Engine doesn't care about first index.
+                    if let Err(e) = store_ctx.engine.gc(self.region_id(), 0, index, batch) {
+                        error!(self.logger, "failed to compact raft logs"; "err" => ?e);
+                    }
                 }
             }
             if self.remove_tombstone_tablets(new_persisted) {

@@ -9,8 +9,8 @@ use std::{
 };
 
 use engine_traits::{
-    CfName, CompactedEvent, IterOptions, Iterable, Iterator, KvEngine, TabletRegistry, CF_WRITE,
-    LARGE_CFS,
+    CF_WRITE, CfName, CompactedEvent, IterOptions, Iterable, Iterator, KvEngine, LARGE_CFS,
+    TabletRegistry,
 };
 use file_system::{IoType, WithIoType};
 use itertools::Itertools;
@@ -21,20 +21,20 @@ use kvproto::{
 use online_config::{ConfigChange, OnlineConfig};
 use pd_client::{BucketMeta, BucketStat};
 use tikv_util::{
-    box_err, debug, error, info, keybuilder::KeyBuilder, warn, worker::Runnable, Either,
+    Either, box_err, debug, error, info, keybuilder::KeyBuilder, warn, worker::Runnable,
 };
 use txn_types::Key;
 
 use super::metrics::*;
 use crate::{
+    Result,
     coprocessor::{
+        Config, CoprocessorHost, SplitCheckerHost,
         dispatcher::StoreHandle,
         region_info_accessor::RegionInfoProvider,
         split_observer::{is_valid_split_key, strip_timestamp_if_exists},
-        Config, CoprocessorHost, SplitCheckerHost,
     },
     store::metrics::{COMPACTION_DECLINED_BYTES, COMPACTION_RELATED_REGION_COUNT},
-    Result,
 };
 
 #[derive(PartialEq, Eq)]
@@ -253,17 +253,22 @@ impl BucketStatsInfo {
         // The bucket ranges is none when the region buckets is also none.
         // So this condition indicates that the region buckets needs to refresh not
         // renew.
-        if let Some(bucket_ranges) = bucket_ranges
-            && self.bucket_stat.is_some()
-        {
-            assert_eq!(buckets.len(), bucket_ranges.len());
-            change_bucket_version = self.update_buckets(
-                cfg,
-                next_bucket_version,
-                buckets,
-                region_epoch,
-                &bucket_ranges,
-            );
+        if let Some(bucket_ranges) = bucket_ranges {
+            if self.bucket_stat.is_some() {
+                assert_eq!(buckets.len(), bucket_ranges.len());
+                change_bucket_version = self.update_buckets(
+                    cfg,
+                    next_bucket_version,
+                    buckets,
+                    region_epoch,
+                    &bucket_ranges,
+                );
+            } else {
+                change_bucket_version = true;
+                // when the region buckets is none, the exclusive buckets includes all the
+                // bucket keys.
+                self.init_buckets(cfg, next_bucket_version, buckets, region_epoch, region);
+            }
         } else {
             change_bucket_version = true;
             // when the region buckets is none, the exclusive buckets includes all the

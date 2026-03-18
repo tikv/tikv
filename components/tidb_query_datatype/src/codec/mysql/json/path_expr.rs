@@ -26,6 +26,7 @@
 // ```
 
 use nom::{
+    IResult,
     branch::alt,
     bytes::complete::tag,
     character::{
@@ -35,7 +36,6 @@ use nom::{
     combinator::{map, map_opt},
     multi::{many0, many1},
     sequence::{delimited, pair, tuple},
-    IResult,
 };
 
 use super::json_unquote::unquote_string;

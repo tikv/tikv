@@ -28,7 +28,7 @@ use std::{
     fs::{self, File},
     io::{self, BorrowedBuf, Read, Seek, SeekFrom, Write},
     path::Path,
-    sync::{atomic::Ordering, Arc},
+    sync::{Arc, atomic::Ordering},
     time::Duration,
 };
 
@@ -55,23 +55,23 @@ use kvproto::{
 };
 use protobuf::Message;
 use raftstore::store::{
-    snap::{ReceivingGuard, TabletSnapKey, TabletSnapManager},
     SnapManager,
+    snap::{ReceivingGuard, TabletSnapKey, TabletSnapManager},
 };
 use security::SecurityManager;
 use tikv_kv::RaftExtension;
 use tikv_util::{
+    DeferContext, Either,
     config::{ReadableSize, Tracker, VersionTrack},
     time::Instant,
     worker::Runnable,
-    DeferContext, Either,
 };
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
 use super::{
-    metrics::*,
-    snap::{Task, DEFAULT_POOL_SIZE},
     Config, Error, Result,
+    metrics::*,
+    snap::{DEFAULT_POOL_SIZE, Task},
 };
 use crate::tikv_util::{sys::thread::ThreadBuildWrapper, time::Limiter};
 
@@ -154,18 +154,17 @@ pub trait SnapCacheBuilder: Send + Sync {
 
 impl<EK: KvEngine> SnapCacheBuilder for TabletRegistry<EK> {
     fn build(&self, region_id: u64, path: &Path) -> Result<()> {
-        if let Some(mut c) = self.get(region_id)
-            && let Some(db) = c.latest()
-        {
-            let mut checkpointer = db.new_checkpointer()?;
-            // Avoid flush.
-            checkpointer.create_at(path, None, u64::MAX)?;
-            Ok(())
-        } else {
-            Err(Error::Other(
-                format!("region {} not found", region_id).into(),
-            ))
+        if let Some(mut c) = self.get(region_id) {
+            if let Some(db) = c.latest() {
+                let mut checkpointer = db.new_checkpointer()?;
+                // Avoid flush.
+                checkpointer.create_at(path, None, u64::MAX)?;
+                return Ok(());
+            }
         }
+        Err(Error::Other(
+            format!("region {} not found", region_id).into(),
+        ))
     }
 }
 
@@ -330,17 +329,17 @@ async fn cleanup_cache(
         };
         let mut buffer = Vec::with_capacity(PREVIEW_CHUNK_LEN);
         for meta in preview.take_metas().into_vec() {
-            if is_sst(&meta.file_name)
-                && let Some(p) = exists.remove(&meta.file_name)
-            {
-                if is_sst_match_preview(&meta, &p, &mut buffer, limiter, key_manager).await? {
-                    reused += meta.file_size;
-                    continue;
-                }
-                // We should not write to the file directly as it's hard linked.
-                fs::remove_file(&p)?;
-                if let Some(m) = key_manager {
-                    m.delete_file(p.to_str().unwrap(), None)?;
+            if is_sst(&meta.file_name) {
+                if let Some(p) = exists.remove(&meta.file_name) {
+                    if is_sst_match_preview(&meta, &p, &mut buffer, limiter, key_manager).await? {
+                        reused += meta.file_size;
+                        continue;
+                    }
+                    // We should not write to the file directly as it's hard linked.
+                    fs::remove_file(&p)?;
+                    if let Some(m) = key_manager {
+                        m.delete_file(p.to_str().unwrap(), None)?;
+                    }
                 }
             }
             missing.push(meta.file_name);
@@ -703,11 +702,11 @@ async fn send_missing(
         digest.write(chunk.file_name.as_bytes());
         chunk.file_size = file_size;
         total_sent += file_size;
-        if let Some(m) = key_manager
-            && let Some((iv, key)) = m.get_file_internal(file_path.to_str().unwrap())?
-        {
-            chunk.iv = iv;
-            chunk.set_key(key);
+        if let Some(m) = key_manager {
+            if let Some((iv, key)) = m.get_file_internal(file_path.to_str().unwrap())? {
+                chunk.iv = iv;
+                chunk.set_key(key);
+            }
         }
         if file_size == 0 {
             let mut req = TabletSnapshotRequest::default();
@@ -1032,14 +1031,14 @@ pub fn copy_tablet_snapshot(
     for path in files {
         let recv = recv_path.join(path.file_name().unwrap());
         std::fs::copy(&path, &recv)?;
-        if let Some(m) = sender_snap_mgr.key_manager()
-            && let Some((iv, key)) = m.get_file_internal(path.to_str().unwrap())?
-        {
-            key_importer
-                .as_mut()
-                .unwrap()
-                .add(recv.to_str().unwrap(), iv, key)
-                .unwrap();
+        if let Some(m) = sender_snap_mgr.key_manager() {
+            if let Some((iv, key)) = m.get_file_internal(path.to_str().unwrap())? {
+                key_importer
+                    .as_mut()
+                    .unwrap()
+                    .add(recv.to_str().unwrap(), iv, key)
+                    .unwrap();
+            }
         }
     }
     if let Some(i) = key_importer {

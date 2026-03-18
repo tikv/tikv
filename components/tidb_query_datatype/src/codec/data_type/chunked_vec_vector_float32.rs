@@ -1,7 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::{
-    bit_vec::BitVec, ChunkRef, ChunkedVec, UnsafeRefInto, VectorFloat32, VectorFloat32Ref,
+    ChunkRef, ChunkedVec, UnsafeRefInto, VectorFloat32, VectorFloat32Ref, bit_vec::BitVec,
 };
 use crate::{
     codec::mysql::{VectorFloat32Decoder, VectorFloat32Encoder},

@@ -37,8 +37,8 @@ use std::{
 
 use collections::HashMap;
 use engine_traits::{
-    CfName, IterOptions, KvEngine as LocalEngine, MetricsExt, Mutable, MvccProperties, ReadOptions,
-    TabletRegistry, WriteBatch, CF_DEFAULT, CF_LOCK,
+    CF_DEFAULT, CF_LOCK, CfName, IterOptions, KvEngine as LocalEngine, MetricsExt, Mutable,
+    MvccProperties, ReadOptions, TabletRegistry, WriteBatch,
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use futures::{future::BoxFuture, prelude::*};
@@ -52,8 +52,8 @@ use kvproto::{
 };
 use pd_client::BucketMeta;
 use raftstore::{
-    store::{PessimisticLockPair, TxnExt},
     SeekRegionCallback,
+    store::{PessimisticLockPair, TxnExt},
 };
 use thiserror::Error;
 use tikv_util::{
@@ -69,8 +69,8 @@ pub use self::{
     raft_extension::{FakeExtension, RaftExtension},
     rocksdb_engine::{RocksEngine, RocksSnapshot},
     stats::{
-        CfStatistics, FlowStatistics, FlowStatsReporter, LoadDataHint, StageLatencyStats,
-        Statistics, StatisticsSummary, RAW_VALUE_TOMBSTONE,
+        CfStatistics, FlowStatistics, FlowStatsReporter, LoadDataHint, RAW_VALUE_TOMBSTONE,
+        StageLatencyStats, Statistics, StatisticsSummary,
     },
 };
 

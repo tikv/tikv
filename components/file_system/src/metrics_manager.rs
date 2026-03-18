@@ -6,9 +6,9 @@ use strum::{EnumCount, IntoEnumIterator};
 use tikv_util::time::Instant;
 
 use crate::{
-    io_stats::fetch_io_bytes,
-    metrics::{tls_flush, IO_BYTES_VEC},
     IoBytes, IoOp, IoRateLimiterStatistics, IoType,
+    io_stats::fetch_io_bytes,
+    metrics::{IO_BYTES_VEC, tls_flush},
 };
 
 pub enum BytesFetcher {

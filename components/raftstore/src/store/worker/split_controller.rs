@@ -1,10 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp::{min, Ordering},
+    cmp::{Ordering, min},
     collections::{BinaryHeap, HashSet},
     slice::{Iter, IterMut},
-    sync::{mpsc::Receiver, Arc},
+    sync::{Arc, mpsc::Receiver},
     time::{Duration, SystemTime},
 };
 
@@ -21,7 +21,7 @@ use tikv_util::{
     config::Tracker,
     debug, info,
     metrics::ThreadInfoStatistics,
-    store::{is_read_query, QueryStats},
+    store::{QueryStats, is_read_query},
     time::Instant,
     warn,
 };
@@ -30,8 +30,8 @@ use crate::store::{
     metrics::*,
     util::build_key_range,
     worker::{
-        split_config::get_sample_num, FlowStatistics, SplitConfig, SplitConfigManager,
-        SplitValidator,
+        FlowStatistics, SplitConfig, SplitConfigManager, SplitValidator,
+        split_config::get_sample_num,
     },
 };
 
@@ -461,27 +461,27 @@ impl ReadStats {
         region_info.cop_detail.add(write_cf_cop_detail);
         // the bucket of the follower only have the version info and not needs to be
         // recorded the hot bucket.
-        if let Some(buckets) = buckets
-            && !buckets.sizes.is_empty()
-        {
-            let bucket_stat = self
-                .region_buckets
-                .entry(region_id)
-                .and_modify(|current| {
-                    if current.meta < *buckets {
-                        let mut new = BucketStat::from_meta(buckets.clone());
-                        std::mem::swap(current, &mut new);
-                        current.merge(&new);
-                    }
-                })
-                .or_insert_with(|| BucketStat::from_meta(buckets.clone()));
-            let mut delta = metapb::BucketStats::default();
-            delta.set_read_bytes(vec![(write.read_bytes + data.read_bytes) as u64]);
-            delta.set_read_keys(vec![(write.read_keys + data.read_keys) as u64]);
-            bucket_stat.add_flows(
-                &[start.unwrap_or_default(), end.unwrap_or_default()],
-                &delta,
-            );
+        if let Some(buckets) = buckets {
+            if !buckets.sizes.is_empty() {
+                let bucket_stat = self
+                    .region_buckets
+                    .entry(region_id)
+                    .and_modify(|current| {
+                        if current.meta < *buckets {
+                            let mut new = BucketStat::from_meta(buckets.clone());
+                            std::mem::swap(current, &mut new);
+                            current.merge(&new);
+                        }
+                    })
+                    .or_insert_with(|| BucketStat::from_meta(buckets.clone()));
+                let mut delta = metapb::BucketStats::default();
+                delta.set_read_bytes(vec![(write.read_bytes + data.read_bytes) as u64]);
+                delta.set_read_keys(vec![(write.read_keys + data.read_keys) as u64]);
+                bucket_stat.add_flows(
+                    &[start.unwrap_or_default(), end.unwrap_or_default()],
+                    &delta,
+                );
+            }
         }
     }
 

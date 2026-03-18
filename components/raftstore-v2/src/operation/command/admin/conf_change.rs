@@ -19,13 +19,13 @@ use kvproto::{
 use protobuf::Message;
 use raft::prelude::*;
 use raftstore::{
+    Error, Result,
     coprocessor::{RegionChangeEvent, RegionChangeReason},
     store::{
+        ProposalContext,
         metrics::{PEER_ADMIN_CMD_COUNTER_VEC, PEER_PROPOSE_LOG_SIZE_HISTOGRAM},
         util::{self, ChangePeerI, ConfChangeKind},
-        ProposalContext,
     },
-    Error, Result,
 };
 use slog::{error, info, warn};
 use tikv_util::{box_err, slog_panic};

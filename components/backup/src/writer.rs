@@ -4,8 +4,8 @@ use std::{fmt::Display, io::Read};
 
 use encryption::{EncrypterReader, Iv};
 use engine_traits::{
-    CfName, ExternalSstFileInfo, KvEngine, SstCompressionType, SstExt, SstWriter, SstWriterBuilder,
-    CF_DEFAULT, CF_WRITE,
+    CF_DEFAULT, CF_WRITE, CfName, ExternalSstFileInfo, KvEngine, SstCompressionType, SstExt,
+    SstWriter, SstWriterBuilder,
 };
 use external_storage::{ExternalStorage, UnpinReader};
 use file_system::Sha256Reader;
@@ -21,7 +21,7 @@ use tikv_util::{
 };
 use txn_types::KvPair;
 
-use crate::{backup_file_name, metrics::*, utils::KeyValueCodec, Error, Result};
+use crate::{Error, Result, backup_file_name, metrics::*, utils::KeyValueCodec};
 
 #[derive(Debug, Clone, Copy)]
 /// CfNameWrap wraps the CfName type.

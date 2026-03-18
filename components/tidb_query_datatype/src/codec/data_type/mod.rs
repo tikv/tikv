@@ -12,7 +12,7 @@ mod logical_rows;
 mod scalar;
 mod vector;
 
-pub use logical_rows::{LogicalRows, BATCH_MAX_SIZE, IDENTICAL_LOGICAL_ROWS};
+pub use logical_rows::{BATCH_MAX_SIZE, IDENTICAL_LOGICAL_ROWS, LogicalRows};
 
 #[macro_export]
 macro_rules! match_template_evaltype {
@@ -48,10 +48,10 @@ pub use self::{
 };
 use super::Result;
 pub use crate::codec::mysql::{
-    json::JsonRef, Decimal, Duration, Enum, EnumRef, Json, JsonType, Set, SetRef, Time as DateTime,
-    VectorFloat32, VectorFloat32Ref,
+    Decimal, Duration, Enum, EnumRef, Json, JsonType, Set, SetRef, Time as DateTime, VectorFloat32,
+    VectorFloat32Ref, json::JsonRef,
 };
-use crate::{codec::convert::ConvertTo, expr::EvalContext, EvalType};
+use crate::{EvalType, codec::convert::ConvertTo, expr::EvalContext};
 
 /// A trait of evaluating current concrete eval type into a MySQL logic value,
 /// represented by Rust's `bool` type.

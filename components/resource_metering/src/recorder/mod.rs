@@ -2,7 +2,7 @@
 
 use std::{
     fmt::{self, Display, Formatter},
-    sync::{atomic::Ordering::Relaxed, Arc},
+    sync::{Arc, atomic::Ordering::Relaxed},
     time::Duration,
 };
 
@@ -16,8 +16,8 @@ use tikv_util::{
 
 use self::{collector_reg::CollectorReg, sub_recorder::SubRecorder};
 use crate::{
-    collector::Collector, config::ENABLE_NETWORK_IO_COLLECTION, Config, RawRecords,
-    ResourceTagFactory,
+    Config, RawRecords, ResourceTagFactory, collector::Collector,
+    config::ENABLE_NETWORK_IO_COLLECTION,
 };
 mod collector_reg;
 mod localstorage;
@@ -29,8 +29,8 @@ pub use self::{
     sub_recorder::{
         cpu::CpuRecorder,
         summary::{
-            record_logical_read_bytes, record_logical_write_bytes, record_network_in_bytes,
-            record_network_out_bytes, record_read_keys, record_write_keys, SummaryRecorder,
+            SummaryRecorder, record_logical_read_bytes, record_logical_write_bytes,
+            record_network_in_bytes, record_network_out_bytes, record_read_keys, record_write_keys,
         },
     },
 };
@@ -337,8 +337,8 @@ pub fn init_recorder(
 mod tests {
     use std::{
         sync::{
-            atomic::{AtomicUsize, Ordering::SeqCst},
             Mutex,
+            atomic::{AtomicUsize, Ordering::SeqCst},
         },
         thread::sleep,
     };
@@ -347,8 +347,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        recorder::localstorage::{LocalStorage, LocalStorageRef},
         TagInfos,
+        recorder::localstorage::{LocalStorage, LocalStorageRef},
     };
 
     #[derive(Clone, Default)]

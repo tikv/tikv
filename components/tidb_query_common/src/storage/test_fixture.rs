@@ -1,11 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::{btree_map, BTreeMap},
+    collections::{BTreeMap, btree_map},
     sync::Arc,
 };
 
-use super::{range::*, OwnedKvPairEntry, Result};
+use super::{OwnedKvPairEntry, Result, range::*};
 
 pub type ErrorBuilder = Box<dyn Send + Sync + Fn() -> crate::error::StorageError>;
 

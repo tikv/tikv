@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use ::security::{SecurityConfig, SecurityManager};
 use grpcio::*;
-use kvproto::tikvpb::{create_tikv, Tikv};
+use kvproto::tikvpb::{Tikv, create_tikv};
 
 fn tikv_service<T>(kv: T, ip: &str, port: u16) -> Result<Server>
 where

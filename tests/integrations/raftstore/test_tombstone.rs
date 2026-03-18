@@ -3,7 +3,7 @@
 use std::{sync::Arc, thread, time::Duration};
 
 use crossbeam::channel;
-use engine_traits::{CfNamesExt, Iterable, Peekable, RaftEngineDebug, SyncMutable, CF_RAFT};
+use engine_traits::{CF_RAFT, CfNamesExt, Iterable, Peekable, RaftEngineDebug, SyncMutable};
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState, StoreIdent};
 use protobuf::Message;
 use raft::eraftpb::MessageType;

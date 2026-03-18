@@ -6,7 +6,7 @@ use std::{
 };
 
 use engine_rocks::{RocksCfOptions, RocksDbOptions};
-use engine_traits::{Checkpointer, KvEngine, Peekable, SyncMutable, LARGE_CFS};
+use engine_traits::{Checkpointer, KvEngine, LARGE_CFS, Peekable, SyncMutable};
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
@@ -16,11 +16,11 @@ use kvproto::{
 use raft::eraftpb::{MessageType, Snapshot};
 use raftstore::{
     errors::Result,
-    store::{snap::TABLET_SNAPSHOT_VERSION, TabletSnapKey, TabletSnapManager},
+    store::{TabletSnapKey, TabletSnapManager, snap::TABLET_SNAPSHOT_VERSION},
 };
 use rand::Rng;
 use test_raftstore::{
-    new_learner_peer, Direction, Filter, FilterFactory, RegionPacketFilter, Simulator as S1, *,
+    Direction, Filter, FilterFactory, RegionPacketFilter, Simulator as S1, new_learner_peer, *,
 };
 use test_raftstore_v2::{Simulator as S2, WrapFactory};
 use tikv::server::tablet_snap::send_snap as send_snap_v2;

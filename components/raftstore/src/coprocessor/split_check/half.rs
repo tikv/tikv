@@ -9,7 +9,7 @@ use tikv_util::{box_try, config::ReadableSize};
 
 use super::{
     super::{
-        error::Result, Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker,
+        Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker, error::Result,
     },
     Host,
 };
@@ -129,7 +129,7 @@ mod tests {
     use std::{iter, sync::mpsc};
 
     use engine_test::ctor::{CfOptions, DbOptions};
-    use engine_traits::{MiscExt, SyncMutable, ALL_CFS, CF_DEFAULT, LARGE_CFS};
+    use engine_traits::{ALL_CFS, CF_DEFAULT, LARGE_CFS, MiscExt, SyncMutable};
     use kvproto::{
         metapb::{Peer, Region},
         pdpb::{CheckPolicy, SplitReason},
@@ -144,8 +144,8 @@ mod tests {
     };
     use crate::{
         coprocessor::{
-            dispatcher::SchedTask, BoxSplitCheckObserver, Config, CoprocessorHost,
-            KeysCheckObserver, SizeCheckObserver,
+            BoxSplitCheckObserver, Config, CoprocessorHost, KeysCheckObserver, SizeCheckObserver,
+            dispatcher::SchedTask,
         },
         store::{BucketRange, SplitCheckRunner, SplitCheckTask},
     };

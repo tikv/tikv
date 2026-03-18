@@ -4,7 +4,7 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, Data, DeriveInput, Fields};
+use syn::{Data, DeriveInput, Fields, parse_macro_input};
 
 /// MemoryTraceHelper adds two methods `reset` and `sum` to derived struct.
 /// All fields of derived struct should be `usize`.

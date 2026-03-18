@@ -3,17 +3,17 @@
 #![cfg(test)]
 
 use std::{
-    collections::{hash_map::RandomState, HashSet},
+    collections::{HashSet, hash_map::RandomState},
     iter::FromIterator,
 };
 
 use kvproto::brpb::{Noop, StorageBackend};
 use tokio_stream::StreamExt;
 
-use super::{keys::MetaKey, MetadataClient, StreamTask};
+use super::{MetadataClient, StreamTask, keys::MetaKey};
 use crate::{
     errors::Result,
-    metadata::{store::SlashEtcStore, MetadataEvent},
+    metadata::{MetadataEvent, store::SlashEtcStore},
 };
 
 pub fn test_meta_cli() -> MetadataClient<SlashEtcStore> {

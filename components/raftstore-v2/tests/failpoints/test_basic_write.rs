@@ -3,11 +3,11 @@
 use std::{assert_matches::assert_matches, time::Duration};
 
 use engine_traits::{
-    CompactExt, DbOptionsExt, ManualCompactionOptions, MiscExt, Peekable, RaftEngineReadOnly,
-    CF_DEFAULT, CF_RAFT, CF_WRITE,
+    CF_DEFAULT, CF_RAFT, CF_WRITE, CompactExt, DbOptionsExt, ManualCompactionOptions, MiscExt,
+    Peekable, RaftEngineReadOnly,
 };
 use futures::executor::block_on;
-use raftstore_v2::{router::PeerMsg, SimpleWriteEncoder};
+use raftstore_v2::{SimpleWriteEncoder, router::PeerMsg};
 
 use crate::cluster::Cluster;
 

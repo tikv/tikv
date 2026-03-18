@@ -7,15 +7,15 @@ use engine_traits::{KvEngine, RaftEngine, TabletContext};
 use keys::{data_end_key, data_key, enc_start_key};
 use kvproto::metapb::Region;
 use raftstore::store::{
-    PeerPessimisticLocks, Transport, UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryState,
-    RAFT_INIT_LOG_INDEX,
+    PeerPessimisticLocks, RAFT_INIT_LOG_INDEX, Transport, UnsafeRecoveryExecutePlanSyncer,
+    UnsafeRecoveryState,
 };
 use slog::{error, info, warn};
 
 use crate::{
     batch::StoreContext,
     fsm::Store,
-    operation::{command::temp_split_path, SplitInit},
+    operation::{SplitInit, command::temp_split_path},
     raft::Peer,
     router::PeerMsg,
 };
@@ -110,15 +110,15 @@ impl Store {
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_unsafe_recovery_wait_initialized(&mut self, syncer: UnsafeRecoveryExecutePlanSyncer) {
-        if let Some(state) = self.unsafe_recovery_state()
-            && !state.is_abort()
-        {
-            warn!(self.logger,
-                "Unsafe recovery, can't wait initialize, another plan is executing in progress";
-                "state" => ?state,
-            );
-            syncer.abort();
-            return;
+        if let Some(state) = self.unsafe_recovery_state() {
+            if !state.is_abort() {
+                warn!(self.logger,
+                    "Unsafe recovery, can't wait initialize, another plan is executing in progress";
+                    "state" => ?state,
+                );
+                syncer.abort();
+                return;
+            }
         }
 
         *self.unsafe_recovery_state_mut() = Some(UnsafeRecoveryState::WaitInitialize(syncer));

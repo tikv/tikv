@@ -8,16 +8,16 @@ use std::{
 use codec::prelude::*;
 use tipb::FieldType;
 
-use super::{check_fsp, Decimal, DEFAULT_FSP};
+use super::{DEFAULT_FSP, Decimal, check_fsp};
 use crate::{
+    FieldTypeAccessor,
     codec::{
+        Error, Result, TEN_POW,
         convert::ConvertTo,
         error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE},
-        mysql::{Time as DateTime, TimeType, MAX_FSP, MIN_FSP},
-        Error, Result, TEN_POW,
+        mysql::{MAX_FSP, MIN_FSP, Time as DateTime, TimeType},
     },
     expr::EvalContext,
-    FieldTypeAccessor,
 };
 
 pub const NANOS_PER_MICRO: i64 = 1_000;
@@ -95,9 +95,9 @@ fn check_nanos(nanos: i64) -> Result<i64> {
 
 mod parser {
     use nom::{
+        IResult,
         character::complete::{anychar, char, digit0, digit1, space0, space1},
         combinator::opt,
-        IResult,
     };
 
     use super::*;

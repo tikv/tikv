@@ -2,14 +2,14 @@
 
 use std::{
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     thread,
     time::Duration,
 };
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use tikv_util::memory::{MemoryQuota, OwnedAllocated};
 
 fn bench_memory_quota_alloc(c: &mut Criterion) {

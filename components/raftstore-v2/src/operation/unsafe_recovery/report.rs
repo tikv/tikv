@@ -2,7 +2,7 @@
 
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{pdpb, raft_serverpb::RegionLocalState};
-use raft::{GetEntriesContext, Storage, NO_LIMIT};
+use raft::{GetEntriesContext, NO_LIMIT, Storage};
 use raftstore::store::{
     ProposalContext, Transport, UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryState,
     UnsafeRecoveryWaitApplySyncer,
@@ -27,15 +27,15 @@ impl Store {
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_unsafe_recovery_wait_apply(&mut self, syncer: UnsafeRecoveryWaitApplySyncer) {
-        if let Some(state) = self.unsafe_recovery_state()
-            && !state.is_abort()
-        {
-            warn!(self.logger,
-                "Unsafe recovery, can't wait apply, another plan is executing in progress";
-                "state" => ?state,
-            );
-            syncer.abort();
-            return;
+        if let Some(state) = self.unsafe_recovery_state() {
+            if !state.is_abort() {
+                warn!(self.logger,
+                    "Unsafe recovery, can't wait apply, another plan is executing in progress";
+                    "state" => ?state,
+                );
+                syncer.abort();
+                return;
+            }
         }
         let target_index = if self.has_force_leader() {
             // For regions that lose quorum (or regions have force leader), whatever has
