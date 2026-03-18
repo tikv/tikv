@@ -77,7 +77,7 @@ pub fn create_compaction(st: StorageBackend) -> Execution {
         max_concurrent_subcompaction: 3,
         external_storage: st,
         backend_config: BackendConfig {
-            gcs_v2_enable: false,
+            gcs_v2_enable: true,
             ..Default::default()
         },
         db: None,

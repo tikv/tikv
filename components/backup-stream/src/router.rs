@@ -2127,7 +2127,7 @@ mod tests {
                 temp_file_memory_quota: 1024 * 2,
                 max_flush_interval: Duration::from_secs(300),
                 s3_multi_part_size: ReadableSize::mb(5).0 as usize,
-                gcs_v2_enable: false,
+                gcs_v2_enable: true,
             },
             BackupEncryptionManager::default(),
         );
@@ -2228,7 +2228,7 @@ mod tests {
                 temp_file_memory_quota: 32 * 2,
                 max_flush_interval: Duration::from_secs(300),
                 s3_multi_part_size: ReadableSize::mb(5).0 as usize,
-                gcs_v2_enable: false,
+                gcs_v2_enable: true,
             },
             BackupEncryptionManager::default(),
         );
@@ -2504,7 +2504,7 @@ mod tests {
                 temp_file_memory_quota: 2,
                 max_flush_interval: Duration::from_secs(300),
                 s3_multi_part_size: ReadableSize::mb(5).0 as usize,
-                gcs_v2_enable: false,
+                gcs_v2_enable: true,
             },
             BackupEncryptionManager::default(),
         ));
@@ -2545,7 +2545,7 @@ mod tests {
                 temp_file_memory_quota: 32 * 2,
                 max_flush_interval: Duration::from_secs(300),
                 s3_multi_part_size: ReadableSize::mb(5).0 as usize,
-                gcs_v2_enable: false,
+                gcs_v2_enable: true,
             },
             BackupEncryptionManager::default(),
         );
@@ -2590,7 +2590,7 @@ mod tests {
                 temp_file_memory_quota: 2,
                 max_flush_interval: Duration::from_secs(300),
                 s3_multi_part_size: ReadableSize::mb(5).0 as usize,
-                gcs_v2_enable: false,
+                gcs_v2_enable: true,
             },
             BackupEncryptionManager::default(),
         ));
@@ -2647,7 +2647,7 @@ mod tests {
                 temp_file_memory_quota: 2,
                 max_flush_interval: Duration::from_secs(300),
                 s3_multi_part_size: ReadableSize::mb(5).0 as usize,
-                gcs_v2_enable: false,
+                gcs_v2_enable: true,
             },
             BackupEncryptionManager::default(),
         ));
@@ -2943,7 +2943,7 @@ mod tests {
                 temp_file_memory_quota: 2,
                 max_flush_interval: cfg.max_flush_interval.0,
                 s3_multi_part_size: cfg.s3_multi_part_size.0 as usize,
-                gcs_v2_enable: false,
+                gcs_v2_enable: true,
             },
             BackupEncryptionManager::default(),
         ));
@@ -3002,7 +3002,7 @@ mod tests {
                 temp_file_memory_quota: 2,
                 max_flush_interval: Duration::from_secs(300),
                 s3_multi_part_size: ReadableSize::mb(5).0 as usize,
-                gcs_v2_enable: false,
+                gcs_v2_enable: true,
             },
             BackupEncryptionManager::default(),
         ));
