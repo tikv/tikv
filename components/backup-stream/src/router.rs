@@ -3077,7 +3077,7 @@ mod tests {
     async fn test_encryption_plaintext_data_key() -> Result<()> {
         // set up plaintext data key
         //
-        let data_key: [u8; 32] = rand::thread_rng().r#gen();
+        let data_key: [u8; 32] = rand::thread_rng().random();
         let mut cipher = CipherInfo::new();
         cipher.set_cipher_key(data_key.to_vec());
         cipher.set_cipher_type(EncryptionMethod::Aes256Ctr);
