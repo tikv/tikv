@@ -1540,6 +1540,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
         RawDeleteRange, future_raw_delete_range(storage), raw_delete_range;
         RawBatchScan, future_raw_batch_scan(storage), raw_batch_scan;
         RawCoprocessor, future_raw_coprocessor(copr_v2, storage), coprocessor;
+        RawCompareAndSwap, future_raw_compare_and_swap(storage), raw_compare_and_swap;
         RawCompareAndDelete, future_raw_compare_and_delete(storage), raw_compare_and_delete;
         PessimisticLock, future_acquire_pessimistic_lock(storage), kv_pessimistic_lock;
         PessimisticRollback, future_pessimistic_rollback(storage), kv_pessimistic_rollback;
