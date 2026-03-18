@@ -1,7 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use api_version::ApiV2;
+use api_version::{ApiV2, KvFormat};
 use engine_traits::CfName;
 use kvproto::kvrpcpb::ApiVersion;
 use raw::RawStore;
@@ -319,7 +319,7 @@ mod tests {
     /// lock-guard output for `RawCompareAndDelete`.
     ///
     /// Specifically:
-    /// - For V1/V1Ttl: a `Modify::Delete` at the plain (untimstamped) key.
+    /// - For V1/V1Ttl: a `Modify::Delete` at the plain (un-timestamped) key.
     /// - For V2: a `Modify::Put` at `key@ts` containing
     ///   `ENCODED_LOGICAL_DELETE`, plus exactly one lock guard at
     ///   `RAW_KEY_PREFIX@key_guard_ts`.
