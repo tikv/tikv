@@ -143,6 +143,7 @@ impl std::ops::AddAssign for IoBytes {
 }
 
 #[cfg(not(any(test, feature = "testexport")))]
+#[allow(clippy::redundant_closure_call)]
 fn get_thread_io_bytes_stats() -> Result<IoBytes, String> {
     get_thread_io_bytes_total()
 }
@@ -155,6 +156,7 @@ fn get_thread_io_bytes_stats() -> Result<IoBytes, String> {
 /// on each invocation, simulating incremental IO operations. This is useful
 /// for testing scenarios where the IO stats change over time.
 #[cfg(any(test, feature = "testexport"))]
+#[allow(clippy::redundant_closure_call)]
 fn get_thread_io_bytes_stats() -> Result<IoBytes, String> {
     fail::fail_point!("failed_to_get_thread_io_bytes_stats", |_| {
         Err("get_thread_io_bytes_total failed".into())
@@ -166,20 +168,20 @@ fn get_thread_io_bytes_stats() -> Result<IoBytes, String> {
         let mut current_stats = stats.get();
 
         // Add the mock IO bytes to the stats.
-        current_stats.read += {
+        current_stats.read += (|| {
             fail::fail_point!("delta_read_io_bytes", |d| d
                 .unwrap()
                 .parse::<u64>()
                 .unwrap());
             0
-        };
-        current_stats.write += {
+        })();
+        current_stats.write += (|| {
             fail::fail_point!("delta_write_io_bytes", |d| d
                 .unwrap()
                 .parse::<u64>()
                 .unwrap());
             0
-        };
+        })();
 
         stats.set(current_stats);
         Ok(current_stats)
