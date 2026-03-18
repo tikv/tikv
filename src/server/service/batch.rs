@@ -9,19 +9,19 @@ use tikv_util::{
     mpsc::future::{Sender, WakePolicy},
     time::Instant,
 };
-use tracker::{with_tls_tracker, RequestInfo, RequestType, Tracker, TrackerToken, GLOBAL_TRACKERS};
+use tracker::{GLOBAL_TRACKERS, RequestInfo, RequestType, Tracker, TrackerToken, with_tls_tracker};
 use txn_types::ValueEntry;
 
 use crate::{
     server::{
-        metrics::{GrpcTypeKind, ResourcePriority, REQUEST_BATCH_SIZE_HISTOGRAM_VEC},
-        service::kv::{batch_commands_response, GrpcRequestDuration, MeasuredSingleResponse},
+        metrics::{GrpcTypeKind, REQUEST_BATCH_SIZE_HISTOGRAM_VEC, ResourcePriority},
+        service::kv::{GrpcRequestDuration, MeasuredSingleResponse, batch_commands_response},
     },
     storage::{
+        ResponseBatchConsumer, Result, Storage,
         errors::{extract_key_error, extract_region_error},
         kv::{Engine, Statistics},
         lock_manager::LockManager,
-        ResponseBatchConsumer, Result, Storage,
     },
 };
 
@@ -367,7 +367,7 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager, F: KvFormat>(
 mod tests {
     use std::time::Duration;
 
-    use tikv_util::mpsc::future::{unbounded, WakePolicy};
+    use tikv_util::mpsc::future::{WakePolicy, unbounded};
     use txn_types::{TimeStamp, ValueEntry};
 
     use super::*;

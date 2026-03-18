@@ -8,7 +8,7 @@ use std::{
 
 use collections::HashMap;
 use kvproto::replication_modepb::ReplicationMode;
-use pd_client::{take_peer_address, PdClient};
+use pd_client::{PdClient, take_peer_address};
 use raftstore::store::GlobalReplicationState;
 use thiserror::Error;
 use tikv_kv::RaftExtension;

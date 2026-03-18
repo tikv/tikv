@@ -5,20 +5,20 @@ use std::{
     future::Future,
     path::PathBuf,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
     },
     time::Duration,
 };
 
-use engine_traits::{KvEngine, CF_WRITE};
+use engine_traits::{CF_WRITE, KvEngine};
 use kvproto::{
     errorpb,
     import_sstpb::{Error as ImportPbError, SstMeta, SwitchMode, *},
     kvrpcpb::Context,
 };
 use raftstore_v2::StoreMeta;
-use sst_importer::{metrics::*, sst_meta_to_path, Error, Result, SstImporter};
+use sst_importer::{Error, Result, SstImporter, metrics::*, sst_meta_to_path};
 use tikv_kv::{
     Engine, LocalTablets, Modify, SnapContext, Snapshot, SnapshotExt, WriteData, WriteEvent,
 };

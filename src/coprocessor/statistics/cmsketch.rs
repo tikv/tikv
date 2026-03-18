@@ -93,7 +93,7 @@ mod tests {
     use std::{cmp::min, slice::from_ref};
 
     use collections::HashMap;
-    use rand::{distributions::Distribution, rngs::StdRng, SeedableRng};
+    use rand::{SeedableRng, distributions::Distribution, rngs::StdRng};
     use tidb_query_datatype::{
         codec::{datum, datum::Datum},
         expr::EvalContext,

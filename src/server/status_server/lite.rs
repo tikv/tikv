@@ -13,15 +13,15 @@ use std::{error::Error as StdError, net::SocketAddr, str::FromStr, sync::Arc};
 use futures_util::future::TryFutureExt;
 use http::{Method, Request, Response, StatusCode};
 use hyper::{
+    Body, Server as HyperSrv,
     server::{accept::Accept, conn::AddrIncoming},
     service::service_fn,
-    Body, Server as HyperSrv,
 };
 use openssl::x509::X509;
 use security::SecurityConfig;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use super::{make_response, tls_incoming, StatusServer};
+use super::{StatusServer, make_response, tls_incoming};
 use crate::server::Result;
 
 /// Svc is a type alias that help us to call static methods in the full status
