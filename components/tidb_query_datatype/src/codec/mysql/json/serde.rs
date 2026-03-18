@@ -6,7 +6,10 @@ use serde::{
     de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor},
     ser::{Error as SerError, Serialize, SerializeMap, SerializeTuple, Serializer},
 };
-use serde_json::Serializer as JsonSerializer;
+use serde_json::{
+    Serializer as JsonSerializer,
+    ser::{CompactFormatter, Formatter as _},
+};
 
 use super::{Json, JsonRef, JsonType};
 use crate::codec::{Error, convert::ToStringValue};
@@ -77,14 +80,13 @@ fn write_mysql_finite_float<W>(writer: &mut W, value: f64) -> std::io::Result<()
 where
     W: ?Sized + std::io::Write,
 {
-    let mut buffer = zmij::Buffer::new();
-    let s = buffer.format_finite(value);
-    if let Some((mantissa, exponent)) = s.split_once("e+") {
-        writer.write_all(mantissa.as_bytes())?;
-        writer.write_all(b"e")?;
-        writer.write_all(exponent.as_bytes())
+    let mut formatted = Vec::with_capacity(32);
+    CompactFormatter.write_f64(&mut formatted, value)?;
+    if let Some(pos) = formatted.windows(2).position(|window| window == b"e+") {
+        writer.write_all(&formatted[..=pos])?;
+        writer.write_all(&formatted[(pos + 2)..])
     } else {
-        writer.write_all(s.as_bytes())
+        writer.write_all(&formatted)
     }
 }
 
