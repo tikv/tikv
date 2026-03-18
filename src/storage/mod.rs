@@ -3191,7 +3191,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         self.sched_raw_command(metadata, priority, CMD, async move {
             let key = F::encode_raw_key_owned(key, None);
             let cmd = RawCompareAndSwap::new(cf, key, previous_value, value, ttl, api_version, ctx);
-            Self::sched_raw_atomic_command(sched, cmd, Box::new(callback));
+            Self::sched_raw_atomic_command(sched, cmd, callback);
         })
     }
 
@@ -3214,7 +3214,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         self.sched_raw_command(metadata, priority, CMD, async move {
             let key = F::encode_raw_key_owned(key, None);
             let cmd = RawCompareAndDelete::new(cf, key, previous_value, api_version, ctx);
-            Self::sched_raw_atomic_command(sched, cmd, Box::new(callback));
+            Self::sched_raw_atomic_command(sched, cmd, callback);
         })
     }
 
