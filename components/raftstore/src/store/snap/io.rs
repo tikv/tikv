@@ -132,6 +132,7 @@ where
 /// Build a snapshot file for the given column family in sst format.
 /// If there are no key-value pairs fetched, no files will be created at `path`,
 /// otherwise the file will be created and synchronized.
+#[allow(clippy::redundant_closure_call)]
 pub fn build_sst_cf_file_list<E>(
     cf_file: &mut CfFile,
     engine: &E,
@@ -164,7 +165,7 @@ where
                              key_mgr: Option<Arc<DataKeyManager>>|
      -> Result<u64, Error> {
         let info = sst_writer.finish()?;
-        {
+        (|| {
             fail_point!("inject_sst_file_corruption", |_| {
                 static CALLED: std::sync::atomic::AtomicBool =
                     std::sync::atomic::AtomicBool::new(false);
@@ -183,7 +184,7 @@ where
                 let mut f = OpenOptions::new().write(true).open(&path).unwrap();
                 f.write_all(b"x").unwrap();
             });
-        };
+        })();
 
         let sst_reader = E::SstReader::open(&path, key_mgr)?;
         if let Err(e) = sst_reader.verify_checksum() {

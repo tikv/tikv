@@ -474,6 +474,7 @@ where
 
     /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no
     /// available snapshot.
+    #[allow(clippy::redundant_closure_call)]
     pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
         fail_point!("ignore generate snapshot", self.peer_id == 1, |_| {
             Err(raft::Error::Store(
@@ -554,10 +555,10 @@ where
 
         match find_peer_by_id(&self.region, to) {
             Some(to_peer) => {
-                let max_snap_try_cnt = {
+                let max_snap_try_cnt = (|| {
                     fail_point!("ignore_snap_try_cnt", |_| usize::MAX);
                     MAX_SNAP_TRY_CNT
-                };
+                })();
 
                 if *tried_cnt >= max_snap_try_cnt {
                     let cnt = *tried_cnt;
