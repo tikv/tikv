@@ -49,7 +49,9 @@ pub fn setup_for_ci() {
         #[cfg(target_os = "linux")]
         {
             if env::var("GRPC_POLL_STRATEGY").is_err() {
-                env::set_var("GRPC_POLL_STRATEGY", "epollex");
+                unsafe {
+                    env::set_var("GRPC_POLL_STRATEGY", "epollex");
+                }
             }
         }
 

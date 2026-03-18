@@ -233,12 +233,16 @@ mod all {
     #[test]
     fn upload_checkpoint_exits_in_time() {
         defer! {{
-            std::env::remove_var("LOG_BACKUP_UGC_SLEEP_AND_RETURN");
+            unsafe {
+                std::env::remove_var("LOG_BACKUP_UGC_SLEEP_AND_RETURN");
+            }
         }}
         let suite = SuiteBuilder::new_named("upload_checkpoint_exits_in_time")
             .nodes(1)
             .build();
-        std::env::set_var("LOG_BACKUP_UGC_SLEEP_AND_RETURN", "meow");
+        unsafe {
+            std::env::set_var("LOG_BACKUP_UGC_SLEEP_AND_RETURN", "meow");
+        }
         let (_, victim) = suite.endpoints.iter().next().unwrap();
         let sched = victim.scheduler();
         sched

@@ -293,7 +293,9 @@ mod tests {
         const AWS_WEB_IDENTITY_TOKEN_FILE: &str = "AWS_WEB_IDENTITY_TOKEN_FILE";
 
         let default_provider = DefaultCredentialsProvider::new(new_http_client()).await;
-        std::env::set_var(AWS_WEB_IDENTITY_TOKEN_FILE, "tmp");
+        unsafe {
+            std::env::set_var(AWS_WEB_IDENTITY_TOKEN_FILE, "tmp");
+        }
         // mock k8s env with web_identitiy_provider
         fail::cfg("cred_err", "return").unwrap();
         fail::cfg("retry_count", "return(1)").unwrap();
@@ -314,6 +316,8 @@ mod tests {
 
         fail::remove("cred_err");
         fail::remove("retry_count");
-        std::env::remove_var(AWS_WEB_IDENTITY_TOKEN_FILE);
+        unsafe {
+            std::env::remove_var(AWS_WEB_IDENTITY_TOKEN_FILE);
+        }
     }
 }

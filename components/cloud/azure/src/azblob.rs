@@ -841,11 +841,13 @@ mod tests {
         let mut bucket = BucketConf::default(container_name);
         bucket.endpoint = Some(StringNonEmpty::static_str("http://127.0.0.1:10000/user"));
         bucket.prefix = Some(StringNonEmpty::static_str("backup 02/prefix"));
-        env::remove_var(ENV_ACCOUNT_NAME);
-        env::remove_var(ENV_SHARED_KEY);
-        env::remove_var(ENV_CLIENT_ID);
-        env::remove_var(ENV_TENANT_ID);
-        env::remove_var(ENV_CLIENT_SECRET);
+        unsafe {
+            env::remove_var(ENV_ACCOUNT_NAME);
+            env::remove_var(ENV_SHARED_KEY);
+            env::remove_var(ENV_CLIENT_ID);
+            env::remove_var(ENV_TENANT_ID);
+            env::remove_var(ENV_CLIENT_SECRET);
+        }
         let config = Config::default(bucket.clone());
 
         assert_eq!(config.account_name.is_none(), true);
@@ -854,11 +856,13 @@ mod tests {
         assert_eq!(config.env_account_name.is_none(), true);
         assert_eq!(config.env_shared_key.is_none(), true);
 
-        env::set_var(ENV_ACCOUNT_NAME, "user1");
-        env::set_var(ENV_SHARED_KEY, "cGFzc3dk");
-        env::set_var(ENV_CLIENT_ID, "<client_id>");
-        env::set_var(ENV_TENANT_ID, "<tenant_id>");
-        env::set_var(ENV_CLIENT_SECRET, "<client_secret>");
+        unsafe {
+            env::set_var(ENV_ACCOUNT_NAME, "user1");
+            env::set_var(ENV_SHARED_KEY, "cGFzc3dk");
+            env::set_var(ENV_CLIENT_ID, "<client_id>");
+            env::set_var(ENV_TENANT_ID, "<tenant_id>");
+            env::set_var(ENV_CLIENT_SECRET, "<client_secret>");
+        }
 
         let config = Config::default(bucket);
 
@@ -884,11 +888,13 @@ mod tests {
         assert_eq!(debug_str.contains("<client_secret>"), false);
         assert_eq!(debug_str.contains("cGFzc3dk"), false);
 
-        env::remove_var(ENV_ACCOUNT_NAME);
-        env::remove_var(ENV_SHARED_KEY);
-        env::remove_var(ENV_CLIENT_ID);
-        env::remove_var(ENV_TENANT_ID);
-        env::remove_var(ENV_CLIENT_SECRET);
+        unsafe {
+            env::remove_var(ENV_ACCOUNT_NAME);
+            env::remove_var(ENV_SHARED_KEY);
+            env::remove_var(ENV_CLIENT_ID);
+            env::remove_var(ENV_TENANT_ID);
+            env::remove_var(ENV_CLIENT_SECRET);
+        }
     }
 
     #[ignore = "no available azure cloud service for the test env."]
