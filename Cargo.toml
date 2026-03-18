@@ -8,7 +8,7 @@ keywords = ["KV", "distributed-systems", "raft"]
 homepage = "https://tikv.org"
 repository = "https://github.com/tikv/tikv/"
 readme = "README.md"
-edition = "2021"
+edition = "2024"
 publish = false
 
 [features]
@@ -287,7 +287,7 @@ causal_ts = { path = "components/causal_ts" }
 cdc = { path = "components/cdc", default-features = false }
 # Do not enable default-features because it implicitly enables oldtime which is
 # vulnerable to RUSTSEC-2020-0071, see more in deny.toml.
-chrono = { version = "0.4", default-features = false }
+chrono = { version = "0.4.44", default-features = false }
 # Do not enable default-features because it implicitly enables the unsound
 # "atty" crate, see more about RUSTSEC-2021-0145 in deny.toml.
 clap = { version = "2.32", default-features = false, features = [

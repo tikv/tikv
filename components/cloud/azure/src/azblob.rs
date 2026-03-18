@@ -491,11 +491,14 @@ impl ContainerBuilder for TokenCredContainerBuilder {
                 if interval > TOKEN_EXPIRE_LEFT_TIME_MINS {
                     // there still have time to use the token,
                     // and only need one thread to update token.
-                    if let Ok(l) = self.modify_place.try_lock() {
-                        modify_lock = Some(l);
-                    } else {
-                        // otherwise, continue to use the current token
-                        return Ok(t.1.clone());
+                    match self.modify_place.try_lock() {
+                        Ok(l) => {
+                            modify_lock = Some(l);
+                        }
+                        _ => {
+                            // otherwise, continue to use the current token
+                            return Ok(t.1.clone());
+                        }
                     }
                 }
             }

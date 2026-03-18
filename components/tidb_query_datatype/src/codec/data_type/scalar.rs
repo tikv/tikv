@@ -318,7 +318,7 @@ impl ScalarValueRef<'_> {
                     None => {
                         output.write_evaluable_datum_null()?;
                     }
-                    Some(ref val) => {
+                    Some(val) => {
                         output.write_evaluable_datum_json(*val)?;
                     }
                 }

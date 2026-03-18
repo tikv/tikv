@@ -251,7 +251,7 @@ impl LazyBatchColumn {
                 output.extend_from_slice(&v[row_index]);
                 Ok(())
             }
-            LazyBatchColumn::Decoded(ref v) => v.encode(row_index, field_type, ctx, output),
+            LazyBatchColumn::Decoded(v) => v.encode(row_index, field_type, ctx, output),
         }
     }
 
@@ -266,9 +266,7 @@ impl LazyBatchColumn {
     ) -> Result<()> {
         let column = match self {
             LazyBatchColumn::Raw(v) => Column::from_raw_datums(field_type, v, logical_rows, ctx)?,
-            LazyBatchColumn::Decoded(ref v) => {
-                Column::from_vector_value(field_type, v, logical_rows)?
-            }
+            LazyBatchColumn::Decoded(v) => Column::from_vector_value(field_type, v, logical_rows)?,
         };
         output.write_chunk_column(&column)
     }

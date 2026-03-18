@@ -66,14 +66,14 @@ impl<Iter, S: Storage, F: KvFormat> Default for IndexLookUpPhase<Iter, S, F> {
 impl<Iter, S: Storage, F: KvFormat> IndexLookUpPhase<Iter, S, F> {
     fn mut_index_scan_or_err(&mut self) -> Result<&mut IndexScanState> {
         match self {
-            IndexLookUpPhase::IndexScan(ref mut s) => Ok(s),
+            IndexLookUpPhase::IndexScan(s) => Ok(s),
             _ => Err(other_err!("The current phase is not IndexScan")),
         }
     }
 
     fn mut_table_lookup_or_err(&mut self) -> Result<&mut TableLookUpState<Iter, S, F>> {
         match self {
-            IndexLookUpPhase::TableLookUp(ref mut s) => Ok(s),
+            IndexLookUpPhase::TableLookUp(s) => Ok(s),
             _ => Err(other_err!("The current phase is not TableLookUp")),
         }
     }

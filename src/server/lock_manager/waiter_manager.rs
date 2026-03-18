@@ -231,7 +231,7 @@ impl Waiter {
     }
 
     /// The `F` will be invoked if the `Waiter` times out normally.
-    fn on_timeout<F: FnOnce()>(&self, f: F) -> impl Future<Output = ()> {
+    fn on_timeout<F: FnOnce()>(&self, f: F) -> impl Future<Output = ()> + use<F> {
         let timer = self.delay.clone();
         async move {
             if timer.await {
@@ -948,10 +948,10 @@ pub mod tests {
         let mut waiter_info = Vec::new();
         let mut rng = rand::thread_rng();
         for i in 0..20 {
-            let waiter_ts = rng.gen::<u64>().into();
+            let waiter_ts = rng.r#gen::<u64>().into();
             let lock = LockDigest {
-                ts: rng.gen::<u64>().into(),
-                hash: rng.gen(),
+                ts: rng.r#gen::<u64>().into(),
+                hash: rng.r#gen(),
             };
             wait_table.add_waiter(
                 LockWaitToken(Some(i)),

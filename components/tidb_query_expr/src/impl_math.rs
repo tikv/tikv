@@ -338,7 +338,7 @@ fn pow(lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
 #[inline]
 #[rpn_fn]
 fn rand() -> Result<Option<Real>> {
-    let res = MYSQL_RNG.with(|mysql_rng| mysql_rng.borrow_mut().gen());
+    let res = MYSQL_RNG.with(|mysql_rng| mysql_rng.borrow_mut().r#gen());
     Ok(Real::new(res).ok())
 }
 
@@ -346,7 +346,7 @@ fn rand() -> Result<Option<Real>> {
 #[rpn_fn(nullable)]
 fn rand_with_seed_first_gen(seed: Option<&i64>) -> Result<Option<Real>> {
     let mut rng = MySqlRng::new_with_seed(seed.cloned().unwrap_or(0));
-    let res = rng.gen();
+    let res = rng.r#gen();
     Ok(Real::new(res).ok())
 }
 
@@ -705,7 +705,7 @@ impl MySqlRng {
         MySqlRng { seed1, seed2 }
     }
 
-    fn gen(&mut self) -> f64 {
+    fn r#gen(&mut self) -> f64 {
         self.seed1 = (self.seed1 * 3 + self.seed2) % MAX_RAND_VALUE;
         self.seed2 = (self.seed1 + self.seed2 + 33) % MAX_RAND_VALUE;
         f64::from(self.seed1) / f64::from(MAX_RAND_VALUE)
@@ -2111,14 +2111,14 @@ mod tests {
         let mut rng1 = MySqlRng::new();
         std::thread::sleep(std::time::Duration::from_millis(100));
         let mut rng2 = MySqlRng::new();
-        let got1 = rng1.gen();
-        let got2 = rng2.gen();
+        let got1 = rng1.r#gen();
+        let got2 = rng2.r#gen();
         assert!(got1 < 1.0);
         assert!(got1 >= 0.0);
-        assert_ne!(got1, rng1.gen());
+        assert_ne!(got1, rng1.r#gen());
         assert!(got2 < 1.0);
         assert!(got2 >= 0.0);
-        assert_ne!(got2, rng2.gen());
+        assert_ne!(got2, rng2.r#gen());
         assert_ne!(got1, got2);
     }
 
@@ -2133,9 +2133,9 @@ mod tests {
         ];
         for (seed, exp1, exp2) in tests {
             let mut rand = MySqlRng::new_with_seed(seed);
-            let res1 = rand.gen();
+            let res1 = rand.r#gen();
             assert_eq!(res1, exp1);
-            let res2 = rand.gen();
+            let res2 = rand.r#gen();
             assert_eq!(res2, exp2);
         }
     }

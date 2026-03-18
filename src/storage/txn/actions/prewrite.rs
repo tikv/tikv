@@ -2114,7 +2114,7 @@ pub mod tests {
         let cases = 1000;
         for _ in 0..cases {
             // At most 12 ops per-case.
-            let ops_count = rg.gen::<u8>() % 12;
+            let ops_count = rg.r#gen::<u8>() % 12;
             let ops = (0..ops_count)
                 .enumerate()
                 .map(|(i, _)| {
@@ -2122,7 +2122,7 @@ pub mod tests {
                         // The first op must be put.
                         0
                     } else {
-                        rg.gen::<u8>() % 4
+                        rg.r#gen::<u8>() % 4
                     }
                 })
                 .collect::<Vec<_>>();

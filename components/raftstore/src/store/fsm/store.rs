@@ -2718,7 +2718,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
     /// 2. After each incremental range finishes and before next one (if any)
     ///    starts. If `false`, we pause compaction and wait. See:
     ///    `CompactRunner::full_compact` in `worker/compact.rs`.
-    fn is_low_load_for_full_compact(&self) -> impl Fn() -> bool {
+    fn is_low_load_for_full_compact(&self) -> impl Fn() -> bool + use<EK, ER, T> {
         let max_start_cpu_usage = self.ctx.cfg.periodic_full_compact_start_max_cpu;
         let global_stat = self.ctx.global_stat.clone();
         move || {

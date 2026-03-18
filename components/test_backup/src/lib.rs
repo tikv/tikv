@@ -445,7 +445,7 @@ pub fn name_to_cf(name: &str) -> CfName {
 }
 
 pub fn make_unique_dir(path: &Path) -> PathBuf {
-    let uid: u64 = rand::thread_rng().gen();
+    let uid: u64 = rand::thread_rng().r#gen();
     let tmp_suffix = format!("{:016x}", uid);
     let unique = path.join(tmp_suffix);
     fs::create_dir_all(&unique).unwrap();

@@ -25,15 +25,13 @@ fn generate_token(ast: DeriveInput) -> std::result::Result<TokenStream, Error> {
     check_generics(&ast.generics, name.span())?;
 
     let crate_name = Ident::new("online_config", Span::call_site());
-    let encoder_name = Ident::new(
-        {
-            // Avoid naming conflict
-            let mut hasher = DefaultHasher::new();
-            format!("{}", &name).hash(&mut hasher);
-            format!("{}Encoder{:x}", name, hasher.finish()).as_str()
-        },
-        Span::call_site(),
-    );
+    // Keep the owned string alive while constructing the derived identifier.
+    let encoder_name = {
+        let mut hasher = DefaultHasher::new();
+        format!("{}", &name).hash(&mut hasher);
+        let encoder_name = format!("{}Encoder{:x}", name, hasher.finish());
+        Ident::new(&encoder_name, Span::call_site())
+    };
     let encoder_lt = Lifetime::new("'lt", Span::call_site());
 
     let fields = get_struct_fields(ast.data, name.span())?;

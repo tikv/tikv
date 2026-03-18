@@ -430,7 +430,7 @@ fn report_unreachable(router: &impl RaftExtension, msg: &RaftMessage) {
 }
 
 fn grpc_error_is_unimplemented(e: &grpcio::Error) -> bool {
-    if let grpcio::Error::RpcFailure(ref status) = e {
+    if let grpcio::Error::RpcFailure(status) = e {
         status.code() == RpcStatusCode::UNIMPLEMENTED
     } else {
         false

@@ -51,10 +51,10 @@ impl HostAllocator {
 
 unsafe impl GlobalAlloc for HostAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        self.alloc_fn.load(Ordering::Relaxed).unwrap()(layout)
+        unsafe { self.alloc_fn.load(Ordering::Relaxed).unwrap()(layout) }
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        self.dealloc_fn.load(Ordering::Relaxed).unwrap()(ptr, layout)
+        unsafe { self.dealloc_fn.load(Ordering::Relaxed).unwrap()(ptr, layout) }
     }
 }
 

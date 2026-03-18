@@ -232,15 +232,14 @@ impl CommandExt for Prewrite {
     fn write_bytes(&self) -> usize {
         let mut bytes = 0;
         for m in &self.mutations {
-            match *m {
-                Mutation::Put((ref key, ref value), _)
-                | Mutation::Insert((ref key, ref value), _) => {
+            match m {
+                Mutation::Put((key, value), _) | Mutation::Insert((key, value), _) => {
                     bytes += key.as_encoded().len();
                     bytes += value.len();
                 }
-                Mutation::Delete(ref key, _)
-                | Mutation::Lock(ref key, _)
-                | Mutation::SharedLock(ref key, _) => {
+                Mutation::Delete(key, _)
+                | Mutation::Lock(key, _)
+                | Mutation::SharedLock(key, _) => {
                     bytes += key.as_encoded().len();
                 }
                 Mutation::CheckNotExists(..) => (),
@@ -452,14 +451,13 @@ impl CommandExt for PrewritePessimistic {
         let mut bytes = 0;
         for (m, _) in &self.mutations {
             match m {
-                Mutation::Put((ref key, ref value), _)
-                | Mutation::Insert((ref key, ref value), _) => {
+                Mutation::Put((key, value), _) | Mutation::Insert((key, value), _) => {
                     bytes += key.as_encoded().len();
                     bytes += value.len();
                 }
-                Mutation::Delete(ref key, _)
-                | Mutation::Lock(ref key, _)
-                | Mutation::SharedLock(ref key, _) => {
+                Mutation::Delete(key, _)
+                | Mutation::Lock(key, _)
+                | Mutation::SharedLock(key, _) => {
                     bytes += key.as_encoded().len();
                 }
                 Mutation::CheckNotExists(..) => (),

@@ -102,7 +102,7 @@ where
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             None => Ok(false),
-            Some(ref v) => v.as_mysql_bool(context),
+            Some(v) => v.as_mysql_bool(context),
         }
     }
 }
@@ -141,7 +141,7 @@ impl AsMySqlBool for Option<BytesRef<'_>> {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             None => Ok(false),
-            Some(ref v) => v.as_mysql_bool(context),
+            Some(v) => v.as_mysql_bool(context),
         }
     }
 }
@@ -150,7 +150,7 @@ impl AsMySqlBool for Option<JsonRef<'_>> {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             None => Ok(false),
-            Some(ref v) => v.as_mysql_bool(context),
+            Some(v) => v.as_mysql_bool(context),
         }
     }
 }
@@ -159,7 +159,7 @@ impl AsMySqlBool for Option<VectorFloat32Ref<'_>> {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             None => Ok(false),
-            Some(ref v) => v.as_mysql_bool(context),
+            Some(v) => v.as_mysql_bool(context),
         }
     }
 }
@@ -168,7 +168,7 @@ impl AsMySqlBool for Option<EnumRef<'_>> {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             None => Ok(false),
-            Some(ref v) => v.as_mysql_bool(context),
+            Some(v) => v.as_mysql_bool(context),
         }
     }
 }
@@ -177,7 +177,7 @@ impl AsMySqlBool for Option<SetRef<'_>> {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             None => Ok(false),
-            Some(ref v) => v.as_mysql_bool(context),
+            Some(v) => v.as_mysql_bool(context),
         }
     }
 }

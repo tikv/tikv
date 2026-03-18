@@ -103,7 +103,7 @@ impl TimestampOracle {
         }
     }
 
-    pub(crate) fn closed(&self) -> impl Future<Output = ()> {
+    pub(crate) fn closed(&self) -> impl Future<Output = ()> + use<> {
         let mut close_rx = self.close_rx.clone();
         async move {
             let _ = close_rx.changed().await;

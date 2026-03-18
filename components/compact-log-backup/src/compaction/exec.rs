@@ -252,7 +252,7 @@ where
         &mut self,
         c: &Subcompaction,
         ext: &mut SubcompactExt,
-    ) -> Result<impl Iterator<Item = Vec<Record>>> {
+    ) -> Result<impl Iterator<Item = Vec<Record>> + use<DB>> {
         let mut eext = ExecuteAllExt::default();
         eext.max_concurrency = ext.max_load_concurrency;
 

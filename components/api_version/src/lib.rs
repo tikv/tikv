@@ -113,19 +113,19 @@ pub struct ApiV2;
 
 #[macro_export]
 macro_rules! test_kv_format_impl {
-    ($func:ident<$ver:ident $($left_ver:ident)*> $(($($arg:expr),*))?) => {
+    ($func:ident<$ver:ident $($left_ver:ident)*> $(($($arg:expr_2021),*))?) => {
         $crate::test_kv_format_impl!(__imp $func<$ver> $(($($arg),*))?);
         $crate::test_kv_format_impl!($func<$($left_ver)*> $(($($arg),*))?);
     };
-    ($func:ident<> $(($($arg:expr),*))?) => {
+    ($func:ident<> $(($($arg:expr_2021),*))?) => {
     };
-    ($func:ident $(($($arg:expr),*))?) => {
+    ($func:ident $(($($arg:expr_2021),*))?) => {
         $crate::test_kv_format_impl!($func<ApiV1 ApiV1Ttl ApiV2>$(($($arg),*))?);
     };
     (__imp $func:ident<$ver:ident>) => {
         $func::<$crate::$ver>();
     };
-    (__imp $func:ident<$ver:ident>($($arg:expr),*)) => {
+    (__imp $func:ident<$ver:ident>($($arg:expr_2021),*)) => {
         $func::<$crate::$ver>($($arg),*);
     };
 }
@@ -165,7 +165,7 @@ macro_rules! match_template_api_version {
 /// ```
 #[macro_export]
 macro_rules! dispatch_api_version {
-    ($api_version:expr, $e:expr) => {{
+    ($api_version:expr_2021, $e:expr_2021) => {{
         $crate::match_template! {
             API = [
                 V1 => $crate::ApiV1,

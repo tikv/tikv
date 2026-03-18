@@ -1614,7 +1614,7 @@ async fn future_handle_empty(
 fn future_get<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: GetRequest,
-) -> impl Future<Output = ServerResult<GetResponse>> {
+) -> impl Future<Output = ServerResult<GetResponse>> + use<E, L, F> {
     let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
         req.get_context(),
         RequestType::KvGet,
@@ -1695,7 +1695,7 @@ fn set_time_detail(
 fn future_scan<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: ScanRequest,
-) -> impl Future<Output = ServerResult<ScanResponse>> {
+) -> impl Future<Output = ServerResult<ScanResponse>> + use<E, L, F> {
     let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
         req.get_context(),
         RequestType::KvScan,
@@ -1746,7 +1746,7 @@ fn future_scan<E: Engine, L: LockManager, F: KvFormat>(
 fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: BatchGetRequest,
-) -> impl Future<Output = ServerResult<BatchGetResponse>> {
+) -> impl Future<Output = ServerResult<BatchGetResponse>> + use<E, L, F> {
     let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
         req.get_context(),
         RequestType::KvBatchGet,
@@ -1805,7 +1805,7 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
 fn future_buffer_batch_get<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: BufferBatchGetRequest,
-) -> impl Future<Output = ServerResult<BufferBatchGetResponse>> {
+) -> impl Future<Output = ServerResult<BufferBatchGetResponse>> + use<E, L, F> {
     let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
         req.get_context(),
         RequestType::KvBufferBatchGet,
@@ -1857,7 +1857,7 @@ fn future_buffer_batch_get<E: Engine, L: LockManager, F: KvFormat>(
 fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: ScanLockRequest,
-) -> impl Future<Output = ServerResult<ScanLockResponse>> {
+) -> impl Future<Output = ServerResult<ScanLockResponse>> + use<E, L, F> {
     let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
         req.get_context(),
         RequestType::KvScanLock,
@@ -1904,7 +1904,7 @@ async fn future_gc(_: GcRequest) -> ServerResult<GcResponse> {
 fn future_delete_range<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: DeleteRangeRequest,
-) -> impl Future<Output = ServerResult<DeleteRangeResponse>> {
+) -> impl Future<Output = ServerResult<DeleteRangeResponse>> + use<E, L, F> {
     let (cb, f) = paired_future_callback();
     let res = storage.delete_range(
         req.take_context(),
@@ -1992,7 +1992,7 @@ pub async fn future_flashback_to_version<E: Engine, L: LockManager, F: KvFormat>
 fn future_raw_get<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawGetRequest,
-) -> impl Future<Output = ServerResult<RawGetResponse>> {
+) -> impl Future<Output = ServerResult<RawGetResponse>> + use<E, L, F> {
     let v = storage.raw_get(req.take_context(), req.take_cf(), req.take_key());
 
     async move {
@@ -2014,7 +2014,7 @@ fn future_raw_get<E: Engine, L: LockManager, F: KvFormat>(
 fn future_raw_batch_get<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawBatchGetRequest,
-) -> impl Future<Output = ServerResult<RawBatchGetResponse>> {
+) -> impl Future<Output = ServerResult<RawBatchGetResponse>> + use<E, L, F> {
     let keys = req.take_keys().into();
     let v = storage.raw_batch_get(req.take_context(), req.take_cf(), keys);
 
@@ -2033,7 +2033,7 @@ fn future_raw_batch_get<E: Engine, L: LockManager, F: KvFormat>(
 fn future_raw_put<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawPutRequest,
-) -> impl Future<Output = ServerResult<RawPutResponse>> {
+) -> impl Future<Output = ServerResult<RawPutResponse>> + use<E, L, F> {
     let (cb, f) = paired_future_callback();
     let for_atomic = req.get_for_cas();
     let res = if for_atomic {
@@ -2073,7 +2073,7 @@ fn future_raw_put<E: Engine, L: LockManager, F: KvFormat>(
 fn future_raw_batch_put<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawBatchPutRequest,
-) -> impl Future<Output = ServerResult<RawBatchPutResponse>> {
+) -> impl Future<Output = ServerResult<RawBatchPutResponse>> + use<E, L, F> {
     let cf = req.take_cf();
     let pairs_len = req.get_pairs().len();
     // The TTL for each key in seconds.
@@ -2122,7 +2122,7 @@ fn future_raw_batch_put<E: Engine, L: LockManager, F: KvFormat>(
 fn future_raw_delete<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawDeleteRequest,
-) -> impl Future<Output = ServerResult<RawDeleteResponse>> {
+) -> impl Future<Output = ServerResult<RawDeleteResponse>> + use<E, L, F> {
     let (cb, f) = paired_future_callback();
     let for_atomic = req.get_for_cas();
     let res = if for_atomic {
@@ -2149,7 +2149,7 @@ fn future_raw_delete<E: Engine, L: LockManager, F: KvFormat>(
 fn future_raw_batch_delete<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawBatchDeleteRequest,
-) -> impl Future<Output = ServerResult<RawBatchDeleteResponse>> {
+) -> impl Future<Output = ServerResult<RawBatchDeleteResponse>> + use<E, L, F> {
     let cf = req.take_cf();
     let keys = req.take_keys().into();
     let (cb, f) = paired_future_callback();
@@ -2178,7 +2178,7 @@ fn future_raw_batch_delete<E: Engine, L: LockManager, F: KvFormat>(
 fn future_raw_scan<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawScanRequest,
-) -> impl Future<Output = ServerResult<RawScanResponse>> {
+) -> impl Future<Output = ServerResult<RawScanResponse>> + use<E, L, F> {
     let end_key = if req.get_end_key().is_empty() {
         None
     } else {
@@ -2209,7 +2209,7 @@ fn future_raw_scan<E: Engine, L: LockManager, F: KvFormat>(
 fn future_raw_batch_scan<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawBatchScanRequest,
-) -> impl Future<Output = ServerResult<RawBatchScanResponse>> {
+) -> impl Future<Output = ServerResult<RawBatchScanResponse>> + use<E, L, F> {
     let v = storage.raw_batch_scan(
         req.take_context(),
         req.take_cf(),
@@ -2234,7 +2234,7 @@ fn future_raw_batch_scan<E: Engine, L: LockManager, F: KvFormat>(
 fn future_raw_delete_range<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawDeleteRangeRequest,
-) -> impl Future<Output = ServerResult<RawDeleteRangeResponse>> {
+) -> impl Future<Output = ServerResult<RawDeleteRangeResponse>> + use<E, L, F> {
     let (cb, f) = paired_future_callback();
     let res = storage.raw_delete_range(
         req.take_context(),
@@ -2262,7 +2262,7 @@ fn future_raw_delete_range<E: Engine, L: LockManager, F: KvFormat>(
 fn future_raw_get_key_ttl<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawGetKeyTtlRequest,
-) -> impl Future<Output = ServerResult<RawGetKeyTtlResponse>> {
+) -> impl Future<Output = ServerResult<RawGetKeyTtlResponse>> + use<E, L, F> {
     let v = storage.raw_get_key_ttl(req.take_context(), req.take_cf(), req.take_key());
 
     async move {
@@ -2284,7 +2284,7 @@ fn future_raw_get_key_ttl<E: Engine, L: LockManager, F: KvFormat>(
 fn future_raw_compare_and_swap<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawCasRequest,
-) -> impl Future<Output = ServerResult<RawCasResponse>> {
+) -> impl Future<Output = ServerResult<RawCasResponse>> + use<E, L, F> {
     let (cb, f) = paired_future_callback();
     let previous_value = if req.get_previous_not_exist() {
         None
@@ -2330,7 +2330,7 @@ fn future_raw_compare_and_swap<E: Engine, L: LockManager, F: KvFormat>(
 fn future_raw_checksum<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawChecksumRequest,
-) -> impl Future<Output = ServerResult<RawChecksumResponse>> {
+) -> impl Future<Output = ServerResult<RawChecksumResponse>> + use<E, L, F> {
     let f = storage.raw_checksum(
         req.take_context(),
         req.get_algorithm(),
@@ -2359,7 +2359,7 @@ fn future_copr<E: Engine>(
     copr: &Endpoint<E>,
     peer: Option<String>,
     req: Request,
-) -> impl Future<Output = ServerResult<MemoryTraceGuard<Response>>> {
+) -> impl Future<Output = ServerResult<MemoryTraceGuard<Response>>> + use<E> {
     let ret = copr.parse_and_handle_unary_request(req, peer);
     async move { Ok(ret.await) }
 }
@@ -2368,7 +2368,7 @@ fn future_raw_coprocessor<E: Engine, L: LockManager, F: KvFormat>(
     copr_v2: &coprocessor_v2::Endpoint,
     storage: &Storage<E, L, F>,
     req: RawCoprocessorRequest,
-) -> impl Future<Output = ServerResult<RawCoprocessorResponse>> {
+) -> impl Future<Output = ServerResult<RawCoprocessorResponse>> + use<E, L, F> {
     let ret = copr_v2.handle_request(storage, req);
     async move { Ok(ret.await) }
 }
@@ -2376,7 +2376,7 @@ fn future_raw_coprocessor<E: Engine, L: LockManager, F: KvFormat>(
 fn future_broadcast_txn_status<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: BroadcastTxnStatusRequest,
-) -> impl Future<Output = ServerResult<BroadcastTxnStatusResponse>> {
+) -> impl Future<Output = ServerResult<BroadcastTxnStatusResponse>> + use<E, L, F> {
     let (cb, f) = paired_future_callback();
     let res = storage.update_txn_status_cache(
         req.take_context(),
@@ -2426,7 +2426,7 @@ macro_rules! txn_command_future {
         fn $fn_name<E: Engine, L: LockManager, F: KvFormat>(
             storage: &Storage<E, L, F>,
             $req: $req_ty,
-        ) -> impl Future<Output = ServerResult<$resp_ty>> {
+        ) -> impl Future<Output = ServerResult<$resp_ty>> + use<E, L, F> {
             $($prelude)*
             let grpc_req_size = $req.compute_size() as u64;
             let cmd: crate::storage::txn::commands::TypedCommand<_> = $req.into();

@@ -159,11 +159,7 @@ impl Execution {
         ext.prefetch_running_count = self.cfg.prefetch_running_count as usize;
         ext.prefetch_buffer_count = self.cfg.prefetch_buffer_count as usize;
 
-        let ExecuteCtx {
-            ref storage,
-            ref mut hooks,
-            ..
-        } = cx;
+        let ExecuteCtx { storage, hooks, .. } = cx;
 
         let cx = BeforeStartCtx {
             storage: storage.as_ref(),

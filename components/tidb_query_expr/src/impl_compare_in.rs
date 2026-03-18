@@ -241,7 +241,7 @@ pub fn compare_in_int_type_by_hash(
                     None => {
                         default_ret = None;
                     }
-                    Some(&v) => {
+                    &Some(&v) => {
                         if (*base_val == v)
                             && ((*base_val >= 0)
                                 || (arg0_unsigned && argi_unsigned)

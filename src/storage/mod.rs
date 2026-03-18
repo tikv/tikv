@@ -345,7 +345,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     fn snapshot(
         engine: &mut E,
         ctx: SnapContext<'_>,
-    ) -> impl std::future::Future<Output = Result<E::Snap>> {
+    ) -> impl std::future::Future<Output = Result<E::Snap>> + use<E, L, F> {
         kv::snapshot(engine, ctx)
             .map_err(txn::Error::from)
             .map_err(Error::from)
@@ -628,7 +628,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         key: Key,
         start_ts: TimeStamp,
         load_commit_ts: bool,
-    ) -> impl Future<Output = Result<(Option<ValueEntry>, KvGetStatistics)>> {
+    ) -> impl Future<Output = Result<(Option<ValueEntry>, KvGetStatistics)>> + use<E, L, F> {
         let deadline = Self::get_deadline(&ctx);
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
@@ -826,7 +826,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         trackers: Vec<TrackerToken>,
         consumer: P,
         begin_instant: Instant,
-    ) -> impl Future<Output = Result<()>> {
+    ) -> impl Future<Output = Result<()>> + use<P, E, L, F> {
         const CMD: CommandKind = CommandKind::batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let priority = requests[0].get_context().get_priority();
@@ -1052,7 +1052,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         ctx: Context,
         mut keys: Vec<Key>,
         start_ts: TimeStamp,
-    ) -> impl Future<Output = Result<(Vec<Result<KvPair>>, KvGetStatistics)>> {
+    ) -> impl Future<Output = Result<(Vec<Result<KvPair>>, KvGetStatistics)>> + use<E, L, F> {
         let deadline = Self::get_deadline(&ctx);
         const CMD: CommandKind = CommandKind::buffer_batch_get;
         let priority = ctx.get_priority();
@@ -1267,7 +1267,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         keys: Vec<Key>,
         start_ts: TimeStamp,
         load_commit_ts: bool,
-    ) -> impl Future<Output = Result<(Vec<Result<KvPairEntry>>, KvGetStatistics)>> {
+    ) -> impl Future<Output = Result<(Vec<Result<KvPairEntry>>, KvGetStatistics)>> + use<E, L, F>
+    {
         let deadline = Self::get_deadline(&ctx);
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
@@ -1494,7 +1495,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         start_ts: TimeStamp,
         key_only: bool,
         reverse_scan: bool,
-    ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
+    ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> + use<E, L, F> {
         const CMD: CommandKind = CommandKind::scan;
         let priority = ctx.get_priority();
         let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
@@ -1686,7 +1687,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         start_key: Option<Key>,
         end_key: Option<Key>,
         limit: usize,
-    ) -> impl Future<Output = Result<Vec<LockInfo>>> {
+    ) -> impl Future<Output = Result<Vec<LockInfo>>> + use<E, L, F> {
         const CMD: CommandKind = CommandKind::scan_lock;
         let priority = ctx.get_priority();
         let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
@@ -2029,7 +2030,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         ctx: Context,
         cf: String,
         key: Vec<u8>,
-    ) -> impl Future<Output = Result<Option<Vec<u8>>>> {
+    ) -> impl Future<Output = Result<Option<Vec<u8>>>> + use<E, L, F> {
         const CMD: CommandKind = CommandKind::raw_get;
         let priority = ctx.get_priority();
         let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
@@ -2118,7 +2119,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         gets: Vec<RawGetRequest>,
         ids: Vec<u64>,
         consumer: P,
-    ) -> impl Future<Output = Result<()>> {
+    ) -> impl Future<Output = Result<()>> + use<P, E, L, F> {
         const CMD: CommandKind = CommandKind::raw_batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let priority = gets[0].get_context().get_priority();
@@ -2276,7 +2277,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         ctx: Context,
         cf: String,
         keys: Vec<Vec<u8>>,
-    ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
+    ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> + use<E, L, F> {
         const CMD: CommandKind = CommandKind::raw_batch_get;
         let priority = ctx.get_priority();
         let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
@@ -2530,16 +2531,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             self.api_version,
             ctx.api_version,
             CMD,
-            pairs.iter().map(|(ref k, _)| k),
+            pairs.iter().map(|(k, _)| k),
         )?;
 
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
 
-        check_key_size!(
-            pairs.iter().map(|(ref k, _)| k),
-            self.max_key_size,
-            callback
-        );
+        check_key_size!(pairs.iter().map(|(k, _)| k), self.max_key_size, callback);
         Self::check_ttl_valid(pairs.len(), &ttls)?;
 
         let provider = self.causal_ts_provider.clone();
@@ -2782,7 +2779,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         limit: usize,
         key_only: bool,
         reverse_scan: bool,
-    ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
+    ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> + use<E, L, F> {
         const CMD: CommandKind = CommandKind::raw_scan;
         let priority = ctx.get_priority();
         let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
@@ -2920,7 +2917,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         each_limit: usize,
         key_only: bool,
         reverse_scan: bool,
-    ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
+    ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> + use<E, L, F> {
         const CMD: CommandKind = CommandKind::raw_batch_scan;
         let priority = ctx.get_priority();
         let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
@@ -3083,7 +3080,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         ctx: Context,
         cf: String,
         key: Vec<u8>,
-    ) -> impl Future<Output = Result<Option<u64>>> {
+    ) -> impl Future<Output = Result<Option<u64>>> + use<E, L, F> {
         const CMD: CommandKind = CommandKind::raw_get_key_ttl;
         let priority = ctx.get_priority();
         let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
@@ -3217,7 +3214,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             self.api_version,
             ctx.api_version,
             CMD,
-            pairs.iter().map(|(ref k, _)| k),
+            pairs.iter().map(|(k, _)| k),
         )?;
 
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
@@ -3263,7 +3260,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         ctx: Context,
         algorithm: ChecksumAlgorithm,
         mut ranges: Vec<KeyRange>,
-    ) -> impl Future<Output = Result<(u64, u64, u64)>> {
+    ) -> impl Future<Output = Result<(u64, u64, u64)>> + use<E, L, F> {
         const CMD: CommandKind = CommandKind::raw_checksum;
         let priority = ctx.get_priority();
         let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
@@ -3369,7 +3366,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         task_id: u64,
         metadata: TaskMetadata<'_>,
         resource_limiter: Option<Arc<ResourceLimiter>>,
-    ) -> impl Future<Output = Result<T>>
+    ) -> impl Future<Output = Result<T>> + use<Fut, T, E, L, F>
     where
         Fut: Future<Output = Result<T>> + Send + 'static,
         T: Send + 'static,
@@ -3478,11 +3475,11 @@ fn get_priority_tag(priority: CommandPri) -> CommandPriority {
     }
 }
 
-fn prepare_snap_ctx<'a>(
+fn prepare_snap_ctx<'a, 'b>(
     pb_ctx: &'a Context,
-    keys: impl IntoIterator<Item = &'a Key> + Clone,
+    keys: impl IntoIterator<Item = &'b Key> + Clone,
     start_ts: TimeStamp,
-    bypass_locks: &'a TsSet,
+    bypass_locks: &TsSet,
     concurrency_manager: &ConcurrencyManager,
     cmd: CommandKind,
 ) -> Result<SnapContext<'a>> {

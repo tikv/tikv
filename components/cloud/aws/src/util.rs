@@ -59,10 +59,9 @@ pub fn new_http_client() -> SharedHttpClient {
 
 pub fn new_credentials_provider(http: impl HttpClient + 'static) -> DefaultCredentialsProvider {
     let fut = DefaultCredentialsProvider::new(http);
-    if let Ok(hnd) = tokio::runtime::Handle::try_current() {
-        tokio::task::block_in_place(move || hnd.block_on(fut))
-    } else {
-        block_on_external_io(fut)
+    match tokio::runtime::Handle::try_current() {
+        Ok(hnd) => tokio::task::block_in_place(move || hnd.block_on(fut)),
+        _ => block_on_external_io(fut),
     }
 }
 

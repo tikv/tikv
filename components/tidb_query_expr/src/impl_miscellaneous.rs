@@ -201,7 +201,7 @@ pub fn is_ipv6(addr: Option<BytesRef>) -> Result<Option<Int>> {
 #[rpn_fn(nullable)]
 #[inline]
 pub fn uuid() -> Result<Option<Bytes>> {
-    let mut node_id = rand::thread_rng().gen::<[u8; 6]>();
+    let mut node_id = rand::thread_rng().r#gen::<[u8; 6]>();
     node_id[0] |= 0x01; // RFC 4122 multicast bit
 
     let result = Uuid::now_v1(&node_id);

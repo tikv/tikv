@@ -59,7 +59,7 @@ impl FixtureBuilder {
         let mut rng: XorShiftRng = SeedableRng::seed_from_u64(SEED_1);
         let mut col = Vec::with_capacity(self.rows);
         for _ in 0..self.rows {
-            col.push(Datum::I64(rng.gen()));
+            col.push(Datum::I64(rng.r#gen()));
         }
         self.columns.push(col);
         self.field_types.push(FieldTypeTp::LongLong.into());

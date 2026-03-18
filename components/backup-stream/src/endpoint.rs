@@ -1022,7 +1022,7 @@ where
         let sched = self.scheduler.clone();
         self.pool.spawn(root!("flush"; async move {
             let res = fut.await;
-            if let Err(ref err) = &res {
+            if let Err(err) = &res {
                 err.report("during updating flush status")
             }
             let flush_res = FlushResult { task, error: res.err().map(Box::new) };

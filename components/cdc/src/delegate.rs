@@ -268,7 +268,7 @@ impl fmt::Debug for LockTracker {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LockTracker::Pending => write!(f, "LockTracker::Pending"),
-            LockTracker::Preparing(ref locks) => {
+            LockTracker::Preparing(locks) => {
                 write!(f, "LockTracker::Preparing({})", locks.len())
             }
             LockTracker::Prepared { locks, .. } => {
@@ -513,7 +513,7 @@ impl Delegate {
     /// Let downstream subscribe the delegate.
     /// Return error if subscribe fails and the `Delegate` won't be changed.
     pub fn subscribe(&mut self, downstream: Downstream) -> StdResult<(), (Error, Downstream)> {
-        if let LockTracker::Prepared { ref region, .. } = &self.lock_tracker {
+        if let LockTracker::Prepared { region, .. } = &self.lock_tracker {
             // Check if the downstream is outdated.
             if let Err(e) = Self::check_epoch_on_ready(&downstream, region) {
                 return Err((e, downstream));

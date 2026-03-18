@@ -232,10 +232,9 @@ impl std::fmt::Debug for AzureHsmClientDebug {
 }
 
 fn convert_azure_error(err: AzureError) -> CloudError {
-    let err_msg = if let Ok(e) = err.into_inner() {
-        e
-    } else {
-        Box::new(std::io::Error::other("unknown error"))
+    let err_msg = match err.into_inner() {
+        Ok(e) => e,
+        _ => Box::new(std::io::Error::other("unknown error")),
     };
     CloudError::KmsError(KmsError::Other(OtherError::from_box(err_msg)))
 }

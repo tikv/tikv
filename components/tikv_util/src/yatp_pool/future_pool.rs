@@ -116,7 +116,7 @@ impl FuturePool {
     pub fn spawn_handle<F>(
         &self,
         future: F,
-    ) -> Result<impl Future<Output = Result<F::Output, Canceled>>, Full>
+    ) -> Result<impl Future<Output = Result<F::Output, Canceled>> + use<F>, Full>
     where
         F: Future + Send + 'static,
         F::Output: Send,
@@ -237,7 +237,7 @@ impl PoolInner {
     fn spawn_handle<F>(
         &self,
         future: F,
-    ) -> Result<impl Future<Output = Result<F::Output, Canceled>>, Full>
+    ) -> Result<impl Future<Output = Result<F::Output, Canceled>> + use<F>, Full>
     where
         F: Future + Send + 'static,
         F::Output: Send,

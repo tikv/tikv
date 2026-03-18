@@ -129,10 +129,10 @@ mod tests {
     fn average_error(depth: usize, width: usize, total: u32, max_value: usize, s: f64) -> u64 {
         let mut c = CmSketch::new(depth, width).unwrap();
         let mut map: HashMap<u64, u32> = HashMap::default();
-        let gen = ZipfDistribution::new(max_value, s).unwrap();
+        let zipf = ZipfDistribution::new(max_value, s).unwrap();
         let mut rng = StdRng::seed_from_u64(0x01020304);
         for _ in 0..total {
-            let val = gen.sample(&mut rng) as u64;
+            let val = zipf.sample(&mut rng) as u64;
             let bytes =
                 datum::encode_value(&mut EvalContext::default(), from_ref(&Datum::U64(val)))
                     .unwrap();

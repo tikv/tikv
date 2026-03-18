@@ -206,7 +206,7 @@ macro_rules! do_sleep {
     ($duration:expr,skewed_sync) => {
         use rand::Rng;
         let mut rng = rand::thread_rng();
-        let subtraction: bool = rng.gen();
+        let subtraction: bool = rng.r#gen();
         let offset = std::cmp::min(Duration::from_millis(1), ($duration) / 100);
         std::thread::sleep(if subtraction {
             $duration - offset

@@ -103,22 +103,22 @@ impl fmt::Debug for Deregister {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut de = f.debug_struct("Deregister");
         match self {
-            Deregister::Conn(ref conn_id) => de
+            Deregister::Conn(conn_id) => de
                 .field("deregister", &"conn")
                 .field("conn_id", conn_id)
                 .finish(),
             Deregister::Request {
-                ref conn_id,
-                ref request_id,
+                conn_id,
+                request_id,
             } => de
                 .field("deregister", &"request")
                 .field("conn_id", conn_id)
                 .field("request_id", request_id)
                 .finish(),
             Deregister::Region {
-                ref conn_id,
-                ref request_id,
-                ref region_id,
+                conn_id,
+                request_id,
+                region_id,
             } => de
                 .field("deregister", &"region")
                 .field("conn_id", conn_id)
@@ -126,11 +126,11 @@ impl fmt::Debug for Deregister {
                 .field("region_id", region_id)
                 .finish(),
             Deregister::Downstream {
-                ref conn_id,
-                ref request_id,
-                ref region_id,
-                ref downstream_id,
-                ref err,
+                conn_id,
+                request_id,
+                region_id,
+                downstream_id,
+                err,
             } => de
                 .field("deregister", &"downstream")
                 .field("conn_id", conn_id)
@@ -140,9 +140,9 @@ impl fmt::Debug for Deregister {
                 .field("err", err)
                 .finish(),
             Deregister::Delegate {
-                ref region_id,
-                ref observe_id,
-                ref err,
+                region_id,
+                observe_id,
+                err,
             } => de
                 .field("deregister", &"delegate")
                 .field("region_id", region_id)
@@ -220,8 +220,8 @@ impl fmt::Debug for Task {
         let mut de = f.debug_struct("CdcTask");
         match self {
             Task::Register {
-                ref request,
-                ref downstream,
+                request,
+                downstream,
                 ..
             } => de
                 .field("type", &"register")
@@ -234,14 +234,14 @@ impl fmt::Debug for Task {
                 .field("type", &"deregister")
                 .field("deregister", deregister)
                 .finish(),
-            Task::OpenConn { ref conn } => de
+            Task::OpenConn { conn } => de
                 .field("type", &"open_conn")
                 .field("conn_id", &conn.get_id())
                 .finish(),
             Task::SetConnVersion {
-                ref conn_id,
-                ref version,
-                ref explicit_features,
+                conn_id,
+                version,
+                explicit_features,
             } => de
                 .field("type", &"set_conn_version")
                 .field("conn_id", conn_id)
@@ -253,30 +253,26 @@ impl fmt::Debug for Task {
                 .field("multi_batch", &multi.len())
                 .finish(),
             Task::MinTs {
-                ref min_ts,
-                ref current_ts,
-                ..
+                min_ts, current_ts, ..
             } => de
                 .field("type", &"mit_ts")
                 .field("current_ts", current_ts)
                 .field("min_ts", min_ts)
                 .finish(),
             Task::FinishScanLocks {
-                ref observe_id,
-                ref region,
-                ..
+                observe_id, region, ..
             } => de
                 .field("type", &"finish_scan_locks")
                 .field("observe_id", &observe_id)
                 .field("region_id", &region.get_id())
                 .finish(),
-            Task::RegisterMinTsEvent { ref event_time, .. } => {
+            Task::RegisterMinTsEvent { event_time, .. } => {
                 de.field("event_time", &event_time).finish()
             }
             Task::InitDownstream {
-                ref region_id,
-                ref observe_id,
-                ref downstream_id,
+                region_id,
+                observe_id,
+                downstream_id,
                 ..
             } => de
                 .field("type", &"init_downstream")

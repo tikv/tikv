@@ -369,7 +369,7 @@ impl VectorValue {
         use crate::codec::datum_codec::EvaluableDatumEncoder;
 
         match self {
-            VectorValue::Int(ref vec) => {
+            VectorValue::Int(vec) => {
                 match vec.get_option_ref(row_index) {
                     None => {
                         output.write_evaluable_datum_null()?;
@@ -382,7 +382,7 @@ impl VectorValue {
                 }
                 Ok(())
             }
-            VectorValue::Real(ref vec) => {
+            VectorValue::Real(vec) => {
                 match vec.get_option_ref(row_index) {
                     None => {
                         output.write_evaluable_datum_null()?;
@@ -393,7 +393,7 @@ impl VectorValue {
                 }
                 Ok(())
             }
-            VectorValue::Decimal(ref vec) => {
+            VectorValue::Decimal(vec) => {
                 match &vec.get_option_ref(row_index) {
                     None => {
                         output.write_evaluable_datum_null()?;
@@ -404,7 +404,7 @@ impl VectorValue {
                 }
                 Ok(())
             }
-            VectorValue::Bytes(ref vec) => {
+            VectorValue::Bytes(vec) => {
                 match &vec.get_option_ref(row_index) {
                     None => {
                         output.write_evaluable_datum_null()?;
@@ -415,7 +415,7 @@ impl VectorValue {
                 }
                 Ok(())
             }
-            VectorValue::DateTime(ref vec) => {
+            VectorValue::DateTime(vec) => {
                 match vec.get_option_ref(row_index) {
                     None => {
                         output.write_evaluable_datum_null()?;
@@ -426,7 +426,7 @@ impl VectorValue {
                 }
                 Ok(())
             }
-            VectorValue::Duration(ref vec) => {
+            VectorValue::Duration(vec) => {
                 match vec.get_option_ref(row_index) {
                     None => {
                         output.write_evaluable_datum_null()?;
@@ -437,34 +437,34 @@ impl VectorValue {
                 }
                 Ok(())
             }
-            VectorValue::Json(ref vec) => {
+            VectorValue::Json(vec) => {
                 match &vec.get_option_ref(row_index) {
                     None => {
                         output.write_evaluable_datum_null()?;
                     }
-                    Some(ref val) => {
+                    Some(val) => {
                         output.write_evaluable_datum_json(*val)?;
                     }
                 }
                 Ok(())
             }
-            VectorValue::VectorFloat32(ref vec) => {
+            VectorValue::VectorFloat32(vec) => {
                 match &vec.get_option_ref(row_index) {
                     None => {
                         output.write_evaluable_datum_null()?;
                     }
-                    Some(ref val) => {
+                    Some(val) => {
                         output.write_evaluable_datum_vector_float32(*val)?;
                     }
                 }
                 Ok(())
             }
-            VectorValue::Enum(ref vec) => {
+            VectorValue::Enum(vec) => {
                 match &vec.get_option_ref(row_index) {
                     None => {
                         output.write_evaluable_datum_null()?;
                     }
-                    Some(ref val) => {
+                    Some(val) => {
                         output.write_evaluable_datum_enum_uint(*val)?;
                     }
                 }
@@ -488,7 +488,7 @@ impl VectorValue {
         };
 
         match self {
-            VectorValue::Bytes(ref vec) => {
+            VectorValue::Bytes(vec) => {
                 match vec.get_option_ref(row_index) {
                     None => {
                         output.write_evaluable_datum_null()?;
@@ -565,7 +565,7 @@ macro_rules! impl_ext {
             #[inline]
             pub fn $push_name(&mut self, v: Option<$ty>) {
                 match self {
-                    VectorValue::$ty(ref mut vec) => vec.push(v),
+                    VectorValue::$ty(vec) => vec.push(v),
                     other => panic!(
                         "Cannot call `{}` over a {} column",
                         stringify!($push_name),

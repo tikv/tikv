@@ -714,7 +714,7 @@ fn send_a_large_snapshot(
 fn random_long_vec(length: usize) -> Vec<u8> {
     let mut rng = rand::thread_rng();
     let mut value = Vec::with_capacity(1024);
-    (0..length).for_each(|_| value.push(rng.gen::<u8>()));
+    (0..length).for_each(|_| value.push(rng.r#gen::<u8>()));
     value
 }
 

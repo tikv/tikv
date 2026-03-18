@@ -169,7 +169,7 @@ impl ReadPoolHandle {
                     // strictly higher priority. This implements queue fairness:
                     // important tasks can preempt less important queued tasks
                     // when the pool is full.
-                    if let Some(ref ctl) = resource_ctl {
+                    if let Some(ctl) = resource_ctl {
                         let estimated_priority = ctl.peek_priority_of(&metadata, priority);
                         if let Some(mut evicted) = remote.try_evict_lowest(estimated_priority) {
                             // Decrement the running_tasks counter for the
@@ -240,7 +240,7 @@ impl ReadPoolHandle {
         task_id: u64,
         metadata: TaskMetadata<'_>,
         resource_limiter: Option<Arc<ResourceLimiter>>,
-    ) -> impl Future<Output = Result<T, ReadPoolError>>
+    ) -> impl Future<Output = Result<T, ReadPoolError>> + use<F, T>
     where
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static,

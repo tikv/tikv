@@ -405,7 +405,7 @@ impl<E: Engine> Endpoint<E> {
     fn async_in_memory_snapshot(
         engine: &mut E,
         ctx: &ReqContext,
-    ) -> impl std::future::Future<Output = Result<E::IMSnap>> {
+    ) -> impl std::future::Future<Output = Result<E::IMSnap>> + use<E> {
         let mut snap_ctx = SnapContext {
             pb_ctx: &ctx.context,
             start_ts: Some(ctx.txn_start_ts),
@@ -574,7 +574,7 @@ impl<E: Engine> Endpoint<E> {
     fn handle_unary_request(
         &self,
         r: ParseCopRequestResult<E::IMSnap>,
-    ) -> impl Future<Output = Result<MemoryTraceGuard<coppb::Response>>> {
+    ) -> impl Future<Output = Result<MemoryTraceGuard<coppb::Response>>> + use<E> {
         let req_ctx = r.req_ctx;
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
@@ -635,7 +635,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         mut req: coppb::Request,
         peer: Option<String>,
-    ) -> impl Future<Output = MemoryTraceGuard<coppb::Response>> {
+    ) -> impl Future<Output = MemoryTraceGuard<coppb::Response>> + use<E> {
         let tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
             req.get_context(),
             RequestType::Unknown,
@@ -698,7 +698,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req: &mut coppb::Request,
         peer: &Option<String>,
-    ) -> impl Future<Output = Vec<coppb::StoreBatchTaskResponse>> {
+    ) -> impl Future<Output = Vec<coppb::StoreBatchTaskResponse>> + use<E> {
         let mut batch_futs = Vec::with_capacity(req.tasks.len());
         let batch_reqs: Vec<(coppb::Request, u64)> = req
             .take_tasks()
@@ -865,7 +865,7 @@ impl<E: Engine> Endpoint<E> {
     fn handle_stream_request(
         &self,
         r: ParseCopRequestResult<E::IMSnap>,
-    ) -> Result<impl futures::stream::Stream<Item = Result<coppb::Response>>> {
+    ) -> Result<impl futures::stream::Stream<Item = Result<coppb::Response>> + use<E>> {
         let req_ctx = r.req_ctx;
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
@@ -926,7 +926,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req: coppb::Request,
         peer: Option<String>,
-    ) -> impl futures::stream::Stream<Item = coppb::Response> {
+    ) -> impl futures::stream::Stream<Item = coppb::Response> + use<E> {
         let tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
             req.get_context(),
             RequestType::Unknown,

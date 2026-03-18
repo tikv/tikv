@@ -394,9 +394,9 @@ macro_rules! try_send {
 macro_rules! debug {
     ($($t: tt)+) => {
         if cfg!(feature = "backup-stream-debug") {
-            tikv_util::info!(#"backup-stream", $($t)+)
+            tikv_util::info!(# "backup-stream", $($t)+)
         } else {
-            tikv_util::debug!(#"backup-stream", $($t)+)
+            tikv_util::debug!(# "backup-stream", $($t)+)
         }
     };
 }

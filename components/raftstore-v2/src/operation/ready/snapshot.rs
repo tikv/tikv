@@ -428,7 +428,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 "state" => ?state,
             );
             match state {
-                SnapState::Generating { ref canceled, .. } => {
+                SnapState::Generating { canceled, .. } => {
                     if canceled.load(Ordering::SeqCst) {
                         self.cancel_generating_snap(Some(to));
                     } else {
@@ -437,7 +437,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                         ));
                     }
                 }
-                SnapState::Generated(ref s) => {
+                SnapState::Generated(s) => {
                     let snap = *s.clone();
                     if self.validate_snap(&snap, request_index) {
                         *state = SnapState::Sending(s.clone());
@@ -445,7 +445,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                     }
                     *state = SnapState::Relax;
                 }
-                SnapState::Sending(ref s) => {
+                SnapState::Sending(s) => {
                     if self.validate_snap(s, request_index) {
                         return Ok(*s.clone());
                     }

@@ -3943,12 +3943,12 @@ where
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Msg::Apply { apply, .. } => write!(f, "[region {}] async apply", apply.region_id),
-            Msg::Registration(ref r) => {
+            Msg::Registration(r) => {
                 write!(f, "[region {}] Reg {:?}", r.region.get_id(), r.apply_state)
             }
             Msg::LogsUpToDate(_) => write!(f, "logs are updated"),
             Msg::Noop => write!(f, "noop"),
-            Msg::Destroy(ref d) => write!(f, "[region {}] destroy", d.region_id),
+            Msg::Destroy(d) => write!(f, "[region {}] destroy", d.region_id),
             Msg::Snapshot(GenSnapTask { region_id, .. }) => {
                 write!(f, "[region {}] requests a snapshot", region_id)
             }
