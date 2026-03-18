@@ -28,6 +28,7 @@ impl RocksEngine {
 
     // We store all data which would be deleted in memory at first because the data
     // of region will never be larger than max-region-size.
+    #[allow(clippy::redundant_closure_call)]
     fn delete_all_in_range_cf_by_ingest(
         &self,
         wopts: &WriteOptions,
@@ -75,10 +76,10 @@ impl RocksEngine {
                 } else {
                     data.push(it.key().to_vec());
                 }
-                let max_delete_count_by_key = {
+                let max_delete_count_by_key = (|| {
                     fail_point!("manually_set_max_delete_count_by_key", |_| { 0 });
                     MAX_DELETE_COUNT_BY_KEY
-                };
+                })();
                 if data.len() > max_delete_count_by_key {
                     let builder = RocksSstWriterBuilder::new().set_db(self).set_cf(cf);
                     let mut writer = builder.build(sst_path.as_str())?;

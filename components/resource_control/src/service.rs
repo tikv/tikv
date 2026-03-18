@@ -186,6 +186,7 @@ impl ResourceManagerService {
     }
 
     // report ru metrics periodically.
+    #[allow(clippy::redundant_closure_call)]
     pub async fn report_ru_metrics(&self) {
         let mut last_group_statistics_map: HashMap<String, ReportStatistic> = HashMap::new();
         // load controller config firstly.
@@ -282,7 +283,7 @@ impl ResourceManagerService {
             }
 
             let dur = if cfg!(feature = "failpoints") {
-                {
+                (|| {
                     fail::fail_point!("set_report_duration", |v| {
                         let dur = v
                             .expect("should provide delay time (in ms)")
@@ -291,7 +292,7 @@ impl ResourceManagerService {
                         std::time::Duration::from_millis(dur)
                     });
                     std::time::Duration::from_millis(100)
-                }
+                })()
             } else {
                 BACKGROUND_RU_REPORT_DURATION
             };

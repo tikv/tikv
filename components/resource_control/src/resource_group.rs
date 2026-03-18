@@ -1073,14 +1073,14 @@ pub(crate) mod tests {
         let resource_manager = ResourceGroupManager::default();
         let resource_ctl = resource_manager.derive_controller("test_read".into(), true);
         let resource_ctl_write = resource_manager.derive_controller("test_write".into(), false);
-        assert_eq!(resource_ctl.is_customized(), false);
-        assert_eq!(resource_ctl_write.is_customized(), false);
+        assert!(!resource_ctl.is_customized());
+        assert!(!resource_ctl_write.is_customized());
         let group1 = new_resource_group_ru("test1".into(), 5000, 0);
         resource_manager.add_resource_group(group1);
         assert_eq!(resource_ctl.resource_group(b"test1").weight, 20);
         assert_eq!(resource_ctl_write.resource_group(b"test1").weight, 20);
-        assert_eq!(resource_ctl.is_customized(), true);
-        assert_eq!(resource_ctl_write.is_customized(), true);
+        assert!(resource_ctl.is_customized());
+        assert!(resource_ctl_write.is_customized());
 
         // add a resource group with big ru
         let group1 = new_resource_group_ru("test2".into(), 50000, 0);
