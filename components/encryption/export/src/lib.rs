@@ -11,7 +11,7 @@ pub use encryption::{
 };
 use encryption::{FileBackend, PlaintextBackend, cloud_convert_error};
 use gcp::{GcpKms, STORAGE_VENDOR_NAME_GCP};
-use gcs_v2::GcpKms as GcpKmsV2;
+use gcp_v2::GcpKms as GcpKmsV2;
 use tikv_util::{box_err, error, info};
 
 pub fn data_key_manager_from_config(

@@ -2331,7 +2331,7 @@ dependencies = [
  "encryption",
  "file_system",
  "gcp",
- "gcs_v2",
+ "gcp_v2",
  "kvproto",
  "protobuf 2.8.0",
  "rust-ini",
@@ -2605,7 +2605,7 @@ dependencies = [
  "futures-io",
  "futures-util",
  "gcp",
- "gcs_v2",
+ "gcp_v2",
  "hyper 0.14.28",
  "kvproto",
  "lazy_static",
@@ -3042,7 +3042,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gcs_v2"
+name = "gcp_v2"
 version = "0.0.1"
 dependencies = [
  "anyhow",

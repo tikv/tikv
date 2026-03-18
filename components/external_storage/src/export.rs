@@ -10,7 +10,7 @@ use cloud::blob::{BlobStorage, DeletableStorage, IterableStorage, PutResource};
 use encryption::DataKeyManager;
 use futures_util::{future::LocalBoxFuture, stream::LocalBoxStream};
 use gcp::GcsStorage;
-use gcs_v2::GcsStorage as GcsStorageV2;
+use gcp_v2::GcsStorage as GcsStorageV2;
 use kvproto::brpb::{
     AzureBlobStorage, Gcs, Noop, S3, StorageBackend, StorageBackend_oneof_backend as Backend,
 };
@@ -74,7 +74,7 @@ fn create_backend(
         }
         Backend::Gcs(config) => {
             if backend_config.gcs_v2_enable {
-                info!("external storage selected: gcs_v2");
+                info!("external storage selected: gcp_v2");
                 blob_store(GcsStorageV2::from_input(config.clone())?)
             } else {
                 blob_store(GcsStorage::from_input(config.clone())?)

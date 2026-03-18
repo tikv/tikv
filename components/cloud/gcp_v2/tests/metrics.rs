@@ -119,7 +119,7 @@ fn make_cfg(
 }
 
 #[tokio::test]
-async fn gcs_v2_put_uses_resumable_upload_with_requested_options()
+async fn gcp_v2_put_uses_resumable_upload_with_requested_options()
 -> Result<(), Box<dyn std::error::Error>> {
     let (endpoint, shutdown, captured) = start_server().await?;
     let cfg = make_cfg(
@@ -129,7 +129,7 @@ async fn gcs_v2_put_uses_resumable_upload_with_requested_options()
         "COLDLINE",
         "projectPrivate",
     );
-    let s = gcs_v2::GcsStorage::from_input(cfg)?;
+    let s = gcp_v2::GcsStorage::from_input(cfg)?;
 
     s.put(
         "a",
@@ -163,7 +163,7 @@ async fn gcs_v2_put_uses_resumable_upload_with_requested_options()
 }
 
 #[tokio::test]
-async fn gcs_v2_zero_length_put_uses_resumable_upload() -> Result<(), Box<dyn std::error::Error>> {
+async fn gcp_v2_zero_length_put_uses_resumable_upload() -> Result<(), Box<dyn std::error::Error>> {
     let (endpoint, shutdown, captured) = start_server().await?;
     let cfg = make_cfg(
         &endpoint,
@@ -172,7 +172,7 @@ async fn gcs_v2_zero_length_put_uses_resumable_upload() -> Result<(), Box<dyn st
         "COLDLINE",
         "projectPrivate",
     );
-    let s = gcs_v2::GcsStorage::from_input(cfg)?;
+    let s = gcp_v2::GcsStorage::from_input(cfg)?;
 
     s.put(
         "zero",

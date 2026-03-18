@@ -113,7 +113,7 @@ impl std::fmt::Display for GcsApiError {
         if let Some(code) = self.http_status_code() {
             return write!(
                 f,
-                "gcs_v2 {op} failed (http={code}): {err}",
+                "gcp_v2 {op} failed (http={code}): {err}",
                 op = self.op,
                 err = self.source
             );
@@ -121,14 +121,14 @@ impl std::fmt::Display for GcsApiError {
         if let Some(code) = self.grpc_code() {
             return write!(
                 f,
-                "gcs_v2 {op} failed (grpc={code:?}): {err}",
+                "gcp_v2 {op} failed (grpc={code:?}): {err}",
                 op = self.op,
                 err = self.source
             );
         }
         write!(
             f,
-            "gcs_v2 {op} failed: {err}",
+            "gcp_v2 {op} failed: {err}",
             op = self.op,
             err = self.source
         )

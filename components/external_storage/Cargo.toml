@@ -22,7 +22,7 @@ futures = "0.3"
 futures-io = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 gcp = { workspace = true }
-gcs_v2 = { workspace = true }
+gcp_v2 = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.3"
 openssl = { workspace = true }
