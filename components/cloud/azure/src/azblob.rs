@@ -122,16 +122,15 @@ impl Config {
             env::var(ENV_CLIENT_ID).ok(),
             env::var(ENV_TENANT_ID).ok(),
             env::var(ENV_CLIENT_SECRET).ok(),
-        ) {
-            if !(client_id.is_empty() || tenant_id.is_empty() || client_secret.is_empty()) {
-                let client_id = ClientId::new(client_id);
-                let client_secret = ClientSecret::new(client_secret);
-                return Some(CredentialInfo {
-                    client_id,
-                    tenant_id,
-                    client_secret,
-                });
-            }
+        ) && !(client_id.is_empty() || tenant_id.is_empty() || client_secret.is_empty())
+        {
+            let client_id = ClientId::new(client_id);
+            let client_secret = ClientSecret::new(client_secret);
+            return Some(CredentialInfo {
+                client_id,
+                tenant_id,
+                client_secret,
+            });
         }
         None
     }

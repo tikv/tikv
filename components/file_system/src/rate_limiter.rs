@@ -389,10 +389,10 @@ impl PriorityBasedIoRateLimiter {
             used_budgets += ((served_by_first_epoch + served_by_skipped_epochs) as f32
                 / (skipped_epochs + 1.0)) as usize;
             // Only apply rate limit adjustments on low-priority IOs.
-            if *pri == IoPriority::Medium {
-                if let Some(adjustor) = &locked.adjustor {
-                    total_budgets = adjustor.adjust(total_budgets);
-                }
+            if *pri == IoPriority::Medium
+                && let Some(adjustor) = &locked.adjustor
+            {
+                total_budgets = adjustor.adjust(total_budgets);
             }
             remaining_budgets = if total_budgets > used_budgets {
                 total_budgets - used_budgets

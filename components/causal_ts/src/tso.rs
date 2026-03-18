@@ -228,12 +228,12 @@ impl TsoBatchList {
     pub fn push(&self, batch_size: u32, last_ts: TimeStamp, need_flush: bool) -> Result<u64> {
         let new_batch = TsoBatch::new(batch_size, last_ts);
 
-        if let Some((_, last_batch)) = self.inner.read().iter().next_back() {
-            if new_batch.original_start() < last_batch.excluded_end() {
-                error!("timestamp fall back"; "batch_size" => batch_size, "last_ts" => ?last_ts,
-                    "last_batch" => ?last_batch, "new_batch" => ?new_batch);
-                return Err(box_err!("timestamp fall back"));
-            }
+        if let Some((_, last_batch)) = self.inner.read().iter().next_back()
+            && new_batch.original_start() < last_batch.excluded_end()
+        {
+            error!("timestamp fall back"; "batch_size" => batch_size, "last_ts" => ?last_ts,
+                "last_batch" => ?last_batch, "new_batch" => ?new_batch);
+            return Err(box_err!("timestamp fall back"));
         }
 
         let key = new_batch.original_start().into_inner();
@@ -255,11 +255,11 @@ impl TsoBatchList {
         // Note: do NOT try to make it async.
         // According to benchmark, `write().pop_first()` can be done in ~50ns, while
         // async implemented by `Worker` costs ~1us.
-        if self.inner.read().len() > self.capacity as usize {
-            if let Some((_, batch)) = self.inner.write().pop_first() {
-                self.tso_remain
-                    .fetch_sub(batch.remain() as i32, Ordering::Relaxed);
-            }
+        if self.inner.read().len() > self.capacity as usize
+            && let Some((_, batch)) = self.inner.write().pop_first()
+        {
+            self.tso_remain
+                .fetch_sub(batch.remain() as i32, Ordering::Relaxed);
         }
 
         Ok(key)

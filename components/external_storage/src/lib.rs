@@ -515,27 +515,27 @@ fn calc_and_compare_checksums(
     opt_expected_encrypted_file_checksum: Option<Vec<u8>>,
     opt_encrypted_file_hasher: Option<Arc<Mutex<Hasher>>>,
 ) -> Result<(), io::Error> {
-    if let Some(expected_encrypted_checksum) = opt_expected_encrypted_file_checksum {
-        if let Some(hasher) = opt_encrypted_file_hasher {
-            let calc_checksum = hasher.lock().unwrap().finish().map_or_else(
-                |err| {
-                    Err(io::Error::other(format!(
-                        "openssl hasher finish failed: {}",
-                        err
-                    )))
-                },
-                |bytes| Ok(bytes.to_vec()),
-            )?;
+    if let Some(expected_encrypted_checksum) = opt_expected_encrypted_file_checksum
+        && let Some(hasher) = opt_encrypted_file_hasher
+    {
+        let calc_checksum = hasher.lock().unwrap().finish().map_or_else(
+            |err| {
+                Err(io::Error::other(format!(
+                    "openssl hasher finish failed: {}",
+                    err
+                )))
+            },
+            |bytes| Ok(bytes.to_vec()),
+        )?;
 
-            if !expected_encrypted_checksum.eq(&calc_checksum) {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!(
-                        "encrypted file checksums do not match, expected: {:?}, calculated: {:?}",
-                        expected_encrypted_checksum, calc_checksum,
-                    ),
-                ));
-            }
+        if !expected_encrypted_checksum.eq(&calc_checksum) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "encrypted file checksums do not match, expected: {:?}, calculated: {:?}",
+                    expected_encrypted_checksum, calc_checksum,
+                ),
+            ));
         }
     }
     Ok(())

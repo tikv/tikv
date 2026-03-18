@@ -301,7 +301,7 @@ macro_rules! impl_evaluable_type {
 unsafe fn retain_lifetime_transmute<T, U>(from: &T) -> &U {
     // with the help of elided lifetime, we can ensure &T and &U
     // shares the same lifetime.
-    &*(from as *const T as *const U)
+    unsafe { &*(from as *const T as *const U) }
 }
 
 impl Evaluable for Int {
@@ -437,13 +437,13 @@ impl<'a, T: Evaluable + EvaluableRet> EvaluableRef<'a> for &'a T {
 
 impl<A: UnsafeRefInto<B>, B> UnsafeRefInto<Option<B>> for Option<A> {
     unsafe fn unsafe_into(self) -> Option<B> {
-        self.map(|x| x.unsafe_into())
+        self.map(|x| unsafe { x.unsafe_into() })
     }
 }
 
 impl<T: Evaluable + EvaluableRet> UnsafeRefInto<&'static T> for &T {
     unsafe fn unsafe_into(self) -> &'static T {
-        std::mem::transmute(self)
+        unsafe { std::mem::transmute(self) }
     }
 }
 
@@ -504,31 +504,31 @@ impl<'a> EvaluableRef<'a> for BytesRef<'a> {
 
 impl UnsafeRefInto<BytesRef<'static>> for BytesRef<'_> {
     unsafe fn unsafe_into(self) -> BytesRef<'static> {
-        std::mem::transmute(self)
+        unsafe { std::mem::transmute(self) }
     }
 }
 
 impl UnsafeRefInto<JsonRef<'static>> for JsonRef<'_> {
     unsafe fn unsafe_into(self) -> JsonRef<'static> {
-        std::mem::transmute(self)
+        unsafe { std::mem::transmute(self) }
     }
 }
 
 impl UnsafeRefInto<EnumRef<'static>> for EnumRef<'_> {
     unsafe fn unsafe_into(self) -> EnumRef<'static> {
-        std::mem::transmute(self)
+        unsafe { std::mem::transmute(self) }
     }
 }
 
 impl UnsafeRefInto<SetRef<'static>> for SetRef<'_> {
     unsafe fn unsafe_into(self) -> SetRef<'static> {
-        std::mem::transmute(self)
+        unsafe { std::mem::transmute(self) }
     }
 }
 
 impl UnsafeRefInto<VectorFloat32Ref<'static>> for VectorFloat32Ref<'_> {
     unsafe fn unsafe_into(self) -> VectorFloat32Ref<'static> {
-        std::mem::transmute(self)
+        unsafe { std::mem::transmute(self) }
     }
 }
 

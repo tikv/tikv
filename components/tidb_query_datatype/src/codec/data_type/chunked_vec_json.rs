@@ -123,7 +123,7 @@ impl From<Vec<Option<Json>>> for ChunkedVecJson {
 
 impl UnsafeRefInto<&'static ChunkedVecJson> for &ChunkedVecJson {
     unsafe fn unsafe_into(self) -> &'static ChunkedVecJson {
-        std::mem::transmute(self)
+        unsafe { std::mem::transmute(self) }
     }
 }
 

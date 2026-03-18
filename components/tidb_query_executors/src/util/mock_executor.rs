@@ -90,10 +90,10 @@ impl BatchExecutor for MockExecutor {
     }
 
     fn intermediate_schema(&self, index: usize) -> Result<&[FieldType]> {
-        if let Some((idx, schema)) = &self.intermediate_schema {
-            if *idx == index {
-                return Ok(schema);
-            }
+        if let Some((idx, schema)) = &self.intermediate_schema
+            && *idx == index
+        {
+            return Ok(schema);
         }
         if let Some(child) = &self.child {
             return child.intermediate_schema(index);
@@ -105,10 +105,10 @@ impl BatchExecutor for MockExecutor {
         &mut self,
         results: &mut [Vec<BatchExecuteResult>],
     ) -> Result<()> {
-        if let Some((idx, _)) = &self.intermediate_schema {
-            if let Some(mut next) = self.intermediate_results.next() {
-                results[*idx].append(&mut next);
-            }
+        if let Some((idx, _)) = &self.intermediate_schema
+            && let Some(mut next) = self.intermediate_results.next()
+        {
+            results[*idx].append(&mut next);
         }
         if let Some(child) = &mut self.child {
             child.consume_and_fill_intermediate_results(results)?

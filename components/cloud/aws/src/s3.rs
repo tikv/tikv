@@ -305,12 +305,12 @@ impl S3Storage {
     }
 
     fn strip_prefix_if_needed(&self, key: String) -> String {
-        if let Some(prefix) = &self.config.bucket.prefix {
-            if key.starts_with(prefix.as_str()) {
-                return key[prefix.len()..]
-                    .trim_start_matches(DEFAULT_SEP)
-                    .to_owned();
-            }
+        if let Some(prefix) = &self.config.bucket.prefix
+            && key.starts_with(prefix.as_str())
+        {
+            return key[prefix.len()..]
+                .trim_start_matches(DEFAULT_SEP)
+                .to_owned();
         }
         key
     }

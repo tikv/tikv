@@ -387,10 +387,10 @@ fn json_with_path_validator(expr: &tipb::Expr) -> Result<()> {
 #[inline]
 fn json_keys(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     assert!(!args.is_empty() && args.len() <= 2);
-    if let Some(j) = args[0].as_json() {
-        if let Some(list) = parse_json_path_list(&args[1..])? {
-            return Ok(j.keys(&list)?);
-        }
+    if let Some(j) = args[0].as_json()
+        && let Some(list) = parse_json_path_list(&args[1..])?
+    {
+        return Ok(j.keys(&list)?);
     }
     Ok(None)
 }

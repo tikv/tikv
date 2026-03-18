@@ -454,17 +454,17 @@ where
         };
 
         let mut result = executor.next_batch(scan_rows).await;
-        if let Ok(is_drained) = result.is_drained {
-            if is_drained.stop() {
-                state
-                    .table_scan
-                    .as_mut()
-                    .unwrap()
-                    .summary_collector
-                    .collect(&mut self.table_scan_exec_summary);
-                state.table_scan = None;
-                result.is_drained = Ok(BatchExecIsDrain::Remain);
-            }
+        if let Ok(is_drained) = result.is_drained
+            && is_drained.stop()
+        {
+            state
+                .table_scan
+                .as_mut()
+                .unwrap()
+                .summary_collector
+                .collect(&mut self.table_scan_exec_summary);
+            state.table_scan = None;
+            result.is_drained = Ok(BatchExecIsDrain::Remain);
         }
         Ok(result)
     }
