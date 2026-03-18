@@ -378,7 +378,16 @@ impl<L: LockManager> TxnSchedulerInner<L> {
     fn acquire_lock_on_wakeup(
         &self,
         cid: u64,
-    ) -> Result<Option<Task>, (String, TaskMetadata<'_>, CommandPri, StorageError)> {
+    ) -> Result<
+        Option<Task>,
+        (
+            String,
+            TaskMetadata<'static>,
+            CommandPri,
+            StorageError,
+            Context,
+        ),
+    > {
         let mut task_slot = self.get_task_slot(cid);
         let tctx = task_slot.get_mut(&cid).unwrap();
         // Check deadline early during acquiring latches to avoid expired requests
@@ -393,9 +402,10 @@ impl<L: LockManager> TxnSchedulerInner<L> {
             tctx.lock.owned_count += 1;
             return Err((
                 cmd.ctx().request_source.clone(),
-                TaskMetadata::from_ctx(cmd.resource_control_ctx()),
+                TaskMetadata::from_ctx(cmd.resource_control_ctx()).deep_clone(),
                 cmd.priority(),
                 e.into(),
+                cmd.ctx().clone(),
             ));
         }
         if self.latches.acquire(&mut tctx.lock, cid) {
@@ -680,14 +690,21 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 self.execute(task);
             }
             Ok(None) => {}
-            Err((request_source, metadata, pri, err)) => {
+            Err((request_source, metadata, pri, err, ctx)) => {
                 // Spawn the finish task to the pool to avoid stack overflow
                 // when many queuing tasks fail successively.
                 let this = self.clone();
+                let resource_tag = self.inner.resource_tag_factory.new_tag(&ctx);
                 self.get_sched_pool()
-                    .spawn(&request_source, metadata, pri, async move {
-                        this.finish_with_err(cid, err, None);
-                    })
+                    .spawn(
+                        &request_source,
+                        metadata,
+                        pri,
+                        async move {
+                            this.finish_with_err(cid, err, None);
+                        }
+                        .in_resource_metering_tag(resource_tag),
+                    )
                     .unwrap();
             }
         }
@@ -2370,7 +2387,7 @@ mod tests {
     use std::{
         sync::{
             Arc,
-            mpsc::{channel, RecvTimeoutError},
+            mpsc::{RecvTimeoutError, channel},
         },
         thread,
         time::Duration,
@@ -2405,13 +2422,13 @@ mod tests {
         },
         mvcc::{self, Mutation},
         test_util::latest_feature_gate,
-        types::PessimisticLockParameters,
         txn::{
             commands,
             commands::TypedCommand,
             flow_controller::{EngineFlowController, FlowController},
             latch::*,
         },
+        types::PessimisticLockParameters,
     };
 
     #[derive(Clone)]

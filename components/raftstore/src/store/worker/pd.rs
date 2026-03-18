@@ -999,6 +999,8 @@ struct StoreHeartbeatPeerReport {
     report_peers: HashMap<u64, pdpb::PeerStat>,
     region_unified_read_cpu_usage_sum: u64,
     region_scheduler_cpu_usage_sum: u64,
+    orphan_unified_read_cpu_usage_sum: u64,
+    orphan_scheduler_cpu_usage_sum: u64,
 }
 
 fn collect_report_peers_for_store_heartbeat(
@@ -1056,12 +1058,23 @@ fn collect_report_peers_for_store_heartbeat(
         read_stat.set_cpu_stats(cpu_stats);
         report_peers.insert(*region_id, read_stat);
     }
+    let mut orphan_unified_read_cpu_usage_sum = 0;
+    let mut orphan_scheduler_cpu_usage_sum = 0;
+    if has_interval {
+        for cpu_record in region_cpu_records_since_store_heartbeat.values().copied() {
+            let cpu_usage = calculate_store_heartbeat_cpu_usage(cpu_record, interval_seconds);
+            orphan_unified_read_cpu_usage_sum += cpu_usage.unified_read_cpu_usage;
+            orphan_scheduler_cpu_usage_sum += cpu_usage.scheduler_cpu_usage;
+        }
+    }
     // Drain orphan CPU records for regions no longer tracked in `region_peers`.
     region_cpu_records_since_store_heartbeat.clear();
     StoreHeartbeatPeerReport {
         report_peers,
         region_unified_read_cpu_usage_sum,
         region_scheduler_cpu_usage_sum,
+        orphan_unified_read_cpu_usage_sum,
+        orphan_scheduler_cpu_usage_sum,
     }
 }
 
@@ -1431,6 +1444,8 @@ where
                 report_peers,
                 region_unified_read_cpu_usage_sum,
                 region_scheduler_cpu_usage_sum,
+                orphan_unified_read_cpu_usage_sum,
+                orphan_scheduler_cpu_usage_sum,
             } = {
                 let mut region_peers = self.region_peers.write().unwrap();
                 collect_report_peers_for_store_heartbeat(
@@ -1465,11 +1480,17 @@ where
                     .with_label_values(&["unified_read", "region_sum"])
                     .set(region_unified_read_cpu_usage_sum as i64);
                 STORE_CPU_POOL_GAUGE_VEC
+                    .with_label_values(&["unified_read", "orphan_untracked"])
+                    .set(orphan_unified_read_cpu_usage_sum as i64);
+                STORE_CPU_POOL_GAUGE_VEC
                     .with_label_values(&["scheduler", "store_level"])
                     .set(store_scheduler as i64);
                 STORE_CPU_POOL_GAUGE_VEC
                     .with_label_values(&["scheduler", "region_sum"])
                     .set(region_scheduler_cpu_usage_sum as i64);
+                STORE_CPU_POOL_GAUGE_VEC
+                    .with_label_values(&["scheduler", "orphan_untracked"])
+                    .set(orphan_scheduler_cpu_usage_sum as i64);
             }
 
             stats = collect_report_read_peer_stats(HOTSPOT_REPORT_CAPACITY, report_peers, stats);
@@ -3139,18 +3160,22 @@ mod tests {
         region_cpu_records_since_store_heartbeat.insert(
             2,
             RegionCpuRecord {
-                cpu_time_ms: 12,
+                cpu_time_ms: 42,
+                unified_read_cpu_time_ms: 17,
+                scheduler_cpu_time_ms: 25,
                 ..Default::default()
             },
         );
 
-        collect_report_peers_for_store_heartbeat(
+        let report = collect_report_peers_for_store_heartbeat(
             &mut region_peers,
             &mut region_cpu_records_since_store_heartbeat,
             1,
         );
 
         assert!(region_cpu_records_since_store_heartbeat.is_empty());
+        assert_eq!(report.orphan_unified_read_cpu_usage_sum, 1);
+        assert_eq!(report.orphan_scheduler_cpu_usage_sum, 3);
     }
 
     #[test]
@@ -3182,6 +3207,8 @@ mod tests {
         let reported = report.report_peers.get(&1).unwrap();
         assert_eq!(reported.get_cpu_stats().get_unified_read(), 0);
         assert_eq!(reported.get_read_bytes(), hotspot_byte_report_threshold());
+        assert_eq!(report.orphan_unified_read_cpu_usage_sum, 0);
+        assert_eq!(report.orphan_scheduler_cpu_usage_sum, 0);
     }
 
     #[test]
