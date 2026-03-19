@@ -284,6 +284,7 @@ mod tests {
 
     #[test]
     fn test_retry_is_send_even_return_type_not_sync() {
+        #[allow(dead_code)]
         struct BangSync(Option<RefCell<()>>);
         let fut = retry(|| futures::future::ok::<_, TriviallyRetry>(BangSync(None)));
         assert_send(fut)

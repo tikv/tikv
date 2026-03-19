@@ -89,6 +89,7 @@ mod imp {
 
     #[allow(deprecated)]
     #[allow(deprecated)]
+    #[allow(deprecated)]
     pub fn current() -> io::Result<super::LinuxStyleCpuTime> {
         let mut state = String::new();
         File::open("/proc/stat")?.read_to_string(&mut state)?;
