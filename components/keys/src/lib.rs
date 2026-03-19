@@ -361,7 +361,7 @@ mod tests {
 
     #[test]
     fn test_region_key() {
-        let ids = vec![1, 1024, u64::max_value()];
+        let ids = vec![1, 1024, u64::MAX];
         for id in ids {
             // region meta key
             let meta_prefix = region_meta_prefix(id);

@@ -1,8 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(test)]
-#![feature(duration_consts_float)]
-
 #[macro_use]
 extern crate lazy_static;
 #[cfg(test)]
@@ -583,7 +581,7 @@ impl<R: AsyncRead + Unpin> AsyncRead for Sha256Reader<R> {
             .lock()
             .expect("failed to lock hasher in Sha256Reader async read");
         if let Err(e) = hasher.update(new_data) {
-            return Poll::Ready(Err(io::Error::new(ErrorKind::Other, e)));
+            return Poll::Ready(Err(io::Error::other(e)));
         }
 
         Poll::Ready(Ok(()))

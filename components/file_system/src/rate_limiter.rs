@@ -263,13 +263,13 @@ macro_rules! request_imp {
                 // Bytes served by next epoch (and skipped epochs) during refill are subtracted
                 // from pending_bytes, round up the rest.
                 DEFAULT_REFILL_PERIOD
-                    * ((locked.pending_bytes[priority_idx] + cached_bytes_per_epoch - 1)
-                        / cached_bytes_per_epoch) as u32
+                    * locked.pending_bytes[priority_idx].div_ceil(cached_bytes_per_epoch) as u32
             } else {
                 // `(a-1)/b` is equivalent to `roundup(a.saturating_sub(b)/b)`.
                 locked.next_refill_time - now
                     + DEFAULT_REFILL_PERIOD
-                        * ((locked.pending_bytes[priority_idx] - 1) / cached_bytes_per_epoch) as u32
+                        * (locked.pending_bytes[priority_idx].div_ceil(cached_bytes_per_epoch) - 1)
+                            as u32
             };
             if wait > MAX_WAIT_DURATION_PER_REQUEST {
                 // Long wait duration could freeze request thread not to react to latest budgets
