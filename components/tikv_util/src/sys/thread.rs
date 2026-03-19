@@ -229,12 +229,14 @@ mod imp {
 
     /// Gets the ID of the current process.
     #[inline]
+    #[allow(deprecated)]
     pub fn process_id() -> Pid {
         unsafe { mach_task_self_ }
     }
 
     /// Gets the ID of the current thread.
     #[inline]
+    #[allow(deprecated)]
     pub fn thread_id() -> Pid {
         unsafe { mach_thread_self() }
     }

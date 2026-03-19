@@ -153,7 +153,7 @@ impl PoolInner {
     fn scale_pool_size(&self, thread_count: usize) {
         self.pool.scale_workers(thread_count);
         let mut max_tasks = self.max_tasks.load(Ordering::Acquire);
-        if max_tasks != std::usize::MAX {
+        if max_tasks != usize::MAX {
             max_tasks = max_tasks
                 .saturating_div(self.pool_size.load(Ordering::Acquire))
                 .saturating_mul(thread_count);
@@ -187,7 +187,7 @@ impl PoolInner {
         }));
 
         let max_tasks = self.max_tasks.load(Ordering::Acquire);
-        if max_tasks == std::usize::MAX {
+        if max_tasks == usize::MAX {
             return Ok(());
         }
 
@@ -477,14 +477,16 @@ mod tests {
     }
 
     fn spawn_long_time_future(
-        pool: &FuturePool,
+        pool: FuturePool,
         id: u64,
         future_duration_ms: u64,
     ) -> Result<impl Future<Output = Result<u64, Canceled>>, Full> {
-        pool.spawn_handle(async move {
+        let (tx, rx) = oneshot::channel();
+        pool.spawn(async move {
             thread::sleep(Duration::from_millis(future_duration_ms));
-            id
-        })
+            let _ = tx.send(id);
+        })?;
+        Ok(rx)
     }
 
     fn wait_on_new_thread<F>(sender: mpsc::Sender<F::Output>, future: F)
@@ -510,44 +512,44 @@ mod tests {
 
         wait_on_new_thread(
             tx.clone(),
-            spawn_long_time_future(&read_pool, 0, 5).unwrap(),
+            spawn_long_time_future(read_pool.clone(), 0, 5).unwrap(),
         );
         // not full
         assert_eq!(rx.recv().unwrap(), Ok(0));
 
         wait_on_new_thread(
             tx.clone(),
-            spawn_long_time_future(&read_pool, 1, 100).unwrap(),
+            spawn_long_time_future(read_pool.clone(), 1, 100).unwrap(),
         );
         wait_on_new_thread(
             tx.clone(),
-            spawn_long_time_future(&read_pool, 2, 200).unwrap(),
+            spawn_long_time_future(read_pool.clone(), 2, 200).unwrap(),
         );
         wait_on_new_thread(
             tx.clone(),
-            spawn_long_time_future(&read_pool, 3, 300).unwrap(),
+            spawn_long_time_future(read_pool.clone(), 3, 300).unwrap(),
         );
         wait_on_new_thread(
             tx.clone(),
-            spawn_long_time_future(&read_pool, 4, 400).unwrap(),
+            spawn_long_time_future(read_pool.clone(), 4, 400).unwrap(),
         );
         // no available results (running = 4)
         rx.recv_timeout(Duration::from_millis(50)).unwrap_err();
 
         // full
-        assert!(spawn_long_time_future(&read_pool, 5, 100).is_err());
+        assert!(spawn_long_time_future(read_pool.clone(), 5, 100).is_err());
 
         // full
-        assert!(spawn_long_time_future(&read_pool, 6, 100).is_err());
+        assert!(spawn_long_time_future(read_pool.clone(), 6, 100).is_err());
 
         // wait a future completes (running = 3)
         assert_eq!(rx.recv().unwrap(), Ok(1));
 
         // add new (running = 4)
-        wait_on_new_thread(tx, spawn_long_time_future(&read_pool, 7, 5).unwrap());
+        wait_on_new_thread(tx, spawn_long_time_future(read_pool.clone(), 7, 5).unwrap());
 
         // full
-        assert!(spawn_long_time_future(&read_pool, 8, 100).is_err());
+        assert!(spawn_long_time_future(read_pool.clone(), 8, 100).is_err());
 
         rx.recv().unwrap().unwrap();
         rx.recv().unwrap().unwrap();

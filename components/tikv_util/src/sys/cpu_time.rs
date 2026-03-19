@@ -87,6 +87,8 @@ impl ProcessStat {
 mod imp {
     use std::{fs::File, io, io::Read, time::Duration};
 
+    #[allow(deprecated)]
+    #[allow(deprecated)]
     pub fn current() -> io::Result<super::LinuxStyleCpuTime> {
         let mut state = String::new();
         File::open("/proc/stat")?.read_to_string(&mut state)?;

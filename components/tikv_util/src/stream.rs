@@ -218,10 +218,7 @@ macro_rules! retry_expr {
 
 /// Retires a future execution. Comparing to `retry`, this version allows more
 /// configurations.
-pub async fn retry_all_ext<'a, G, T, F, E>(
-    mut action: G,
-    ext: RetryExt<JustRetry<E>>,
-) -> Result<T, E>
+pub async fn retry_all_ext<G, T, F, E>(mut action: G, ext: RetryExt<JustRetry<E>>) -> Result<T, E>
 where
     G: FnMut() -> F,
     F: Future<Output = Result<T, E>>,

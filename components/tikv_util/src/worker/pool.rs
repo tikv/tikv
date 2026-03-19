@@ -157,12 +157,12 @@ impl<T: Display + Send> Scheduler<T> {
     pub fn schedule_force(&self, task: T) -> Result<(), ScheduleError<T>> {
         self.counter.fetch_add(1, Ordering::SeqCst);
         self.metrics_pending_task_count.inc();
-        if let Err(e) = self.sender.unbounded_send(Msg::Task(task)) {
-            if let Msg::Task(t) = e.into_inner() {
-                self.counter.fetch_sub(1, Ordering::SeqCst);
-                self.metrics_pending_task_count.dec();
-                return Err(ScheduleError::Stopped(t));
-            }
+        if let Err(e) = self.sender.unbounded_send(Msg::Task(task))
+            && let Msg::Task(t) = e.into_inner()
+        {
+            self.counter.fetch_sub(1, Ordering::SeqCst);
+            self.metrics_pending_task_count.dec();
+            return Err(ScheduleError::Stopped(t));
         }
         Ok(())
     }
@@ -557,6 +557,7 @@ mod tests {
 
     use super::*;
 
+    #[allow(dead_code)]
     struct StepRunner {
         count: Arc<AtomicU64>,
         timeout_duration: Duration,

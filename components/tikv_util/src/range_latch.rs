@@ -104,7 +104,12 @@ impl RangeLatch {
                 // Safety: `_mutex_guard` is declared before `handle` in `KeyHandleGuard`.
                 // So the mutex guard will be released earlier than the `Arc<KeyHandle>`.
                 // Then we can make sure the mutex guard doesn't point to released memory.
-                let mutex_guard = unsafe { std::mem::transmute(mutex_guard) };
+                let mutex_guard = unsafe {
+                    std::mem::transmute::<
+                        std::sync::MutexGuard<'_, ()>,
+                        std::sync::MutexGuard<'_, ()>,
+                    >(mutex_guard)
+                };
 
                 return RangeLatchGuard {
                     start_key,

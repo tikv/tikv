@@ -150,7 +150,7 @@ impl Config {
     pub fn default_for_test() -> Self {
         Self {
             workers: 2,
-            max_tasks_per_worker: std::usize::MAX,
+            max_tasks_per_worker: usize::MAX,
             stack_size: 2_000_000,
         }
     }
@@ -338,7 +338,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
             core_thread_count: 1,
             max_thread_count: 1,
             stack_size: 0,
-            max_tasks: std::usize::MAX,
+            max_tasks: usize::MAX,
             cleanup_method: CleanupMethod::InPlace,
 
             enable_task_wait_metrics: false,

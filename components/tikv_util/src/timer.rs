@@ -55,7 +55,7 @@ impl<T> Timer<T> {
         if self
             .pending
             .peek()
-            .map_or(false, |t| t.0.next_tick <= instant)
+            .is_some_and(|t| t.0.next_tick <= instant)
         {
             return self.pending.pop().map(|t| t.0.task);
         }
