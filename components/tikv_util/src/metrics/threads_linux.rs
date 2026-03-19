@@ -579,36 +579,36 @@ mod tests {
         let pid = thread::process_id();
         let tids: Vec<_> = thread::thread_ids(pid).unwrap();
         for tid in tids {
-            if let Ok(stat) = thread::full_thread_stat(pid, tid) {
-                if stat.command.starts_with(s1) {
-                    rx1.recv().unwrap();
-                    thread_info.record();
-                    {
-                        let write_io = thread_info
-                            .metrics_total
-                            .write_ios
-                            .entry(tid)
-                            .or_insert(0.0);
-                        assert_eq!(*write_io as u64, page_size);
-                    }
-
-                    tx.send(()).unwrap();
-
-                    rx1.recv().unwrap();
-                    thread_info.record();
-                    {
-                        let write_io = thread_info
-                            .metrics_total
-                            .write_ios
-                            .entry(tid)
-                            .or_insert(0.0);
-                        assert_eq!(*write_io as u64, page_size * 2);
-                    }
-
-                    tx.send(()).unwrap();
-                    rx1.recv().unwrap();
-                    return;
+            if let Ok(stat) = thread::full_thread_stat(pid, tid)
+                && stat.command.starts_with(s1)
+            {
+                rx1.recv().unwrap();
+                thread_info.record();
+                {
+                    let write_io = thread_info
+                        .metrics_total
+                        .write_ios
+                        .entry(tid)
+                        .or_insert(0.0);
+                    assert_eq!(*write_io as u64, page_size);
                 }
+
+                tx.send(()).unwrap();
+
+                rx1.recv().unwrap();
+                thread_info.record();
+                {
+                    let write_io = thread_info
+                        .metrics_total
+                        .write_ios
+                        .entry(tid)
+                        .or_insert(0.0);
+                    assert_eq!(*write_io as u64, page_size * 2);
+                }
+
+                tx.send(()).unwrap();
+                rx1.recv().unwrap();
+                return;
             }
         }
         panic!();
@@ -653,21 +653,21 @@ mod tests {
         let pid = thread::process_id();
         let tids: Vec<_> = thread::thread_ids(pid).unwrap();
         for tid in tids {
-            if let Ok(stat) = thread::full_thread_stat(pid, tid) {
-                if stat.command.starts_with(tn) {
-                    rx.recv().unwrap();
-                    thread_info.record();
+            if let Ok(stat) = thread::full_thread_stat(pid, tid)
+                && stat.command.starts_with(tn)
+            {
+                rx.recv().unwrap();
+                thread_info.record();
 
-                    let mut cpu_usages = thread_info.get_cpu_usages();
-                    let cpu_usage = cpu_usages.entry(stat.command).or_insert(0);
-                    assert!(*cpu_usage < 110); // Consider the error of statistics
-                    if *cpu_usage < 50 {
-                        panic!("the load must be heavy than 0.5, but got {}", *cpu_usage);
-                    }
-
-                    tx.send(()).unwrap();
-                    return;
+                let mut cpu_usages = thread_info.get_cpu_usages();
+                let cpu_usage = cpu_usages.entry(stat.command).or_insert(0);
+                assert!(*cpu_usage < 110); // Consider the error of statistics
+                if *cpu_usage < 50 {
+                    panic!("the load must be heavy than 0.5, but got {}", *cpu_usage);
                 }
+
+                tx.send(()).unwrap();
+                return;
             }
         }
         panic!();
