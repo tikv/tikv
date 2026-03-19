@@ -995,6 +995,17 @@ fn calculate_store_heartbeat_cpu_usage(
     }
 }
 
+fn calculate_region_heartbeat_cpu_usage(
+    cpu_record: RegionCpuRecord,
+    interval_seconds: u64,
+) -> (u64, pdpb::CpuStats) {
+    let cpu_usage = calculate_store_heartbeat_cpu_usage(cpu_record, interval_seconds);
+    let mut stats = pdpb::CpuStats::default();
+    stats.set_unified_read(cpu_usage.unified_read_cpu_usage);
+    stats.set_scheduler(cpu_usage.scheduler_cpu_usage);
+    (cpu_usage.cpu_usage, stats)
+}
+
 struct StoreHeartbeatPeerReport {
     report_peers: HashMap<u64, pdpb::PeerStat>,
     region_unified_read_cpu_usage_sum: u64,
@@ -2735,28 +2746,7 @@ where
                         // Keep consistent with the calculation of cpu_usages in a store heartbeat.
                         // See components/tikv_util/src/metrics/threads_linux.rs for more details.
                         if interval_second > 0 {
-                            let cpu_time_duration =
-                                Duration::from_millis(cpu_record.cpu_time_ms as u64);
-                            let total = ((cpu_time_duration.as_secs_f64() * 100.0)
-                                / interval_second as f64)
-                                as u64;
-                            let unified_read = ((Duration::from_millis(
-                                cpu_record.unified_read_cpu_time_ms as u64,
-                            )
-                            .as_secs_f64()
-                                * 100.0)
-                                / interval_second as f64)
-                                as u64;
-                            let scheduler =
-                                ((Duration::from_millis(cpu_record.scheduler_cpu_time_ms as u64)
-                                    .as_secs_f64()
-                                    * 100.0)
-                                    / interval_second as f64)
-                                    as u64;
-                            let mut stats = pdpb::CpuStats::default();
-                            stats.set_unified_read(unified_read);
-                            stats.set_scheduler(scheduler);
-                            (total, stats)
+                            calculate_region_heartbeat_cpu_usage(cpu_record, interval_second)
                         } else {
                             (0, pdpb::CpuStats::default())
                         }
@@ -3405,6 +3395,21 @@ mod tests {
             cpu_usage.unified_read_cpu_usage + cpu_usage.scheduler_cpu_usage,
             1
         );
+    }
+
+    #[test]
+    fn test_calculate_region_heartbeat_cpu_usage_preserves_rounding_gap() {
+        let (cpu_usage, cpu_stats) = calculate_region_heartbeat_cpu_usage(
+            RegionCpuRecord {
+                cpu_time_ms: 12,
+                unified_read_cpu_time_ms: 6,
+                scheduler_cpu_time_ms: 6,
+            },
+            1,
+        );
+
+        assert_eq!(cpu_usage, 1);
+        assert_eq!(cpu_stats.get_unified_read() + cpu_stats.get_scheduler(), 1);
     }
 
     #[test]

@@ -19,6 +19,37 @@ use crate::{
     router::{CmdResChannel, PeerMsg},
 };
 
+fn calculate_region_heartbeat_cpu_usage(
+    cpu_record: RegionCpuRecord,
+    interval_seconds: u64,
+) -> (u64, pdpb::CpuStats) {
+    if interval_seconds == 0 {
+        return (0, pdpb::CpuStats::default());
+    }
+
+    let unified_read_cpu_time_ms = cpu_record.unified_read_cpu_time_ms as u64;
+    let scheduler_cpu_time_ms = cpu_record.scheduler_cpu_time_ms as u64;
+    let mut unified_read = ((Duration::from_millis(unified_read_cpu_time_ms).as_secs_f64() * 100.0)
+        / interval_seconds as f64) as u64;
+    let mut scheduler = ((Duration::from_millis(scheduler_cpu_time_ms).as_secs_f64() * 100.0)
+        / interval_seconds as f64) as u64;
+    let total = ((Duration::from_millis(cpu_record.cpu_time_ms as u64).as_secs_f64() * 100.0)
+        / interval_seconds as f64) as u64;
+    let rounding_gap = total.saturating_sub(unified_read + scheduler);
+    if rounding_gap > 0 {
+        if unified_read_cpu_time_ms >= scheduler_cpu_time_ms {
+            unified_read += rounding_gap;
+        } else {
+            scheduler += rounding_gap;
+        }
+    }
+
+    let mut stats = pdpb::CpuStats::default();
+    stats.set_unified_read(unified_read);
+    stats.set_scheduler(scheduler);
+    (total, stats)
+}
+
 pub struct RegionHeartbeatTask {
     pub term: u64,
     pub region: metapb::Region,
@@ -149,22 +180,7 @@ where
             // Keep consistent with the calculation of cpu_usages in a store heartbeat.
             // See components/tikv_util/src/metrics/threads_linux.rs for more details.
             if interval_second > 0 {
-                let total = ((Duration::from_millis(cpu_record.cpu_time_ms as u64).as_secs_f64()
-                    * 100.0)
-                    / interval_second as f64) as u64;
-                let unified_read =
-                    ((Duration::from_millis(cpu_record.unified_read_cpu_time_ms as u64)
-                        .as_secs_f64()
-                        * 100.0)
-                        / interval_second as f64) as u64;
-                let scheduler = ((Duration::from_millis(cpu_record.scheduler_cpu_time_ms as u64)
-                    .as_secs_f64()
-                    * 100.0)
-                    / interval_second as f64) as u64;
-                let mut stats = pdpb::CpuStats::default();
-                stats.set_unified_read(unified_read);
-                stats.set_scheduler(scheduler);
-                (total, stats)
+                calculate_region_heartbeat_cpu_usage(cpu_record, interval_second)
             } else {
                 (0, pdpb::CpuStats::default())
             }
@@ -495,6 +511,21 @@ fn remove_peer_stat_from_maps(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_calculate_region_heartbeat_cpu_usage_preserves_rounding_gap() {
+        let (cpu_usage, cpu_stats) = calculate_region_heartbeat_cpu_usage(
+            RegionCpuRecord {
+                cpu_time_ms: 12,
+                unified_read_cpu_time_ms: 6,
+                scheduler_cpu_time_ms: 6,
+            },
+            1,
+        );
+
+        assert_eq!(cpu_usage, 1);
+        assert_eq!(cpu_stats.get_unified_read() + cpu_stats.get_scheduler(), 1);
+    }
 
     #[test]
     fn test_remove_peer_stat_from_maps() {

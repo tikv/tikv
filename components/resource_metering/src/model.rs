@@ -329,6 +329,15 @@ impl Default for RawRecords {
 }
 
 impl RawRecords {
+    /// Returns whether this batch contains any reportable records, including
+    /// tag-absent CPU that is tracked outside the tagged record map.
+    #[inline]
+    pub fn has_reportable_data(&self) -> bool {
+        !self.records.is_empty()
+            || self.unified_read_tag_absent_untracked.cpu_time > 0
+            || self.scheduler_tag_absent_untracked.cpu_time > 0
+    }
+
     /// Returns RawRecord aggregated by extra tag.
     pub fn aggregate_by_extra_tag(&self) -> HashMap<Arc<Vec<u8>>, RawRecord> {
         let mut raw_map: HashMap<Arc<Vec<u8>>, RawRecord> = HashMap::default();
