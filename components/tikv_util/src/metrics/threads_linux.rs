@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    io::{Error, ErrorKind, Result},
+    io::{Error, Result},
     sync::Mutex,
     time::Duration,
 };
