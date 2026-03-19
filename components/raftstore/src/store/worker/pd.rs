@@ -1003,6 +1003,8 @@ struct StoreHeartbeatPeerReport {
     orphan_scheduler_cpu_usage_sum: u64,
     tagged_non_region_unified_read_cpu_usage_sum: u64,
     tagged_non_region_scheduler_cpu_usage_sum: u64,
+    tagged_other_store_unified_read_cpu_usage_sum: u64,
+    tagged_other_store_scheduler_cpu_usage_sum: u64,
     tag_absent_scheduler_cpu_usage_sum: u64,
 }
 
@@ -1011,6 +1013,7 @@ fn collect_report_peers_for_store_heartbeat(
     // region_id -> CPU time breakdown accumulated since last store heartbeat.
     region_cpu_records_since_store_heartbeat: &mut HashMap<u64, RegionCpuRecord>,
     tagged_non_region_cpu_records_since_store_heartbeat: RegionCpuRecord,
+    tagged_other_store_cpu_records_since_store_heartbeat: RegionCpuRecord,
     tag_absent_scheduler_cpu_records_since_store_heartbeat: RegionCpuRecord,
     interval_seconds: u64,
 ) -> StoreHeartbeatPeerReport {
@@ -1080,6 +1083,14 @@ fn collect_report_peers_for_store_heartbeat(
     } else {
         StoreHeartbeatCpuUsage::default()
     };
+    let tagged_other_store_cpu_usage = if has_interval {
+        calculate_store_heartbeat_cpu_usage(
+            tagged_other_store_cpu_records_since_store_heartbeat,
+            interval_seconds,
+        )
+    } else {
+        StoreHeartbeatCpuUsage::default()
+    };
     let tag_absent_scheduler_cpu_usage = if has_interval {
         calculate_store_heartbeat_cpu_usage(
             tag_absent_scheduler_cpu_records_since_store_heartbeat,
@@ -1099,6 +1110,10 @@ fn collect_report_peers_for_store_heartbeat(
         tagged_non_region_unified_read_cpu_usage_sum: tagged_non_region_cpu_usage
             .unified_read_cpu_usage,
         tagged_non_region_scheduler_cpu_usage_sum: tagged_non_region_cpu_usage.scheduler_cpu_usage,
+        tagged_other_store_unified_read_cpu_usage_sum: tagged_other_store_cpu_usage
+            .unified_read_cpu_usage,
+        tagged_other_store_scheduler_cpu_usage_sum: tagged_other_store_cpu_usage
+            .scheduler_cpu_usage,
         tag_absent_scheduler_cpu_usage_sum: tag_absent_scheduler_cpu_usage.scheduler_cpu_usage,
     }
 }
@@ -1138,6 +1153,9 @@ where
     // Tagged CPU that carried no usable region_id and therefore cannot be
     // merged into region-level sums.
     tagged_non_region_cpu_records_since_store_heartbeat: RegionCpuRecord,
+    // Tagged CPU whose tag points at a different store, so it cannot be merged
+    // into this store's region-level sums.
+    tagged_other_store_cpu_records_since_store_heartbeat: RegionCpuRecord,
     // Scheduler CPU observed while no tag was attached.
     tag_absent_scheduler_cpu_records_since_store_heartbeat: RegionCpuRecord,
 
@@ -1247,6 +1265,7 @@ where
             region_cpu_records_since_region_heartbeat: HashMap::default(),
             region_cpu_records_since_store_heartbeat: HashMap::default(),
             tagged_non_region_cpu_records_since_store_heartbeat: RegionCpuRecord::default(),
+            tagged_other_store_cpu_records_since_store_heartbeat: RegionCpuRecord::default(),
             tag_absent_scheduler_cpu_records_since_store_heartbeat: RegionCpuRecord::default(),
             concurrency_manager,
             snap_mgr,
@@ -1480,6 +1499,8 @@ where
                 orphan_scheduler_cpu_usage_sum,
                 tagged_non_region_unified_read_cpu_usage_sum,
                 tagged_non_region_scheduler_cpu_usage_sum,
+                tagged_other_store_unified_read_cpu_usage_sum,
+                tagged_other_store_scheduler_cpu_usage_sum,
                 tag_absent_scheduler_cpu_usage_sum,
             } = {
                 let mut region_peers = self.region_peers.write().unwrap();
@@ -1487,6 +1508,7 @@ where
                     &mut region_peers,
                     &mut self.region_cpu_records_since_store_heartbeat,
                     std::mem::take(&mut self.tagged_non_region_cpu_records_since_store_heartbeat),
+                    std::mem::take(&mut self.tagged_other_store_cpu_records_since_store_heartbeat),
                     std::mem::take(
                         &mut self.tag_absent_scheduler_cpu_records_since_store_heartbeat,
                     ),
@@ -1512,9 +1534,23 @@ where
                         store_scheduler += record.get_value();
                     }
                 }
+                let unified_read_tag_present_total = region_unified_read_cpu_usage_sum
+                    + orphan_unified_read_cpu_usage_sum
+                    + tagged_non_region_unified_read_cpu_usage_sum
+                    + tagged_other_store_unified_read_cpu_usage_sum;
+                let scheduler_tag_present_total = region_scheduler_cpu_usage_sum
+                    + orphan_scheduler_cpu_usage_sum
+                    + tagged_non_region_scheduler_cpu_usage_sum
+                    + tagged_other_store_scheduler_cpu_usage_sum;
                 STORE_CPU_POOL_GAUGE_VEC
                     .with_label_values(&["unified_read", "store_level"])
                     .set(store_unified_read as i64);
+                STORE_CPU_POOL_GAUGE_VEC
+                    .with_label_values(&["unified_read", "metering_total"])
+                    .set(unified_read_tag_present_total as i64);
+                STORE_CPU_POOL_GAUGE_VEC
+                    .with_label_values(&["unified_read", "tag_present_total"])
+                    .set(unified_read_tag_present_total as i64);
                 STORE_CPU_POOL_GAUGE_VEC
                     .with_label_values(&["unified_read", "region_sum"])
                     .set(region_unified_read_cpu_usage_sum as i64);
@@ -1525,8 +1561,17 @@ where
                     .with_label_values(&["unified_read", "tagged_non_region_untracked"])
                     .set(tagged_non_region_unified_read_cpu_usage_sum as i64);
                 STORE_CPU_POOL_GAUGE_VEC
+                    .with_label_values(&["unified_read", "tagged_other_store_untracked"])
+                    .set(tagged_other_store_unified_read_cpu_usage_sum as i64);
+                STORE_CPU_POOL_GAUGE_VEC
                     .with_label_values(&["scheduler", "store_level"])
                     .set(store_scheduler as i64);
+                STORE_CPU_POOL_GAUGE_VEC
+                    .with_label_values(&["scheduler", "metering_total"])
+                    .set((scheduler_tag_present_total + tag_absent_scheduler_cpu_usage_sum) as i64);
+                STORE_CPU_POOL_GAUGE_VEC
+                    .with_label_values(&["scheduler", "tag_present_total"])
+                    .set(scheduler_tag_present_total as i64);
                 STORE_CPU_POOL_GAUGE_VEC
                     .with_label_values(&["scheduler", "region_sum"])
                     .set(region_scheduler_cpu_usage_sum as i64);
@@ -1536,6 +1581,9 @@ where
                 STORE_CPU_POOL_GAUGE_VEC
                     .with_label_values(&["scheduler", "tagged_non_region_untracked"])
                     .set(tagged_non_region_scheduler_cpu_usage_sum as i64);
+                STORE_CPU_POOL_GAUGE_VEC
+                    .with_label_values(&["scheduler", "tagged_other_store_untracked"])
+                    .set(tagged_other_store_scheduler_cpu_usage_sum as i64);
                 STORE_CPU_POOL_GAUGE_VEC
                     .with_label_values(&["scheduler", "tag_absent_untracked"])
                     .set(tag_absent_scheduler_cpu_usage_sum as i64);
@@ -2229,12 +2277,14 @@ where
             &mut self.region_cpu_records_since_region_heartbeat,
             None,
             None,
+            None,
         );
         calculate_region_cpu_records(
             self.store_id,
             records,
             &mut self.region_cpu_records_since_store_heartbeat,
             Some(&mut self.tagged_non_region_cpu_records_since_store_heartbeat),
+            Some(&mut self.tagged_other_store_cpu_records_since_store_heartbeat),
             Some(&mut self.tag_absent_scheduler_cpu_records_since_store_heartbeat),
         );
     }
@@ -2463,12 +2513,17 @@ fn calculate_region_cpu_records(
     records: Arc<RawRecords>,
     region_cpu_records: &mut HashMap<u64, RegionCpuRecord>,
     tagged_non_region_cpu_record: Option<&mut RegionCpuRecord>,
+    tagged_other_store_cpu_record: Option<&mut RegionCpuRecord>,
     tag_absent_scheduler_cpu_record: Option<&mut RegionCpuRecord>,
 ) {
     let mut tagged_non_region_cpu_record = tagged_non_region_cpu_record;
+    let mut tagged_other_store_cpu_record = tagged_other_store_cpu_record;
     for (tag, record) in &records.records {
         let record_store_id = tag.store_id;
         if record_store_id != store_id {
+            if let Some(acc) = tagged_other_store_cpu_record.as_mut() {
+                (*acc).merge_raw_record(record);
+            }
             continue;
         }
         if tag.region_id == 0 {
@@ -3236,6 +3291,7 @@ mod tests {
             &mut region_cpu_records_since_store_heartbeat,
             RegionCpuRecord::default(),
             RegionCpuRecord::default(),
+            RegionCpuRecord::default(),
             1,
         );
 
@@ -3266,6 +3322,7 @@ mod tests {
         let report = collect_report_peers_for_store_heartbeat(
             &mut region_peers,
             &mut region_cpu_records_since_store_heartbeat,
+            RegionCpuRecord::default(),
             RegionCpuRecord::default(),
             RegionCpuRecord::default(),
             0,
@@ -3303,6 +3360,11 @@ mod tests {
                 scheduler_cpu_time_ms: 20,
             },
             RegionCpuRecord {
+                cpu_time_ms: 25,
+                unified_read_cpu_time_ms: 10,
+                scheduler_cpu_time_ms: 15,
+            },
+            RegionCpuRecord {
                 cpu_time_ms: 40,
                 scheduler_cpu_time_ms: 40,
                 ..Default::default()
@@ -3312,6 +3374,8 @@ mod tests {
 
         assert_eq!(report.tagged_non_region_unified_read_cpu_usage_sum, 1);
         assert_eq!(report.tagged_non_region_scheduler_cpu_usage_sum, 2);
+        assert_eq!(report.tagged_other_store_unified_read_cpu_usage_sum, 1);
+        assert_eq!(report.tagged_other_store_scheduler_cpu_usage_sum, 1);
         assert_eq!(report.tag_absent_scheduler_cpu_usage_sum, 4);
     }
 
@@ -3423,6 +3487,7 @@ mod tests {
                 &mut region_cpu_records_since_region_heartbeat,
                 None,
                 None,
+                None,
             );
 
             sleep(Duration::from_millis(50));
@@ -3439,9 +3504,10 @@ mod tests {
     }
 
     #[test]
-    fn test_calculate_region_cpu_records_splits_regionless_and_tag_absent() {
+    fn test_calculate_region_cpu_records_splits_regionless_other_store_and_tag_absent() {
         let mut region_cpu_records = HashMap::default();
         let mut tagged_non_region = RegionCpuRecord::default();
+        let mut tagged_other_store = RegionCpuRecord::default();
         let mut tag_absent_scheduler = RegionCpuRecord::default();
         let mut peer = Peer::default();
         peer.set_id(11);
@@ -3456,6 +3522,14 @@ mod tests {
         regionless_ctx.set_peer(peer);
         regionless_ctx.set_region_id(0);
         let regionless_tag = Arc::new(TagInfos::from_rpc_context(&regionless_ctx));
+
+        let mut other_store_peer = Peer::default();
+        other_store_peer.set_id(12);
+        other_store_peer.set_store_id(DEFAULT_TEST_STORE_ID + 1);
+        let mut other_store_ctx = kvrpcpb::Context::default();
+        other_store_ctx.set_peer(other_store_peer);
+        other_store_ctx.set_region_id(2);
+        let other_store_tag = Arc::new(TagInfos::from_rpc_context(&other_store_ctx));
 
         let mut records = HashMap::default();
         records.insert(
@@ -3475,6 +3549,15 @@ mod tests {
                 ..Default::default()
             },
         );
+        records.insert(
+            other_store_tag,
+            RawRecord {
+                cpu_time: 40,
+                unified_read_cpu_time: 8,
+                scheduler_cpu_time: 32,
+                ..Default::default()
+            },
+        );
         let raw_records = Arc::new(RawRecords {
             begin_unix_time_secs: UnixSecs::now().into_inner(),
             duration: Duration::default(),
@@ -3491,6 +3574,7 @@ mod tests {
             raw_records,
             &mut region_cpu_records,
             Some(&mut tagged_non_region),
+            Some(&mut tagged_other_store),
             Some(&mut tag_absent_scheduler),
         );
 
@@ -3500,6 +3584,8 @@ mod tests {
         );
         assert_eq!(tagged_non_region.unified_read_cpu_time_ms, 5);
         assert_eq!(tagged_non_region.scheduler_cpu_time_ms, 15);
+        assert_eq!(tagged_other_store.unified_read_cpu_time_ms, 8);
+        assert_eq!(tagged_other_store.scheduler_cpu_time_ms, 32);
         assert_eq!(tag_absent_scheduler.scheduler_cpu_time_ms, 30);
     }
 

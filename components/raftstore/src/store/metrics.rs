@@ -1052,7 +1052,7 @@ lazy_static! {
 
     pub static ref STORE_CPU_POOL_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_raftstore_cpu_pool_usage",
-        "CPU usage split by thread pool and attribution source: store-level (ThreadInfoStatistics), region-level sum (resource metering), orphan records, tagged-non-region records, and scheduler tag-absent records.",
+        "CPU usage split by thread pool and attribution source: store-level (ThreadInfoStatistics), metering totals, tag-present totals, region-level sums, orphan records, tagged-non-region records, tagged-other-store records, and scheduler tag-absent records.",
         &["pool", "source"]
     ).unwrap();
 }
