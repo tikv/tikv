@@ -127,6 +127,7 @@ mod imp {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(deprecated)]
 mod imp {
     use std::{io, ptr};
 
@@ -137,7 +138,6 @@ mod imp {
         // throughout the internet, so this is just modeled after what everyone
         // else is doing. For now this is modeled largely after libuv.
 
-        #[allow(deprecated)]
         unsafe {
             let mut num_cpus_u = 0;
             let mut cpu_info = ptr::null_mut();

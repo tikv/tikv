@@ -152,7 +152,7 @@ mod imp {
 
     // Sadly the std lib does not have any support for setting `errno`, so we
     // have to implement this ourselves.
-    extern "C" {
+    unsafe extern "C" {
         #[link_name = "__errno_location"]
         fn errno_location() -> *mut c_int;
     }
@@ -192,6 +192,7 @@ mod imp {
 
 #[cfg(target_os = "macos")]
 #[allow(bad_style)]
+#[allow(deprecated)]
 mod imp {
     use std::{io, iter::FromIterator, mem::size_of, ptr::null_mut, slice};
 
@@ -229,14 +230,12 @@ mod imp {
 
     /// Gets the ID of the current process.
     #[inline]
-    #[allow(deprecated)]
     pub fn process_id() -> Pid {
         unsafe { mach_task_self_ }
     }
 
     /// Gets the ID of the current thread.
     #[inline]
-    #[allow(deprecated)]
     pub fn thread_id() -> Pid {
         unsafe { mach_thread_self() }
     }
