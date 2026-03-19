@@ -1,7 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use api_version::{ApiV2, KvFormat};
+use api_version::ApiV2;
 use engine_traits::CfName;
 use kvproto::kvrpcpb::ApiVersion;
 use raw::RawStore;
@@ -125,7 +125,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndDelete {
 mod tests {
     use std::sync::Arc;
 
-    use api_version::{ApiV2, test_kv_format_impl};
+    use api_version::{ApiV2, KvFormat, test_kv_format_impl};
     use causal_ts::CausalTsProviderImpl;
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_DEFAULT;
