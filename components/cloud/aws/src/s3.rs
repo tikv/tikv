@@ -143,12 +143,9 @@ impl BlobConfig for Config {
     }
 
     fn url(&self) -> io::Result<url::Url> {
-        self.bucket.url("s3").map_err(|s| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("error creating bucket url: {}", s),
-            )
-        })
+        self.bucket
+            .url("s3")
+            .map_err(|s| io::Error::other(format!("error creating bucket url: {}", s)))
     }
 }
 
@@ -481,7 +478,7 @@ impl<'client> S3Uploader<'client> {
         } else {
             // Otherwise, use multipart upload to improve robustness.
             self.upload_id = retry_and_count(|| self.begin(), "begin_upload").await?;
-            let upload_res = async {
+            let upload_res = Box::pin(async {
                 let mut buf = vec![0; self.multi_part_size];
                 let mut part_number = 1;
                 loop {
@@ -489,16 +486,16 @@ impl<'client> S3Uploader<'client> {
                     if data_size == 0 {
                         break;
                     }
-                    let part = retry_and_count(
+                    let part = Box::pin(retry_and_count(
                         || self.upload_part(part_number, &buf[..data_size]),
                         "upload_part",
-                    )
+                    ))
                     .await?;
                     self.parts.push(part);
                     part_number += 1;
                 }
                 Ok(())
-            }
+            })
             .await;
 
             if upload_res.is_ok() {
@@ -780,10 +777,7 @@ impl DeletableStorage for S3Storage {
                 .observe(now.saturating_elapsed().as_secs_f64());
             match res {
                 Ok(_) => Ok(()),
-                Err(e) => Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("failed to delete object {}", e),
-                )),
+                Err(e) => Err(io::Error::other(format!("failed to delete object {}", e))),
             }
         }
         .boxed_local()
@@ -824,10 +818,7 @@ impl IterableStorage for S3Storage {
                     .unwrap_or_else(|| futures::stream::empty().right_stream())
             })
             .map_err(|err| {
-                io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("sdk encounters an unexpected error: {:?}", err),
-                )
+                io::Error::other(format!("sdk encounters an unexpected error: {:?}", err))
             })
             .try_flatten()
             .boxed_local()
@@ -836,7 +827,7 @@ impl IterableStorage for S3Storage {
 
 #[cfg(test)]
 mod tests {
-    use std::assert_matches::assert_matches;
+    use std::assert_matches;
 
     use aws_sdk_s3::{config::Credentials, primitives::SdkBody};
     use aws_smithy_runtime::{
@@ -1335,7 +1326,7 @@ mod tests {
 
     #[ignore = "s3 test env is unavailable"]
     #[tokio::test]
-    #[cfg(FALSE)]
+    #[cfg(false)]
     // FIXME: enable this (or move this to an integration test) if we've got a
     // reliable way to test s3 (aws test_util requires custom logic to verify the
     // body stream which itself can have bug)
@@ -1406,8 +1397,6 @@ mod tests {
         use std::io::{self, Cursor, Read};
 
         use futures::io::AllowStdIo;
-
-        use self::try_read_exact;
 
         /// ThrottleRead throttles a `Read` -- make it emits 2 chars for each
         /// `read` call.
