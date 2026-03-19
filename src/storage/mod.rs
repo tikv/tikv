@@ -3180,6 +3180,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         const CMD: CommandKind = CommandKind::raw_compare_and_swap;
         let api_version = self.api_version;
         Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
+        check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
         let cf = Self::rawkv_cf(&cf, api_version)?;
 
         if !F::IS_TTL_ENABLED && ttl != 0 {
@@ -3206,6 +3207,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         const CMD: CommandKind = CommandKind::raw_compare_and_delete;
         let api_version = self.api_version;
         Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
+        check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
         let cf = Self::rawkv_cf(&cf, api_version)?;
 
         let sched = self.get_scheduler();
