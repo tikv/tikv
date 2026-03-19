@@ -146,37 +146,19 @@ mod tests {
         cmd: TypedCommand<(Option<Value>, bool)>,
         ts_provider: Option<Arc<CausalTsProviderImpl>>,
     ) -> Result<(Option<Value>, bool)> {
-        let snap = engine.snapshot(Default::default())?;
-        use kvproto::kvrpcpb::ExtraOp;
-        let mut statistic = Statistics::default();
-
-        let raw_ext = block_on(get_raw_ext(ts_provider, cm.clone(), true, &cmd.cmd)).unwrap();
-        let context = WriteContext {
-            lock_mgr: &MockLockManager::new(),
-            concurrency_manager: cm,
-            extra_op: ExtraOp::Noop,
-            statistics: &mut statistic,
-            async_apply_prewrite: false,
-            raw_ext,
-            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
-        };
-        let ret = cmd.cmd.process_write(snap, context)?;
-        match ret.pr {
-            ProcessResult::RawCompareAndSwapRes {
-                previous_value,
-                succeed,
-            } => {
-                if succeed {
-                    let ctx = Context::default();
-                    engine.write(&ctx, ret.to_be_write).unwrap();
-                }
-                Ok((previous_value, succeed))
-            }
-            _ => unreachable!(),
-        }
+        sched_compare_command(engine, cm, cmd, ts_provider)
     }
 
-    pub fn sched_cas_command<E: Engine>(
+    fn sched_cas_command<E: Engine>(
+        engine: &mut E,
+        cm: ConcurrencyManager,
+        cmd: TypedCommand<(Option<Value>, bool)>,
+        ts_provider: Option<Arc<CausalTsProviderImpl>>,
+    ) -> Result<(Option<Value>, bool)> {
+        sched_compare_command(engine, cm, cmd, ts_provider)
+    }
+
+    fn sched_compare_command<E: Engine>(
         engine: &mut E,
         cm: ConcurrencyManager,
         cmd: TypedCommand<(Option<Value>, bool)>,
