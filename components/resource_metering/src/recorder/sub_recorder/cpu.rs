@@ -1,5 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering::Relaxed},
+};
+
 use collections::HashMap;
 use tikv_util::{
     sys::thread::{self, Pid, THREAD_NAME_HASHMAP},
@@ -11,7 +16,11 @@ use tikv_util::{
 
 use crate::{
     RawRecords, ThreadPoolType,
-    metrics::STAT_TASK_COUNT,
+    metrics::{
+        SCHED_POLL_STATE_CPU_MILLIS_COUNTER, SCHED_POLL_STATE_SAMPLE_COUNTER,
+        SCHED_TAG_CPU_MILLIS_COUNTER, SCHED_TAG_SAMPLE_COUNTER, STAT_TASK_COUNT,
+        UNIFIED_READ_TAG_CPU_MILLIS_COUNTER, UNIFIED_READ_TAG_SAMPLE_COUNTER,
+    },
     recorder::{
         SubRecorder,
         localstorage::{LocalStorage, SharedTagInfos},
@@ -53,22 +62,93 @@ fn detect_thread_pool_type(tid: Pid) -> ThreadPoolType {
 
 impl SubRecorder for CpuRecorder {
     fn tick(&mut self, records: &mut RawRecords, _: &mut HashMap<Pid, LocalStorage>) {
-        let records = &mut records.records;
         let pid = thread::process_id();
         self.thread_stats.iter_mut().for_each(|(tid, thread_stat)| {
             let cur_tag = thread_stat.attached_tag.load_full();
-            if let Some(cur_tag) = cur_tag {
-                if let Ok(cur_stat) = thread::thread_stat(pid, *tid) {
-                    STAT_TASK_COUNT.inc();
-                    let last_stat = &thread_stat.stat;
-                    if *last_stat != cur_stat {
-                        let delta_ms =
-                            (cur_stat.total_cpu_time() - last_stat.total_cpu_time()) * 1_000.;
-                        let record = records.entry(cur_tag).or_default();
-                        record.add_cpu_time(delta_ms as u32, thread_stat.pool_type);
+            let has_tag = cur_tag.is_some();
+            let observe_scheduler = thread_stat.pool_type == ThreadPoolType::Scheduler;
+            let observe_unified_read = matches!(
+                thread_stat.pool_type,
+                ThreadPoolType::UnifiedRead | ThreadPoolType::Coprocessor
+            );
+            let observe_pool = observe_scheduler || observe_unified_read;
+            if !observe_pool && !has_tag {
+                return;
+            }
+
+            if let Ok(cur_stat) = thread::thread_stat(pid, *tid) {
+                STAT_TASK_COUNT.inc();
+
+                if observe_pool {
+                    let state = if cur_tag.is_some() {
+                        "present"
+                    } else {
+                        "absent"
+                    };
+                    if observe_scheduler {
+                        SCHED_TAG_SAMPLE_COUNTER.with_label_values(&[state]).inc();
+                    } else {
+                        UNIFIED_READ_TAG_SAMPLE_COUNTER
+                            .with_label_values(&[state])
+                            .inc();
                     }
+
+                    let last_observe_stat = &thread_stat.observe_stat;
+                    if *last_observe_stat != cur_stat {
+                        let delta_ms = (cur_stat.total_cpu_time()
+                            - last_observe_stat.total_cpu_time())
+                            * 1_000.;
+                        if delta_ms > 0.0 {
+                            if observe_scheduler {
+                                SCHED_TAG_CPU_MILLIS_COUNTER
+                                    .with_label_values(&[state])
+                                    .inc_by(delta_ms as u64);
+                                SCHED_POLL_STATE_CPU_MILLIS_COUNTER
+                                    .with_label_values(&[scheduler_poll_state(
+                                        has_tag,
+                                        thread_stat.tracked_future_polling.load(Relaxed),
+                                    )])
+                                    .inc_by(delta_ms as u64);
+                            } else {
+                                UNIFIED_READ_TAG_CPU_MILLIS_COUNTER
+                                    .with_label_values(&[state])
+                                    .inc_by(delta_ms as u64);
+                            }
+                        }
+                    }
+                    if observe_scheduler {
+                        SCHED_POLL_STATE_SAMPLE_COUNTER
+                            .with_label_values(&[scheduler_poll_state(
+                                has_tag,
+                                thread_stat.tracked_future_polling.load(Relaxed),
+                            )])
+                            .inc();
+                    }
+                }
+
+                let last_stat = &thread_stat.stat;
+                if *last_stat != cur_stat {
+                    let delta_ms =
+                        (cur_stat.total_cpu_time() - last_stat.total_cpu_time()) * 1_000.;
+                    if delta_ms > 0.0 {
+                        if let Some(cur_tag) = cur_tag.as_ref() {
+                            let record = records.records.entry(cur_tag.clone()).or_default();
+                            record.add_cpu_time(delta_ms as u32, thread_stat.pool_type);
+                        } else if observe_scheduler {
+                            records
+                                .scheduler_tag_absent_untracked
+                                .add_cpu_time(delta_ms as u32, thread_stat.pool_type);
+                        } else if observe_unified_read {
+                            records
+                                .unified_read_tag_absent_untracked
+                                .add_cpu_time(delta_ms as u32, thread_stat.pool_type);
+                        }
+                    }
+                }
+                if observe_pool || has_tag {
                     thread_stat.stat = cur_stat;
                 }
+                thread_stat.observe_stat = cur_stat;
             }
         });
     }
@@ -97,17 +177,22 @@ impl SubRecorder for CpuRecorder {
     ) {
         let pid = thread::process_id();
         for (tid, stat) in &mut self.thread_stats {
-            stat.stat = thread::thread_stat(pid, *tid).unwrap_or_default();
+            let cur_stat = thread::thread_stat(pid, *tid).unwrap_or_default();
+            stat.stat = cur_stat;
+            stat.observe_stat = cur_stat;
         }
     }
 
     fn thread_created(&mut self, id: Pid, store: &LocalStorage) {
         let pool_type = detect_thread_pool_type(id);
+        let stat = thread::thread_stat(thread::process_id(), id).unwrap_or_default();
         self.thread_stats.insert(
             id,
             ThreadStat {
                 attached_tag: store.attached_tag.clone(),
-                stat: Default::default(),
+                tracked_future_polling: store.tracked_future_polling.clone(),
+                stat,
+                observe_stat: stat,
                 pool_type,
             },
         );
@@ -116,8 +201,21 @@ impl SubRecorder for CpuRecorder {
 
 struct ThreadStat {
     attached_tag: SharedTagInfos,
+    tracked_future_polling: Arc<AtomicBool>,
     stat: thread::ThreadStat,
+    observe_stat: thread::ThreadStat,
     pool_type: ThreadPoolType,
+}
+
+#[inline]
+fn scheduler_poll_state(has_tag: bool, tracked_future_polling: bool) -> &'static str {
+    if has_tag {
+        "tag_present"
+    } else if tracked_future_polling {
+        "task_poll_tag_absent"
+    } else {
+        "outside_task_poll"
+    }
 }
 
 #[cfg(test)]
@@ -140,7 +238,10 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::{RawRecords, TagInfos};
+    use crate::{
+        RawRecords, TagInfos,
+        metrics::{SCHED_POLL_STATE_CPU_MILLIS_COUNTER, SCHED_POLL_STATE_SAMPLE_COUNTER},
+    };
 
     fn heavy_job() -> u64 {
         let m: u64 = rand::random();
@@ -182,5 +283,208 @@ mod tests {
         let mut records = RawRecords::default();
         recorder.tick(&mut records, &mut HashMap::default());
         assert!(!records.records.is_empty());
+    }
+
+    #[test]
+    fn test_scheduler_tick_advances_baseline_and_tracks_absent_cpu() {
+        let tagged = Arc::new(TagInfos {
+            store_id: 1,
+            region_id: 2,
+            peer_id: 3,
+            key_ranges: vec![],
+            extra_attachment: Arc::new(b"abc".to_vec()),
+        });
+        let tid = thread::thread_id();
+        let pid = thread::process_id();
+        let stat = thread::thread_stat(pid, tid).unwrap_or_default();
+        let attached_tag = SharedTagInfos::new(tagged.clone());
+        let mut recorder = CpuRecorder::default();
+        recorder.thread_stats.insert(
+            tid,
+            ThreadStat {
+                attached_tag: attached_tag.clone(),
+                tracked_future_polling: Arc::new(AtomicBool::new(false)),
+                stat,
+                observe_stat: stat,
+                pool_type: ThreadPoolType::Scheduler,
+            },
+        );
+
+        let initial_stat = recorder.thread_stats.get(&tid).unwrap().stat;
+        loop {
+            let cur_stat = thread::thread_stat(pid, tid).unwrap();
+            if cur_stat.total_cpu_time() - initial_stat.total_cpu_time() >= 0.001 {
+                break;
+            }
+            heavy_job();
+        }
+
+        let mut records = RawRecords::default();
+        recorder.tick(&mut records, &mut HashMap::default());
+        let tagged_cpu_before_absent = records.records.get(&tagged).unwrap().scheduler_cpu_time;
+        assert!(tagged_cpu_before_absent > 0);
+
+        attached_tag.swap(None);
+        let baseline_before_absent = recorder.thread_stats.get(&tid).unwrap().stat;
+        loop {
+            let cur_stat = thread::thread_stat(pid, tid).unwrap();
+            if cur_stat.total_cpu_time() - baseline_before_absent.total_cpu_time() >= 0.001 {
+                break;
+            }
+            heavy_job();
+        }
+
+        recorder.tick(&mut records, &mut HashMap::default());
+        let baseline_after_absent = recorder.thread_stats.get(&tid).unwrap().stat;
+        assert!(baseline_after_absent.total_cpu_time() > baseline_before_absent.total_cpu_time());
+        assert!(records.scheduler_tag_absent_untracked.scheduler_cpu_time > 0);
+        assert_eq!(
+            records.records.get(&tagged).unwrap().scheduler_cpu_time,
+            tagged_cpu_before_absent
+        );
+    }
+
+    #[test]
+    fn test_unified_read_tick_advances_baseline_and_tracks_absent_cpu() {
+        let tagged = Arc::new(TagInfos {
+            store_id: 1,
+            region_id: 2,
+            peer_id: 3,
+            key_ranges: vec![],
+            extra_attachment: Arc::new(b"abc".to_vec()),
+        });
+        let tid = thread::thread_id();
+        let pid = thread::process_id();
+        let stat = thread::thread_stat(pid, tid).unwrap_or_default();
+        let attached_tag = SharedTagInfos::new(tagged.clone());
+        let mut recorder = CpuRecorder::default();
+        recorder.thread_stats.insert(
+            tid,
+            ThreadStat {
+                attached_tag: attached_tag.clone(),
+                tracked_future_polling: Arc::new(AtomicBool::new(false)),
+                stat,
+                observe_stat: stat,
+                pool_type: ThreadPoolType::UnifiedRead,
+            },
+        );
+
+        let initial_stat = recorder.thread_stats.get(&tid).unwrap().stat;
+        loop {
+            let cur_stat = thread::thread_stat(pid, tid).unwrap();
+            if cur_stat.total_cpu_time() - initial_stat.total_cpu_time() >= 0.001 {
+                break;
+            }
+            heavy_job();
+        }
+
+        let mut records = RawRecords::default();
+        recorder.tick(&mut records, &mut HashMap::default());
+        let tagged_cpu_before_absent = records.records.get(&tagged).unwrap().unified_read_cpu_time;
+        assert!(tagged_cpu_before_absent > 0);
+
+        attached_tag.swap(None);
+        let baseline_before_absent = recorder.thread_stats.get(&tid).unwrap().stat;
+        loop {
+            let cur_stat = thread::thread_stat(pid, tid).unwrap();
+            if cur_stat.total_cpu_time() - baseline_before_absent.total_cpu_time() >= 0.001 {
+                break;
+            }
+            heavy_job();
+        }
+
+        recorder.tick(&mut records, &mut HashMap::default());
+        let baseline_after_absent = recorder.thread_stats.get(&tid).unwrap().stat;
+        assert!(baseline_after_absent.total_cpu_time() > baseline_before_absent.total_cpu_time());
+        assert!(
+            records
+                .unified_read_tag_absent_untracked
+                .unified_read_cpu_time
+                > 0
+        );
+        assert_eq!(
+            records.records.get(&tagged).unwrap().unified_read_cpu_time,
+            tagged_cpu_before_absent
+        );
+    }
+
+    #[test]
+    fn test_scheduler_absent_cpu_is_split_by_poll_scope() {
+        let tid = thread::thread_id();
+        let pid = thread::process_id();
+        let stat = thread::thread_stat(pid, tid).unwrap_or_default();
+        let tracked_future_polling = Arc::new(AtomicBool::new(true));
+        let attached_tag = SharedTagInfos::default();
+        let mut recorder = CpuRecorder::default();
+        recorder.thread_stats.insert(
+            tid,
+            ThreadStat {
+                attached_tag,
+                tracked_future_polling: tracked_future_polling.clone(),
+                stat,
+                observe_stat: stat,
+                pool_type: ThreadPoolType::Scheduler,
+            },
+        );
+
+        let task_poll_sample_before = SCHED_POLL_STATE_SAMPLE_COUNTER
+            .with_label_values(&["task_poll_tag_absent"])
+            .get();
+        let task_poll_cpu_before = SCHED_POLL_STATE_CPU_MILLIS_COUNTER
+            .with_label_values(&["task_poll_tag_absent"])
+            .get();
+        let outside_sample_before = SCHED_POLL_STATE_SAMPLE_COUNTER
+            .with_label_values(&["outside_task_poll"])
+            .get();
+        let outside_cpu_before = SCHED_POLL_STATE_CPU_MILLIS_COUNTER
+            .with_label_values(&["outside_task_poll"])
+            .get();
+
+        let mut records = RawRecords::default();
+        let initial_stat = recorder.thread_stats.get(&tid).unwrap().stat;
+        loop {
+            let cur_stat = thread::thread_stat(pid, tid).unwrap();
+            if cur_stat.total_cpu_time() - initial_stat.total_cpu_time() >= 0.001 {
+                break;
+            }
+            heavy_job();
+        }
+        recorder.tick(&mut records, &mut HashMap::default());
+        assert!(
+            SCHED_POLL_STATE_SAMPLE_COUNTER
+                .with_label_values(&["task_poll_tag_absent"])
+                .get()
+                > task_poll_sample_before
+        );
+        assert!(
+            SCHED_POLL_STATE_CPU_MILLIS_COUNTER
+                .with_label_values(&["task_poll_tag_absent"])
+                .get()
+                > task_poll_cpu_before
+        );
+
+        tracked_future_polling.store(false, Relaxed);
+        let baseline_before_outside = recorder.thread_stats.get(&tid).unwrap().stat;
+        loop {
+            let cur_stat = thread::thread_stat(pid, tid).unwrap();
+            if cur_stat.total_cpu_time() - baseline_before_outside.total_cpu_time() >= 0.001 {
+                break;
+            }
+            heavy_job();
+        }
+        recorder.tick(&mut records, &mut HashMap::default());
+        assert!(
+            SCHED_POLL_STATE_SAMPLE_COUNTER
+                .with_label_values(&["outside_task_poll"])
+                .get()
+                > outside_sample_before
+        );
+        assert!(
+            SCHED_POLL_STATE_CPU_MILLIS_COUNTER
+                .with_label_values(&["outside_task_poll"])
+                .get()
+                > outside_cpu_before
+        );
+        assert!(records.scheduler_tag_absent_untracked.scheduler_cpu_time > 0);
     }
 }

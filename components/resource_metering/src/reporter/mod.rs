@@ -327,6 +327,8 @@ mod tests {
             begin_unix_time_secs: 123,
             duration: Duration::default(),
             records,
+            unified_read_tag_absent_untracked: RawRecord::default(),
+            scheduler_tag_absent_untracked: RawRecord::default(),
         })));
         r.on_timeout();
         r.shutdown();
@@ -379,6 +381,8 @@ mod tests {
             begin_unix_time_secs: 123,
             duration: Duration::default(),
             records: records.clone(),
+            unified_read_tag_absent_untracked: RawRecord::default(),
+            scheduler_tag_absent_untracked: RawRecord::default(),
         })));
 
         r.on_timeout();
@@ -394,6 +398,8 @@ mod tests {
             begin_unix_time_secs: 123,
             duration: Duration::default(),
             records,
+            unified_read_tag_absent_untracked: RawRecord::default(),
+            scheduler_tag_absent_untracked: RawRecord::default(),
         })));
 
         r.on_timeout();
@@ -447,6 +453,8 @@ mod tests {
             begin_unix_time_secs: 123,
             duration: Duration::default(),
             records,
+            unified_read_tag_absent_untracked: RawRecord::default(),
+            scheduler_tag_absent_untracked: RawRecord::default(),
         })));
         r.on_timeout();
         r.shutdown();

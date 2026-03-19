@@ -143,7 +143,7 @@ impl Recorder {
             }
             let mut records = std::mem::take(&mut self.records);
             records.duration = duration;
-            if !records.records.is_empty() {
+            if records.has_reportable_data() {
                 let records = Arc::new(records);
                 for collector in self.collectors.values().chain(self.observers.values()) {
                     collector.collect(records.clone());
@@ -405,6 +405,27 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct MockAbsentOnlySubRecorder;
+
+    impl SubRecorder for MockAbsentOnlySubRecorder {
+        fn tick(
+            &mut self,
+            _records: &mut RawRecords,
+            _thread_stores: &mut HashMap<Pid, LocalStorage>,
+        ) {
+        }
+
+        fn collect(
+            &mut self,
+            records: &mut RawRecords,
+            _thread_stores: &mut HashMap<Pid, LocalStorage>,
+        ) {
+            records.scheduler_tag_absent_untracked.cpu_time = 2;
+            records.scheduler_tag_absent_untracked.scheduler_cpu_time = 2;
+        }
+    }
+
     #[derive(Clone, Default)]
     struct MockCollector {
         records: Arc<Mutex<Option<Arc<RawRecords>>>>,
@@ -585,5 +606,29 @@ mod tests {
         assert_eq!(records, {
             observer.records.lock().unwrap().take().unwrap()
         });
+    }
+
+    #[test]
+    fn test_recorder_collects_absent_only_window() {
+        let mut recorder = RecorderBuilder::default()
+            .precision_ms(20)
+            .add_sub_recorder(Box::new(MockAbsentOnlySubRecorder))
+            .build();
+
+        let collector = MockCollector::default();
+        recorder.run(Task::CollectorReg(CollectorReg::Register {
+            id: CollectorId(1),
+            as_observer: false,
+            collector: Box::new(collector.clone()),
+        }));
+        recorder.on_timeout();
+
+        sleep(Duration::from_millis(recorder.precision_ms));
+        recorder.on_timeout();
+
+        let records = { collector.records.lock().unwrap().take().unwrap() };
+        assert!(records.records.is_empty());
+        assert_eq!(records.scheduler_tag_absent_untracked.cpu_time, 2);
+        assert_eq!(records.scheduler_tag_absent_untracked.scheduler_cpu_time, 2);
     }
 }
