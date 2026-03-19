@@ -11,7 +11,7 @@ use tikv_util::{
 
 use crate::{
     RawRecords, ThreadPoolType,
-    metrics::STAT_TASK_COUNT,
+    metrics::{SCHED_TAG_CPU_MILLIS_COUNTER, SCHED_TAG_SAMPLE_COUNTER, STAT_TASK_COUNT},
     recorder::{
         SubRecorder,
         localstorage::{LocalStorage, SharedTagInfos},
@@ -57,9 +57,36 @@ impl SubRecorder for CpuRecorder {
         let pid = thread::process_id();
         self.thread_stats.iter_mut().for_each(|(tid, thread_stat)| {
             let cur_tag = thread_stat.attached_tag.load_full();
-            if let Some(cur_tag) = cur_tag {
-                if let Ok(cur_stat) = thread::thread_stat(pid, *tid) {
-                    STAT_TASK_COUNT.inc();
+            let observe_scheduler = thread_stat.pool_type == ThreadPoolType::Scheduler;
+            if !observe_scheduler && cur_tag.is_none() {
+                return;
+            }
+
+            if let Ok(cur_stat) = thread::thread_stat(pid, *tid) {
+                STAT_TASK_COUNT.inc();
+
+                if observe_scheduler {
+                    let state = if cur_tag.is_some() {
+                        "present"
+                    } else {
+                        "absent"
+                    };
+                    SCHED_TAG_SAMPLE_COUNTER.with_label_values(&[state]).inc();
+
+                    let last_observe_stat = &thread_stat.observe_stat;
+                    if *last_observe_stat != cur_stat {
+                        let delta_ms = (cur_stat.total_cpu_time()
+                            - last_observe_stat.total_cpu_time())
+                            * 1_000.;
+                        if delta_ms > 0.0 {
+                            SCHED_TAG_CPU_MILLIS_COUNTER
+                                .with_label_values(&[state])
+                                .inc_by(delta_ms as u64);
+                        }
+                    }
+                }
+
+                if let Some(cur_tag) = cur_tag {
                     let last_stat = &thread_stat.stat;
                     if *last_stat != cur_stat {
                         let delta_ms =
@@ -69,6 +96,7 @@ impl SubRecorder for CpuRecorder {
                     }
                     thread_stat.stat = cur_stat;
                 }
+                thread_stat.observe_stat = cur_stat;
             }
         });
     }
@@ -97,17 +125,21 @@ impl SubRecorder for CpuRecorder {
     ) {
         let pid = thread::process_id();
         for (tid, stat) in &mut self.thread_stats {
-            stat.stat = thread::thread_stat(pid, *tid).unwrap_or_default();
+            let cur_stat = thread::thread_stat(pid, *tid).unwrap_or_default();
+            stat.stat = cur_stat;
+            stat.observe_stat = cur_stat;
         }
     }
 
     fn thread_created(&mut self, id: Pid, store: &LocalStorage) {
         let pool_type = detect_thread_pool_type(id);
+        let stat = thread::thread_stat(thread::process_id(), id).unwrap_or_default();
         self.thread_stats.insert(
             id,
             ThreadStat {
                 attached_tag: store.attached_tag.clone(),
-                stat: Default::default(),
+                stat,
+                observe_stat: stat,
                 pool_type,
             },
         );
@@ -117,6 +149,7 @@ impl SubRecorder for CpuRecorder {
 struct ThreadStat {
     attached_tag: SharedTagInfos,
     stat: thread::ThreadStat,
+    observe_stat: thread::ThreadStat,
     pool_type: ThreadPoolType,
 }
 

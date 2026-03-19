@@ -9,6 +9,18 @@ lazy_static! {
         "Counter of times to read the stat of tasks from procfs"
     )
     .unwrap();
+    pub static ref SCHED_TAG_SAMPLE_COUNTER: IntCounterVec = register_int_counter_vec!(
+        "tikv_resource_metering_scheduler_tag_sample_total",
+        "Scheduler-pool sampling points split by whether a resource tag is attached",
+        &["state"]
+    )
+    .unwrap();
+    pub static ref SCHED_TAG_CPU_MILLIS_COUNTER: IntCounterVec = register_int_counter_vec!(
+        "tikv_resource_metering_scheduler_tag_cpu_millis_total",
+        "Scheduler-pool observed CPU time in milliseconds split by whether a resource tag is attached",
+        &["state"]
+    )
+    .unwrap();
     pub static ref REPORT_DURATION_HISTOGRAM: Histogram = register_histogram!(
         "tikv_resource_metering_report_duration_seconds",
         "Bucketed histogram of reporting time (s) to the resource metering clients"
