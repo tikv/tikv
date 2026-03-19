@@ -124,15 +124,6 @@ impl PdMocker for MetaStorage {
                 resp.set_events(vec![event].into());
                 sink.send((resp, Default::default())).await.unwrap();
 
-                #[cfg(feature = "failpoints")]
-                {
-                    use futures::executor::block_on;
-                    let cli_clone = cli.clone();
-                    fail_point!("watch_meta_storage_return", |_| {
-                        block_on(async move { cli_clone.lock().await.clear_subs() });
-                        watcher.close();
-                    });
-                }
             }
         });
         true
