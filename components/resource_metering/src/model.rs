@@ -307,6 +307,8 @@ pub struct RawRecords {
 
     // tag -> record
     pub records: HashMap<Arc<TagInfos>, RawRecord>,
+    // Unified-read CPU observed while no resource tag is attached.
+    pub unified_read_tag_absent_untracked: RawRecord,
     // Scheduler CPU observed while no resource tag is attached.
     pub scheduler_tag_absent_untracked: RawRecord,
 }
@@ -320,6 +322,7 @@ impl Default for RawRecords {
             begin_unix_time_secs: now_unix_time.as_secs(),
             duration: Duration::default(),
             records: HashMap::default(),
+            unified_read_tag_absent_untracked: RawRecord::default(),
             scheduler_tag_absent_untracked: RawRecord::default(),
         }
     }
@@ -933,6 +936,7 @@ mod tests {
             begin_unix_time_secs: 1,
             duration: Duration::from_secs(1),
             records: raw_map,
+            unified_read_tag_absent_untracked: RawRecord::default(),
             scheduler_tag_absent_untracked: RawRecord::default(),
         };
         let agg_map = raw.aggregate_by_extra_tag();
@@ -1008,6 +1012,7 @@ mod tests {
             begin_unix_time_secs: 1,
             duration: Duration::from_secs(1),
             records,
+            unified_read_tag_absent_untracked: RawRecord::default(),
             scheduler_tag_absent_untracked: RawRecord::default(),
         };
 
@@ -1078,6 +1083,7 @@ mod tests {
             begin_unix_time_secs: 0,
             duration: Duration::new(0, 0),
             records: HashMap::default(),
+            unified_read_tag_absent_untracked: RawRecord::default(),
             scheduler_tag_absent_untracked: RawRecord::default(),
         };
         raw_records.records.insert(
@@ -1268,6 +1274,7 @@ mod tests {
             begin_unix_time_secs: 1,
             duration: Duration::from_secs(1),
             records,
+            unified_read_tag_absent_untracked: RawRecord::default(),
             scheduler_tag_absent_untracked: RawRecord::default(),
         };
 
@@ -1450,6 +1457,7 @@ mod tests {
             begin_unix_time_secs: 1,
             duration: Duration::from_secs(1),
             records,
+            unified_read_tag_absent_untracked: RawRecord::default(),
             scheduler_tag_absent_untracked: RawRecord::default(),
         };
 
@@ -1557,6 +1565,7 @@ mod tests {
             begin_unix_time_secs: 1,
             duration: Duration::from_secs(1),
             records,
+            unified_read_tag_absent_untracked: RawRecord::default(),
             scheduler_tag_absent_untracked: RawRecord::default(),
         };
 
@@ -1621,6 +1630,7 @@ mod tests {
             begin_unix_time_secs: 1,
             duration: Duration::from_secs(1),
             records,
+            unified_read_tag_absent_untracked: RawRecord::default(),
             scheduler_tag_absent_untracked: RawRecord::default(),
         };
         let agg_map = rs.aggregate_by_extra_tag();

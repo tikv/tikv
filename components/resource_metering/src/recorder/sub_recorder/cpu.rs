@@ -11,7 +11,10 @@ use tikv_util::{
 
 use crate::{
     RawRecords, ThreadPoolType,
-    metrics::{SCHED_TAG_CPU_MILLIS_COUNTER, SCHED_TAG_SAMPLE_COUNTER, STAT_TASK_COUNT},
+    metrics::{
+        SCHED_TAG_CPU_MILLIS_COUNTER, SCHED_TAG_SAMPLE_COUNTER, STAT_TASK_COUNT,
+        UNIFIED_READ_TAG_CPU_MILLIS_COUNTER, UNIFIED_READ_TAG_SAMPLE_COUNTER,
+    },
     recorder::{
         SubRecorder,
         localstorage::{LocalStorage, SharedTagInfos},
@@ -58,20 +61,31 @@ impl SubRecorder for CpuRecorder {
             let cur_tag = thread_stat.attached_tag.load_full();
             let has_tag = cur_tag.is_some();
             let observe_scheduler = thread_stat.pool_type == ThreadPoolType::Scheduler;
-            if !observe_scheduler && !has_tag {
+            let observe_unified_read = matches!(
+                thread_stat.pool_type,
+                ThreadPoolType::UnifiedRead | ThreadPoolType::Coprocessor
+            );
+            let observe_pool = observe_scheduler || observe_unified_read;
+            if !observe_pool && !has_tag {
                 return;
             }
 
             if let Ok(cur_stat) = thread::thread_stat(pid, *tid) {
                 STAT_TASK_COUNT.inc();
 
-                if observe_scheduler {
+                if observe_pool {
                     let state = if cur_tag.is_some() {
                         "present"
                     } else {
                         "absent"
                     };
-                    SCHED_TAG_SAMPLE_COUNTER.with_label_values(&[state]).inc();
+                    if observe_scheduler {
+                        SCHED_TAG_SAMPLE_COUNTER.with_label_values(&[state]).inc();
+                    } else {
+                        UNIFIED_READ_TAG_SAMPLE_COUNTER
+                            .with_label_values(&[state])
+                            .inc();
+                    }
 
                     let last_observe_stat = &thread_stat.observe_stat;
                     if *last_observe_stat != cur_stat {
@@ -79,9 +93,15 @@ impl SubRecorder for CpuRecorder {
                             - last_observe_stat.total_cpu_time())
                             * 1_000.;
                         if delta_ms > 0.0 {
-                            SCHED_TAG_CPU_MILLIS_COUNTER
-                                .with_label_values(&[state])
-                                .inc_by(delta_ms as u64);
+                            if observe_scheduler {
+                                SCHED_TAG_CPU_MILLIS_COUNTER
+                                    .with_label_values(&[state])
+                                    .inc_by(delta_ms as u64);
+                            } else {
+                                UNIFIED_READ_TAG_CPU_MILLIS_COUNTER
+                                    .with_label_values(&[state])
+                                    .inc_by(delta_ms as u64);
+                            }
                         }
                     }
                 }
@@ -98,10 +118,14 @@ impl SubRecorder for CpuRecorder {
                             records
                                 .scheduler_tag_absent_untracked
                                 .add_cpu_time(delta_ms as u32, thread_stat.pool_type);
+                        } else if observe_unified_read {
+                            records
+                                .unified_read_tag_absent_untracked
+                                .add_cpu_time(delta_ms as u32, thread_stat.pool_type);
                         }
                     }
                 }
-                if observe_scheduler || has_tag {
+                if observe_pool || has_tag {
                     thread_stat.stat = cur_stat;
                 }
                 thread_stat.observe_stat = cur_stat;
@@ -279,6 +303,69 @@ mod tests {
         assert!(records.scheduler_tag_absent_untracked.scheduler_cpu_time > 0);
         assert_eq!(
             records.records.get(&tagged).unwrap().scheduler_cpu_time,
+            tagged_cpu_before_absent
+        );
+    }
+
+    #[test]
+    fn test_unified_read_tick_advances_baseline_and_tracks_absent_cpu() {
+        let tagged = Arc::new(TagInfos {
+            store_id: 1,
+            region_id: 2,
+            peer_id: 3,
+            key_ranges: vec![],
+            extra_attachment: Arc::new(b"abc".to_vec()),
+        });
+        let tid = thread::thread_id();
+        let pid = thread::process_id();
+        let stat = thread::thread_stat(pid, tid).unwrap_or_default();
+        let attached_tag = SharedTagInfos::new(tagged.clone());
+        let mut recorder = CpuRecorder::default();
+        recorder.thread_stats.insert(
+            tid,
+            ThreadStat {
+                attached_tag: attached_tag.clone(),
+                stat,
+                observe_stat: stat,
+                pool_type: ThreadPoolType::UnifiedRead,
+            },
+        );
+
+        let initial_stat = recorder.thread_stats.get(&tid).unwrap().stat;
+        loop {
+            let cur_stat = thread::thread_stat(pid, tid).unwrap();
+            if cur_stat.total_cpu_time() - initial_stat.total_cpu_time() >= 0.001 {
+                break;
+            }
+            heavy_job();
+        }
+
+        let mut records = RawRecords::default();
+        recorder.tick(&mut records, &mut HashMap::default());
+        let tagged_cpu_before_absent = records.records.get(&tagged).unwrap().unified_read_cpu_time;
+        assert!(tagged_cpu_before_absent > 0);
+
+        attached_tag.swap(None);
+        let baseline_before_absent = recorder.thread_stats.get(&tid).unwrap().stat;
+        loop {
+            let cur_stat = thread::thread_stat(pid, tid).unwrap();
+            if cur_stat.total_cpu_time() - baseline_before_absent.total_cpu_time() >= 0.001 {
+                break;
+            }
+            heavy_job();
+        }
+
+        recorder.tick(&mut records, &mut HashMap::default());
+        let baseline_after_absent = recorder.thread_stats.get(&tid).unwrap().stat;
+        assert!(baseline_after_absent.total_cpu_time() > baseline_before_absent.total_cpu_time());
+        assert!(
+            records
+                .unified_read_tag_absent_untracked
+                .unified_read_cpu_time
+                > 0
+        );
+        assert_eq!(
+            records.records.get(&tagged).unwrap().unified_read_cpu_time,
             tagged_cpu_before_absent
         );
     }
