@@ -265,7 +265,7 @@ fn state_to_str(state: &pid::State) -> &str {
 }
 
 fn to_io_err(s: String) -> Error {
-    Error::new(ErrorKind::Other, s)
+    Error::other(s)
 }
 
 #[inline]

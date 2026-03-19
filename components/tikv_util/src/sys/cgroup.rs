@@ -189,16 +189,16 @@ fn parse_proc_cgroup_v1(lines: &str) -> HashMap<String, String> {
     let mut subsystems = HashMap::new();
     for line in lines.lines().map(|s| s.trim()).filter(|s| !s.is_empty()) {
         let mut iter = line.split(':');
-        if let Some(_id) = iter.next() {
-            if let Some(systems) = iter.next() {
-                // If the path itself contains ":", we need to concat them
-                let path = iter.collect::<Vec<_>>().join(":");
-                if !path.is_empty() {
-                    for system in systems.split(',') {
-                        subsystems.insert(system.to_owned(), path.clone());
-                    }
-                    continue;
+        if let Some(_id) = iter.next()
+            && let Some(systems) = iter.next()
+        {
+            // If the path itself contains ":", we need to concat them
+            let path = iter.collect::<Vec<_>>().join(":");
+            if !path.is_empty() {
+                for system in systems.split(',') {
+                    subsystems.insert(system.to_owned(), path.clone());
                 }
+                continue;
             }
         }
         warn!("fail to parse cgroup v1: {}", line);
