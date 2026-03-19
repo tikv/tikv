@@ -327,6 +327,7 @@ mod tests {
             begin_unix_time_secs: 123,
             duration: Duration::default(),
             records,
+            scheduler_tag_absent_untracked: RawRecord::default(),
         })));
         r.on_timeout();
         r.shutdown();
@@ -379,6 +380,7 @@ mod tests {
             begin_unix_time_secs: 123,
             duration: Duration::default(),
             records: records.clone(),
+            scheduler_tag_absent_untracked: RawRecord::default(),
         })));
 
         r.on_timeout();
@@ -394,6 +396,7 @@ mod tests {
             begin_unix_time_secs: 123,
             duration: Duration::default(),
             records,
+            scheduler_tag_absent_untracked: RawRecord::default(),
         })));
 
         r.on_timeout();
@@ -447,6 +450,7 @@ mod tests {
             begin_unix_time_secs: 123,
             duration: Duration::default(),
             records,
+            scheduler_tag_absent_untracked: RawRecord::default(),
         })));
         r.on_timeout();
         r.shutdown();

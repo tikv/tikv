@@ -53,12 +53,12 @@ fn detect_thread_pool_type(tid: Pid) -> ThreadPoolType {
 
 impl SubRecorder for CpuRecorder {
     fn tick(&mut self, records: &mut RawRecords, _: &mut HashMap<Pid, LocalStorage>) {
-        let records = &mut records.records;
         let pid = thread::process_id();
         self.thread_stats.iter_mut().for_each(|(tid, thread_stat)| {
             let cur_tag = thread_stat.attached_tag.load_full();
+            let has_tag = cur_tag.is_some();
             let observe_scheduler = thread_stat.pool_type == ThreadPoolType::Scheduler;
-            if !observe_scheduler && cur_tag.is_none() {
+            if !observe_scheduler && !has_tag {
                 return;
             }
 
@@ -86,14 +86,22 @@ impl SubRecorder for CpuRecorder {
                     }
                 }
 
-                if let Some(cur_tag) = cur_tag {
-                    let last_stat = &thread_stat.stat;
-                    if *last_stat != cur_stat {
-                        let delta_ms =
-                            (cur_stat.total_cpu_time() - last_stat.total_cpu_time()) * 1_000.;
-                        let record = records.entry(cur_tag).or_default();
-                        record.add_cpu_time(delta_ms as u32, thread_stat.pool_type);
+                let last_stat = &thread_stat.stat;
+                if *last_stat != cur_stat {
+                    let delta_ms =
+                        (cur_stat.total_cpu_time() - last_stat.total_cpu_time()) * 1_000.;
+                    if delta_ms > 0.0 {
+                        if let Some(cur_tag) = cur_tag.as_ref() {
+                            let record = records.records.entry(cur_tag.clone()).or_default();
+                            record.add_cpu_time(delta_ms as u32, thread_stat.pool_type);
+                        } else if observe_scheduler {
+                            records
+                                .scheduler_tag_absent_untracked
+                                .add_cpu_time(delta_ms as u32, thread_stat.pool_type);
+                        }
                     }
+                }
+                if observe_scheduler || has_tag {
                     thread_stat.stat = cur_stat;
                 }
                 thread_stat.observe_stat = cur_stat;
@@ -215,5 +223,63 @@ mod tests {
         let mut records = RawRecords::default();
         recorder.tick(&mut records, &mut HashMap::default());
         assert!(!records.records.is_empty());
+    }
+
+    #[test]
+    fn test_scheduler_tick_advances_baseline_and_tracks_absent_cpu() {
+        let tagged = Arc::new(TagInfos {
+            store_id: 1,
+            region_id: 2,
+            peer_id: 3,
+            key_ranges: vec![],
+            extra_attachment: Arc::new(b"abc".to_vec()),
+        });
+        let tid = thread::thread_id();
+        let pid = thread::process_id();
+        let stat = thread::thread_stat(pid, tid).unwrap_or_default();
+        let attached_tag = SharedTagInfos::new(tagged.clone());
+        let mut recorder = CpuRecorder::default();
+        recorder.thread_stats.insert(
+            tid,
+            ThreadStat {
+                attached_tag: attached_tag.clone(),
+                stat,
+                observe_stat: stat,
+                pool_type: ThreadPoolType::Scheduler,
+            },
+        );
+
+        let initial_stat = recorder.thread_stats.get(&tid).unwrap().stat;
+        loop {
+            let cur_stat = thread::thread_stat(pid, tid).unwrap();
+            if cur_stat.total_cpu_time() - initial_stat.total_cpu_time() >= 0.001 {
+                break;
+            }
+            heavy_job();
+        }
+
+        let mut records = RawRecords::default();
+        recorder.tick(&mut records, &mut HashMap::default());
+        let tagged_cpu_before_absent = records.records.get(&tagged).unwrap().scheduler_cpu_time;
+        assert!(tagged_cpu_before_absent > 0);
+
+        attached_tag.swap(None);
+        let baseline_before_absent = recorder.thread_stats.get(&tid).unwrap().stat;
+        loop {
+            let cur_stat = thread::thread_stat(pid, tid).unwrap();
+            if cur_stat.total_cpu_time() - baseline_before_absent.total_cpu_time() >= 0.001 {
+                break;
+            }
+            heavy_job();
+        }
+
+        recorder.tick(&mut records, &mut HashMap::default());
+        let baseline_after_absent = recorder.thread_stats.get(&tid).unwrap().stat;
+        assert!(baseline_after_absent.total_cpu_time() > baseline_before_absent.total_cpu_time());
+        assert!(records.scheduler_tag_absent_untracked.scheduler_cpu_time > 0);
+        assert_eq!(
+            records.records.get(&tagged).unwrap().scheduler_cpu_time,
+            tagged_cpu_before_absent
+        );
     }
 }
