@@ -198,10 +198,55 @@ pub fn handle_records_impl<'a, K, T>(
     }
 }
 
+/// Identifies which thread pool a CPU sample was taken from.
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum ThreadPoolType {
+    /// Thread pool type is unknown or not classified.
+    #[default]
+    Unknown = 0,
+    /// Unified read pool threads (prefix "unified-read").
+    UnifiedRead = 1,
+    /// Scheduler worker pool threads (prefix "sched-pool").
+    Scheduler = 2,
+    /// Coprocessor threads share the unified read pool, so they are also
+    /// classified as `UnifiedRead`. This variant is reserved for future use
+    /// if coprocessor gets its own dedicated pool.
+    Coprocessor = 3,
+}
+
+/// Per-region CPU time accumulator with per-thread-pool breakdown.
+///
+/// Used by the PD heartbeat path to track how much CPU each region consumed
+/// on different thread pools between heartbeats.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct RegionCpuRecord {
+    /// Total CPU time in milliseconds (sum of all pools + unknown).
+    pub cpu_time_ms: u32,
+    /// CPU time on unified-read-pool threads (ms).
+    pub unified_read_cpu_time_ms: u32,
+    /// CPU time on scheduler-pool threads (ms).
+    pub scheduler_cpu_time_ms: u32,
+}
+
+impl RegionCpuRecord {
+    /// Accumulate a [`RawRecord`]'s CPU fields into this record.
+    #[inline]
+    pub fn merge_raw_record(&mut self, raw: &RawRecord) {
+        self.cpu_time_ms += raw.cpu_time;
+        self.unified_read_cpu_time_ms += raw.unified_read_cpu_time;
+        self.scheduler_cpu_time_ms += raw.scheduler_cpu_time;
+    }
+}
+
 /// Raw resource statistics record.
 #[derive(Debug, Default, Copy, Clone, PartialEq)]
 pub struct RawRecord {
     pub cpu_time: u32, // ms
+    /// CPU time consumed on unified-read-pool threads (ms).
+    pub unified_read_cpu_time: u32,
+    /// CPU time consumed on scheduler-pool threads (ms).
+    pub scheduler_cpu_time: u32,
     pub read_keys: u32,
     pub write_keys: u32,
     pub logical_read_bytes: u64,
@@ -211,8 +256,24 @@ pub struct RawRecord {
 }
 
 impl RawRecord {
+    /// Add CPU time delta and attribute it to the given thread pool type.
+    pub fn add_cpu_time(&mut self, delta_ms: u32, pool_type: ThreadPoolType) {
+        self.cpu_time += delta_ms;
+        match pool_type {
+            ThreadPoolType::UnifiedRead | ThreadPoolType::Coprocessor => {
+                self.unified_read_cpu_time += delta_ms;
+            }
+            ThreadPoolType::Scheduler => {
+                self.scheduler_cpu_time += delta_ms;
+            }
+            ThreadPoolType::Unknown => {}
+        }
+    }
+
     pub fn merge(&mut self, other: &Self) {
         self.cpu_time += other.cpu_time;
+        self.unified_read_cpu_time += other.unified_read_cpu_time;
+        self.scheduler_cpu_time += other.scheduler_cpu_time;
         self.read_keys += other.read_keys;
         self.write_keys += other.write_keys;
         self.logical_read_bytes += other.logical_read_bytes;
@@ -411,6 +472,7 @@ impl From<Records> for Vec<ResourceUsageRecord> {
                     logical_write_bytes,
                     network_in_bytes,
                     network_out_bytes,
+                    ..
                 },
             ) in records.others
             {
@@ -578,6 +640,7 @@ impl From<RegionRecords> for Vec<ResourceUsageRecord> {
                     logical_write_bytes,
                     network_in_bytes,
                     network_out_bytes,
+                    ..
                 },
             ) in records.others
             {
@@ -834,6 +897,7 @@ mod tests {
                 network_out_bytes: 2222,
                 logical_read_bytes: 3333,
                 logical_write_bytes: 4444,
+                ..Default::default()
             },
         );
         raw_map.insert(
@@ -846,6 +910,7 @@ mod tests {
                 network_out_bytes: 5555,
                 logical_read_bytes: 6666,
                 logical_write_bytes: 7777,
+                ..Default::default()
             },
         );
         raw_map.insert(
@@ -858,6 +923,7 @@ mod tests {
                 network_out_bytes: 8888,
                 logical_read_bytes: 9999,
                 logical_write_bytes: 11110,
+                ..Default::default()
             },
         );
         let raw = RawRecords {
@@ -905,6 +971,7 @@ mod tests {
                 network_out_bytes: 2222,
                 logical_read_bytes: 3333,
                 logical_write_bytes: 4444,
+                ..Default::default()
             },
         );
         records.insert(
@@ -917,6 +984,7 @@ mod tests {
                 network_out_bytes: 5555,
                 logical_read_bytes: 6666,
                 logical_write_bytes: 7777,
+                ..Default::default()
             },
         );
         records.insert(
@@ -929,6 +997,7 @@ mod tests {
                 network_out_bytes: 8888,
                 logical_read_bytes: 9999,
                 logical_write_bytes: 11110,
+                ..Default::default()
             },
         );
         let rs = RawRecords {
@@ -1015,6 +1084,7 @@ mod tests {
                 network_out_bytes: 111,
                 logical_read_bytes: 111,
                 logical_write_bytes: 111,
+                ..Default::default()
             },
         );
         raw_records.records.insert(
@@ -1027,6 +1097,7 @@ mod tests {
                 network_out_bytes: 111,
                 logical_read_bytes: 111,
                 logical_write_bytes: 111,
+                ..Default::default()
             },
         );
         raw_records.records.insert(
@@ -1039,6 +1110,7 @@ mod tests {
                 network_out_bytes: 111,
                 logical_read_bytes: 111,
                 logical_write_bytes: 111,
+                ..Default::default()
             },
         );
 
@@ -1118,6 +1190,7 @@ mod tests {
                 network_out_bytes: 2222,
                 logical_read_bytes: 3333,
                 logical_write_bytes: 4444,
+                ..Default::default()
             },
         );
         records.insert(
@@ -1130,6 +1203,7 @@ mod tests {
                 network_out_bytes: 5555,
                 logical_read_bytes: 6666,
                 logical_write_bytes: 7777,
+                ..Default::default()
             },
         );
         records.insert(
@@ -1142,6 +1216,7 @@ mod tests {
                 network_out_bytes: 8888,
                 logical_read_bytes: 9999,
                 logical_write_bytes: 11110,
+                ..Default::default()
             },
         );
         records.insert(
@@ -1154,6 +1229,7 @@ mod tests {
                 network_out_bytes: 22220,
                 logical_read_bytes: 33330,
                 logical_write_bytes: 44440,
+                ..Default::default()
             },
         );
         records.insert(
@@ -1166,6 +1242,7 @@ mod tests {
                 network_out_bytes: 55550,
                 logical_read_bytes: 66660,
                 logical_write_bytes: 77770,
+                ..Default::default()
             },
         );
         records.insert(
@@ -1178,6 +1255,7 @@ mod tests {
                 network_out_bytes: 88880,
                 logical_read_bytes: 99990,
                 logical_write_bytes: 111110,
+                ..Default::default()
             },
         );
         let rs = RawRecords {
@@ -1293,6 +1371,7 @@ mod tests {
                 network_out_bytes: 2222,
                 logical_read_bytes: 3333,
                 logical_write_bytes: 4444,
+                ..Default::default()
             },
         );
         records.insert(
@@ -1305,6 +1384,7 @@ mod tests {
                 network_out_bytes: 5555,
                 logical_read_bytes: 6666,
                 logical_write_bytes: 7777,
+                ..Default::default()
             },
         );
         records.insert(
@@ -1317,6 +1397,7 @@ mod tests {
                 network_out_bytes: 8888,
                 logical_read_bytes: 9999,
                 logical_write_bytes: 11110,
+                ..Default::default()
             },
         );
         records.insert(
@@ -1329,6 +1410,7 @@ mod tests {
                 network_out_bytes: 22220,
                 logical_read_bytes: 33330,
                 logical_write_bytes: 44440,
+                ..Default::default()
             },
         );
         records.insert(
@@ -1341,6 +1423,7 @@ mod tests {
                 network_out_bytes: 55550,
                 logical_read_bytes: 66660,
                 logical_write_bytes: 77770,
+                ..Default::default()
             },
         );
         records.insert(
@@ -1353,6 +1436,7 @@ mod tests {
                 network_out_bytes: 88880,
                 logical_read_bytes: 99990,
                 logical_write_bytes: 111110,
+                ..Default::default()
             },
         );
         let rs = RawRecords {
@@ -1430,6 +1514,7 @@ mod tests {
                 network_out_bytes: 8888,
                 logical_read_bytes: 7777,
                 logical_write_bytes: 6666,
+                ..Default::default()
             },
         );
         // tag2 largest logical io
@@ -1443,6 +1528,7 @@ mod tests {
                 network_out_bytes: 6666,
                 logical_read_bytes: 9999,
                 logical_write_bytes: 9999,
+                ..Default::default()
             },
         );
         // tag3 largest cpu
@@ -1456,6 +1542,7 @@ mod tests {
                 network_out_bytes: 2222,
                 logical_read_bytes: 3333,
                 logical_write_bytes: 4444,
+                ..Default::default()
             },
         );
         let rs = RawRecords {
@@ -1504,6 +1591,7 @@ mod tests {
                 network_out_bytes: 222,
                 logical_read_bytes: 333,
                 logical_write_bytes: 444,
+                ..Default::default()
             },
         );
         // tag5 won't be picked
@@ -1517,6 +1605,7 @@ mod tests {
                 network_out_bytes: 22,
                 logical_read_bytes: 33,
                 logical_write_bytes: 44,
+                ..Default::default()
             },
         );
         let rs = RawRecords {
