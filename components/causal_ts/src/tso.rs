@@ -2,8 +2,8 @@
 
 //! ## The algorithm to make the TSO cache tolerate failure of TSO service
 //!
-//! 1. The expected total size (in duration) of TSO cache is specified by
-//!    config item `causal-ts.alloc-ahead-buffer`.
+//! 1. The expected total size (in duration) of TSO cache is specified by config
+//!    item `causal-ts.alloc-ahead-buffer`.
 //!
 //! 2. Count usage of TSO on every renew interval.
 //!

@@ -123,7 +123,6 @@ impl PdMocker for MetaStorage {
                 let mut resp = mpb::WatchResponse::default();
                 resp.set_events(vec![event].into());
                 sink.send((resp, Default::default())).await.unwrap();
-
             }
         });
         true
