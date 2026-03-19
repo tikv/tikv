@@ -19,6 +19,7 @@ use syn::{Ident, ItemFn, Path, parse_macro_input, parse_quote};
 ///
 /// It generates three test cases as following:
 ///
+/// ```text
 /// #[cfg(test)]
 /// mod test_something {
 ///     #[test]
@@ -39,6 +40,7 @@ use syn::{Ident, ItemFn, Path, parse_macro_input, parse_quote};
 ///         let mut cluster = new_cluster(0, 1);
 ///     }
 /// }
+/// ```
 #[proc_macro_attribute]
 pub fn test_case(arg: TokenStream, input: TokenStream) -> TokenStream {
     let mut fn_item = parse_macro_input!(input as ItemFn);

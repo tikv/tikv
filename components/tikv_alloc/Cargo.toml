@@ -48,3 +48,6 @@ features = ["stats"]
 version = "0.5.0"
 optional = true
 features = ["unprefixed_malloc_on_supported_platforms", "stats"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
