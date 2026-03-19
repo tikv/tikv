@@ -2294,6 +2294,15 @@ fn future_raw_compare_and_swap<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawCasRequest,
 ) -> impl Future<Output = ServerResult<RawCasResponse>> {
+    #[allow(deprecated)]
+    if req.get_delete() {
+        let mut resp = RawCasResponse::default();
+        resp.set_error(
+            "RawCASRequest.delete is deprecated - use RawCompareAndDelete instead".to_owned(),
+        );
+        return async move { Ok(resp) }.left_future();
+    }
+
     let (cb, f) = paired_future_callback();
     let previous_value = if req.get_previous_not_exist() {
         None
@@ -2332,6 +2341,7 @@ fn future_raw_compare_and_swap<E: Engine, L: LockManager, F: KvFormat>(
         }
         Ok(resp)
     }
+    .right_future()
 }
 
 fn future_raw_compare_and_delete<E: Engine, L: LockManager, F: KvFormat>(
@@ -2968,6 +2978,49 @@ mod tests {
         };
         poll_future_notify(task);
         assert_eq!(block_on(rx1).unwrap(), 200);
+    }
+
+    #[test]
+    fn test_raw_cas_rejects_deprecated_delete_flag() {
+        // A RawCASRequest with `delete=true` must be rejected with an explicit error
+        // rather than silently executing as a plain CAS write.
+        let storage = crate::storage::TestStorageBuilderApiV1::new(
+            crate::storage::lock_manager::MockLockManager::new(),
+        )
+        .build()
+        .unwrap();
+        let mut req = RawCasRequest::default();
+        req.set_context(Context::default());
+        req.set_key(b"k".to_vec());
+        req.set_value(b"v".to_vec());
+        #[allow(deprecated)]
+        req.set_delete(true);
+        let resp = block_on(future_raw_compare_and_swap(&storage, req)).unwrap();
+        let err = resp.get_error();
+        assert!(!err.is_empty());
+        assert!(err.contains("RawCompareAndDelete"));
+        assert!(!resp.get_succeed());
+    }
+
+    #[test]
+    fn test_raw_cas_delete_false_bypasses_guard() {
+        // A RawCASRequest with `delete=false` (the default) must not be rejected by
+        // the deprecated-flag guard.
+        let storage = crate::storage::TestStorageBuilderApiV1::new(
+            crate::storage::lock_manager::MockLockManager::new(),
+        )
+        .build()
+        .unwrap();
+        let mut req = RawCasRequest::default();
+        req.set_context(Context::default());
+        req.set_key(b"k".to_vec());
+        req.set_value(b"v".to_vec());
+        #[allow(deprecated)]
+        req.set_delete(false);
+        req.set_previous_not_exist(true);
+        let resp = block_on(future_raw_compare_and_swap(&storage, req)).unwrap();
+        assert!(resp.get_error().is_empty());
+        assert!(resp.get_succeed());
     }
 
     #[test]

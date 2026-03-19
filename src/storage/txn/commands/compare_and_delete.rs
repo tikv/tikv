@@ -46,10 +46,11 @@ impl CommandExt for RawCompareAndDelete {
     tag!(raw_compare_and_delete);
     gen_lock!(key);
 
-    // Note: the size returned is an underestimate of the actual bytes written for API V2,
-    // since the key is appended with a timestamp. This underestimation is consistent with
-    // the other write_bytes() implementations (e.g atomic_store.rs and compare_and_swap.rs).
-    // If this needs fixing it should be fixed everywhere for consistency.
+    // Note: the size returned is an underestimate of the actual bytes written for
+    // API V2, since the key is appended with a timestamp. This underestimation
+    // is consistent with the other write_bytes() implementations (e.g
+    // atomic_store.rs and compare_and_swap.rs). If this needs fixing it should
+    // be fixed everywhere for consistency.
     fn write_bytes(&self) -> usize {
         if self.api_version == ApiVersion::V2 {
             self.key.as_encoded().len() + ApiV2::ENCODED_LOGICAL_DELETE.len()
