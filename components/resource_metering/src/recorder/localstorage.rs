@@ -27,6 +27,7 @@ pub struct LocalStorage {
     pub register_failed_times: u32,
     pub is_set: bool,
     pub attached_tag: SharedTagInfos,
+    pub tracked_future_polling: Arc<AtomicBool>,
     pub summary_enable: Arc<AtomicBool>,
     pub summary_cur_record: Arc<SummaryRecord>,
     pub summary_records: Arc<Mutex<HashMap<Arc<TagInfos>, SummaryRecord>>>,

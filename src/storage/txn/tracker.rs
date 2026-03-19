@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 
+use resource_metering::set_tls_tracked_future_polling;
 use tikv_util::time::Instant;
 use tracker::{FutureTrack, GLOBAL_TRACKERS, TrackerToken};
 
@@ -132,6 +133,7 @@ impl FutureTrack for TlsFutureTracker {
             state.current_stage = PollState::Began(now);
             *current_state.borrow_mut() = Some(state);
         });
+        set_tls_tracked_future_polling(true);
     }
 
     fn on_poll_finish(&mut self) {
@@ -144,6 +146,7 @@ impl FutureTrack for TlsFutureTracker {
             GLOBAL_TRACKERS.with_tracker(state.token, |tracker| {
                 state.on_poll_finish(now, tracker);
             });
+            set_tls_tracked_future_polling(false);
             // Set to Finish state to tracking the wait time before the next poll.
             state.current_stage = PollState::Finished(now);
             self.state = Some(state);
@@ -164,6 +167,7 @@ mod tests {
 
     use futures::{channel::oneshot::channel, executor::LocalPool, task::LocalSpawnExt};
     use kvproto::kvrpcpb as pb;
+    use resource_metering::tls_tracked_future_polling;
     use tracker::*;
 
     use super::*;
@@ -298,5 +302,26 @@ mod tests {
             let state = current_state.borrow();
             assert!(state.is_none(), "{:?}", state);
         });
+    }
+
+    #[test]
+    fn test_tracked_future_polling_flag() {
+        let token = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
+            &pb::Context::default(),
+            RequestType::Unknown,
+            0,
+        )));
+        let tracker = TlsFutureTracker::new(token, CommandKind::prewrite, 0);
+        let fut = track(
+            async move {
+                assert!(tls_tracked_future_polling());
+            },
+            tracker,
+        );
+        let mut local = LocalPool::new();
+        let spawner = local.spawner();
+        spawner.spawn_local(fut).unwrap();
+        assert!(local.try_run_one());
+        assert!(!tls_tracked_future_polling());
     }
 }

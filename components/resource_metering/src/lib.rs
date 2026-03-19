@@ -63,6 +63,21 @@ pub struct ResourceMeteringTag {
     resource_tag_factory: ResourceTagFactory,
 }
 
+/// Publishes whether the current thread is polling a tracked future.
+///
+/// This is used by diagnostics that sample other worker threads from the
+/// recorder thread and therefore need a cross-thread-visible bit instead of a
+/// pure TLS flag.
+pub fn set_tls_tracked_future_polling(polling: bool) {
+    STORAGE.with(|s| {
+        s.borrow().tracked_future_polling.store(polling, Relaxed);
+    });
+}
+
+pub fn tls_tracked_future_polling() -> bool {
+    STORAGE.with(|s| s.borrow().tracked_future_polling.load(Relaxed))
+}
+
 impl ResourceMeteringTag {
     /// This method is used to provide [ResourceMeteringTag] with the ability
     /// to attach to the thread local context.

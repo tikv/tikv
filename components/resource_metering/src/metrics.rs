@@ -33,6 +33,18 @@ lazy_static! {
         &["state"]
     )
     .unwrap();
+    pub static ref SCHED_POLL_STATE_SAMPLE_COUNTER: IntCounterVec = register_int_counter_vec!(
+        "tikv_resource_metering_scheduler_poll_state_sample_total",
+        "Scheduler-pool sampling points split by tagged poll, tracked-poll-without-tag, or outside-tracked-poll state",
+        &["state"]
+    )
+    .unwrap();
+    pub static ref SCHED_POLL_STATE_CPU_MILLIS_COUNTER: IntCounterVec = register_int_counter_vec!(
+        "tikv_resource_metering_scheduler_poll_state_cpu_millis_total",
+        "Scheduler-pool observed CPU time in milliseconds split by tagged poll, tracked-poll-without-tag, or outside-tracked-poll state",
+        &["state"]
+    )
+    .unwrap();
     pub static ref REPORT_DURATION_HISTOGRAM: Histogram = register_histogram!(
         "tikv_resource_metering_report_duration_seconds",
         "Bucketed histogram of reporting time (s) to the resource metering clients"

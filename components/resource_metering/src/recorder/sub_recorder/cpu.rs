@@ -1,5 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering::Relaxed},
+};
+
 use collections::HashMap;
 use tikv_util::{
     sys::thread::{self, Pid, THREAD_NAME_HASHMAP},
@@ -12,6 +17,7 @@ use tikv_util::{
 use crate::{
     RawRecords, ThreadPoolType,
     metrics::{
+        SCHED_POLL_STATE_CPU_MILLIS_COUNTER, SCHED_POLL_STATE_SAMPLE_COUNTER,
         SCHED_TAG_CPU_MILLIS_COUNTER, SCHED_TAG_SAMPLE_COUNTER, STAT_TASK_COUNT,
         UNIFIED_READ_TAG_CPU_MILLIS_COUNTER, UNIFIED_READ_TAG_SAMPLE_COUNTER,
     },
@@ -97,12 +103,26 @@ impl SubRecorder for CpuRecorder {
                                 SCHED_TAG_CPU_MILLIS_COUNTER
                                     .with_label_values(&[state])
                                     .inc_by(delta_ms as u64);
+                                SCHED_POLL_STATE_CPU_MILLIS_COUNTER
+                                    .with_label_values(&[scheduler_poll_state(
+                                        has_tag,
+                                        thread_stat.tracked_future_polling.load(Relaxed),
+                                    )])
+                                    .inc_by(delta_ms as u64);
                             } else {
                                 UNIFIED_READ_TAG_CPU_MILLIS_COUNTER
                                     .with_label_values(&[state])
                                     .inc_by(delta_ms as u64);
                             }
                         }
+                    }
+                    if observe_scheduler {
+                        SCHED_POLL_STATE_SAMPLE_COUNTER
+                            .with_label_values(&[scheduler_poll_state(
+                                has_tag,
+                                thread_stat.tracked_future_polling.load(Relaxed),
+                            )])
+                            .inc();
                     }
                 }
 
@@ -170,6 +190,7 @@ impl SubRecorder for CpuRecorder {
             id,
             ThreadStat {
                 attached_tag: store.attached_tag.clone(),
+                tracked_future_polling: store.tracked_future_polling.clone(),
                 stat,
                 observe_stat: stat,
                 pool_type,
@@ -180,9 +201,21 @@ impl SubRecorder for CpuRecorder {
 
 struct ThreadStat {
     attached_tag: SharedTagInfos,
+    tracked_future_polling: Arc<AtomicBool>,
     stat: thread::ThreadStat,
     observe_stat: thread::ThreadStat,
     pool_type: ThreadPoolType,
+}
+
+#[inline]
+fn scheduler_poll_state(has_tag: bool, tracked_future_polling: bool) -> &'static str {
+    if has_tag {
+        "tag_present"
+    } else if tracked_future_polling {
+        "task_poll_tag_absent"
+    } else {
+        "outside_task_poll"
+    }
 }
 
 #[cfg(test)]
@@ -205,7 +238,10 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::{RawRecords, TagInfos};
+    use crate::{
+        RawRecords, TagInfos,
+        metrics::{SCHED_POLL_STATE_CPU_MILLIS_COUNTER, SCHED_POLL_STATE_SAMPLE_COUNTER},
+    };
 
     fn heavy_job() -> u64 {
         let m: u64 = rand::random();
@@ -267,6 +303,7 @@ mod tests {
             tid,
             ThreadStat {
                 attached_tag: attached_tag.clone(),
+                tracked_future_polling: Arc::new(AtomicBool::new(false)),
                 stat,
                 observe_stat: stat,
                 pool_type: ThreadPoolType::Scheduler,
@@ -325,6 +362,7 @@ mod tests {
             tid,
             ThreadStat {
                 attached_tag: attached_tag.clone(),
+                tracked_future_polling: Arc::new(AtomicBool::new(false)),
                 stat,
                 observe_stat: stat,
                 pool_type: ThreadPoolType::UnifiedRead,
@@ -368,5 +406,85 @@ mod tests {
             records.records.get(&tagged).unwrap().unified_read_cpu_time,
             tagged_cpu_before_absent
         );
+    }
+
+    #[test]
+    fn test_scheduler_absent_cpu_is_split_by_poll_scope() {
+        let tid = thread::thread_id();
+        let pid = thread::process_id();
+        let stat = thread::thread_stat(pid, tid).unwrap_or_default();
+        let tracked_future_polling = Arc::new(AtomicBool::new(true));
+        let attached_tag = SharedTagInfos::default();
+        let mut recorder = CpuRecorder::default();
+        recorder.thread_stats.insert(
+            tid,
+            ThreadStat {
+                attached_tag,
+                tracked_future_polling: tracked_future_polling.clone(),
+                stat,
+                observe_stat: stat,
+                pool_type: ThreadPoolType::Scheduler,
+            },
+        );
+
+        let task_poll_sample_before = SCHED_POLL_STATE_SAMPLE_COUNTER
+            .with_label_values(&["task_poll_tag_absent"])
+            .get();
+        let task_poll_cpu_before = SCHED_POLL_STATE_CPU_MILLIS_COUNTER
+            .with_label_values(&["task_poll_tag_absent"])
+            .get();
+        let outside_sample_before = SCHED_POLL_STATE_SAMPLE_COUNTER
+            .with_label_values(&["outside_task_poll"])
+            .get();
+        let outside_cpu_before = SCHED_POLL_STATE_CPU_MILLIS_COUNTER
+            .with_label_values(&["outside_task_poll"])
+            .get();
+
+        let mut records = RawRecords::default();
+        let initial_stat = recorder.thread_stats.get(&tid).unwrap().stat;
+        loop {
+            let cur_stat = thread::thread_stat(pid, tid).unwrap();
+            if cur_stat.total_cpu_time() - initial_stat.total_cpu_time() >= 0.001 {
+                break;
+            }
+            heavy_job();
+        }
+        recorder.tick(&mut records, &mut HashMap::default());
+        assert!(
+            SCHED_POLL_STATE_SAMPLE_COUNTER
+                .with_label_values(&["task_poll_tag_absent"])
+                .get()
+                > task_poll_sample_before
+        );
+        assert!(
+            SCHED_POLL_STATE_CPU_MILLIS_COUNTER
+                .with_label_values(&["task_poll_tag_absent"])
+                .get()
+                > task_poll_cpu_before
+        );
+
+        tracked_future_polling.store(false, Relaxed);
+        let baseline_before_outside = recorder.thread_stats.get(&tid).unwrap().stat;
+        loop {
+            let cur_stat = thread::thread_stat(pid, tid).unwrap();
+            if cur_stat.total_cpu_time() - baseline_before_outside.total_cpu_time() >= 0.001 {
+                break;
+            }
+            heavy_job();
+        }
+        recorder.tick(&mut records, &mut HashMap::default());
+        assert!(
+            SCHED_POLL_STATE_SAMPLE_COUNTER
+                .with_label_values(&["outside_task_poll"])
+                .get()
+                > outside_sample_before
+        );
+        assert!(
+            SCHED_POLL_STATE_CPU_MILLIS_COUNTER
+                .with_label_values(&["outside_task_poll"])
+                .get()
+                > outside_cpu_before
+        );
+        assert!(records.scheduler_tag_absent_untracked.scheduler_cpu_time > 0);
     }
 }
