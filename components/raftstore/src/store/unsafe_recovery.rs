@@ -245,6 +245,7 @@ pub fn start_unsafe_recovery_report(
     router.broadcast_wait_apply(wait_apply);
 }
 
+#[expect(dead_code)]
 #[derive(Clone, Debug)]
 pub struct UnsafeRecoveryForceLeaderSyncer(Arc<InvokeClosureOnDrop>);
 

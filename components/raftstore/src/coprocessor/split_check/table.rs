@@ -36,22 +36,20 @@ where
 
         let current_encoded_key = keys::origin_key(entry.key());
 
-        let split_key = if self.first_encoded_table_prefix.is_some() {
-            if !is_same_table(
-                self.first_encoded_table_prefix.as_ref().unwrap(),
-                current_encoded_key,
-            ) {
-                // Different tables.
+        let split_key =
+            if let Some(first_encoded_table_prefix) = self.first_encoded_table_prefix.as_ref() {
+                if !is_same_table(first_encoded_table_prefix, current_encoded_key) {
+                    // Different tables.
+                    Some(current_encoded_key)
+                } else {
+                    None
+                }
+            } else if is_table_key(current_encoded_key) {
+                // Now we meet the very first table key of this region.
                 Some(current_encoded_key)
             } else {
                 None
-            }
-        } else if is_table_key(current_encoded_key) {
-            // Now we meet the very first table key of this region.
-            Some(current_encoded_key)
-        } else {
-            None
-        };
+            };
         self.split_key = split_key.and_then(to_encoded_table_prefix);
         self.split_key.is_some()
     }

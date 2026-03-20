@@ -47,6 +47,7 @@ impl BatchIndexScanExecutor<Box<dyn Storage<Statistics = ()>>, ApiV1> {
 }
 
 impl<S: Storage, F: KvFormat> BatchIndexScanExecutor<S, F> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         storage: S,
         config: Arc<EvalConfig>,
@@ -96,7 +97,7 @@ impl<S: Storage, F: KvFormat> BatchIndexScanExecutor<S, F> {
             });
         let is_int_handle = columns_info
             .get(columns_info.len() - 1 - pid_column_cnt - physical_table_id_column_cnt)
-            .map_or(false, |ci| ci.get_pk_handle());
+            .is_some_and(|ci| ci.get_pk_handle());
         let is_common_handle = primary_column_ids_len > 0;
         let (decode_handle_strategy, handle_column_cnt) = match (is_int_handle, is_common_handle) {
             (false, false) => (NoDecode, 0),
@@ -119,7 +120,7 @@ impl<S: Storage, F: KvFormat> BatchIndexScanExecutor<S, F> {
 
         let schema: Vec<_> = columns_info
             .iter()
-            .map(|ci| field_type_from_column_info(ci))
+            .map(field_type_from_column_info)
             .collect();
 
         let columns_id_without_handle: Vec<_> = columns_info[..columns_info.len()
@@ -669,7 +670,7 @@ impl IndexScanExecutorImpl {
                 truncate_str
                     .iter()
                     .cloned()
-                    .chain(std::iter::repeat(PADDING_SPACE as _).take(space_num as _))
+                    .chain(std::iter::repeat_n(PADDING_SPACE as _, space_num as _))
                     .collect::<Vec<_>>()
             } else {
                 let original_data = row
@@ -1001,7 +1002,7 @@ impl IndexScanExecutorImpl {
     fn split_common_handle(value: &[u8]) -> Result<(&[u8], &[u8])> {
         if value
             .first()
-            .map_or(false, |c| *c == table::INDEX_VALUE_COMMON_HANDLE_FLAG)
+            .is_some_and(|c| *c == table::INDEX_VALUE_COMMON_HANDLE_FLAG)
         {
             let handle_len = (&value[1..]).read_u16().map_err(|_| {
                 other_err!(
@@ -1023,7 +1024,7 @@ impl IndexScanExecutorImpl {
     fn split_partition_id(value: &[u8]) -> Result<(&[u8], &[u8])> {
         if value
             .first()
-            .map_or(false, |c| *c == table::INDEX_VALUE_PARTITION_ID_FLAG)
+            .is_some_and(|c| *c == table::INDEX_VALUE_PARTITION_ID_FLAG)
         {
             if value.len() < 9 {
                 return Err(other_err!(
@@ -1042,7 +1043,7 @@ impl IndexScanExecutorImpl {
         Ok(
             if value
                 .first()
-                .map_or(false, |c| *c == table::INDEX_VALUE_RESTORED_DATA_FLAG)
+                .is_some_and(|c| *c == table::INDEX_VALUE_RESTORED_DATA_FLAG)
             {
                 (value, &value[value.len()..])
             } else {
@@ -1084,14 +1085,14 @@ mod tests {
         // Index schema: (INT, FLOAT)
 
         // the elements in data are: [int index, float index, handle id].
-        let data = vec![
+        let data = [
             [Datum::I64(-5), Datum::F64(0.3), Datum::I64(10)],
             [Datum::I64(5), Datum::F64(5.1), Datum::I64(5)],
             [Datum::I64(5), Datum::F64(10.5), Datum::I64(2)],
         ];
 
         // The column info for each column in `data`. Used to build the executor.
-        let columns_info = vec![
+        let columns_info = [
             {
                 let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
@@ -1117,7 +1118,7 @@ mod tests {
         ];
 
         // The schema of these columns. Used to check executor output.
-        let schema = vec![
+        let schema = [
             FieldTypeTp::LongLong.into(),
             FieldTypeTp::Double.into(),
             FieldTypeTp::LongLong.into(),

@@ -3,8 +3,10 @@
 //! This crate provides aggregate functions for batch executors.
 
 #![allow(incomplete_features)]
+#![allow(clippy::macro_metavars_in_unsafe)]
 #![feature(proc_macro_hygiene)]
 #![feature(specialization)]
+#![feature(stmt_expr_attributes)]
 
 #[macro_use(box_try)]
 extern crate tikv_util;
@@ -129,6 +131,7 @@ macro_rules! update_vector {
 }
 
 #[macro_export]
+#[allow(clippy::macro_metavars_in_unsafe)]
 macro_rules! update_repeat {
     ($state:expr, $ctx:expr, $value:expr, $repeat_times:expr) => {
         unsafe { $state.update_repeat_unsafe($ctx, $value.unsafe_into(), $repeat_times) }
@@ -138,7 +141,10 @@ macro_rules! update_repeat {
 #[macro_export]
 macro_rules! update {
     ($state:expr, $ctx:expr, $value:expr) => {
-        unsafe { $state.update_unsafe($ctx, $value.unsafe_into()) }
+        #[allow(clippy::macro_metavars_in_unsafe)]
+        unsafe {
+            $state.update_unsafe($ctx, $value.unsafe_into())
+        }
     };
 }
 

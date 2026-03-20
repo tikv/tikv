@@ -844,10 +844,7 @@ impl Snapshot {
         region: &Region,
         allow_multi_files_snapshot: bool,
         for_balance: bool,
-    ) -> RaftStoreResult<()>
-    where
-        EK: KvEngine,
-    {
+    ) -> RaftStoreResult<()> {
         fail_point!("snapshot_enter_do_build");
         if self.exists() {
             match self.validate(|_, _| -> RaftStoreResult<()> { Ok(()) }) {

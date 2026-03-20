@@ -594,6 +594,7 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
 }
 
 impl<SS: 'static> BatchExecutorsRunner<SS> {
+    #[allow(clippy::too_many_arguments)]
     pub fn from_request<S: Storage<Statistics = SS> + 'static, F: KvFormat>(
         mut req: DagRequest,
         ranges: Vec<KeyRange>,
@@ -2166,7 +2167,7 @@ mod tests {
             exec
         }
 
-        let executors = vec![
+        let executors = [
             new_executor(ExecType::TypeIndexScan, 0),
             new_executor(ExecType::TypeSelection, 0),
             new_executor(ExecType::TypeLimit, 5),
@@ -2198,7 +2199,7 @@ mod tests {
         test_executor_with_index(6, false);
 
         // invalid case 1
-        let executors = vec![
+        let executors = [
             new_executor(ExecType::TypeIndexScan, 2),
             new_executor(ExecType::TypeSelection, 0),
         ];
@@ -2215,7 +2216,7 @@ mod tests {
         );
 
         // invalid case 2
-        let executors = vec![
+        let executors = [
             new_executor(ExecType::TypeIndexScan, 0),
             new_executor(ExecType::TypeSelection, 0),
             new_executor(ExecType::TypeLimit, 0),

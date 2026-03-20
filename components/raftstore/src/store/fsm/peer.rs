@@ -1,5 +1,8 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+#![allow(clippy::result_large_err)]
+#![allow(clippy::type_complexity)]
+
 // #[PerformanceCriticalPath]
 use std::{
     borrow::Cow,
@@ -2059,7 +2062,7 @@ where
             .peer
             .uncampaigned_new_regions
             .as_ref()
-            .map_or(false, |r| r.is_empty());
+            .is_some_and(|r| r.is_empty());
         // If the peer has any uncleared records in the uncampaigned_new_regions list,
         // and there has valid leader in the region, it's safely to clear the records.
         if has_uncompaigned_regions && self.fsm.peer.has_valid_leader() {
@@ -2670,10 +2673,7 @@ where
             }
             let disk_full_peers = &self.fsm.peer.disk_full_peers;
 
-            disk_full_peers.is_empty()
-                || disk_full_peers
-                    .get(peer_id)
-                    .map_or(true, |x| x != msg.disk_usage)
+            disk_full_peers.is_empty() || disk_full_peers.get(peer_id) != Some(msg.disk_usage)
         };
         if refill_disk_usages || self.fsm.peer.has_region_merge_proposal {
             let prev = self.fsm.peer.disk_full_peers.get(peer_id);
@@ -4104,7 +4104,7 @@ where
             if self
                 .fsm
                 .delayed_destroy
-                .map_or(false, |delay| delay.reason == reason)
+                .is_some_and(|delay| delay.reason == reason)
             {
                 panic!(
                     "{} destroy peer twice with same delay reason, original {:?}, now {}",
@@ -4145,13 +4145,13 @@ where
                 .snapshot_recovery_maybe_finish_wait_apply(/* force= */ true);
         }
 
-        (|| {
+        {
             fail_point!(
                 "before_destroy_peer_on_peer_1003",
                 self.fsm.peer.peer_id() == 1003,
                 |_| {}
             );
-        })();
+        };
         let mut meta = self.ctx.store_meta.lock().unwrap();
         meta.damaged_regions.remove(&self.fsm.region_id());
         meta.damaged_regions.shrink_to_fit();
@@ -4292,7 +4292,7 @@ where
                 // peer decide to destroy by itself. Without target, the
                 // `pending_merge_targets` for target won't be removed, so here source peer help
                 // target to clear.
-                if meta.regions.get(&target).is_none()
+                if !meta.regions.contains_key(&target)
                     && meta.pending_merge_targets.get(&target).unwrap().is_empty()
                 {
                     meta.pending_merge_targets.remove(&target);
@@ -5335,16 +5335,12 @@ where
         target: metapb::Peer,
         result: MergeResultKind,
     ) {
-        let exists = self
-            .fsm
-            .peer
-            .pending_merge_state
-            .as_ref()
-            .map_or(true, |s| {
-                s.get_target().get_peers().iter().any(|p| {
-                    p.get_store_id() == target.get_store_id() && p.get_id() <= target.get_id()
-                })
-            });
+        let exists = self.fsm.peer.pending_merge_state.as_ref().is_none_or(|s| {
+            s.get_target()
+                .get_peers()
+                .iter()
+                .any(|p| p.get_store_id() == target.get_store_id() && p.get_id() <= target.get_id())
+        });
         if !exists {
             panic!(
                 "{} unexpected merge result: {:?} {:?} {:?}",
@@ -5486,11 +5482,10 @@ where
         // which are added before applying snapshot
         if let Some(wait_destroy_regions) = meta.atomic_snap_regions.remove(&self.fsm.region_id()) {
             for (source_region_id, _) in wait_destroy_regions {
-                assert_eq!(
+                assert!(
                     meta.destroyed_region_for_snap
                         .remove(&source_region_id)
-                        .is_some(),
-                    true
+                        .is_some()
                 );
             }
         }
@@ -6377,7 +6372,7 @@ where
 
     #[inline]
     fn region_split_skip_max_count(&self) -> usize {
-        fail_point!("region_split_skip_max_count", |_| { usize::max_value() });
+        fail_point!("region_split_skip_max_count", |_| { usize::MAX });
         REGION_SPLIT_SKIP_MAX_COUNT
     }
 
@@ -7258,7 +7253,7 @@ where
 
     fn on_set_flashback_state(&mut self, region: metapb::Region) {
         // Update the region meta.
-        self.update_region((|| {
+        self.update_region({
             #[cfg(feature = "failpoints")]
             fail_point!("keep_peer_fsm_flashback_state_false", |_| {
                 let mut region = region.clone();
@@ -7266,7 +7261,7 @@ where
                 region
             });
             region
-        })());
+        });
         // Let the leader lease to None to ensure that local reads are not executed.
         self.fsm.peer.leader_lease_mut().expire_remote_lease();
         let mut pessimistic_locks = self.fsm.peer.txn_ext.pessimistic_locks.write();

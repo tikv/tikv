@@ -473,12 +473,16 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
             let group_key_offsets = &self.group_key_offsets
                 [group_index * (self.group_by_exps.len() + self.extra_group_by_col_index.len())..];
 
-            for group_index in 0..self.group_by_exps.len() {
+            for (group_index, group_by_column) in group_by_columns
+                .iter_mut()
+                .enumerate()
+                .take(self.group_by_exps.len())
+            {
                 // Read from extra column if it's a bytes column
                 let buffer_group_index = self.original_group_by_col_index[group_index];
                 let offset_begin = group_key_offsets[buffer_group_index];
                 let offset_end = group_key_offsets[buffer_group_index + 1];
-                group_by_columns[group_index]
+                group_by_column
                     .mut_raw()
                     .push(&self.group_key_buffer[offset_begin..offset_end]);
             }

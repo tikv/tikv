@@ -51,6 +51,7 @@ struct TableLookUpState<Iter, S: Storage, F: KvFormat> {
         Option<WithSummaryCollector<ExecSummaryCollectorEnabled, BatchTableScanExecutor<S, F>>>,
 }
 
+#[allow(clippy::large_enum_variant)]
 enum IndexLookUpPhase<Iter, S: Storage, F: KvFormat> {
     IndexScan(IndexScanState),
     TableLookUp(TableLookUpState<Iter, S, F>),
@@ -345,9 +346,11 @@ where
     #[inline]
     fn step_to_index_scan(&mut self) -> Result<()> {
         let results = self.finish_table_task_iter()?;
-        let mut index_scan = IndexScanState::default();
-        // reuses results
-        index_scan.results = results;
+        let index_scan = IndexScanState {
+            // reuses results
+            results,
+            ..Default::default()
+        };
         self.phase = IndexLookUpPhase::IndexScan(index_scan);
         Ok(())
     }
@@ -1798,7 +1801,11 @@ pub mod tests {
     ) {
         assert_eq!(*result.is_drained.as_ref().unwrap(), is_drained);
         assert_eq!(result.warnings.warning_cnt, warning_cnt);
-        for i in 0..result.physical_columns.columns_len() {
+        for (i, expect) in expected
+            .iter()
+            .enumerate()
+            .take(result.physical_columns.columns_len())
+        {
             let col = &mut result.physical_columns[i];
             col.ensure_decoded(
                 &mut EvalContext::default(),
@@ -1807,7 +1814,6 @@ pub mod tests {
             )
             .unwrap();
 
-            let expect = &expected[i];
             match expect[0] {
                 Datum::I64(_) => {
                     let expect_i64 = expect

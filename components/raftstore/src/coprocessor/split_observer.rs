@@ -1,5 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+#![allow(clippy::result_large_err)]
+
 use itertools::Itertools;
 use kvproto::{
     metapb::Region,

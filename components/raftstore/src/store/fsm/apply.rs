@@ -1,5 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+#![allow(clippy::result_large_err)]
+
 // #[PerformanceCriticalPath]
 #[cfg(test)]
 use std::sync::mpsc::Sender;
@@ -18,7 +20,6 @@ use std::{
         mpsc::SyncSender,
     },
     time::Duration,
-    usize,
     vec::Drain,
 };
 
@@ -197,7 +198,7 @@ impl<C> PendingCmdQueue<C> {
 
     fn pop_compact(&mut self, index: u64) -> Option<PendingCmd<C>> {
         let mut front = None;
-        while self.compacts.front().map_or(false, |c| c.index < index) {
+        while self.compacts.front().is_some_and(|c| c.index < index) {
             front = self.compacts.pop_front();
             front.as_mut().unwrap().cb.take().unwrap();
         }
@@ -320,6 +321,7 @@ pub enum ExecResult<S> {
 }
 
 /// The possible returned value when applying logs.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum ApplyResult<S> {
     None,
@@ -475,6 +477,7 @@ impl<EK> ApplyContext<EK>
 where
     EK: KvEngine,
 {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         tag: String,
         host: CoprocessorHost<EK>,
@@ -1448,8 +1451,8 @@ where
     ///
     /// An apply operation can fail in the following situations:
     ///   - it encounters an error that will occur on all stores, it can
-    /// continue applying next entry safely, like epoch not match for
-    /// example;
+    ///     continue applying next entry safely, like epoch not match for
+    ///     example;
     ///   - it encounters an error that may not occur on all stores, in this
     ///     case we should try to apply the entry again or panic. Considering
     ///     that this usually due to disk operation fail, which is rare, so just
@@ -1978,7 +1981,7 @@ where
         if cf.is_empty() {
             cf = CF_DEFAULT;
         }
-        if !ALL_CFS.iter().any(|x| *x == cf) {
+        if !ALL_CFS.contains(&cf) {
             return Err(box_err!("invalid delete range command, cf: {:?}", cf));
         }
 
@@ -2717,7 +2720,7 @@ where
             {
                 Ok(None) => (),
                 Ok(Some(state)) => {
-                    if replace_regions.get(region_id).is_some() {
+                    if replace_regions.contains(region_id) {
                         // It's marked replaced, then further destroy will skip cleanup, so there
                         // should be no region local state.
                         panic!(

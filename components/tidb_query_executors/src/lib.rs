@@ -9,6 +9,7 @@
 //! UDF functions are also exported and can be used standalone.
 
 #![allow(incomplete_features)]
+#![allow(clippy::unnecessary_sort_by)]
 #![feature(proc_macro_hygiene)]
 #![feature(specialization)]
 #![feature(stmt_expr_attributes)]

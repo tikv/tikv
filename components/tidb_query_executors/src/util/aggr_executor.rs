@@ -631,9 +631,10 @@ pub mod tests {
         ];
 
         let exec_fast = |src_exec, paging_size| {
-            let mut config = EvalConfig::default();
-            config.paging_size = paging_size;
-            let config = Arc::new(config);
+            let config = Arc::new(EvalConfig {
+                paging_size,
+                ..Default::default()
+            });
             Box::new(BatchFastHashAggregationExecutor::new_for_test_with_config(
                 config,
                 src_exec,
@@ -644,9 +645,10 @@ pub mod tests {
         };
 
         let exec_slow = |src_exec, paging_size| {
-            let mut config = EvalConfig::default();
-            config.paging_size = paging_size;
-            let config = Arc::new(config);
+            let config = Arc::new(EvalConfig {
+                paging_size,
+                ..Default::default()
+            });
             Box::new(BatchSlowHashAggregationExecutor::new_for_test_with_config(
                 config,
                 src_exec,
@@ -668,23 +670,24 @@ pub mod tests {
             for exec_builder in &executor_builders {
                 let src_exec = make_src_executor_2();
                 let mut exec = exec_builder(src_exec, Some(paging_size));
-                for nth_call in 0..call_num {
+                for (nth_call, &expected_rows) in row_num.iter().enumerate().take(call_num) {
                     let r = block_on(exec.next_batch(1));
                     if nth_call == call_num - 1 {
                         assert!(r.is_drained.unwrap().stop());
                     } else {
                         assert!(r.is_drained.unwrap().is_remain());
                     }
-                    assert_eq!(r.physical_columns.rows_len(), row_num[nth_call]);
+                    assert_eq!(r.physical_columns.rows_len(), expected_rows);
                 }
             }
         }
 
         let expect_row_num2 = [vec![4], vec![3, 0, 2], vec![3, 0, 1, 2]];
         let exec_stream = |src_exec, paging_size| {
-            let mut config = EvalConfig::default();
-            config.paging_size = paging_size;
-            let config = Arc::new(config);
+            let config = Arc::new(EvalConfig {
+                paging_size,
+                ..Default::default()
+            });
             Box::new(BatchStreamAggregationExecutor::new_for_test_with_config(
                 config,
                 src_exec,
@@ -698,14 +701,14 @@ pub mod tests {
             let call_num = expect_call_num[test_case];
             let row_num = &expect_row_num2[test_case];
             let mut exec = exec_stream(make_src_executor_2(), Some(paging_size));
-            for nth_call in 0..call_num {
+            for (nth_call, &expected_rows) in row_num.iter().enumerate().take(call_num) {
                 let r = block_on(exec.next_batch(1));
                 if nth_call == call_num - 1 {
                     assert!(r.is_drained.unwrap().stop());
                 } else {
                     assert!(r.is_drained.unwrap().is_remain());
                 }
-                assert_eq!(r.physical_columns.rows_len(), row_num[nth_call]);
+                assert_eq!(r.physical_columns.rows_len(), expected_rows);
             }
         }
     }

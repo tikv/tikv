@@ -21,9 +21,8 @@ pub struct TopNHeap {
 
 impl TopNHeap {
     /// parameters:
-    /// - n: The maximum number of rows in the heaps
-    /// note: to avoid large N causing OOM, the initial capacity will be limited
-    /// up to 1024.
+    /// - n: The maximum number of rows in the heaps note: to avoid large N
+    ///   causing OOM, the initial capacity will be limited up to 1024.
     pub fn new(n: usize) -> Self {
         Self {
             n,

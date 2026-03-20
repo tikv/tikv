@@ -38,8 +38,8 @@ pub struct BatchTopNExecutor<Src: BatchExecutor> {
     /// 1. `BatchTopNExecutor` is valid (i.e. not dropped).
     ///
     /// 2. The referenced `LazyBatchColumnVec` of the element must be valid,
-    /// which only happens when at least one of the row is in the `heap`.
-    /// Note that rows may be swapped out from    `heap` at any time.
+    ///    which only happens when at least one of the row is in the `heap`.
+    ///    Note that rows may be swapped out from `heap` at any time.
     ///
     /// This field is placed before `order_exprs` and `src` because it relies on
     /// data in those fields and we want this field to be dropped first.
@@ -1196,9 +1196,10 @@ mod tests {
     fn test_top_paging() {
         // Top N = 5 and PagingSize = 6, same with no-paging.
         let test_top5_paging6 = |col_index: usize, is_desc: bool, expected: &[Option<i64>]| {
-            let mut config = EvalConfig::default();
-            config.paging_size = Some(6);
-            let config = Arc::new(config);
+            let config = Arc::new(EvalConfig {
+                paging_size: Some(6),
+                ..Default::default()
+            });
             let src_exec = make_src_executor_unsigned();
             let mut exec = BatchTopNExecutor::new_for_test_with_config(
                 config,
@@ -1307,9 +1308,10 @@ mod tests {
 
         // Top N = 5 and PagingSize = 4, return all data and do nothing.
         let test_top5_paging4 = |build_src_executor: fn() -> MockExecutor| {
-            let mut config = EvalConfig::default();
-            config.paging_size = Some(4);
-            let config = Arc::new(config);
+            let config = Arc::new(EvalConfig {
+                paging_size: Some(4),
+                ..Default::default()
+            });
             let src_exec = build_src_executor();
             let mut exec = BatchTopNExecutor::new_for_test_with_config(
                 config,

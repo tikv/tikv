@@ -1,6 +1,8 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp::min, collections::HashMap, sync::Arc, time::Duration, u64};
+#![allow(clippy::result_large_err)]
+
+use std::{cmp::min, collections::HashMap, sync::Arc, time::Duration};
 
 use batch_system::Config as BatchSystemConfig;
 use engine_traits::{PerfLevel, perf_level_serde};

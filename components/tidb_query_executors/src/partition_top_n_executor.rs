@@ -1025,9 +1025,10 @@ mod tests {
 
     #[test]
     fn test_small_n() {
-        let mut config = EvalConfig::default();
-        config.paging_size = Some(10);
-        let config = Arc::new(config);
+        let config = Arc::new(EvalConfig {
+            paging_size: Some(10),
+            ..Default::default()
+        });
         let src_exec = make_full_batch();
         let mut exec = BatchPartitionTopNExecutor::new_for_test_with_config(
             config,
@@ -1075,9 +1076,10 @@ mod tests {
 
     #[test]
     fn test_without_order_key() {
-        let mut config = EvalConfig::default();
-        config.paging_size = Some(10);
-        let config = Arc::new(config);
+        let config = Arc::new(EvalConfig {
+            paging_size: Some(10),
+            ..Default::default()
+        });
         let src_exec = make_full_batch();
         let mut exec = BatchPartitionTopNExecutor::new_for_test_with_config(
             config,
@@ -1121,9 +1123,10 @@ mod tests {
 
     #[test]
     fn test_paging_limit_normal_n() {
-        let mut config = EvalConfig::default();
-        config.paging_size = Some(10);
-        let config = Arc::new(config);
+        let config = Arc::new(EvalConfig {
+            paging_size: Some(10),
+            ..Default::default()
+        });
         let src_exec = make_full_batch();
         let mut exec = BatchPartitionTopNExecutor::new_for_test_with_config(
             config,
@@ -1166,9 +1169,10 @@ mod tests {
 
     #[test]
     fn test_paging_limit_oversize_n() {
-        let mut config = EvalConfig::default();
-        config.paging_size = Some(9);
-        let config = Arc::new(config);
+        let config = Arc::new(EvalConfig {
+            paging_size: Some(9),
+            ..Default::default()
+        });
         let src_exec = make_full_batch();
         let mut exec = BatchPartitionTopNExecutor::new_for_test_with_config(
             config,
@@ -2060,9 +2064,10 @@ mod tests {
     fn test_no_partition_top_paging() {
         // Top N = 5 and PagingSize = 10, same with no-paging.
         let test_top5_paging6 = |col_index: usize, is_desc: bool, expected: &[Option<i64>]| {
-            let mut config = EvalConfig::default();
-            config.paging_size = Some(10);
-            let config = Arc::new(config);
+            let config = Arc::new(EvalConfig {
+                paging_size: Some(10),
+                ..Default::default()
+            });
             let src_exec = make_src_executor_unsigned();
             let mut exec = BatchPartitionTopNExecutor::new_for_test_with_config(
                 config,
@@ -2172,9 +2177,10 @@ mod tests {
 
         // Top N = 5 and PagingSize = 8, return all data and do nothing.
         let test_top5_paging4 = |build_src_executor: fn() -> MockExecutor| {
-            let mut config = EvalConfig::default();
-            config.paging_size = Some(8);
-            let config = Arc::new(config);
+            let config = Arc::new(EvalConfig {
+                paging_size: Some(8),
+                ..Default::default()
+            });
             let src_exec = build_src_executor();
             let mut exec = BatchPartitionTopNExecutor::new_for_test_with_config(
                 config,

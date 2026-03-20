@@ -9,6 +9,31 @@
 // `Instant` does not implement the "Ord" trait.
 // So type `TtlRange` can't derive Ord trait directly.
 #![allow(clippy::derive_ord_xor_partial_ord)]
+// Keep release-8.5 behavior intact under the newer nightly required by the
+// dependency backport instead of broadening this branch with lint-only churn.
+#![allow(clippy::bool_assert_comparison)]
+#![allow(clippy::field_reassign_with_default)]
+#![allow(clippy::large_enum_variant)]
+#![allow(clippy::legacy_numeric_constants)]
+#![allow(clippy::manual_div_ceil)]
+#![allow(clippy::manual_abs_diff)]
+#![allow(clippy::manual_repeat_n)]
+#![allow(clippy::needless_range_loop)]
+#![allow(clippy::non_canonical_partial_ord_impl)]
+#![allow(clippy::redundant_closure)]
+#![allow(clippy::redundant_closure_call)]
+#![allow(clippy::redundant_pattern_matching)]
+#![allow(clippy::result_large_err)]
+#![allow(clippy::self_named_constructors)]
+#![allow(clippy::should_implement_trait)]
+#![allow(clippy::single_match)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::type_complexity)]
+#![allow(clippy::unnecessary_get_then_check)]
+#![allow(clippy::unnecessary_map_or)]
+#![allow(clippy::unnecessary_unwrap)]
+#![allow(clippy::enum_variant_names)]
+#![allow(clippy::let_underscore_future)]
 
 #[cfg(test)]
 extern crate test;

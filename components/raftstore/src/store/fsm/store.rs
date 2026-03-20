@@ -1,5 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+#![allow(clippy::result_large_err)]
+
 // #[PerformanceCriticalPath]
 use std::{
     cell::Cell,
@@ -15,7 +17,6 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant, SystemTime},
-    u64,
 };
 
 use batch_system::{
@@ -266,7 +267,7 @@ impl StoreMeta {
         reason: RegionChangeReason,
     ) {
         let prev = self.regions.insert(region.get_id(), region.clone());
-        if prev.map_or(true, |r| r.get_id() != region.get_id()) {
+        if prev.is_none_or(|r| r.get_id() != region.get_id()) {
             // TODO: may not be a good idea to panic when holding a lock.
             panic!("{} region corrupted", peer.tag);
         }
@@ -1677,6 +1678,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
     }
 
     // TODO: reduce arguments
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn<T: Transport + 'static, C: PdClient + 'static>(
         &mut self,
         meta: metapb::Store,
@@ -1892,6 +1894,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn start_system<T: Transport + 'static, C: PdClient + 'static>(
         &mut self,
         mut workers: Workers<EK>,
@@ -2700,15 +2703,15 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
     /// Returns a predicate `Fn` which is evaluated:
     /// 1. Before full compaction runs: if  `false`, we return and wait for the
-    /// next full compaction tick
-    /// (`PERIODIC_FULL_COMPACT_TICK_INTERVAL_DURATION`) before starting. If
-    /// true, we begin full compaction, which means the first incremental range
-    /// will be compactecd. See: ``StoreFsmDelegate::on_full_compact_tick``
-    /// in this file.
+    ///    next full compaction tick
+    ///    (`PERIODIC_FULL_COMPACT_TICK_INTERVAL_DURATION`) before starting. If
+    ///    true, we begin full compaction, which means the first incremental
+    ///    range will be compactecd. See:
+    ///    ``StoreFsmDelegate::on_full_compact_tick`` in this file.
     ///
     /// 2. After each incremental range finishes and before next one (if any)
-    /// starts. If `false`, we pause compaction and wait. See:
-    /// `CompactRunner::full_compact` in `worker/compact.rs`.
+    ///    starts. If `false`, we pause compaction and wait. See:
+    ///    `CompactRunner::full_compact` in `worker/compact.rs`.
     fn is_low_load_for_full_compact(&self) -> impl Fn() -> bool {
         let max_start_cpu_usage = self.ctx.cfg.periodic_full_compact_start_max_cpu;
         let global_stat = self.ctx.global_stat.clone();
@@ -2778,13 +2781,13 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         // almost idle (no more pending regions on applying logs), it can be
         // regarded as the candidate for balancing leaders.
         if during_starting_stage {
-            let completed_target_count = (|| {
+            let completed_target_count = {
                 fail_point!("on_mock_store_completed_target_count", |_| 0);
                 std::cmp::max(
                     1,
                     STORE_CHECK_COMPLETE_APPLY_REGIONS_PERCENT * region_count / 100,
                 )
-            })();
+            };
             // If the number of regions on completing applying logs does not occupy the
             // majority of regions, the store is regarded as busy.
             if completed_apply_peers_count < completed_target_count {
