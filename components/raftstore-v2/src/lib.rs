@@ -21,12 +21,11 @@
 // Functionalities like read, write, etc should be implemented in [`operation`]
 // using a standalone modules.
 
-#![feature(let_chains)]
-#![feature(array_windows)]
-#![feature(div_duration)]
 #![feature(box_into_inner)]
-#![feature(assert_matches)]
-#![feature(option_get_or_insert_default)]
+#![allow(clippy::doc_lazy_continuation)]
+#![allow(clippy::manual_is_multiple_of)]
+#![allow(clippy::replace_box)]
+#![allow(clippy::unnecessary_map_or)]
 
 mod batch;
 mod bootstrap;
