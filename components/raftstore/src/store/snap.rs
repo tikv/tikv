@@ -13,7 +13,6 @@ use std::{
     },
     thread,
     time::{self, Duration},
-    u64,
 };
 
 use collections::{HashMap, HashMapEntry as Entry};
@@ -162,7 +161,7 @@ impl SnapKey {
     pub fn from_snap(snap: &RaftSnapshot) -> io::Result<SnapKey> {
         let mut snap_data = RaftSnapshotData::default();
         if let Err(e) = snap_data.merge_from_bytes(snap.get_data()) {
-            return Err(io::Error::new(ErrorKind::Other, e));
+            return Err(io::Error::other(e));
         }
         Ok(SnapKey::from_region_snap(
             snap_data.get_region().get_id(),
@@ -230,7 +229,7 @@ fn retry_delete_snapshot(mgr: &SnapManagerCore, key: &SnapKey, snap: &Snapshot) 
 pub fn gen_snapshot_meta(cf_files: &[CfFile], for_balance: bool) -> RaftStoreResult<SnapshotMeta> {
     let mut meta = Vec::with_capacity(cf_files.len());
     for cf_file in cf_files {
-        if !SNAPSHOT_CFS.iter().any(|cf| cf_file.cf == *cf) {
+        if !SNAPSHOT_CFS.contains(&cf_file.cf) {
             return Err(box_err!(
                 "failed to encode invalid snapshot cf {}",
                 cf_file.cf
@@ -810,10 +809,7 @@ impl Snapshot {
                 self.cf_index = index;
                 Ok(())
             }
-            None => Err(io::Error::new(
-                ErrorKind::Other,
-                format!("fail to find cf {}", cf),
-            )),
+            None => Err(io::Error::other(format!("fail to find cf {}", cf))),
         }
     }
 
@@ -1393,10 +1389,8 @@ impl Write for Snapshot {
             written_bytes += write_len;
 
             let file = &mut file_for_recving.file;
-            let encrypt_buffer = if file_for_recving.encrypter.is_none() {
-                Cow::Borrowed(&next_buf[0..write_len])
-            } else {
-                let (cipher, crypter) = file_for_recving.encrypter.as_mut().unwrap();
+            let encrypt_buffer = if let Some((cipher, crypter)) = file_for_recving.encrypter.as_mut()
+            {
                 let mut encrypt_buffer = vec![0; write_len + cipher.block_size()];
                 let mut bytes = crypter.update(&next_buf[0..write_len], &mut encrypt_buffer)?;
                 if switch {
@@ -1404,6 +1398,8 @@ impl Write for Snapshot {
                 }
                 encrypt_buffer.truncate(bytes);
                 Cow::Owned(encrypt_buffer)
+            } else {
+                Cow::Borrowed(&next_buf[0..write_len])
             };
             let encrypt_len = encrypt_buffer.len();
 

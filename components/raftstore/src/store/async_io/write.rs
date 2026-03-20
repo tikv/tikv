@@ -238,7 +238,7 @@ where
         !(self.raft_state.is_none()
             && self.entries.is_empty()
             && self.extra_write.is_empty()
-            && self.raft_wb.as_ref().map_or(true, |wb| wb.is_empty()))
+            && self.raft_wb.as_ref().is_none_or(|wb| wb.is_empty()))
     }
 
     /// Append continous entries.

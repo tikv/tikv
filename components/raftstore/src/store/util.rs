@@ -1054,7 +1054,7 @@ pub fn check_conf_change(
             .get_peers()
             .iter()
             .find(|p| p.get_id() == peer.get_id())
-            .map_or(false, |p| p.get_is_witness() != peer.get_is_witness())
+            .is_some_and(|p| p.get_is_witness() != peer.get_is_witness())
         {
             return Err(box_err!(
                 "invalid conf change request: {:?}, can not switch witness in conf change",
@@ -1150,7 +1150,7 @@ fn check_availability_by_last_heartbeats(
             .get_peers()
             .iter()
             .find(|p| p.get_id() == *id)
-            .map_or(false, |p| {
+            .is_some_and(|p| {
                 p.role == PeerRole::Voter || p.role == PeerRole::IncomingVoter
             })
         {
@@ -1177,7 +1177,7 @@ fn check_availability_by_last_heartbeats(
             .get_peers()
             .iter()
             .find(|p| p.get_id() == peer.get_id())
-            .map_or(false, |p| {
+            .is_some_and(|p| {
                 p.role == PeerRole::Voter || p.role == PeerRole::IncomingVoter
             });
         if !is_voter && change_type == ConfChangeType::AddNode {
@@ -1303,8 +1303,8 @@ impl RegionReadProgressRegistry {
         self.registry
             .lock()
             .unwrap()
-            .iter()
-            .map(|(_, rrp)| rrp.resolved_ts())
+            .values()
+            .map(|rrp| rrp.resolved_ts())
             //TODO: the uninitialized peer should be taken into consideration instead of skipping it(https://github.com/tikv/tikv/issues/15506).
             .filter(|ts| *ts != 0) // ts == 0 means the peer is uninitialized,
             .min()
@@ -1654,7 +1654,7 @@ impl RegionReadProgressCore {
         peer_id: u64,
     ) -> RegionReadProgressCore {
         // forbids stale read for witness
-        let is_witness = find_peer_by_id(region, peer_id).map_or(false, |p| p.is_witness);
+        let is_witness = find_peer_by_id(region, peer_id).is_some_and(|p| p.is_witness);
         RegionReadProgressCore {
             peer_id,
             region_id: region.get_id(),

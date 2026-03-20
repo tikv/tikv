@@ -10,7 +10,6 @@ use std::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc::{self, Receiver, TryRecvError},
     },
-    u64,
 };
 
 use engine_traits::{CF_RAFT, Engines, KvEngine, Mutable, Peekable, RaftEngine, RaftLogBatch};
@@ -487,7 +486,7 @@ where
             ));
         }
 
-        if find_peer_by_id(&self.region, to).map_or(false, |p| p.is_witness) {
+        if find_peer_by_id(&self.region, to).is_some_and(|p| p.is_witness) {
             // Although we always sending snapshot task behind apply task to get latest
             // snapshot, we can't use `last_applying_idx` here, as below the judgment
             // condition will generate an witness snapshot directly, the new non-witness

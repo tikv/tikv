@@ -123,7 +123,7 @@ where
         ctx: &mut C,
         persisted_number: u64,
     ) {
-        if self.last_unpersisted.map_or(true, |n| n > persisted_number) {
+        if self.last_unpersisted.is_none_or(|n| n > persisted_number) {
             return;
         }
         // The peer must be destroyed after all previous write tasks have been finished.
