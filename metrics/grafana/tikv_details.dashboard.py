@@ -4263,6 +4263,14 @@ def Snapshot() -> RowPanel:
                         ),
                         additional_groupby=True,
                     ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_pending_delete_ranges_of_stale_peer",
+                            by_labels=[],
+                        ),
+                        legend_format="delete",
+                        additional_groupby=True,
+                    ),
                 ],
             ),
         ]
