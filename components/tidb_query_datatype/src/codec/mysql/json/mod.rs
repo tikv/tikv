@@ -106,6 +106,7 @@ use crate::{
 const ERR_CONVERT_FAILED: &str = "Can not covert from ";
 
 /// The types of `Json` which follows <https://tools.ietf.org/html/rfc7159#section-3>
+#[allow(non_local_definitions)]
 #[derive(PartialEq, FromPrimitive, Clone, Debug, Copy)]
 pub enum JsonType {
     Object = 0x01,

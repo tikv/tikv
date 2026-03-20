@@ -150,7 +150,7 @@ impl From<Vec<Option<Enum>>> for ChunkedVecEnum {
     }
 }
 
-impl<'a> UnsafeRefInto<&'static ChunkedVecEnum> for &'a ChunkedVecEnum {
+impl UnsafeRefInto<&'static ChunkedVecEnum> for &ChunkedVecEnum {
     unsafe fn unsafe_into(self) -> &'static ChunkedVecEnum {
         std::mem::transmute(self)
     }

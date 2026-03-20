@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp, convert::TryInto, fmt::Debug, io::Write, mem, sync::Arc, u8};
+use std::{cmp, convert::TryInto, fmt::Debug, io::Write, mem, sync::Arc};
 
 use api_version::KvFormat;
 use codec::prelude::*;
@@ -331,7 +331,7 @@ pub fn decode_row(
     cols: &HashMap<i64, ColumnInfo>,
 ) -> Result<HashMap<i64, Datum>> {
     let mut values = datum::decode(data)?;
-    if values.first().map_or(true, |d| *d == Datum::Null) {
+    if values.first().is_none_or(|d| *d == Datum::Null) {
         return Ok(HashMap::default());
     }
     if values.len() & 1 == 1 {
@@ -543,7 +543,8 @@ pub fn generate_index_data_for_test(
         .map(|(cid, value)| {
             expect_row.insert(
                 *cid,
-                datum::encode_key(&mut EvalContext::default(), &[value.clone()]).unwrap(),
+                datum::encode_key(&mut EvalContext::default(), std::slice::from_ref(value))
+                    .unwrap(),
             );
             value.clone()
         })

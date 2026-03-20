@@ -144,13 +144,13 @@ pub trait Encoding {
 
     #[inline]
     fn lower(s: &str, writer: BytesWriter) -> BytesGuard {
-        let res = s.chars().flat_map(|ch| encoding::unicode_to_lower(ch));
+        let res = s.chars().flat_map(encoding::unicode_to_lower);
         writer.write_from_char_iter(res)
     }
 
     #[inline]
     fn upper(s: &str, writer: BytesWriter) -> BytesGuard {
-        let res = s.chars().flat_map(|ch| encoding::unicode_to_upper(ch));
+        let res = s.chars().flat_map(encoding::unicode_to_upper);
         writer.write_from_char_iter(res)
     }
 }
@@ -197,7 +197,7 @@ where
     #[allow(clippy::transmute_ptr_to_ptr)]
     pub fn new_ref(inner: &T) -> Result<&Self> {
         C::Charset::validate(inner.as_ref())?;
-        Ok(unsafe { std::mem::transmute(inner) })
+        Ok(unsafe { std::mem::transmute::<&T, &SortKey<T, C>>(inner) })
     }
 
     #[inline]
@@ -206,7 +206,7 @@ where
         if let Some(inner) = inner {
             C::Charset::validate(inner.as_ref())?;
         }
-        Ok(unsafe { std::mem::transmute(inner) })
+        Ok(unsafe { std::mem::transmute::<&Option<T>, &Option<SortKey<T, C>>>(inner) })
     }
 
     #[inline]
@@ -248,6 +248,7 @@ where
 
 impl<T, C: Collator> Eq for SortKey<T, C> where T: AsRef<[u8]> {}
 
+#[allow(clippy::non_canonical_partial_ord_impl)]
 impl<T, C: Collator> PartialOrd for SortKey<T, C>
 where
     T: AsRef<[u8]>,

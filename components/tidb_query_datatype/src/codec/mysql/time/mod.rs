@@ -914,7 +914,7 @@ fn handle_zero_date(ctx: &mut EvalContext, mut args: TimeArgs) -> Result<Option<
     debug_assert!(args.is_zero());
 
     if no_zero_date {
-        (!strict_mode || ignore_truncate).ok_or(Error::truncated())?;
+        boolinator::Boolinator::ok_or(!strict_mode || ignore_truncate, Error::truncated())?;
         ctx.warnings.append_warning(Error::truncated());
         args.clear();
         return Ok(None);
@@ -936,7 +936,7 @@ fn handle_zero_in_date(ctx: &mut EvalContext, mut args: TimeArgs) -> Result<Opti
     if no_zero_in_date {
         // If we are in NO_ZERO_IN_DATE + STRICT_MODE, zero-in-date produces and error.
         // Otherwise, we reset the datetime value and check if we enabled NO_ZERO_DATE.
-        (!strict_mode || ignore_truncate).ok_or(Error::truncated())?;
+        boolinator::Boolinator::ok_or(!strict_mode || ignore_truncate, Error::truncated())?;
         ctx.warnings.append_warning(Error::truncated());
         args.clear();
         return handle_zero_date(ctx, args);
@@ -948,7 +948,7 @@ fn handle_zero_in_date(ctx: &mut EvalContext, mut args: TimeArgs) -> Result<Opti
 fn handle_invalid_date(ctx: &mut EvalContext, mut args: TimeArgs) -> Result<Option<TimeArgs>> {
     let sql_mode = ctx.cfg.sql_mode;
     let allow_invalid_date = sql_mode.contains(SqlMode::INVALID_DATES);
-    allow_invalid_date.ok_or(Error::truncated())?;
+    boolinator::Boolinator::ok_or(allow_invalid_date, Error::truncated())?;
     args.clear();
     handle_zero_date(ctx, args)
 }
@@ -1467,9 +1467,15 @@ impl Time {
         let dur = chrono::Duration::nanoseconds(duration.to_nanos());
 
         let time = if unlikely(ctx.cfg.is_test) {
-            Utc.ymd(2020, 2, 2).and_hms(0, 0, 0).checked_add_signed(dur)
+            Utc.with_ymd_and_hms(2020, 2, 2, 0, 0, 0)
+                .single()
+                .and_then(|t| t.checked_add_signed(dur))
         } else {
-            Utc::today().and_hms(0, 0, 0).checked_add_signed(dur)
+            Utc::now()
+                .date_naive()
+                .and_hms_opt(0, 0, 0)
+                .and_then(|t| t.and_local_timezone(Utc).single())
+                .and_then(|t| t.checked_add_signed(dur))
         };
 
         let time = time.ok_or::<Error>(box_err!("parse from duration {} overflows", duration))?;
@@ -1540,14 +1546,25 @@ impl Time {
 
         if self.day() > self.last_day_of_month() || self.month() == 0 || self.day() == 0 {
             let date = if self.month() == 0 {
-                (self.year() >= 1).ok_or(Error::incorrect_datetime_value(self))?;
-                NaiveDate::from_ymd(self.year() as i32 - 1, 12, 1)
+                boolinator::Boolinator::ok_or(
+                    self.year() >= 1,
+                    Error::incorrect_datetime_value(self),
+                )?;
+                NaiveDate::from_ymd_opt(self.year() as i32 - 1, 12, 1)
+                    .ok_or(Error::incorrect_datetime_value(self))?
             } else {
-                NaiveDate::from_ymd(self.year() as i32, self.month(), 1)
+                NaiveDate::from_ymd_opt(self.year() as i32, self.month(), 1)
+                    .ok_or(Error::incorrect_datetime_value(self))?
             } + chrono::Duration::days(i64::from(self.day()) - 1);
             let datetime = NaiveDateTime::new(
                 date,
-                NaiveTime::from_hms_micro(self.hour(), self.minute(), self.second(), self.micro()),
+                NaiveTime::from_hms_micro_opt(
+                    self.hour(),
+                    self.minute(),
+                    self.second(),
+                    self.micro(),
+                )
+                .ok_or(Error::incorrect_datetime_value(self))?,
             );
             return Time::try_from_chrono_datetime(
                 ctx,
@@ -1712,9 +1729,9 @@ impl Time {
 
     pub fn weekday(self) -> Weekday {
         let date = if self.month() == 0 {
-            NaiveDate::from_ymd(self.year() as i32 - 1, 12, 1)
+            NaiveDate::from_ymd_opt(self.year() as i32 - 1, 12, 1).unwrap()
         } else {
-            NaiveDate::from_ymd(self.year() as i32, self.month(), 1)
+            NaiveDate::from_ymd_opt(self.year() as i32, self.month(), 1).unwrap()
         } + chrono::Duration::days(i64::from(self.day()) - 1);
         date.weekday()
     }

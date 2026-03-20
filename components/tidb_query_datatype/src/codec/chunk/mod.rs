@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+#[allow(clippy::module_inception)]
 mod chunk;
 mod column;
 

@@ -141,8 +141,6 @@ impl<T: BufferWriter> V1CompatibleEncoder for T {}
 /// not always equals the encoded-bytes using v1 directly.
 #[cfg(test)]
 mod tests {
-    use std::{f64, i8, i16, i32, i64, u8, u16, u32, u64};
-
     use super::{
         super::encoder_for_test::{Column, ScalarValueEncoder},
         V1CompatibleEncoder,

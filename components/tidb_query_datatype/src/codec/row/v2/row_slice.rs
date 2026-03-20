@@ -183,9 +183,9 @@ impl RowSlice<'_> {
     #[inline]
     fn id_valid(&self, id: i64) -> bool {
         let upper: i64 = if self.is_big() {
-            i64::from(u32::max_value())
+            i64::from(u32::MAX)
         } else {
-            i64::from(u8::max_value())
+            i64::from(u8::MAX)
         };
         id > 0 && id <= upper
     }
@@ -359,8 +359,6 @@ impl<'a, T: PrimInt> LeBytes<'a, T> {
 
 #[cfg(test)]
 mod tests {
-    use std::u16;
-
     use codec::prelude::NumberEncoder;
     use tipb::FieldType;
 
@@ -423,7 +421,7 @@ mod tests {
         assert_eq!(big_row.search_in_non_null_ids(333).unwrap(), None);
         assert_eq!(
             big_row
-                .search_in_non_null_ids(i64::from(u32::max_value()) + 2)
+                .search_in_non_null_ids(i64::from(u32::MAX) + 2)
                 .unwrap(),
             None
         );
@@ -438,8 +436,7 @@ mod tests {
         assert_eq!(row.search_in_non_null_ids(33).unwrap(), None);
         assert_eq!(row.search_in_non_null_ids(35).unwrap(), None);
         assert_eq!(
-            row.search_in_non_null_ids(i64::from(u8::max_value()) + 2)
-                .unwrap(),
+            row.search_in_non_null_ids(i64::from(u8::MAX) + 2).unwrap(),
             None
         );
         assert_eq!(Some((0, 2)), row.search_in_non_null_ids(1).unwrap());

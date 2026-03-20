@@ -157,7 +157,11 @@ macro_rules! word_cnt {
             // when $len is negative and $t is unsigned
             0 as $t
         } else {
-            ($len as $t + DIGITS_PER_WORD as $t - 1) / (DIGITS_PER_WORD as $t)
+            // feature `int_roundings` is not stable.
+            #[allow(clippy::manual_div_ceil)]
+            {
+                ($len as $t + DIGITS_PER_WORD as $t - 1) / (DIGITS_PER_WORD as $t)
+            }
         }
     }};
 }
@@ -202,7 +206,7 @@ fn count_leading_zeroes(i: u8, word: u32) -> u8 {
 /// removed from fraction.
 fn count_trailing_zeroes(i: u8, word: u32) -> u8 {
     let (mut c, mut i) = (0, i as usize);
-    while word % TEN_POW[i] == 0 {
+    while word.is_multiple_of(TEN_POW[i]) {
         i += 1;
         c += 1;
     }

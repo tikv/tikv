@@ -74,7 +74,7 @@ impl AsMySqlBool for Real {
     }
 }
 
-impl<'a, T: AsMySqlBool> AsMySqlBool for &'a T {
+impl<T: AsMySqlBool> AsMySqlBool for &T {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         (**self).as_mysql_bool(context)
@@ -95,7 +95,7 @@ impl<'a> AsMySqlBool for BytesRef<'a> {
     }
 }
 
-impl<'a, T> AsMySqlBool for Option<&'a T>
+impl<T> AsMySqlBool for Option<&T>
 where
     T: AsMySqlBool,
 {
@@ -441,7 +441,7 @@ impl<A: UnsafeRefInto<B>, B> UnsafeRefInto<Option<B>> for Option<A> {
     }
 }
 
-impl<'a, T: Evaluable + EvaluableRet> UnsafeRefInto<&'static T> for &'a T {
+impl<T: Evaluable + EvaluableRet> UnsafeRefInto<&'static T> for &T {
     unsafe fn unsafe_into(self) -> &'static T {
         std::mem::transmute(self)
     }
@@ -711,7 +711,7 @@ impl<'a> EvaluableRef<'a> for SetRef<'a> {
         }
     }
     #[inline]
-    fn borrow_vector_value(v: &'a VectorValue) -> &ChunkedVecSet {
+    fn borrow_vector_value(v: &'a VectorValue) -> &'a ChunkedVecSet {
         match v {
             VectorValue::Set(x) => x,
             other => panic!(

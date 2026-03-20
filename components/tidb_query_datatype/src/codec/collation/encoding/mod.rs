@@ -27,15 +27,15 @@ fn format_invalid_char(data: BytesRef<'_>) -> String {
     let mut buf = String::with_capacity(32);
     const MAX_BYTES_TO_SHOW: usize = 5;
     buf.push('\'');
-    for i in 0..data.len() {
+    for (i, &byte) in data.iter().enumerate() {
         if i > MAX_BYTES_TO_SHOW {
             buf.push_str("...");
             break;
         }
-        if data[i].is_ascii() {
-            buf.push(char::from(data[i]));
+        if byte.is_ascii() {
+            buf.push(char::from(byte));
         } else {
-            buf.push_str(format!("\\x{:X}", data[i]).as_str());
+            buf.push_str(format!("\\x{:X}", byte).as_str());
         }
     }
     buf.push('\'');

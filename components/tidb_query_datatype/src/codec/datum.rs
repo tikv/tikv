@@ -4,7 +4,7 @@ use std::{
     borrow::Cow,
     cmp::Ordering,
     fmt::{self, Debug, Display, Formatter},
-    i64, str,
+    str,
 };
 
 use codec::{
@@ -746,7 +746,7 @@ impl Datum {
     pub fn checked_rem(self, _: &mut EvalContext, d: Datum) -> Result<Datum> {
         match d {
             Datum::I64(0) | Datum::U64(0) => return Ok(Datum::Null),
-            Datum::F64(f) if f == 0f64 => return Ok(Datum::Null),
+            Datum::F64(0f64) => return Ok(Datum::Null),
             _ => {}
         }
         match (self, d) {

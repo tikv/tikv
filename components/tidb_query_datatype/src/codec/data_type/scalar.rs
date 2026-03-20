@@ -507,6 +507,7 @@ impl<'a> Ord for ScalarValueRef<'a> {
     }
 }
 
+#[allow(clippy::non_canonical_partial_ord_impl)]
 impl<'a> PartialOrd for ScalarValueRef<'a> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match_template_evaltype! {

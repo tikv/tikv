@@ -323,22 +323,22 @@ mod tests {
 
     #[test]
     fn test_nan_inf() {
-        let v = VectorFloat32::from_f32(vec![1.0, std::f32::NAN]);
+        let v = VectorFloat32::from_f32(vec![1.0, f32::NAN]);
         v.unwrap_err();
 
-        let v = VectorFloat32::from_f32(vec![1.0, std::f32::INFINITY]);
+        let v = VectorFloat32::from_f32(vec![1.0, f32::INFINITY]);
         v.unwrap_err();
 
-        let v = VectorFloat32::from_f32(vec![1.0, std::f32::NEG_INFINITY]);
+        let v = VectorFloat32::from_f32(vec![1.0, f32::NEG_INFINITY]);
         v.unwrap_err();
 
-        let v = VectorFloat32Ref::from_f32(&[1.0, std::f32::NAN]);
+        let v = VectorFloat32Ref::from_f32(&[1.0, f32::NAN]);
         v.unwrap_err();
 
-        let v = VectorFloat32Ref::from_f32(&[1.0, std::f32::INFINITY]);
+        let v = VectorFloat32Ref::from_f32(&[1.0, f32::INFINITY]);
         v.unwrap_err();
 
-        let v = VectorFloat32Ref::from_f32(&[1.0, std::f32::NEG_INFINITY]);
+        let v = VectorFloat32Ref::from_f32(&[1.0, f32::NEG_INFINITY]);
         v.unwrap_err();
     }
 

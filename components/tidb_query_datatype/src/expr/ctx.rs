@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{i64, mem, sync::Arc, u64};
+use std::{mem, sync::Arc};
 
 use bitflags::bitflags;
 use tipb::DagRequest;
