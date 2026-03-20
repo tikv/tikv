@@ -423,18 +423,18 @@ pub fn regexp_replace<C: Collator>(
         for capture in regex.captures_iter(trimmed) {
             // unwrap on 0 is OK because captures only reports matches.
             let m = capture.get(0).unwrap();
-            result.extend(trimmed[last_match..m.start()].as_bytes());
+            result.extend(&trimmed.as_bytes()[last_match..m.start()]);
             last_match = m.end();
             replace_work(&capture, &mut result)?;
         }
     } else if let Some(capture) = regex.captures_iter(trimmed).nth((occurrence - 1) as usize) {
         // unwrap on 0 is OK because captures only reports matches.
         let m = capture.get(0).unwrap();
-        result.extend(trimmed[0..m.start()].as_bytes());
+        result.extend(&trimmed.as_bytes()[0..m.start()]);
         last_match = m.end();
         replace_work(&capture, &mut result)?;
     }
-    result.extend(trimmed[last_match..].as_bytes());
+    result.extend(&trimmed.as_bytes()[last_match..]);
 
     Ok(Some(result))
 }

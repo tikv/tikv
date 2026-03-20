@@ -472,9 +472,9 @@ pub fn truncate_uint_with_uint(arg0: &Int, _arg1: &Int) -> Result<Option<Int>> {
 #[rpn_fn]
 pub fn truncate_real_with_int(arg0: &Real, arg1: &Int) -> Result<Option<Real>> {
     let d = if *arg1 >= 0 {
-        (*arg1).min(i64::from(i32::max_value())) as i32
+        (*arg1).min(i64::from(i32::MAX)) as i32
     } else {
-        (*arg1).max(i64::from(i32::min_value())) as i32
+        (*arg1).max(i64::from(i32::MIN)) as i32
     };
     Ok(Some(truncate_real(*arg0, d)))
 }
@@ -482,7 +482,7 @@ pub fn truncate_real_with_int(arg0: &Real, arg1: &Int) -> Result<Option<Real>> {
 #[inline]
 #[rpn_fn]
 pub fn truncate_real_with_uint(arg0: &Real, arg1: &Int) -> Result<Option<Real>> {
-    let d = (*arg1 as u64).min(i32::max_value() as u64) as i32;
+    let d = (*arg1 as u64).min(i32::MAX as u64) as i32;
     Ok(Some(truncate_real(*arg0, d)))
 }
 
@@ -577,9 +577,9 @@ impl IntWithSign {
         let value = if is_neg {
             // Avoid int64 overflow error.
             // -int64_min = int64_max + 1
-            num.min(Int::max_value() as u64 + 1)
+            num.min(Int::MAX as u64 + 1)
         } else {
-            num.min(Int::max_value() as u64)
+            num.min(Int::MAX as u64)
         };
         IntWithSign::from_signed_uint(value, is_neg)
     }
@@ -678,8 +678,8 @@ pub fn i64_to_usize(i: i64, is_unsigned: bool) -> (usize, bool) {
     } else if i >= 0 {
         (i as usize, true)
     } else {
-        let i = if i == i64::min_value() {
-            i64::max_value() as usize + 1
+        let i = if i == i64::MIN {
+            i64::MAX as usize + 1
         } else {
             -i as usize
         };
@@ -720,7 +720,7 @@ impl Default for MySqlRng {
 
 #[cfg(test)]
 mod tests {
-    use std::{f64, i64, str::FromStr};
+    use std::{f64, str::FromStr};
 
     use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp, builder::FieldTypeBuilder};
     use tipb::ScalarFuncSig;
@@ -1008,9 +1008,10 @@ mod tests {
         }
     }
 
-    fn test_unary_func_ok_none<I: Evaluable, O: EvaluableRet>(sig: ScalarFuncSig)
+    fn test_unary_func_ok_none<I, O>(sig: ScalarFuncSig)
     where
-        O: PartialEq,
+        I: Evaluable,
+        O: EvaluableRet + PartialEq,
         Option<I>: Into<ScalarValue>,
         Option<O>: From<ScalarValue>,
     {
@@ -1770,8 +1771,8 @@ mod tests {
             (1028, 5, false, 1028),
             (1028, -2, false, 1000),
             (1028, 309, false, 1028),
-            (1028, i64::min_value(), false, 0),
-            (1028, u64::max_value() as i64, true, 1028),
+            (1028, i64::MIN, false, 0),
+            (1028, u64::MAX as i64, true, 1028),
         ];
         for (lhs, rhs, rhs_is_unsigned, expected) in tests {
             let rhs_field_type = FieldTypeBuilder::new()
@@ -1798,7 +1799,7 @@ mod tests {
         let tests = vec![
             (
                 18446744073709551615_u64,
-                u64::max_value() as i64,
+                u64::MAX as i64,
                 true,
                 18446744073709551615_u64,
             ),
@@ -1841,9 +1842,9 @@ mod tests {
             (123.2, -1, false, 120.0),
             (123.2, 100, false, 123.2),
             (123.2, -100, false, 0.0),
-            (123.2, i64::max_value(), false, 123.2),
-            (123.2, i64::min_value(), false, 0.0),
-            (123.2, u64::max_value() as i64, true, 123.2),
+            (123.2, i64::MAX, false, 123.2),
+            (123.2, i64::MIN, false, 0.0),
+            (123.2, u64::MAX as i64, true, 123.2),
             (-1.23, 0, false, -1.0),
             (
                 1.797693134862315708145274237317043567981e+308,
@@ -1937,7 +1938,7 @@ mod tests {
             ),
             (
                 Decimal::from_str("23.298").unwrap(),
-                u64::max_value() as i64,
+                u64::MAX as i64,
                 true,
                 Decimal::from_str("23.298").unwrap(),
             ),

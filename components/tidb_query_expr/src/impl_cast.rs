@@ -1613,9 +1613,7 @@ mod tests {
         collections::BTreeMap,
         f32, f64,
         fmt::{Debug, Display},
-        i64,
         sync::Arc,
-        u64,
     };
 
     use tidb_query_datatype::{
@@ -1822,7 +1820,7 @@ mod tests {
         }
     }
 
-    fn make_extra(ret_field_type: &FieldType) -> RpnFnCallExtra {
+    fn make_extra(ret_field_type: &FieldType) -> RpnFnCallExtra<'_> {
         RpnFnCallExtra { ret_field_type }
     }
 
@@ -2159,7 +2157,7 @@ mod tests {
             let rft = FieldTypeConfig::default().into();
             let extra = make_extra(&rft);
             let r = cast_enum_as_time(&mut ctx, &extra, Some(input));
-            assert_eq!(r.unwrap().is_none(), true)
+            assert!(r.unwrap().is_none())
         }
     }
 
@@ -2956,14 +2954,18 @@ mod tests {
         ];
 
         for (case, expected) in cases {
-            let mut cfg = EvalConfig::default();
-            cfg.tz = Tz::from_tz_name("America/New_York").unwrap();
+            let cfg = EvalConfig {
+                tz: Tz::from_tz_name("America/New_York").unwrap(),
+                ..Default::default()
+            };
             let mut ctx = EvalContext::new(Arc::new(cfg));
             let duration = Duration::parse(&mut ctx, case, MAX_FSP).unwrap();
 
-            let mut cfg2 = EvalConfig::default();
-            cfg2.tz = Tz::from_tz_name("Asia/Tokyo").unwrap();
-            cfg2.is_test = true;
+            let cfg2 = EvalConfig {
+                tz: Tz::from_tz_name("Asia/Tokyo").unwrap(),
+                is_test: true,
+                ..Default::default()
+            };
             let ctx2 = EvalContext::new(Arc::new(cfg2));
 
             let now = RpnFnScalarEvaluator::new()
@@ -4745,8 +4747,8 @@ mod tests {
 
     /// base_cs
     ///   - (cast_func_input, in_union, is_res_unsigned, base_result)
-    ///   - the base_result is the result **should** produce by
-    /// the logic of cast func above `produce_dec_with_specified_tp`
+    ///   - the base_result is the result **should** produce by the logic of
+    ///     cast func above `produce_dec_with_specified_tp`
     fn test_as_decimal_helper<T: Clone, FnCast, FnToStr>(
         base_cs: Vec<(T, bool, bool, Decimal)>,
         cast_func: FnCast,

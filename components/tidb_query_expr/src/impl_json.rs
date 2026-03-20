@@ -246,8 +246,8 @@ pub fn json_merge_patch(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
     let mut target = jsons[0].unwrap().to_owned();
 
     if jsons.len() > 1 {
-        for i in 1..jsons.len() {
-            target = Json::merge_patch(target.as_ref(), jsons[i].unwrap())?;
+        for json in jsons.iter().skip(1) {
+            target = Json::merge_patch(target.as_ref(), json.unwrap())?;
         }
     }
     Ok(Some(target.to_owned()))
@@ -854,10 +854,10 @@ mod tests {
             match output {
                 Ok(s) => {
                     assert_eq!(s, expect, "{:?}", arg);
-                    assert_eq!(success, true);
+                    assert!(success);
                 }
                 Err(_) => {
-                    assert_eq!(success, false);
+                    assert!(!success);
                 }
             }
         }

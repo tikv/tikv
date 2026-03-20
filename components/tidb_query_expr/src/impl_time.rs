@@ -195,7 +195,7 @@ pub fn year_week_with_mode(ctx: &mut EvalContext, t: &DateTime, mode: &Int) -> R
     let (year, week) = t.year_week(WeekMode::from_bits_truncate(*mode as u32));
     let result = i64::from(week + year * 100);
     if result < 0 {
-        return Ok(Some(i64::from(u32::max_value())));
+        return Ok(Some(i64::from(u32::MAX)));
     }
     Ok(Some(result))
 }
@@ -214,7 +214,7 @@ pub fn year_week_without_mode(ctx: &mut EvalContext, t: &DateTime) -> Result<Opt
     let (year, week) = t.year_week(WeekMode::from_bits_truncate(0u32));
     let result = i64::from(week + year * 100);
     if result < 0 {
-        return Ok(Some(i64::from(u32::max_value())));
+        return Ok(Some(i64::from(u32::MAX)));
     }
     Ok(Some(result))
 }
@@ -3266,7 +3266,7 @@ mod tests {
         ];
         let mut ctx = EvalContext::default();
         for (datetime, exp) in cases {
-            let expected = exp.map(|exp| Int::from(exp));
+            let expected = exp.map(Int::from);
             let datetime = datetime
                 .map(|arg1| DateTime::parse_datetime(&mut ctx, arg1, MAX_FSP, true).unwrap());
             let output = RpnFnScalarEvaluator::new()
@@ -3780,8 +3780,10 @@ mod tests {
         };
 
         for (func_sig, time, interval, unit, expected) in cases {
-            let mut cfg = EvalConfig::default();
-            cfg.is_test = true;
+            let cfg = EvalConfig {
+                is_test: true,
+                ..Default::default()
+            };
             let mut ctx = EvalContext::new(Arc::new(cfg));
             let (time_type, interval_type, result_type) = get_add_sub_date_expr_types(func_sig);
             let mut result_field_type: FieldType = result_type.into();
