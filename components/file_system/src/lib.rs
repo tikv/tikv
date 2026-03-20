@@ -154,6 +154,7 @@ fn get_thread_io_bytes_stats() -> Result<IoBytes, String> {
 /// on each invocation, simulating incremental IO operations. This is useful
 /// for testing scenarios where the IO stats change over time.
 #[cfg(any(test, feature = "testexport"))]
+#[allow(clippy::redundant_closure_call)]
 fn get_thread_io_bytes_stats() -> Result<IoBytes, String> {
     fail::fail_point!("failed_to_get_thread_io_bytes_stats", |_| {
         Err("get_thread_io_bytes_total failed".into())
@@ -165,20 +166,20 @@ fn get_thread_io_bytes_stats() -> Result<IoBytes, String> {
         let mut current_stats = stats.get();
 
         // Add the mock IO bytes to the stats.
-        current_stats.read += {
+        current_stats.read += (|| {
             fail::fail_point!("delta_read_io_bytes", |d| d
                 .unwrap()
                 .parse::<u64>()
                 .unwrap());
             0
-        };
-        current_stats.write += {
+        })();
+        current_stats.write += (|| {
             fail::fail_point!("delta_write_io_bytes", |d| d
                 .unwrap()
                 .parse::<u64>()
                 .unwrap());
             0
-        };
+        })();
 
         stats.set(current_stats);
         Ok(current_stats)
@@ -665,7 +666,7 @@ mod tests {
         let tmp_dir = TempDir::new().unwrap();
         let dir_path = tmp_dir.path().to_path_buf();
 
-        assert_eq!(file_exists(&dir_path), false);
+        assert!(!file_exists(&dir_path));
 
         let existent_file = dir_path.join("empty_file");
         {
@@ -675,10 +676,10 @@ mod tests {
                 .open(&existent_file)
                 .unwrap();
         }
-        assert_eq!(file_exists(&existent_file), true);
+        assert!(file_exists(&existent_file));
 
         let non_existent_file = dir_path.join("non_existent_file");
-        assert_eq!(file_exists(non_existent_file), false);
+        assert!(!file_exists(non_existent_file));
     }
 
     #[test]
@@ -694,9 +695,9 @@ mod tests {
                 .open(&existent_file)
                 .unwrap();
         }
-        assert_eq!(file_exists(&existent_file), true);
+        assert!(file_exists(&existent_file));
         delete_file_if_exist(&existent_file).unwrap();
-        assert_eq!(file_exists(&existent_file), false);
+        assert!(!file_exists(&existent_file));
 
         let non_existent_file = dir_path.join("non_existent_file");
         delete_file_if_exist(non_existent_file).unwrap();
@@ -791,7 +792,7 @@ mod tests {
         let mut io_tracker = IoBytesTracker::new();
         assert_eq!(io_tracker.prev_io_bytes.read, 100);
         assert_eq!(io_tracker.prev_io_bytes.write, 50);
-        assert_eq!(io_tracker.initialized, true);
+        assert!(io_tracker.initialized);
         let io_bytes = io_tracker.update();
         assert_eq!(io_bytes.unwrap().read, 100);
         assert_eq!(io_bytes.unwrap().write, 50);
@@ -815,7 +816,7 @@ mod tests {
         fail::cfg("delta_write_io_bytes", "return(50)").unwrap();
 
         let mut io_tracker = IoBytesTracker::new();
-        assert_eq!(io_tracker.initialized, false);
+        assert!(!io_tracker.initialized);
         assert_eq!(io_tracker.prev_io_bytes.read, 0);
         assert_eq!(io_tracker.prev_io_bytes.write, 0);
         let io_bytes = io_tracker.update();
