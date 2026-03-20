@@ -811,7 +811,7 @@ fn transfer_error(e: RaftEngineError) -> engine_traits::Error {
 
 #[cfg(test)]
 mod tests {
-    use std::assert_matches::assert_matches;
+    use std::assert_matches;
 
     use engine_traits::ALL_CFS;
 

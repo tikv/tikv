@@ -202,7 +202,8 @@ mod tests {
 
     #[test]
     fn test_ttl_properties_codec() {
-        let cases: Vec<(Option<u64>, Option<u64>, Vec<(&[u8], u64)>)> = vec![
+        type TestCase<'a> = (Option<u64>, Option<u64>, Vec<(&'a [u8], u64)>);
+        let cases: Vec<TestCase<'_>> = vec![
             (
                 Some(0),                                                      // min_expire_ts
                 Some(1),                                                      // max_expire_ts

@@ -436,9 +436,9 @@ mod tests {
                 )
                     .prop_map(|(k, v)| Operation::Put(k, v)),
                 prop::collection::vec(prop::num::u8::ANY, 0..key_size)
-                    .prop_map(|k| Operation::Get(k)),
+                    .prop_map(Operation::Get),
                 prop::collection::vec(prop::num::u8::ANY, 0..key_size)
-                    .prop_map(|k| Operation::Delete(k)),
+                    .prop_map(Operation::Delete),
                 (
                     prop::collection::vec(prop::num::u8::ANY, 0..key_size),
                     0..10usize
