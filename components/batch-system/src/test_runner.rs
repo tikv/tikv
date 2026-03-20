@@ -22,6 +22,7 @@ pub enum Message {
     /// `Runner` will do simple calculation for the given times.
     Loop(usize),
     /// `Runner` will call the callback directly.
+    #[allow(clippy::type_complexity)]
     Callback(Box<dyn FnOnce(&Handler, &mut Runner) + Send + 'static>),
     /// group name, write bytes
     Resource(String, u64),

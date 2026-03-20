@@ -114,7 +114,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{assert_matches::assert_matches, sync::mpsc, time::Duration};
+    use std::{assert_matches, sync::mpsc, time::Duration};
 
     use byteorder::{BigEndian, WriteBytesExt};
     use engine_test::kv::{KvTestEngine, new_engine};

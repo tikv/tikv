@@ -33,6 +33,7 @@ pub struct TxnSstWriter<E: KvEngine> {
 }
 
 impl<E: KvEngine> TxnSstWriter<E> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         default: E::SstWriter,
         write: E::SstWriter,

@@ -397,6 +397,7 @@ impl<E: KvEngine> SstImporter<E> {
     //
     // This method returns the *inclusive* key range (`[start, end]`) of SST
     // file created, or returns None if the SST is empty.
+    #[allow(clippy::too_many_arguments)]
     pub async fn download_ext(
         &self,
         meta: &SstMeta,
@@ -442,6 +443,7 @@ impl<E: KvEngine> SstImporter<E> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn download_files_ext(
         &self,
         basic_meta: &SstMeta,
@@ -611,6 +613,7 @@ impl<E: KvEngine> SstImporter<E> {
         Ok(ext_storage)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn async_download_file_from_external_storage(
         &self,
         file_length: u64,
@@ -1198,6 +1201,7 @@ impl<E: KvEngine> SstImporter<E> {
         Ok(new_buff)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn do_apply_kv_file(
         &self,
         start_key: &[u8],
@@ -1311,6 +1315,7 @@ impl<E: KvEngine> SstImporter<E> {
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn do_download_ext(
         &self,
         meta: &SstMeta,
@@ -1372,6 +1377,7 @@ impl<E: KvEngine> SstImporter<E> {
             .map(|r| r.to_owned())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn do_download_ext_after_lock_check(
         &self,
         path: crate::import_file::ImportPath,
@@ -1867,6 +1873,7 @@ fn is_after_end_bound<K: AsRef<[u8]>>(value: &[u8], bound: &Bound<K>) -> bool {
 }
 
 impl<E: KvEngine> SstImporter<E> {
+    #[allow(clippy::too_many_arguments)]
     async fn do_download_sst_file(
         &self,
         path: &crate::import_file::ImportPath,
@@ -1945,6 +1952,7 @@ impl<E: KvEngine> SstImporter<E> {
         Ok(result.clone())
     }
 
+    #[allow(clippy::type_complexity)]
     fn do_pre_rewrite(
         &self,
         meta: &SstMeta,
@@ -1994,6 +2002,7 @@ impl<E: KvEngine> SstImporter<E> {
         Ok((range_start, range_end))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn do_rewrite_keys<'a, Iter: Iterator>(
         &'a self,
         dst_file_name: PathBuf,

@@ -129,8 +129,10 @@ fn test_resource_group() {
     resource_manager.add_resource_group(get_group("group1", 10, 10));
     resource_manager.add_resource_group(get_group("group2", 100, 100));
 
-    let mut cfg = Config::default();
-    cfg.pool_size = 1;
+    let cfg = Config {
+        pool_size: 1,
+        ..Default::default()
+    };
     let (router, mut system) = batch_system::create_system(
         &cfg,
         control_tx,

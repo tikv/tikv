@@ -12,7 +12,6 @@ use std::{
         atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
-    u64,
 };
 
 use engine_traits::{

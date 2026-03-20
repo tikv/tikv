@@ -148,6 +148,7 @@ pub enum Error {
     MisMatchRequest,
 
     #[error("a general error wrapper")]
+    #[allow(clippy::enum_variant_names)]
     ErrorWrapper(String),
 }
 

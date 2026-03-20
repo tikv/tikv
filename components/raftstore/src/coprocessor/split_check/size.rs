@@ -234,7 +234,7 @@ pub fn get_approximate_split_keys(
 
 #[cfg(test)]
 pub mod tests {
-    use std::{assert_matches::assert_matches, iter, sync::mpsc, u64};
+    use std::{assert_matches, iter, sync::mpsc};
 
     use collections::HashSet;
     use engine_test::{

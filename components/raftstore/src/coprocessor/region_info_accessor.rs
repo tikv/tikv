@@ -48,7 +48,7 @@ const ITERATED_COUNT_FILTER_FACTOR: usize = 100;
 /// perfectly precise. Some regions may be temporarily absent while merging or
 /// splitting is in progress. Also, `RegionInfoAccessor`'s information may
 /// slightly lag the actual regions on the TiKV.
-
+///
 /// `RaftStoreEvent` Represents events dispatched from raftstore coprocessor.
 #[derive(Debug)]
 pub enum RaftStoreEvent {

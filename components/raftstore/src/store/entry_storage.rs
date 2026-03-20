@@ -1291,7 +1291,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
 
 #[cfg(test)]
 pub mod tests {
-    use std::{assert_matches::assert_matches, sync::mpsc};
+    use std::{assert_matches, sync::mpsc};
 
     use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
     use engine_traits::RaftEngineReadOnly;

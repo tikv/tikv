@@ -1515,10 +1515,10 @@ impl SnapManager {
             return Ok(());
         }
         if !path.is_dir() {
-            return Err(io::Error::new(
-                ErrorKind::Other,
-                format!("{} should be a directory", path.display()),
-            ));
+            return Err(io::Error::other(format!(
+                "{} should be a directory",
+                path.display()
+            )));
         }
         for f in file_system::read_dir(path)? {
             let p = f?;
@@ -2355,10 +2355,10 @@ impl TabletSnapManager {
             file_system::create_dir_all(&path)?;
         }
         if !path.is_dir() {
-            return Err(io::Error::new(
-                ErrorKind::Other,
-                format!("{} should be a directory", path.display()),
-            ));
+            return Err(io::Error::other(format!(
+                "{} should be a directory",
+                path.display()
+            )));
         }
         encryption::clean_up_dir(&path, SNAP_GEN_PREFIX, key_manager.as_deref())?;
         encryption::clean_up_trash(&path, key_manager.as_deref())?;
@@ -2448,9 +2448,11 @@ impl TabletSnapManager {
             };
 
             let path = entry.path();
-            if path.file_name().and_then(|n| n.to_str()).map_or(true, |n| {
-                !n.starts_with(SNAP_GEN_PREFIX) || n.ends_with(TMP_FILE_SUFFIX)
-            }) {
+            if path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_none_or(|n| !n.starts_with(SNAP_GEN_PREFIX) || n.ends_with(TMP_FILE_SUFFIX))
+            {
                 continue;
             }
             paths.push(path);
@@ -2472,7 +2474,7 @@ impl TabletSnapManager {
             if !path
                 .file_name()
                 .and_then(|n| n.to_str())
-                .map_or(true, |n| n.starts_with(SNAP_REV_PREFIX))
+                .is_none_or(|n| n.starts_with(SNAP_REV_PREFIX))
             {
                 continue;
             }
