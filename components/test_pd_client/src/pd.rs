@@ -529,7 +529,7 @@ impl PdCluster {
         if self
             .stores
             .get(&store_id)
-            .map_or(true, |s| s.store.get_id() != 0)
+            .is_none_or(|s| s.store.get_id() != 0)
         {
             self.stores.insert(
                 store_id,
@@ -1087,10 +1087,10 @@ impl TestPdClient {
             };
             let add = add_peers
                 .iter()
-                .all(|peer| find_peer(&region, peer.get_store_id()).map_or(false, |p| p == peer));
+                .all(|peer| find_peer(&region, peer.get_store_id()) == Some(peer));
             let remove = remove_peers
                 .iter()
-                .all(|peer| find_peer(&region, peer.get_store_id()).map_or(true, |p| p != peer));
+                .all(|peer| find_peer(&region, peer.get_store_id()) != Some(peer));
             if add && remove {
                 return;
             }
@@ -1403,7 +1403,7 @@ impl TestPdClient {
             .rl()
             .leaders
             .get(&region_id)
-            .map_or(false, |p| *p == peer)
+            .is_some_and(|p| *p == peer)
     }
 
     // check whether region is split by split_key or not.

@@ -196,7 +196,6 @@ impl ConcurrencyManager {
     /// - Ok(()): If the update is successful or has no effect
     /// - Err(limit): If new_ts is greater than the max_ts_limit, returns the
     ///   current limit value
-
     pub fn update_max_ts(
         &self,
         new_ts: TimeStamp,
@@ -557,7 +556,7 @@ pub trait IntoErrorSource: sealed::Sealed {
 }
 
 // &str impl
-impl<'a> sealed::Sealed for &'a str {}
+impl sealed::Sealed for &str {}
 impl<'a> IntoErrorSource for &'a str {
     type Output = &'a str;
     fn into_error_source(self) -> Self::Output {

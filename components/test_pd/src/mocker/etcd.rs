@@ -45,7 +45,7 @@ impl Etcd {
             ))
             .collect::<Vec<_>>()
             .as_slice()
-            .group_by(|item1, item2| item1.0.0 == item2.0.0)
+            .chunk_by(|item1, item2| item1.0.0 == item2.0.0)
             .filter_map(|group| {
                 let (k, v) = group.last()?;
                 match v {
