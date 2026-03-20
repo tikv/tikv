@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::{cmp, collections::VecDeque, mem, u64, usize};
+use std::{cmp, collections::VecDeque, mem};
 
 use collections::HashMap;
 use kvproto::{

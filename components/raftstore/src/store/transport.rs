@@ -46,7 +46,7 @@ where
     fn significant_send(&self, region_id: u64, msg: SignificantMsg<EK::Snapshot>) -> Result<()>;
 }
 
-impl<'a, T: SignificantRouter<EK>, EK: KvEngine> SignificantRouter<EK> for &'a Mutex<T> {
+impl<T: SignificantRouter<EK>, EK: KvEngine> SignificantRouter<EK> for &Mutex<T> {
     #[inline]
     fn significant_send(&self, region_id: u64, msg: SignificantMsg<EK::Snapshot>) -> Result<()> {
         Mutex::lock(self).unwrap().significant_send(region_id, msg)
@@ -89,7 +89,7 @@ where
     }
 }
 
-impl<'a, EK: KvEngine, T: CasualRouter<EK>> CasualRouter<EK> for &'a Mutex<T> {
+impl<EK: KvEngine, T: CasualRouter<EK>> CasualRouter<EK> for &Mutex<T> {
     #[inline]
     fn send(&self, region_id: u64, msg: CasualMessage<EK>) -> Result<()> {
         CasualRouter::send(&*Mutex::lock(self).unwrap(), region_id, msg)

@@ -11,7 +11,6 @@ use std::{
         atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
-    u64, usize,
 };
 
 use bitflags::bitflags;
@@ -1825,7 +1824,7 @@ where
     pub fn should_destroy_after_apply_snapshot(&self) -> bool {
         self.apply_snap_ctx
             .as_ref()
-            .map_or(false, |ctx| ctx.destroy_peer_after_apply)
+            .is_some_and(|ctx| ctx.destroy_peer_after_apply)
     }
 
     /// Returns `true` if the raft group has replicated a snapshot but not
@@ -2666,7 +2665,7 @@ where
     /// - Schedule the snapshot task to region worker through
     ///   `schedule_applying_snapshot`
     /// - Wait for applying snapshot to complete(`check_snap_status`)
-    /// Then it's valid to handle the next ready.
+    ///   Then it's valid to handle the next ready.
     fn check_snap_status<T: Transport>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> bool {
         if let Some(snap_ctx) = self.apply_snap_ctx.as_ref() {
             if !snap_ctx.scheduled {
@@ -2800,7 +2799,7 @@ where
             None => return,
         };
         let cancel_by_unreachable_store =
-            unreachable_store_id.map_or(false, |s| to_peer.get_store_id() == s);
+            unreachable_store_id.is_some_and(|s| to_peer.get_store_id() == s);
         let cancel_by_peer_not_found = find_peer_by_id(self.region(), to_peer.get_id()).is_none();
         if cancel_by_unreachable_store || cancel_by_peer_not_found {
             self.get_store().cancel_generating_snap(None);
@@ -4153,7 +4152,7 @@ where
     pub fn pre_read_index(&self) -> Result<()> {
         fail_point!(
             "before_propose_readindex",
-            |s| if s.map_or(true, |s| s.parse().unwrap_or(true)) {
+            |s| if s.is_none_or(|s| s.parse().unwrap_or(true)) {
                 Ok(())
             } else {
                 Err(box_err!(
@@ -5516,7 +5515,7 @@ where
             }
             for peer in self.get_store().region().get_peers() {
                 let (peer_id, store_id) = (peer.get_id(), peer.get_store_id());
-                if self.disk_full_peers.peers.get(&peer_id).is_some() {
+                if self.disk_full_peers.peers.contains_key(&peer_id) {
                     disk_full_stores.push(store_id);
                 }
             }
@@ -6082,17 +6081,17 @@ where
             None => return false,
         };
         let max_lease = ctx.cfg.raft_store_max_leader_lease();
-        let has_overlapped_reads = self.pending_reads.back().map_or(false, |read| {
+        let has_overlapped_reads = self.pending_reads.back().is_some_and(|read| {
             // If there is any read index whose lease can cover till next heartbeat
             // then we don't need to propose a new one
             read.propose_time + max_lease > renew_bound
         });
-        let has_overlapped_writes = self.proposals.back().map_or(false, |proposal| {
+        let has_overlapped_writes = self.proposals.back().is_some_and(|proposal| {
             // If there is any write whose lease can cover till next heartbeat
             // then we don't need to propose a new one
             proposal
                 .propose_time
-                .map_or(false, |propose_time| propose_time + max_lease > renew_bound)
+                .is_some_and(|propose_time| propose_time + max_lease > renew_bound)
         });
         !has_overlapped_reads && !has_overlapped_writes
     }
@@ -6730,6 +6729,7 @@ mod tests {
                 }
             }
         }
+        #[allow(unused_assignments)]
         fn must_call() -> ExtCallback {
             let mut d = DropPanic(true);
             Box::new(move || {

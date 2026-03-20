@@ -11,7 +11,6 @@ use std::{
         Arc, Mutex, MutexGuard,
         atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
     },
-    u64,
 };
 
 use collections::HashSet;
@@ -940,7 +939,7 @@ pub trait ChangePeerI {
     fn to_confchange(&self, _: Vec<u8>) -> Self::CC;
 }
 
-impl<'a> ChangePeerI for &'a ChangePeerRequest {
+impl ChangePeerI for &ChangePeerRequest {
     type CC = eraftpb::ConfChange;
     type CP = Vec<ChangePeerRequest>;
 
