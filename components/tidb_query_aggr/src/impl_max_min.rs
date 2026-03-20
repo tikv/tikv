@@ -260,13 +260,12 @@ where
         _ctx: &mut EvalContext,
         value: Option<EnumRef<'_>>,
     ) -> Result<()> {
-        let extreme_ref = self
-            .extremum
-            .as_ref()
-            .map(|x| EnumRef::from_owned_value(unsafe {
+        let extreme_ref = self.extremum.as_ref().map(|x| {
+            EnumRef::from_owned_value(unsafe {
                 #[allow(clippy::missing_transmute_annotations)]
                 std::mem::transmute(x)
-            }));
+            })
+        });
 
         if value.is_some()
             && (self.extremum.is_none()
@@ -348,13 +347,12 @@ where
     /// ref: https://dev.mysql.com/doc/refman/5.7/en/aggregate-functions.html#function_max
     #[inline]
     fn update_concrete(&mut self, _ctx: &mut EvalContext, value: Option<SetRef<'_>>) -> Result<()> {
-        let extreme_ref = self
-            .extremum
-            .as_ref()
-            .map(|x| SetRef::from_owned_value(unsafe {
+        let extreme_ref = self.extremum.as_ref().map(|x| {
+            SetRef::from_owned_value(unsafe {
                 #[allow(clippy::missing_transmute_annotations)]
                 std::mem::transmute(x)
-            }));
+            })
+        });
 
         if value.is_some()
             && (self.extremum.is_none()
@@ -441,13 +439,12 @@ where
     where
         TT: EvaluableRef<'a, EvaluableType = T::EvaluableType> + Ord,
     {
-        let extreme_ref = self
-            .extremum_value
-            .as_ref()
-            .map(|x| TT::from_owned_value(unsafe {
+        let extreme_ref = self.extremum_value.as_ref().map(|x| {
+            TT::from_owned_value(unsafe {
                 #[allow(clippy::missing_transmute_annotations)]
                 std::mem::transmute(x)
-            }));
+            })
+        });
         if value.is_some() && (self.extremum_value.is_none() || extreme_ref.cmp(&value) == E::ORD) {
             self.extremum_value = value.map(|x| x.into_owned_value());
         }
