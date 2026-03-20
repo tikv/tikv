@@ -2664,8 +2664,8 @@ where
     ///   `Peer::on_persist_ready`
     /// - Schedule the snapshot task to region worker through
     ///   `schedule_applying_snapshot`
-    /// - Wait for applying snapshot to complete(`check_snap_status`)
-    ///   Then it's valid to handle the next ready.
+    /// - Wait for applying snapshot to complete(`check_snap_status`) Then it's
+    ///   valid to handle the next ready.
     fn check_snap_status<T: Transport>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> bool {
         if let Some(snap_ctx) = self.apply_snap_ctx.as_ref() {
             if !snap_ctx.scheduled {
