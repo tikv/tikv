@@ -75,7 +75,7 @@ mod tests {
         cap_0_topn.push(1);
         assert_eq!(cap_0_topn.pop(), None);
         assert_eq!(cap_0_topn.len(), 0);
-        assert_eq!(cap_0_topn.is_empty(), true);
+        assert!(cap_0_topn.is_empty());
     }
 
     #[test]
@@ -84,7 +84,7 @@ mod tests {
         cap_0_topn.push(1);
         assert_eq!(cap_0_topn.peek(), Some(&1));
         assert_eq!(cap_0_topn.len(), 1);
-        assert_eq!(cap_0_topn.is_empty(), false);
+        assert!(!cap_0_topn.is_empty());
     }
 
     #[test]

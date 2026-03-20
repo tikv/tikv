@@ -211,7 +211,7 @@ impl FromStr for ReadableSize {
                 if size.chars().all(|c| char::is_ascii_digit(&c)) {
                     return size
                         .parse::<u64>()
-                        .map(|n| ReadableSize(n))
+                        .map(ReadableSize)
                         .map_err(|_| format!("invalid size string: {:?}", s));
                 }
                 UNIT
@@ -2400,7 +2400,7 @@ mod tests {
             assert!(incoming.is_some());
             let incoming = incoming.unwrap();
             assert_eq!(incoming.v1, 1000);
-            assert_eq!(incoming.v2, true);
+            assert!(incoming.v2);
         }
 
         assert!(trackers.iter_mut().all(|tr| tr.any_new().is_none()));
