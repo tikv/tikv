@@ -807,7 +807,10 @@ mod tests {
         let mut stream = CmdResStream::new(sub);
         chan.notify_proposed();
         chan.notify_committed();
-        assert!(matches!(block_on(stream.next()), Some(CmdResEvent::Proposed)));
+        assert!(matches!(
+            block_on(stream.next()),
+            Some(CmdResEvent::Proposed)
+        ));
         drop(chan);
         assert!(block_on(stream.next()).is_none());
 
@@ -817,7 +820,10 @@ mod tests {
         let mut stream = CmdResStream::new(sub);
         chan.notify_proposed();
         chan.notify_committed();
-        assert!(matches!(block_on(stream.next()), Some(CmdResEvent::Committed)));
+        assert!(matches!(
+            block_on(stream.next()),
+            Some(CmdResEvent::Committed)
+        ));
         drop(chan);
         assert!(block_on(stream.next()).is_none());
     }
