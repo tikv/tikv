@@ -767,53 +767,53 @@ mod tests {
         fn eq(a: &[u8], b: &[u8]) -> bool {
             Key::is_user_key_eq(a, b)
         }
-        assert_eq!(false, eq(b"", b""));
-        assert_eq!(false, eq(b"12345", b""));
-        assert_eq!(true, eq(b"12345678", b""));
-        assert_eq!(true, eq(b"x12345678", b"x"));
-        assert_eq!(false, eq(b"x12345", b"x"));
+        assert!(!eq(b"", b""));
+        assert!(!eq(b"12345", b""));
+        assert!(eq(b"12345678", b""));
+        assert!(eq(b"x12345678", b"x"));
+        assert!(!eq(b"x12345", b"x"));
         // user key len == 3
-        assert_eq!(true, eq(b"xyz12345678", b"xyz"));
-        assert_eq!(true, eq(b"xyz________", b"xyz"));
-        assert_eq!(false, eq(b"xyy12345678", b"xyz"));
-        assert_eq!(false, eq(b"yyz12345678", b"xyz"));
-        assert_eq!(false, eq(b"xyz12345678", b"xy"));
-        assert_eq!(false, eq(b"xyy12345678", b"xy"));
-        assert_eq!(false, eq(b"yyz12345678", b"xy"));
+        assert!(eq(b"xyz12345678", b"xyz"));
+        assert!(eq(b"xyz________", b"xyz"));
+        assert!(!eq(b"xyy12345678", b"xyz"));
+        assert!(!eq(b"yyz12345678", b"xyz"));
+        assert!(!eq(b"xyz12345678", b"xy"));
+        assert!(!eq(b"xyy12345678", b"xy"));
+        assert!(!eq(b"yyz12345678", b"xy"));
         // user key len == 7
-        assert_eq!(true, eq(b"abcdefg12345678", b"abcdefg"));
-        assert_eq!(true, eq(b"abcdefgzzzzzzzz", b"abcdefg"));
-        assert_eq!(false, eq(b"abcdefg12345678", b"abcdef"));
-        assert_eq!(false, eq(b"abcdefg12345678", b"bcdefg"));
-        assert_eq!(false, eq(b"abcdefv12345678", b"abcdefg"));
-        assert_eq!(false, eq(b"vbcdefg12345678", b"abcdefg"));
-        assert_eq!(false, eq(b"abccefg12345678", b"abcdefg"));
+        assert!(eq(b"abcdefg12345678", b"abcdefg"));
+        assert!(eq(b"abcdefgzzzzzzzz", b"abcdefg"));
+        assert!(!eq(b"abcdefg12345678", b"abcdef"));
+        assert!(!eq(b"abcdefg12345678", b"bcdefg"));
+        assert!(!eq(b"abcdefv12345678", b"abcdefg"));
+        assert!(!eq(b"vbcdefg12345678", b"abcdefg"));
+        assert!(!eq(b"abccefg12345678", b"abcdefg"));
         // user key len == 8
-        assert_eq!(true, eq(b"abcdefgh12345678", b"abcdefgh"));
-        assert_eq!(true, eq(b"abcdefghyyyyyyyy", b"abcdefgh"));
-        assert_eq!(false, eq(b"abcdefgh12345678", b"abcdefg"));
-        assert_eq!(false, eq(b"abcdefgh12345678", b"bcdefgh"));
-        assert_eq!(false, eq(b"abcdefgz12345678", b"abcdefgh"));
-        assert_eq!(false, eq(b"zbcdefgh12345678", b"abcdefgh"));
-        assert_eq!(false, eq(b"abcddfgh12345678", b"abcdefgh"));
+        assert!(eq(b"abcdefgh12345678", b"abcdefgh"));
+        assert!(eq(b"abcdefghyyyyyyyy", b"abcdefgh"));
+        assert!(!eq(b"abcdefgh12345678", b"abcdefg"));
+        assert!(!eq(b"abcdefgh12345678", b"bcdefgh"));
+        assert!(!eq(b"abcdefgz12345678", b"abcdefgh"));
+        assert!(!eq(b"zbcdefgh12345678", b"abcdefgh"));
+        assert!(!eq(b"abcddfgh12345678", b"abcdefgh"));
         // user key len == 9
-        assert_eq!(true, eq(b"abcdefghi12345678", b"abcdefghi"));
-        assert_eq!(true, eq(b"abcdefghixxxxxxxx", b"abcdefghi"));
-        assert_eq!(false, eq(b"abcdefghi12345678", b"abcdefgh"));
-        assert_eq!(false, eq(b"abcdefghi12345678", b"bcdefghi"));
-        assert_eq!(false, eq(b"abcdefghy12345678", b"abcdefghi"));
-        assert_eq!(false, eq(b"ybcdefghi12345678", b"abcdefghi"));
-        assert_eq!(false, eq(b"abcddfghi12345678", b"abcdefghi"));
+        assert!(eq(b"abcdefghi12345678", b"abcdefghi"));
+        assert!(eq(b"abcdefghixxxxxxxx", b"abcdefghi"));
+        assert!(!eq(b"abcdefghi12345678", b"abcdefgh"));
+        assert!(!eq(b"abcdefghi12345678", b"bcdefghi"));
+        assert!(!eq(b"abcdefghy12345678", b"abcdefghi"));
+        assert!(!eq(b"ybcdefghi12345678", b"abcdefghi"));
+        assert!(!eq(b"abcddfghi12345678", b"abcdefghi"));
         // user key len == 11
-        assert_eq!(true, eq(b"abcdefghijk87654321", b"abcdefghijk"));
-        assert_eq!(true, eq(b"abcdefghijkabcdefgh", b"abcdefghijk"));
-        assert_eq!(false, eq(b"abcdefghijk87654321", b"abcdefghij"));
-        assert_eq!(false, eq(b"abcdefghijk87654321", b"bcdefghijk"));
-        assert_eq!(false, eq(b"abcdefghijx87654321", b"abcdefghijk"));
-        assert_eq!(false, eq(b"xbcdefghijk87654321", b"abcdefghijk"));
-        assert_eq!(false, eq(b"abxdefghijk87654321", b"abcdefghijk"));
-        assert_eq!(false, eq(b"axcdefghijk87654321", b"abcdefghijk"));
-        assert_eq!(false, eq(b"abcdeffhijk87654321", b"abcdefghijk"));
+        assert!(eq(b"abcdefghijk87654321", b"abcdefghijk"));
+        assert!(eq(b"abcdefghijkabcdefgh", b"abcdefghijk"));
+        assert!(!eq(b"abcdefghijk87654321", b"abcdefghij"));
+        assert!(!eq(b"abcdefghijk87654321", b"bcdefghijk"));
+        assert!(!eq(b"abcdefghijx87654321", b"abcdefghijk"));
+        assert!(!eq(b"xbcdefghijk87654321", b"abcdefghijk"));
+        assert!(!eq(b"abxdefghijk87654321", b"abcdefghijk"));
+        assert!(!eq(b"axcdefghijk87654321", b"abcdefghijk"));
+        assert!(!eq(b"abcdeffhijk87654321", b"abcdefghijk"));
     }
 
     #[test]
