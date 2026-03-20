@@ -6,7 +6,6 @@ use std::{
     ops::Not,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    u64,
 };
 
 use bytes::Bytes;

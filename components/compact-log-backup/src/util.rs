@@ -171,10 +171,11 @@ pub fn redact(k: &[u8]) -> log_wrappers::Value<'_> {
     log_wrappers::Value::key(k)
 }
 
+#[allow(dead_code)]
 #[derive(Eq, PartialEq)]
 pub struct EndKey<'a>(pub &'a [u8]);
 
-impl<'a> PartialOrd for EndKey<'a> {
+impl PartialOrd for EndKey<'_> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         use std::cmp::Ordering::*;
         match (self, other) {

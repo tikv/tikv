@@ -263,7 +263,10 @@ where
         let extreme_ref = self
             .extremum
             .as_ref()
-            .map(|x| EnumRef::from_owned_value(unsafe { std::mem::transmute(x) }));
+            .map(|x| EnumRef::from_owned_value(unsafe {
+                #[allow(clippy::missing_transmute_annotations)]
+                std::mem::transmute(x)
+            }));
 
         if value.is_some()
             && (self.extremum.is_none()
@@ -348,7 +351,10 @@ where
         let extreme_ref = self
             .extremum
             .as_ref()
-            .map(|x| SetRef::from_owned_value(unsafe { std::mem::transmute(x) }));
+            .map(|x| SetRef::from_owned_value(unsafe {
+                #[allow(clippy::missing_transmute_annotations)]
+                std::mem::transmute(x)
+            }));
 
         if value.is_some()
             && (self.extremum.is_none()
@@ -438,7 +444,10 @@ where
         let extreme_ref = self
             .extremum_value
             .as_ref()
-            .map(|x| TT::from_owned_value(unsafe { std::mem::transmute(x) }));
+            .map(|x| TT::from_owned_value(unsafe {
+                #[allow(clippy::missing_transmute_annotations)]
+                std::mem::transmute(x)
+            }));
         if value.is_some() && (self.extremum_value.is_none() || extreme_ref.cmp(&value) == E::ORD) {
             self.extremum_value = value.map(|x| x.into_owned_value());
         }

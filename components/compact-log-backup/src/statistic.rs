@@ -58,7 +58,6 @@ pub struct LoadMetaStatistic {
 /// The statistic of loading data files for a subcompaction.
 #[derive(Default, Debug, Add, AddAssign, Clone, Serialize)]
 #[serde(rename_all = "kebab-case")]
-
 pub struct LoadStatistic {
     /// How many logical "files" we have loaded?
     pub files_in: u64,
@@ -128,7 +127,7 @@ pub mod prom {
         where
             S: serde::Serializer,
         {
-            use ::prometheus::core::Metric;
+            use prometheus::core::Metric;
             let proto = self.0.metric();
             let hist = proto.get_histogram();
             let mut m = serializer.serialize_map(Some(hist.get_bucket().len() + 2))?;

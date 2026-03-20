@@ -282,6 +282,7 @@ impl RawRecords {
     /// Returns (RawRecord aggregated by extra tag, RawRecord aggregated by
     /// region id). Merge these two aggregations together to save one
     /// iteration.
+    #[allow(clippy::type_complexity)]
     pub fn aggregate_by_extra_tag_and_region(
         &self,
     ) -> (HashMap<Arc<Vec<u8>>, RawRecord>, HashMap<u64, RawRecord>) {

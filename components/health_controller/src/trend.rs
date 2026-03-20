@@ -450,6 +450,7 @@ pub struct Trend {
 }
 
 impl Trend {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         spike_filter_duration: Duration,
         spike_filter_value_gauge: IntGauge,

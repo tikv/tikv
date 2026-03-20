@@ -35,13 +35,13 @@ pub use self::parser::{AggrDefinitionParser, AllAggrDefinitionParser};
 /// incremental update model:
 ///
 /// - Each aggregate function associates a state structure, storing partially
-/// computed aggregate results.
+///   computed aggregate results.
 ///
 /// - The caller calls `update()` or `update_vector()` for each row to update
-/// the state.
+///   the state.
 ///
 /// - The caller finally calls `push_result()` to aggregate a summary value and
-/// push it into the given data container.
+///   push it into the given data container.
 ///
 /// This trait can be auto derived by using `tidb_query_codegen::AggrFunction`.
 pub trait AggrFunction: std::fmt::Debug + Send + 'static {

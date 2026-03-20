@@ -117,10 +117,10 @@ pub enum CacheKvFile {
 /// returns an error on an invalid internal state.
 /// pass the error back to the client side for further debugging.
 fn error(message: impl std::fmt::Display) -> Error {
-    Error::Io(io::Error::new(
-        ErrorKind::Other,
-        format!("internal error in TiKV: {}", message),
-    ))
+    Error::Io(io::Error::other(format!(
+        "internal error in TiKV: {}",
+        message
+    )))
 }
 
 impl CacheKvFile {

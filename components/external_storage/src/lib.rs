@@ -338,6 +338,7 @@ pub fn encrypt_wrap_reader(
     Ok(input)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn read_external_storage_into_file<In, Out>(
     mut input: In,
     mut output: Out,
@@ -541,6 +542,7 @@ fn calc_and_compare_checksums(
     Ok(())
 }
 
+#[allow(clippy::type_complexity)]
 pub fn wrap_with_checksum_reader_if_needed(
     contains_checksum: bool,
     encrypted_reader: ExternalData<'_>,
