@@ -1389,18 +1389,18 @@ impl Write for Snapshot {
             written_bytes += write_len;
 
             let file = &mut file_for_recving.file;
-            let encrypt_buffer = if let Some((cipher, crypter)) = file_for_recving.encrypter.as_mut()
-            {
-                let mut encrypt_buffer = vec![0; write_len + cipher.block_size()];
-                let mut bytes = crypter.update(&next_buf[0..write_len], &mut encrypt_buffer)?;
-                if switch {
-                    bytes += crypter.finalize(&mut encrypt_buffer)?;
-                }
-                encrypt_buffer.truncate(bytes);
-                Cow::Owned(encrypt_buffer)
-            } else {
-                Cow::Borrowed(&next_buf[0..write_len])
-            };
+            let encrypt_buffer =
+                if let Some((cipher, crypter)) = file_for_recving.encrypter.as_mut() {
+                    let mut encrypt_buffer = vec![0; write_len + cipher.block_size()];
+                    let mut bytes = crypter.update(&next_buf[0..write_len], &mut encrypt_buffer)?;
+                    if switch {
+                        bytes += crypter.finalize(&mut encrypt_buffer)?;
+                    }
+                    encrypt_buffer.truncate(bytes);
+                    Cow::Owned(encrypt_buffer)
+                } else {
+                    Cow::Borrowed(&next_buf[0..write_len])
+                };
             let encrypt_len = encrypt_buffer.len();
 
             let mut start = 0;

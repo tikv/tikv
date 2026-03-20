@@ -1150,9 +1150,7 @@ fn check_availability_by_last_heartbeats(
             .get_peers()
             .iter()
             .find(|p| p.get_id() == *id)
-            .is_some_and(|p| {
-                p.role == PeerRole::Voter || p.role == PeerRole::IncomingVoter
-            })
+            .is_some_and(|p| p.role == PeerRole::Voter || p.role == PeerRole::IncomingVoter)
         {
             // leader itself is not a slow peer
             if *id == leader_id || last_heartbeat.elapsed() <= slow_voter_threshold {
@@ -1177,9 +1175,7 @@ fn check_availability_by_last_heartbeats(
             .get_peers()
             .iter()
             .find(|p| p.get_id() == peer.get_id())
-            .is_some_and(|p| {
-                p.role == PeerRole::Voter || p.role == PeerRole::IncomingVoter
-            });
+            .is_some_and(|p| p.role == PeerRole::Voter || p.role == PeerRole::IncomingVoter);
         if !is_voter && change_type == ConfChangeType::AddNode {
             // exiting peers, promoting from learner to voter
             if let Some(last_heartbeat) = peer_heartbeats.get(&peer.get_id()) {
