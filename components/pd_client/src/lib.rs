@@ -620,8 +620,10 @@ mod tests {
 
     #[test]
     fn test_processed_key_0() {
-        let mut cop_detail = RegionWriteCfCopDetail::default();
-        cop_detail.next = 11;
+        let cop_detail = RegionWriteCfCopDetail {
+            next: 11,
+            ..Default::default()
+        };
 
         assert_eq!(cop_detail.mvcc_amplification(), 11.0);
     }

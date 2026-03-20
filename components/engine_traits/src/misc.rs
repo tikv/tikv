@@ -10,6 +10,7 @@ use crate::{
     flow_control_factors::FlowControlFactorsExt, range::Range,
 };
 
+#[allow(clippy::enum_variant_names)]
 #[derive(Clone, Debug)]
 pub enum DeleteStrategy {
     /// Delete the SST files that are fullly fit in range. However, the SST

@@ -13,8 +13,6 @@ use collections::HashMap;
 use kvproto::metapb::Region;
 use tikv_util::box_err;
 
-#[cfg(any(test, feature = "testexport"))]
-use crate::StateStorage;
 use crate::{Error, FlushState, Result};
 
 #[derive(Debug)]

@@ -174,6 +174,7 @@ pub struct Client {
 }
 
 impl Client {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
