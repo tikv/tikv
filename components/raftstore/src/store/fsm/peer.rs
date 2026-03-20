@@ -4145,13 +4145,13 @@ where
                 .snapshot_recovery_maybe_finish_wait_apply(/* force= */ true);
         }
 
-        {
+        (|| {
             fail_point!(
                 "before_destroy_peer_on_peer_1003",
                 self.fsm.peer.peer_id() == 1003,
                 |_| {}
             );
-        };
+        })();
         let mut meta = self.ctx.store_meta.lock().unwrap();
         meta.damaged_regions.remove(&self.fsm.region_id());
         meta.damaged_regions.shrink_to_fit();
@@ -7253,7 +7253,7 @@ where
 
     fn on_set_flashback_state(&mut self, region: metapb::Region) {
         // Update the region meta.
-        self.update_region({
+        self.update_region((|| {
             #[cfg(feature = "failpoints")]
             fail_point!("keep_peer_fsm_flashback_state_false", |_| {
                 let mut region = region.clone();
@@ -7261,7 +7261,7 @@ where
                 region
             });
             region
-        });
+        })());
         // Let the leader lease to None to ensure that local reads are not executed.
         self.fsm.peer.leader_lease_mut().expire_remote_lease();
         let mut pessimistic_locks = self.fsm.peer.txn_ext.pessimistic_locks.write();

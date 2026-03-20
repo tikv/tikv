@@ -2781,13 +2781,13 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         // almost idle (no more pending regions on applying logs), it can be
         // regarded as the candidate for balancing leaders.
         if during_starting_stage {
-            let completed_target_count = {
+            let completed_target_count = (|| {
                 fail_point!("on_mock_store_completed_target_count", |_| 0);
                 std::cmp::max(
                     1,
                     STORE_CHECK_COMPLETE_APPLY_REGIONS_PERCENT * region_count / 100,
                 )
-            };
+            })();
             // If the number of regions on completing applying logs does not occupy the
             // majority of regions, the store is regarded as busy.
             if completed_apply_peers_count < completed_target_count {
