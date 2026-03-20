@@ -188,7 +188,7 @@ impl KmsProvider for AzureKms {
             ),
         };
         self.client
-            .encrypt(&self.current_key_id.clone().into_inner(), encrypt_params)
+            .encrypt(self.current_key_id.clone().into_inner(), encrypt_params)
             .await
             .map_err(convert_azure_error)
             .and_then(|response| {
@@ -235,10 +235,7 @@ fn convert_azure_error(err: AzureError) -> CloudError {
     let err_msg = if let Ok(e) = err.into_inner() {
         e
     } else {
-        Box::new(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "unknown error",
-        ))
+        Box::new(std::io::Error::other("unknown error"))
     };
     CloudError::KmsError(KmsError::Other(OtherError::from_box(err_msg)))
 }

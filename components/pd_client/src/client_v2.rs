@@ -19,7 +19,6 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant as StdInstant},
-    u64,
 };
 
 use fail::fail_point;
@@ -88,7 +87,7 @@ impl RawClient {
     async fn connect(ctx: &ConnectContext) -> Result<Self> {
         // -1 means the max.
         let retries = match ctx.cfg.retry_max_count {
-            -1 => std::isize::MAX,
+            -1 => isize::MAX,
             v => v.saturating_add(1),
         };
         for i in 0..retries {
@@ -101,7 +100,7 @@ impl RawClient {
                     });
                 }
                 Err(e) => {
-                    if i as usize % ctx.cfg.retry_log_every == 0 {
+                    if (i as usize).is_multiple_of(ctx.cfg.retry_log_every) {
                         warn!("validate PD endpoints failed"; "err" => ?e);
                     }
                     let _ = GLOBAL_TIMER_HANDLE

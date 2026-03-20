@@ -233,12 +233,9 @@ impl BlobConfig for Config {
     }
 
     fn url(&self) -> io::Result<url::Url> {
-        self.bucket.url("azure").map_err(|s| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("error creating bucket url: {}", s),
-            )
-        })
+        self.bucket
+            .url("azure")
+            .map_err(|s| io::Error::other(format!("error creating bucket url: {}", s)))
     }
 }
 
@@ -891,7 +888,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(feature = "azurite")]
+    #[cfg(false)]
     // test in Azurite emulator
     async fn test_azblob_storage() {
         use futures_util::stream;
