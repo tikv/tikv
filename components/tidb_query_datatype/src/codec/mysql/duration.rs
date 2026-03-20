@@ -133,10 +133,10 @@ mod parser {
         let (mut rest, hour) = number(input)?;
         hhmmss[0] = hour;
 
-        for i in 1..=2 {
+        for (i, slot) in hhmmss.iter_mut().enumerate().skip(1) {
             if let Ok((remain, _)) = colon(rest) {
                 let (remain, num) = number(remain)?;
-                hhmmss[i] = num;
+                *slot = num;
                 rest = remain;
             } else {
                 if i == 1 && require_colon {
@@ -634,7 +634,7 @@ impl Eq for Duration {}
 impl PartialOrd for Duration {
     #[inline]
     fn partial_cmp(&self, rhs: &Duration) -> Option<Ordering> {
-        self.nanos.partial_cmp(&rhs.nanos)
+        Some(self.cmp(rhs))
     }
 }
 

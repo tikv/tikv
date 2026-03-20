@@ -382,8 +382,8 @@ mod tests {
 
         for i in 1..=data.len() {
             let le_bytes = read_le_bytes::<u16>(&mut buf.as_slice(), i).unwrap();
-            for j in 0..i {
-                assert_eq!(unsafe { le_bytes.get_unchecked(j) }, data[j]);
+            for (j, expected) in data.iter().enumerate().take(i) {
+                assert_eq!(unsafe { le_bytes.get_unchecked(j) }, *expected);
             }
         }
     }

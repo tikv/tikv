@@ -75,9 +75,10 @@ impl<'a> Ord for JsonRef<'a> {
 impl<'a> PartialEq for JsonRef<'a> {
     fn eq(&self, right: &JsonRef<'_>) -> bool {
         self.partial_cmp(right)
-            .map_or(false, |r| r == Ordering::Equal)
+            .is_some_and(|r| r == Ordering::Equal)
     }
 }
+#[allow(clippy::non_canonical_partial_ord_impl)]
 impl<'a> PartialOrd for JsonRef<'a> {
     // See `CompareBinary` in TiDB `types/json/binary_functions.go`
     fn partial_cmp(&self, right: &JsonRef<'_>) -> Option<Ordering> {
@@ -196,6 +197,7 @@ impl PartialEq for Json {
     }
 }
 
+#[allow(clippy::non_canonical_partial_ord_impl)]
 impl PartialOrd for Json {
     fn partial_cmp(&self, right: &Json) -> Option<Ordering> {
         self.as_ref().partial_cmp(&right.as_ref())

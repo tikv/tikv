@@ -255,13 +255,12 @@ mod tests {
             json_array_ref.array_get_elem(4).unwrap().get_str().unwrap(),
             "abcdefg"
         );
-        assert_eq!(
-            json_array_ref
+        assert!(
+            !json_array_ref
                 .array_get_elem(5)
                 .unwrap()
                 .get_literal()
-                .unwrap(),
-            false
+                .unwrap()
         );
         assert_eq!(
             json_array_ref.array_get_elem(6).unwrap().object_get_key(0),
@@ -375,13 +374,12 @@ mod tests {
                 .unwrap(),
             "abcdefg"
         );
-        assert_eq!(
-            json_object_ref
+        assert!(
+            !json_object_ref
                 .object_get_val(5)
                 .unwrap()
                 .get_literal()
-                .unwrap(),
-            false
+                .unwrap()
         );
         assert_eq!(
             json_object_ref.object_get_val(6).unwrap().object_get_key(0),

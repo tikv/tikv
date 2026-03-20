@@ -730,7 +730,7 @@ impl RowHandle for CommonHandle {
 
 #[cfg(test)]
 mod tests {
-    use std::{i64, iter::FromIterator};
+    use std::iter::FromIterator;
 
     use api_version::ApiV1;
     use collections::{HashMap, HashSet};

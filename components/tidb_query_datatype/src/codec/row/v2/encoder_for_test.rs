@@ -21,8 +21,6 @@
 //! * null column ids: when flag == 1 (big), id is 4 bytes, otherwise 1 byte
 //! * non-null values offset: when big, offset is 4 bytes, otherwise 2 bytes
 
-use std::{i8, i16, i32, u8, u16, u32};
-
 use codec::prelude::*;
 use num_traits::Zero;
 use tipb::FieldType;

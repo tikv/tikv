@@ -1176,10 +1176,7 @@ pub fn skip_n(buf: &mut &[u8], n: usize) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        cmp::Ordering, i8, i16, i32, i64, slice::from_ref, str::FromStr, sync::Arc, u8, u16, u32,
-        u64,
-    };
+    use std::{cmp::Ordering, slice::from_ref, str::FromStr, sync::Arc};
 
     use super::*;
     use crate::{

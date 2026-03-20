@@ -126,7 +126,7 @@ impl<'a> PartialOrd for VectorFloat32Ref<'a> {
 
 impl<'a> VectorFloat32Ref<'a> {
     pub fn new(value: &[u8]) -> Result<VectorFloat32Ref<'_>> {
-        if value.len() % F32_SIZE != 0 {
+        if !value.len().is_multiple_of(F32_SIZE) {
             return Err(box_err!("Vector length error. Please check the input."));
         }
         let check_vec = VectorFloat32Ref { value };
@@ -150,6 +150,7 @@ impl<'a> VectorFloat32Ref<'a> {
         self.value.len() + std::mem::size_of::<u32>()
     }
 
+    #[allow(clippy::wrong_self_convention)]
     pub fn to_owned(&self) -> VectorFloat32 {
         VectorFloat32 {
             value: self.value.to_owned(),
@@ -251,7 +252,7 @@ impl<'a> VectorFloat32Ref<'a> {
         let similarity = (distance as f64) / ((norma as f64) * (normb as f64)).sqrt();
         if similarity.is_nan() {
             // Divide by zero
-            return Ok(std::f64::NAN);
+            return Ok(f64::NAN);
         }
         let similarity = similarity.clamp(-1.0, 1.0);
         Ok(1.0 - similarity)

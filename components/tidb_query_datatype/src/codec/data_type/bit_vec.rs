@@ -171,8 +171,8 @@ mod tests {
         let mut x = BitVec::with_capacity(0);
         x.push(false);
         x.push(true);
-        assert_eq!(x.get(0), false);
-        assert_eq!(x.get(1), true);
+        assert!(!x.get(0));
+        assert!(x.get(1));
     }
 
     #[test]

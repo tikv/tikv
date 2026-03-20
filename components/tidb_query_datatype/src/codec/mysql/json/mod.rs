@@ -1,5 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+#![allow(non_local_definitions)]
+
 //! The binary JSON format from MySQL 5.7 is as follows:
 //! ```text
 //!   JSON doc ::= type value
@@ -148,6 +150,7 @@ impl<'a> JsonRef<'a> {
     }
 
     /// Returns an owned Json via copying
+    #[allow(clippy::wrong_self_convention)]
     pub fn to_owned(&self) -> Json {
         Json {
             type_code: self.type_code,

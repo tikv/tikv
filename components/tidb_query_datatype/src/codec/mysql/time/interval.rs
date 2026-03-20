@@ -40,6 +40,7 @@ pub enum IntervalUnit {
 }
 
 impl IntervalUnit {
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(unit: &str) -> Result<Self> {
         use IntervalUnit::*;
         match unit.to_uppercase().as_str() {
@@ -457,7 +458,7 @@ impl Interval {
 
         // Populate fields in reverse order
         for (i, &matched) in matches.iter().rev().enumerate() {
-            fields[index as usize - i] = &matched;
+            fields[index as usize - i] = matched;
         }
 
         // Helper to parse integer fields and handle errors
@@ -563,7 +564,7 @@ impl Interval {
         input: &str,
     ) -> Result<Duration> {
         let val = Self::parse_from_str_internal(ctx, unit, input, true)?
-            .ok_or_else(|| Error::datetime_function_overflow())?;
+            .ok_or_else(Error::datetime_function_overflow)?;
         use IntervalUnit::*;
         match unit {
             Microsecond | Second | Minute | Hour | Day | Week | Month | Quarter | Year => {
