@@ -21,7 +21,7 @@ fn count_file(path: &Path, pat: impl Fn(&Path) -> bool) -> usize {
 
 fn count_sst(path: &Path) -> usize {
     count_file(path, |path| {
-        path.extension().map_or(false, |ext| ext == "sst")
+        path.extension().is_some_and(|ext| ext == "sst")
     })
 }
 

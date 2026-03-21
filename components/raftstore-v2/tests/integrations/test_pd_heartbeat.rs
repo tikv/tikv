@@ -210,8 +210,6 @@ fn test_report_buckets() {
             router.send(region_id, msg).unwrap();
             let _resp = block_on(sub.result()).unwrap();
         }
-        ((suffix.as_bytes().len() + 10) * repeat)
-            .try_into()
-            .unwrap()
+        ((suffix.len() + 10) * repeat) as u64
     }
 }

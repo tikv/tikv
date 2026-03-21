@@ -61,7 +61,7 @@ pub fn check_skip_wal(path: &str) {
     let mut found = false;
     for f in std::fs::read_dir(path).unwrap() {
         let e = f.unwrap();
-        if e.path().extension().map_or(false, |ext| ext == "log") {
+        if e.path().extension().is_some_and(|ext| ext == "log") {
             found = true;
             assert_eq!(e.metadata().unwrap().len(), 0, "{}", e.path().display());
         }
