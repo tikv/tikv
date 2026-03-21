@@ -298,11 +298,11 @@ impl RegionCacheIterator {
                 break;
             }
 
-            if let Some(ref prefix) = self.prefix {
-                if prefix != self.prefix_extractor.as_mut().unwrap().transform(user_key) {
-                    // stop iterating due to unmatched prefix
-                    break;
-                }
+            if let Some(ref prefix) = self.prefix
+                && prefix != self.prefix_extractor.as_mut().unwrap().transform(user_key)
+            {
+                // stop iterating due to unmatched prefix
+                break;
             }
 
             if self.is_visible(sequence) {
@@ -369,11 +369,11 @@ impl RegionCacheIterator {
                 break;
             }
 
-            if let Some(ref prefix) = self.prefix {
-                if prefix != self.prefix_extractor.as_mut().unwrap().transform(user_key) {
-                    // stop iterating due to unmatched prefix
-                    break;
-                }
+            if let Some(ref prefix) = self.prefix
+                && prefix != self.prefix_extractor.as_mut().unwrap().transform(user_key)
+            {
+                // stop iterating due to unmatched prefix
+                break;
             }
 
             if !self.find_value_for_current_key(guard) {
@@ -653,7 +653,7 @@ impl Deref for RegionCacheDbVector {
 
 impl DbVector for RegionCacheDbVector {}
 
-impl<'a> PartialEq<&'a [u8]> for RegionCacheDbVector {
+impl PartialEq<&[u8]> for RegionCacheDbVector {
     fn eq(&self, rhs: &&[u8]) -> bool {
         self.0.as_slice() == *rhs
     }
@@ -728,8 +728,7 @@ mod tests {
                         .lock()
                         .unwrap()
                         .0
-                        .get(&snapshot_ts)
-                        .is_none()
+                        .contains_key(&snapshot_ts)
                 )
             }
         };

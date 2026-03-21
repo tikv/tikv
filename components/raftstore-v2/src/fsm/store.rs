@@ -80,8 +80,7 @@ impl<EK> StoreMeta<EK> {
                 } else {
                     assert!(
                         self.region_ranges
-                            .get(&(data_end_key(prev.get_end_key()), version))
-                            .is_some(),
+                            .contains_key(&(data_end_key(prev.get_end_key()), version)),
                         "{} region corrupted",
                         SlogFormat(logger)
                     );

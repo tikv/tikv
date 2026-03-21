@@ -253,7 +253,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             cf = CF_DEFAULT;
         }
 
-        if !ALL_CFS.iter().any(|x| *x == cf) {
+        if !ALL_CFS.contains(&cf) {
             return Err(box_err!("invalid delete range command, cf: {:?}", cf));
         }
 
