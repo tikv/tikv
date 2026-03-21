@@ -19,6 +19,8 @@ pub struct FixtureStorage {
     data_view_unsafe: Option<btree_map::Range<'static, Vec<u8>, FixtureValue>>,
     is_backward_scan: bool,
     is_key_only: bool,
+    load_commit_ts: bool,
+    mock_commit_ts: Option<u64>,
 }
 
 impl FixtureStorage {
@@ -28,7 +30,13 @@ impl FixtureStorage {
             data_view_unsafe: None,
             is_backward_scan: false,
             is_key_only: false,
+            load_commit_ts: false,
+            mock_commit_ts: None,
         }
+    }
+
+    pub fn set_mock_commit_ts(&mut self, commit_ts: Option<u64>) {
+        self.mock_commit_ts = commit_ts
     }
 }
 
@@ -56,7 +64,7 @@ impl super::Storage for FixtureStorage {
         &mut self,
         is_backward_scan: bool,
         is_key_only: bool,
-        _load_commit_ts: bool,
+        load_commit_ts: bool,
         range: IntervalRange,
     ) -> Result<()> {
         let data_view = self
@@ -70,6 +78,7 @@ impl super::Storage for FixtureStorage {
         };
         self.is_backward_scan = is_backward_scan;
         self.is_key_only = is_key_only;
+        self.load_commit_ts = load_commit_ts;
         Ok(())
     }
 
@@ -88,13 +97,21 @@ impl super::Storage for FixtureStorage {
                     Ok(Some(OwnedKvPairEntry {
                         key: k.clone(),
                         value: v.clone(),
-                        commit_ts: None,
+                        commit_ts: if self.load_commit_ts {
+                            self.mock_commit_ts
+                        } else {
+                            None
+                        },
                     }))
                 } else {
                     Ok(Some(OwnedKvPairEntry {
                         key: k.clone(),
                         value: Vec::new(),
-                        commit_ts: None,
+                        commit_ts: if self.load_commit_ts {
+                            self.mock_commit_ts
+                        } else {
+                            None
+                        },
                     }))
                 }
             }
@@ -105,7 +122,7 @@ impl super::Storage for FixtureStorage {
     fn get_entry(
         &mut self,
         is_key_only: bool,
-        _load_commit_ts: bool,
+        load_commit_ts: bool,
         range: PointRange,
     ) -> Result<Option<super::OwnedKvPairEntry>> {
         let r = self.data.get(&range.0);
@@ -116,13 +133,21 @@ impl super::Storage for FixtureStorage {
                     Ok(Some(OwnedKvPairEntry {
                         key: range.0,
                         value: v.clone(),
-                        commit_ts: None,
+                        commit_ts: if load_commit_ts {
+                            self.mock_commit_ts
+                        } else {
+                            None
+                        },
                     }))
                 } else {
                     Ok(Some(OwnedKvPairEntry {
                         key: range.0,
                         value: Vec::new(),
-                        commit_ts: None,
+                        commit_ts: if load_commit_ts {
+                            self.mock_commit_ts
+                        } else {
+                            None
+                        },
                     }))
                 }
             }
