@@ -1,6 +1,5 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use core::slice::SlicePattern;
 use std::{fmt::Debug, ops::Deref, result, sync::Arc};
 
 use bytes::Bytes;
@@ -97,18 +96,17 @@ impl Drop for RegionCacheSnapshot {
             .core
             .region_manager
             .remove_region_snapshot(&self.snapshot_meta);
-        if !regions_removable.is_empty() {
-            if let Err(e) = self
+        if !regions_removable.is_empty()
+            && let Err(e) = self
                 .engine
                 .bg_worker_manager()
                 .schedule_task(BackgroundTask::DeleteRegions(regions_removable))
-            {
-                error!(
-                    "ime schedule delete range failed";
-                    "err" => ?e,
-                );
-                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
-            }
+        {
+            error!(
+                "ime schedule delete range failed";
+                "err" => ?e,
+            );
+            assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
         }
     }
 }

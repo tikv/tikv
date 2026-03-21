@@ -83,11 +83,7 @@ impl<I: Iterator> Cursor<I> {
         });
 
         assert_ne!(self.scan_mode, ScanMode::Backward);
-        if self
-            .max_key
-            .as_ref()
-            .map_or(false, |k| k <= key.as_encoded())
-        {
+        if self.max_key.as_ref().is_some_and(|k| k <= key.as_encoded()) {
             self.iter.validate_key(key)?;
             return Ok(false);
         }
@@ -130,11 +126,7 @@ impl<I: Iterator> Cursor<I> {
         {
             return Ok(true);
         }
-        if self
-            .max_key
-            .as_ref()
-            .map_or(false, |k| k <= key.as_encoded())
-        {
+        if self.max_key.as_ref().is_some_and(|k| k <= key.as_encoded()) {
             self.iter.validate_key(key)?;
             return Ok(false);
         }
@@ -201,11 +193,7 @@ impl<I: Iterator> Cursor<I> {
 
     pub fn seek_for_prev(&mut self, key: &Key, statistics: &mut CfStatistics) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Forward);
-        if self
-            .min_key
-            .as_ref()
-            .map_or(false, |k| k >= key.as_encoded())
-        {
+        if self.min_key.as_ref().is_some_and(|k| k >= key.as_encoded()) {
             self.iter.validate_key(key)?;
             return Ok(false);
         }
@@ -238,11 +226,7 @@ impl<I: Iterator> Cursor<I> {
             return Ok(true);
         }
 
-        if self
-            .min_key
-            .as_ref()
-            .map_or(false, |k| k >= key.as_encoded())
-        {
+        if self.min_key.as_ref().is_some_and(|k| k >= key.as_encoded()) {
             self.iter.validate_key(key)?;
             return Ok(false);
         }

@@ -45,7 +45,7 @@ impl BTreeEngine {
         let mut cf_contents = vec![];
 
         // create default cf if missing
-        if !cfs.iter().any(|&c| c == CF_DEFAULT) {
+        if !cfs.contains(&CF_DEFAULT) {
             cf_names.push(CF_DEFAULT);
             cf_contents.push(Arc::new(RwLock::new(BTreeMap::new())))
         }

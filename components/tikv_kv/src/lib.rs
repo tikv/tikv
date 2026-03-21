@@ -5,7 +5,6 @@
 //! [`Server`](crate::server::Server). The [`BTreeEngine`](kv::BTreeEngine) and
 //! [`RocksEngine`](RocksEngine) are used for testing only.
 
-#![feature(bound_map)]
 #![feature(min_specialization)]
 #![feature(type_alias_impl_trait)]
 #![feature(impl_trait_in_assoc_type)]
@@ -1220,8 +1219,8 @@ pub mod tests {
                     Some((format!("key_{}", i / 2 * 2), format!("value_{}", i / 2)))
                 } else {
                     Some((
-                        format!("key_{}", (i + 1) / 2 * 2),
-                        format!("value_{}", (i + 1) / 2),
+                        format!("key_{}", i.div_ceil(2) * 2),
+                        format!("value_{}", i.div_ceil(2)),
                     ))
                 }
             } else if seek_mode != SeekMode::Normal {

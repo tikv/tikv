@@ -299,7 +299,7 @@ impl<RE: RaftExtension + 'static> Engine for RocksEngine<RE> {
         })();
         let mut res = Some(res);
         stream::poll_fn(move |cx| {
-            if res.as_ref().map_or(false, |r| r.is_err()) {
+            if res.as_ref().is_some_and(|r| r.is_err()) {
                 return Poll::Ready(res.take().map(WriteEvent::Finished));
             }
             // If it's none, it means an error is returned, it should not be polled again.
