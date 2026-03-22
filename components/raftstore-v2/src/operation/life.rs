@@ -394,7 +394,7 @@ impl Store {
     }
 
     /// When a message's recipient doesn't exist, it will be redirected to
-    /// store. Store is responsible for checking if it's neccessary to create
+    /// store. Store is responsible for checking if it's necessary to create
     /// a peer to handle the message.
     ///
     /// Return true if the peer is created by the message, false indicates
