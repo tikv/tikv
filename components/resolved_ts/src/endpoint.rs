@@ -481,7 +481,7 @@ where
                     }
                     stats.unresolved_count += 1;
                 }
-                ResolverStatus::Ready { .. } => {
+                ResolverStatus::Ready => {
                     stats.heap_size += observed_region.resolver.approximate_heap_bytes() as i64;
                     stats.resolved_count += 1;
                 }
