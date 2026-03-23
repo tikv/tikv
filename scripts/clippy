@@ -56,17 +56,21 @@ CLIPPY_LINTS=(
     -A unexpected_cfgs \
     -A clippy::legacy_numeric_constants \
     -A clippy::manual_div_ceil \
+    -A clippy::manual_unwrap_or \
     -A clippy::manual_unwrap_or_default \
     -A clippy::unnecessary_map_or \
     -A clippy::io_other_error \
     -A clippy::doc_lazy_continuation \
+    -A clippy::doc_overindented_list_items \
     -A clippy::manual_inspect \
     -A clippy::manual_contains \
     -A clippy::manual_is_multiple_of \
     -A clippy::manual_swap \
+    -A clippy::swap_with_temporary \
     -A clippy::question_mark \
     -A clippy::while_let_loop \
     -A clippy::box_collection \
+    -A clippy::vec_box \
     -A clippy::unnecessary_unwrap \
     -A clippy::useless_conversion \
     -A clippy::cloned_ref_to_slice_refs \
