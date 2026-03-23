@@ -9825,18 +9825,25 @@ mod tests {
     #[allow(clippy::large_enum_variant)]
     pub enum Msg {
         WaitFor {
+            #[allow(dead_code)]
             token: LockWaitToken,
+            #[allow(dead_code)]
             region_id: u64,
+            #[allow(dead_code)]
             region_epoch: RegionEpoch,
+            #[allow(dead_code)]
             term: u64,
             start_ts: TimeStamp,
             wait_info: KeyLockWaitInfo,
             is_first_lock: bool,
             timeout: Option<WaitTimeout>,
+            #[allow(dead_code)]
             cancel_callback: CancellationCallback,
+            #[allow(dead_code)]
             diag_ctx: DiagnosticContext,
         },
         RemoveLockWait {
+            #[allow(dead_code)]
             token: LockWaitToken,
         },
     }

@@ -50,7 +50,7 @@ const EMA_FACTOR: f64 = 0.6; // EMA stands for Exponential Moving Average
 /// Also, it decreases the delayed write rate further if the factors still
 /// exceed the threshold. So under heavy write load, the write rate may be
 /// throttled to a very low rate from time to time, causing QPS drop eventually.
-
+///
 /// For compaction pending bytes, we use discardable ratio to do flow control
 /// which is separated mechanism from throttle speed. Compaction pending bytes
 /// is a approximate value, usually, changes up and down dramatically, so it's

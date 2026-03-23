@@ -21,6 +21,9 @@ fi
 # - `derive_partial_eq_without_eq` has compilation overhead.
 # - Blocking issue for enabling `result_large_err` is the protobuf messages.
 # - Blocking issue for clippy::large_enum_variant is the raftstore peer message.
+# - Allow `unexpected_cfgs` as have defines many compiling cfg for unsupported test cases.
+# - Allow some stable-1.92 style lints to keep release-8.5 semantically aligned
+#   with master without backporting a large formatting-only cleanup batch.
 CLIPPY_LINTS=(
     -A clippy::module_inception  \
     -A clippy::result_large_err \
@@ -50,6 +53,30 @@ CLIPPY_LINTS=(
     -D clippy::assertions_on_result_states \
     -A clippy::non_canonical_partial_ord_impl \
     -A clippy::arc_with_non_send_sync \
+    -A unexpected_cfgs \
+    -A clippy::legacy_numeric_constants \
+    -A clippy::manual_div_ceil \
+    -A clippy::manual_unwrap_or_default \
+    -A clippy::unnecessary_map_or \
+    -A clippy::io_other_error \
+    -A clippy::doc_lazy_continuation \
+    -A clippy::manual_inspect \
+    -A clippy::manual_contains \
+    -A clippy::manual_is_multiple_of \
+    -A clippy::manual_swap \
+    -A clippy::question_mark \
+    -A clippy::while_let_loop \
+    -A clippy::box_collection \
+    -A clippy::unnecessary_unwrap \
+    -A clippy::useless_conversion \
+    -A clippy::cloned_ref_to_slice_refs \
+    -A clippy::useless_vec \
+    -A clippy::manual_repeat_n \
+    -A clippy::manual_abs_diff \
+    -A clippy::unnecessary_get_then_check \
+    -A clippy::unused_enumerate_index \
+    -A clippy::double_ended_iterator_last \
+    -A clippy::needless_return \
 )
 
 # TODO: Enables `clippy::needless_return_with_question_mark` after

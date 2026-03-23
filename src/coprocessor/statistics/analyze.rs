@@ -39,6 +39,7 @@ pub(crate) struct RowSampleBuilder<S: Snapshot, F: KvFormat> {
     columns_info: Vec<tipb::ColumnInfo>,
     column_groups: Vec<tipb::AnalyzeColumnGroup>,
     quota_limiter: Arc<QuotaLimiter>,
+    #[allow(dead_code)] // kept for future use (e.g. priority or reporting)
     is_auto_analyze: bool,
 }
 
@@ -211,9 +212,11 @@ trait RowSampleCollector: Send {
     );
     fn sampling(&mut self, data: &[Vec<u8>]);
     fn to_proto(&mut self) -> tipb::RowSampleCollector;
+    #[allow(dead_code)]
     fn get_reported_memory_usage(&mut self) -> usize {
         self.mut_base().reported_memory_usage
     }
+    #[allow(dead_code)]
     fn get_memory_usage(&mut self) -> usize {
         self.mut_base().memory_usage
     }
