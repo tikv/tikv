@@ -2576,24 +2576,33 @@ macro_rules! readpool_config {
                 assert!(invalid_cfg.validate().is_err());
                 invalid_cfg.max_tasks_per_worker_high = 1;
                 assert!(invalid_cfg.validate().is_err());
-                invalid_cfg.max_tasks_per_worker_high = 100;
-                cfg.validate().unwrap();
+                let invalid_cfg = $struct_name {
+                    max_tasks_per_worker_high: 100,
+                    ..cfg
+                };
+                invalid_cfg.validate().unwrap();
 
                 let mut invalid_cfg = cfg.clone();
                 invalid_cfg.max_tasks_per_worker_normal = 0;
                 assert!(invalid_cfg.validate().is_err());
                 invalid_cfg.max_tasks_per_worker_normal = 1;
                 assert!(invalid_cfg.validate().is_err());
-                invalid_cfg.max_tasks_per_worker_normal = 100;
-                cfg.validate().unwrap();
+                let invalid_cfg = $struct_name {
+                    max_tasks_per_worker_normal: 100,
+                    ..cfg
+                };
+                invalid_cfg.validate().unwrap();
 
                 let mut invalid_cfg = cfg.clone();
                 invalid_cfg.max_tasks_per_worker_low = 0;
                 assert!(invalid_cfg.validate().is_err());
                 invalid_cfg.max_tasks_per_worker_low = 1;
                 assert!(invalid_cfg.validate().is_err());
-                invalid_cfg.max_tasks_per_worker_low = 100;
-                cfg.validate().unwrap();
+                let invalid_cfg = $struct_name {
+                    max_tasks_per_worker_low: 100,
+                    ..cfg
+                };
+                invalid_cfg.validate().unwrap();
 
                 let mut invalid_but_unified = cfg.clone();
                 invalid_but_unified.use_unified_pool = Some(true);

@@ -1216,7 +1216,6 @@ impl<E: Engine> RegionStorageAccessor for ExtraSnapStoreAccessor<E> {
 #[cfg(test)]
 mod tests {
     use std::{
-        assert_matches::assert_matches,
         sync::{Mutex, atomic, mpsc},
         thread, vec,
     };
@@ -2433,7 +2432,7 @@ mod tests {
             let result =
                 block_on(unsafe { Endpoint::<RocksEngine>::get_snapshot_with_timeout(&req_ctx) });
             assert!(result.is_err());
-            assert_matches!(result, Err(Error::DeadlineExceeded));
+            assert!(matches!(result, Err(Error::DeadlineExceeded)));
         }
 
         // Test case 2: Snapshot retrieval delayed by failpoint, causing timeout
@@ -2476,7 +2475,7 @@ mod tests {
                     // In production yatp FuturePool environment, this would
                     // timeout correctly
                 } else {
-                    assert_matches!(result, Err(Error::DeadlineExceeded));
+                    assert!(matches!(result, Err(Error::DeadlineExceeded)));
                     // Verify that timeout happened before the full sleep duration
                     // The timeout should trigger around 100ms, not wait for the full 5000ms sleep
                     assert!(
@@ -3039,9 +3038,9 @@ mod tests {
         .map_err(Error::from)
         .err()
         .unwrap();
-        assert_matches!(err, Error::Locked(LockInfo { key, .. }) if {
+        assert!(matches!(err, Error::Locked(LockInfo { key, .. }) if {
             assert_eq!(key, b"key".to_vec());
             true
-        });
+        }));
     }
 }

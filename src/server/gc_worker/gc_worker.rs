@@ -1565,7 +1565,9 @@ pub mod test_gc_worker {
         }
 
         type IMSnap = Self::Snap;
-        type IMSnapshotRes = Self::SnapshotRes;
+        // TODO: revert this once https://github.com/rust-lang/rust/issues/140222 is fixed.
+        // type IMSnapshotRes = Self::SnapshotRes;
+        type IMSnapshotRes = impl Future<Output = EngineResult<Self::Snap>> + Send;
         fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
             self.async_snapshot(ctx)
         }
@@ -1579,9 +1581,11 @@ pub mod test_gc_worker {
         }
     }
 
+    #[allow(dead_code)]
     #[derive(Clone, Default)]
     pub struct MultiRocksEngine {
         pub engines: Arc<Mutex<HashMap<u64, PrefixedEngine>>>,
+        #[allow(dead_code)]
         pub region_info: HashMap<u64, Region>,
     }
 
@@ -1630,7 +1634,9 @@ pub mod test_gc_worker {
         }
 
         type IMSnap = Self::Snap;
-        type IMSnapshotRes = Self::SnapshotRes;
+        // TODO: revert this once https://github.com/rust-lang/rust/issues/140222 is fixed.
+        // type IMSnapshotRes = Self::SnapshotRes;
+        type IMSnapshotRes = impl Future<Output = EngineResult<Self::Snap>> + Send;
         fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
             self.async_snapshot(ctx)
         }

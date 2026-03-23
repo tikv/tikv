@@ -482,8 +482,6 @@ impl<S: Snapshot> PointGetter<S> {
 
 #[cfg(test)]
 mod tests {
-    use std::assert_matches::assert_matches;
-
     use engine_rocks::ReadPerfInstant;
     use kvproto::kvrpcpb::{Assertion, AssertionLevel, PrewriteRequestPessimisticAction::*};
     use tidb_query_datatype::{
@@ -1452,7 +1450,7 @@ mod tests {
         // When load_commit_ts is true, `access_locks` should be ignored and
         // the lock should be seen as conflict
         let err = must_get_entry_err(&mut getter, key, true);
-        assert_matches!(err.0, box ErrorInner::KeyIsLocked { .. });
+        assert!(matches!(err.0, box ErrorInner::KeyIsLocked { .. }));
     }
 
     #[test]
