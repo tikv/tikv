@@ -527,7 +527,7 @@ impl BlobStorage for GcsStorage {
         let client = self.get_data_client().await?;
         let storage_class = self.inner.config.storage_class.clone();
         let predefined_acl = self.inner.config.predefined_acl.clone();
-        put_with_client(
+        Box::pin(put_with_client(
             &client,
             bucket,
             full_name,
@@ -535,7 +535,7 @@ impl BlobStorage for GcsStorage {
             content_length,
             storage_class,
             predefined_acl,
-        )
+        ))
         .await
     }
 
@@ -747,7 +747,7 @@ mod tests {
         let client = google_cloud_storage::client::Storage::from_stub(SuccessfulWriteStorageStub);
         let before_insert = histogram_sample_count("gcp", "insert_multipart");
 
-        put_with_client(
+        Box::pin(put_with_client(
             &client,
             storage.bucket_resource_name(),
             storage.full_path("a"),
@@ -755,7 +755,7 @@ mod tests {
             5,
             storage.inner.config.storage_class.clone(),
             storage.inner.config.predefined_acl.clone(),
-        )
+        ))
         .await?;
 
         let after_insert = histogram_sample_count("gcp", "insert_multipart");
@@ -770,7 +770,7 @@ mod tests {
         let before_multipart = histogram_sample_count("gcp", "insert_multipart");
         let before_simple = histogram_sample_count("gcp", "insert_simple");
 
-        put_with_client(
+        Box::pin(put_with_client(
             &client,
             storage.bucket_resource_name(),
             storage.full_path("zero"),
@@ -778,7 +778,7 @@ mod tests {
             0,
             storage.inner.config.storage_class.clone(),
             storage.inner.config.predefined_acl.clone(),
-        )
+        ))
         .await?;
 
         let after_multipart = histogram_sample_count("gcp", "insert_multipart");

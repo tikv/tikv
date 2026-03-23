@@ -108,6 +108,11 @@ exceptions = [
     { name = "slog-json", allow = ["MPL-2.0"] },
     { name = "smartstring", allow = ["MPL-2.0"] },
     { name = "inferno", allow = ["CDDL-1.0"] },
+    # rustls FIPS support pulls aws-lc-fips-sys, which is dual/triple licensed and
+    # includes the OpenSSL license in its SPDX expression.
+    { name = "aws-lc-fips-sys", allow = ["OpenSSL"] },
+    # reqwest/hyper-rustls bundle Mozilla root certificates through webpki-roots.
+    { name = "webpki-roots", allow = ["CDLA-Permissive-2.0"] },
 ]
 
 [sources]
