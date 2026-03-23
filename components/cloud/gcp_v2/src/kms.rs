@@ -14,7 +14,9 @@ use google_cloud_kms_v1::{client::KeyManagementService, model::ProtectionLevel};
 use tikv_util::{box_err, stream::RetryError, time::Instant};
 use tokio::sync::OnceCell;
 
-use crate::credentials::{CredentialsMode, build_credentials, validate_credentials_json};
+use crate::credentials::{
+    CredentialsMode, build_credentials, ensure_rustls_fips_provider, validate_credentials_json,
+};
 
 const DEFAULT_DATAKEY_SIZE: usize = 32;
 
@@ -48,6 +50,7 @@ impl GcpKms {
                 cloud::error::OtherError::from_box(box_err!("invalid configurations for GCP KMS")),
             )));
         }
+        ensure_rustls_fips_provider().map_err(Self::map_credential_error)?;
         if config.key_id.ends_with('/') {
             let mut key = config.key_id.into_inner();
             key.pop();

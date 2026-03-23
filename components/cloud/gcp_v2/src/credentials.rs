@@ -25,9 +25,38 @@ pub(crate) fn validate_credentials_json(creds_json: &str) -> io::Result<()> {
     Ok(())
 }
 
+pub(crate) fn ensure_rustls_fips_provider() -> io::Result<()> {
+    if let Some(provider) = rustls::crypto::CryptoProvider::get_default() {
+        if provider.fips() {
+            return Ok(());
+        }
+        return Err(io::Error::other(
+            "rustls crypto provider is already initialized without FIPS; gcp_v2 requires the aws-lc-rs FIPS provider",
+        ));
+    }
+
+    if rustls::crypto::default_fips_provider()
+        .install_default()
+        .is_ok()
+    {
+        return Ok(());
+    }
+
+    match rustls::crypto::CryptoProvider::get_default() {
+        Some(provider) if provider.fips() => Ok(()),
+        Some(_) => Err(io::Error::other(
+            "rustls crypto provider is already initialized without FIPS; gcp_v2 requires the aws-lc-rs FIPS provider",
+        )),
+        None => Err(io::Error::other(
+            "failed to install the rustls aws-lc-rs FIPS provider",
+        )),
+    }
+}
+
 pub(crate) fn build_credentials(
     mode: &CredentialsMode,
 ) -> io::Result<Option<google_cloud_auth::credentials::Credentials>> {
+    ensure_rustls_fips_provider()?;
     match mode {
         CredentialsMode::Default => Ok(None),
         CredentialsMode::Anonymous => Ok(Some(
@@ -68,5 +97,21 @@ pub(crate) fn build_credentials(
             };
             Ok(Some(creds))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_rustls_fips_provider;
+
+    #[test]
+    fn test_ensure_rustls_fips_provider() {
+        ensure_rustls_fips_provider().unwrap();
+        assert!(
+            rustls::crypto::CryptoProvider::get_default()
+                .unwrap()
+                .fips()
+        );
+        ensure_rustls_fips_provider().unwrap();
     }
 }
