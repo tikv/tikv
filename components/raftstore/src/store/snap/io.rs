@@ -132,6 +132,7 @@ where
 /// Build a snapshot file for the given column family in sst format.
 /// If there are no key-value pairs fetched, no files will be created at `path`,
 /// otherwise the file will be created and synchronized.
+#[allow(clippy::redundant_closure_call)]
 pub fn build_sst_cf_file_list<E>(
     cf_file: &mut CfFile,
     engine: &E,

@@ -205,8 +205,8 @@ impl<'a> VectorFloat32Ref<'a> {
             }
         }
         let byte_index: usize = idx * 4;
-        let float_ptr = self.value.as_ptr().add(byte_index) as *const f32;
-        float_ptr.read_unaligned()
+        let float_ptr = unsafe { self.value.as_ptr().add(byte_index) } as *const f32;
+        unsafe { float_ptr.read_unaligned() }
     }
 
     pub fn l2_squared_distance(&self, b: VectorFloat32Ref<'a>) -> Result<f64> {

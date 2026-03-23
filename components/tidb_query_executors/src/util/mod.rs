@@ -37,15 +37,15 @@ pub unsafe fn eval_exprs_decoded_no_lifetime(
     output: &mut Vec<RpnStackNode<'_>>,
 ) -> Result<()> {
     unsafe fn erase_lifetime<'a, T: ?Sized>(v: &T) -> &'a T {
-        &*(v as *const T)
+        unsafe { &*(v as *const T) }
     }
 
     for expr in exprs {
-        output.push(erase_lifetime(expr).eval_decoded(
+        output.push(unsafe { erase_lifetime(expr) }.eval_decoded(
             ctx,
-            erase_lifetime(schema),
-            erase_lifetime(input_physical_columns),
-            erase_lifetime(input_logical_rows),
+            unsafe { erase_lifetime(schema) },
+            unsafe { erase_lifetime(input_physical_columns) },
+            unsafe { erase_lifetime(input_logical_rows) },
             input_logical_rows.len(),
         )?)
     }

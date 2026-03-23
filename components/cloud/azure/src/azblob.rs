@@ -122,16 +122,15 @@ impl Config {
             env::var(ENV_CLIENT_ID).ok(),
             env::var(ENV_TENANT_ID).ok(),
             env::var(ENV_CLIENT_SECRET).ok(),
-        ) {
-            if !(client_id.is_empty() || tenant_id.is_empty() || client_secret.is_empty()) {
-                let client_id = ClientId::new(client_id);
-                let client_secret = ClientSecret::new(client_secret);
-                return Some(CredentialInfo {
-                    client_id,
-                    tenant_id,
-                    client_secret,
-                });
-            }
+        ) && !(client_id.is_empty() || tenant_id.is_empty() || client_secret.is_empty())
+        {
+            let client_id = ClientId::new(client_id);
+            let client_secret = ClientSecret::new(client_secret);
+            return Some(CredentialInfo {
+                client_id,
+                tenant_id,
+                client_secret,
+            });
         }
         None
     }
@@ -491,11 +490,14 @@ impl ContainerBuilder for TokenCredContainerBuilder {
                 if interval > TOKEN_EXPIRE_LEFT_TIME_MINS {
                     // there still have time to use the token,
                     // and only need one thread to update token.
-                    if let Ok(l) = self.modify_place.try_lock() {
-                        modify_lock = Some(l);
-                    } else {
-                        // otherwise, continue to use the current token
-                        return Ok(t.1.clone());
+                    match self.modify_place.try_lock() {
+                        Ok(l) => {
+                            modify_lock = Some(l);
+                        }
+                        _ => {
+                            // otherwise, continue to use the current token
+                            return Ok(t.1.clone());
+                        }
                     }
                 }
             }
@@ -839,11 +841,13 @@ mod tests {
         let mut bucket = BucketConf::default(container_name);
         bucket.endpoint = Some(StringNonEmpty::static_str("http://127.0.0.1:10000/user"));
         bucket.prefix = Some(StringNonEmpty::static_str("backup 02/prefix"));
-        env::remove_var(ENV_ACCOUNT_NAME);
-        env::remove_var(ENV_SHARED_KEY);
-        env::remove_var(ENV_CLIENT_ID);
-        env::remove_var(ENV_TENANT_ID);
-        env::remove_var(ENV_CLIENT_SECRET);
+        unsafe {
+            env::remove_var(ENV_ACCOUNT_NAME);
+            env::remove_var(ENV_SHARED_KEY);
+            env::remove_var(ENV_CLIENT_ID);
+            env::remove_var(ENV_TENANT_ID);
+            env::remove_var(ENV_CLIENT_SECRET);
+        }
         let config = Config::default(bucket.clone());
 
         assert_eq!(config.account_name.is_none(), true);
@@ -852,11 +856,13 @@ mod tests {
         assert_eq!(config.env_account_name.is_none(), true);
         assert_eq!(config.env_shared_key.is_none(), true);
 
-        env::set_var(ENV_ACCOUNT_NAME, "user1");
-        env::set_var(ENV_SHARED_KEY, "cGFzc3dk");
-        env::set_var(ENV_CLIENT_ID, "<client_id>");
-        env::set_var(ENV_TENANT_ID, "<tenant_id>");
-        env::set_var(ENV_CLIENT_SECRET, "<client_secret>");
+        unsafe {
+            env::set_var(ENV_ACCOUNT_NAME, "user1");
+            env::set_var(ENV_SHARED_KEY, "cGFzc3dk");
+            env::set_var(ENV_CLIENT_ID, "<client_id>");
+            env::set_var(ENV_TENANT_ID, "<tenant_id>");
+            env::set_var(ENV_CLIENT_SECRET, "<client_secret>");
+        }
 
         let config = Config::default(bucket);
 
@@ -882,11 +888,13 @@ mod tests {
         assert_eq!(debug_str.contains("<client_secret>"), false);
         assert_eq!(debug_str.contains("cGFzc3dk"), false);
 
-        env::remove_var(ENV_ACCOUNT_NAME);
-        env::remove_var(ENV_SHARED_KEY);
-        env::remove_var(ENV_CLIENT_ID);
-        env::remove_var(ENV_TENANT_ID);
-        env::remove_var(ENV_CLIENT_SECRET);
+        unsafe {
+            env::remove_var(ENV_ACCOUNT_NAME);
+            env::remove_var(ENV_SHARED_KEY);
+            env::remove_var(ENV_CLIENT_ID);
+            env::remove_var(ENV_TENANT_ID);
+            env::remove_var(ENV_CLIENT_SECRET);
+        }
     }
 
     #[ignore = "no available azure cloud service for the test env."]

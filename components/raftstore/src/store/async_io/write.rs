@@ -625,14 +625,13 @@ where
             )
             .unwrap();
 
-        if let Some(raft_state) = task.raft_state.take() {
-            if self
+        if let Some(raft_state) = task.raft_state.take()
+            && self
                 .raft_states
                 .insert(task.region_id, raft_state)
                 .is_none()
-            {
-                self.state_size += std::mem::size_of::<RaftLocalState>();
-            }
+        {
+            self.state_size += std::mem::size_of::<RaftLocalState>();
         }
         self.extra_batch_write.merge(&mut task.extra_write);
 
@@ -926,12 +925,11 @@ where
 
     #[inline]
     fn should_emit_adaptive_log(last_log: &mut Option<Instant>, now: Instant) -> bool {
-        if let Some(last_log_time) = *last_log {
-            if now.saturating_duration_since(last_log_time)
+        if let Some(last_log_time) = *last_log
+            && now.saturating_duration_since(last_log_time)
                 < Duration::from_secs(ADAPTIVE_LOG_INTERVAL_SECS)
-            {
-                return false;
-            }
+        {
+            return false;
         }
         *last_log = Some(now);
         true
@@ -1465,14 +1463,14 @@ pub fn write_to_db_for_test<EK, ER>(
     batch.add_write_task(&engines.raft, task);
     let metrics = StoreWriteMetrics::new(false);
     batch.before_write_to_db(&metrics);
-    if let ExtraBatchWrite::V1(kv_wb) = &mut batch.extra_batch_write {
-        if !kv_wb.is_empty() {
-            let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(true);
-            kv_wb.write_opt(&write_opts).unwrap_or_else(|e| {
-                panic!("test failed to write to kv engine: {:?}", e);
-            });
-        }
+    if let ExtraBatchWrite::V1(kv_wb) = &mut batch.extra_batch_write
+        && !kv_wb.is_empty()
+    {
+        let mut write_opts = WriteOptions::new();
+        write_opts.set_sync(true);
+        kv_wb.write_opt(&write_opts).unwrap_or_else(|e| {
+            panic!("test failed to write to kv engine: {:?}", e);
+        });
     }
     if !batch.raft_wbs[0].is_empty() {
         for wb in &mut batch.raft_wbs {

@@ -234,7 +234,7 @@ mod tests {
         }
         b.iter(|| {
             let region_id = rng.gen_range(0..TOTAL_REGIONS);
-            if rng.gen() {
+            if rng.r#gen() {
                 validator.disable(black_box(region_id));
             } else {
                 validator.enable(black_box(region_id));

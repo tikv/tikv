@@ -50,7 +50,9 @@ impl KeyHandle {
     /// This method is not thread safe. Make sure that no other threads access
     /// `table` at the same time.
     pub(crate) unsafe fn set_table(&self, table: LockTable) {
-        *self.table.get() = Some(table);
+        unsafe {
+            *self.table.get() = Some(table);
+        }
     }
 }
 

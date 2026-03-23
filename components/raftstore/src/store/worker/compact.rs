@@ -206,23 +206,23 @@ where
             // range; otherwise, pause this task
             // (see `FullCompactController::pause` for details) until predicate
             // evaluates to true.
-            if let Some(next_range) = ranges.front() {
-                if !(compact_controller.incremental_compaction_pred)() {
-                    info!("pausing full compaction before next increment";
-                    "finished_start_key" => ?range.0.map(log_wrappers::Value::key),
-                    "finished_end_key" => ?range.1.map(log_wrappers::Value::key),
-                    "next_range_start_key" => ?next_range.0.map(log_wrappers::Value::key),
-                    "next_range_end_key" => ?next_range.1.map(log_wrappers::Value::key),
-                    "remaining" => ranges.len(),
-                    );
-                    let pause_started = Instant::now();
-                    let pause_timer = FULL_COMPACT_PAUSE.start_coarse_timer();
-                    compact_controller.pause().await?;
-                    pause_timer.observe_duration();
-                    info!("resuming incremental full compaction";
-                        "paused" => ?pause_started.saturating_elapsed(),
-                    );
-                }
+            if let Some(next_range) = ranges.front()
+                && !(compact_controller.incremental_compaction_pred)()
+            {
+                info!("pausing full compaction before next increment";
+                "finished_start_key" => ?range.0.map(log_wrappers::Value::key),
+                "finished_end_key" => ?range.1.map(log_wrappers::Value::key),
+                "next_range_start_key" => ?next_range.0.map(log_wrappers::Value::key),
+                "next_range_end_key" => ?next_range.1.map(log_wrappers::Value::key),
+                "remaining" => ranges.len(),
+                );
+                let pause_started = Instant::now();
+                let pause_timer = FULL_COMPACT_PAUSE.start_coarse_timer();
+                compact_controller.pause().await?;
+                pause_timer.observe_duration();
+                info!("resuming incremental full compaction";
+                    "paused" => ?pause_started.saturating_elapsed(),
+                );
             }
         }
 

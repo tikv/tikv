@@ -460,19 +460,19 @@ where
         for modifies in region_modifies.values_mut() {
             for modify in modifies.iter_mut() {
                 match modify {
-                    Modify::Delete(_, ref mut key) => {
+                    Modify::Delete(_, key) => {
                         let bytes = keys::data_key(key.as_encoded());
                         *key = Key::from_encoded(bytes);
                     }
-                    Modify::Put(_, ref mut key, _) => {
+                    Modify::Put(_, key, _) => {
                         let bytes = keys::data_key(key.as_encoded());
                         *key = Key::from_encoded(bytes);
                     }
-                    Modify::PessimisticLock(ref mut key, _) => {
+                    Modify::PessimisticLock(key, _) => {
                         let bytes = keys::data_key(key.as_encoded());
                         *key = Key::from_encoded(bytes);
                     }
-                    Modify::DeleteRange(_, ref mut key1, ref mut key2, _) => {
+                    Modify::DeleteRange(_, key1, key2, _) => {
                         let bytes = keys::data_key(key1.as_encoded());
                         *key1 = Key::from_encoded(bytes);
                         let bytes = keys::data_end_key(key2.as_encoded());
@@ -649,7 +649,7 @@ where
         })
     }
 
-    type SnapshotRes = impl Future<Output = kv::Result<Self::Snap>> + Send;
+    type SnapshotRes = impl Future<Output = kv::Result<Self::Snap>> + Send + use<E, S>;
     fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes {
         async_snapshot(&mut self.router, ctx)
     }
@@ -659,7 +659,7 @@ where
     }
 
     type IMSnap = RegionSnapshot<HybridEngineSnapshot<E, RegionCacheMemoryEngine>>;
-    type IMSnapshotRes = impl Future<Output = kv::Result<Self::IMSnap>> + Send;
+    type IMSnapshotRes = impl Future<Output = kv::Result<Self::IMSnap>> + Send + use<E, S>;
     fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
         async_snapshot(&mut self.router, ctx).map_ok(|region_snap| {
             // TODO: Remove replace_snapshot. Taking a snapshot and replacing it
@@ -737,7 +737,7 @@ where
 fn async_snapshot<E, S>(
     router: &mut RaftRouterWrap<S, E>,
     mut ctx: SnapContext<'_>,
-) -> impl Future<Output = kv::Result<RegionSnapshot<E::Snapshot>>> + Send
+) -> impl Future<Output = kv::Result<RegionSnapshot<E::Snapshot>>> + Send + use<E, S>
 where
     E: KvEngine,
     S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,

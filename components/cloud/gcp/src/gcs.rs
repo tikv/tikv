@@ -202,12 +202,12 @@ impl GcsStorage {
     }
 
     fn strip_prefix_if_needed(&self, key: String) -> String {
-        if let Some(prefix) = &self.config.bucket.prefix {
-            if key.starts_with(prefix.as_str()) {
-                return key[prefix.len()..]
-                    .trim_start_matches(DEFAULT_SEP)
-                    .to_owned();
-            }
+        if let Some(prefix) = &self.config.bucket.prefix
+            && key.starts_with(prefix.as_str())
+        {
+            return key[prefix.len()..]
+                .trim_start_matches(DEFAULT_SEP)
+                .to_owned();
         }
         key
     }
@@ -435,7 +435,7 @@ impl GcsPrefixIter<'_> {
             .cli
             .make_request(req.map(|_e| Body::empty()), tame_gcs::Scopes::ReadOnly)
             .await
-            .map_err(|err| io::Error::other(err))?;
+            .map_err(io::Error::other)?;
         let resp = utils::read_from_http_body::<ListResponse>(res).await?;
         metrics::CLOUD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["gcp", "list"])

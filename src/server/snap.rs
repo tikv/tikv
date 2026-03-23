@@ -160,7 +160,7 @@ pub fn send_snap(
     cfg: &Config,
     addr: &str,
     msg: RaftMessage,
-) -> Result<impl Future<Output = Result<SendStat>>> {
+) -> Result<impl Future<Output = Result<SendStat>> + use<>> {
     assert!(msg.get_message().has_snapshot());
     let timer = Instant::now();
 

@@ -442,10 +442,10 @@ impl ConcurrencyManager {
         let mut min_lock_ts = None;
         // TODO: The iteration looks not so efficient. It's better to be optimized.
         self.lock_table.for_each(|handle| {
-            if let Some(curr_ts) = handle.with_lock(|lock| lock.as_ref().map(|l| l.ts)) {
-                if min_lock_ts.map(|ts| ts > curr_ts).unwrap_or(true) {
-                    min_lock_ts = Some(curr_ts);
-                }
+            if let Some(curr_ts) = handle.with_lock(|lock| lock.as_ref().map(|l| l.ts))
+                && min_lock_ts.map(|ts| ts > curr_ts).unwrap_or(true)
+            {
+                min_lock_ts = Some(curr_ts);
             }
         });
         min_lock_ts
@@ -455,14 +455,13 @@ impl ConcurrencyManager {
         let mut min_lock: Option<(TimeStamp, Key)> = None;
         // TODO: The iteration looks not so efficient. It's better to be optimized.
         self.lock_table.for_each_kv(|key, handle| {
-            if let Some(curr_ts) = handle.with_lock(|lock| lock.as_ref().map(|l| l.ts)) {
-                if min_lock
+            if let Some(curr_ts) = handle.with_lock(|lock| lock.as_ref().map(|l| l.ts))
+                && min_lock
                     .as_ref()
                     .map(|(ts, _)| ts > &curr_ts)
                     .unwrap_or(true)
-                {
-                    min_lock = Some((curr_ts, key.clone()));
-                }
+            {
+                min_lock = Some((curr_ts, key.clone()));
             }
         });
         min_lock

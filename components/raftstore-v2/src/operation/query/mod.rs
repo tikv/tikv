@@ -231,10 +231,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.post_pending_read_index_on_replica(ctx);
         } else {
             self.pending_reads_mut().advance_leader_reads(states);
-            if let Some(propose_time) = self.pending_reads().last_ready().map(|r| r.propose_time) {
-                if !self.leader_lease_mut().is_suspect() {
-                    self.maybe_renew_leader_lease(propose_time, &ctx.store_meta, None);
-                }
+            if let Some(propose_time) = self.pending_reads().last_ready().map(|r| r.propose_time)
+                && !self.leader_lease_mut().is_suspect()
+            {
+                self.maybe_renew_leader_lease(propose_time, &ctx.store_meta, None);
             }
 
             if self.ready_to_handle_read() {

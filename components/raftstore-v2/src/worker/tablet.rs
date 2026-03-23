@@ -659,10 +659,8 @@ where
     fn on_timeout(&mut self) {
         self.pending_destroy_tasks.retain_mut(|(path, cb)| {
             let r = Self::process_destroy_task(&self.logger, &self.tablet_registry, path);
-            if r {
-                if let Some(cb) = cb.take() {
-                    cb();
-                }
+            if r && let Some(cb) = cb.take() {
+                cb();
             }
             !r
         });

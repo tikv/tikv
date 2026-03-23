@@ -165,6 +165,7 @@ impl HeapSize for Lock {
 }
 
 impl Lock {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         lock_type: LockType,
         primary: Vec<u8>,
@@ -925,8 +926,10 @@ impl SharedLocks {
     }
 
     pub fn into_lock_info(self, raw_key: Vec<u8>) -> LockInfo {
-        let mut info = LockInfo::default();
-        info.lock_type = Op::SharedLock;
+        let mut info = LockInfo {
+            lock_type: Op::SharedLock,
+            ..Default::default()
+        };
         let shared_locks: Vec<_> = self
             .txn_info_segments
             .values()

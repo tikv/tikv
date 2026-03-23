@@ -690,18 +690,17 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             }
             CheckPolicy::Approximate => match host.approximate_split_keys(region, tablet) {
                 Ok(keys) => {
-                    if host.enable_region_bucket() {
-                        if let Err(e) =
+                    if host.enable_region_bucket()
+                        && let Err(e) =
                             self.approximate_check_bucket(tablet, region, &mut host, bucket_ranges)
-                        {
-                            error!(%e;
-                                "approximate_check_bucket failed";
-                                "region_id" => region_id,
-                                "is_key_range" => is_key_range,
-                                "start_key" => log_wrappers::Value::key(&start_key),
-                                "end_key" => log_wrappers::Value::key(&end_key),
-                            );
-                        }
+                    {
+                        error!(%e;
+                            "approximate_check_bucket failed";
+                            "region_id" => region_id,
+                            "is_key_range" => is_key_range,
+                            "start_key" => log_wrappers::Value::key(&start_key),
+                            "end_key" => log_wrappers::Value::key(&end_key),
+                        );
                     }
                     keys.into_iter()
                         .map(|k| keys::origin_key(&k).to_vec())

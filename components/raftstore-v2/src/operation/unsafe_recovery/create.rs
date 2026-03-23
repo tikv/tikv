@@ -110,15 +110,15 @@ impl Store {
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_unsafe_recovery_wait_initialized(&mut self, syncer: UnsafeRecoveryExecutePlanSyncer) {
-        if let Some(state) = self.unsafe_recovery_state() {
-            if !state.is_abort() {
-                warn!(self.logger,
-                    "Unsafe recovery, can't wait initialize, another plan is executing in progress";
-                    "state" => ?state,
-                );
-                syncer.abort();
-                return;
-            }
+        if let Some(state) = self.unsafe_recovery_state()
+            && !state.is_abort()
+        {
+            warn!(self.logger,
+                "Unsafe recovery, can't wait initialize, another plan is executing in progress";
+                "state" => ?state,
+            );
+            syncer.abort();
+            return;
         }
 
         *self.unsafe_recovery_state_mut() = Some(UnsafeRecoveryState::WaitInitialize(syncer));
@@ -126,15 +126,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     pub fn unsafe_recovery_maybe_finish_wait_initialized(&mut self, force: bool) {
-        if let Some(UnsafeRecoveryState::WaitInitialize(_)) = self.unsafe_recovery_state() {
-            if self.storage().is_initialized() || force {
-                info!(self.logger,
-                    "Unsafe recovery, finish wait initialize";
-                    "tablet_index" =>  self.storage().tablet_index(),
-                    "force" => force,
-                );
-                *self.unsafe_recovery_state_mut() = None;
-            }
+        if let Some(UnsafeRecoveryState::WaitInitialize(_)) = self.unsafe_recovery_state()
+            && (self.storage().is_initialized() || force)
+        {
+            info!(self.logger,
+                "Unsafe recovery, finish wait initialize";
+                "tablet_index" =>  self.storage().tablet_index(),
+                "force" => force,
+            );
+            *self.unsafe_recovery_state_mut() = None;
         }
     }
 }

@@ -80,7 +80,7 @@ impl<T> Eq for TimeoutTask<T> {}
 
 impl<T> PartialOrd for TimeoutTask<T> {
     fn partial_cmp(&self, other: &TimeoutTask<T>) -> Option<Ordering> {
-        self.next_tick.partial_cmp(&other.next_tick)
+        Some(self.cmp(other))
     }
 }
 

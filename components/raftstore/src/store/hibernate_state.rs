@@ -75,10 +75,10 @@ impl HibernateState {
     }
 
     pub fn count_vote(&mut self, from: u64) {
-        if let LeaderState::Poll(v) = &mut self.leader {
-            if !v.contains(&from) {
-                v.push(from);
-            }
+        if let LeaderState::Poll(v) = &mut self.leader
+            && !v.contains(&from)
+        {
+            v.push(from);
         }
     }
 

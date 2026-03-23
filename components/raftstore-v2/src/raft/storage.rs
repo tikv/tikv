@@ -107,11 +107,11 @@ impl<EK: KvEngine, ER> Storage<EK, ER> {
         }
         let to = to_peer_id.unwrap();
         let mut task = self.gen_snap_task.borrow_mut();
-        if let Some(t) = &**task {
-            if to == t.to_peer() {
-                **task = None;
-            };
-        }
+        if let Some(t) = &**task
+            && to == t.to_peer()
+        {
+            **task = None;
+        };
     }
 
     #[inline]
@@ -576,7 +576,7 @@ mod tests {
         };
         assert_eq!(snap.get_metadata().get_index(), 5);
         assert_eq!(snap.get_metadata().get_term(), 5);
-        assert_eq!(snap.get_data().is_empty(), false);
+        assert!(!snap.get_data().is_empty());
         let mut snapshot_data = RaftSnapshotData::default();
         snapshot_data.merge_from_bytes(snap.get_data()).unwrap();
         assert_eq!(snapshot_data.get_meta().get_commit_index_hint(), 0);
@@ -608,8 +608,8 @@ mod tests {
         apply.set_apply_progress(10, 5);
         apply.schedule_gen_snapshot(gen_task_b);
         // on snapshot a and b
-        assert_eq!(s.on_snapshot_generated(res, 0), false);
+        assert!(!s.on_snapshot_generated(res, 0));
         let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        assert_eq!(s.on_snapshot_generated(res, 0), true);
+        assert!(s.on_snapshot_generated(res, 0));
     }
 }

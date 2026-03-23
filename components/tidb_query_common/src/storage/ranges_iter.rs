@@ -47,6 +47,7 @@ impl RangesIterator {
 
     /// Continues iterating.
     #[inline]
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> IterStatus {
         if self.in_range {
             return IterStatus::Continue;

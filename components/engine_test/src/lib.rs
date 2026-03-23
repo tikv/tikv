@@ -516,8 +516,10 @@ pub mod ctor {
 
         impl RaftEngineConstructorExt for raft_log_engine::RaftLogEngine {
             fn new_raft_engine(path: &str, db_opts: Option<RaftDbOptions>) -> Result<Self> {
-                let mut config = RaftEngineConfig::default();
-                config.dir = path.to_owned();
+                let config = RaftEngineConfig {
+                    dir: path.to_owned(),
+                    ..Default::default()
+                };
                 RaftLogEngine::new(
                     config,
                     db_opts.as_ref().and_then(|opts| opts.key_manager.clone()),

@@ -18,6 +18,8 @@ use tikv_util::warn;
 
 use crate::TagInfos;
 
+type AggregatedRecords = (HashMap<Arc<Vec<u8>>, RawRecord>, HashMap<u64, RawRecord>);
+
 thread_local! {
     static STATIC_CPU_BUF: Cell<Vec<u32>> = const {Cell::new(vec![])};
     static STATIC_NETWORK_BUF: Cell<Vec<u64>> = const {Cell::new(vec![])};
@@ -282,9 +284,7 @@ impl RawRecords {
     /// Returns (RawRecord aggregated by extra tag, RawRecord aggregated by
     /// region id). Merge these two aggregations together to save one
     /// iteration.
-    pub fn aggregate_by_extra_tag_and_region(
-        &self,
-    ) -> (HashMap<Arc<Vec<u8>>, RawRecord>, HashMap<u64, RawRecord>) {
+    pub fn aggregate_by_extra_tag_and_region(&self) -> AggregatedRecords {
         let mut raw_map: HashMap<Arc<Vec<u8>>, RawRecord> = HashMap::default();
         let mut region_raw_map: HashMap<u64, RawRecord> = HashMap::default();
         for (tag_info, record) in self.records.iter() {

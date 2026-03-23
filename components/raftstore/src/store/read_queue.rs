@@ -270,10 +270,10 @@ impl<C: ErrorCallback> ReadIndexQueue<C> {
                 // clear addition_request to indicate lock checking has finished
                 self.reads[offset].addition_request = None;
                 self.reads[offset].locked = locked.map(Box::new);
-                if let Some(occur_index) = self.reads[offset].read_index {
-                    if occur_index < index {
-                        continue;
-                    }
+                if let Some(occur_index) = self.reads[offset].read_index
+                    && occur_index < index
+                {
+                    continue;
                 }
                 self.reads[offset].read_index = Some(index);
                 min_changed_offset = cmp::min(min_changed_offset, offset);

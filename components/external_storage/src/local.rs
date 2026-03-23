@@ -15,7 +15,6 @@ use futures_util::{
     future::{FutureExt, LocalBoxFuture},
     stream::TryStreamExt,
 };
-use rand::Rng;
 use tikv_util::stream::error_stream;
 use tokio::fs::{self, File};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
@@ -35,6 +34,7 @@ pub struct LocalStorage {
 
 impl LocalStorage {
     /// Create a new local storage in the given path.
+    #[allow(clippy::redundant_closure_call)]
     pub fn new(base: &Path) -> io::Result<LocalStorage> {
         info!("create local storage"; "base" => base.display());
         (|| {
@@ -61,7 +61,7 @@ impl LocalStorage {
     }
 
     fn tmp_path(&self, path: &Path) -> PathBuf {
-        let uid: u64 = rand::thread_rng().gen();
+        let uid: u64 = rand::random();
         let tmp_suffix = format!("{}{:016x}", LOCAL_STORAGE_TMP_FILE_SUFFIX, uid);
         // Save tmp files in base directory.
         self.base.join(path).with_extension(tmp_suffix)

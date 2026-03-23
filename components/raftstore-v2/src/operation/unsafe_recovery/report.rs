@@ -27,15 +27,15 @@ impl Store {
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_unsafe_recovery_wait_apply(&mut self, syncer: UnsafeRecoveryWaitApplySyncer) {
-        if let Some(state) = self.unsafe_recovery_state() {
-            if !state.is_abort() {
-                warn!(self.logger,
-                    "Unsafe recovery, can't wait apply, another plan is executing in progress";
-                    "state" => ?state,
-                );
-                syncer.abort();
-                return;
-            }
+        if let Some(state) = self.unsafe_recovery_state()
+            && !state.is_abort()
+        {
+            warn!(self.logger,
+                "Unsafe recovery, can't wait apply, another plan is executing in progress";
+                "state" => ?state,
+            );
+            syncer.abort();
+            return;
         }
         let target_index = if self.has_force_leader() {
             // For regions that lose quorum (or regions have force leader), whatever has
@@ -64,18 +64,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn unsafe_recovery_maybe_finish_wait_apply(&mut self, force: bool) {
         if let Some(UnsafeRecoveryState::WaitApply { target_index, .. }) =
             self.unsafe_recovery_state()
+            && (self.raft_group().raft.raft_log.applied >= *target_index || force)
         {
-            if self.raft_group().raft.raft_log.applied >= *target_index || force {
-                if self.is_in_force_leader() {
-                    info!(self.logger,
-                        "Unsafe recovery, finish wait apply";
-                        "target_index" => target_index,
-                        "applied" =>  self.raft_group().raft.raft_log.applied,
-                        "force" => force,
-                    );
-                }
-                *self.unsafe_recovery_state_mut() = None;
+            if self.is_in_force_leader() {
+                info!(self.logger,
+                    "Unsafe recovery, finish wait apply";
+                    "target_index" => target_index,
+                    "applied" =>  self.raft_group().raft.raft_log.applied,
+                    "force" => force,
+                );
             }
+            *self.unsafe_recovery_state_mut() = None;
         }
     }
 

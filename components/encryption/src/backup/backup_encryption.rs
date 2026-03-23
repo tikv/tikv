@@ -38,15 +38,6 @@ impl BackupEncryptionManager {
         }
     }
 
-    pub fn default() -> Self {
-        BackupEncryptionManager {
-            plaintext_data_key: None,
-            master_key_based_file_encryption_method: EncryptionMethod::default(),
-            multi_master_key_backend: MultiMasterKeyBackend::new(),
-            tikv_data_key_manager: None,
-        }
-    }
-
     pub fn opt_data_key_manager(&self) -> Option<Arc<DataKeyManager>> {
         self.tikv_data_key_manager.clone()
     }
@@ -79,5 +70,16 @@ impl BackupEncryptionManager {
     pub fn generate_data_key(&self) -> Result<Vec<u8>, Error> {
         self.multi_master_key_backend
             .generate_data_key(self.master_key_based_file_encryption_method)
+    }
+}
+
+impl Default for BackupEncryptionManager {
+    fn default() -> Self {
+        Self {
+            plaintext_data_key: None,
+            master_key_based_file_encryption_method: EncryptionMethod::default(),
+            multi_master_key_backend: MultiMasterKeyBackend::new(),
+            tikv_data_key_manager: None,
+        }
     }
 }

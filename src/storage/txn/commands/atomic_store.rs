@@ -46,7 +46,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
 
         if let Some(ref raw_ext) = raw_ext {
             for mutation in &mut mutations {
-                if let Modify::Put(_, ref mut key, _) = mutation {
+                if let Modify::Put(_, key, _) = mutation {
                     key.append_ts_inplace(raw_ext.ts);
                 }
             }

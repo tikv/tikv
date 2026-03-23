@@ -334,8 +334,8 @@ impl ErrorInner {
                 })
             }
             ErrorInner::PrimaryMismatch(l) => Some(ErrorInner::PrimaryMismatch(l.clone())),
-            ErrorInner::GenerationOutOfOrder(gen, key, lock_info) => Some(
-                ErrorInner::GenerationOutOfOrder(*gen, key.clone(), lock_info.clone()),
+            ErrorInner::GenerationOutOfOrder(generation, key, lock_info) => Some(
+                ErrorInner::GenerationOutOfOrder(*generation, key.clone(), lock_info.clone()),
             ),
             ErrorInner::InvalidMaxTsUpdate(e) => Some(ErrorInner::InvalidMaxTsUpdate(e.clone())),
             ErrorInner::NotInShrinkMode(shared_locks) => {

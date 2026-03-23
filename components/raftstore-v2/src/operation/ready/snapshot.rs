@@ -428,7 +428,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 "state" => ?state,
             );
             match state {
-                SnapState::Generating { ref canceled, .. } => {
+                SnapState::Generating { canceled, .. } => {
                     if canceled.load(Ordering::SeqCst) {
                         self.cancel_generating_snap(Some(to));
                     } else {
@@ -437,7 +437,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                         ));
                     }
                 }
-                SnapState::Generated(ref s) => {
+                SnapState::Generated(s) => {
                     let snap = *s.clone();
                     if self.validate_snap(&snap, request_index) {
                         *state = SnapState::Sending(s.clone());
@@ -445,7 +445,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                     }
                     *state = SnapState::Relax;
                 }
-                SnapState::Sending(ref s) => {
+                SnapState::Sending(s) => {
                     if self.validate_snap(s, request_index) {
                         return Ok(*s.clone());
                     }
@@ -545,16 +545,16 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     pub fn cancel_generating_snap(&self, to_peer: Option<u64>) {
         if let Some(id) = to_peer {
             let mut states = self.snap_states.borrow_mut();
-            if let Some(state) = states.get(&id) {
-                if matches!(*state, SnapState::Generating { .. }) {
-                    info!(
-                        self.logger(),
-                        "snapshot is canceled";
-                        "to_peer" => to_peer,
-                    );
-                    self.cancel_snap_task(to_peer);
-                    states.remove(&id);
-                }
+            if let Some(state) = states.get(&id)
+                && matches!(*state, SnapState::Generating { .. })
+            {
+                info!(
+                    self.logger(),
+                    "snapshot is canceled";
+                    "to_peer" => to_peer,
+                );
+                self.cancel_snap_task(to_peer);
+                states.remove(&id);
             }
         } else {
             self.cancel_snap_task(to_peer);
@@ -611,13 +611,13 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             // Set commit index for learner snapshots. It's needed to address
             // compatibility issues between v1 and v2 snapshots.
             // See https://github.com/pingcap/tiflash/issues/7568#issuecomment-1576382311
-            if let Some(p) = find_peer_by_id(self.region(), to_peer_id) {
-                if p.get_role() == PeerRole::Learner {
-                    let mut snapshot_data = RaftSnapshotData::default();
-                    if snapshot_data.merge_from_bytes(snapshot.get_data()).is_ok() {
-                        snapshot_data.mut_meta().set_commit_index_hint(commit_index);
-                        snapshot.set_data(snapshot_data.write_to_bytes().unwrap().into());
-                    }
+            if let Some(p) = find_peer_by_id(self.region(), to_peer_id)
+                && p.get_role() == PeerRole::Learner
+            {
+                let mut snapshot_data = RaftSnapshotData::default();
+                if snapshot_data.merge_from_bytes(snapshot.get_data()).is_ok() {
+                    snapshot_data.mut_meta().set_commit_index_hint(commit_index);
+                    snapshot.set_data(snapshot_data.write_to_bytes().unwrap().into());
                 }
             }
             *state = SnapState::Generated(Box::new(snapshot));

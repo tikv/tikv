@@ -1,4 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
+#![allow(clippy::field_reassign_with_default, clippy::too_many_arguments)]
 
 use std::{
     ops::{Deref, DerefMut},
@@ -958,10 +959,10 @@ pub mod life_helper {
             match router.send(region_id, msg) {
                 Err(TrySendError::Disconnected(_)) => return,
                 Ok(()) => {
-                    if let Some(m) = block_on(sub.result()) {
-                        if m.raft_status.id != peer_id {
-                            return;
-                        }
+                    if let Some(m) = block_on(sub.result())
+                        && m.raft_status.id != peer_id
+                    {
+                        return;
                     }
                 }
                 Err(_) => (),

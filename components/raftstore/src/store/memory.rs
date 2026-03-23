@@ -58,12 +58,12 @@ lazy_static! {
 }
 
 pub fn get_memory_usage_entry_cache() -> u64 {
-    (|| {
+    {
         fail_point!("mock_memory_usage_entry_cache", |t| {
             t.unwrap().parse::<u64>().unwrap()
         });
         MEMTRACE_ENTRY_CACHE.sum() as u64
-    })()
+    }
 }
 
 pub fn needs_evict_entry_cache(evict_cache_on_memory_ratio: f64) -> bool {

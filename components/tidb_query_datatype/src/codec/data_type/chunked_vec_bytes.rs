@@ -215,7 +215,7 @@ impl From<Vec<Option<Bytes>>> for ChunkedVecBytes {
 
 impl UnsafeRefInto<&'static ChunkedVecBytes> for &ChunkedVecBytes {
     unsafe fn unsafe_into(self) -> &'static ChunkedVecBytes {
-        std::mem::transmute(self)
+        unsafe { std::mem::transmute(self) }
     }
 }
 

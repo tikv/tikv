@@ -361,10 +361,10 @@ pub fn check_flashback_state(
     skip_not_prepared: bool,
 ) -> Result<()> {
     // The admin flashback cmd could be proposed/applied under any state.
-    if let Some(ty) = admin_type {
-        if ty == AdminCmdType::PrepareFlashback || ty == AdminCmdType::FinishFlashback {
-            return Ok(());
-        }
+    if let Some(ty) = admin_type
+        && (ty == AdminCmdType::PrepareFlashback || ty == AdminCmdType::FinishFlashback)
+    {
+        return Ok(());
     }
     // TODO: only use `flashback_start_ts` to check flashback state.
     let is_in_flashback = is_in_flashback || flashback_start_ts > 0;
@@ -375,10 +375,11 @@ pub fn check_flashback_state(
     //   - A read request whose `read_ts` is smaller than `flashback_start_ts` will
     //     be allowed.
     if is_in_flashback && !is_flashback_request {
-        if let Ok(read_ts) = decode_u64(&mut header.get_flag_data()) {
-            if read_ts != 0 && read_ts < flashback_start_ts {
-                return Ok(());
-            }
+        if let Ok(read_ts) = decode_u64(&mut header.get_flag_data())
+            && read_ts != 0
+            && read_ts < flashback_start_ts
+        {
+            return Ok(());
         }
         return Err(Error::FlashbackInProgress(region_id, flashback_start_ts));
     }
@@ -554,12 +555,12 @@ impl Lease {
             }
         }
         // Renew remote if it's valid.
-        if let Some(Either::Right(bound)) = self.bound {
-            if bound - self.last_update > self.max_drift {
-                self.last_update = bound;
-                if let Some(ref r) = self.remote {
-                    r.renew(bound);
-                }
+        if let Some(Either::Right(bound)) = self.bound
+            && bound - self.last_update > self.max_drift
+        {
+            self.last_update = bound;
+            if let Some(ref r) = self.remote {
+                r.renew(bound);
             }
         }
     }
@@ -919,6 +920,7 @@ pub enum ConfChangeKind {
 }
 
 impl ConfChangeKind {
+    #[allow(clippy::self_named_constructors)]
     pub fn confchange_kind(change_num: usize) -> ConfChangeKind {
         match change_num {
             0 => ConfChangeKind::LeaveJoint,
@@ -1197,11 +1199,11 @@ fn check_availability_by_last_heartbeats(
             // If the change_type is AddLearnerNode and the last heartbeat is found, it
             // means it's a demote from voter as AddLearnerNode on existing learner node is
             // not allowed.
-            if let Some(last_heartbeat) = peer_heartbeats.get(&peer.get_id()) {
-                if last_heartbeat.elapsed() <= slow_voter_threshold {
-                    normal_voters.retain(|id| *id != peer.get_id());
-                    normal_voters_to_remove.push(peer.clone());
-                }
+            if let Some(last_heartbeat) = peer_heartbeats.get(&peer.get_id())
+                && last_heartbeat.elapsed() <= slow_voter_threshold
+            {
+                normal_voters.retain(|id| *id != peer.get_id());
+                normal_voters_to_remove.push(peer.clone());
             }
         }
     }
@@ -1318,10 +1320,10 @@ impl RegionReadProgressRegistry {
         let now = Some(Instant::now_coarse());
         for leader_info in &leaders {
             let region_id = leader_info.get_region_id();
-            if let Some(rp) = registry.get(&region_id) {
-                if rp.consume_leader_info(leader_info, coprocessor, now) {
-                    regions.push(region_id);
-                }
+            if let Some(rp) = registry.get(&region_id)
+                && rp.consume_leader_info(leader_info, coprocessor, now)
+            {
+                regions.push(region_id);
             }
         }
         regions
@@ -1404,31 +1406,31 @@ impl RegionReadProgress {
     }
 
     pub fn notify_advance_resolved_ts(&self) {
-        if let Ok(core) = self.core.try_lock() {
-            if let Some(advance_notify) = &core.advance_notify {
-                advance_notify.notify_waiters();
-            }
+        if let Ok(core) = self.core.try_lock()
+            && let Some(advance_notify) = &core.advance_notify
+        {
+            advance_notify.notify_waiters();
         }
     }
 
     pub fn update_applied<E: KvEngine>(&self, applied: u64, coprocessor: &CoprocessorHost<E>) {
         let mut core = self.core.lock().unwrap();
-        if let Some(ts) = core.update_applied(applied) {
-            if !core.pause {
-                self.safe_ts.store(ts, AtomicOrdering::Release);
-                // No need to update leader safe ts here.
-                coprocessor.on_update_safe_ts(core.region_id, ts, INVALID_TIMESTAMP)
-            }
+        if let Some(ts) = core.update_applied(applied)
+            && !core.pause
+        {
+            self.safe_ts.store(ts, AtomicOrdering::Release);
+            // No need to update leader safe ts here.
+            coprocessor.on_update_safe_ts(core.region_id, ts, INVALID_TIMESTAMP)
         }
     }
 
     // TODO: remove it when coprocessor hook is implemented in v2.
     pub fn update_applied_core(&self, applied: u64) {
         let mut core = self.core.lock().unwrap();
-        if let Some(ts) = core.update_applied(applied) {
-            if !core.pause {
-                self.safe_ts.store(ts, AtomicOrdering::Release);
-            }
+        if let Some(ts) = core.update_applied(applied)
+            && !core.pause
+        {
+            self.safe_ts.store(ts, AtomicOrdering::Release);
         }
     }
 
@@ -1440,10 +1442,10 @@ impl RegionReadProgress {
         if core.discard {
             return;
         }
-        if let Some(ts) = core.update_safe_ts(apply_index, ts, now) {
-            if !core.pause {
-                self.safe_ts.store(ts, AtomicOrdering::Release);
-            }
+        if let Some(ts) = core.update_safe_ts(apply_index, ts, now)
+            && !core.pause
+        {
+            self.safe_ts.store(ts, AtomicOrdering::Release);
         }
     }
 
@@ -1458,13 +1460,13 @@ impl RegionReadProgress {
         coprocessor: &CoprocessorHost<E>,
     ) {
         let mut core = self.core.lock().unwrap();
-        if let Some(ts) = core.merge_safe_ts(source_safe_ts, merge_index) {
-            if !core.pause {
-                self.safe_ts.store(ts, AtomicOrdering::Release);
-                // After region merge, self safe ts may decrease, so leader safe ts should be
-                // reset.
-                coprocessor.on_update_safe_ts(core.region_id, ts, ts)
-            }
+        if let Some(ts) = core.merge_safe_ts(source_safe_ts, merge_index)
+            && !core.pause
+        {
+            self.safe_ts.store(ts, AtomicOrdering::Release);
+            // After region merge, self safe ts may decrease, so leader safe ts should be
+            // reset.
+            coprocessor.on_update_safe_ts(core.region_id, ts, ts)
         }
         // Reset `read_index_safe_ts` to 0 after region merge, because the source
         // region's `read_index_safe_ts` may lag from the target region's.
@@ -1490,12 +1492,13 @@ impl RegionReadProgress {
             // `read_state` is guaranteed to be valid when it is published by the leader
             let rs = leader_info.get_read_state();
             let (apply_index, ts) = (rs.get_applied_index(), rs.get_safe_ts());
-            if apply_index != 0 && ts != 0 && !core.discard {
-                if let Some(ts) = core.update_safe_ts(apply_index, ts, now) {
-                    if !core.pause {
-                        self.safe_ts.store(ts, AtomicOrdering::Release);
-                    }
-                }
+            if apply_index != 0
+                && ts != 0
+                && !core.discard
+                && let Some(ts) = core.update_safe_ts(apply_index, ts, now)
+                && !core.pause
+            {
+                self.safe_ts.store(ts, AtomicOrdering::Release);
             }
             coprocessor.on_update_safe_ts(leader_info.region_id, self.safe_ts(), rs.get_safe_ts())
         }

@@ -850,10 +850,10 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
     // None indicates cleanning the fetched result.
     pub fn update_async_fetch_res(&mut self, low: u64, res: Option<Box<RaftlogFetchResult>>) {
         // If it's in fetching, don't clean the async fetch result.
-        if let Some(RaftlogFetchState::Fetching(_)) = self.async_fetch_results.borrow().get(&low) {
-            if res.is_none() {
-                return;
-            }
+        if let Some(RaftlogFetchState::Fetching(_)) = self.async_fetch_results.borrow().get(&low)
+            && res.is_none()
+        {
+            return;
         }
 
         match res {

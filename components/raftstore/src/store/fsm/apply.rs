@@ -3943,12 +3943,12 @@ where
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Msg::Apply { apply, .. } => write!(f, "[region {}] async apply", apply.region_id),
-            Msg::Registration(ref r) => {
+            Msg::Registration(r) => {
                 write!(f, "[region {}] Reg {:?}", r.region.get_id(), r.apply_state)
             }
             Msg::LogsUpToDate(_) => write!(f, "logs are updated"),
             Msg::Noop => write!(f, "noop"),
-            Msg::Destroy(ref d) => write!(f, "[region {}] destroy", d.region_id),
+            Msg::Destroy(d) => write!(f, "[region {}] destroy", d.region_id),
             Msg::Snapshot(GenSnapTask { region_id, .. }) => {
                 write!(f, "[region {}] requests a snapshot", region_id)
             }
@@ -4217,7 +4217,7 @@ where
         fail_point!("on_apply_handle_destroy");
         assert_eq!(d.region_id, self.delegate.region_id());
         if d.merge_from_snapshot {
-            assert_eq!(self.delegate.stopped, false);
+            assert!(!self.delegate.stopped);
         }
         if !self.delegate.stopped {
             self.destroy(ctx);
@@ -5419,12 +5419,12 @@ mod tests {
         req.set_ingest_sst(IngestSstRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
-        assert_eq!(should_write_to_engine(true, &cmd), true);
-        assert_eq!(should_sync_log(&cmd), true);
+        assert!(should_write_to_engine(true, &cmd));
+        assert!(should_sync_log(&cmd));
 
         // Normal command
         let req = RaftCmdRequest::default();
-        assert_eq!(should_sync_log(&req), false);
+        assert!(!should_sync_log(&req));
     }
 
     #[test]
@@ -5433,8 +5433,8 @@ mod tests {
         let mut req = RaftCmdRequest::default();
         req.mut_admin_request()
             .set_cmd_type(AdminCmdType::ComputeHash);
-        assert_eq!(should_write_to_engine(true, &req), true);
-        assert_eq!(should_write_to_engine(false, &req), true);
+        assert!(should_write_to_engine(true, &req));
+        assert!(should_write_to_engine(false, &req));
 
         // DeleteRange command
         let mut req = Request::default();
@@ -5442,8 +5442,8 @@ mod tests {
         req.set_delete_range(DeleteRangeRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
-        assert_eq!(should_write_to_engine(true, &cmd), true);
-        assert_eq!(should_write_to_engine(false, &cmd), true);
+        assert!(should_write_to_engine(true, &cmd));
+        assert!(should_write_to_engine(false, &cmd));
 
         // IngestSst command
         let mut req = Request::default();
@@ -5451,8 +5451,8 @@ mod tests {
         req.set_ingest_sst(IngestSstRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
-        assert_eq!(should_write_to_engine(true, &cmd), true);
-        assert_eq!(should_write_to_engine(false, &cmd), false);
+        assert!(should_write_to_engine(true, &cmd));
+        assert!(!should_write_to_engine(false, &cmd));
     }
 
     #[test]
@@ -5463,7 +5463,7 @@ mod tests {
         req.set_put(PutRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
-        assert_eq!(has_high_latency_operation(&cmd), false);
+        assert!(!has_high_latency_operation(&cmd));
 
         // IngestSst command
         let mut req = Request::default();
@@ -5471,7 +5471,7 @@ mod tests {
         req.set_ingest_sst(IngestSstRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
-        assert_eq!(has_high_latency_operation(&cmd), true);
+        assert!(has_high_latency_operation(&cmd));
 
         // DeleteRange command
         let mut req = Request::default();
@@ -5479,7 +5479,7 @@ mod tests {
         req.set_delete_range(DeleteRangeRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
-        assert_eq!(has_high_latency_operation(&cmd), true);
+        assert!(has_high_latency_operation(&cmd));
     }
 
     fn validate<F, E>(router: &ApplyRouter<E>, region_id: u64, validate: F)
@@ -6053,7 +6053,7 @@ mod tests {
             );
             self.last_pending_handle_sst_count.store(
                 match apply_info.pending_handle_ssts {
-                    Some(ref v) => v.len() as u64,
+                    Some(v) => v.len() as u64,
                     None => 0,
                 },
                 Ordering::SeqCst,

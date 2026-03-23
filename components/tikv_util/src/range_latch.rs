@@ -6,6 +6,8 @@ use std::{
     mem::ManuallyDrop,
     sync::{Arc, Mutex},
 };
+
+type RangeLatchEntry = (Arc<Mutex<()>>, (Vec<u8>, Vec<u8>));
 /// A structure used to manage range-based latch with mutual exclusion.
 ///
 /// Currently used to ensure mutual exclusion between compaction filter and
@@ -44,7 +46,7 @@ pub struct RangeLatch {
     ///   - `Arc<Mutex<()>>`: The latch object for this range.
     ///   - `(Vec<u8>, Vec<u8>)`: The actual range definition (start_key,
     ///     end_key).
-    range_latches: Mutex<BTreeMap<Vec<u8>, (Arc<Mutex<()>>, (Vec<u8>, Vec<u8>))>>,
+    range_latches: Mutex<BTreeMap<Vec<u8>, RangeLatchEntry>>,
 }
 
 impl RangeLatch {

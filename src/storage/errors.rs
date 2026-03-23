@@ -273,12 +273,12 @@ pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
 pub fn extract_region_error_from_error(e: &Error) -> Option<errorpb::Error> {
     match e {
         // TODO: use `Error::cause` instead.
-        Error(box ErrorInner::Kv(KvError(box KvErrorInner::Request(ref e))))
+        Error(box ErrorInner::Kv(KvError(box KvErrorInner::Request(e))))
         | Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Engine(KvError(
-            box KvErrorInner::Request(ref e),
+            box KvErrorInner::Request(e),
         )))))
         | Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::Kv(KvError(box KvErrorInner::Request(ref e))),
+            box MvccErrorInner::Kv(KvError(box KvErrorInner::Request(e))),
         ))))) => Some(e.to_owned()),
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::MaxTimestampNotSynced {
             ..

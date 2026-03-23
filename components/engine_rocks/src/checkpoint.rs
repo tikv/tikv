@@ -17,9 +17,11 @@ impl Checkpointable for RocksEngine {
     }
 
     fn merge(&self, dbs: &[&Self]) -> Result<()> {
-        let mut mopts = rocksdb::MergeInstanceOptions::default();
-        mopts.merge_memtable = false;
-        mopts.allow_source_write = true;
+        let mopts = rocksdb::MergeInstanceOptions {
+            merge_memtable: false,
+            allow_source_write: true,
+            ..Default::default()
+        };
         let inner: Vec<_> = dbs.iter().map(|e| e.as_inner().as_ref()).collect();
         self.as_inner().merge_instances(&mopts, &inner).map_err(r2e)
     }
@@ -38,7 +40,7 @@ impl Checkpointer for RocksEngineCheckpointer {
         file_system::delete_dir_if_exist(db_out_dir).unwrap();
         self.0
             .create_at(db_out_dir, titan_out_dir, log_size_for_flush)
-            .map_err(|e| r2e(e))
+            .map_err(r2e)
     }
 }
 

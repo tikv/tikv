@@ -432,10 +432,11 @@ impl WriteRef<'_> {
         // * If `gc_fence_ts <= read_ts`, since the current version is the latest
         //   version found by reading at `read_ts`, the version at `gc_fence_ts` must be
         //   missing, so the current version must be invalid.
-        if let Some(gc_fence_ts) = self.gc_fence {
-            if !gc_fence_ts.is_zero() && gc_fence_ts <= read_ts {
-                return false;
-            }
+        if let Some(gc_fence_ts) = self.gc_fence
+            && !gc_fence_ts.is_zero()
+            && gc_fence_ts <= read_ts
+        {
+            return false;
         }
 
         true

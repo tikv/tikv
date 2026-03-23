@@ -57,10 +57,10 @@ impl<WB: WriteBatch> WriteBatch for WriteBatchWrapper<WB> {
     fn write_callback_opt(&mut self, opts: &WriteOptions, mut cb: impl FnMut(u64)) -> Result<u64> {
         let called = AtomicBool::new(false);
         let res = self.write_batch.write_callback_opt(opts, |s| {
-            if !called.fetch_or(true, Ordering::SeqCst) {
-                if let Some(w) = self.observable_write_batch.as_mut() {
-                    w.write_opt_seq(opts, s);
-                }
+            if !called.fetch_or(true, Ordering::SeqCst)
+                && let Some(w) = self.observable_write_batch.as_mut()
+            {
+                w.write_opt_seq(opts, s);
             }
             cb(s);
         });

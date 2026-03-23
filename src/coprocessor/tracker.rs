@@ -291,7 +291,7 @@ impl<E: Engine> Tracker<E> {
                 req_tag
                     .merge_from_bytes(&tracker.req_info.resource_group_tag)
                     .unwrap_or_default();
-                info!(#"slow_log", "slow-query";
+                info!(# "slow_log", "slow-query";
                     "connection_id" => source_stmt.get_connection_id(),
                     "session_alias" => source_stmt.get_session_alias(),
                     "query_digest" => hex::encode(req_tag.get_sql_digest()),

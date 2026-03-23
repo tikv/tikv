@@ -289,11 +289,12 @@ impl ApplyTrace {
                 }
             })
             .max();
-        if let Some(m) = last_modified {
-            if m >= self.admin.flushed + 4096000 && m >= self.last_flush_trigger + 4096000 {
-                self.last_flush_trigger = m;
-                return true;
-            }
+        if let Some(m) = last_modified
+            && m >= self.admin.flushed + 4096000
+            && m >= self.last_flush_trigger + 4096000
+        {
+            self.last_flush_trigger = m;
+            return true;
         }
         false
     }
@@ -526,12 +527,12 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             }
         };
         apply_state.set_applied_index(applied_index);
-        (|| {
+        {
             // Make node reply from start.
             fail_point!("RESET_APPLY_INDEX_WHEN_RESTART", |_| {
                 apply_state.set_applied_index(5);
             });
-        })();
+        };
 
         Self::create(
             store_id,
@@ -720,12 +721,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "region flush before close begin";
         );
         let region_id = self.region_id();
-        let flush_threshold: u64 = (|| {
+        let flush_threshold: u64 = {
             fail_point!("flush_before_close_threshold", |t| {
                 t.unwrap().parse::<u64>().unwrap()
             });
             50
-        })();
+        };
 
         if let Some(tablet) = self.tablet().cloned() {
             let applied_index = self.storage().entry_storage().applied_index();

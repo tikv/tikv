@@ -66,14 +66,14 @@ impl<Iter, S: Storage, F: KvFormat> Default for IndexLookUpPhase<Iter, S, F> {
 impl<Iter, S: Storage, F: KvFormat> IndexLookUpPhase<Iter, S, F> {
     fn mut_index_scan_or_err(&mut self) -> Result<&mut IndexScanState> {
         match self {
-            IndexLookUpPhase::IndexScan(ref mut s) => Ok(s),
+            IndexLookUpPhase::IndexScan(s) => Ok(s),
             _ => Err(other_err!("The current phase is not IndexScan")),
         }
     }
 
     fn mut_table_lookup_or_err(&mut self) -> Result<&mut TableLookUpState<Iter, S, F>> {
         match self {
-            IndexLookUpPhase::TableLookUp(ref mut s) => Ok(s),
+            IndexLookUpPhase::TableLookUp(s) => Ok(s),
             _ => Err(other_err!("The current phase is not TableLookUp")),
         }
     }
@@ -454,17 +454,17 @@ where
         };
 
         let mut result = executor.next_batch(scan_rows).await;
-        if let Ok(is_drained) = result.is_drained {
-            if is_drained.stop() {
-                state
-                    .table_scan
-                    .as_mut()
-                    .unwrap()
-                    .summary_collector
-                    .collect(&mut self.table_scan_exec_summary);
-                state.table_scan = None;
-                result.is_drained = Ok(BatchExecIsDrain::Remain);
-            }
+        if let Ok(is_drained) = result.is_drained
+            && is_drained.stop()
+        {
+            state
+                .table_scan
+                .as_mut()
+                .unwrap()
+                .summary_collector
+                .collect(&mut self.table_scan_exec_summary);
+            state.table_scan = None;
+            result.is_drained = Ok(BatchExecIsDrain::Remain);
         }
         Ok(result)
     }

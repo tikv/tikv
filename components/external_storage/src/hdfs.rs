@@ -37,7 +37,7 @@ pub struct HdfsStorage {
 
 impl HdfsStorage {
     pub fn new(remote: &str, config: HdfsConfig) -> io::Result<HdfsStorage> {
-        let mut remote = Url::parse(remote).map_err(|e| io::Error::other(e))?;
+        let mut remote = Url::parse(remote).map_err(io::Error::other)?;
         if !remote.path().ends_with('/') {
             let mut new_path = remote.path().to_owned();
             new_path.push('/');
@@ -167,10 +167,14 @@ mod tests {
     #[test]
     fn test_get_hdfs_bin() {
         let backend = HdfsStorage::new("hdfs://", HdfsConfig::default()).unwrap();
-        std::env::remove_var("HADOOP_HOME");
+        unsafe {
+            std::env::remove_var("HADOOP_HOME");
+        }
         assert!(backend.get_hdfs_bin().is_none());
 
-        std::env::set_var("HADOOP_HOME", "/opt/hadoop");
+        unsafe {
+            std::env::set_var("HADOOP_HOME", "/opt/hadoop");
+        }
         assert_eq!(
             backend.get_hdfs_bin().as_deref(),
             Some("/opt/hadoop/bin/hdfs")

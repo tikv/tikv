@@ -408,12 +408,12 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
 
                 // If the column info of the corresponding primary column id is missing, we
                 // ignore this slice of the datum.
-                if let Some(&index) = index {
-                    if !self.is_column_filled[index] {
-                        columns[index].mut_raw().push(datum);
-                        decoded_columns += 1;
-                        self.is_column_filled[index] = true;
-                    }
+                if let Some(&index) = index
+                    && !self.is_column_filled[index]
+                {
+                    columns[index].mut_raw().push(datum);
+                    decoded_columns += 1;
+                    self.is_column_filled[index] = true;
                 }
             }
         } else {

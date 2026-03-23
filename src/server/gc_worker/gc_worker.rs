@@ -1494,19 +1494,19 @@ pub mod test_gc_worker {
             let mut modifies: Vec<_> = region_modifies.into_values().flatten().collect();
             for modify in &mut modifies {
                 match modify {
-                    Modify::Delete(_, ref mut key) => {
+                    Modify::Delete(_, key) => {
                         let bytes = keys::data_key(key.as_encoded());
                         *key = Key::from_encoded(bytes);
                     }
-                    Modify::Put(_, ref mut key, _) => {
+                    Modify::Put(_, key, _) => {
                         let bytes = keys::data_key(key.as_encoded());
                         *key = Key::from_encoded(bytes);
                     }
-                    Modify::PessimisticLock(ref mut key, _) => {
+                    Modify::PessimisticLock(key, _) => {
                         let bytes = keys::data_key(key.as_encoded());
                         *key = Key::from_encoded(bytes);
                     }
-                    Modify::DeleteRange(_, ref mut key1, ref mut key2, _) => {
+                    Modify::DeleteRange(_, key1, key2, _) => {
                         let bytes = keys::data_key(key1.as_encoded());
                         *key1 = Key::from_encoded(bytes);
                         let bytes = keys::data_end_key(key2.as_encoded());
@@ -1527,16 +1527,16 @@ pub mod test_gc_worker {
             on_applied: Option<OnAppliedCb>,
         ) -> Self::WriteRes {
             batch.modifies.iter_mut().for_each(|modify| match modify {
-                Modify::Delete(_, ref mut key) => {
+                Modify::Delete(_, key) => {
                     *key = Key::from_encoded(keys::data_key(key.as_encoded()));
                 }
-                Modify::Put(_, ref mut key, _) => {
+                Modify::Put(_, key, _) => {
                     *key = Key::from_encoded(keys::data_key(key.as_encoded()));
                 }
-                Modify::PessimisticLock(ref mut key, _) => {
+                Modify::PessimisticLock(key, _) => {
                     *key = Key::from_encoded(keys::data_key(key.as_encoded()));
                 }
-                Modify::DeleteRange(_, ref mut start_key, ref mut end_key, _) => {
+                Modify::DeleteRange(_, start_key, end_key, _) => {
                     *start_key = Key::from_encoded(keys::data_key(start_key.as_encoded()));
                     *end_key = Key::from_encoded(keys::data_end_key(end_key.as_encoded()));
                 }

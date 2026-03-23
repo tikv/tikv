@@ -10,6 +10,7 @@ use num_traits::{AsPrimitive, FromPrimitive};
 use crate::time::Instant;
 
 #[derive(PartialEq, Debug)]
+#[allow(clippy::enum_variant_names)]
 pub enum Trend {
     Increasing,
     Decreasing,

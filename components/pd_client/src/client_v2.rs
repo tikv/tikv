@@ -316,6 +316,7 @@ impl CachedRawClient {
 
     /// Increases global version only when a new connection is established.
     /// Might panic if `wait_for_ready` isn't called up-front.
+    #[allow(clippy::redundant_closure_call)]
     async fn reconnect(&mut self) -> Result<bool> {
         let force = (|| {
             fail_point!("pd_client_force_reconnect", |_| true);
@@ -389,6 +390,7 @@ impl CachedRawClient {
     }
 }
 
+#[allow(clippy::redundant_closure_call)]
 async fn reconnect_loop(
     mut client: CachedRawClient,
     cfg: Config,

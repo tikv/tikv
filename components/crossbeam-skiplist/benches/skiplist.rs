@@ -3,7 +3,7 @@
 
 extern crate test;
 
-use test::{black_box, Bencher};
+use test::{Bencher, black_box};
 
 use crossbeam_epoch as epoch;
 use crossbeam_skiplist::SkipList;

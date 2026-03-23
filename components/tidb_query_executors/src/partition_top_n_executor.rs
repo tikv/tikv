@@ -189,10 +189,10 @@ impl<Src: BatchExecutor> BatchPartitionTopNExecutor<Src> {
     // partition key. If yes, return true. Else, update saved partition key,
     // and return false.
     fn check_partition_equal_or_update(&mut self, current: HeapItemUnsafe) -> Result<bool> {
-        if let Some(last_partition_key) = &self.last_partition_key {
-            if last_partition_key == &current {
-                return Ok(true);
-            }
+        if let Some(last_partition_key) = &self.last_partition_key
+            && last_partition_key == &current
+        {
+            return Ok(true);
         }
         self.last_partition_key = Some(current);
         Ok(false)
@@ -344,10 +344,10 @@ impl<Src: BatchExecutor> BatchExecutor for BatchPartitionTopNExecutor<Src> {
         }
 
         // limit intermediate memory by paging_size.
-        if let Some(paging_size) = self.context.cfg.paging_size {
-            if self.n * 2 > paging_size as usize {
-                return self.src.next_batch(scan_rows).await;
-            }
+        if let Some(paging_size) = self.context.cfg.paging_size
+            && self.n * 2 > paging_size as usize
+        {
+            return self.src.next_batch(scan_rows).await;
         }
 
         let result = self.handle_next_batch().await;

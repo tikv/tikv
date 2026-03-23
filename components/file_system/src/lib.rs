@@ -143,6 +143,7 @@ impl std::ops::AddAssign for IoBytes {
 }
 
 #[cfg(not(any(test, feature = "testexport")))]
+#[allow(clippy::redundant_closure_call)]
 fn get_thread_io_bytes_stats() -> Result<IoBytes, String> {
     get_thread_io_bytes_total()
 }
@@ -155,6 +156,7 @@ fn get_thread_io_bytes_stats() -> Result<IoBytes, String> {
 /// on each invocation, simulating incremental IO operations. This is useful
 /// for testing scenarios where the IO stats change over time.
 #[cfg(any(test, feature = "testexport"))]
+#[allow(clippy::redundant_closure_call)]
 fn get_thread_io_bytes_stats() -> Result<IoBytes, String> {
     fail::fail_point!("failed_to_get_thread_io_bytes_stats", |_| {
         Err("get_thread_io_bytes_total failed".into())

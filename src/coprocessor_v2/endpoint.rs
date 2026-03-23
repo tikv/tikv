@@ -57,7 +57,7 @@ impl Endpoint {
         &self,
         storage: &Storage<E, L, F>,
         req: kvrpcpb::RawCoprocessorRequest,
-    ) -> impl Future<Output = kvrpcpb::RawCoprocessorResponse> {
+    ) -> impl Future<Output = kvrpcpb::RawCoprocessorResponse> + use<E, L, F> {
         let mut response = kvrpcpb::RawCoprocessorResponse::default();
 
         let coprocessor_result = self.handle_request_impl(storage, req);

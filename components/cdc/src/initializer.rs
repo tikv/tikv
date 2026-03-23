@@ -413,7 +413,7 @@ impl<E: KvEngine> Initializer<E> {
             let Some(cursors) = old_value_cursors.as_mut() else {
                 return Ok(());
             };
-            if let OldValue::SeekWrite(ref key) = v {
+            if let OldValue::SeekWrite(key) = v {
                 match near_seek_old_value(
                     key,
                     &mut cursors.write,

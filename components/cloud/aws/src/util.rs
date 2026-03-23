@@ -59,10 +59,9 @@ pub fn new_http_client() -> SharedHttpClient {
 
 pub fn new_credentials_provider(http: impl HttpClient + 'static) -> DefaultCredentialsProvider {
     let fut = DefaultCredentialsProvider::new(http);
-    if let Ok(hnd) = tokio::runtime::Handle::try_current() {
-        tokio::task::block_in_place(move || hnd.block_on(fut))
-    } else {
-        block_on_external_io(fut)
+    match tokio::runtime::Handle::try_current() {
+        Ok(hnd) => tokio::task::block_in_place(move || hnd.block_on(fut)),
+        _ => block_on_external_io(fut),
     }
 }
 
@@ -178,7 +177,7 @@ impl ProvideCredentials for DefaultCredentialsProvider {
                     Box::pin(
                         self.default_provider
                             .provide_credentials()
-                            .map_err(|e| CredentialsErrorWrapper(e)),
+                            .map_err(CredentialsErrorWrapper),
                     )
                 },
                 "get_cred_on_premise",
@@ -294,7 +293,9 @@ mod tests {
         const AWS_WEB_IDENTITY_TOKEN_FILE: &str = "AWS_WEB_IDENTITY_TOKEN_FILE";
 
         let default_provider = DefaultCredentialsProvider::new(new_http_client()).await;
-        std::env::set_var(AWS_WEB_IDENTITY_TOKEN_FILE, "tmp");
+        unsafe {
+            std::env::set_var(AWS_WEB_IDENTITY_TOKEN_FILE, "tmp");
+        }
         // mock k8s env with web_identitiy_provider
         fail::cfg("cred_err", "return").unwrap();
         fail::cfg("retry_count", "return(1)").unwrap();
@@ -315,6 +316,8 @@ mod tests {
 
         fail::remove("cred_err");
         fail::remove("retry_count");
-        std::env::remove_var(AWS_WEB_IDENTITY_TOKEN_FILE);
+        unsafe {
+            std::env::remove_var(AWS_WEB_IDENTITY_TOKEN_FILE);
+        }
     }
 }

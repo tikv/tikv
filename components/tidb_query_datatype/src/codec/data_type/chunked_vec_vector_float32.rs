@@ -130,6 +130,6 @@ impl From<Vec<Option<VectorFloat32>>> for ChunkedVecVectorFloat32 {
 
 impl UnsafeRefInto<&'static ChunkedVecVectorFloat32> for &ChunkedVecVectorFloat32 {
     unsafe fn unsafe_into(self) -> &'static ChunkedVecVectorFloat32 {
-        std::mem::transmute(self)
+        unsafe { std::mem::transmute(self) }
     }
 }

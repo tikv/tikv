@@ -236,13 +236,15 @@ impl BufferWriter for Vec<u8> {
         // Ensure returned slice has enough space
         self.reserve(size);
         let ptr = self.as_mut_ptr();
-        &mut std::slice::from_raw_parts_mut(ptr, self.capacity())[self.len()..]
+        unsafe { &mut std::slice::from_raw_parts_mut(ptr, self.capacity())[self.len()..] }
     }
 
     #[inline]
     unsafe fn advance_mut(&mut self, count: usize) {
         let len = self.len();
-        self.set_len(len + count);
+        unsafe {
+            self.set_len(len + count);
+        }
     }
 
     #[inline]
@@ -255,12 +257,14 @@ impl BufferWriter for Vec<u8> {
 impl<T: BufferWriter + ?Sized> BufferWriter for &mut T {
     #[inline]
     unsafe fn bytes_mut(&mut self, size: usize) -> &mut [u8] {
-        (**self).bytes_mut(size)
+        unsafe { (**self).bytes_mut(size) }
     }
 
     #[inline]
     unsafe fn advance_mut(&mut self, count: usize) {
-        (**self).advance_mut(count)
+        unsafe {
+            (**self).advance_mut(count);
+        }
     }
 
     #[inline]
@@ -272,12 +276,14 @@ impl<T: BufferWriter + ?Sized> BufferWriter for &mut T {
 impl<T: BufferWriter + ?Sized> BufferWriter for Box<T> {
     #[inline]
     unsafe fn bytes_mut(&mut self, size: usize) -> &mut [u8] {
-        (**self).bytes_mut(size)
+        unsafe { (**self).bytes_mut(size) }
     }
 
     #[inline]
     unsafe fn advance_mut(&mut self, count: usize) {
-        (**self).advance_mut(count)
+        unsafe {
+            (**self).advance_mut(count);
+        }
     }
 
     #[inline]

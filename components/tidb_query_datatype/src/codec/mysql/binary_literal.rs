@@ -22,7 +22,7 @@ fn trim_leading_zero_bytes(bytes: &[u8]) -> &[u8] {
     let (pos, _) = bytes
         .iter()
         .enumerate()
-        .find(|(_, &x)| x != 0)
+        .find(|&(_, &x)| x != 0)
         .unwrap_or((bytes.len() - 1, &0));
     &bytes[pos..]
 }

@@ -905,10 +905,7 @@ pub mod tests {
         let engine = engine_test::kv::new_engine_opt(path, db_opts, cfs_opts).unwrap();
 
         let region = make_region(1, vec![], vec![]);
-        assert_eq!(
-            get_approximate_split_keys(&engine, &region, 1).is_err(),
-            true
-        );
+        assert!(get_approximate_split_keys(&engine, &region, 1).is_err());
 
         let mut big_value = Vec::with_capacity(256);
         big_value.extend(iter::repeat_n(b'v', 256));
@@ -918,10 +915,7 @@ pub mod tests {
             engine.put_cf(CF_DEFAULT, &k, &big_value).unwrap();
             engine.flush_cf(CF_DEFAULT, true).unwrap();
         }
-        assert_eq!(
-            get_approximate_split_keys(&engine, &region, 1).is_err(),
-            true
-        );
+        assert!(get_approximate_split_keys(&engine, &region, 1).is_err());
     }
 
     fn test_get_approximate_split_keys_impl(data_cf: CfName) {
@@ -949,7 +943,7 @@ pub mod tests {
         }
         let region = make_region(1, vec![], vec![]);
 
-        assert_eq!(
+        assert!(
             get_approximate_split_keys(&engine, &region, 0)
                 .unwrap()
                 .into_iter()
@@ -959,8 +953,7 @@ pub mod tests {
                         .unwrap()
                 })
                 .next()
-                .is_none(),
-            true
+                .is_none()
         );
         for i in 4..5 {
             let k = format!("key_{:03}", i).into_bytes();

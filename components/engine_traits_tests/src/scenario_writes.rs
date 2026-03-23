@@ -122,7 +122,7 @@ impl WriteScenarioEngine {
                 let r1 = self.db.engine.get_value(key);
                 let r2 = self.db.engine.get_value_cf(CF_DEFAULT, key);
                 match (&r1, &r2) {
-                    (Ok(Some(ref r1)), Ok(Some(ref r2))) => assert_eq!(r1[..], r2[..]),
+                    (Ok(Some(r1)), Ok(Some(r2))) => assert_eq!(r1[..], r2[..]),
                     (Ok(None), Ok(None)) => { /* pass */ }
                     _ => {}
                 }

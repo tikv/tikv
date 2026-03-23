@@ -192,12 +192,8 @@ pub enum TxnEntry {
 impl TxnEntry {
     pub fn old_value(&mut self) -> &mut OldValue {
         match self {
-            TxnEntry::Prewrite {
-                ref mut old_value, ..
-            } => old_value,
-            TxnEntry::Commit {
-                ref mut old_value, ..
-            } => old_value,
+            TxnEntry::Prewrite { old_value, .. } => old_value,
+            TxnEntry::Commit { old_value, .. } => old_value,
         }
     }
 
@@ -551,7 +547,7 @@ impl<S: Snapshot> SnapshotStore<S> {
     }
 
     fn verify_range(&self, lower_bound: &Option<Key>, upper_bound: &Option<Key>) -> Result<()> {
-        if let Some(ref l) = lower_bound {
+        if let Some(l) = lower_bound {
             if let Some(b) = self.snapshot.lower_bound() {
                 if !b.is_empty() && l.as_encoded().as_slice() < b {
                     REQUEST_EXCEED_BOUND.inc();
@@ -564,7 +560,7 @@ impl<S: Snapshot> SnapshotStore<S> {
                 }
             }
         }
-        if let Some(ref u) = upper_bound {
+        if let Some(u) = upper_bound {
             if let Some(b) = self.snapshot.upper_bound() {
                 if !b.is_empty() && (u.as_encoded().as_slice() > b || u.as_encoded().is_empty()) {
                     REQUEST_EXCEED_BOUND.inc();

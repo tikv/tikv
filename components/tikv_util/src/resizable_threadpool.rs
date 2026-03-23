@@ -16,6 +16,8 @@ struct DeamonRuntime {
     tracker: TaskTracker,
 }
 
+type ReplacePoolRule = dyn Fn(usize, &str) -> TokioResult<Runtime> + Send + Sync;
+
 impl DeamonRuntime {
     pub fn spawn<Fut>(&self, fut: Fut)
     where
@@ -97,7 +99,7 @@ pub struct ResizableRuntime {
     thread_prefix: String,
     gc_runtime: DeamonRuntime,
     current_runtime: Arc<Mutex<DeamonRuntime>>,
-    replace_pool_rule: Box<dyn Fn(usize, &str) -> TokioResult<Runtime> + Send + Sync>,
+    replace_pool_rule: Box<ReplacePoolRule>,
     after_adjust: Box<dyn Fn(usize) + Send + Sync>,
 }
 
@@ -105,7 +107,7 @@ impl ResizableRuntime {
     pub fn new(
         thread_size: usize,
         thread_prefix: &str,
-        replace_pool_rule: Box<dyn Fn(usize, &str) -> TokioResult<Runtime> + Send + Sync>,
+        replace_pool_rule: Box<ReplacePoolRule>,
         after_adjust: Box<dyn Fn(usize) + Send + Sync>,
     ) -> Self {
         let init_name = format!("{}-v0", thread_prefix);

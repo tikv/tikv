@@ -883,19 +883,19 @@ where
 
     #[inline]
     pub fn maybe_send_read_stats(&self, read_stats: ReadStats) {
-        if let Some(sender) = &self.read_stats_sender {
-            if sender.try_send(read_stats).is_err() {
-                debug!("send read_stats failed, are we shutting down or channel is full?")
-            }
+        if let Some(sender) = &self.read_stats_sender
+            && sender.try_send(read_stats).is_err()
+        {
+            debug!("send read_stats failed, are we shutting down or channel is full?")
         }
     }
 
     #[inline]
     pub fn maybe_send_cpu_stats(&self, cpu_stats: &Arc<RawRecords>) {
-        if let Some(sender) = &self.cpu_stats_sender {
-            if sender.try_send(cpu_stats.clone()).is_err() {
-                debug!("send region cpu info failed, are we shutting down or channel is full?")
-            }
+        if let Some(sender) = &self.cpu_stats_sender
+            && sender.try_send(cpu_stats.clone()).is_err()
+        {
+            debug!("send region cpu info failed, are we shutting down or channel is full?")
         }
     }
 }
@@ -1553,22 +1553,15 @@ where
                         }
                     }
                     // Control grpc server.
-                    if let Some(op) = resp.control_grpc.take() {
-                        if let Err(e) =
+                    if let Some(op) = resp.control_grpc.take()
+                        && let Err(e) =
                             scheduler.schedule(Task::ControlGrpcServer(op.get_ctrl_event()))
-                        {
-                            warn!("fail to schedule control grpc task"; "err" => ?e);
-                        }
+                    {
+                        warn!("fail to schedule control grpc task"; "err" => ?e);
                     }
                     // NodeState for this store.
                     {
-                        let state = (|| {
-                            #[cfg(feature = "failpoints")]
-                            fail_point!("manually_set_store_offline", |_| {
-                                metapb::NodeState::Removing
-                            });
-                            resp.get_state()
-                        })();
+                        let state = resp.get_state();
                         match state {
                             metapb::NodeState::Removing | metapb::NodeState::Removed => {
                                 let is_offlined = snap_mgr.is_offlined();

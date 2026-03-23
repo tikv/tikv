@@ -571,9 +571,7 @@ impl CmdBatch {
         cmd_bytes += std::mem::size_of::<Cmd>() * self.cmds.capacity();
         for cmd in self.cmds.iter() {
             let Cmd {
-                ref request,
-                ref response,
-                ..
+                request, response, ..
             } = cmd;
             if !response.get_header().has_error() && !request.has_admin_request() {
                 cmd_bytes += std::mem::size_of::<kvproto::raft_cmdpb::Request>()

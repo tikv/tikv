@@ -186,6 +186,7 @@ impl ResourceManagerService {
     }
 
     // report ru metrics periodically.
+    #[allow(clippy::redundant_closure_call)]
     pub async fn report_ru_metrics(&self) {
         let mut last_group_statistics_map: HashMap<String, ReportStatistic> = HashMap::new();
         // load controller config firstly.

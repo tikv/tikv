@@ -506,32 +506,32 @@ mod tests {
         guard.smallest_key = keys::LOCAL_MIN_KEY.to_vec();
         guard.largest_key = keys::LOCAL_MAX_KEY.to_vec();
         guard.initialize();
-        assert_eq!(guard.use_guard, false);
+        assert!(!guard.use_guard);
 
         guard.smallest_key = keys::LOCAL_MIN_KEY.to_vec();
         guard.largest_key = keys::DATA_MIN_KEY.to_vec();
         guard.initialize();
-        assert_eq!(guard.use_guard, true);
+        assert!(guard.use_guard);
 
         guard.smallest_key = keys::LOCAL_MIN_KEY.to_vec();
         guard.largest_key = keys::DATA_MAX_KEY.to_vec();
         guard.initialize();
-        assert_eq!(guard.use_guard, true);
+        assert!(guard.use_guard);
 
         guard.smallest_key = keys::DATA_MIN_KEY.to_vec();
         guard.largest_key = keys::DATA_MAX_KEY.to_vec();
         guard.initialize();
-        assert_eq!(guard.use_guard, true);
+        assert!(guard.use_guard);
 
         guard.smallest_key = keys::DATA_MIN_KEY.to_vec();
         guard.largest_key = vec![keys::DATA_PREFIX + 10];
         guard.initialize();
-        assert_eq!(guard.use_guard, true);
+        assert!(guard.use_guard);
 
         guard.smallest_key = keys::DATA_MAX_KEY.to_vec();
         guard.largest_key = vec![keys::DATA_PREFIX + 10];
         guard.initialize();
-        assert_eq!(guard.use_guard, false);
+        assert!(!guard.use_guard);
     }
 
     #[test]

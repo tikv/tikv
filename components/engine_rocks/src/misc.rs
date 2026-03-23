@@ -28,6 +28,7 @@ impl RocksEngine {
 
     // We store all data which would be deleted in memory at first because the data
     // of region will never be larger than max-region-size.
+    #[allow(clippy::redundant_closure_call)]
     fn delete_all_in_range_cf_by_ingest(
         &self,
         wopts: &WriteOptions,

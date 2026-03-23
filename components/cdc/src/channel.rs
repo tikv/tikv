@@ -68,7 +68,7 @@ impl CdcEvent {
             .map(|s| s.parse::<u32>().unwrap())
             .unwrap_or(0));
         match self {
-            CdcEvent::ResolvedTs(ref r) => {
+            CdcEvent::ResolvedTs(r) => {
                 // For region id, it is unlikely to exceed 100,000,000 which is
                 // encoded into 4 bytes.
                 // For TSO, it is likely to be encoded into 9 bytes,
@@ -86,7 +86,7 @@ impl CdcEvent {
                 // Bytes of a TSO.
                 + (tag_bytes + approximate_tso_bytes)
             }
-            CdcEvent::Event(ref e) => e.compute_size(),
+            CdcEvent::Event(e) => e.compute_size(),
             CdcEvent::Barrier(_) => 0,
         }
     }
@@ -94,13 +94,13 @@ impl CdcEvent {
     pub fn event(&self) -> &Event {
         match self {
             CdcEvent::ResolvedTs(_) | CdcEvent::Barrier(_) => unreachable!(),
-            CdcEvent::Event(ref e) => e,
+            CdcEvent::Event(e) => e,
         }
     }
 
     pub fn resolved_ts(&self) -> &ResolvedTs {
         match self {
-            CdcEvent::ResolvedTs(ref r) => r,
+            CdcEvent::ResolvedTs(r) => r,
             CdcEvent::Event(_) | CdcEvent::Barrier(_) => unreachable!(),
         }
     }
@@ -113,7 +113,7 @@ impl fmt::Debug for CdcEvent {
                 let mut d = f.debug_tuple("Barrier");
                 d.finish()
             }
-            CdcEvent::ResolvedTs(ref r) => {
+            CdcEvent::ResolvedTs(r) => {
                 let mut d = f.debug_struct("ResolvedTs");
                 d.field("resolved ts", &r.ts);
                 d.field("region count", &r.regions.len());

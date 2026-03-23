@@ -131,12 +131,12 @@ fn must_wait_same_notifies(
     loop {
         match notify_rx.recv_timeout(Duration::from_secs(3)) {
             Ok((region_id, n)) => {
-                if let Some(n2) = notify_map.get(&region_id) {
-                    if n == *n2 {
-                        notify_map.remove(&region_id);
-                        if notify_map.is_empty() {
-                            break;
-                        }
+                if let Some(n2) = notify_map.get(&region_id)
+                    && n == *n2
+                {
+                    notify_map.remove(&region_id);
+                    if notify_map.is_empty() {
+                        break;
                     }
                 }
             }
@@ -627,9 +627,9 @@ fn test_worker() {
 
     must_have_same_notifies(vec![(region_1, (1, 11)), (region_2, (2, 15))], &t.notify_rx);
 
-    assert_eq!(test_raft_kv(&engines.raft, 17), false);
-    assert_eq!(test_raft_kv(&engines.raft, 27), true);
-    assert_eq!(test_raft_kv(&engines.raft, 37), true);
+    assert!(!test_raft_kv(&engines.raft, 17));
+    assert!(test_raft_kv(&engines.raft, 27));
+    assert!(test_raft_kv(&engines.raft, 37));
 
     must_have_entries_and_state(
         &engines.raft,
@@ -721,9 +721,9 @@ fn test_worker_split_raft_wb() {
 
         must_have_same_notifies(vec![(region_1, (1, 11)), (region_2, (2, 15))], &t.notify_rx);
 
-        assert_eq!(test_raft_kv(&engines.raft, raft_key_1), false);
-        assert_eq!(test_raft_kv(&engines.raft, raft_key_2), true);
-        assert_eq!(test_raft_kv(&engines.raft, raft_key_3), true);
+        assert!(!test_raft_kv(&engines.raft, raft_key_1));
+        assert!(test_raft_kv(&engines.raft, raft_key_2));
+        assert!(test_raft_kv(&engines.raft, raft_key_3));
 
         must_have_entries_and_state(
             &engines.raft,
@@ -831,9 +831,9 @@ fn test_basic_flow() {
     assert_eq!(snapshot.get_value(b"kv_k2").unwrap().unwrap(), b"kv_v2");
     assert_eq!(snapshot.get_value(b"kv_k3").unwrap().unwrap(), b"kv_v3");
 
-    assert_eq!(test_raft_kv(&engines.raft, 17), false);
-    assert_eq!(test_raft_kv(&engines.raft, 27), true);
-    assert_eq!(test_raft_kv(&engines.raft, 37), true);
+    assert!(!test_raft_kv(&engines.raft, 17));
+    assert!(test_raft_kv(&engines.raft, 27));
+    assert!(test_raft_kv(&engines.raft, 37));
 
     must_have_entries_and_state(
         &engines.raft,
@@ -933,9 +933,9 @@ fn test_basic_flow_with_states() {
 
     must_wait_same_notifies(vec![(region_1, (1, 15)), (region_2, (2, 20))], &t.notify_rx);
 
-    assert_eq!(test_raft_kv(&engines.raft, 17), false);
-    assert_eq!(test_raft_kv(&engines.raft, 27), true);
-    assert_eq!(test_raft_kv(&engines.raft, 37), true);
+    assert!(!test_raft_kv(&engines.raft, 17));
+    assert!(test_raft_kv(&engines.raft, 27));
+    assert!(test_raft_kv(&engines.raft, 37));
 
     must_have_entries_and_state(
         &engines.raft,

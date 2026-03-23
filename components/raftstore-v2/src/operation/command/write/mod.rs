@@ -48,12 +48,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             apply::notify_req_region_removed(self.region_id(), ch);
             return;
         }
-        if let Some(encoder) = self.simple_write_encoder_mut() {
-            if encoder.amend(&header, &data) {
-                encoder.add_response_channel(ch);
-                self.set_has_ready();
-                return;
-            }
+        if let Some(encoder) = self.simple_write_encoder_mut()
+            && encoder.amend(&header, &data)
+        {
+            encoder.add_response_channel(ch);
+            self.set_has_ready();
+            return;
         }
         if let Err(e) = self.validate_command(&header, None, &mut ctx.raft_metrics) {
             let resp = cmd_resp::new_error(e);

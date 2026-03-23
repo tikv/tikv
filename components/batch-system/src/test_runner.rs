@@ -17,12 +17,14 @@ use tikv_util::mpsc;
 
 use crate::*;
 
+type RunnerCallback = dyn FnOnce(&Handler, &mut Runner) + Send + 'static;
+
 /// Message `Runner` can accepts.
 pub enum Message {
     /// `Runner` will do simple calculation for the given times.
     Loop(usize),
     /// `Runner` will call the callback directly.
-    Callback(Box<dyn FnOnce(&Handler, &mut Runner) + Send + 'static>),
+    Callback(Box<RunnerCallback>),
     /// group name, write bytes
     Resource(String, u64),
 }

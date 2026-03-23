@@ -369,7 +369,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         req: RaftCmdRequest,
     ) -> Result<u64> {
-        (|| fail::fail_point!("propose_commit_merge_1", store_ctx.store_id == 1, |_| {}))();
+        fail::fail_point!("propose_commit_merge_1", store_ctx.store_id == 1, |_| {});
         let mut proposal_ctx = ProposalContext::empty();
         proposal_ctx.insert(ProposalContext::COMMIT_MERGE);
         let data = req.write_to_bytes().unwrap();
@@ -400,10 +400,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
         let mut start_time = Instant::now_coarse();
         let mut wait_duration = None;
-        let force_send = (|| {
+        let force_send = {
             fail::fail_point!("force_send_catch_up_logs", |_| true);
             false
-        })();
+        };
         if !source_path.exists() || force_send {
             let (tx, rx) = oneshot::channel();
             self.res_reporter().redirect_catch_up_logs(CatchUpLogs {
@@ -614,12 +614,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "current" => ?cul.merge,
             );
         }
-        if let Some(state) = self.applied_merge_state() {
-            if state.get_commit() == commit_of_merge(&catch_up_logs.merge) {
-                assert_eq!(state.get_target().get_id(), catch_up_logs.target_region_id);
-                self.finish_catch_up_logs(store_ctx, catch_up_logs);
-                return;
-            }
+        if let Some(state) = self.applied_merge_state()
+            && state.get_commit() == commit_of_merge(&catch_up_logs.merge)
+        {
+            assert_eq!(state.get_target().get_id(), catch_up_logs.target_region_id);
+            self.finish_catch_up_logs(store_ctx, catch_up_logs);
+            return;
         }
         // Directly append these logs to raft log and then commit them.
         match self.maybe_append_merge_entries(&catch_up_logs.merge) {

@@ -142,6 +142,113 @@ impl<EK: KvEngine, ER: RaftEngine> RaftKv2<EK, ER> {
     }
 }
 
+fn async_snapshot<EK: KvEngine, ER: RaftEngine>(
+    mut router: RaftRouter<EK, ER>,
+    mut ctx: tikv_kv::SnapContext<'_>,
+) -> impl Future<Output = tikv_kv::Result<RegionSnapshot<EK::Snapshot>>> + Send + 'static + use<EK, ER>
+{
+    let mut req = Request::default();
+    req.set_cmd_type(CmdType::Snap);
+    if !ctx.key_ranges.is_empty() && ctx.start_ts.is_some_and(|ts| !ts.is_zero()) {
+        req.mut_read_index()
+            .set_start_ts(ctx.start_ts.as_ref().unwrap().into_inner());
+        req.mut_read_index()
+            .set_key_ranges(mem::take(&mut ctx.key_ranges).into());
+    }
+    ASYNC_REQUESTS_COUNTER_VEC.snapshot.all.inc();
+    let begin_instant = Instant::now();
+
+    let mut header = new_request_header(ctx.pb_ctx, ctx.extra_region_override.as_ref());
+    let mut flags = 0;
+    let need_encoded_start_ts = ctx.start_ts.is_none_or(|ts| !ts.is_zero());
+    if ctx.pb_ctx.get_stale_read() && need_encoded_start_ts {
+        flags |= WriteBatchFlags::STALE_READ.bits();
+    }
+    if ctx.allowed_in_flashback {
+        flags |= WriteBatchFlags::FLASHBACK.bits();
+    }
+    header.set_flags(flags);
+    // Encode `start_ts` in `flag_data` for the check of stale read and flashback.
+    if need_encoded_start_ts {
+        encode_start_ts_into_flag_data(&mut header, ctx.start_ts.unwrap_or_default().into_inner());
+    }
+
+    let mut cmd = RaftCmdRequest::default();
+    cmd.set_header(header);
+    cmd.set_requests(vec![req].into());
+    let res: tikv_kv::Result<()> = (|| {
+        fail_point!("raftkv_async_snapshot_err", |_| {
+            Err(box_err!("injected error for async_snapshot"))
+        });
+        Ok(())
+    })();
+    let f = if res.is_err() {
+        None
+    } else {
+        Some(router.snapshot(cmd))
+    };
+
+    async move {
+        res?;
+        let res = f.unwrap().await;
+        match res {
+            Ok(snap) => {
+                let elapse = begin_instant.saturating_elapsed_secs();
+                let tracker = get_tls_tracker_token();
+                GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                    if tracker.metrics.read_index_propose_wait_nanos > 0 {
+                        ASYNC_REQUESTS_DURATIONS_VEC
+                            .snapshot_read_index_propose_wait
+                            .observe(
+                                tracker.metrics.read_index_propose_wait_nanos as f64
+                                    / 1_000_000_000.0,
+                            );
+                        // snapshot may be handled by lease read in raftstore
+                        if tracker.metrics.read_index_confirm_wait_nanos > 0 {
+                            ASYNC_REQUESTS_DURATIONS_VEC
+                                .snapshot_read_index_confirm
+                                .observe(
+                                    tracker.metrics.read_index_confirm_wait_nanos as f64
+                                        / 1_000_000_000.0,
+                                );
+                        }
+                    } else if tracker.metrics.local_read {
+                        ASYNC_REQUESTS_DURATIONS_VEC
+                            .snapshot_local_read
+                            .observe(elapse);
+                    }
+                });
+                // The observed snapshot duration is larger than the actual
+                // snapshot duration, because it includes the waiting time
+                // of this future.
+                // TODO: Fix the inaccuracy, see #17581.
+                ASYNC_REQUESTS_DURATIONS_VEC.snapshot.observe(elapse);
+                ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
+                Ok(snap)
+            }
+            Err(mut resp) => {
+                if resp
+                    .get_responses()
+                    .first()
+                    .is_some_and(|r| r.get_read_index().has_locked())
+                {
+                    let locked = resp.mut_responses()[0].mut_read_index().take_locked();
+                    Err(tikv_kv::Error::from(tikv_kv::ErrorInner::KeyIsLocked(
+                        locked,
+                    )))
+                } else if resp.get_header().has_error() {
+                    let err = tikv_kv::Error::from(resp.take_header().take_error());
+                    let status_kind = get_status_kind_from_engine_error(&err);
+                    ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
+                    Err(err)
+                } else {
+                    Err(box_err!("unexpected response: {:?}", resp))
+                }
+            }
+        }
+    }
+}
+
 impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
     type Snap = RegionSnapshot<EK::Snapshot>;
     type Local = EK;
@@ -168,117 +275,16 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
         Ok(())
     }
 
-    type SnapshotRes = impl Future<Output = tikv_kv::Result<Self::Snap>> + Send + 'static;
-    fn async_snapshot(&mut self, mut ctx: tikv_kv::SnapContext<'_>) -> Self::SnapshotRes {
-        let mut req = Request::default();
-        req.set_cmd_type(CmdType::Snap);
-        if !ctx.key_ranges.is_empty() && ctx.start_ts.is_some_and(|ts| !ts.is_zero()) {
-            req.mut_read_index()
-                .set_start_ts(ctx.start_ts.as_ref().unwrap().into_inner());
-            req.mut_read_index()
-                .set_key_ranges(mem::take(&mut ctx.key_ranges).into());
-        }
-        ASYNC_REQUESTS_COUNTER_VEC.snapshot.all.inc();
-        let begin_instant = Instant::now();
-
-        let mut header = new_request_header(ctx.pb_ctx, ctx.extra_region_override.as_ref());
-        let mut flags = 0;
-        let need_encoded_start_ts = ctx.start_ts.is_none_or(|ts| !ts.is_zero());
-        if ctx.pb_ctx.get_stale_read() && need_encoded_start_ts {
-            flags |= WriteBatchFlags::STALE_READ.bits();
-        }
-        if ctx.allowed_in_flashback {
-            flags |= WriteBatchFlags::FLASHBACK.bits();
-        }
-        header.set_flags(flags);
-        // Encode `start_ts` in `flag_data` for the check of stale read and flashback.
-        if need_encoded_start_ts {
-            encode_start_ts_into_flag_data(
-                &mut header,
-                ctx.start_ts.unwrap_or_default().into_inner(),
-            );
-        }
-
-        let mut cmd = RaftCmdRequest::default();
-        cmd.set_header(header);
-        cmd.set_requests(vec![req].into());
-        let res: tikv_kv::Result<()> = (|| {
-            fail_point!("raftkv_async_snapshot_err", |_| {
-                Err(box_err!("injected error for async_snapshot"))
-            });
-            Ok(())
-        })();
-        let f = if res.is_err() {
-            None
-        } else {
-            Some(self.router.snapshot(cmd))
-        };
-
-        async move {
-            res?;
-            let res = f.unwrap().await;
-            match res {
-                Ok(snap) => {
-                    let elapse = begin_instant.saturating_elapsed_secs();
-                    let tracker = get_tls_tracker_token();
-                    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-                        if tracker.metrics.read_index_propose_wait_nanos > 0 {
-                            ASYNC_REQUESTS_DURATIONS_VEC
-                                .snapshot_read_index_propose_wait
-                                .observe(
-                                    tracker.metrics.read_index_propose_wait_nanos as f64
-                                        / 1_000_000_000.0,
-                                );
-                            // snapshot may be handled by lease read in raftstore
-                            if tracker.metrics.read_index_confirm_wait_nanos > 0 {
-                                ASYNC_REQUESTS_DURATIONS_VEC
-                                    .snapshot_read_index_confirm
-                                    .observe(
-                                        tracker.metrics.read_index_confirm_wait_nanos as f64
-                                            / 1_000_000_000.0,
-                                    );
-                            }
-                        } else if tracker.metrics.local_read {
-                            ASYNC_REQUESTS_DURATIONS_VEC
-                                .snapshot_local_read
-                                .observe(elapse);
-                        }
-                    });
-                    // The observed snapshot duration is larger than the actual
-                    // snapshot duration, because it includes the waiting time
-                    // of this future.
-                    // TODO: Fix the inaccuracy, see #17581.
-                    ASYNC_REQUESTS_DURATIONS_VEC.snapshot.observe(elapse);
-                    ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
-                    Ok(snap)
-                }
-                Err(mut resp) => {
-                    if resp
-                        .get_responses()
-                        .first()
-                        .is_some_and(|r| r.get_read_index().has_locked())
-                    {
-                        let locked = resp.mut_responses()[0].mut_read_index().take_locked();
-                        Err(tikv_kv::Error::from(tikv_kv::ErrorInner::KeyIsLocked(
-                            locked,
-                        )))
-                    } else if resp.get_header().has_error() {
-                        let err = tikv_kv::Error::from(resp.take_header().take_error());
-                        let status_kind = get_status_kind_from_engine_error(&err);
-                        ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
-                        Err(err)
-                    } else {
-                        Err(box_err!("unexpected response: {:?}", resp))
-                    }
-                }
-            }
-        }
+    type SnapshotRes =
+        impl Future<Output = tikv_kv::Result<Self::Snap>> + Send + 'static + use<EK, ER>;
+    fn async_snapshot(&mut self, ctx: tikv_kv::SnapContext<'_>) -> Self::SnapshotRes {
+        async_snapshot(self.router.clone(), ctx)
     }
 
     type IMSnap = Self::Snap;
     // TODO: revert this once https://github.com/rust-lang/rust/issues/140222 is fixed.
     // type IMSnapshotRes = Self::SnapshotRes;
-    type IMSnapshotRes = impl Future<Output = tikv_kv::Result<Self::Snap>> + Send;
+    type IMSnapshotRes = impl Future<Output = tikv_kv::Result<Self::Snap>> + Send + use<EK, ER>;
     fn async_in_memory_snapshot(&mut self, ctx: tikv_kv::SnapContext<'_>) -> Self::IMSnapshotRes {
         self.async_snapshot(ctx)
     }

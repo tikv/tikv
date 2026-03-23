@@ -10,22 +10,22 @@ impl Logger for RocksDbLogger {
     fn logv(&self, log_level: LogLevel, data: &[u8]) {
         match log_level {
             LogLevel::HEADER_LEVEL => {
-                info!(#"rocksdb_log_header", "{}", String::from_utf8_lossy(data));
+                info!(# "rocksdb_log_header", "{}", String::from_utf8_lossy(data));
             }
             LogLevel::DEBUG_LEVEL => {
-                debug!(#"rocksdb_log", "{}", String::from_utf8_lossy(data));
+                debug!(# "rocksdb_log", "{}", String::from_utf8_lossy(data));
             }
             LogLevel::INFO_LEVEL => {
-                info!(#"rocksdb_log", "{}", String::from_utf8_lossy(data));
+                info!(# "rocksdb_log", "{}", String::from_utf8_lossy(data));
             }
             LogLevel::WARN_LEVEL => {
-                warn!(#"rocksdb_log", "{}", String::from_utf8_lossy(data));
+                warn!(# "rocksdb_log", "{}", String::from_utf8_lossy(data));
             }
             LogLevel::ERROR_LEVEL => {
-                error!(#"rocksdb_log", "{}", String::from_utf8_lossy(data));
+                error!(# "rocksdb_log", "{}", String::from_utf8_lossy(data));
             }
             LogLevel::FATAL_LEVEL => {
-                crit!(#"rocksdb_log", "{}", String::from_utf8_lossy(data));
+                crit!(# "rocksdb_log", "{}", String::from_utf8_lossy(data));
             }
             LogLevel::NUM_INFO_LOG_LEVELS => (),
         }
@@ -39,22 +39,22 @@ impl Logger for RaftDbLogger {
     fn logv(&self, log_level: LogLevel, data: &[u8]) {
         match log_level {
             LogLevel::HEADER_LEVEL => {
-                info!(#"raftdb_log_header", "{}", String::from_utf8_lossy(data));
+                info!(# "raftdb_log_header", "{}", String::from_utf8_lossy(data));
             }
             LogLevel::DEBUG_LEVEL => {
-                debug!(#"raftdb_log", "{}", String::from_utf8_lossy(data));
+                debug!(# "raftdb_log", "{}", String::from_utf8_lossy(data));
             }
             LogLevel::INFO_LEVEL => {
-                info!(#"raftdb_log", "{}", String::from_utf8_lossy(data));
+                info!(# "raftdb_log", "{}", String::from_utf8_lossy(data));
             }
             LogLevel::WARN_LEVEL => {
-                warn!(#"raftdb_log", "{}", String::from_utf8_lossy(data));
+                warn!(# "raftdb_log", "{}", String::from_utf8_lossy(data));
             }
             LogLevel::ERROR_LEVEL => {
-                error!(#"raftdb_log", "{}", String::from_utf8_lossy(data));
+                error!(# "raftdb_log", "{}", String::from_utf8_lossy(data));
             }
             LogLevel::FATAL_LEVEL => {
-                crit!(#"raftdb_log", "{}", String::from_utf8_lossy(data));
+                crit!(# "raftdb_log", "{}", String::from_utf8_lossy(data));
             }
             LogLevel::NUM_INFO_LOG_LEVELS => (),
         }

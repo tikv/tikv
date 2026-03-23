@@ -107,7 +107,7 @@ impl<T: Clone> From<Vec<Option<T>>> for ChunkedVecSized<T> {
 
 impl<T: Evaluable> UnsafeRefInto<&'static ChunkedVecSized<T>> for &ChunkedVecSized<T> {
     unsafe fn unsafe_into(self) -> &'static ChunkedVecSized<T> {
-        std::mem::transmute(self)
+        unsafe { std::mem::transmute(self) }
     }
 }
 

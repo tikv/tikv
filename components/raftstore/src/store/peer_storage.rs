@@ -474,6 +474,7 @@ where
 
     /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no
     /// available snapshot.
+    #[allow(clippy::redundant_closure_call)]
     pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
         fail_point!("ignore generate snapshot", self.peer_id == 1, |_| {
             Err(raft::Error::Store(
@@ -945,25 +946,24 @@ where
             ref index,
             ..
         } = *snap_state
+            && !canceled.load(Ordering::SeqCst)
         {
-            if !canceled.load(Ordering::SeqCst) {
-                if let Some(idx) = compact_to {
-                    let snap_index = index.load(Ordering::SeqCst);
-                    // Do not cancel if the snapshot is still valid after the
-                    // compaction.
-                    if snap_index == 0 || idx <= snap_index + 1 {
-                        return;
-                    }
+            if let Some(idx) = compact_to {
+                let snap_index = index.load(Ordering::SeqCst);
+                // Do not cancel if the snapshot is still valid after the
+                // compaction.
+                if snap_index == 0 || idx <= snap_index + 1 {
+                    return;
                 }
-                canceled.store(true, Ordering::SeqCst);
-                // Cancel snapshot precheck.
-                self.take_gen_snap_task();
-                info!(
-                    "canceled generating snap";
-                    "region_id" => self.region.get_id(),
-                    "peer_id" => self.peer_id,
-                );
             }
+            canceled.store(true, Ordering::SeqCst);
+            // Cancel snapshot precheck.
+            self.take_gen_snap_task();
+            info!(
+                "canceled generating snap";
+                "region_id" => self.region.get_id(),
+                "peer_id" => self.peer_id,
+            );
         }
     }
 
@@ -1043,10 +1043,10 @@ where
 
         // Last index is 0 means the peer is created from raft message
         // and has not applied snapshot yet, so skip persistent hard state.
-        if self.raft_state().get_last_index() > 0 {
-            if let Some(hs) = ready.hs() {
-                self.raft_state_mut().set_hard_state(hs.clone());
-            }
+        if self.raft_state().get_last_index() > 0
+            && let Some(hs) = ready.hs()
+        {
+            self.raft_state_mut().set_hard_state(hs.clone());
         }
 
         // Save raft state if it has changed or there is a snapshot.
@@ -1075,18 +1075,18 @@ where
 
     pub fn persist_snapshot(&mut self, res: &PersistSnapshotResult) {
         // cleanup data before scheduling apply task
-        if self.is_initialized() {
-            if let Err(e) = self.clear_extra_data(self.region(), &res.region) {
-                // No need panic here, when applying snapshot, the deletion will be tried
-                // again. But if the region range changes, like [a, c) -> [a, b) and [b, c),
-                // [b, c) will be kept in rocksdb until a covered snapshot is applied or
-                // store is restarted.
-                error!(?e;
-                    "failed to cleanup data, may leave some dirty data";
-                    "region_id" => self.get_region_id(),
-                    "peer_id" => self.peer_id,
-                );
-            }
+        if self.is_initialized()
+            && let Err(e) = self.clear_extra_data(self.region(), &res.region)
+        {
+            // No need panic here, when applying snapshot, the deletion will be tried
+            // again. But if the region range changes, like [a, c) -> [a, b) and [b, c),
+            // [b, c) will be kept in rocksdb until a covered snapshot is applied or
+            // store is restarted.
+            error!(?e;
+                "failed to cleanup data, may leave some dirty data";
+                "region_id" => self.get_region_id(),
+                "peer_id" => self.peer_id,
+            );
         }
 
         // Note that the correctness depends on the fact that these source regions MUST
@@ -1119,9 +1119,9 @@ where
         // The `region` is updated after persisting in order to stay consistent with the
         // one in `StoreMeta::regions` (will be updated soon).
         // See comments in `apply_snapshot` for more details.
-        (|| {
+        {
             fail_point!("before_set_region_on_peer_3", self.peer_id == 3, |_| {});
-        })();
+        };
         self.set_region(res.region.clone());
     }
 }
@@ -2110,13 +2110,13 @@ pub mod tests {
             assert_eq!(*s.snap_tried_cnt.borrow(), 1);
             let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
             generate_and_schedule_snapshot(gen_task, &s.engines, &snap_gen_sched).unwrap();
-            let snap = match *s.snap_state.borrow() {
+
+            match *s.snap_state.borrow() {
                 SnapState::Generating { ref receiver, .. } => {
                     receiver.recv_timeout(Duration::from_secs(3)).unwrap()
                 }
                 ref s => panic!("unexpected state: {:?}", s),
-            };
-            snap
+            }
         };
 
         // generate snapshot for peer

@@ -22,6 +22,18 @@
 // using a standalone modules.
 
 #![feature(box_into_inner)]
+#![allow(
+    clippy::enum_variant_names,
+    clippy::field_reassign_with_default,
+    clippy::large_enum_variant,
+    clippy::needless_range_loop,
+    clippy::non_canonical_partial_ord_impl,
+    clippy::result_large_err,
+    clippy::should_implement_trait,
+    clippy::too_many_arguments,
+    clippy::type_complexity,
+    clippy::wrong_self_convention
+)]
 
 mod batch;
 mod bootstrap;

@@ -11,6 +11,7 @@ use crate::{
 };
 
 #[derive(Clone, Debug)]
+#[allow(clippy::enum_variant_names)]
 pub enum DeleteStrategy {
     /// Delete the SST files that are fullly fit in range. However, the SST
     /// files that are partially overlapped with the range will not be
@@ -195,10 +196,10 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt + WriteBatchExt {
     /// `threshold`.
     fn has_old_active_memtable(&self, threshold: std::time::SystemTime) -> bool {
         for cf in self.cf_names() {
-            if let Ok(Some((_, age))) = self.get_active_memtable_stats_cf(cf) {
-                if age < threshold {
-                    return true;
-                }
+            if let Ok(Some((_, age))) = self.get_active_memtable_stats_cf(cf)
+                && age < threshold
+            {
+                return true;
             }
         }
         false

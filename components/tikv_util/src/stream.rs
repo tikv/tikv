@@ -18,6 +18,8 @@ use tokio::runtime::Builder;
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(32);
 const MAX_RETRY_TIMES: usize = 14;
 
+type FailureHook<E> = dyn FnMut(&E) + Send + Sync + 'static;
+
 /// Wrapper of an `AsyncRead` instance, exposed as a `Sync` `Stream` of `Bytes`.
 pub struct AsyncReadAsSyncStreamOfBytes<R> {
     // we need this Mutex to ensure the type is Sync (provided R is Send).
@@ -106,7 +108,7 @@ where
 
 /// The extra configuration for retry.
 pub struct RetryExt<E> {
-    pub on_failure: Option<Box<dyn FnMut(&E) + Send + Sync + 'static>>,
+    pub on_failure: Option<Box<FailureHook<E>>>,
     pub max_retry_times: usize,
     pub max_retry_delay: Duration,
 }
@@ -231,6 +233,7 @@ where
 
 /// Retires a future execution. Comparing to `retry`, this version allows more
 /// configurations.
+#[allow(clippy::redundant_closure_call)]
 pub async fn retry_ext<G, T, F, E>(mut action: G, mut ext: RetryExt<E>) -> Result<T, E>
 where
     G: FnMut() -> F,

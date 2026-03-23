@@ -497,10 +497,10 @@ impl RegionCollector {
     /// this case, and if `clear_regions_in_range` is true, those out-of-date
     /// regions will be removed from the collection.
     fn check_region_range(&mut self, region: &Region, clear_regions_in_range: bool) -> bool {
-        if let Some(region_with_same_id) = self.regions.get(&region.get_id()) {
-            if self.is_region_epoch_stale(region, &region_with_same_id.region) {
-                return false;
-            }
+        if let Some(region_with_same_id) = self.regions.get(&region.get_id())
+            && self.is_region_epoch_stale(region, &region_with_same_id.region)
+        {
+            return false;
         }
 
         let mut stale_regions_in_range = vec![];
@@ -739,11 +739,11 @@ impl RegionCollector {
                 // epoch is properly set and an Update message was sent.
                 return;
             }
-            if let RaftStoreEvent::RoleChange { initialized, .. } = &event {
-                if !initialized {
-                    // Ignore uninitialized peers.
-                    return;
-                }
+            if let RaftStoreEvent::RoleChange { initialized, .. } = &event
+                && !initialized
+            {
+                // Ignore uninitialized peers.
+                return;
             }
             if !self.check_region_range(region, true) {
                 debug!(
@@ -984,12 +984,11 @@ impl RegionInfoProvider for RegionInfoAccessor {
         self.seek_region(
             key,
             Box::new(move |iter| {
-                if let Some(info) = iter.next() {
-                    if info.region.get_start_key() <= key_in_vec.as_slice() {
-                        if let Err(e) = tx.send(info.region.clone()) {
-                            warn!("failed to send find_region_by_key result: {:?}", e);
-                        }
-                    }
+                if let Some(info) = iter.next()
+                    && info.region.get_start_key() <= key_in_vec.as_slice()
+                    && let Err(e) = tx.send(info.region.clone())
+                {
+                    warn!("failed to send find_region_by_key result: {:?}", e);
                 }
             }),
         )?;
@@ -1313,14 +1312,14 @@ mod tests {
         // If end_key is updated and the region_id corresponding to the `old_end_key`
         // doesn't equals to `region_id`, it shouldn't be removed since it was
         // used by another region.
-        if let Some(old_end_key) = old_end_key {
-            if old_end_key.as_slice() != region.get_end_key() {
-                assert!(
-                    c.region_ranges
-                        .get(&RangeKey::from_end_key(old_end_key))
-                        .is_none_or(|id| *id != region.get_id())
-                );
-            }
+        if let Some(old_end_key) = old_end_key
+            && old_end_key.as_slice() != region.get_end_key()
+        {
+            assert!(
+                c.region_ranges
+                    .get(&RangeKey::from_end_key(old_end_key))
+                    .is_none_or(|id| *id != region.get_id())
+            );
         }
     }
 
