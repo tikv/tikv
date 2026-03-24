@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::RocksSnapshot;
 use futures::executor::block_on;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use pd_client::PdClient;

@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::RocksSnapshot;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use raft::eraftpb::MessageType;
 use raftstore::store::msg::*;
