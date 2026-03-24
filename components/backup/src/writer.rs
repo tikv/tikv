@@ -592,10 +592,7 @@ mod tests {
                 ),
             ],
             &[
-                (
-                    engine_traits::CF_DEFAULT,
-                    &[(&keys::data_key(b"a"), b"a")],
-                ),
+                (engine_traits::CF_DEFAULT, &[(&keys::data_key(b"a"), b"a")]),
                 (
                     engine_traits::CF_WRITE,
                     &[(&keys::data_key(b"a"), b"a"), (&keys::data_key(b"b"), &[])],
