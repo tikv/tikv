@@ -65,9 +65,9 @@ fn hotspot_cpu_usage_report_threshold() -> u64 {
 }
 
 #[derive(Default)]
-struct StoreHeartbeatCpuUsage {
-    unified_read_cpu_usage: u64,
-    scheduler_cpu_usage: u64,
+pub(super) struct StoreHeartbeatCpuUsage {
+    pub(super) unified_read_cpu_usage: u64,
+    pub(super) scheduler_cpu_usage: u64,
 }
 
 pub(super) fn cpu_usage_from_millis(cpu_time_ms: u64, interval_seconds: u64) -> u64 {
@@ -77,16 +77,15 @@ pub(super) fn cpu_usage_from_millis(cpu_time_ms: u64, interval_seconds: u64) -> 
     ((Duration::from_millis(cpu_time_ms).as_secs_f64() * 100.0) / interval_seconds as f64) as u64
 }
 
-fn calculate_store_heartbeat_cpu_usage(
-    cpu_record: resource_metering::RegionCpuRecord,
+pub(super) fn calculate_cpu_usage_breakdown(
+    unified_read_cpu_time_ms: u64,
+    scheduler_cpu_time_ms: u64,
     interval_seconds: u64,
 ) -> StoreHeartbeatCpuUsage {
     if interval_seconds == 0 {
         return StoreHeartbeatCpuUsage::default();
     }
 
-    let unified_read_cpu_time_ms = cpu_record.unified_read_cpu_time_ms as u64;
-    let scheduler_cpu_time_ms = cpu_record.scheduler_cpu_time_ms as u64;
     let mut unified_read_cpu_usage =
         cpu_usage_from_millis(unified_read_cpu_time_ms, interval_seconds);
     let mut scheduler_cpu_usage = cpu_usage_from_millis(scheduler_cpu_time_ms, interval_seconds);
@@ -108,6 +107,17 @@ fn calculate_store_heartbeat_cpu_usage(
         unified_read_cpu_usage,
         scheduler_cpu_usage,
     }
+}
+
+fn calculate_store_heartbeat_cpu_usage(
+    cpu_record: resource_metering::RegionCpuRecord,
+    interval_seconds: u64,
+) -> StoreHeartbeatCpuUsage {
+    calculate_cpu_usage_breakdown(
+        cpu_record.unified_read_cpu_time_ms as u64,
+        cpu_record.scheduler_cpu_time_ms as u64,
+        interval_seconds,
+    )
 }
 
 fn collect_report_peers_for_store_heartbeat(

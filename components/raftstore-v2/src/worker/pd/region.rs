@@ -13,7 +13,11 @@ use resource_metering::{RawRecords, RegionCpuRecord};
 use slog::{debug, error, info};
 use tikv_util::{store::QueryStats, time::UnixSecs};
 
-use super::{Runner, requests::*, store::cpu_usage_from_millis};
+use super::{
+    Runner,
+    requests::*,
+    store::{calculate_cpu_usage_breakdown, cpu_usage_from_millis},
+};
 use crate::{
     operation::{RequestHalfSplit, RequestSplit},
     router::{CmdResChannel, PeerMsg},
@@ -150,17 +154,14 @@ where
             // See components/tikv_util/src/metrics/threads_linux.rs for more details.
             if interval_second > 0 {
                 let total = cpu_usage_from_millis(cpu_record.cpu_time_ms as u64, interval_second);
-                let unified_read = cpu_usage_from_millis(
+                let cpu_usage = calculate_cpu_usage_breakdown(
                     cpu_record.unified_read_cpu_time_ms as u64,
-                    interval_second,
-                );
-                let scheduler = cpu_usage_from_millis(
                     cpu_record.scheduler_cpu_time_ms as u64,
                     interval_second,
                 );
                 let mut stats = pdpb::CpuStats::default();
-                stats.set_unified_read(unified_read);
-                stats.set_scheduler(scheduler);
+                stats.set_unified_read(cpu_usage.unified_read_cpu_usage);
+                stats.set_scheduler(cpu_usage.scheduler_cpu_usage);
                 (total, stats)
             } else {
                 (0, pdpb::CpuStats::default())

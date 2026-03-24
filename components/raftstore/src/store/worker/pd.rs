@@ -964,16 +964,15 @@ fn cpu_usage_from_millis(cpu_time_ms: u64, interval_seconds: u64) -> u64 {
     ((Duration::from_millis(cpu_time_ms).as_secs_f64() * 100.0) / interval_seconds as f64) as u64
 }
 
-fn calculate_store_heartbeat_cpu_usage(
-    cpu_record: RegionCpuRecord,
+fn calculate_cpu_usage_breakdown(
+    unified_read_cpu_time_ms: u64,
+    scheduler_cpu_time_ms: u64,
     interval_seconds: u64,
 ) -> StoreHeartbeatCpuUsage {
     if interval_seconds == 0 {
         return StoreHeartbeatCpuUsage::default();
     }
 
-    let unified_read_cpu_time_ms = cpu_record.unified_read_cpu_time_ms as u64;
-    let scheduler_cpu_time_ms = cpu_record.scheduler_cpu_time_ms as u64;
     let mut unified_read_cpu_usage =
         cpu_usage_from_millis(unified_read_cpu_time_ms, interval_seconds);
     let mut scheduler_cpu_usage = cpu_usage_from_millis(scheduler_cpu_time_ms, interval_seconds);
@@ -995,6 +994,17 @@ fn calculate_store_heartbeat_cpu_usage(
         unified_read_cpu_usage,
         scheduler_cpu_usage,
     }
+}
+
+fn calculate_store_heartbeat_cpu_usage(
+    cpu_record: RegionCpuRecord,
+    interval_seconds: u64,
+) -> StoreHeartbeatCpuUsage {
+    calculate_cpu_usage_breakdown(
+        cpu_record.unified_read_cpu_time_ms as u64,
+        cpu_record.scheduler_cpu_time_ms as u64,
+        interval_seconds,
+    )
 }
 
 struct StoreHeartbeatPeerReport {
@@ -2597,19 +2607,18 @@ where
                         // Keep consistent with the calculation of cpu_usages in a store heartbeat.
                         // See components/tikv_util/src/metrics/threads_linux.rs for more details.
                         if interval_second > 0 {
-                            let total =
-                                cpu_usage_from_millis(cpu_record.cpu_time_ms as u64, interval_second);
-                            let unified_read = cpu_usage_from_millis(
-                                cpu_record.unified_read_cpu_time_ms as u64,
+                            let total = cpu_usage_from_millis(
+                                cpu_record.cpu_time_ms as u64,
                                 interval_second,
                             );
-                            let scheduler = cpu_usage_from_millis(
+                            let cpu_usage = calculate_cpu_usage_breakdown(
+                                cpu_record.unified_read_cpu_time_ms as u64,
                                 cpu_record.scheduler_cpu_time_ms as u64,
                                 interval_second,
                             );
                             let mut stats = pdpb::CpuStats::default();
-                            stats.set_unified_read(unified_read);
-                            stats.set_scheduler(scheduler);
+                            stats.set_unified_read(cpu_usage.unified_read_cpu_usage);
+                            stats.set_scheduler(cpu_usage.scheduler_cpu_usage);
                             (total, stats)
                         } else {
                             (0, pdpb::CpuStats::default())
