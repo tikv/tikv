@@ -13,7 +13,7 @@ use resource_metering::{RawRecords, RegionCpuRecord};
 use slog::{debug, error, info};
 use tikv_util::{store::QueryStats, time::UnixSecs};
 
-use super::{Runner, requests::*};
+use super::{Runner, requests::*, store::cpu_usage_from_millis};
 use crate::{
     operation::{RequestHalfSplit, RequestSplit},
     router::{CmdResChannel, PeerMsg},
@@ -149,18 +149,15 @@ where
             // Keep consistent with the calculation of cpu_usages in a store heartbeat.
             // See components/tikv_util/src/metrics/threads_linux.rs for more details.
             if interval_second > 0 {
-                let total = ((Duration::from_millis(cpu_record.cpu_time_ms as u64).as_secs_f64()
-                    * 100.0)
-                    / interval_second as f64) as u64;
-                let unified_read =
-                    ((Duration::from_millis(cpu_record.unified_read_cpu_time_ms as u64)
-                        .as_secs_f64()
-                        * 100.0)
-                        / interval_second as f64) as u64;
-                let scheduler = ((Duration::from_millis(cpu_record.scheduler_cpu_time_ms as u64)
-                    .as_secs_f64()
-                    * 100.0)
-                    / interval_second as f64) as u64;
+                let total = cpu_usage_from_millis(cpu_record.cpu_time_ms as u64, interval_second);
+                let unified_read = cpu_usage_from_millis(
+                    cpu_record.unified_read_cpu_time_ms as u64,
+                    interval_second,
+                );
+                let scheduler = cpu_usage_from_millis(
+                    cpu_record.scheduler_cpu_time_ms as u64,
+                    interval_second,
+                );
                 let mut stats = pdpb::CpuStats::default();
                 stats.set_unified_read(unified_read);
                 stats.set_scheduler(scheduler);

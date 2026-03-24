@@ -209,10 +209,6 @@ pub enum ThreadPoolType {
     UnifiedRead = 1,
     /// Scheduler worker pool threads (prefix "sched-pool").
     Scheduler = 2,
-    /// Coprocessor threads share the unified read pool, so they are also
-    /// classified as `UnifiedRead`. This variant is reserved for future use
-    /// if coprocessor gets its own dedicated pool.
-    Coprocessor = 3,
 }
 
 /// Per-region CPU time accumulator with per-thread-pool breakdown.
@@ -260,7 +256,7 @@ impl RawRecord {
     pub fn add_cpu_time(&mut self, delta_ms: u32, pool_type: ThreadPoolType) {
         self.cpu_time += delta_ms;
         match pool_type {
-            ThreadPoolType::UnifiedRead | ThreadPoolType::Coprocessor => {
+            ThreadPoolType::UnifiedRead => {
                 self.unified_read_cpu_time += delta_ms;
             }
             ThreadPoolType::Scheduler => {

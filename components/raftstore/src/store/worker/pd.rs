@@ -959,6 +959,9 @@ struct StoreHeartbeatCpuUsage {
 }
 
 fn cpu_usage_from_millis(cpu_time_ms: u64, interval_seconds: u64) -> u64 {
+    if interval_seconds == 0 {
+        return 0;
+    }
     ((Duration::from_millis(cpu_time_ms).as_secs_f64() * 100.0) / interval_seconds as f64) as u64
 }
 
@@ -970,16 +973,18 @@ fn calculate_store_heartbeat_cpu_usage(
         return StoreHeartbeatCpuUsage::default();
     }
 
+    let cpu_usage = cpu_usage_from_millis(cpu_record.cpu_time_ms as u64, interval_seconds);
     let unified_read_cpu_time_ms = cpu_record.unified_read_cpu_time_ms as u64;
     let scheduler_cpu_time_ms = cpu_record.scheduler_cpu_time_ms as u64;
     let mut unified_read_cpu_usage =
         cpu_usage_from_millis(unified_read_cpu_time_ms, interval_seconds);
     let mut scheduler_cpu_usage = cpu_usage_from_millis(scheduler_cpu_time_ms, interval_seconds);
-    let cpu_usage = cpu_usage_from_millis(
+    let breakdown_cpu_usage = cpu_usage_from_millis(
         unified_read_cpu_time_ms.saturating_add(scheduler_cpu_time_ms),
         interval_seconds,
     );
-    let rounding_gap = cpu_usage.saturating_sub(unified_read_cpu_usage + scheduler_cpu_usage);
+    let rounding_gap =
+        breakdown_cpu_usage.saturating_sub(unified_read_cpu_usage + scheduler_cpu_usage);
     if rounding_gap > 0 {
         if unified_read_cpu_time_ms >= scheduler_cpu_time_ms {
             unified_read_cpu_usage += rounding_gap;
@@ -997,8 +1002,8 @@ fn calculate_store_heartbeat_cpu_usage(
 
 struct StoreHeartbeatPeerReport {
     report_peers: HashMap<u64, pdpb::PeerStat>,
-    region_unified_read_cpu_usage_sum: u64,
-    region_scheduler_cpu_usage_sum: u64,
+    region_unified_read_cpu_time_ms_sum: u64,
+    region_scheduler_cpu_time_ms_sum: u64,
 }
 
 fn collect_report_peers_for_store_heartbeat(
@@ -1009,29 +1014,28 @@ fn collect_report_peers_for_store_heartbeat(
 ) -> StoreHeartbeatPeerReport {
     let has_interval = interval_seconds > 0;
     let mut report_peers = HashMap::default();
-    let mut region_unified_read_cpu_usage_sum = 0;
-    let mut region_scheduler_cpu_usage_sum = 0;
+    let mut region_unified_read_cpu_time_ms_sum = 0;
+    let mut region_scheduler_cpu_time_ms_sum = 0;
     for (region_id, region_peer) in region_peers.iter_mut() {
         let read_bytes = region_peer.read_bytes - region_peer.last_store_report_read_bytes;
         let read_keys = region_peer.read_keys - region_peer.last_store_report_read_keys;
         let query_stats = region_peer
             .query_stats
             .sub_query_stats(&region_peer.last_store_report_query_stats);
+        let cpu_record = region_cpu_records_since_store_heartbeat
+            .remove(region_id)
+            .unwrap_or_default();
         let cpu_usage = if has_interval {
-            calculate_store_heartbeat_cpu_usage(
-                region_cpu_records_since_store_heartbeat
-                    .remove(region_id)
-                    .unwrap_or_default(),
-                interval_seconds,
-            )
+            calculate_store_heartbeat_cpu_usage(cpu_record, interval_seconds)
         } else {
             // `interval_seconds == 0` is unexpected but can happen in corner cases.
             // Drain the record and report 0 to avoid division by zero.
-            region_cpu_records_since_store_heartbeat.remove(region_id);
             StoreHeartbeatCpuUsage::default()
         };
-        region_unified_read_cpu_usage_sum += cpu_usage.unified_read_cpu_usage;
-        region_scheduler_cpu_usage_sum += cpu_usage.scheduler_cpu_usage;
+        if has_interval {
+            region_unified_read_cpu_time_ms_sum += cpu_record.unified_read_cpu_time_ms as u64;
+            region_scheduler_cpu_time_ms_sum += cpu_record.scheduler_cpu_time_ms as u64;
+        }
         region_peer.last_store_report_read_bytes = region_peer.read_bytes;
         region_peer.last_store_report_read_keys = region_peer.read_keys;
         region_peer
@@ -1060,8 +1064,8 @@ fn collect_report_peers_for_store_heartbeat(
     region_cpu_records_since_store_heartbeat.clear();
     StoreHeartbeatPeerReport {
         report_peers,
-        region_unified_read_cpu_usage_sum,
-        region_scheduler_cpu_usage_sum,
+        region_unified_read_cpu_time_ms_sum,
+        region_scheduler_cpu_time_ms_sum,
     }
 }
 
@@ -1429,8 +1433,8 @@ where
                 .saturating_sub(self.store_stat.last_report_ts.into_inner());
             let StoreHeartbeatPeerReport {
                 report_peers,
-                region_unified_read_cpu_usage_sum,
-                region_scheduler_cpu_usage_sum,
+                region_unified_read_cpu_time_ms_sum,
+                region_scheduler_cpu_time_ms_sum,
             } = {
                 let mut region_peers = self.region_peers.write().unwrap();
                 collect_report_peers_for_store_heartbeat(
@@ -1463,13 +1467,19 @@ where
                     .set(store_unified_read as i64);
                 STORE_CPU_POOL_GAUGE_VEC
                     .with_label_values(&["unified_read", "region_sum"])
-                    .set(region_unified_read_cpu_usage_sum as i64);
+                    .set(cpu_usage_from_millis(
+                        region_unified_read_cpu_time_ms_sum,
+                        interval_seconds,
+                    ) as i64);
                 STORE_CPU_POOL_GAUGE_VEC
                     .with_label_values(&["scheduler", "store_level"])
                     .set(store_scheduler as i64);
                 STORE_CPU_POOL_GAUGE_VEC
                     .with_label_values(&["scheduler", "region_sum"])
-                    .set(region_scheduler_cpu_usage_sum as i64);
+                    .set(
+                        cpu_usage_from_millis(region_scheduler_cpu_time_ms_sum, interval_seconds)
+                            as i64,
+                    );
             }
 
             stats = collect_report_read_peer_stats(HOTSPOT_REPORT_CAPACITY, report_peers, stats);
@@ -2587,24 +2597,16 @@ where
                         // Keep consistent with the calculation of cpu_usages in a store heartbeat.
                         // See components/tikv_util/src/metrics/threads_linux.rs for more details.
                         if interval_second > 0 {
-                            let cpu_time_duration =
-                                Duration::from_millis(cpu_record.cpu_time_ms as u64);
-                            let total = ((cpu_time_duration.as_secs_f64() * 100.0)
-                                / interval_second as f64)
-                                as u64;
-                            let unified_read = ((Duration::from_millis(
+                            let total =
+                                cpu_usage_from_millis(cpu_record.cpu_time_ms as u64, interval_second);
+                            let unified_read = cpu_usage_from_millis(
                                 cpu_record.unified_read_cpu_time_ms as u64,
-                            )
-                            .as_secs_f64()
-                                * 100.0)
-                                / interval_second as f64)
-                                as u64;
-                            let scheduler =
-                                ((Duration::from_millis(cpu_record.scheduler_cpu_time_ms as u64)
-                                    .as_secs_f64()
-                                    * 100.0)
-                                    / interval_second as f64)
-                                    as u64;
+                                interval_second,
+                            );
+                            let scheduler = cpu_usage_from_millis(
+                                cpu_record.scheduler_cpu_time_ms as u64,
+                                interval_second,
+                            );
                             let mut stats = pdpb::CpuStats::default();
                             stats.set_unified_read(unified_read);
                             stats.set_scheduler(scheduler);
@@ -3181,6 +3183,8 @@ mod tests {
         assert!(region_cpu_records_since_store_heartbeat.is_empty());
         let reported = report.report_peers.get(&1).unwrap();
         assert_eq!(reported.get_cpu_stats().get_unified_read(), 0);
+        assert_eq!(report.region_unified_read_cpu_time_ms_sum, 0);
+        assert_eq!(report.region_scheduler_cpu_time_ms_sum, 0);
         assert_eq!(reported.get_read_bytes(), hotspot_byte_report_threshold());
     }
 
@@ -3198,6 +3202,66 @@ mod tests {
         assert_eq!(cpu_usage.cpu_usage, 1);
         assert_eq!(
             cpu_usage.unified_read_cpu_usage + cpu_usage.scheduler_cpu_usage,
+            1
+        );
+    }
+
+    #[test]
+    fn test_collect_report_peers_for_store_heartbeat_uses_total_cpu_for_hotspot() {
+        let mut region_peers = HashMap::default();
+        region_peers.insert(1, PeerStat::default());
+        let mut region_cpu_records_since_store_heartbeat: HashMap<u64, RegionCpuRecord> =
+            HashMap::default();
+        region_cpu_records_since_store_heartbeat.insert(
+            1,
+            RegionCpuRecord {
+                cpu_time_ms: 10,
+                ..Default::default()
+            },
+        );
+
+        let report = collect_report_peers_for_store_heartbeat(
+            &mut region_peers,
+            &mut region_cpu_records_since_store_heartbeat,
+            1,
+        );
+
+        let reported = report.report_peers.get(&1).unwrap();
+        assert_eq!(reported.get_cpu_stats().get_unified_read(), 0);
+        assert_eq!(reported.get_cpu_stats().get_scheduler(), 0);
+    }
+
+    #[test]
+    fn test_collect_report_peers_for_store_heartbeat_accumulates_cpu_time_before_rounding() {
+        let mut region_peers = HashMap::default();
+        region_peers.insert(1, PeerStat::default());
+        region_peers.insert(2, PeerStat::default());
+        let mut region_cpu_records_since_store_heartbeat: HashMap<u64, RegionCpuRecord> =
+            HashMap::default();
+        region_cpu_records_since_store_heartbeat.insert(
+            1,
+            RegionCpuRecord {
+                unified_read_cpu_time_ms: 6,
+                ..Default::default()
+            },
+        );
+        region_cpu_records_since_store_heartbeat.insert(
+            2,
+            RegionCpuRecord {
+                unified_read_cpu_time_ms: 6,
+                ..Default::default()
+            },
+        );
+
+        let report = collect_report_peers_for_store_heartbeat(
+            &mut region_peers,
+            &mut region_cpu_records_since_store_heartbeat,
+            1,
+        );
+
+        assert_eq!(report.region_unified_read_cpu_time_ms_sum, 12);
+        assert_eq!(
+            cpu_usage_from_millis(report.region_unified_read_cpu_time_ms_sum, 1),
             1
         );
     }
