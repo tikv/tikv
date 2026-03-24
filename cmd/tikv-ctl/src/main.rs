@@ -1,8 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![feature(lazy_cell)]
-#![feature(let_chains)]
-
 #[macro_use]
 extern crate log;
 
@@ -1299,6 +1296,9 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
     stderr_buf.read_to_end(&mut buffer).unwrap();
     let corruptions = unsafe { String::from_utf8_unchecked(buffer) };
 
+    let r = Regex::new(r"/\w*\.sst").unwrap();
+    let column_r = Regex::new(r"--------------- (.*) --------------\n(.*)").unwrap();
+    let sst_stat_r = Regex::new(r".*\n\d+:\d+\[\d+ .. \d+\]\['(\w*)' seq:\d+, type:\d+ .. '(\w*)' seq:\d+, type:\d+\] at level \d+").unwrap();
     for line in corruptions.lines() {
         println!("--------------------------------------------------------");
         // The corruption format may like this:
@@ -1307,7 +1307,6 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
         // ```
         println!("corruption info:\n{}", line);
 
-        let r = Regex::new(r"/\w*\.sst").unwrap();
         let sst_file_number = match r.captures(line) {
             None => {
                 println!("skip bad line format");
@@ -1368,15 +1367,13 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
         // --------------- Column family "write"  (ID 2) --------------
         // 63:132906243[3555338 .. 3555338]['7A311B40EFCC2CB4C5911ECF3937D728DED26AE53FA5E61BE04F23F2BE54EACC73' seq:3555338, type:1 .. '7A313030302E25CD5F57252E' seq:3555338, type:1] at level 0
         // ```
-        let column_r = Regex::new(r"--------------- (.*) --------------\n(.*)").unwrap();
         if let Some(m) = column_r.captures(&output) {
             println!(
                 "{} for {}",
                 m.get(2).unwrap().as_str(),
                 m.get(1).unwrap().as_str()
             );
-            let r = Regex::new(r".*\n\d+:\d+\[\d+ .. \d+\]\['(\w*)' seq:\d+, type:\d+ .. '(\w*)' seq:\d+, type:\d+\] at level \d+").unwrap();
-            let matches = match r.captures(&output) {
+            let matches = match sst_stat_r.captures(&output) {
                 None => {
                     println!("sst start key format is not correct: {}", output);
                     continue;
