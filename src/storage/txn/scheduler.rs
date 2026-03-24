@@ -623,6 +623,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         // Patch B: attach resource metering tag so that precheck CPU on the
         // scheduler pool is attributed to the region.
         let resource_tag = self.inner.resource_tag_factory.new_tag(&ctx);
+        let outer_resource_tag = resource_tag.clone();
         let execution = async move {
             match unsafe { with_tls_engine(|engine: &mut E| engine.precheck_write_with_ctx(&ctx)) }
             {
@@ -671,10 +672,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         .in_resource_metering_tag(resource_tag);
         let execution = track(execution, TlsFutureTracker::new(tracker_token, tag, cid));
         self.get_sched_pool()
-            .spawn(
+            .spawn_with_outer_resource_metering_tag(
                 &cmd.ctx().request_source,
                 TaskMetadata::from_ctx(cmd.resource_control_ctx()),
                 cmd.priority(),
+                outer_resource_tag,
                 execution,
             )
             .unwrap();
@@ -695,11 +697,13 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 // when many queuing tasks fail successively.
                 let this = self.clone();
                 let resource_tag = self.inner.resource_tag_factory.new_tag(&ctx);
+                let outer_resource_tag = resource_tag.clone();
                 self.get_sched_pool()
-                    .spawn(
+                    .spawn_with_outer_resource_metering_tag(
                         &request_source,
                         metadata,
                         pri,
+                        outer_resource_tag,
                         async move {
                             this.finish_with_err(cid, err, None);
                         }
@@ -749,6 +753,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         // Patch A: create resource metering tag early so that snapshot and all
         // subsequent scheduler CPU is attributed to the region.
         let resource_tag = self.inner.resource_tag_factory.new_tag(task.cmd().ctx());
+        let outer_resource_tag = resource_tag.clone();
         let execution = async move {
             fail_point!("scheduler_start_execute");
             if sched.check_task_deadline_exceeded(&task, None) {
@@ -832,7 +837,13 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         });
         SCHED_TXN_RUNNING_COMMANDS.inc();
         self.get_sched_pool()
-            .spawn(&request_source, metadata, priority, execution)
+            .spawn_with_outer_resource_metering_tag(
+                &request_source,
+                metadata,
+                priority,
+                outer_resource_tag,
+                execution,
+            )
             .unwrap();
     }
 
@@ -1170,11 +1181,13 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         } else {
             let lock_wait_queues = self.inner.lock_wait_queues.clone();
             let resource_tag = self.inner.resource_tag_factory.new_tag(ctx);
+            let outer_resource_tag = resource_tag.clone();
             self.get_sched_pool()
-                .spawn(
+                .spawn_with_outer_resource_metering_tag(
                     request_source,
                     metadata,
                     CommandPri::High,
+                    outer_resource_tag,
                     async move {
                         lock_wait_queues.update_lock_wait(new_acquired_locks);
                     }

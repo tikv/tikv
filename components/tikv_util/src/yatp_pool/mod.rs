@@ -198,6 +198,8 @@ pub struct YatpPoolRunner<T: PoolTicker> {
     after_start: Option<Arc<dyn Fn() + Send + Sync>>,
     before_stop: Option<Arc<dyn Fn() + Send + Sync>>,
     before_pause: Option<Arc<dyn Fn() + Send + Sync>>,
+    before_task_handle: Option<Arc<dyn Fn(u64) + Send + Sync>>,
+    after_task_handle: Option<Arc<dyn Fn(u64, bool) + Send + Sync>>,
 
     // Statistics about the schedule wait/exec duration.
     // local histogram for high,medium,low priority tasks.
@@ -227,6 +229,7 @@ impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
 
     fn handle(&mut self, local: &mut Local<Self::TaskCell>, mut task_cell: Self::TaskCell) -> bool {
         let extras = task_cell.mut_extras();
+        let task_id = extras.task_id();
         let priority = priority_from_task_meta(extras.metadata());
         let start_time =
             if self.schedule_wait_durations.enabled() || self.schedule_exec_durations.enabled() {
@@ -234,6 +237,9 @@ impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
             } else {
                 None
             };
+        if let Some(f) = self.before_task_handle.as_ref() {
+            f(task_id);
+        }
         if let Some(dur) = start_time
             .zip(extras.schedule_time())
             .map(|(t1, t2)| t1.saturating_duration_since(t2))
@@ -241,6 +247,9 @@ impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
             self.schedule_wait_durations.observe(priority, dur);
         }
         let finished = self.inner.handle(local, task_cell);
+        if let Some(f) = self.after_task_handle.as_ref() {
+            f(task_id, finished);
+        }
         let end_time = if self.schedule_exec_durations.enabled() {
             Some(std::time::Instant::now())
         } else {
@@ -288,6 +297,8 @@ impl<T: PoolTicker> YatpPoolRunner<T> {
         after_start: Option<Arc<dyn Fn() + Send + Sync>>,
         before_stop: Option<Arc<dyn Fn() + Send + Sync>>,
         before_pause: Option<Arc<dyn Fn() + Send + Sync>>,
+        before_task_handle: Option<Arc<dyn Fn(u64) + Send + Sync>>,
+        after_task_handle: Option<Arc<dyn Fn(u64, bool) + Send + Sync>>,
         schedule_wait_durations: TaskScheduleHistograms,
         schedule_exec_durations: TaskScheduleHistograms,
     ) -> Self {
@@ -298,6 +309,8 @@ impl<T: PoolTicker> YatpPoolRunner<T> {
             after_start,
             before_stop,
             before_pause,
+            before_task_handle,
+            after_task_handle,
             schedule_wait_durations,
             schedule_exec_durations,
         }
@@ -310,6 +323,8 @@ pub struct YatpPoolBuilder<T: PoolTicker> {
     after_start: Option<Arc<dyn Fn() + Send + Sync>>,
     before_stop: Option<Arc<dyn Fn() + Send + Sync>>,
     before_pause: Option<Arc<dyn Fn() + Send + Sync>>,
+    before_task_handle: Option<Arc<dyn Fn(u64) + Send + Sync>>,
+    after_task_handle: Option<Arc<dyn Fn(u64, bool) + Send + Sync>>,
     min_thread_count: usize,
     core_thread_count: usize,
     max_thread_count: usize,
@@ -334,6 +349,8 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
             after_start: None,
             before_stop: None,
             before_pause: None,
+            before_task_handle: None,
+            after_task_handle: None,
             min_thread_count: 1,
             core_thread_count: 1,
             max_thread_count: 1,
@@ -411,6 +428,22 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         F: Fn() + Send + Sync + 'static,
     {
         self.before_pause = Some(Arc::new(f));
+        self
+    }
+
+    pub fn before_task_handle<F>(mut self, f: F) -> Self
+    where
+        F: Fn(u64) + Send + Sync + 'static,
+    {
+        self.before_task_handle = Some(Arc::new(f));
+        self
+    }
+
+    pub fn after_task_handle<F>(mut self, f: F) -> Self
+    where
+        F: Fn(u64, bool) + Send + Sync + 'static,
+    {
+        self.after_task_handle = Some(Arc::new(f));
         self
     }
 
@@ -557,6 +590,8 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         let after_start = self.after_start.take();
         let before_stop = self.before_stop.take();
         let before_pause = self.before_pause.take();
+        let before_task_handle = self.before_task_handle.take();
+        let after_task_handle = self.after_task_handle.take();
         let schedule_wait_durations = TaskScheduleHistograms::new(
             self.enable_task_wait_metrics,
             &name,
@@ -573,6 +608,8 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
             after_start,
             before_stop,
             before_pause,
+            before_task_handle,
+            after_task_handle,
             schedule_wait_durations,
             schedule_exec_durations,
         );

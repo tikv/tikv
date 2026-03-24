@@ -58,6 +58,7 @@ pub const MAX_THREAD_REGISTER_RETRY: u32 = 10;
 /// specified future context. It is used in the main business logic of TiKV.
 ///
 /// [Future]: futures::Future
+#[derive(Clone)]
 pub struct ResourceMeteringTag {
     infos: Arc<TagInfos>,
     resource_tag_factory: ResourceTagFactory,
@@ -101,6 +102,11 @@ impl ResourceMeteringTag {
 
             // unexpected nested attachment
             if ls.is_set {
+                if ls.attached_tag.load_full().as_ref() == Some(&self.infos) {
+                    return Guard {
+                        should_detach: false,
+                    };
+                }
                 debug_assert!(false, "nested attachment is not allowed");
                 return Guard {
                     should_detach: false,
@@ -507,5 +513,30 @@ mod tests {
             result.is_err(),
             "nested attachment should panic in debug mode"
         );
+    }
+
+    #[test]
+    fn test_nested_same_resource_metering_tag_is_allowed() {
+        std::thread::spawn(|| {
+            let factory = ResourceTagFactory::new_for_test();
+            let mut ctx = kvproto::kvrpcpb::Context::default();
+            ctx.set_region_id(100);
+            let tag = factory.new_tag(&ctx);
+
+            let inner = async {
+                STORAGE.with(|s| {
+                    let ls = s.borrow();
+                    assert!(ls.is_set);
+                    assert_eq!(ls.attached_tag.load_full().unwrap().region_id, 100);
+                });
+                7u64
+            }
+            .in_resource_metering_tag(tag.clone());
+
+            let outer = async move { inner.await }.in_resource_metering_tag(tag);
+            assert_eq!(futures::executor::block_on(outer), 7);
+        })
+        .join()
+        .unwrap();
     }
 }
