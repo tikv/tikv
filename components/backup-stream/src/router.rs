@@ -857,7 +857,7 @@ impl TempFileKey {
     fn format_date_time(ts: u64, t: FormatType) -> impl Display {
         use chrono::prelude::*;
         let millis = TimeStamp::physical(ts.into());
-        let dt = Utc.timestamp_millis(millis as _);
+        let dt = Utc.timestamp_millis_opt(millis as _).unwrap();
         match t {
             FormatType::Date => dt.format("%Y%m%d"),
             FormatType::Hour => dt.format("%H"),
@@ -1951,6 +1951,7 @@ impl std::fmt::Debug for DataFile {
 }
 
 #[derive(Clone, Ord, PartialOrd, PartialEq, Eq, Debug)]
+#[allow(dead_code)]
 struct KeyRange(Vec<u8>);
 
 #[derive(Clone, Debug)]
