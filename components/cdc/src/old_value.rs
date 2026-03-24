@@ -534,7 +534,10 @@ mod tests {
         let mut default_cursor = new_old_value_cursor(&snapshot, CF_DEFAULT);
         let mut load_default = |use_default_cursor: bool| {
             if use_default_cursor {
-                let x = unsafe { std::mem::transmute::<_, &'static mut _>(&mut default_cursor) };
+                let x = unsafe {
+                    #[allow(clippy::missing_transmute_annotations)]
+                    std::mem::transmute::<_, &'static mut _>(&mut default_cursor)
+                };
                 Either::Right(x)
             } else {
                 Either::Left(&snapshot)

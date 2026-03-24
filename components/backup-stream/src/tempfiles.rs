@@ -339,9 +339,8 @@ impl TempFilePool {
     fn create_relative(&self, p: &Path) -> std::io::Result<SwappedOut> {
         let abs_path = self.cfg.swap_files.join(p);
         #[cfg(test)]
-        match &self.override_swapout {
-            Some(f) => return Ok(SwappedOut::Dynamic(f(&abs_path))),
-            None => {}
+        if let Some(f) = &self.override_swapout {
+            return Ok(SwappedOut::Dynamic(f(&abs_path)));
         }
         let mut file = OsFile::from_std(SyncOsFile::create(&abs_path)?);
         file.set_max_buf_size(self.config().write_buffer_size);
