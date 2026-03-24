@@ -1007,6 +1007,14 @@ fn calculate_store_heartbeat_cpu_usage(
     )
 }
 
+fn report_interval_start(start_ts: UnixSecs, last_report_ts: UnixSecs) -> UnixSecs {
+    if last_report_ts.is_zero() {
+        start_ts
+    } else {
+        last_report_ts
+    }
+}
+
 struct StoreHeartbeatPeerReport {
     report_peers: HashMap<u64, pdpb::PeerStat>,
     region_unified_read_cpu_time_ms_sum: u64,
@@ -1438,9 +1446,11 @@ where
         // For fake heartbeats, keep peer deltas and CPU records untouched so the
         // next real heartbeat still reports a full interval.
         if !is_fake_heartbeat {
+            let report_start_ts =
+                report_interval_start(self.start_ts, self.store_stat.last_report_ts);
             let interval_seconds = now
                 .into_inner()
-                .saturating_sub(self.store_stat.last_report_ts.into_inner());
+                .saturating_sub(report_start_ts.into_inner());
             let StoreHeartbeatPeerReport {
                 report_peers,
                 region_unified_read_cpu_time_ms_sum,
@@ -1528,7 +1538,9 @@ where
         stats.set_write_io_rates(self.store_stat.store_write_io_rates.clone().into());
 
         let mut interval = pdpb::TimeInterval::default();
-        interval.set_start_timestamp(self.store_stat.last_report_ts.into_inner());
+        interval.set_start_timestamp(
+            report_interval_start(self.start_ts, self.store_stat.last_report_ts).into_inner(),
+        );
         stats.set_interval(interval);
         self.store_stat.engine_last_total_bytes_read = self.store_stat.engine_total_bytes_read;
         self.store_stat.engine_last_total_keys_read = self.store_stat.engine_total_keys_read;
@@ -2202,11 +2214,7 @@ where
         let region_id = region_buckets.meta.region_id;
         self.merge_buckets(region_buckets);
         let report_buckets = self.region_buckets.get_mut(&region_id).unwrap();
-        let last_report_ts = if report_buckets.last_report_ts.is_zero() {
-            self.start_ts
-        } else {
-            report_buckets.last_report_ts
-        };
+        let last_report_ts = report_interval_start(self.start_ts, report_buckets.last_report_ts);
         let now = UnixSecs::now();
         let interval_second = now.into_inner() - last_report_ts.into_inner();
         let delta = report_buckets.new_report(now);
@@ -3319,6 +3327,18 @@ mod tests {
         assert_eq!(
             cpu_usage_from_millis(report.region_unified_read_cpu_time_ms_sum, 1),
             1
+        );
+    }
+
+    #[test]
+    fn test_report_interval_start_falls_back_to_runner_start_ts() {
+        let start_ts = UnixSecs::now();
+        let last_report_ts = UnixSecs::now();
+
+        assert_eq!(report_interval_start(start_ts, UnixSecs::zero()), start_ts);
+        assert_eq!(
+            report_interval_start(UnixSecs::zero(), last_report_ts),
+            last_report_ts
         );
     }
 
