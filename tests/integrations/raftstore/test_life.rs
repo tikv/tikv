@@ -49,11 +49,15 @@ impl Filter for ForwardFilter {
                 }
             }
         } else {
+            let mut kept = Vec::with_capacity(msgs.len());
             for m in msgs.drain(..) {
                 if self.node_id == m.get_to_peer().get_store_id() {
                     (self.chain_send)(m);
+                } else {
+                    kept.push(m);
                 }
             }
+            *msgs = kept;
         }
         Ok(())
     }

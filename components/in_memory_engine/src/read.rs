@@ -721,7 +721,7 @@ mod tests {
                 );
             } else {
                 assert!(
-                    regions_map.regions()[&region.id]
+                    !regions_map.regions()[&region.id]
                         .region_snapshot_list()
                         .lock()
                         .unwrap()
