@@ -2464,7 +2464,7 @@ mod tests {
 
         for (num, exp) in cases {
             let dec: Decimal = num.into();
-            let dec_str = format!("{}", dec);
+            let dec_str = dec.to_string_value();
             assert_eq!(dec_str, exp);
         }
     }
@@ -2479,7 +2479,7 @@ mod tests {
 
         for (num, exp) in cases {
             let dec: Decimal = num.into();
-            let dec_str = format!("{}", dec);
+            let dec_str = dec.to_string_value();
             assert_eq!(dec_str, exp);
         }
     }
@@ -2525,8 +2525,8 @@ mod tests {
             let log = format!(
                 "input: {}, expect: {:?}, output: {:?}",
                 input,
-                expect.as_ref().map(|x| x.to_string()),
-                r.as_ref().map(|x| x.to_string())
+                expect.as_ref().map(|x| x.to_string_value()),
+                r.as_ref().map(|x| x.to_string_value())
             );
             match expect {
                 Err(e) => {
@@ -2624,7 +2624,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (dec_str, exp) in cases {
             let dec = dec_str.parse::<Decimal>().unwrap();
-            let res = format!("{}", dec);
+            let res = dec.to_string_value();
             assert_eq!(res, dec_str);
 
             let f: f64 = dec.convert(&mut ctx).unwrap();
@@ -2933,7 +2933,7 @@ mod tests {
                 .unwrap()
                 .unwrap();
             let shifted = dec.shift_with_word_buf_len(shift, word_buf_len);
-            let res = shifted.map(|d| d.to_string());
+            let res = shifted.map(|d| d.to_string_value());
             assert_eq!(res, exp.map(ToOwned::to_owned));
         }
     }
@@ -2986,15 +2986,15 @@ mod tests {
             let dec = dec_str.parse::<Decimal>().unwrap();
             let round_dec = dec.round(scale, RoundMode::HalfEven);
             assert_eq!(round_dec.frac_cnt, round_dec.result_frac_cnt);
-            let res = round_dec.map(|d| d.to_string());
+            let res = round_dec.map(|d| d.to_string_value());
             assert_eq!(res, half_exp.map(|s| s.to_owned()));
             let round_dec = dec.round(scale, RoundMode::Truncate);
             assert_eq!(round_dec.frac_cnt, round_dec.result_frac_cnt);
-            let res = round_dec.map(|d| d.to_string());
+            let res = round_dec.map(|d| d.to_string_value());
             assert_eq!(res, trunc_exp.map(|s| s.to_owned()));
             let round_dec = dec.round(scale, RoundMode::Ceiling);
             assert_eq!(round_dec.frac_cnt, round_dec.result_frac_cnt);
-            let res = round_dec.map(|d| d.to_string());
+            let res = round_dec.map(|d| d.to_string_value());
             assert_eq!(res, ceil_exp.map(|s| s.to_owned()));
         }
     }
@@ -3082,7 +3082,7 @@ mod tests {
 
         for (word_buf_len, dec, exp) in cases {
             let d = Decimal::from_bytes_with_word_buf(dec, word_buf_len).unwrap();
-            let res = d.map(|d| d.to_string());
+            let res = d.map(|d| d.to_string_value());
             assert_eq!(res, exp.map(|s| s.to_owned()));
         }
 
@@ -3144,7 +3144,7 @@ mod tests {
             let mut buf = vec![];
             let res = buf.write_decimal(&dec, prec, frac).unwrap();
             let decoded = buf.as_slice().read_decimal().unwrap();
-            let res = res.map(|_| decoded.to_string());
+            let res = res.map(|_| decoded.to_string_value());
             assert_eq!(res, exp.map(|s| s.to_owned()));
         }
     }
@@ -3255,7 +3255,7 @@ mod tests {
 
         for (prec, frac, exp) in cases {
             let dec = super::max_decimal(prec, frac);
-            let res = dec.to_string();
+            let res = dec.to_string_value();
             assert_eq!(&res, exp);
         }
     }
@@ -3302,12 +3302,12 @@ mod tests {
             let rhs = rhs_str.parse::<Decimal>().unwrap();
 
             let res_dec = &lhs + &rhs;
-            let res = res_dec.map(|s| s.to_string());
+            let res = res_dec.map(|s| s.to_string_value());
             let exp_str = exp.map(|s| s.to_owned());
             assert_eq!(res, exp_str);
 
             let res_dec = &rhs + &lhs;
-            let res = res_dec.map(|s| s.to_string());
+            let res = res_dec.map(|s| s.to_string_value());
             assert_eq!(res, exp_str);
         }
     }
@@ -3350,7 +3350,7 @@ mod tests {
             let lhs = lhs_str.parse::<Decimal>().unwrap();
             let rhs = rhs_str.parse::<Decimal>().unwrap();
             let res_dec = &lhs - &rhs;
-            let res = res_dec.map(|s| s.to_string());
+            let res = res_dec.map(|s| s.to_string_value());
             assert_eq!(res, exp.map(|s| s.to_owned()));
         }
     }
@@ -3384,10 +3384,10 @@ mod tests {
             let lhs: Decimal = lhs_str.parse().unwrap();
             let rhs: Decimal = rhs_str.parse().unwrap();
             let exp = exp_str.map(|s| s.to_owned());
-            let res = (&lhs * &rhs).map(|d| d.to_string());
+            let res = (&lhs * &rhs).map(|d| d.to_string_value());
             assert_eq!(res, exp);
 
-            let res = (&rhs * &lhs).map(|d| d.to_string());
+            let res = (&rhs * &lhs).map(|d| d.to_string_value());
             assert_eq!(res, exp);
         }
     }
@@ -3409,11 +3409,11 @@ mod tests {
             let lhs: Decimal = lhs_str.parse().unwrap();
             let rhs: Decimal = rhs_str.parse().unwrap();
             let exp = exp_str.map(|s| s.to_owned());
-            let res = (&lhs * &rhs).map(|d| d.to_string());
+            let res = (&lhs * &rhs).map(|d| d.to_string_value());
             assert_eq!(res, exp);
 
             let exp = rev_exp_str.map(|s| s.to_owned());
-            let res = (&rhs * &lhs).map(|d| d.to_string());
+            let res = (&rhs * &lhs).map(|d| d.to_string_value());
             assert_eq!(res, exp);
         }
     }
@@ -3606,12 +3606,12 @@ mod tests {
         for (frac_incr, lhs_str, rhs_str, div_exp, rem_exp) in cases {
             let lhs: Decimal = lhs_str.parse().unwrap();
             let rhs: Decimal = rhs_str.parse().unwrap();
-            let res =
-                super::do_div_mod(&lhs, &rhs, frac_incr, false).map(|d| d.unwrap().to_string());
+            let res = super::do_div_mod(&lhs, &rhs, frac_incr, false)
+                .map(|d| d.unwrap().to_string_value());
             assert_eq!(res, div_exp.map(|s| s.to_owned()));
 
-            let res =
-                super::do_div_mod(&lhs, &rhs, frac_incr, true).map(|d| d.unwrap().to_string());
+            let res = super::do_div_mod(&lhs, &rhs, frac_incr, true)
+                .map(|d| d.unwrap().to_string_value());
             assert_eq!(res, rem_exp.map(|s| s.to_owned()));
         }
 
@@ -3628,7 +3628,7 @@ mod tests {
         for (lhs_str, rhs_str, div_exp) in div_cases {
             let lhs: Decimal = lhs_str.parse().unwrap();
             let rhs: Decimal = rhs_str.parse().unwrap();
-            let res = (&lhs / &rhs).unwrap().map(|d| d.to_string());
+            let res = (&lhs / &rhs).unwrap().map(|d| d.to_string_value());
             assert_eq!(res, div_exp.map(|s| s.to_owned()))
         }
 
@@ -3636,7 +3636,7 @@ mod tests {
         for (lhs_str, rhs_str, rem_exp) in rem_cases {
             let lhs: Decimal = lhs_str.parse().unwrap();
             let rhs: Decimal = rhs_str.parse().unwrap();
-            let res = (lhs % rhs).unwrap().map(|d| d.to_string());
+            let res = (lhs % rhs).unwrap().map(|d| d.to_string_value());
             assert_eq!(res, rem_exp.map(|s| s.to_owned()))
         }
     }
@@ -3657,12 +3657,12 @@ mod tests {
         for (pos, neg) in cases {
             let pos_dec: Decimal = pos.parse().unwrap();
             let res = -pos_dec;
-            assert_eq!(format!("{}", res), neg);
+            assert_eq!(res.to_string_value(), neg);
             assert!((&pos_dec + &res).is_zero());
 
             let neg_dec: Decimal = neg.parse().unwrap();
             let res = -neg_dec;
-            assert_eq!(format!("{}", res), pos);
+            assert_eq!(res.to_string_value(), pos);
             assert!((&neg_dec + &res).is_zero());
         }
 
@@ -3694,12 +3694,12 @@ mod tests {
 
         for (prec, frac, exp) in cases {
             let positive = super::max_or_min_dec(false, prec, frac);
-            let res = positive.to_string();
+            let res = positive.to_string_value();
             assert_eq!(&res, exp);
             let negative = super::max_or_min_dec(true, prec, frac);
             let mut negative_exp = String::from("-");
             negative_exp.push_str(exp);
-            let res = negative.to_string();
+            let res = negative.to_string_value();
             assert_eq!(res, negative_exp);
         }
     }

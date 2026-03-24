@@ -288,7 +288,7 @@ mod tests {
     fn test_from_str_for_object() {
         let jstr1 = r#"{"a": [1, "2", {"aa": "bb"}, 4.0, null], "c": null,"b": true}"#;
         let j1: Json = jstr1.parse().unwrap();
-        let jstr2 = j1.to_string();
+        let jstr2 = j1.to_string_value();
         let expect_str = r#"{"a": [1, "2", {"aa": "bb"}, 4.0, null], "b": true, "c": null}"#;
         assert_eq!(jstr2, expect_str);
     }
@@ -369,7 +369,7 @@ mod tests {
         ];
 
         for (json, json_str) in legal_cases {
-            assert_eq!(json.to_string(), json_str);
+            assert_eq!(json.to_string_value(), json_str);
         }
     }
 }
