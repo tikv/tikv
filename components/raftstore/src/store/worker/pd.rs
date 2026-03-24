@@ -953,7 +953,6 @@ fn should_report_hotspot_read_peer(
 
 #[derive(Default)]
 struct StoreHeartbeatCpuUsage {
-    cpu_usage: u64,
     unified_read_cpu_usage: u64,
     scheduler_cpu_usage: u64,
 }
@@ -973,7 +972,6 @@ fn calculate_store_heartbeat_cpu_usage(
         return StoreHeartbeatCpuUsage::default();
     }
 
-    let cpu_usage = cpu_usage_from_millis(cpu_record.cpu_time_ms as u64, interval_seconds);
     let unified_read_cpu_time_ms = cpu_record.unified_read_cpu_time_ms as u64;
     let scheduler_cpu_time_ms = cpu_record.scheduler_cpu_time_ms as u64;
     let mut unified_read_cpu_usage =
@@ -994,7 +992,6 @@ fn calculate_store_heartbeat_cpu_usage(
     }
 
     StoreHeartbeatCpuUsage {
-        cpu_usage,
         unified_read_cpu_usage,
         scheduler_cpu_usage,
     }
@@ -1041,11 +1038,14 @@ fn collect_report_peers_for_store_heartbeat(
         region_peer
             .last_store_report_query_stats
             .fill_query_stats(&region_peer.query_stats);
+        // Store heartbeat still reports read hotspots, so CPU admission only
+        // uses unified-read pool CPU. If store heartbeat later also reports
+        // write hotspots, scheduler CPU should be folded into this check.
         if !should_report_hotspot_read_peer(
             read_bytes,
             read_keys,
             &query_stats,
-            cpu_usage.cpu_usage,
+            cpu_usage.unified_read_cpu_usage,
         ) {
             continue;
         }
@@ -3199,7 +3199,6 @@ mod tests {
             1,
         );
 
-        assert_eq!(cpu_usage.cpu_usage, 1);
         assert_eq!(
             cpu_usage.unified_read_cpu_usage + cpu_usage.scheduler_cpu_usage,
             1
@@ -3207,7 +3206,7 @@ mod tests {
     }
 
     #[test]
-    fn test_collect_report_peers_for_store_heartbeat_uses_total_cpu_for_hotspot() {
+    fn test_collect_report_peers_for_store_heartbeat_ignores_untracked_cpu_for_hotspot() {
         let mut region_peers = HashMap::default();
         region_peers.insert(1, PeerStat::default());
         let mut region_cpu_records_since_store_heartbeat: HashMap<u64, RegionCpuRecord> =
@@ -3226,9 +3225,57 @@ mod tests {
             1,
         );
 
+        assert!(!report.report_peers.contains_key(&1));
+    }
+
+    #[test]
+    fn test_collect_report_peers_for_store_heartbeat_uses_unified_read_cpu_for_hotspot() {
+        let mut region_peers = HashMap::default();
+        region_peers.insert(1, PeerStat::default());
+        let mut region_cpu_records_since_store_heartbeat: HashMap<u64, RegionCpuRecord> =
+            HashMap::default();
+        region_cpu_records_since_store_heartbeat.insert(
+            1,
+            RegionCpuRecord {
+                cpu_time_ms: 10,
+                unified_read_cpu_time_ms: 10,
+                ..Default::default()
+            },
+        );
+
+        let report = collect_report_peers_for_store_heartbeat(
+            &mut region_peers,
+            &mut region_cpu_records_since_store_heartbeat,
+            1,
+        );
+
         let reported = report.report_peers.get(&1).unwrap();
-        assert_eq!(reported.get_cpu_stats().get_unified_read(), 0);
+        assert_eq!(reported.get_cpu_stats().get_unified_read(), 1);
         assert_eq!(reported.get_cpu_stats().get_scheduler(), 0);
+    }
+
+    #[test]
+    fn test_collect_report_peers_for_store_heartbeat_ignores_scheduler_cpu_for_hotspot() {
+        let mut region_peers = HashMap::default();
+        region_peers.insert(1, PeerStat::default());
+        let mut region_cpu_records_since_store_heartbeat: HashMap<u64, RegionCpuRecord> =
+            HashMap::default();
+        region_cpu_records_since_store_heartbeat.insert(
+            1,
+            RegionCpuRecord {
+                cpu_time_ms: 10,
+                scheduler_cpu_time_ms: 10,
+                ..Default::default()
+            },
+        );
+
+        let report = collect_report_peers_for_store_heartbeat(
+            &mut region_peers,
+            &mut region_cpu_records_since_store_heartbeat,
+            1,
+        );
+
+        assert!(!report.report_peers.contains_key(&1));
     }
 
     #[test]
