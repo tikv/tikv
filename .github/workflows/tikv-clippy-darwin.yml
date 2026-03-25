@@ -2,6 +2,7 @@ name: Clippy (Darwin)
 
 env:
   CMAKE_VERSION: "3.28.0"
+  GO_VERSION: "1.25.7"
 
 on:
   pull_request:
@@ -40,6 +41,23 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Install Go
+        env:
+          GO_VERSION: ${{ env.GO_VERSION }}
+        run: |
+          GO_ARCH="${{ matrix.arch }}"
+          GO_TARBALL="go${GO_VERSION}.darwin-${GO_ARCH}.tar.gz"
+          GO_URL="https://go.dev/dl/${GO_TARBALL}"
+
+          cd /tmp
+          curl -L -o "${GO_TARBALL}" "${GO_URL}"
+
+          sudo rm -rf /usr/local/go
+          sudo tar -C /usr/local -xzf "${GO_TARBALL}"
+
+          echo "/usr/local/go/bin" >> "$GITHUB_PATH"
+          /usr/local/go/bin/go version
         
       - name: Install CMake
         env:
