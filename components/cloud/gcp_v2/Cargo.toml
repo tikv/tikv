@@ -30,3 +30,4 @@ crc32c = "0.6"
 
 [dev-dependencies]
 prometheus = "0.13"
+tempfile = "3"

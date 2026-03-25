@@ -1,5 +1,6 @@
 use std::{
     io,
+    path::Path,
     sync::{Arc, Mutex},
 };
 
@@ -28,6 +29,12 @@ fn build_http_response(body: &str, extra_headers: &[(&str, &str)]) -> Vec<u8> {
 }
 
 fn response_for_target(target: &str, addr: &str) -> Vec<u8> {
+    if target.contains("/token") {
+        return build_http_response(
+            r#"{"access_token":"test-token","issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"Bearer","expires_in":3600}"#,
+            &[],
+        );
+    }
     if target.contains("uploadType=resumable") {
         let location = format!("http://{addr}/upload/resumable");
         return build_http_response("", &[("Location", location.as_str())]);
@@ -118,6 +125,22 @@ fn make_cfg(
     cfg
 }
 
+fn external_account_credentials_blob(token_url: &str, subject_token_file: &Path) -> String {
+    format!(
+        r#"{{
+  "type": "external_account",
+  "audience": "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/pool/providers/provider",
+  "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+  "token_url": "{token_url}",
+  "credential_source": {{
+    "file": "{}"
+  }}
+}}"#
+        ,
+        subject_token_file.display()
+    )
+}
+
 #[tokio::test]
 async fn gcp_v2_put_uses_resumable_upload_with_requested_options()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -129,6 +152,11 @@ async fn gcp_v2_put_uses_resumable_upload_with_requested_options()
         "COLDLINE",
         "projectPrivate",
     );
+    let mut cfg = cfg;
+    let token_file = tempfile::NamedTempFile::new()?;
+    std::fs::write(token_file.path(), "header.payload.signature")?;
+    cfg.credentials_blob =
+        external_account_credentials_blob(&format!("{endpoint}/token"), token_file.path());
     let s = gcp_v2::GcsStorage::from_input(cfg)?;
 
     s.put(
@@ -172,6 +200,11 @@ async fn gcp_v2_zero_length_put_uses_resumable_upload() -> Result<(), Box<dyn st
         "COLDLINE",
         "projectPrivate",
     );
+    let mut cfg = cfg;
+    let token_file = tempfile::NamedTempFile::new()?;
+    std::fs::write(token_file.path(), "header.payload.signature")?;
+    cfg.credentials_blob =
+        external_account_credentials_blob(&format!("{endpoint}/token"), token_file.path());
     let s = gcp_v2::GcsStorage::from_input(cfg)?;
 
     s.put(

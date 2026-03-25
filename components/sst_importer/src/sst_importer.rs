@@ -2917,23 +2917,27 @@ mod tests {
         )
         .unwrap();
 
-        let mut backend_config = BackendConfig::default();
-        backend_config.gcp_v2_enable = true;
-        importer.set_backend_config(backend_config);
-
         let mut gcs = kvproto::brpb::Gcs::default();
         gcs.bucket = "test-bucket".to_owned();
         gcs.endpoint = "http://127.0.0.1:1".to_owned();
+        gcs.credentials_blob = r#"{"type":"external_account"}"#.to_owned();
         let mut backend = StorageBackend::default();
         backend.set_gcs(gcs);
 
-        let direct = importer.external_storage_or_cache(&backend, "").unwrap();
-        assert_eq!(direct.name(), "gcp_v2");
-
-        let cached = importer
-            .external_storage_or_cache(&backend, "cached-gcs")
+        let mut backend_config = BackendConfig::default();
+        backend_config.gcp_v2_enable = true;
+        importer.set_backend_config(backend_config);
+        importer.external_storage_or_cache(&backend, "").unwrap();
+        importer
+            .external_storage_or_cache(&backend, "cached-gcs-v2")
             .unwrap();
-        assert_eq!(cached.name(), "gcp_v2");
+
+        importer.set_backend_config(BackendConfig::default());
+        match importer.external_storage_or_cache(&backend, "") {
+            Ok(_) => panic!("gcs v1 should reject external_account credentials"),
+            Err(Error::Io(err)) => assert_eq!(err.kind(), io::ErrorKind::InvalidInput),
+            Err(err) => panic!("unexpected error: {err}"),
+        }
     }
 
     #[test]
