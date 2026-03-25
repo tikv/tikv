@@ -1,6 +1,6 @@
 // Copyright 2026 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{future::Future, io, pin::Pin};
+use std::{cmp, future::Future, io, pin::Pin};
 
 use async_trait::async_trait;
 use cloud::{
@@ -99,14 +99,14 @@ impl tikv_util::stream::RetryError for GcsApiError {
             return true;
         }
 
-        matches!(
-            self.grpc_code(),
+        match self.grpc_code() {
             Some(google_cloud_gax::error::rpc::Code::Unavailable)
-                | Some(google_cloud_gax::error::rpc::Code::DeadlineExceeded)
-                | Some(google_cloud_gax::error::rpc::Code::ResourceExhausted)
-                | Some(google_cloud_gax::error::rpc::Code::Aborted)
-                | Some(google_cloud_gax::error::rpc::Code::Internal)
-        )
+            | Some(google_cloud_gax::error::rpc::Code::DeadlineExceeded)
+            | Some(google_cloud_gax::error::rpc::Code::ResourceExhausted)
+            | Some(google_cloud_gax::error::rpc::Code::Aborted)
+            | Some(google_cloud_gax::error::rpc::Code::Internal) => true,
+            _ => false,
+        }
     }
 }
 
@@ -163,7 +163,7 @@ impl StreamingSource for PutResourceSource {
     type Error = io::Error;
 
     async fn next(&mut self) -> Option<Result<bytes::Bytes, Self::Error>> {
-        let mut buf = vec![0; (self.exact_size as usize).clamp(1, PUT_READ_CHUNK_SIZE)];
+        let mut buf = vec![0; cmp::max(1, cmp::min(self.exact_size as usize, PUT_READ_CHUNK_SIZE))];
         match self.reader.lock().await.read(&mut buf).await {
             Ok(0) => None,
             Ok(n) => {
@@ -357,8 +357,6 @@ impl GcsStorage {
             // Validate JSON format but don't build credentials yet
             validate_credentials_json(&input.credentials_blob)?;
             CredentialsMode::Json(input.credentials_blob.clone())
-        } else if endpoint.is_some() {
-            CredentialsMode::Anonymous
         } else {
             CredentialsMode::Default
         };
@@ -728,6 +726,23 @@ mod tests {
     }
 
     #[test]
+    fn custom_endpoint_without_credentials_uses_default_credentials_mode() -> io::Result<()> {
+        let mut input = InputConfig::default();
+        input.bucket = "b".to_string();
+        input.endpoint = "http://127.0.0.1:1".to_string();
+        let s = GcsStorage::from_input(input)?;
+        assert!(matches!(
+            s.inner.data_credentials_mode,
+            CredentialsMode::Default
+        ));
+        assert!(matches!(
+            s.inner.control_credentials_mode,
+            CredentialsMode::Default
+        ));
+        Ok(())
+    }
+
+    #[test]
     fn url_with_custom_endpoint() -> io::Result<()> {
         let mut input = InputConfig::default();
         input.bucket = "bucket".to_string();
@@ -759,7 +774,7 @@ mod tests {
         .await?;
 
         let after_insert = histogram_sample_count("gcp", "insert_multipart");
-        assert!(after_insert > before_insert);
+        assert!(after_insert >= before_insert + 1);
         Ok(())
     }
 
@@ -783,7 +798,7 @@ mod tests {
 
         let after_multipart = histogram_sample_count("gcp", "insert_multipart");
         let after_simple = histogram_sample_count("gcp", "insert_simple");
-        assert!(after_multipart > before_multipart);
+        assert!(after_multipart >= before_multipart + 1);
         assert_eq!(after_simple, before_simple);
         Ok(())
     }

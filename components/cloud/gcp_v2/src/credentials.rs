@@ -5,7 +5,6 @@ use std::io;
 #[derive(Clone)]
 pub(crate) enum CredentialsMode {
     Default,
-    Anonymous,
     Json(String),
 }
 
@@ -13,7 +12,6 @@ impl std::fmt::Debug for CredentialsMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CredentialsMode::Default => f.write_str("Default"),
-            CredentialsMode::Anonymous => f.write_str("Anonymous"),
             CredentialsMode::Json(_) => f.write_str("Json(REDACTED)"),
         }
     }
@@ -59,9 +57,6 @@ pub(crate) fn build_credentials(
     ensure_rustls_fips_provider()?;
     match mode {
         CredentialsMode::Default => Ok(None),
-        CredentialsMode::Anonymous => Ok(Some(
-            google_cloud_auth::credentials::anonymous::Builder::new().build(),
-        )),
         CredentialsMode::Json(creds_json) => {
             let creds_value: serde_json::Value = serde_json::from_str(creds_json)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;

@@ -84,7 +84,6 @@ impl GcpKms {
                 validate_credentials_json(&json_string).map_err(Self::map_credential_error)?;
                 CredentialsMode::Json(json_string)
             }
-            None if endpoint.is_some() => CredentialsMode::Anonymous,
             None => CredentialsMode::Default,
         };
 
@@ -528,9 +527,9 @@ mod tests {
         let after_generate = histogram_sample_count("gcp", "generateRandomBytes");
         let after_encrypt = histogram_sample_count("gcp", "encrypt");
         let after_decrypt = histogram_sample_count("gcp", "decrypt");
-        assert!(after_generate > before_generate);
-        assert!(after_encrypt > before_encrypt);
-        assert!(after_decrypt > before_decrypt);
+        assert!(after_generate >= before_generate + 1);
+        assert!(after_encrypt >= before_encrypt + 1);
+        assert!(after_decrypt >= before_decrypt + 1);
         Ok(())
     }
 
@@ -560,5 +559,15 @@ mod tests {
             !msg.contains("unsupported credentials_blob type"),
             "unexpected error message: {msg}"
         );
+    }
+
+    #[test]
+    fn custom_endpoint_without_credentials_uses_default_credentials_mode()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut config = test_config()?;
+        config.location.endpoint = "http://127.0.0.1:1".to_owned();
+        let kms = GcpKms::new(config)?;
+        assert!(matches!(kms.credentials_mode, CredentialsMode::Default));
+        Ok(())
     }
 }
