@@ -135,8 +135,7 @@ fn external_account_credentials_blob(token_url: &str, subject_token_file: &Path)
   "credential_source": {{
     "file": "{}"
   }}
-}}"#
-        ,
+}}"#,
         subject_token_file.display()
     )
 }
