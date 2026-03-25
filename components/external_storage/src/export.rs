@@ -73,7 +73,7 @@ fn create_backend(
             blob_store(s)
         }
         Backend::Gcs(config) => {
-            if backend_config.gcs_v2_enable {
+            if backend_config.gcp_v2_enable {
                 info!("external storage selected: gcp_v2");
                 blob_store(GcsStorageV2::from_input(config.clone())?)
             } else {

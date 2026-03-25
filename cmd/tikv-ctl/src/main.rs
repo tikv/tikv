@@ -406,7 +406,7 @@ fn main() {
             minimal_compaction_size,
             prefetch_running_count,
             prefetch_buffer_count,
-            gcs_v2_enable,
+            gcp_v2_enable,
         } => {
             let tmp_engine =
                 TemporaryRocks::new(&cfg).expect("failed to create temp engine for writing SSTs.");
@@ -446,7 +446,7 @@ fn main() {
                 backend_config: Default::default(),
                 db: Some(tmp_engine.rocks),
             };
-            exec.backend_config.gcs_v2_enable = gcs_v2_enable;
+            exec.backend_config.gcp_v2_enable = gcp_v2_enable;
 
             use tikv::server::status_server::lite::Server as StatusServerLite;
             struct ExportTiKVInfo {

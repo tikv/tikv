@@ -1037,7 +1037,7 @@ mod test {
             std::fs::create_dir_all(&tmp).unwrap();
             let mut bs_cfg = BackupStreamConfig::default();
             bs_cfg.temp_path = tmp.to_string_lossy().into_owned();
-            bs_cfg.gcs_v2_enable = true;
+            bs_cfg.gcp_v2_enable = true;
             let router = RouterInner::new(
                 scheduler.clone(),
                 crate::router::Config::from_backup_stream_config(bs_cfg),
