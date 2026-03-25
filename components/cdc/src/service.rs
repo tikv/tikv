@@ -2,8 +2,8 @@
 
 use std::{
     sync::{
-        Arc,
         atomic::{AtomicUsize, Ordering},
+        Arc,
     },
     time::{Duration, Instant},
 };
@@ -17,15 +17,15 @@ use futures::{
 use grpcio::{DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::{
     cdcpb::{
-        ChangeData, ChangeDataEvent, ChangeDataRequest, ChangeDataRequest_oneof_request,
-        ChangeDataRequestKvApi,
+        ChangeData, ChangeDataEvent, ChangeDataRequest, ChangeDataRequestKvApi,
+        ChangeDataRequest_oneof_request,
     },
     kvrpcpb::ApiVersion,
 };
 use tikv_util::{error, info, memory::MemoryQuota, timer::GLOBAL_TIMER_HANDLE, warn, worker::*};
 
 use crate::{
-    channel::{CDC_CHANNLE_CAPACITY, Sink, channel},
+    channel::{channel, Sink, CDC_CHANNLE_CAPACITY},
     delegate::{Downstream, DownstreamId, DownstreamState, ObservedRange},
     endpoint::{Deregister, Task},
     metrics::CDC_ABORTED_CONNECTIONS,
@@ -37,6 +37,7 @@ static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 const CDC_WATCHDOG_CHECK_INTERVAL_SECS: u64 = 2;
 const CDC_IDLE_WARNING_THRESHOLD_SECS: u64 = 60;
 const CDC_IDLE_DEREGISTER_THRESHOLD_SECS: u64 = 60 * 20; // 20 minutes
+const CDC_MEMORY_QUOTA_ABORT_THRESHOLD: f64 = 0.999;
 
 pub fn validate_kv_api(kv_api: ChangeDataRequestKvApi, api_version: ApiVersion) -> bool {
     kv_api == ChangeDataRequestKvApi::TiDb
@@ -532,6 +533,7 @@ impl Service {
             conn_id,
             cancel_tx,
             forward_exit_rx,
+            self.memory_quota.clone(),
         );
     }
 
@@ -547,6 +549,7 @@ impl Service {
         conn_id: ConnId,
         cancel_tx: tokio::sync::oneshot::Sender<()>,
         mut forward_exit_rx: tokio::sync::oneshot::Receiver<()>,
+        memory_quota: Arc<MemoryQuota>,
     ) {
         let last_flush_time_clone = last_flush_time.clone();
         let peer_clone = peer.clone();
@@ -570,7 +573,11 @@ impl Service {
                         let elapsed = last_flush_time_clone.load().elapsed();
 
                         // Check if last flush was more than the warning threshold
-                        if elapsed > Duration::from_secs(CDC_IDLE_WARNING_THRESHOLD_SECS) {
+                        // To prevent the case that the connection idle since there are a lot of
+                        // incremental scan tasks queueing so won't send events, also check on the
+                        // memory usage, if the memory quota is almost used up, we abort the connection.
+                        if elapsed > Duration::from_secs(_idle_threshold)
+                            && memory_quota.used_ratio() >= CDC_MEMORY_QUOTA_ABORT_THRESHOLD {
                             warn!("cdc connection idle too long";
                                   "downstream" => peer_clone.clone(),
                                   "conn_id" => ?conn_id,
@@ -649,13 +656,13 @@ async fn sleep_before_drain_change_event() {
 mod tests {
     use std::{sync::Arc, time::Duration};
 
-    use futures::{SinkExt, executor::block_on};
+    use futures::{executor::block_on, SinkExt};
     use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder, WriteFlags};
-    use kvproto::cdcpb::{ChangeDataClient, ResolvedTs, create_change_data};
+    use kvproto::cdcpb::{create_change_data, ChangeDataClient, ResolvedTs};
     use tikv_util::future::block_on_timeout;
 
     use super::*;
-    use crate::channel::{CdcEvent, recv_timeout};
+    use crate::channel::{recv_timeout, CdcEvent};
 
     fn new_rpc_suite(capacity: usize) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
         let memory_quota = Arc::new(MemoryQuota::new(capacity));
