@@ -975,10 +975,16 @@ fn calculate_cpu_usage_breakdown(
     let mut unified_read_cpu_usage =
         cpu_usage_from_millis(unified_read_cpu_time_ms, interval_seconds);
     let mut scheduler_cpu_usage = cpu_usage_from_millis(scheduler_cpu_time_ms, interval_seconds);
+    // Convert the pooled CPU once as well so integer truncation happens on the
+    // total only once. This keeps the split view reconcilable with the overall
+    // tracked CPU usage even when each pool is too small to survive truncation
+    // on its own.
     let breakdown_cpu_usage = cpu_usage_from_millis(
         unified_read_cpu_time_ms.saturating_add(scheduler_cpu_time_ms),
         interval_seconds,
     );
+    // Assign any truncated remainder back to the dominant pool so the split
+    // fields still sum to the pooled total that PD sees for the tracked CPU.
     let rounding_gap =
         breakdown_cpu_usage.saturating_sub(unified_read_cpu_usage + scheduler_cpu_usage);
     if rounding_gap > 0 {
