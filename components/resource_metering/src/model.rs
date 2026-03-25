@@ -207,7 +207,7 @@ pub enum ThreadPoolType {
     Unknown = 0,
     /// Unified read pool threads (prefix "unified-read").
     UnifiedRead = 1,
-    /// Scheduler worker pool threads (prefix "sched-pool").
+    /// Scheduler worker threads (prefix "sched").
     Scheduler = 2,
 }
 

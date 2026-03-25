@@ -71,6 +71,8 @@ pub const SCHEDULE_WORKER_HIGH_PRI_THREAD: &str = "sched-high";
 
 pub const SCHEDULE_WORKER_PRIORITY_THREAD: &str = "sched-pri";
 
+pub const SCHEDULE_THREAD_PREFIX: &str = "sched";
+
 pub const RESOLVED_TS_WORKER_THREAD: &str = "resolved-ts";
 
 pub const TRANSPORT_STATS_THREAD: &str = "trans-stats";
@@ -178,9 +180,16 @@ pub fn matches_thread_name_prefix(thread_name: &str, prefix: &str) -> bool {
     thread_name.starts_with(&prefix[..LINUX_THREAD_NAME_MAX_LEN])
 }
 
+#[inline]
+pub fn matches_scheduler_thread_name(thread_name: &str) -> bool {
+    matches_thread_name_prefix(thread_name, SCHEDULE_THREAD_PREFIX)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{LINUX_THREAD_NAME_MAX_LEN, matches_thread_name_prefix};
+    use super::{
+        LINUX_THREAD_NAME_MAX_LEN, matches_scheduler_thread_name, matches_thread_name_prefix,
+    };
 
     #[test]
     fn test_matches_thread_name_prefix_basic() {
@@ -201,5 +210,14 @@ mod tests {
             &format!("x{thread_name}"),
             long_prefix
         ));
+    }
+
+    #[test]
+    fn test_matches_scheduler_thread_name() {
+        assert!(matches_scheduler_thread_name("sched-pool-1"));
+        assert!(matches_scheduler_thread_name("sched-high-1"));
+        assert!(matches_scheduler_thread_name("sched-pri-1"));
+        assert!(matches_scheduler_thread_name("scheduler-worker-pool-1"));
+        assert!(!matches_scheduler_thread_name("foo-sched-pool-1"));
     }
 }

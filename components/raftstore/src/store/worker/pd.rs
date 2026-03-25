@@ -48,8 +48,7 @@ use tikv_util::{
     sys::{SysQuota, disk, thread::StdThreadBuildWrapper},
     thd_name,
     thread_name_prefix::{
-        SCHEDULE_WORKER_HIGH_PRI_THREAD, SCHEDULE_WORKER_POOL_THREAD,
-        SCHEDULE_WORKER_PRIORITY_THREAD, STATS_MONITOR_THREAD, UNIFIED_READ_POOL_THREAD,
+        STATS_MONITOR_THREAD, UNIFIED_READ_POOL_THREAD, matches_scheduler_thread_name,
         matches_thread_name_prefix,
     },
     time::{Instant as TiInstant, UnixSecs},
@@ -1475,10 +1474,7 @@ where
                     let name = record.get_key();
                     if matches_thread_name_prefix(name, UNIFIED_READ_POOL_THREAD) {
                         store_unified_read += record.get_value();
-                    } else if matches_thread_name_prefix(name, SCHEDULE_WORKER_POOL_THREAD)
-                        || matches_thread_name_prefix(name, SCHEDULE_WORKER_HIGH_PRI_THREAD)
-                        || matches_thread_name_prefix(name, SCHEDULE_WORKER_PRIORITY_THREAD)
-                    {
+                    } else if matches_scheduler_thread_name(name) {
                         store_scheduler += record.get_value();
                     }
                 }
