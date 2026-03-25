@@ -148,7 +148,6 @@ impl<E: KvEngine> Initializer<E> {
         let region_epoch = self.region_epoch.clone();
         let downstream_state = self.downstream_state.clone();
         let (cb, fut) = tikv_util::future::paired_future_callback();
-        let sink = self.sink.clone();
         let build_resolver = self.build_resolver.clone();
         let (incremental_scan_barrier_cb, incremental_scan_barrier_fut) =
             tikv_util::future::paired_future_callback();
@@ -166,7 +165,6 @@ impl<E: KvEngine> Initializer<E> {
                     observe_id,
                     downstream_id,
                     downstream_state,
-                    sink,
                     build_resolver,
                     incremental_scan_barrier: barrier,
                     cb: Box::new(move || cb(resp)),

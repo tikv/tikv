@@ -201,7 +201,6 @@ pub enum Task {
         observe_id: ObserveId,
         downstream_id: DownstreamId,
         downstream_state: Arc<AtomicCell<DownstreamState>>,
-        sink: crate::channel::Sink,
         build_resolver: Arc<AtomicBool>,
         // `incremental_scan_barrier` will be sent into `sink` to ensure all delta changes
         // are delivered to the downstream. And then incremental scan can start.
@@ -1254,20 +1253,22 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 observe_id,
                 downstream_id,
                 downstream_state,
-                sink,
                 build_resolver,
                 incremental_scan_barrier,
                 cb,
             } => {
-                match self.capture_regions.get_mut(&region_id) {
-                    Some(delegate) if delegate.handle.id == observe_id => {
-                        if delegate.init_lock_tracker() {
-                            build_resolver.store(true, Ordering::Release);
-                        }
-                    }
+                let delegate = match self.capture_regions.get_mut(&region_id) {
+                    Some(delegate) if delegate.handle.id == observe_id => delegate,
                     _ => return,
+                };
+                if delegate.init_lock_tracker() {
+                    build_resolver.store(true, Ordering::Release);
                 }
-                if let Err(e) = sink.unbounded_send(incremental_scan_barrier, true) {
+                let downstream = match delegate.downstream(downstream_id) {
+                    Some(d) => d,
+                    None => return,
+                };
+                if let Err(e) = downstream.sink_barrier(incremental_scan_barrier) {
                     warn!("cdc failed to schedule barrier for delta before delta scan";
                         "region_id" => region_id,
                         "observe_id" => ?observe_id,
