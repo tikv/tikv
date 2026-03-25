@@ -527,9 +527,9 @@ mod tests {
         let after_generate = histogram_sample_count("gcp", "generateRandomBytes");
         let after_encrypt = histogram_sample_count("gcp", "encrypt");
         let after_decrypt = histogram_sample_count("gcp", "decrypt");
-        assert!(after_generate >= before_generate + 1);
-        assert!(after_encrypt >= before_encrypt + 1);
-        assert!(after_decrypt >= before_decrypt + 1);
+        assert!(after_generate > before_generate);
+        assert!(after_encrypt > before_encrypt);
+        assert!(after_decrypt > before_decrypt);
         Ok(())
     }
 

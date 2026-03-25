@@ -1,6 +1,6 @@
 // Copyright 2026 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp, future::Future, io, pin::Pin};
+use std::{future::Future, io, pin::Pin};
 
 use async_trait::async_trait;
 use cloud::{
@@ -99,14 +99,14 @@ impl tikv_util::stream::RetryError for GcsApiError {
             return true;
         }
 
-        match self.grpc_code() {
+        matches!(
+            self.grpc_code(),
             Some(google_cloud_gax::error::rpc::Code::Unavailable)
-            | Some(google_cloud_gax::error::rpc::Code::DeadlineExceeded)
-            | Some(google_cloud_gax::error::rpc::Code::ResourceExhausted)
-            | Some(google_cloud_gax::error::rpc::Code::Aborted)
-            | Some(google_cloud_gax::error::rpc::Code::Internal) => true,
-            _ => false,
-        }
+                | Some(google_cloud_gax::error::rpc::Code::DeadlineExceeded)
+                | Some(google_cloud_gax::error::rpc::Code::ResourceExhausted)
+                | Some(google_cloud_gax::error::rpc::Code::Aborted)
+                | Some(google_cloud_gax::error::rpc::Code::Internal)
+        )
     }
 }
 
@@ -163,7 +163,7 @@ impl StreamingSource for PutResourceSource {
     type Error = io::Error;
 
     async fn next(&mut self) -> Option<Result<bytes::Bytes, Self::Error>> {
-        let mut buf = vec![0; cmp::max(1, cmp::min(self.exact_size as usize, PUT_READ_CHUNK_SIZE))];
+        let mut buf = vec![0; (self.exact_size as usize).clamp(1, PUT_READ_CHUNK_SIZE)];
         match self.reader.lock().await.read(&mut buf).await {
             Ok(0) => None,
             Ok(n) => {
@@ -774,7 +774,7 @@ mod tests {
         .await?;
 
         let after_insert = histogram_sample_count("gcp", "insert_multipart");
-        assert!(after_insert >= before_insert + 1);
+        assert!(after_insert > before_insert);
         Ok(())
     }
 
@@ -798,7 +798,7 @@ mod tests {
 
         let after_multipart = histogram_sample_count("gcp", "insert_multipart");
         let after_simple = histogram_sample_count("gcp", "insert_simple");
-        assert!(after_multipart >= before_multipart + 1);
+        assert!(after_multipart > before_multipart);
         assert_eq!(after_simple, before_simple);
         Ok(())
     }
