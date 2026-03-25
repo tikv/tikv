@@ -61,6 +61,17 @@ const BACKUP_BATCH_LIMIT: usize = 1024;
 // task yield duration when resource limit is on.
 const TASK_YIELD_DURATION: Duration = Duration::from_millis(10);
 
+pub fn storage_backend_config(config: &BackupConfig) -> BackendConfig {
+    BackendConfig {
+        s3_multi_part_size: config.s3_multi_part_size.0 as usize,
+        gcp_v2_enable: config.gcp_v2_enable,
+        hdfs_config: HdfsConfig {
+            hadoop_home: config.hadoop.home.clone(),
+            linux_user: config.hadoop.linux_user.clone(),
+        },
+    }
+}
+
 #[derive(Clone)]
 struct Request {
     start_key: Vec<u8>,
@@ -931,21 +942,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
     }
 
     fn get_config(&self) -> BackendConfig {
-        BackendConfig {
-            s3_multi_part_size: self.config_manager.0.read().unwrap().s3_multi_part_size.0 as usize,
-            gcp_v2_enable: self.config_manager.0.read().unwrap().gcp_v2_enable,
-            hdfs_config: HdfsConfig {
-                hadoop_home: self.config_manager.0.read().unwrap().hadoop.home.clone(),
-                linux_user: self
-                    .config_manager
-                    .0
-                    .read()
-                    .unwrap()
-                    .hadoop
-                    .linux_user
-                    .clone(),
-            },
-        }
+        storage_backend_config(&self.config_manager.0.read().unwrap())
     }
 
     fn spawn_backup_worker(
