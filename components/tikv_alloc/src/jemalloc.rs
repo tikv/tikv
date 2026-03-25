@@ -3,7 +3,7 @@
 // The implementation of this crate when jemalloc is turned on
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ptr::{self, NonNull},
     slice,
     sync::Mutex,
@@ -129,8 +129,14 @@ pub unsafe fn add_thread_memory_accessor() {
 }
 
 pub fn remove_thread_memory_accessor() {
+    let tid = thread::current().id();
+
     let mut thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
-    thread_memory_map.remove(&thread::current().id());
+    thread_memory_map.remove(&tid);
+    drop(thread_memory_map);
+
+    let mut thread_arena_map = THREAD_ARENA_MAP.lock().unwrap();
+    thread_arena_map.remove(&tid);
 }
 
 use std::thread::ThreadId;
@@ -228,9 +234,14 @@ pub fn iterate_arena_allocation_stats(mut f: impl FnMut(&str, u64, u64, u64)) {
     // skip advancing the epoch here.
     let thread_arena_map = THREAD_ARENA_MAP.lock().unwrap();
     let mut collected = HashMap::<&str, (u64, u64, u64)>::with_capacity(thread_arena_map.len());
+    let mut seen = HashSet::<(&str, usize)>::with_capacity(thread_arena_map.len());
     for (_, (name, index)) in thread_arena_map.iter() {
+        let thread_name = trim_thread_suffix(name);
+        if !seen.insert((thread_name, *index)) {
+            continue;
+        }
         let stats = fetch_arena_stats(*index);
-        let ent = collected.entry(trim_thread_suffix(name)).or_default();
+        let ent = collected.entry(thread_name).or_default();
         ent.0 += stats.0;
         ent.1 += stats.1;
         ent.2 += stats.2;
@@ -256,7 +267,9 @@ extern "C" fn write_cb(printer: *mut c_void, msg: *const c_char) {
 #[cfg(test)]
 mod tests {
     use crate::{
-        add_thread_memory_accessor, imp::THREAD_MEMORY_MAP, remove_thread_memory_accessor,
+        add_thread_memory_accessor,
+        imp::{THREAD_ARENA_MAP, THREAD_MEMORY_MAP},
+        remove_thread_memory_accessor,
     };
 
     fn assert_delta(name: impl std::fmt::Display, delta: f64, a: u64, b: u64) {
@@ -319,6 +332,66 @@ mod tests {
         drop(l);
         for th in threads.into_iter() {
             th.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn test_remove_thread_memory_accessor_cleans_arena_map() {
+        let tid = std::thread::current().id();
+        let old_memory = THREAD_MEMORY_MAP.lock().unwrap().remove(&tid);
+        let old_arena = THREAD_ARENA_MAP.lock().unwrap().remove(&tid);
+
+        THREAD_ARENA_MAP
+            .lock()
+            .unwrap()
+            .insert(tid, ("test-remove-thread-memory-accessor".to_owned(), 1));
+
+        remove_thread_memory_accessor();
+
+        assert!(THREAD_ARENA_MAP.lock().unwrap().get(&tid).is_none());
+
+        if let Some(entry) = old_memory {
+            THREAD_MEMORY_MAP.lock().unwrap().insert(tid, entry);
+        }
+        if let Some(entry) = old_arena {
+            THREAD_ARENA_MAP.lock().unwrap().insert(tid, entry);
+        }
+    }
+
+    #[cfg(feature = "mem-profiling")]
+    #[test]
+    fn test_iterate_arena_allocation_stats_dedups_same_arena() {
+        let tid = std::thread::current().id();
+        let other_tid = std::thread::spawn(|| std::thread::current().id())
+            .join()
+            .unwrap();
+        let old_current = THREAD_ARENA_MAP.lock().unwrap().remove(&tid);
+        let old_other = THREAD_ARENA_MAP.lock().unwrap().remove(&other_tid);
+
+        {
+            let mut arena_map = THREAD_ARENA_MAP.lock().unwrap();
+            arena_map.insert(tid, ("test-dedup-1".to_owned(), 0));
+            arena_map.insert(other_tid, ("test-dedup-2".to_owned(), 0));
+        }
+
+        let expected = super::fetch_arena_stats(0);
+        let mut collected = Vec::new();
+        super::iterate_arena_allocation_stats(|name, resident, mapped, retained| {
+            if name == "test-dedup" {
+                collected.push((resident, mapped, retained));
+            }
+        });
+
+        assert_eq!(collected, vec![expected]);
+
+        let mut arena_map = THREAD_ARENA_MAP.lock().unwrap();
+        arena_map.remove(&tid);
+        arena_map.remove(&other_tid);
+        if let Some(entry) = old_current {
+            arena_map.insert(tid, entry);
+        }
+        if let Some(entry) = old_other {
+            arena_map.insert(other_tid, entry);
         }
     }
 }
