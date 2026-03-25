@@ -1,17 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-<<<<<<< HEAD
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-=======
 use std::{
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
->>>>>>> a01b4143de (cdc: add watchdog for cdc conn (#18757))
 };
 
 use collections::{HashMap, HashMapEntry};
@@ -23,15 +17,15 @@ use futures::{
 use grpcio::{DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::{
     cdcpb::{
-        ChangeData, ChangeDataEvent, ChangeDataRequest, ChangeDataRequestKvApi,
-        ChangeDataRequest_oneof_request,
+        ChangeData, ChangeDataEvent, ChangeDataRequest, ChangeDataRequest_oneof_request,
+        ChangeDataRequestKvApi,
     },
     kvrpcpb::ApiVersion,
 };
 use tikv_util::{error, info, memory::MemoryQuota, timer::GLOBAL_TIMER_HANDLE, warn, worker::*};
 
 use crate::{
-    channel::{channel, Sink, CDC_CHANNLE_CAPACITY},
+    channel::{CDC_CHANNLE_CAPACITY, Sink, channel},
     delegate::{Downstream, DownstreamId, DownstreamState, ObservedRange},
     endpoint::{Deregister, Task},
     metrics::CDC_ABORTED_CONNECTIONS,
@@ -655,13 +649,13 @@ async fn sleep_before_drain_change_event() {
 mod tests {
     use std::{sync::Arc, time::Duration};
 
-    use futures::{executor::block_on, SinkExt};
+    use futures::{SinkExt, executor::block_on};
     use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder, WriteFlags};
-    use kvproto::cdcpb::{create_change_data, ChangeDataClient, ResolvedTs};
+    use kvproto::cdcpb::{ChangeDataClient, ResolvedTs, create_change_data};
     use tikv_util::future::block_on_timeout;
 
     use super::*;
-    use crate::channel::{recv_timeout, CdcEvent};
+    use crate::channel::{CdcEvent, recv_timeout};
 
     fn new_rpc_suite(capacity: usize) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
         let memory_quota = Arc::new(MemoryQuota::new(capacity));
