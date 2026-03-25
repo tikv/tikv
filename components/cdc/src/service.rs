@@ -573,15 +573,11 @@ impl Service {
                         let elapsed = last_flush_time_clone.load().elapsed();
 
                         // Check if last flush was more than the warning threshold
-                        // To prevent the case that the connection idle since there are a lot of
-                        // incremental scan tasks queueing so won't send events, also check on the
-                        // memory usage, if the memory quota is almost used up, we abort the connection.
-                        if elapsed > Duration::from_secs(_idle_threshold)
-                            && memory_quota.used_ratio() >= CDC_MEMORY_QUOTA_ABORT_THRESHOLD {
+                        if elapsed > Duration::from_secs(CDC_IDLE_WARNING_THRESHOLD_SECS) {
                             warn!("cdc connection idle too long";
-                                  "downstream" => peer_clone.clone(),
-                                  "conn_id" => ?conn_id,
-                                  "seconds_since_last_flush" => elapsed.as_secs());
+                                    "downstream" => peer_clone.clone(),
+                                    "conn_id" => ?conn_id,
+                                    "seconds_since_last_flush" => elapsed.as_secs());
                         }
 
                         let _idle_threshold = CDC_IDLE_DEREGISTER_THRESHOLD_SECS;
@@ -600,11 +596,15 @@ impl Service {
                         };
 
                         // Check if last flush was more than the deregister threshold
-                        if elapsed > Duration::from_secs(_idle_threshold) {
+                        // To prevent the case that the connection idle since there are a lot of
+                        // incremental scan tasks queueing so won't send events, also check on the
+                        // memory usage, if the memory quota is almost used up, we abort the connection.
+                        if elapsed > Duration::from_secs(_idle_threshold)
+                            && memory_quota.used_ratio() >= CDC_MEMORY_QUOTA_ABORT_THRESHOLD {
                             error!("cdc connection idle for too long, aborting connection";
-                                   "downstream" => peer_clone.clone(),
-                                   "conn_id" => ?conn_id,
-                                   "seconds_since_last_flush" => elapsed.as_secs());
+                                    "downstream" => peer_clone.clone(),
+                                    "conn_id" => ?conn_id,
+                                    "seconds_since_last_flush" => elapsed.as_secs());
                             // Cancel the gRPC connection
                             let _ = cancel_tx.send(());
                             break;
