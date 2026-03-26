@@ -1011,6 +1011,11 @@ fn collect_report_peers_for_store_heartbeat(
         let query_stats = region_peer
             .query_stats
             .sub_query_stats(&region_peer.last_store_report_query_stats);
+        // Drain the CPU record for this region. The record accumulates since the last
+        // store heartbeat and should be consumed exactly once when reporting.
+        // Using `remove` ensures we report delta values rather than cumulative totals.
+        // If the region is not in the CPU records map (e.g., no CPU activity recorded),
+        // we use a default value of zero.
         let cpu_record = region_cpu_records_since_store_heartbeat
             .remove(region_id)
             .unwrap_or_default();
@@ -1052,7 +1057,9 @@ fn collect_report_peers_for_store_heartbeat(
         read_stat.set_cpu_stats(cpu_stats);
         report_peers.insert(*region_id, read_stat);
     }
-    // Drain orphan CPU records for regions no longer tracked in `region_peers`.
+    // Drain orphan CPU records for regions that are no longer tracked in `region_peers`.
+    // This can happen when a region is destroyed or merged between heartbeats.
+    // The clear() ensures we don't accumulate stale CPU records indefinitely.
     region_cpu_records_since_store_heartbeat.clear();
     StoreHeartbeatPeerReport {
         report_peers,
@@ -1454,19 +1461,23 @@ where
                     }
                 }
                 STORE_CPU_POOL_GAUGE_VEC
-                    .with_label_values(&["unified_read", "store_level"])
+                    .unified_read
+                    .store_level
                     .set(store_unified_read as i64);
                 STORE_CPU_POOL_GAUGE_VEC
-                    .with_label_values(&["unified_read", "region_sum"])
+                    .unified_read
+                    .region_sum
                     .set(cpu_usage_from_millis(
                         region_unified_read_cpu_time_ms_sum,
                         interval_seconds,
                     ) as i64);
                 STORE_CPU_POOL_GAUGE_VEC
-                    .with_label_values(&["scheduler", "store_level"])
+                    .scheduler
+                    .store_level
                     .set(store_scheduler as i64);
                 STORE_CPU_POOL_GAUGE_VEC
-                    .with_label_values(&["scheduler", "region_sum"])
+                    .scheduler
+                    .region_sum
                     .set(
                         cpu_usage_from_millis(region_scheduler_cpu_time_ms_sum, interval_seconds)
                             as i64,
