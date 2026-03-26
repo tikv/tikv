@@ -963,53 +963,20 @@ fn cpu_usage_from_millis(cpu_time_ms: u64, interval_seconds: u64) -> u64 {
     ((Duration::from_millis(cpu_time_ms).as_secs_f64() * 100.0) / interval_seconds as f64) as u64
 }
 
-fn calculate_cpu_usage_breakdown(
-    unified_read_cpu_time_ms: u64,
-    scheduler_cpu_time_ms: u64,
-    interval_seconds: u64,
-) -> StoreHeartbeatCpuUsage {
-    if interval_seconds == 0 {
-        return StoreHeartbeatCpuUsage::default();
-    }
-
-    let mut unified_read_cpu_usage =
-        cpu_usage_from_millis(unified_read_cpu_time_ms, interval_seconds);
-    let mut scheduler_cpu_usage = cpu_usage_from_millis(scheduler_cpu_time_ms, interval_seconds);
-    // Convert the pooled CPU once as well so integer truncation happens on the
-    // total only once. This keeps the split view reconcilable with the overall
-    // tracked CPU usage even when each pool is too small to survive truncation
-    // on its own.
-    let breakdown_cpu_usage = cpu_usage_from_millis(
-        unified_read_cpu_time_ms.saturating_add(scheduler_cpu_time_ms),
-        interval_seconds,
-    );
-    // Assign any truncated remainder back to the dominant pool so the split
-    // fields still sum to the pooled total that PD sees for the tracked CPU.
-    let rounding_gap =
-        breakdown_cpu_usage.saturating_sub(unified_read_cpu_usage + scheduler_cpu_usage);
-    if rounding_gap > 0 {
-        if unified_read_cpu_time_ms >= scheduler_cpu_time_ms {
-            unified_read_cpu_usage += rounding_gap;
-        } else {
-            scheduler_cpu_usage += rounding_gap;
-        }
-    }
-
-    StoreHeartbeatCpuUsage {
-        unified_read_cpu_usage,
-        scheduler_cpu_usage,
-    }
-}
-
-fn calculate_store_heartbeat_cpu_usage(
+fn calculate_region_cpu_usage(
     cpu_record: RegionCpuRecord,
     interval_seconds: u64,
 ) -> StoreHeartbeatCpuUsage {
-    calculate_cpu_usage_breakdown(
-        cpu_record.unified_read_cpu_time_ms as u64,
-        cpu_record.scheduler_cpu_time_ms as u64,
-        interval_seconds,
-    )
+    StoreHeartbeatCpuUsage {
+        unified_read_cpu_usage: cpu_usage_from_millis(
+            cpu_record.unified_read_cpu_time_ms as u64,
+            interval_seconds,
+        ),
+        scheduler_cpu_usage: cpu_usage_from_millis(
+            cpu_record.scheduler_cpu_time_ms as u64,
+            interval_seconds,
+        ),
+    }
 }
 
 fn report_interval_start(start_ts: UnixSecs, last_report_ts: UnixSecs) -> UnixSecs {
@@ -1022,6 +989,8 @@ fn report_interval_start(start_ts: UnixSecs, last_report_ts: UnixSecs) -> UnixSe
 
 struct StoreHeartbeatPeerReport {
     report_peers: HashMap<u64, pdpb::PeerStat>,
+    // Keep raw CPU milliseconds here so the store-level region_sum gauges can
+    // convert once after aggregation instead of truncating per region first.
     region_unified_read_cpu_time_ms_sum: u64,
     region_scheduler_cpu_time_ms_sum: u64,
 }
@@ -1046,7 +1015,7 @@ fn collect_report_peers_for_store_heartbeat(
             .remove(region_id)
             .unwrap_or_default();
         let cpu_usage = if has_interval {
-            calculate_store_heartbeat_cpu_usage(cpu_record, interval_seconds)
+            calculate_region_cpu_usage(cpu_record, interval_seconds)
         } else {
             // `interval_seconds == 0` is unexpected but can happen in corner cases.
             // Drain the record and report 0 to avoid division by zero.
@@ -2621,11 +2590,7 @@ where
                                 cpu_record.cpu_time_ms as u64,
                                 interval_second,
                             );
-                            let cpu_usage = calculate_cpu_usage_breakdown(
-                                cpu_record.unified_read_cpu_time_ms as u64,
-                                cpu_record.scheduler_cpu_time_ms as u64,
-                                interval_second,
-                            );
+                            let cpu_usage = calculate_region_cpu_usage(cpu_record, interval_second);
                             let mut stats = pdpb::CpuStats::default();
                             stats.set_unified_read(cpu_usage.unified_read_cpu_usage);
                             stats.set_scheduler(cpu_usage.scheduler_cpu_usage);
@@ -3208,8 +3173,8 @@ mod tests {
     }
 
     #[test]
-    fn test_calculate_store_heartbeat_cpu_usage_preserves_rounding_gap() {
-        let cpu_usage = calculate_store_heartbeat_cpu_usage(
+    fn test_calculate_region_cpu_usage_converts_pools_independently() {
+        let cpu_usage = calculate_region_cpu_usage(
             RegionCpuRecord {
                 cpu_time_ms: 12,
                 unified_read_cpu_time_ms: 6,
@@ -3218,10 +3183,8 @@ mod tests {
             1,
         );
 
-        assert_eq!(
-            cpu_usage.unified_read_cpu_usage + cpu_usage.scheduler_cpu_usage,
-            1
-        );
+        assert_eq!(cpu_usage.unified_read_cpu_usage, 0);
+        assert_eq!(cpu_usage.scheduler_cpu_usage, 0);
     }
 
     #[test]
