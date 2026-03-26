@@ -191,7 +191,7 @@ impl ResourceGroupManager {
             {
                 let (mode, read_fill_rate, write_fill_rate) = current_settings;
                 info!(
-                    "update resource group ru settings";
+                    "[CPU throttle] update resource group ru settings";
                     "name" => &rg.name,
                     "mode" => mode,
                     "previous_mode" => prev_mode,
@@ -204,7 +204,7 @@ impl ResourceGroupManager {
             None => {
                 let (mode, read_fill_rate, write_fill_rate) = current_settings;
                 info!(
-                    "add resource group";
+                    "[CPU throttle] add resource group";
                     "name" => &rg.name,
                     "mode" => mode,
                     "read_fill_rate" => read_fill_rate,

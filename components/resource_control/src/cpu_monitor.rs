@@ -8,6 +8,7 @@ use std::{
 
 use futures::compat::Future01CompatExt;
 use tikv_util::{
+    info,
     sys::{
         thread::{self, Pid, THREAD_NAME_HASHMAP},
         SysQuota,
@@ -172,6 +173,17 @@ impl CpuUsageMonitor {
             global_delta_cpu_sec,
             per_resource_group_dag_delta_cpu_us,
         });
+        self.manager.log_monitor_tick_summary(
+            global_delta_cpu_sec,
+            self.window.global_sum_cpu_sec,
+            self.window.window_size,
+            &self
+                .window
+                .samples
+                .back()
+                .expect("cpu sample window must contain the latest sample")
+                .per_resource_group_dag_delta_cpu_us,
+        );
 
         let max_cpu_time_window_sec = (SysQuota::cpu_cores_quota().max(1.0)
             * self.manager.max_read_cpu_ratio()
@@ -207,6 +219,12 @@ async fn sleep_async(duration: Duration) {
 
 pub fn start_cpu_throttle_monitor(bg_worker: &Worker, manager: Arc<CpuThrottleManager>) {
     let mut monitor = CpuUsageMonitor::new(manager.clone());
+    info!(
+        "[CPU throttle] start cpu throttle monitor";
+        "stats_interval" => ?manager.stats_interval(),
+        "window_size" => ?manager.window_size(),
+        "thread_prefix" => "unified-read-pool",
+    );
     bg_worker.spawn_async_task(async move {
         monitor.tick();
         loop {

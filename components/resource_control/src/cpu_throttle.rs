@@ -78,10 +78,15 @@ const CPU_THROTTLE_INFO_LOG_INTERVAL: Duration = Duration::from_secs(1);
 #[derive(Debug, Clone, Copy)]
 enum CpuThrottleInfoLogEvent {
     Usage,
+    MonitorTick,
+    Estimate,
+    UnknownGroup,
     InitialAllocationSuccess,
     InitialAllocationFailure,
     RuntimeAllocationSuccess,
     RuntimeAllocationFailure,
+    RuntimeCheck,
+    TokenRelease,
     GlobalRefillRate,
     ResourceGroupRefillRate,
 }
@@ -90,10 +95,15 @@ impl CpuThrottleInfoLogEvent {
     fn as_str(self) -> &'static str {
         match self {
             CpuThrottleInfoLogEvent::Usage => "usage",
+            CpuThrottleInfoLogEvent::MonitorTick => "monitor_tick",
+            CpuThrottleInfoLogEvent::Estimate => "estimate",
+            CpuThrottleInfoLogEvent::UnknownGroup => "unknown_group",
             CpuThrottleInfoLogEvent::InitialAllocationSuccess => "initial_allocation_success",
             CpuThrottleInfoLogEvent::InitialAllocationFailure => "initial_allocation_failure",
             CpuThrottleInfoLogEvent::RuntimeAllocationSuccess => "runtime_allocation_success",
             CpuThrottleInfoLogEvent::RuntimeAllocationFailure => "runtime_allocation_failure",
+            CpuThrottleInfoLogEvent::RuntimeCheck => "runtime_check",
+            CpuThrottleInfoLogEvent::TokenRelease => "token_release",
             CpuThrottleInfoLogEvent::GlobalRefillRate => "global_refill_rate",
             CpuThrottleInfoLogEvent::ResourceGroupRefillRate => "resource_group_refill_rate",
         }
@@ -682,7 +692,7 @@ impl CpuTokenHandle {
 
         let (fair_share_status, fair_share_triggered) = fair_share_log_state(&self.config);
         info!(
-            "cpu throttle runtime token allocation succeeded";
+            "[CPU throttle] cpu throttle runtime token allocation succeeded";
             "resource_group" => self.resource_group.as_str(),
             "additional_us" => additional_us,
             "wait_duration" => ?wait_duration,
@@ -722,7 +732,7 @@ impl CpuTokenHandle {
 
         let (fair_share_status, fair_share_triggered) = fair_share_log_state(&self.config);
         info!(
-            "cpu throttle runtime token allocation failed";
+            "[CPU throttle] cpu throttle runtime token allocation failed";
             "resource_group" => self.resource_group.as_str(),
             "additional_us" => additional_us,
             "wait_duration" => ?wait_duration,
@@ -739,6 +749,71 @@ impl CpuTokenHandle {
                 .map(|bucket| bucket.available()),
         );
     }
+
+    pub(crate) fn log_runtime_check_trigger(
+        &self,
+        current_cpu_us: u64,
+        threshold_us: u64,
+        additional_us: u64,
+    ) {
+        if !self.info_log_state.should_log(
+            CpuThrottleInfoLogEvent::RuntimeCheck,
+            &self.resource_group,
+            None,
+        ) {
+            return;
+        }
+
+        info!(
+            "[CPU throttle] cpu throttle runtime check triggered additional allocation";
+            "resource_group" => self.resource_group.as_str(),
+            "current_cpu_us" => current_cpu_us,
+            "threshold_us" => threshold_us,
+            "already_allocated_us" => self.allocated(),
+            "additional_us" => additional_us,
+            "is_burst" => self.is_burst.load(Ordering::Acquire),
+            "global_available_us" => self.global_bucket.available(),
+            "resource_group_available_us" => ?self
+                .resource_group_bucket
+                .as_ref()
+                .map(|bucket| bucket.available()),
+        );
+    }
+
+    fn log_token_release_summary(
+        &self,
+        actual_used_us: u64,
+        global_allocated_us: u64,
+        resource_group_allocated_us: u64,
+        global_released_us: u64,
+        resource_group_released_us: u64,
+    ) {
+        if !self.info_log_state.should_log(
+            CpuThrottleInfoLogEvent::TokenRelease,
+            &self.resource_group,
+            None,
+        ) {
+            return;
+        }
+
+        info!(
+            "[CPU throttle] cpu throttle request finished";
+            "resource_group" => self.resource_group.as_str(),
+            "initial_estimated_us" => self.initial_estimated_us,
+            "actual_used_us" => actual_used_us,
+            "global_allocated_us" => global_allocated_us,
+            "resource_group_allocated_us" => resource_group_allocated_us,
+            "global_released_us" => global_released_us,
+            "resource_group_released_us" => resource_group_released_us,
+            "allocation_result" => self.allocation_result_label(),
+            "is_burst" => self.is_burst.load(Ordering::Acquire),
+            "global_available_us" => self.global_bucket.available(),
+            "resource_group_available_us" => ?self
+                .resource_group_bucket
+                .as_ref()
+                .map(|bucket| bucket.available()),
+        );
+    }
 }
 
 impl Drop for CpuTokenHandle {
@@ -746,6 +821,8 @@ impl Drop for CpuTokenHandle {
         let actual_used = self.actual_used_us.load(Ordering::Acquire);
         let global_allocated = self.global_allocated_us.load(Ordering::Acquire);
         let resource_group_allocated = self.resource_group_allocated_us.load(Ordering::Acquire);
+        let global_released = global_allocated.saturating_sub(actual_used);
+        let resource_group_released = resource_group_allocated.saturating_sub(actual_used);
 
         if let Some(estimator) = &self.adaptive_estimator {
             estimator.observe(&self.resource_group, actual_used);
@@ -767,6 +844,13 @@ impl Drop for CpuTokenHandle {
 
         self.inflight_sub(resource_group_allocated);
         self.update_available_metrics();
+        self.log_token_release_summary(
+            actual_used,
+            global_allocated,
+            resource_group_allocated,
+            global_released,
+            resource_group_released,
+        );
 
         CPU_THROTTLE_REQUEST_CPU_TIME
             .with_label_values(&[self.resource_group.as_str()])
@@ -828,10 +912,22 @@ impl CpuThrottleManager {
         };
 
         info!(
-            "initialize cpu throttle manager";
+            "[CPU throttle] initialize cpu throttle manager";
             "global_capacity_us" => global_capacity_us,
             "refill_interval_ms" => refill_interval_ms,
             "max_read_cpu_ratio" => config.max_read_cpu_ratio,
+            "stats_interval_ms" => config.stats_interval_ms,
+            "window_size_ms" => config.window_size_ms,
+            "enable_dynamic_adjustment" => config.enable_dynamic_adjustment,
+            "enable_burst" => config.enable_burst,
+            "enable_runtime_token_management" => config.enable_runtime_token_management,
+            "runtime_check_interval_us" => config.runtime_check_interval_us,
+            "additional_allocation_threshold" => config.additional_allocation_threshold,
+            "per_allocation_us" => config.per_allocation_us,
+            "throttle_default_group" => config.throttle_default_group,
+            "default_group_weight" => ?config.default_group_weight,
+            "enable_fair_allocation" => config.enable_fair_allocation,
+            "fair_allocation_threshold" => config.fair_allocation_threshold,
         );
 
         Self {
@@ -928,9 +1024,22 @@ impl CpuThrottleManager {
             .set(clamp_gauge_value(self.global_bucket.current_refill_rate()));
 
         info!(
-            "refresh cpu throttle config";
+            "[CPU throttle] refresh cpu throttle config";
+            "enabled" => self.current_config().enabled,
             "global_capacity_us" => new_global_capacity_us,
             "refill_interval_ms" => refill_interval_ms,
+            "stats_interval_ms" => self.current_config().stats_interval_ms,
+            "window_size_ms" => self.current_config().window_size_ms,
+            "enable_dynamic_adjustment" => self.current_config().enable_dynamic_adjustment,
+            "enable_burst" => self.current_config().enable_burst,
+            "enable_runtime_token_management" => self.current_config().enable_runtime_token_management,
+            "runtime_check_interval_us" => self.current_config().runtime_check_interval_us,
+            "additional_allocation_threshold" => self.current_config().additional_allocation_threshold,
+            "per_allocation_us" => self.current_config().per_allocation_us,
+            "throttle_default_group" => self.current_config().throttle_default_group,
+            "default_group_weight" => ?self.current_config().default_group_weight,
+            "enable_fair_allocation" => self.current_config().enable_fair_allocation,
+            "fair_allocation_threshold" => self.current_config().fair_allocation_threshold,
         );
     }
 
@@ -1157,7 +1266,7 @@ impl CpuThrottleManager {
                 .map(|entry| entry.key().clone())
                 .collect();
             info!(
-                "recalculate cpu throttle quotas";
+                "[CPU throttle] recalculate cpu throttle quotas";
                 "global_capacity_us" => global_capacity_us,
                 "sum_weights" => sum_weights,
                 "active_resource_groups" => 0,
@@ -1170,7 +1279,7 @@ impl CpuThrottleManager {
         }
 
         info!(
-            "recalculate cpu throttle quotas";
+            "[CPU throttle] recalculate cpu throttle quotas";
             "global_capacity_us" => global_capacity_us,
             "sum_weights" => sum_weights,
             "active_resource_groups" => active_groups.len(),
@@ -1212,7 +1321,7 @@ impl CpuThrottleManager {
                 .with_label_values(&[resource_group.as_str()])
                 .set(clamp_gauge_value(bucket.current_refill_rate()));
             info!(
-                "cpu throttle quota recalculated";
+                "[CPU throttle] cpu throttle quota recalculated";
                 "resource_group" => resource_group.as_str(),
                 "global_capacity_us" => global_capacity_us,
                 "weight" => weight,
@@ -1238,7 +1347,7 @@ impl CpuThrottleManager {
             .collect();
         if !stale_groups.is_empty() {
             info!(
-                "remove stale cpu throttle buckets after recalculation";
+                "[CPU throttle] remove stale cpu throttle buckets after recalculation";
                 "resource_groups" => ?stale_groups,
             );
         }
@@ -1258,6 +1367,11 @@ impl CpuThrottleManager {
             {
                 self.recalculate_all_quotas();
             }
+            info!(
+                "[CPU throttle] cpu throttle resource group disabled";
+                "resource_group" => resource_group.as_str(),
+                "ru_quota" => ru_quota,
+            );
             return;
         }
         let weight = self.weight_for_group(&resource_group, ru_quota);
@@ -1265,6 +1379,14 @@ impl CpuThrottleManager {
             .resource_group_weights
             .insert(resource_group.clone(), weight)
             .map_or(true, |previous_weight| previous_weight != weight);
+        info!(
+            "[CPU throttle] cpu throttle resource group updated";
+            "resource_group" => resource_group.as_str(),
+            "ru_quota" => ru_quota,
+            "weight" => weight,
+            "should_recalculate" => should_recalculate,
+            "has_bucket" => self.resource_group_buckets.contains_key(&resource_group),
+        );
         if should_recalculate || !self.resource_group_buckets.contains_key(&resource_group) {
             self.recalculate_all_quotas();
         }
@@ -1272,6 +1394,8 @@ impl CpuThrottleManager {
 
     pub fn on_resource_group_removed(&self, resource_group: &str) {
         let resource_group = Self::canonicalize_group_name(resource_group);
+        let had_weight = self.resource_group_weights.contains_key(&resource_group);
+        let had_bucket = self.resource_group_buckets.contains_key(&resource_group);
         self.remove_resource_group_bucket(&resource_group);
         self.resource_group_dag_cpu_accum.remove(&resource_group);
         self.usage_state
@@ -1279,6 +1403,12 @@ impl CpuThrottleManager {
             .unwrap()
             .per_resource_group_dag_ratios
             .remove(&resource_group);
+        info!(
+            "[CPU throttle] cpu throttle resource group removed";
+            "resource_group" => resource_group.as_str(),
+            "had_weight" => had_weight,
+            "had_bucket" => had_bucket,
+        );
         if self
             .resource_group_weights
             .remove(&resource_group)
@@ -1297,6 +1427,7 @@ impl CpuThrottleManager {
         let resource_group = Self::canonicalize_group_name(resource_group);
         if self.is_unknown_group(&resource_group) {
             CPU_THROTTLE_UNKNOWN_GROUP.inc();
+            self.log_unknown_group_fallback(&resource_group, estimated_cpu_us);
         }
 
         let start = Instant::now();
@@ -1378,18 +1509,29 @@ impl CpuThrottleManager {
         let resource_group = Self::canonicalize_group_name(resource_group);
         let config = self.current_config();
         let adaptive_estimator = self.adaptive_estimator.read().unwrap().clone();
-        let estimated = if let Some(estimator) = adaptive_estimator {
-            estimator.get(&resource_group)
+        let (estimated, estimate_source) = if let Some(estimator) = adaptive_estimator {
+            (estimator.get(&resource_group), "adaptive")
         } else {
-            self.resource_group_estimated_cpu_per_request_us
+            let overrides = self
+                .resource_group_estimated_cpu_per_request_us
                 .read()
-                .unwrap()
-                .get(&resource_group)
-                .copied()
-                .unwrap_or(config.estimated_cpu_per_request_us)
+                .unwrap();
+            if let Some(override_us) = overrides.get(&resource_group).copied() {
+                (override_us, "override")
+            } else {
+                (config.estimated_cpu_per_request_us, "default")
+            }
         };
         let cap = self.get_capacity_cap(&resource_group);
-        estimated.min(cap).max(1)
+        let capped_estimated = estimated.min(cap).max(1);
+        self.log_estimated_cpu_per_request(
+            &resource_group,
+            estimate_source,
+            estimated,
+            cap,
+            capped_estimated,
+        );
+        capped_estimated
     }
 
     fn try_allocate_canonicalized(
@@ -1473,7 +1615,7 @@ impl CpuThrottleManager {
         }
 
         info!(
-            "update cpu throttle usage";
+            "[CPU throttle] update cpu throttle usage";
             "global_cpu_ratio" => global_ratio,
             "resource_group_dag_cpu_ratios" => ?per_resource_group_dag_ratios,
         );
@@ -1495,7 +1637,7 @@ impl CpuThrottleManager {
         }
 
         info!(
-            "cpu throttle global refill rate";
+            "[CPU throttle] cpu throttle global refill rate";
             "source" => "dynamic_adjustment",
             "action" => action,
             "global_cpu_ratio" => global_ratio,
@@ -1528,7 +1670,7 @@ impl CpuThrottleManager {
         }
 
         info!(
-            "cpu throttle resource group refill rate";
+            "[CPU throttle] cpu throttle resource group refill rate";
             "resource_group" => resource_group,
             "source" => source,
             "action" => action,
@@ -1557,7 +1699,7 @@ impl CpuThrottleManager {
 
         let (fair_share_status, fair_share_triggered) = fair_share_log_state(&handle.config);
         info!(
-            "cpu throttle token allocation succeeded";
+            "[CPU throttle] cpu throttle token allocation succeeded";
             "resource_group" => handle.resource_group.as_str(),
             "estimated_cpu_us" => estimated_cpu_us,
             "wait_duration" => ?wait_duration,
@@ -1597,7 +1739,7 @@ impl CpuThrottleManager {
         let config = self.current_config();
         let (fair_share_status, fair_share_triggered) = fair_share_log_state(&config);
         info!(
-            "cpu throttle token allocation failed";
+            "[CPU throttle] cpu throttle token allocation failed";
             "resource_group" => resource_group,
             "estimated_cpu_us" => estimated_cpu_us,
             "wait_duration" => ?wait_duration,
@@ -1612,6 +1754,73 @@ impl CpuThrottleManager {
                 .resource_group_buckets
                 .get(resource_group)
                 .map(|bucket| bucket.available()),
+        );
+    }
+
+    pub(crate) fn log_monitor_tick_summary(
+        &self,
+        global_delta_cpu_sec: f64,
+        global_sum_cpu_sec: f64,
+        window_size: Duration,
+        per_resource_group_dag_delta_cpu_us: &HashMap<String, u64>,
+    ) {
+        if !self
+            .info_log_state
+            .should_log(CpuThrottleInfoLogEvent::MonitorTick, "global", None)
+        {
+            return;
+        }
+
+        info!(
+            "[CPU throttle] cpu throttle monitor tick";
+            "global_delta_cpu_sec" => global_delta_cpu_sec,
+            "global_sum_cpu_sec" => global_sum_cpu_sec,
+            "window_size" => ?window_size,
+            "per_resource_group_dag_delta_cpu_us" => ?per_resource_group_dag_delta_cpu_us,
+        );
+    }
+
+    fn log_estimated_cpu_per_request(
+        &self,
+        resource_group: &str,
+        estimate_source: &'static str,
+        raw_estimated_us: u64,
+        capacity_cap_us: u64,
+        effective_estimated_us: u64,
+    ) {
+        if !self.info_log_state.should_log(
+            CpuThrottleInfoLogEvent::Estimate,
+            resource_group,
+            Some(estimate_source),
+        ) {
+            return;
+        }
+
+        info!(
+            "[CPU throttle] cpu throttle estimated cpu per request";
+            "resource_group" => resource_group,
+            "estimate_source" => estimate_source,
+            "raw_estimated_us" => raw_estimated_us,
+            "capacity_cap_us" => capacity_cap_us,
+            "effective_estimated_us" => effective_estimated_us,
+            "runtime_token_management_enabled" => self.current_config().enable_runtime_token_management,
+        );
+    }
+
+    fn log_unknown_group_fallback(&self, resource_group: &str, estimated_cpu_us: u64) {
+        if !self.info_log_state.should_log(
+            CpuThrottleInfoLogEvent::UnknownGroup,
+            resource_group,
+            None,
+        ) {
+            return;
+        }
+
+        info!(
+            "[CPU throttle] cpu throttle fallback to global-only allocation for unknown resource group";
+            "resource_group" => resource_group,
+            "estimated_cpu_us" => estimated_cpu_us,
+            "global_available_us" => self.global_bucket.available(),
         );
     }
 
