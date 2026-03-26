@@ -42,6 +42,7 @@ pub const MIN_PRIORITY_UPDATE_INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_MAX_RU_QUOTA: u64 = 10_000;
 /// The maximum RU quota that can be configured.
 const MAX_RU_QUOTA: u64 = i32::MAX as u64;
+type ResourceGroupSettingSnapshot = (&'static str, u64, u64);
 
 #[cfg(test)]
 const LOW_PRIORITY: u32 = 1;
@@ -147,18 +148,75 @@ impl ResourceGroupManager {
         }
     }
 
+    fn snapshot_group_settings(rg: &PbResourceGroup) -> ResourceGroupSettingSnapshot {
+        match rg.get_mode() {
+            GroupMode::RuMode => {
+                let fill_rate = rg
+                    .get_r_u_settings()
+                    .get_r_u()
+                    .get_settings()
+                    .get_fill_rate();
+                ("ru", fill_rate, fill_rate)
+            }
+            GroupMode::RawMode => (
+                "raw",
+                rg.get_raw_resource_settings()
+                    .get_cpu()
+                    .get_settings()
+                    .get_fill_rate(),
+                rg.get_raw_resource_settings()
+                    .get_io_write()
+                    .get_settings()
+                    .get_fill_rate(),
+            ),
+            GroupMode::Unknown => ("unknown", 0, 0),
+        }
+    }
+
     pub fn add_resource_group(&self, rg: PbResourceGroup) {
         let group_name = rg.get_name().to_ascii_lowercase();
         let cpu_ru_quota = Self::get_ru_setting(&rg, true);
+        let current_settings = Self::snapshot_group_settings(&rg);
+        let previous_settings = self
+            .resource_groups
+            .get(&group_name)
+            .map(|group| Self::snapshot_group_settings(&group.group));
         self.registry.read().iter().for_each(|controller| {
             let ru_quota = Self::get_ru_setting(&rg, controller.is_read);
             controller.add_resource_group(group_name.clone().into_bytes(), ru_quota, rg.priority);
         });
-        info!("add resource group"; "name"=> &rg.name, "ru" => rg.get_r_u_settings().get_r_u().get_settings().get_fill_rate());
+        match previous_settings {
+            Some((prev_mode, prev_read_fill_rate, prev_write_fill_rate))
+                if (prev_mode, prev_read_fill_rate, prev_write_fill_rate) != current_settings =>
+            {
+                let (mode, read_fill_rate, write_fill_rate) = current_settings;
+                info!(
+                    "[CPU throttle] update resource group ru settings";
+                    "name" => &rg.name,
+                    "mode" => mode,
+                    "previous_mode" => prev_mode,
+                    "previous_read_fill_rate" => prev_read_fill_rate,
+                    "new_read_fill_rate" => read_fill_rate,
+                    "previous_write_fill_rate" => prev_write_fill_rate,
+                    "new_write_fill_rate" => write_fill_rate,
+                );
+            }
+            None => {
+                let (mode, read_fill_rate, write_fill_rate) = current_settings;
+                info!(
+                    "[CPU throttle] add resource group";
+                    "name" => &rg.name,
+                    "mode" => mode,
+                    "read_fill_rate" => read_fill_rate,
+                    "write_fill_rate" => write_fill_rate,
+                );
+            }
+            _ => {}
+        }
         // try to reuse the quota limit when update resource group settings.
         let prev_limiter = self
             .resource_groups
-            .get(&rg.name)
+            .get(&group_name)
             .and_then(|g| g.limiter.clone());
         let limiter = self.build_resource_limiter(&rg, prev_limiter);
 

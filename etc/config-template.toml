@@ -249,6 +249,7 @@
 # default-group-weight = 0
 
 ## Whether to emit extra debug logs for CPU throttling.
+## This option supports online updates.
 # debug = false
 
 [server]

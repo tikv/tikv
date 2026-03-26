@@ -124,6 +124,11 @@ impl<F: Future> Future for CpuTokenCheckFuture<F> {
 
                             let token_handle = this.token_handle.clone();
                             let per_allocation_us = runtime_config.per_allocation_us;
+                            this.token_handle.log_runtime_check_trigger(
+                                current_cpu_us,
+                                threshold_us,
+                                per_allocation_us,
+                            );
                             *this.state = CheckState::AllocatingTokens {
                                 allocation_future: Box::pin(async move {
                                     token_handle

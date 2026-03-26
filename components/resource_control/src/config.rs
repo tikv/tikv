@@ -378,4 +378,21 @@ mod tests {
             )
         );
     }
+
+    #[test]
+    fn test_config_manager_refreshes_cpu_throttle_debug_flag() {
+        let resource_manager = Arc::new(ResourceGroupManager::new(Config::default()));
+        resource_manager.set_cpu_throttle_manager(Arc::new(CpuThrottleManager::new(
+            Config::default().to_cpu_throttle_config(),
+        )));
+        let mut manager = ResourceContrlCfgMgr::new(resource_manager.clone());
+
+        let mut updated = Config::default();
+        updated.cpu_throttle.debug = true;
+
+        manager.dispatch(Config::default().diff(&updated)).unwrap();
+
+        let cpu_throttle_manager = resource_manager.get_cpu_throttle_manager().unwrap();
+        assert!(cpu_throttle_manager.is_debug_logging_enabled());
+    }
 }
