@@ -1057,9 +1057,10 @@ fn collect_report_peers_for_store_heartbeat(
         read_stat.set_cpu_stats(cpu_stats);
         report_peers.insert(*region_id, read_stat);
     }
-    // Drain orphan CPU records for regions that are no longer tracked in `region_peers`.
-    // This can happen when a region is destroyed or merged between heartbeats.
-    // The clear() ensures we don't accumulate stale CPU records indefinitely.
+    // Drain orphan CPU records for regions that are no longer tracked in
+    // `region_peers`. This can happen when a region is destroyed or merged
+    // between heartbeats. The clear() ensures we don't accumulate stale CPU
+    // records indefinitely.
     region_cpu_records_since_store_heartbeat.clear();
     StoreHeartbeatPeerReport {
         report_peers,
