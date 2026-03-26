@@ -12,7 +12,7 @@ testexport = []
 engine_traits = { workspace = true }
 collections = { workspace = true }
 skiplist-rs = { git = "https://github.com/tikv/skiplist-rs.git", branch = "main" }
-bytes = "1.0"
+bytes = { workspace = true }
 crossbeam = "0.8"
 futures = { version = "0.3", features = ["compat"] }
 tikv_util = { workspace = true }

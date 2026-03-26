@@ -14,7 +14,7 @@ thiserror = "1.0"
 tikv_alloc = { workspace = true }
 
 [dev-dependencies]
-bytes = "1.0"
+bytes = { workspace = true }
 panic_hook = { workspace = true }
 protobuf = "2"
 rand = "0.8"
