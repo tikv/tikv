@@ -73,6 +73,83 @@ fn clamp_gauge_value(value: u64) -> i64 {
     }
 }
 
+const CPU_THROTTLE_INFO_LOG_INTERVAL: Duration = Duration::from_secs(1);
+
+#[derive(Debug, Clone, Copy)]
+enum CpuThrottleInfoLogEvent {
+    Usage,
+    InitialAllocationSuccess,
+    InitialAllocationFailure,
+    RuntimeAllocationSuccess,
+    RuntimeAllocationFailure,
+    GlobalRefillRate,
+    ResourceGroupRefillRate,
+}
+
+impl CpuThrottleInfoLogEvent {
+    fn as_str(self) -> &'static str {
+        match self {
+            CpuThrottleInfoLogEvent::Usage => "usage",
+            CpuThrottleInfoLogEvent::InitialAllocationSuccess => "initial_allocation_success",
+            CpuThrottleInfoLogEvent::InitialAllocationFailure => "initial_allocation_failure",
+            CpuThrottleInfoLogEvent::RuntimeAllocationSuccess => "runtime_allocation_success",
+            CpuThrottleInfoLogEvent::RuntimeAllocationFailure => "runtime_allocation_failure",
+            CpuThrottleInfoLogEvent::GlobalRefillRate => "global_refill_rate",
+            CpuThrottleInfoLogEvent::ResourceGroupRefillRate => "resource_group_refill_rate",
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct CpuThrottleInfoLogState {
+    last_logged_at: DashMap<String, Instant>,
+}
+
+impl CpuThrottleInfoLogState {
+    fn should_log(
+        &self,
+        event: CpuThrottleInfoLogEvent,
+        resource_group: &str,
+        detail: Option<&str>,
+    ) -> bool {
+        let key = match detail {
+            Some(detail) => format!("{}:{}:{}", event.as_str(), resource_group, detail),
+            None => format!("{}:{}", event.as_str(), resource_group),
+        };
+        let now = Instant::now();
+        match self.last_logged_at.entry(key) {
+            dashmap::mapref::entry::Entry::Occupied(mut entry) => {
+                if now.saturating_duration_since(*entry.get()) < CPU_THROTTLE_INFO_LOG_INTERVAL {
+                    return false;
+                }
+                *entry.get_mut() = now;
+                true
+            }
+            dashmap::mapref::entry::Entry::Vacant(entry) => {
+                entry.insert(now);
+                true
+            }
+        }
+    }
+}
+
+fn fair_share_log_state(config: &CpuThrottleConfig) -> (&'static str, bool) {
+    if !config.enable_fair_allocation {
+        ("disabled", false)
+    } else {
+        // The config knobs exist today, but the allocator does not yet have a
+        // fair-share enforcement branch, so report that state explicitly.
+        ("configured_but_not_implemented", false)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RuntimeAllocationSnapshot {
+    resource_group_allocated_delta_us: u64,
+    global_allocated_delta_us: u64,
+    is_burst: bool,
+}
+
 async fn sleep_async(duration: Duration) {
     // The global timer can be dropped during shutdown. This sleep is best-effort,
     // so ignore the compat error instead of panicking.
@@ -434,17 +511,21 @@ pub struct CpuTokenHandle {
     pub(crate) config: Arc<CpuThrottleConfig>,
     adaptive_estimator: Option<Arc<AdaptiveEstimator>>,
     pub(crate) is_burst: AtomicBool,
+    info_log_state: Arc<CpuThrottleInfoLogState>,
 }
 
 impl CpuTokenHandle {
-    pub fn allocate_more(&self, additional_us: u64) -> bool {
+    fn try_allocate_more(
+        &self,
+        additional_us: u64,
+    ) -> Result<RuntimeAllocationSnapshot, ThrottleError> {
         self.global_bucket.refill();
         if let Some(bucket) = &self.resource_group_bucket {
             bucket.refill();
         }
 
         if !self.global_bucket.try_allocate(additional_us) {
-            return false;
+            return Err(ThrottleError::GlobalCpuExhausted);
         }
 
         let mut group_allocated_delta = 0;
@@ -456,7 +537,7 @@ impl CpuTokenHandle {
                     self.is_burst.store(true, Ordering::Release);
                 } else {
                     self.global_bucket.release(additional_us);
-                    return false;
+                    return Err(ThrottleError::ResourceGroupCpuExhausted);
                 }
             }
         }
@@ -470,34 +551,66 @@ impl CpuTokenHandle {
             self.inflight_add(group_allocated_delta);
         }
         self.update_available_metrics();
-        true
+        Ok(RuntimeAllocationSnapshot {
+            resource_group_allocated_delta_us: group_allocated_delta,
+            global_allocated_delta_us: additional_us,
+            is_burst: self.is_burst.load(Ordering::Acquire),
+        })
+    }
+
+    pub fn allocate_more(&self, additional_us: u64) -> bool {
+        self.try_allocate_more(additional_us).is_ok()
     }
 
     pub async fn allocate_more_with_wait(&self, additional_us: u64) -> Result<u64, ThrottleError> {
         let start = Instant::now();
         let refill_interval = Duration::from_millis(self.config.refill_interval_ms.max(1));
         loop {
-            if self.allocate_more(additional_us) {
-                CPU_THROTTLE_RUNTIME_TOKEN_WAIT_DURATION
-                    .with_label_values(&[self.resource_group.as_str(), "success"])
-                    .observe(start.elapsed().as_secs_f64());
-                return Ok(additional_us);
-            }
+            match self.try_allocate_more(additional_us) {
+                Ok(snapshot) => {
+                    let wait_duration = start.elapsed();
+                    CPU_THROTTLE_RUNTIME_TOKEN_WAIT_DURATION
+                        .with_label_values(&[self.resource_group.as_str(), "success"])
+                        .observe(wait_duration.as_secs_f64());
+                    self.log_runtime_allocation_success(additional_us, wait_duration, snapshot);
+                    return Ok(additional_us);
+                }
+                Err(
+                    err @ (ThrottleError::GlobalCpuExhausted
+                    | ThrottleError::ResourceGroupCpuExhausted),
+                ) => {
+                    let now = Instant::now();
+                    if now >= self.request_deadline {
+                        let wait_duration = start.elapsed();
+                        CPU_THROTTLE_RUNTIME_TOKEN_WAIT_DURATION
+                            .with_label_values(&[self.resource_group.as_str(), "timeout"])
+                            .observe(wait_duration.as_secs_f64());
+                        self.log_runtime_allocation_failure(
+                            additional_us,
+                            wait_duration,
+                            &err,
+                            true,
+                        );
+                        return Err(ThrottleError::RequestTimeout);
+                    }
 
-            let now = Instant::now();
-            if now >= self.request_deadline {
-                CPU_THROTTLE_RUNTIME_TOKEN_WAIT_DURATION
-                    .with_label_values(&[self.resource_group.as_str(), "timeout"])
-                    .observe(start.elapsed().as_secs_f64());
-                return Err(ThrottleError::RequestTimeout);
+                    sleep_async(
+                        self.request_deadline
+                            .saturating_duration_since(now)
+                            .min(refill_interval),
+                    )
+                    .await;
+                }
+                Err(err) => {
+                    self.log_runtime_allocation_failure(
+                        additional_us,
+                        start.elapsed(),
+                        &err,
+                        false,
+                    );
+                    return Err(err);
+                }
             }
-
-            sleep_async(
-                self.request_deadline
-                    .saturating_duration_since(now)
-                    .min(refill_interval),
-            )
-            .await;
         }
     }
 
@@ -552,6 +665,80 @@ impl CpuTokenHandle {
             "global_only"
         }
     }
+
+    fn log_runtime_allocation_success(
+        &self,
+        additional_us: u64,
+        wait_duration: Duration,
+        snapshot: RuntimeAllocationSnapshot,
+    ) {
+        if !self.info_log_state.should_log(
+            CpuThrottleInfoLogEvent::RuntimeAllocationSuccess,
+            &self.resource_group,
+            None,
+        ) {
+            return;
+        }
+
+        let (fair_share_status, fair_share_triggered) = fair_share_log_state(&self.config);
+        info!(
+            "cpu throttle runtime token allocation succeeded";
+            "resource_group" => self.resource_group.as_str(),
+            "additional_us" => additional_us,
+            "wait_duration" => ?wait_duration,
+            "allocation_result" => if snapshot.is_burst { "burst" } else { "success" },
+            "is_burst" => snapshot.is_burst,
+            "burst_enabled" => self.config.enable_burst,
+            "fair_share_triggered" => fair_share_triggered,
+            "fair_share_status" => fair_share_status,
+            "global_allocated_delta_us" => snapshot.global_allocated_delta_us,
+            "resource_group_allocated_delta_us" => snapshot.resource_group_allocated_delta_us,
+            "global_allocated_total_us" => self.global_allocated_us.load(Ordering::Acquire),
+            "resource_group_allocated_total_us" => self
+                .resource_group_allocated_us
+                .load(Ordering::Acquire),
+            "global_available_us" => self.global_bucket.available(),
+            "resource_group_available_us" => ?self
+                .resource_group_bucket
+                .as_ref()
+                .map(|bucket| bucket.available()),
+        );
+    }
+
+    fn log_runtime_allocation_failure(
+        &self,
+        additional_us: u64,
+        wait_duration: Duration,
+        err: &ThrottleError,
+        timed_out: bool,
+    ) {
+        if !self.info_log_state.should_log(
+            CpuThrottleInfoLogEvent::RuntimeAllocationFailure,
+            &self.resource_group,
+            Some(err.timeout_allocation_result_label()),
+        ) {
+            return;
+        }
+
+        let (fair_share_status, fair_share_triggered) = fair_share_log_state(&self.config);
+        info!(
+            "cpu throttle runtime token allocation failed";
+            "resource_group" => self.resource_group.as_str(),
+            "additional_us" => additional_us,
+            "wait_duration" => ?wait_duration,
+            "allocation_result" => if timed_out { "timeout" } else { "error" },
+            "failure_reason" => %err,
+            "is_burst" => self.is_burst.load(Ordering::Acquire),
+            "burst_enabled" => self.config.enable_burst,
+            "fair_share_triggered" => fair_share_triggered,
+            "fair_share_status" => fair_share_status,
+            "global_available_us" => self.global_bucket.available(),
+            "resource_group_available_us" => ?self
+                .resource_group_bucket
+                .as_ref()
+                .map(|bucket| bucket.available()),
+        );
+    }
 }
 
 impl Drop for CpuTokenHandle {
@@ -597,6 +784,7 @@ pub struct CpuThrottleManager {
     resource_group_buckets: Arc<DashMap<String, Arc<CpuTokenBucket>>>,
     resource_group_weights: Arc<DashMap<String, u64>>,
     resource_group_inflight_allocated_us: Arc<DashMap<String, AtomicU64>>,
+    info_log_state: Arc<CpuThrottleInfoLogState>,
     config: RwLock<Arc<CpuThrottleConfig>>,
     global_capacity_us: AtomicU64,
     resource_group_estimated_cpu_per_request_us: RwLock<HashMap<String, u64>>,
@@ -651,6 +839,7 @@ impl CpuThrottleManager {
             resource_group_buckets: Arc::new(DashMap::new()),
             resource_group_weights: Arc::new(DashMap::new()),
             resource_group_inflight_allocated_us: Arc::new(DashMap::new()),
+            info_log_state: Arc::new(CpuThrottleInfoLogState::default()),
             global_capacity_us: AtomicU64::new(global_capacity_us),
             resource_group_estimated_cpu_per_request_us: RwLock::new(estimated_overrides),
             adaptive_estimator: RwLock::new(adaptive_estimator),
@@ -847,6 +1036,7 @@ impl CpuThrottleManager {
                     .set(0.0);
             }
         }
+        self.log_usage_update(global_ratio, &per_resource_group_dag_ratios);
     }
 
     pub fn adjust_refill_rates(&self) {
@@ -864,8 +1054,8 @@ impl CpuThrottleManager {
         };
         let high_watermark = config.high_watermark;
         let low_watermark = config.low_watermark;
-
-        if let Some((new_rate, direction)) = next_refill_rate(
+        let previous_global_rate = self.global_bucket.current_refill_rate();
+        let global_action = if let Some((new_rate, direction)) = next_refill_rate(
             self.global_bucket.base_refill_rate(),
             self.global_bucket.current_refill_rate(),
             global_ratio,
@@ -880,13 +1070,24 @@ impl CpuThrottleManager {
             CPU_THROTTLE_REFILL_RATE_ADJUSTMENTS
                 .with_label_values(&["global", direction])
                 .inc();
-        }
+            direction
+        } else {
+            "unchanged"
+        };
+
         CPU_THROTTLE_GLOBAL_REFILL_RATE
             .set(clamp_gauge_value(self.global_bucket.current_refill_rate()));
+        self.log_global_refill_rate(
+            previous_global_rate,
+            self.global_bucket.current_refill_rate(),
+            global_action,
+            global_ratio,
+        );
 
         for entry in self.resource_group_buckets.iter() {
             let resource_group = entry.key();
             let bucket = entry.value();
+            let previous_rate = bucket.current_refill_rate();
             let ratio = per_resource_group_dag_ratios
                 .get(resource_group.as_str())
                 .copied()
@@ -896,7 +1097,7 @@ impl CpuThrottleManager {
                 continue;
             }
             let normalized_ratio = ratio / quota_ratio;
-            if let Some((new_rate, direction)) = next_refill_rate(
+            let action = if let Some((new_rate, direction)) = next_refill_rate(
                 bucket.base_refill_rate(),
                 bucket.current_refill_rate(),
                 normalized_ratio,
@@ -911,10 +1112,24 @@ impl CpuThrottleManager {
                 CPU_THROTTLE_REFILL_RATE_ADJUSTMENTS
                     .with_label_values(&["resource_group", direction])
                     .inc();
-            }
+                direction
+            } else {
+                "unchanged"
+            };
             CPU_THROTTLE_GROUP_REFILL_RATE
                 .with_label_values(&[resource_group.as_str()])
                 .set(clamp_gauge_value(bucket.current_refill_rate()));
+            self.log_resource_group_refill_rate(
+                resource_group.as_str(),
+                previous_rate,
+                bucket.current_refill_rate(),
+                bucket.base_refill_rate(),
+                bucket.capacity(),
+                ratio,
+                normalized_ratio,
+                action,
+                "dynamic_adjustment",
+            );
         }
     }
 
@@ -933,6 +1148,7 @@ impl CpuThrottleManager {
             .map(|(resource_group, _)| resource_group.clone())
             .collect();
         let sum_weights: u64 = weights.iter().map(|(_, weight)| *weight).sum();
+        let global_capacity_us = self.global_capacity_us();
 
         if sum_weights == 0 {
             let existing: Vec<String> = self
@@ -940,16 +1156,29 @@ impl CpuThrottleManager {
                 .iter()
                 .map(|entry| entry.key().clone())
                 .collect();
-            for resource_group in existing {
-                self.remove_resource_group_bucket(&resource_group);
+            info!(
+                "recalculate cpu throttle quotas";
+                "global_capacity_us" => global_capacity_us,
+                "sum_weights" => sum_weights,
+                "active_resource_groups" => 0,
+                "cleared_resource_group_buckets" => ?existing,
+            );
+            for resource_group in &existing {
+                self.remove_resource_group_bucket(resource_group);
             }
             return;
         }
 
+        info!(
+            "recalculate cpu throttle quotas";
+            "global_capacity_us" => global_capacity_us,
+            "sum_weights" => sum_weights,
+            "active_resource_groups" => active_groups.len(),
+        );
+
         for (resource_group, weight) in weights {
-            let quota_us = ((self.global_capacity_us() as u128 * weight as u128)
-                / sum_weights as u128)
-                .max(1) as u64;
+            let quota_us =
+                ((global_capacity_us as u128 * weight as u128) / sum_weights as u128).max(1) as u64;
             let bucket = if let Some(entry) = self.resource_group_buckets.get(&resource_group) {
                 let bucket = entry.clone();
                 bucket.update_quota(quota_us, quota_us);
@@ -972,15 +1201,28 @@ impl CpuThrottleManager {
             if inflight > quota_us {
                 bucket.set_available(0);
             }
+            let available_us = bucket.available();
             CPU_THROTTLE_GROUP_BUCKET_CAPACITY
                 .with_label_values(&[resource_group.as_str()])
                 .set(clamp_gauge_value(quota_us));
             CPU_THROTTLE_GROUP_BUCKET_AVAILABLE
                 .with_label_values(&[resource_group.as_str()])
-                .set(clamp_gauge_value(bucket.available()));
+                .set(clamp_gauge_value(available_us));
             CPU_THROTTLE_GROUP_REFILL_RATE
                 .with_label_values(&[resource_group.as_str()])
                 .set(clamp_gauge_value(bucket.current_refill_rate()));
+            info!(
+                "cpu throttle quota recalculated";
+                "resource_group" => resource_group.as_str(),
+                "global_capacity_us" => global_capacity_us,
+                "weight" => weight,
+                "sum_weights" => sum_weights,
+                "quota_us" => quota_us,
+                "inflight_allocated_us" => inflight,
+                "available_us" => available_us,
+                "base_refill_rate_us" => bucket.base_refill_rate(),
+                "current_refill_rate_us" => bucket.current_refill_rate(),
+            );
         }
 
         let stale_groups: Vec<String> = self
@@ -994,8 +1236,14 @@ impl CpuThrottleManager {
                 }
             })
             .collect();
-        for resource_group in stale_groups {
-            self.remove_resource_group_bucket(&resource_group);
+        if !stale_groups.is_empty() {
+            info!(
+                "remove stale cpu throttle buckets after recalculation";
+                "resource_groups" => ?stale_groups,
+            );
+        }
+        for resource_group in &stale_groups {
+            self.remove_resource_group_bucket(resource_group);
         }
     }
 
@@ -1059,15 +1307,17 @@ impl CpuThrottleManager {
                 request_deadline,
             ) {
                 Ok(handle) => {
+                    let wait_duration = start.elapsed();
                     CPU_THROTTLE_TOKEN_WAIT_DURATION
                         .with_label_values(&[resource_group.as_str(), "success"])
-                        .observe(start.elapsed().as_secs_f64());
+                        .observe(wait_duration.as_secs_f64());
                     CPU_THROTTLE_ALLOCATIONS
                         .with_label_values(&[
                             resource_group.as_str(),
                             handle.allocation_result_label(),
                         ])
                         .inc();
+                    self.log_initial_allocation_success(&handle, estimated_cpu_us, wait_duration);
                     return Ok(handle);
                 }
                 Err(
@@ -1075,9 +1325,10 @@ impl CpuThrottleManager {
                     | ThrottleError::ResourceGroupCpuExhausted),
                 ) => {
                     if Instant::now() >= request_deadline {
+                        let wait_duration = start.elapsed();
                         CPU_THROTTLE_TOKEN_WAIT_DURATION
                             .with_label_values(&[resource_group.as_str(), "timeout"])
-                            .observe(start.elapsed().as_secs_f64());
+                            .observe(wait_duration.as_secs_f64());
                         CPU_THROTTLE_ALLOCATIONS
                             .with_label_values(&[
                                 resource_group.as_str(),
@@ -1088,8 +1339,15 @@ impl CpuThrottleManager {
                             "cpu throttle token allocation timed out";
                             "resource_group" => resource_group.as_str(),
                             "estimated_cpu_us" => estimated_cpu_us,
-                            "wait_duration" => ?start.elapsed(),
+                            "wait_duration" => ?wait_duration,
                             "last_exhaustion" => %err,
+                        );
+                        self.log_initial_allocation_failure(
+                            &resource_group,
+                            estimated_cpu_us,
+                            wait_duration,
+                            &err,
+                            true,
                         );
                         return Err(ThrottleError::RequestTimeout);
                     }
@@ -1102,7 +1360,16 @@ impl CpuThrottleManager {
                     )
                     .await;
                 }
-                Err(err) => return Err(err),
+                Err(err) => {
+                    self.log_initial_allocation_failure(
+                        &resource_group,
+                        estimated_cpu_us,
+                        start.elapsed(),
+                        &err,
+                        false,
+                    );
+                    return Err(err);
+                }
             }
         }
     }
@@ -1184,12 +1451,168 @@ impl CpuThrottleManager {
             config,
             adaptive_estimator: self.adaptive_estimator.read().unwrap().clone(),
             is_burst: AtomicBool::new(is_burst),
+            info_log_state: self.info_log_state.clone(),
         };
         if resource_group_allocated_us > 0 {
             handle.inflight_add(resource_group_allocated_us);
         }
         handle.update_available_metrics();
         Ok(handle)
+    }
+
+    fn log_usage_update(
+        &self,
+        global_ratio: f64,
+        per_resource_group_dag_ratios: &HashMap<String, f64>,
+    ) {
+        if !self
+            .info_log_state
+            .should_log(CpuThrottleInfoLogEvent::Usage, "global", None)
+        {
+            return;
+        }
+
+        info!(
+            "update cpu throttle usage";
+            "global_cpu_ratio" => global_ratio,
+            "resource_group_dag_cpu_ratios" => ?per_resource_group_dag_ratios,
+        );
+    }
+
+    fn log_global_refill_rate(
+        &self,
+        previous_refill_rate_us: u64,
+        current_refill_rate_us: u64,
+        action: &'static str,
+        global_ratio: f64,
+    ) {
+        if !self.info_log_state.should_log(
+            CpuThrottleInfoLogEvent::GlobalRefillRate,
+            "global",
+            None,
+        ) {
+            return;
+        }
+
+        info!(
+            "cpu throttle global refill rate";
+            "source" => "dynamic_adjustment",
+            "action" => action,
+            "global_cpu_ratio" => global_ratio,
+            "base_refill_rate_us" => self.global_bucket.base_refill_rate(),
+            "previous_refill_rate_us" => previous_refill_rate_us,
+            "current_refill_rate_us" => current_refill_rate_us,
+            "global_capacity_us" => self.global_capacity_us(),
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn log_resource_group_refill_rate(
+        &self,
+        resource_group: &str,
+        previous_refill_rate_us: u64,
+        current_refill_rate_us: u64,
+        base_refill_rate_us: u64,
+        capacity_us: u64,
+        observed_dag_cpu_ratio: f64,
+        normalized_dag_cpu_ratio: f64,
+        action: &'static str,
+        source: &'static str,
+    ) {
+        if !self.info_log_state.should_log(
+            CpuThrottleInfoLogEvent::ResourceGroupRefillRate,
+            resource_group,
+            None,
+        ) {
+            return;
+        }
+
+        info!(
+            "cpu throttle resource group refill rate";
+            "resource_group" => resource_group,
+            "source" => source,
+            "action" => action,
+            "base_refill_rate_us" => base_refill_rate_us,
+            "previous_refill_rate_us" => previous_refill_rate_us,
+            "current_refill_rate_us" => current_refill_rate_us,
+            "capacity_us" => capacity_us,
+            "observed_dag_cpu_ratio" => observed_dag_cpu_ratio,
+            "normalized_dag_cpu_ratio" => normalized_dag_cpu_ratio,
+        );
+    }
+
+    fn log_initial_allocation_success(
+        &self,
+        handle: &CpuTokenHandle,
+        estimated_cpu_us: u64,
+        wait_duration: Duration,
+    ) {
+        if !self.info_log_state.should_log(
+            CpuThrottleInfoLogEvent::InitialAllocationSuccess,
+            handle.resource_group.as_str(),
+            None,
+        ) {
+            return;
+        }
+
+        let (fair_share_status, fair_share_triggered) = fair_share_log_state(&handle.config);
+        info!(
+            "cpu throttle token allocation succeeded";
+            "resource_group" => handle.resource_group.as_str(),
+            "estimated_cpu_us" => estimated_cpu_us,
+            "wait_duration" => ?wait_duration,
+            "allocation_result" => handle.allocation_result_label(),
+            "is_burst" => handle.is_burst.load(Ordering::Acquire),
+            "burst_enabled" => handle.config.enable_burst,
+            "fair_share_triggered" => fair_share_triggered,
+            "fair_share_status" => fair_share_status,
+            "global_allocated_us" => handle.global_allocated_us.load(Ordering::Acquire),
+            "resource_group_allocated_us" => handle
+                .resource_group_allocated_us
+                .load(Ordering::Acquire),
+            "global_available_us" => handle.global_bucket.available(),
+            "resource_group_available_us" => ?handle
+                .resource_group_bucket
+                .as_ref()
+                .map(|bucket| bucket.available()),
+        );
+    }
+
+    fn log_initial_allocation_failure(
+        &self,
+        resource_group: &str,
+        estimated_cpu_us: u64,
+        wait_duration: Duration,
+        err: &ThrottleError,
+        timed_out: bool,
+    ) {
+        if !self.info_log_state.should_log(
+            CpuThrottleInfoLogEvent::InitialAllocationFailure,
+            resource_group,
+            Some(err.timeout_allocation_result_label()),
+        ) {
+            return;
+        }
+
+        let config = self.current_config();
+        let (fair_share_status, fair_share_triggered) = fair_share_log_state(&config);
+        info!(
+            "cpu throttle token allocation failed";
+            "resource_group" => resource_group,
+            "estimated_cpu_us" => estimated_cpu_us,
+            "wait_duration" => ?wait_duration,
+            "allocation_result" => if timed_out { "timeout" } else { "error" },
+            "failure_reason" => %err,
+            "is_burst" => false,
+            "burst_enabled" => config.enable_burst,
+            "fair_share_triggered" => fair_share_triggered,
+            "fair_share_status" => fair_share_status,
+            "global_available_us" => self.global_bucket.available(),
+            "resource_group_available_us" => ?self
+                .resource_group_buckets
+                .get(resource_group)
+                .map(|bucket| bucket.available()),
+        );
     }
 
     fn get_capacity_cap(&self, resource_group: &str) -> u64 {
