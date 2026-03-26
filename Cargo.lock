@@ -3818,7 +3818,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/lhy1024/kvproto?rev=f9ddb2510e08814eed991f18d2d51b3a6c199f09#f9ddb2510e08814eed991f18d2d51b3a6c199f09"
+source = "git+https://github.com/pingcap/kvproto.git#678ff92b1edd0cf321336a0ac4530edcb9686995"
 dependencies = [
  "bytes",
  "futures 0.3.15",
@@ -8180,7 +8180,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 0.1.10",
+ "cfg-if 1.0.0",
  "static_assertions",
 ]
 
