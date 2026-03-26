@@ -554,6 +554,7 @@ pub mod tests {
                 write: 1000,
             },
             true,
+            false,
         );
         // Wait for report ru metrics.
         std::thread::sleep(Duration::from_millis(100));
@@ -575,6 +576,7 @@ pub mod tests {
                 write: 2000,
             },
             true,
+            false,
         );
         // Wait for report ru metrics.
         std::thread::sleep(Duration::from_millis(100));

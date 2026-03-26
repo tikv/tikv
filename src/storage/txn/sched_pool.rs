@@ -133,6 +133,7 @@ impl PriorityQueue {
             with_resource_limiter(
                 ControlledFuture::new(f, self.resource_ctl.clone(), group_name),
                 resource_limiter,
+                false,
             ),
             extras,
         )
