@@ -951,7 +951,7 @@ fn should_report_hotspot_read_peer(
 }
 
 #[derive(Default)]
-struct StoreHeartbeatCpuUsage {
+struct RegionCpuUsage {
     unified_read_cpu_usage: u64,
     scheduler_cpu_usage: u64,
 }
@@ -966,8 +966,8 @@ fn cpu_usage_from_millis(cpu_time_ms: u64, interval_seconds: u64) -> u64 {
 fn calculate_region_cpu_usage(
     cpu_record: RegionCpuRecord,
     interval_seconds: u64,
-) -> StoreHeartbeatCpuUsage {
-    StoreHeartbeatCpuUsage {
+) -> RegionCpuUsage {
+    RegionCpuUsage {
         unified_read_cpu_usage: cpu_usage_from_millis(
             cpu_record.unified_read_cpu_time_ms as u64,
             interval_seconds,
@@ -1024,7 +1024,7 @@ fn collect_report_peers_for_store_heartbeat(
         } else {
             // `interval_seconds == 0` is unexpected but can happen in corner cases.
             // Drain the record and report 0 to avoid division by zero.
-            StoreHeartbeatCpuUsage::default()
+            RegionCpuUsage::default()
         };
         if has_interval {
             region_unified_read_cpu_time_ms_sum += cpu_record.unified_read_cpu_time_ms as u64;
