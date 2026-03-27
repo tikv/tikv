@@ -1257,36 +1257,61 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 incremental_scan_barrier,
                 cb,
             } => {
+                // `InitDownstream` is queued asynchronously. When it runs, the
+                // delegate or downstream may already have been removed by a
+                // stale observe generation, connection teardown, or region
+                // error.
                 let delegate = match self.capture_regions.get_mut(&region_id) {
                     Some(delegate) if delegate.handle.id == observe_id => delegate,
-                    _ => return,
+                    _ => {
+                        warn!("cdc delegate not found when init downstream";
+                            "observe_id" => ?observe_id,
+                            "downstream_id" => ?downstream_id,
+                            "region_id" => region_id);
+                        return;
+                    }
                 };
+                let downstream = match delegate.downstream(downstream_id) {
+                    Some(d) => d,
+                    None => {
+                        warn!("cdc downstream not found when init downstream";
+                            "observe_id" => ?observe_id,
+                            "downstream_id" => ?downstream_id,
+                            "region_id" => region_id);
+                        return;
+                    }
+                };
+                // The downstream may still exist but already be stopped by a
+                // late cancel before this queued task runs.
+                if downstream_state.load() == DownstreamState::Stopped {
+                    warn!("cdc failed to init downstream since it's stopped";
+                        "observe_id" => ?observe_id,
+                        "downstream_id" => ?downstream_id,
+                        "region_id" => region_id);
+                    return;
+                }
+                if let Err(e) = downstream.sink_barrier(incremental_scan_barrier) {
+                    warn!("cdc failed to schedule barrier for delta before delta scan";
+                        "error" => ?e,
+                        "observe_id" => ?observe_id,
+                        "downstream_id" => ?downstream_id,
+                        "region_id" => region_id);
+                    return;
+                }
+                if !on_init_downstream(&downstream_state) {
+                    warn!("cdc downstream fails to initialize: canceled";
+                        "observe_id" => ?observe_id,
+                        "downstream_id" => ?downstream_id,
+                        "region_id" => region_id);
+                    return;
+                }
                 if delegate.init_lock_tracker() {
                     build_resolver.store(true, Ordering::Release);
                 }
-                let downstream = match delegate.downstream(downstream_id) {
-                    Some(d) => d,
-                    None => return,
-                };
-                if let Err(e) = downstream.sink_barrier(incremental_scan_barrier) {
-                    warn!("cdc failed to schedule barrier for delta before delta scan";
-                        "region_id" => region_id,
-                        "observe_id" => ?observe_id,
-                        "downstream_id" => ?downstream_id,
-                        "error" => ?e);
-                    return;
-                }
-                if on_init_downstream(&downstream_state) {
-                    info!("cdc downstream starts to initialize";
-                        "region_id" => region_id,
-                        "observe_id" => ?observe_id,
-                        "downstream_id" => ?downstream_id);
-                } else {
-                    warn!("cdc downstream fails to initialize: canceled";
-                        "region_id" => region_id,
-                        "observe_id" => ?observe_id,
-                        "downstream_id" => ?downstream_id);
-                }
+                info!("cdc downstream starts to initialize";
+                    "downstream_id" => ?downstream_id,
+                    "observe_id" => ?observe_id,
+                    "region_id" => region_id);
                 cb();
             }
             Task::TxnExtra(txn_extra) => {

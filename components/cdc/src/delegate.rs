@@ -238,7 +238,8 @@ impl Downstream {
         self.sink_event(change_data_event, force_send)
     }
 
-    pub fn sink_barrier(&self, barrier: CdcEvent::Barrier) -> Result<()> {
+    pub fn sink_barrier(&self, barrier: CdcEvent) -> Result<()> {
+        debug_assert!(matches!(barrier, CdcEvent::Barrier(_)));
         self.sink_cdc_event(barrier, true)
     }
 
