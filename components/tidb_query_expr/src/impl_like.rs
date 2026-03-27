@@ -180,6 +180,13 @@ mod tests {
                 Collation::Utf8Mb4GeneralCi,
                 Some(1),
             ),
+            (
+                r#"Äta"#,
+                r#"æ__"#,
+                '\\',
+                Collation::Latin1SwedishCi,
+                Some(1),
+            ),
             (r#"baab"#, r#"b_%b"#, '\\', Collation::Utf8Mb4Bin, Some(1)),
             (r#"baab"#, r#"b%_b"#, '\\', Collation::Utf8Mb4Bin, Some(1)),
             (r#"bab"#, r#"b_%b"#, '\\', Collation::Utf8Mb4Bin, Some(1)),

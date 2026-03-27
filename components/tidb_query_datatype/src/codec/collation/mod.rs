@@ -35,6 +35,7 @@ macro_rules! match_template_collator {
                 Utf8Mb40900AiCi => CollatorUtf8Mb40900AiCi,
                 Utf8Mb40900Bin => CollatorUtf8Mb4BinNoPadding,
                 Latin1Bin => CollatorLatin1Bin,
+                Latin1SwedishCi => CollatorLatin1SwedishCi,
                 GbkBin => CollatorGbkBin,
                 GbkChineseCi => CollatorGbkChineseCi,
                 Gb18030Bin => CollatorGb18030Bin,
