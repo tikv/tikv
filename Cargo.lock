@@ -3763,7 +3763,11 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
+<<<<<<< HEAD
 source = "git+https://github.com/pingcap/kvproto.git?branch=release-8.5#3586c08f7d29d6ee9eed2a5aa9d33ad24012a6d2"
+=======
+source = "git+https://github.com/pingcap/kvproto.git#678ff92b1edd0cf321336a0ac4530edcb9686995"
+>>>>>>> 030d7b4b4d (resource_metering, raftstore: split region cpu by scheduler and unified read pools (#19473))
 dependencies = [
  "bytes",
  "futures 0.3.15",

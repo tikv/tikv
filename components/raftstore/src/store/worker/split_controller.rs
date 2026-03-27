@@ -1430,6 +1430,7 @@ mod tests {
                     network_out_bytes: 0,
                     logical_read_bytes: 0,
                     logical_write_bytes: 0,
+                    ..Default::default()
                 },
             );
         }
@@ -1910,6 +1911,7 @@ mod tests {
                     network_out_bytes: 0,
                     logical_read_bytes: 0,
                     logical_write_bytes: 0,
+                    ..Default::default()
                 },
             );
             // ["c", "d"] with (test_case.1)ms CPU time.
@@ -1923,6 +1925,7 @@ mod tests {
                     network_out_bytes: 0,
                     logical_read_bytes: 0,
                     logical_write_bytes: 0,
+                    ..Default::default()
                 },
             );
             // Multiple key ranges with (test_case.2)ms CPU time.
@@ -1936,6 +1939,7 @@ mod tests {
                     network_out_bytes: 0,
                     logical_read_bytes: 0,
                     logical_write_bytes: 0,
+                    ..Default::default()
                 },
             );
             // Empty key range with (test_case.3)ms CPU time.
@@ -1949,6 +1953,7 @@ mod tests {
                     network_out_bytes: 0,
                     logical_read_bytes: 0,
                     logical_write_bytes: 0,
+                    ..Default::default()
                 },
             );
 
