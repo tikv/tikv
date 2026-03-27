@@ -4836,9 +4836,12 @@ where
                 new_peer.peer.set_approximate_size(share_size);
                 new_peer.peer.set_approximate_keys(share_keys);
                 *new_peer.peer.txn_ext.pessimistic_locks.write() = locks;
-                // The new peer is likely to become leader, send a heartbeat immediately to
-                // reduce client query miss.
-                new_peer.peer.heartbeat_pd(self.ctx);
+                // Skip heartbeat here: the peer is still a Candidate after
+                // maybe_campaign(), so pending_peers would be reported as empty
+                // (raft progress is only available for Leaders). The first
+                // heartbeat will be sent from on_role_changed()
+                // after the election completes, with correct
+                // pending_peers information.
             }
 
             new_peer.peer.activate(self.ctx);
