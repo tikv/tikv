@@ -177,7 +177,14 @@ impl File {
     }
 
     pub fn try_lock_shared(&self) -> io::Result<()> {
-        self.inner.try_lock_shared()
+        if self.inner.try_lock_shared()? {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "file lock is already held",
+            ))
+        }
     }
 
     pub fn try_lock_exclusive(&self) -> io::Result<()> {

@@ -26,7 +26,7 @@ RUN yum install -y epel-release && \
 
 RUN yum install -y centos-release-scl && \
     yum install -y \
-      devtoolset-8 \
+      devtoolset-8 go \
       perl cmake3 && \
     yum clean all
 

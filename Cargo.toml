@@ -368,6 +368,7 @@ external_storage = { path = "components/external_storage" }
 file_system = { path = "components/file_system" }
 crypto = { path = "components/crypto" }
 gcp = { path = "components/cloud/gcp" }
+gcp_v2 = { path = "components/cloud/gcp_v2" }
 health_controller = { path = "components/health_controller" }
 into_other = { path = "components/into_other" }
 keys = { path = "components/keys" }
@@ -417,10 +418,10 @@ txn_types = { path = "components/txn_types" }
 raft = { version = "0.7.0", default-features = false, features = [
   "protobuf-codec",
 ] }
-raft-engine = { git = "https://github.com/tikv/raft-engine.git", branch = "tikv-8.5", features = [
+raft-engine = { git = "https://github.com/tikv/raft-engine.git", rev = "2f9f6888dc2c88d3e2b582187c26e196b88b8ef3", features = [
   "swap",
 ] }
-raft-engine-ctl = { git = "https://github.com/tikv/raft-engine.git", branch = "tikv-8.5" }
+raft-engine-ctl = { git = "https://github.com/tikv/raft-engine.git", rev = "2f9f6888dc2c88d3e2b582187c26e196b88b8ef3" }
 grpcio = { version = "0.10.4", default-features = false, features = [
   "openssl",
   "protobuf-codec",
