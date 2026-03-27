@@ -2459,8 +2459,8 @@ fn test_merge_source_destroy_before_catch_up_logs_leaks_cm_lock() {
     // Set up gRPC client to the leader store.
     let addr = cluster.sim.rl().get_addr(leader_store);
     let env = Arc::new(Environment::new(1));
-    let channel = ChannelBuilder::new(env).connect(&addr);
-    let client = TikvClient::new(channel);
+    let grpc_channel = ChannelBuilder::new(env).connect(&addr);
+    let client = TikvClient::new(grpc_channel);
 
     // --- Phase 1: Trigger merge with the source unable to signal -----------
     //

@@ -59,7 +59,7 @@ use smallvec::{SmallVec, smallvec};
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
-    Either, MustConsumeVec,     box_err, box_try,
+    Either, MustConsumeVec, box_err, box_try,
     config::{Tracker, VersionTrack},
     debug, error,
     future::poll_future_notify,
@@ -1286,9 +1286,8 @@ where
                         // can check the elapsed time.  If the region is
                         // destroyed by another path before the timer fires,
                         // `router.mailbox()` returns None and the Noop is
-                        // lost.  This is acceptable: the scheduler-level
-                        // timeout in `handle_async_write` acts as a fallback
-                        // to release orphaned KeyHandleGuards.
+                        // silently dropped — the destroy path itself drains
+                        // pending callbacks so KeyHandleGuards are released.
                         let delay = GLOBAL_TIMER_HANDLE
                             .delay(std::time::Instant::now() + timeout)
                             .compat()

@@ -4181,21 +4181,6 @@ impl TikvConfig {
             self.coprocessor.region_bucket_size,
             self.storage.engine == EngineType::RaftKv2,
         )?;
-        // Enforce the documented invariant: the scheduler's safety-net timeout
-        // must exceed the raftstore WaitMergeSource timeout so that apply-level
-        // cleanup has time to deliver WriteEvent::Finished before the scheduler
-        // fires and drops KeyHandleGuards prematurely.
-        if self.storage.write_event_finished_timeout.0
-            <= self.raft_store.merge_source_wait_timeout.0
-        {
-            return Err(format!(
-                "storage.write-event-finished-timeout ({:?}) must be greater than \
-                 raftstore.merge-source-wait-timeout ({:?})",
-                self.storage.write_event_finished_timeout,
-                self.raft_store.merge_source_wait_timeout,
-            )
-            .into());
-        }
         self.security.validate()?;
         self.import.validate()?;
         self.backup.validate()?;
