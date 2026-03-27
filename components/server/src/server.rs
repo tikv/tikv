@@ -994,6 +994,7 @@ where
             false,
         )
         .unwrap();
+        importer.set_backend_config(backup::storage_backend_config(&self.core.config.backup));
         for (cf_name, compression_type) in &[
             (
                 CF_DEFAULT,
