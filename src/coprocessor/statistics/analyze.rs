@@ -32,8 +32,6 @@ use crate::{
     storage::{Snapshot, SnapshotStore, Statistics},
 };
 
-const NDV_FM_SKETCH_SAMPLE_RATE: f64 = 0.05;
-
 pub(crate) struct RowSampleBuilder<S: Snapshot, F: KvFormat> {
     pub(crate) data: BatchTableScanExecutor<TikvStorage<SnapshotStore<S>>, F>,
     /// Accumulated storage statistics for this request. Filled per batch so
@@ -66,7 +64,7 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
         let max_sample_size = req.get_sample_size() as usize;
         let sample_rate = req.get_sample_rate();
         let common_handle_ids = req.take_primary_column_ids();
-        let mut table_scanner = BatchTableScanExecutor::new(
+        let table_scanner = BatchTableScanExecutor::new(
             storage,
             Arc::new(EvalConfig::default()),
             columns_info.clone(),
@@ -76,7 +74,6 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             false, // Streaming mode is not supported in Analyze request, always false here
             req.take_primary_prefix_column_ids(),
         )?;
-        table_scanner.set_row_sample_rate(NDV_FM_SKETCH_SAMPLE_RATE);
         Ok(Self {
             data: table_scanner,
             accumulated_storage_stats: Statistics::default(),
