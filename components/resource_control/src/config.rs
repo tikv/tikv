@@ -178,9 +178,9 @@ impl Config {
             enable_adaptive_estimated_cpu_per_request_us: self
                 .cpu_throttle
                 .enable_adaptive_estimated_cpu_per_request_us,
-            stats_interval_ms: self.cpu_throttle.stats_interval.as_millis() as u64,
-            window_size_ms: self.cpu_throttle.window_size.as_millis() as u64,
-            refill_interval_ms: self.cpu_throttle.refill_interval.as_millis() as u64,
+            stats_interval_ms: self.cpu_throttle.stats_interval.as_millis(),
+            window_size_ms: self.cpu_throttle.window_size.as_millis(),
+            refill_interval_ms: self.cpu_throttle.refill_interval.as_millis(),
             enable_dynamic_adjustment: self.cpu_throttle.enable_dynamic_adjustment,
             high_watermark: self.cpu_throttle.high_watermark,
             low_watermark: self.cpu_throttle.low_watermark,
@@ -310,7 +310,7 @@ mod tests {
     fn test_validate_max_read_cpu_ratio_bounds() {
         let mut config = Config::default();
         config.max_read_cpu_ratio = 1.0;
-        assert!(config.validate().is_ok());
+        config.validate().unwrap();
 
         config.max_read_cpu_ratio = 0.0;
         assert!(config.validate().is_err());

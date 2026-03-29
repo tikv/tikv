@@ -534,8 +534,7 @@ impl<E: Engine> Endpoint<E> {
                 )
                 .await
                 .map_err(Error::from)?;
-                let result = result.map_err(Error::from)?;
-                result
+                result.map_err(Error::from)?
             })
         } else {
             Either::Right(async {
@@ -1501,6 +1500,7 @@ mod tests {
         block_on(copr.handle_unary_request(ParseCopRequestResult {
             req_ctx: outdated_req_ctx,
             req_tag: ReqTag::test,
+            is_dag: false,
             handler_builder,
         }))
         .unwrap_err();
@@ -1989,6 +1989,7 @@ mod tests {
             let resp_future_1 = copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: req_with_exec_detail.clone(),
+                is_dag: false,
                 handler_builder,
             });
             let sender = tx.clone();
@@ -2006,6 +2007,7 @@ mod tests {
             let resp_future_2 = copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: req_with_exec_detail.clone(),
+                is_dag: false,
                 handler_builder,
             });
             let sender = tx.clone();
@@ -2115,6 +2117,7 @@ mod tests {
             let resp_future_1 = copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: req_with_exec_detail.clone(),
+                is_dag: false,
                 handler_builder,
             });
             let sender = tx.clone();
@@ -2132,6 +2135,7 @@ mod tests {
             let resp_future_2 = copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: req_with_exec_detail.clone(),
+                is_dag: false,
                 handler_builder,
             });
             let sender = tx.clone();
@@ -2198,6 +2202,7 @@ mod tests {
             let resp_future_1 = copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: req_with_exec_detail.clone(),
+                is_dag: false,
                 handler_builder,
             });
             let sender = tx.clone();
@@ -2221,6 +2226,7 @@ mod tests {
                 .handle_stream_request(ParseCopRequestResult {
                     req_tag: ReqTag::test,
                     req_ctx: req_with_exec_detail.clone(),
+                    is_dag: false,
                     handler_builder,
                 })
                 .unwrap()
@@ -2382,6 +2388,7 @@ mod tests {
             let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: config,
+                is_dag: false,
                 handler_builder,
             }))
             .unwrap();
@@ -2409,6 +2416,7 @@ mod tests {
             let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: config,
+                is_dag: false,
                 handler_builder,
             }))
             .unwrap();
@@ -2514,6 +2522,7 @@ mod tests {
             let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: config,
+                is_dag: false,
                 handler_builder,
             }))
             .unwrap();
@@ -2534,6 +2543,7 @@ mod tests {
             let res = block_on(copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: config,
+                is_dag: false,
                 handler_builder,
             }));
             assert!(res.is_err(), "{:?}", res);
