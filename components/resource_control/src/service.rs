@@ -13,7 +13,9 @@ use pd_client::{
     meta_storage::{Checked, Get, MetaStorageClient, Sourced, Watch},
 };
 use serde::{Deserialize, Serialize};
-use tikv_util::{error, info, resource_control::DEFAULT_RESOURCE_GROUP_NAME, timer::GLOBAL_TIMER_HANDLE, warn};
+use tikv_util::{
+    error, info, resource_control::DEFAULT_RESOURCE_GROUP_NAME, timer::GLOBAL_TIMER_HANDLE, warn,
+};
 
 use crate::{ResourceGroupManager, resource_limiter::ResourceType};
 
