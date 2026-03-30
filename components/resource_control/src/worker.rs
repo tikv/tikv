@@ -226,12 +226,10 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             std::mem::replace(&mut self.prev_stats[resource_type as usize], total_stats);
         let stats_delta = total_stats - last_stats;
         BACKGROUND_RESOURCE_CONSUMPTION
-            .with_label_values(&["background", resource_type.as_str()])
+            .with_label_values(&[resource_type.as_str()])
             .inc_by(stats_delta.total_consumed);
         if resource_type == ResourceType::Cpu {
-            BACKGROUND_TASKS_WAIT_DURATION
-                .with_label_values(&["background"])
-                .inc_by(stats_delta.total_wait_dur_us);
+            BACKGROUND_TASKS_WAIT_DURATION.inc_by(stats_delta.total_wait_dur_us);
         }
         let background_consumed = (stats_delta / dur_secs).total_consumed as f64;
 
@@ -277,7 +275,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             .get_limiter(resource_type)
             .set_rate_limit(new_budget);
         BACKGROUND_QUOTA_LIMIT_VEC
-            .with_label_values(&["background", resource_type.as_str()])
+            .with_label_values(&[resource_type.as_str()])
             .set(new_budget as i64);
     }
 

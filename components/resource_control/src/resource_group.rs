@@ -62,13 +62,10 @@ pub struct ResourceGroupManager {
     // the count of all groups, a fast path because call `DashMap::len` is a little slower.
     group_count: AtomicU64,
     registry: RwLock<Vec<Arc<ResourceController>>>,
-    // auto incremental version generator used for mark the background
-    // resource limiter has changed.
-    version_generator: AtomicU64,
     // the shared resource limiter of each priority
     priority_limiters: [Arc<ResourceLimiter>; TaskPriority::PRIORITY_COUNT],
     // single shared limiter for all background tasks.
-    pub bg_limiter: Arc<ResourceLimiter>,
+    bg_limiter: Arc<ResourceLimiter>,
     // lastest config.
     config: Arc<VersionTrack<Config>>,
 }
@@ -101,7 +98,6 @@ impl ResourceGroupManager {
             resource_groups: Default::default(),
             group_count: AtomicU64::new(0),
             registry: Default::default(),
-            version_generator: AtomicU64::new(0),
             priority_limiters,
             bg_limiter,
             config: Arc::new(VersionTrack::new(config)),
