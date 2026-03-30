@@ -5,6 +5,9 @@ edition = "2021"
 publish = false
 license = "Apache-2.0"
 
+[features]
+fips = ["rustls/fips"]
+
 [dependencies]
 async-trait = "0.1"
 cloud = { workspace = true }
@@ -15,7 +18,7 @@ google-cloud-gax = "1.0.0"
 google-cloud-auth = "1.0.0"
 google-cloud-kms-v1 = "1.0.0"
 kvproto = { workspace = true }
-rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "fips"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"] }
 tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["full"] }
 tokio-util = { version = "0.7", features = ["compat", "io"] }
