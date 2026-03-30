@@ -404,6 +404,7 @@ impl ResourceGroup {
         }
     }
 
+    #[cfg(test)]
     pub fn get_ru_quota(&self) -> u64 {
         self.group
             .get_r_u_settings()
