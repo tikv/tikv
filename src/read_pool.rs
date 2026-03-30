@@ -26,7 +26,7 @@ use thiserror::Error;
 use tikv_util::{
     resource_control::TaskMetadata,
     sys::{cpu_time::ProcessStat, SysQuota},
-    thread_name_prefix::{UNIFIED_READ_POOL_THREAD, matches_thread_name_prefix},
+    thread_name_prefix::{matches_thread_name_prefix, UNIFIED_READ_POOL_THREAD},
     time::Instant,
     worker::{Runnable, RunnableWithTimer, Scheduler, Worker},
     yatp_pool::{self, CleanupMethod, FuturePool, PoolTicker, YatpPoolBuilder},

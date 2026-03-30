@@ -188,7 +188,7 @@ pub fn matches_scheduler_thread_name(thread_name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        LINUX_THREAD_NAME_MAX_LEN, matches_scheduler_thread_name, matches_thread_name_prefix,
+        matches_scheduler_thread_name, matches_thread_name_prefix, LINUX_THREAD_NAME_MAX_LEN,
     };
 
     #[test]

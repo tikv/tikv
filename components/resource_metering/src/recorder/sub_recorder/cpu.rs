@@ -4,17 +4,17 @@ use collections::HashMap;
 use tikv_util::{
     sys::thread::{self, Pid, THREAD_NAME_HASHMAP},
     thread_name_prefix::{
-        UNIFIED_READ_POOL_THREAD, matches_scheduler_thread_name, matches_thread_name_prefix,
+        matches_scheduler_thread_name, matches_thread_name_prefix, UNIFIED_READ_POOL_THREAD,
     },
 };
 
 use crate::{
-    RawRecords, ThreadPoolType,
     metrics::STAT_TASK_COUNT,
     recorder::{
         localstorage::{LocalStorage, SharedTagInfos},
         SubRecorder,
     },
+    RawRecords, ThreadPoolType,
 };
 
 /// An implementation of [SubRecorder] for collecting cpu statistics.

@@ -48,8 +48,7 @@ use tikv_util::{
     sys::{disk, thread::StdThreadBuildWrapper, SysQuota},
     thd_name,
     thread_name_prefix::{
-        UNIFIED_READ_POOL_THREAD, matches_scheduler_thread_name,
-        matches_thread_name_prefix,
+        matches_scheduler_thread_name, matches_thread_name_prefix, UNIFIED_READ_POOL_THREAD,
     },
     time::{Instant as TiInstant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
