@@ -27,7 +27,7 @@ use tikv_util::{
 };
 use yatp::queue::priority::TaskPriorityProvider;
 
-use crate::{config::Config, metrics::deregister_metrics, resource_limiter::ResourceLimiter};
+use crate::{config::Config, resource_limiter::ResourceLimiter};
 
 // a read task cost at least 50us.
 const DEFAULT_PRIORITY_PER_READ_TASK: u64 = 50;
@@ -64,8 +64,9 @@ pub struct ResourceGroupManager {
     registry: RwLock<Vec<Arc<ResourceController>>>,
     // the shared resource limiter of each priority
     priority_limiters: [Arc<ResourceLimiter>; TaskPriority::PRIORITY_COUNT],
-    // single shared limiter for all background tasks.
     bg_limiter: Arc<ResourceLimiter>,
+    // cached: true when at least one group has background settings configured.
+    has_background: AtomicBool,
     // lastest config.
     config: Arc<VersionTrack<Config>>,
 }
@@ -88,7 +89,7 @@ impl ResourceGroupManager {
             ))
         });
         let bg_limiter = Arc::new(ResourceLimiter::new(
-            "background".to_owned(),
+            DEFAULT_RESOURCE_GROUP_NAME.to_owned(),
             f64::INFINITY,
             f64::INFINITY,
             0,
@@ -100,6 +101,7 @@ impl ResourceGroupManager {
             registry: Default::default(),
             priority_limiters,
             bg_limiter,
+            has_background: AtomicBool::new(false),
             config: Arc::new(VersionTrack::new(config)),
         };
 
@@ -172,6 +174,21 @@ impl ResourceGroupManager {
             .resource_groups
             .iter()
             .any(|g| !g.background_source_types.is_empty());
+        let prev = self.has_background.swap(any_has_bg, Ordering::Release);
+        // When the last background group is removed, reset the shared limiter to
+        // unlimited so that a later re-add does not inherit stale throttled rates.
+        if prev && !any_has_bg {
+            use crate::resource_limiter::ResourceType;
+            self.bg_limiter
+                .get_limiter(ResourceType::Cpu)
+                .set_rate_limit(f64::INFINITY);
+            self.bg_limiter
+                .get_limiter(ResourceType::Io)
+                .set_rate_limit(f64::INFINITY);
+            self.bg_limiter
+                .get_write_io_limiter()
+                .set_rate_limit(f64::INFINITY);
+        }
         self.registry.read().iter().for_each(|controller| {
             controller.set_has_background(any_has_bg);
         });
@@ -191,7 +208,6 @@ impl ResourceGroupManager {
             controller.remove_resource_group(group_name.as_bytes());
         });
         if self.resource_groups.remove(&group_name).is_some() {
-            deregister_metrics(name);
             info!("remove resource group"; "name"=> name);
             self.group_count.fetch_sub(1, Ordering::Relaxed);
         }
@@ -208,7 +224,6 @@ impl ResourceGroupManager {
             let ret = f(k, &v.group);
             if !ret {
                 removed_names.push(k.clone());
-                deregister_metrics(k);
             }
             ret
         });
@@ -220,6 +235,7 @@ impl ResourceGroupManager {
             });
             self.group_count
                 .fetch_sub(removed_names.len() as u64, Ordering::Relaxed);
+            self.update_has_background();
         }
     }
 
@@ -362,9 +378,7 @@ impl ResourceGroupManager {
     }
 
     pub fn has_background_groups(&self) -> bool {
-        self.resource_groups
-            .iter()
-            .any(|kv| !kv.value().background_source_types.is_empty())
+        self.has_background.load(Ordering::Acquire)
     }
 }
 
@@ -388,15 +402,6 @@ impl ResourceGroup {
             background_source_types,
             fallback_default,
         }
-    }
-
-    pub(crate) fn get_ru_quota(&self) -> u64 {
-        assert!(self.group.has_r_u_settings());
-        self.group
-            .get_r_u_settings()
-            .get_r_u()
-            .get_settings()
-            .get_fill_rate()
     }
 
     fn get_background_resource_limiter(

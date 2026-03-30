@@ -48,10 +48,3 @@ lazy_static! {
     )
     .unwrap();
 }
-
-pub fn deregister_metrics(_name: &str) {
-    // BACKGROUND_QUOTA_LIMIT_VEC, BACKGROUND_RESOURCE_CONSUMPTION, and
-    // BACKGROUND_TASKS_WAIT_DURATION are no longer per-group: all background
-    // groups share a single global limiter and always emit metrics under the
-    // fixed label "background". There are no per-group series to clean up here.
-}

@@ -13,7 +13,7 @@ use pd_client::{
     meta_storage::{Checked, Get, MetaStorageClient, Sourced, Watch},
 };
 use serde::{Deserialize, Serialize};
-use tikv_util::{error, info, timer::GLOBAL_TIMER_HANDLE, warn};
+use tikv_util::{error, info, resource_control::DEFAULT_RESOURCE_GROUP_NAME, timer::GLOBAL_TIMER_HANDLE, warn};
 
 use crate::{ResourceGroupManager, resource_limiter::ResourceType};
 
@@ -212,11 +212,11 @@ impl ResourceManagerService {
 
             // Non-existence or version change means this is a brand new limiter,
             // so no need to sub the old statistics.
-            let (cpu_consumed, io_consumed) = if let Some(ref last_stats) = last_bg_statistics
+            let (cpu_consumed, io_consumed) = if let Some(last_stats) = last_bg_statistics
                 .as_ref()
                 .filter(|s| s.version == statistic.version)
             {
-                if statistic == **last_stats {
+                if statistic == *last_stats {
                     let _ = GLOBAL_TIMER_HANDLE
                         .delay(std::time::Instant::now() + BACKGROUND_RU_REPORT_DURATION)
                         .compat()
@@ -245,7 +245,7 @@ impl ResourceManagerService {
             let all_reqs = req.mut_requests();
             // report ru statistics.
             let mut bucket_req = TokenBucketRequest::default();
-            bucket_req.set_resource_group_name("background".to_owned());
+            bucket_req.set_resource_group_name(DEFAULT_RESOURCE_GROUP_NAME.to_owned());
             bucket_req.set_is_background(true);
             let report_consumption = bucket_req.mut_consumption_since_last_request();
 
