@@ -84,9 +84,9 @@ pub struct Resolver {
     // the start_ts and lock samples of large transactions, which use a different tracking strategy
     // from normal transactions.
     large_txns: HashMap<TimeStamp, TxnLocks>,
-    // each large transaction tracked by this resolver has a representative key tracked. So that
-    // when the large transaction is rolled back, we can rely on this key to guarantee that
-    // eventually there will be orphaned transactions.
+    // each large transaction tracked by this resolver has a representative key tracked.
+    // unlocking that key is only a best-effort signal that the transaction may have progressed;
+    // correctness still comes from the transaction state in txn_status_cache.
     large_txn_key_representative: HashMap<Vec<u8>, TimeStamp>,
     // The last shrink time.
     last_aggressive_shrink_time: Instant,
@@ -388,7 +388,7 @@ impl Resolver {
             let shrink_ratio = 8;
             self.shrink_ratio(shrink_ratio);
         } else if let Some(start_ts) = self.large_txn_key_representative.remove(key) {
-            let entry = self.large_txns.remove(&start_ts);
+            let entry = self.large_txns.get(&start_ts);
             debug_assert!(
                 entry.is_some(),
                 "large txn lock should be untracked only once"
@@ -431,6 +431,8 @@ impl Resolver {
         if self.stopped {
             return self.resolved_ts;
         }
+
+        self.cleanup_finished_large_txns();
 
         // Find the min start ts.
         let min_lock = self.oldest_transaction();
@@ -611,6 +613,29 @@ impl Resolver {
 
     pub(crate) fn take_last_attempt(&mut self) -> Option<LastAttempt> {
         self.last_attempt.take()
+    }
+
+    fn cleanup_finished_large_txns(&mut self) {
+        let finished_large_txns: Vec<_> = self
+            .large_txns
+            .keys()
+            .copied()
+            .filter(|start_ts| {
+                matches!(
+                    self.txn_status_cache.get(*start_ts),
+                    Some(TxnState::Committed { .. }) | Some(TxnState::RolledBack)
+                )
+            })
+            .collect();
+
+        for start_ts in finished_large_txns {
+            if let Some(txn_locks) = self.large_txns.remove(&start_ts) {
+                if let Some(sample_lock) = txn_locks.sample_lock {
+                    self.large_txn_key_representative
+                        .remove(sample_lock.as_ref());
+                }
+            }
+        }
     }
 
     fn track_large_txn_lock(
@@ -955,7 +980,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "demonstrates current representative-key large-txn bug"]
     fn test_large_txn_representative_unlock_should_not_advance_resolved_ts() {
         let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
         let txn_status_cache = Arc::new(TxnStatusCache::new(100));
@@ -970,7 +994,9 @@ mod tests {
             .track_lock(2.into(), trailing_key.clone(), None, 2)
             .unwrap();
         assert_eq!(
-            resolver.large_txn_key_representative.get(&representative_key),
+            resolver
+                .large_txn_key_representative
+                .get(&representative_key),
             Some(&2.into())
         );
 
@@ -985,14 +1011,23 @@ mod tests {
         // Unlock only the representative key. The trailing large-txn key is still
         // live, so resolved-ts must remain strictly below the txn's min_commit_ts.
         resolver.untrack_lock(&representative_key, None);
+        assert!(resolver.large_txns.contains_key(&2.into()));
 
-        assert_eq!(
-            resolver.resolve(2.into(), None, TsSource::PdTso),
-            1.into()
+        assert_eq!(resolver.resolve(2.into(), None, TsSource::PdTso), 1.into());
+
+        txn_status_cache.upsert(
+            2.into(),
+            TxnState::Committed {
+                commit_ts: 3.into(),
+            },
+            SystemTime::now(),
         );
+        assert_eq!(
+            resolver.resolve(10.into(), None, TsSource::PdTso),
+            10.into()
+        );
+        assert!(!resolver.large_txns.contains_key(&2.into()));
 
-        // The remaining key can then be untracked without affecting the invariant
-        // we are checking above.
         resolver.untrack_lock(&trailing_key, None);
     }
 }
