@@ -953,4 +953,46 @@ mod tests {
         assert_eq!(resolver.resolve(10.into(), None, TsSource::PdTso), 9.into());
         // Now the txn can commit, with the smallest possible commit_ts = 10.
     }
+
+    #[test]
+    #[ignore = "demonstrates current representative-key large-txn bug"]
+    fn test_large_txn_representative_unlock_should_not_advance_resolved_ts() {
+        let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let txn_status_cache = Arc::new(TxnStatusCache::new(100));
+        let mut resolver = Resolver::new(1, memory_quota, txn_status_cache.clone());
+        let representative_key: Vec<u8> = vec![1, 2, 3, 4];
+        let trailing_key: Vec<u8> = vec![5, 6, 7, 8];
+
+        resolver
+            .track_lock(2.into(), representative_key.clone(), None, 1)
+            .unwrap();
+        resolver
+            .track_lock(2.into(), trailing_key.clone(), None, 2)
+            .unwrap();
+        assert_eq!(
+            resolver.large_txn_key_representative.get(&representative_key),
+            Some(&2.into())
+        );
+
+        txn_status_cache.upsert(
+            2.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 2.into(),
+            },
+            SystemTime::now(),
+        );
+
+        // Unlock only the representative key. The trailing large-txn key is still
+        // live, so resolved-ts must remain strictly below the txn's min_commit_ts.
+        resolver.untrack_lock(&representative_key, None);
+
+        assert_eq!(
+            resolver.resolve(2.into(), None, TsSource::PdTso),
+            1.into()
+        );
+
+        // The remaining key can then be untracked without affecting the invariant
+        // we are checking above.
+        resolver.untrack_lock(&trailing_key, None);
+    }
 }
