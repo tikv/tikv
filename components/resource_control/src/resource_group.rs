@@ -67,6 +67,8 @@ pub struct ResourceGroupManager {
     version_generator: AtomicU64,
     // the shared resource limiter of each priority
     priority_limiters: [Arc<ResourceLimiter>; TaskPriority::PRIORITY_COUNT],
+    // single shared limiter for all background tasks.
+    pub bg_limiter: Arc<ResourceLimiter>,
     // lastest config.
     config: Arc<VersionTrack<Config>>,
 }
@@ -88,12 +90,20 @@ impl ResourceGroupManager {
                 false,
             ))
         });
+        let bg_limiter = Arc::new(ResourceLimiter::new(
+            "background".to_owned(),
+            f64::INFINITY,
+            f64::INFINITY,
+            0,
+            true,
+        ));
         let manager = Self {
             resource_groups: Default::default(),
             group_count: AtomicU64::new(0),
             registry: Default::default(),
             version_generator: AtomicU64::new(0),
             priority_limiters,
+            bg_limiter,
             config: Arc::new(VersionTrack::new(config)),
         };
 
@@ -149,12 +159,7 @@ impl ResourceGroupManager {
             controller.add_resource_group(group_name.clone().into_bytes(), ru_quota, rg.priority);
         });
         info!("add resource group"; "name"=> &rg.name, "ru" => rg.get_r_u_settings().get_r_u().get_settings().get_fill_rate());
-        // try to reuse the quota limit when update resource group settings.
-        let prev_limiter = self
-            .resource_groups
-            .get(&rg.name)
-            .and_then(|g| g.limiter.clone());
-        let limiter = self.build_resource_limiter(&rg, prev_limiter);
+        let limiter = self.build_resource_limiter(&rg);
 
         if self
             .resource_groups
@@ -176,22 +181,9 @@ impl ResourceGroupManager {
         });
     }
 
-    fn build_resource_limiter(
-        &self,
-        rg: &PbResourceGroup,
-        old_limiter: Option<Arc<ResourceLimiter>>,
-    ) -> Option<Arc<ResourceLimiter>> {
+    fn build_resource_limiter(&self, rg: &PbResourceGroup) -> Option<Arc<ResourceLimiter>> {
         if !rg.get_background_settings().get_job_types().is_empty() {
-            old_limiter.or_else(|| {
-                let version = self.version_generator.fetch_add(1, Ordering::Relaxed);
-                Some(Arc::new(ResourceLimiter::new(
-                    rg.name.clone(),
-                    f64::INFINITY,
-                    f64::INFINITY,
-                    version,
-                    true,
-                )))
-            })
+            Some(self.bg_limiter.clone())
         } else {
             None
         }
@@ -367,6 +359,16 @@ impl ResourceGroupManager {
         &self,
     ) -> &[Arc<ResourceLimiter>; TaskPriority::PRIORITY_COUNT] {
         &self.priority_limiters
+    }
+
+    pub fn get_background_limiter(&self) -> Arc<ResourceLimiter> {
+        self.bg_limiter.clone()
+    }
+
+    pub fn has_background_groups(&self) -> bool {
+        self.resource_groups
+            .iter()
+            .any(|kv| !kv.value().background_source_types.is_empty())
     }
 }
 
