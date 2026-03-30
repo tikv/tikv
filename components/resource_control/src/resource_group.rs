@@ -404,6 +404,14 @@ impl ResourceGroup {
         }
     }
 
+    pub fn get_ru_quota(&self) -> u64 {
+        self.group
+            .get_r_u_settings()
+            .get_r_u()
+            .get_settings()
+            .get_fill_rate()
+    }
+
     fn get_background_resource_limiter(
         &self,
         request_source: &str,
