@@ -348,6 +348,17 @@ make_static_metric! {
         },
     }
 
+    pub struct StoreCpuPoolGaugeVec: IntGauge {
+        "pool" => {
+            unified_read,
+            scheduler,
+        },
+        "source" => {
+            store_level,
+            region_sum,
+        },
+    }
+
     pub struct SnapshotGenerateBytesTypeVec: IntCounter {
         "type" => SnapshotGenerateBytesType,
     }
@@ -1042,4 +1053,11 @@ lazy_static! {
             "Is raft process busy or not",
             &["type"]
         ).unwrap();
+
+    pub static ref STORE_CPU_POOL_GAUGE_VEC: StoreCpuPoolGaugeVec = register_static_int_gauge_vec!(
+        StoreCpuPoolGaugeVec,
+        "tikv_raftstore_cpu_pool_usage",
+        "CPU usage comparison between store-level (ThreadInfoStatistics) and region-level sum (resource metering) per thread pool.",
+        &["pool", "source"]
+    ).unwrap();
 }

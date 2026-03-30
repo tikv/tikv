@@ -22,9 +22,7 @@ use tikv_util::{
     debug, info,
     metrics::ThreadInfoStatistics,
     store::{is_read_query, QueryStats},
-    thread_name_prefix::{
-        GRPC_SERVER_THREAD, UNIFIED_READ_POOL_THREAD, matches_thread_name_prefix,
-    },
+    thread_name_prefix::matches_thread_name_prefix,
     time::Instant,
     warn,
 };
@@ -1429,6 +1427,7 @@ mod tests {
                     cpu_time: cpu_times[idx],
                     read_keys: 0,
                     write_keys: 0,
+                    ..Default::default()
                 },
             );
         }
@@ -1905,6 +1904,7 @@ mod tests {
                     cpu_time: test_case.0,
                     read_keys: 0,
                     write_keys: 0,
+                    ..Default::default()
                 },
             );
             // ["c", "d"] with (test_case.1)ms CPU time.
@@ -1914,6 +1914,7 @@ mod tests {
                     cpu_time: test_case.1,
                     read_keys: 0,
                     write_keys: 0,
+                    ..Default::default()
                 },
             );
             // Multiple key ranges with (test_case.2)ms CPU time.
@@ -1923,6 +1924,7 @@ mod tests {
                     cpu_time: test_case.2,
                     read_keys: 0,
                     write_keys: 0,
+                    ..Default::default()
                 },
             );
             // Empty key range with (test_case.3)ms CPU time.
@@ -1932,6 +1934,7 @@ mod tests {
                     cpu_time: test_case.3,
                     read_keys: 0,
                     write_keys: 0,
+                    ..Default::default()
                 },
             );
 
