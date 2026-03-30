@@ -217,14 +217,20 @@
 ## Refill rates recover toward the base rate when observed usage falls below this value.
 # low-watermark = 0.5
 
-## Whether to enable fair allocation mode in CPU throttling.
+## Whether to cap burst borrowing proportionally by resource-group weight when
+## global CPU usage is under pressure.
 # enable-fair-allocation = false
 
-## CPU usage threshold used by fair allocation mode.
+## Global CPU usage threshold above which fair allocation starts limiting burst
+## borrowing.
 # fair-allocation-threshold = 0.7
 
 ## Whether requests may continue with only the global bucket after their resource-group bucket is exhausted.
 # enable-burst = false
+
+## Optional per-resource-group burst overrides in the format
+## "group:true,other:false". If omitted for a group, `enable-burst` applies.
+# resource-group-burst-enabled = ""
 
 ## CPU usage threshold used by burst mode.
 # burst-threshold = 0.9

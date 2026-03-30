@@ -5,7 +5,7 @@ use std::{
     fmt,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, RwLock,
+        Arc, Mutex, RwLock,
     },
     time::{Duration, Instant},
 };
@@ -32,7 +32,7 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThrottleError {
     GlobalCpuExhausted,
     ResourceGroupCpuExhausted,
@@ -214,13 +214,16 @@ impl CpuThrottleInfoLogState {
     }
 }
 
-fn fair_share_log_state(config: &CpuThrottleConfig) -> (&'static str, bool) {
+fn fair_share_log_state(
+    config: &CpuThrottleConfig,
+    fair_share_triggered: bool,
+) -> (&'static str, bool) {
     if !config.enable_fair_allocation {
         ("disabled", false)
+    } else if fair_share_triggered {
+        ("enforced", true)
     } else {
-        // The config knobs exist today, but the allocator does not yet have a
-        // fair-share enforcement branch, so report that state explicitly.
-        ("configured_but_not_implemented", false)
+        ("configured", false)
     }
 }
 
@@ -229,6 +232,181 @@ struct RuntimeAllocationSnapshot {
     resource_group_allocated_delta_us: u64,
     global_allocated_delta_us: u64,
     is_burst: bool,
+    fair_share_triggered: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AllocationAttemptFailure {
+    err: ThrottleError,
+    fair_share_triggered: bool,
+}
+
+fn resource_group_exhausted_without_burst() -> AllocationAttemptFailure {
+    AllocationAttemptFailure {
+        err: ThrottleError::ResourceGroupCpuExhausted,
+        fair_share_triggered: false,
+    }
+}
+
+#[derive(Debug, Default)]
+struct BurstInflightState {
+    total_inflight_us: u64,
+    per_resource_group_inflight_us: HashMap<String, u64>,
+}
+
+impl BurstInflightState {
+    fn inflight_for_group(&self, resource_group: &str) -> u64 {
+        self.per_resource_group_inflight_us
+            .get(resource_group)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn add(&mut self, resource_group: &str, delta_us: u64) -> u64 {
+        if delta_us == 0 {
+            return self.inflight_for_group(resource_group);
+        }
+        let entry = self
+            .per_resource_group_inflight_us
+            .entry(resource_group.to_owned())
+            .or_default();
+        *entry = entry.saturating_add(delta_us);
+        self.total_inflight_us = self.total_inflight_us.saturating_add(delta_us);
+        *entry
+    }
+
+    fn sub(&mut self, resource_group: &str, delta_us: u64) -> u64 {
+        if delta_us == 0 {
+            return self.inflight_for_group(resource_group);
+        }
+
+        let mut should_remove = false;
+        let new_value =
+            if let Some(entry) = self.per_resource_group_inflight_us.get_mut(resource_group) {
+                *entry = entry.saturating_sub(delta_us);
+                should_remove = *entry == 0;
+                *entry
+            } else {
+                0
+            };
+        if should_remove {
+            self.per_resource_group_inflight_us.remove(resource_group);
+        }
+        self.total_inflight_us = self.total_inflight_us.saturating_sub(delta_us);
+        new_value
+    }
+}
+
+fn should_enforce_fair_share(
+    config: &CpuThrottleConfig,
+    usage_state: &RwLock<CpuUsageState>,
+) -> bool {
+    if !config.enable_fair_allocation {
+        return false;
+    }
+
+    usage_state.read().unwrap().global_ratio >= config.fair_allocation_threshold
+}
+
+fn burst_enabled_for_group(
+    resource_group: &str,
+    global_burst_enabled: &AtomicBool,
+    resource_group_burst_enabled: &RwLock<HashMap<String, bool>>,
+) -> bool {
+    resource_group_burst_enabled
+        .read()
+        .unwrap()
+        .get(resource_group)
+        .copied()
+        .unwrap_or_else(|| global_burst_enabled.load(Ordering::Acquire))
+}
+
+fn fair_share_limit_us(group_weight: u64, total_weight: u64, burst_pool_us: u64) -> Option<u64> {
+    if total_weight == 0 || total_weight < group_weight {
+        return None;
+    }
+
+    Some(((burst_pool_us as u128 * group_weight as u128) / total_weight as u128) as u64)
+}
+
+fn try_allocate_burst_tokens(
+    global_bucket: &CpuTokenBucket,
+    resource_group_weights: &DashMap<String, u64>,
+    total_resource_group_weight: &AtomicU64,
+    burst_inflight_state: &Mutex<BurstInflightState>,
+    usage_state: &RwLock<CpuUsageState>,
+    config: &CpuThrottleConfig,
+    resource_group: &str,
+    burst_us: u64,
+) -> Result<bool, AllocationAttemptFailure> {
+    // Read the weight inputs before taking the mutex so burst attempts do not
+    // serialize on DashMap access. These reads are not a single strong snapshot
+    // with sync_resource_groups, but fair-share is a soft cap and
+    // fair_share_limit_us() fails closed if the cached total and group weight
+    // momentarily disagree.
+    let fair_share_weights = should_enforce_fair_share(config, usage_state).then(|| {
+        (
+            resource_group_weights
+                .get(resource_group)
+                .map(|weight| *weight),
+            total_resource_group_weight.load(Ordering::Acquire),
+        )
+    });
+    // Keep the mutex across the fair-share check, global bucket allocation,
+    // and inflight accounting. Otherwise concurrent burst allocations can both
+    // observe the same inflight snapshot and overdraw the shared burst pool.
+    let mut burst_inflight_state = burst_inflight_state.lock().unwrap();
+    let fair_share_triggered = if let Some((group_weight, total_weight)) = fair_share_weights {
+        let burst_pool_us = global_bucket
+            .available()
+            .saturating_add(burst_inflight_state.total_inflight_us);
+        let Some(limit_us) = group_weight.and_then(|group_weight| {
+            fair_share_limit_us(group_weight, total_weight, burst_pool_us)
+        }) else {
+            return Err(AllocationAttemptFailure {
+                err: ThrottleError::ResourceGroupCpuExhausted,
+                fair_share_triggered: true,
+            });
+        };
+        if burst_inflight_state
+            .inflight_for_group(resource_group)
+            .saturating_add(burst_us)
+            > limit_us
+        {
+            return Err(AllocationAttemptFailure {
+                err: ThrottleError::ResourceGroupCpuExhausted,
+                fair_share_triggered: true,
+            });
+        }
+        true
+    } else {
+        false
+    };
+
+    if !global_bucket.try_allocate(burst_us) {
+        return Err(AllocationAttemptFailure {
+            err: ThrottleError::GlobalCpuExhausted,
+            fair_share_triggered,
+        });
+    }
+
+    burst_inflight_state.add(resource_group, burst_us);
+    Ok(fair_share_triggered)
+}
+
+fn release_burst_tokens(
+    burst_inflight_state: &Mutex<BurstInflightState>,
+    resource_group: &str,
+    burst_us: u64,
+) {
+    if burst_us == 0 {
+        return;
+    }
+
+    burst_inflight_state
+        .lock()
+        .unwrap()
+        .sub(resource_group, burst_us);
 }
 
 async fn sleep_async(duration: Duration) {
@@ -590,37 +768,81 @@ pub struct CpuTokenHandle {
     pub(crate) per_resource_group_dag_cpu_accum: Option<Arc<DashMap<String, AtomicU64>>>,
     pub(crate) request_deadline: Instant,
     pub(crate) config: Arc<CpuThrottleConfig>,
+    resource_group_weights: Arc<DashMap<String, u64>>,
+    total_resource_group_weight: Arc<AtomicU64>,
+    global_burst_enabled: Arc<AtomicBool>,
+    resource_group_burst_enabled: Arc<RwLock<HashMap<String, bool>>>,
+    burst_inflight_state: Arc<Mutex<BurstInflightState>>,
+    usage_state: Arc<RwLock<CpuUsageState>>,
     adaptive_estimator: Option<Arc<AdaptiveEstimator>>,
     pub(crate) is_burst: AtomicBool,
+    // Sticky bit that records whether any successful allocation on this handle
+    // has entered the fair-share-controlled burst path.
+    fair_share_ever_triggered: AtomicBool,
     info_log_state: Arc<CpuThrottleInfoLogState>,
 }
 
 impl CpuTokenHandle {
+    fn burst_enabled(&self) -> bool {
+        burst_enabled_for_group(
+            &self.resource_group,
+            self.global_burst_enabled.as_ref(),
+            self.resource_group_burst_enabled.as_ref(),
+        )
+    }
+
     fn try_allocate_more(
         &self,
         additional_us: u64,
-    ) -> Result<RuntimeAllocationSnapshot, ThrottleError> {
+    ) -> Result<RuntimeAllocationSnapshot, AllocationAttemptFailure> {
         self.global_bucket.refill();
         if let Some(bucket) = &self.resource_group_bucket {
             bucket.refill();
         }
 
-        if !self.global_bucket.try_allocate(additional_us) {
-            return Err(ThrottleError::GlobalCpuExhausted);
-        }
-
         let mut group_allocated_delta = 0;
-        if !self.is_burst.load(Ordering::Acquire) {
-            if let Some(bucket) = &self.resource_group_bucket {
-                if bucket.try_allocate(additional_us) {
-                    group_allocated_delta = additional_us;
-                } else if self.config.enable_burst {
-                    self.is_burst.store(true, Ordering::Release);
-                } else {
-                    self.global_bucket.release(additional_us);
-                    return Err(ThrottleError::ResourceGroupCpuExhausted);
+        let mut fair_share_triggered = false;
+        if self.is_burst.load(Ordering::Acquire) {
+            fair_share_triggered = try_allocate_burst_tokens(
+                self.global_bucket.as_ref(),
+                self.resource_group_weights.as_ref(),
+                self.total_resource_group_weight.as_ref(),
+                self.burst_inflight_state.as_ref(),
+                self.usage_state.as_ref(),
+                self.config.as_ref(),
+                &self.resource_group,
+                additional_us,
+            )?;
+        } else if let Some(bucket) = &self.resource_group_bucket {
+            if bucket.try_allocate(additional_us) {
+                if !self.global_bucket.try_allocate(additional_us) {
+                    bucket.release(additional_us);
+                    return Err(AllocationAttemptFailure {
+                        err: ThrottleError::GlobalCpuExhausted,
+                        fair_share_triggered: false,
+                    });
                 }
+                group_allocated_delta = additional_us;
+            } else if self.burst_enabled() {
+                fair_share_triggered = try_allocate_burst_tokens(
+                    self.global_bucket.as_ref(),
+                    self.resource_group_weights.as_ref(),
+                    self.total_resource_group_weight.as_ref(),
+                    self.burst_inflight_state.as_ref(),
+                    self.usage_state.as_ref(),
+                    self.config.as_ref(),
+                    &self.resource_group,
+                    additional_us,
+                )?;
+                self.is_burst.store(true, Ordering::Release);
+            } else {
+                return Err(resource_group_exhausted_without_burst());
             }
+        } else if !self.global_bucket.try_allocate(additional_us) {
+            return Err(AllocationAttemptFailure {
+                err: ThrottleError::GlobalCpuExhausted,
+                fair_share_triggered: false,
+            });
         }
 
         self.allocated_us.fetch_add(additional_us, Ordering::AcqRel);
@@ -631,11 +853,16 @@ impl CpuTokenHandle {
                 .fetch_add(group_allocated_delta, Ordering::AcqRel);
             self.inflight_add(group_allocated_delta);
         }
+        if fair_share_triggered {
+            self.fair_share_ever_triggered
+                .store(true, Ordering::Release);
+        }
         self.update_available_metrics();
         Ok(RuntimeAllocationSnapshot {
             resource_group_allocated_delta_us: group_allocated_delta,
             global_allocated_delta_us: additional_us,
             is_burst: self.is_burst.load(Ordering::Acquire),
+            fair_share_triggered,
         })
     }
 
@@ -656,10 +883,13 @@ impl CpuTokenHandle {
                     self.log_runtime_allocation_success(additional_us, wait_duration, snapshot);
                     return Ok(additional_us);
                 }
-                Err(
-                    err @ (ThrottleError::GlobalCpuExhausted
-                    | ThrottleError::ResourceGroupCpuExhausted),
-                ) => {
+                Err(err)
+                    if matches!(
+                        &err.err,
+                        ThrottleError::GlobalCpuExhausted
+                            | ThrottleError::ResourceGroupCpuExhausted
+                    ) =>
+                {
                     let now = Instant::now();
                     if now >= self.request_deadline {
                         let wait_duration = start.elapsed();
@@ -669,8 +899,9 @@ impl CpuTokenHandle {
                         self.log_runtime_allocation_failure(
                             additional_us,
                             wait_duration,
-                            &err,
+                            &err.err,
                             true,
+                            err.fair_share_triggered,
                         );
                         return Err(ThrottleError::RequestTimeout);
                     }
@@ -686,10 +917,11 @@ impl CpuTokenHandle {
                     self.log_runtime_allocation_failure(
                         additional_us,
                         start.elapsed(),
-                        &err,
+                        &err.err,
                         false,
+                        err.fair_share_triggered,
                     );
-                    return Err(err);
+                    return Err(err.err);
                 }
             }
         }
@@ -761,7 +993,8 @@ impl CpuTokenHandle {
             return;
         }
 
-        let (fair_share_status, fair_share_triggered) = fair_share_log_state(&self.config);
+        let (fair_share_status, fair_share_triggered) =
+            fair_share_log_state(&self.config, snapshot.fair_share_triggered);
         info!(
             "[CPU throttle] cpu throttle runtime token allocation succeeded";
             "resource_group" => self.resource_group.as_str(),
@@ -769,7 +1002,7 @@ impl CpuTokenHandle {
             "wait_duration" => ?wait_duration,
             "allocation_result" => if snapshot.is_burst { "burst" } else { "success" },
             "is_burst" => snapshot.is_burst,
-            "burst_enabled" => self.config.enable_burst,
+            "burst_enabled" => self.burst_enabled(),
             "fair_share_triggered" => fair_share_triggered,
             "fair_share_status" => fair_share_status,
             "global_allocated_delta_us" => snapshot.global_allocated_delta_us,
@@ -792,6 +1025,7 @@ impl CpuTokenHandle {
         wait_duration: Duration,
         err: &ThrottleError,
         timed_out: bool,
+        fair_share_triggered: bool,
     ) {
         if !self.info_log_state.should_log(
             CpuThrottleInfoLogEvent::RuntimeAllocationFailure,
@@ -801,7 +1035,8 @@ impl CpuTokenHandle {
             return;
         }
 
-        let (fair_share_status, fair_share_triggered) = fair_share_log_state(&self.config);
+        let (fair_share_status, fair_share_triggered) =
+            fair_share_log_state(&self.config, fair_share_triggered);
         info!(
             "[CPU throttle] cpu throttle runtime token allocation failed";
             "resource_group" => self.resource_group.as_str(),
@@ -810,7 +1045,7 @@ impl CpuTokenHandle {
             "allocation_result" => if timed_out { "timeout" } else { "error" },
             "failure_reason" => %err,
             "is_burst" => self.is_burst.load(Ordering::Acquire),
-            "burst_enabled" => self.config.enable_burst,
+            "burst_enabled" => self.burst_enabled(),
             "fair_share_triggered" => fair_share_triggered,
             "fair_share_status" => fair_share_status,
             "global_available_us" => self.global_bucket.available(),
@@ -904,6 +1139,14 @@ impl Drop for CpuTokenHandle {
             }
         }
 
+        if self.is_burst.load(Ordering::Acquire) {
+            release_burst_tokens(
+                self.burst_inflight_state.as_ref(),
+                &self.resource_group,
+                global_allocated.saturating_sub(resource_group_allocated),
+            );
+        }
+
         if actual_used < global_allocated {
             self.global_bucket.release(global_allocated - actual_used);
         }
@@ -938,14 +1181,18 @@ pub struct CpuThrottleManager {
     global_bucket: Arc<CpuTokenBucket>,
     resource_group_buckets: Arc<DashMap<String, Arc<CpuTokenBucket>>>,
     resource_group_weights: Arc<DashMap<String, u64>>,
+    total_resource_group_weight: Arc<AtomicU64>,
     resource_group_inflight_allocated_us: Arc<DashMap<String, AtomicU64>>,
+    global_burst_enabled: Arc<AtomicBool>,
+    resource_group_burst_enabled: Arc<RwLock<HashMap<String, bool>>>,
+    burst_inflight_state: Arc<Mutex<BurstInflightState>>,
     info_log_state: Arc<CpuThrottleInfoLogState>,
     config: RwLock<Arc<CpuThrottleConfig>>,
     global_capacity_us: AtomicU64,
     resource_group_estimated_cpu_per_request_us: RwLock<HashMap<String, u64>>,
     adaptive_estimator: RwLock<Option<Arc<AdaptiveEstimator>>>,
     resource_group_dag_cpu_accum: Arc<DashMap<String, AtomicU64>>,
-    usage_state: RwLock<CpuUsageState>,
+    usage_state: Arc<RwLock<CpuUsageState>>,
 }
 
 impl CpuThrottleManager {
@@ -972,6 +1219,9 @@ impl CpuThrottleManager {
             CpuThrottleConfig::parse_resource_group_estimated_cpu_per_request_us(
                 &config.resource_group_estimated_cpu_per_request_us,
             );
+        let burst_overrides = CpuThrottleConfig::parse_resource_group_burst_enabled(
+            &config.resource_group_burst_enabled,
+        );
         let adaptive_estimator = if config.enable_adaptive_estimated_cpu_per_request_us {
             Some(Arc::new(AdaptiveEstimator::new(
                 config.estimated_cpu_per_request_us,
@@ -991,6 +1241,7 @@ impl CpuThrottleManager {
             "window_size_ms" => config.window_size_ms,
             "enable_dynamic_adjustment" => config.enable_dynamic_adjustment,
             "enable_burst" => config.enable_burst,
+            "resource_group_burst_enabled" => config.resource_group_burst_enabled.as_str(),
             "enable_runtime_token_management" => config.enable_runtime_token_management,
             "runtime_check_interval_us" => config.runtime_check_interval_us,
             "additional_allocation_threshold" => config.additional_allocation_threshold,
@@ -1006,13 +1257,17 @@ impl CpuThrottleManager {
             global_bucket,
             resource_group_buckets: Arc::new(DashMap::new()),
             resource_group_weights: Arc::new(DashMap::new()),
+            total_resource_group_weight: Arc::new(AtomicU64::new(0)),
             resource_group_inflight_allocated_us: Arc::new(DashMap::new()),
+            global_burst_enabled: Arc::new(AtomicBool::new(config.enable_burst)),
+            resource_group_burst_enabled: Arc::new(RwLock::new(burst_overrides)),
+            burst_inflight_state: Arc::new(Mutex::new(BurstInflightState::default())),
             info_log_state: Arc::new(CpuThrottleInfoLogState::new(config.debug)),
             global_capacity_us: AtomicU64::new(global_capacity_us),
             resource_group_estimated_cpu_per_request_us: RwLock::new(estimated_overrides),
             adaptive_estimator: RwLock::new(adaptive_estimator),
             resource_group_dag_cpu_accum: Arc::new(DashMap::new()),
-            usage_state: RwLock::new(CpuUsageState::new()),
+            usage_state: Arc::new(RwLock::new(CpuUsageState::new())),
             config: RwLock::new(Arc::new(config)),
         }
     }
@@ -1055,12 +1310,22 @@ impl CpuThrottleManager {
             .contains_key(Self::canonicalize_group_name(resource_group).as_str())
     }
 
+    pub(crate) fn is_burst_enabled_for_group(&self, resource_group: &str) -> bool {
+        let resource_group = Self::canonicalize_group_name(resource_group);
+        burst_enabled_for_group(
+            &resource_group,
+            self.global_burst_enabled.as_ref(),
+            self.resource_group_burst_enabled.as_ref(),
+        )
+    }
+
     pub fn refresh_config(&self, config: CpuThrottleConfig) {
         assert!(
             !config.throttle_default_group || config.default_group_weight.unwrap_or(0) > 0,
             "cpu throttle config invariant violated: default_group_weight must be set when throttle_default_group is enabled",
         );
 
+        let enable_burst = config.enable_burst;
         let debug_enabled = config.debug;
         let refill_interval_ms = config.refill_interval_ms.max(1);
         let new_global_capacity_us = Self::calculate_global_capacity_us(&config);
@@ -1068,6 +1333,9 @@ impl CpuThrottleManager {
             CpuThrottleConfig::parse_resource_group_estimated_cpu_per_request_us(
                 &config.resource_group_estimated_cpu_per_request_us,
             );
+        let burst_overrides = CpuThrottleConfig::parse_resource_group_burst_enabled(
+            &config.resource_group_burst_enabled,
+        );
         let adaptive_estimator = if config.enable_adaptive_estimated_cpu_per_request_us {
             Some(Arc::new(AdaptiveEstimator::new(
                 config.estimated_cpu_per_request_us,
@@ -1082,10 +1350,13 @@ impl CpuThrottleManager {
         self.info_log_state.set_debug_enabled(debug_enabled);
         self.global_capacity_us
             .store(new_global_capacity_us, Ordering::Release);
+        self.global_burst_enabled
+            .store(enable_burst, Ordering::Release);
         *self
             .resource_group_estimated_cpu_per_request_us
             .write()
             .unwrap() = estimated_overrides;
+        *self.resource_group_burst_enabled.write().unwrap() = burst_overrides;
         *self.adaptive_estimator.write().unwrap() = adaptive_estimator;
 
         self.global_bucket
@@ -1110,6 +1381,7 @@ impl CpuThrottleManager {
             "window_size_ms" => self.current_config().window_size_ms,
             "enable_dynamic_adjustment" => self.current_config().enable_dynamic_adjustment,
             "enable_burst" => self.current_config().enable_burst,
+            "resource_group_burst_enabled" => self.current_config().resource_group_burst_enabled.as_str(),
             "enable_runtime_token_management" => self.current_config().enable_runtime_token_management,
             "runtime_check_interval_us" => self.current_config().runtime_check_interval_us,
             "additional_allocation_threshold" => self.current_config().additional_allocation_threshold,
@@ -1150,6 +1422,7 @@ impl CpuThrottleManager {
             self.resource_group_weights.insert(resource_group, weight);
         }
 
+        self.refresh_total_resource_group_weight();
         self.recalculate_all_quotas();
     }
 
@@ -1469,6 +1742,7 @@ impl CpuThrottleManager {
                 .remove(&resource_group)
                 .is_some()
             {
+                self.refresh_total_resource_group_weight();
                 self.recalculate_all_quotas();
             }
             info!(
@@ -1492,6 +1766,7 @@ impl CpuThrottleManager {
             "has_bucket" => self.resource_group_buckets.contains_key(&resource_group),
         );
         if should_recalculate || !self.resource_group_buckets.contains_key(&resource_group) {
+            self.refresh_total_resource_group_weight();
             self.recalculate_all_quotas();
         }
     }
@@ -1518,6 +1793,7 @@ impl CpuThrottleManager {
             .remove(&resource_group)
             .is_some()
         {
+            self.refresh_total_resource_group_weight();
             self.recalculate_all_quotas();
         }
     }
@@ -1555,10 +1831,13 @@ impl CpuThrottleManager {
                     self.log_initial_allocation_success(&handle, estimated_cpu_us, wait_duration);
                     return Ok(handle);
                 }
-                Err(
-                    err @ (ThrottleError::GlobalCpuExhausted
-                    | ThrottleError::ResourceGroupCpuExhausted),
-                ) => {
+                Err(err)
+                    if matches!(
+                        &err.err,
+                        ThrottleError::GlobalCpuExhausted
+                            | ThrottleError::ResourceGroupCpuExhausted
+                    ) =>
+                {
                     if Instant::now() >= request_deadline {
                         let wait_duration = start.elapsed();
                         CPU_THROTTLE_TOKEN_WAIT_DURATION
@@ -1567,7 +1846,7 @@ impl CpuThrottleManager {
                         CPU_THROTTLE_ALLOCATIONS
                             .with_label_values(&[
                                 resource_group.as_str(),
-                                err.timeout_allocation_result_label(),
+                                err.err.timeout_allocation_result_label(),
                             ])
                             .inc();
                         debug!(
@@ -1575,14 +1854,15 @@ impl CpuThrottleManager {
                             "resource_group" => resource_group.as_str(),
                             "estimated_cpu_us" => estimated_cpu_us,
                             "wait_duration" => ?wait_duration,
-                            "last_exhaustion" => %err,
+                            "last_exhaustion" => %err.err,
                         );
                         self.log_initial_allocation_failure(
                             &resource_group,
                             estimated_cpu_us,
                             wait_duration,
-                            &err,
+                            &err.err,
                             true,
+                            err.fair_share_triggered,
                         );
                         return Err(ThrottleError::RequestTimeout);
                     }
@@ -1600,10 +1880,11 @@ impl CpuThrottleManager {
                         &resource_group,
                         estimated_cpu_us,
                         start.elapsed(),
-                        &err,
+                        &err.err,
                         false,
+                        err.fair_share_triggered,
                     );
-                    return Err(err);
+                    return Err(err.err);
                 }
             }
         }
@@ -1643,7 +1924,7 @@ impl CpuThrottleManager {
         resource_group: &str,
         estimated_cpu_us: u64,
         request_deadline: Instant,
-    ) -> Result<CpuTokenHandle, ThrottleError> {
+    ) -> Result<CpuTokenHandle, AllocationAttemptFailure> {
         let config = self.current_config();
         self.global_bucket.refill();
         let resource_group_bucket = self
@@ -1654,21 +1935,39 @@ impl CpuThrottleManager {
                 bucket.clone()
             });
 
-        if !self.global_bucket.try_allocate(estimated_cpu_us) {
-            return Err(ThrottleError::GlobalCpuExhausted);
-        }
-
         let mut is_burst = false;
         let mut resource_group_allocated_us = 0;
+        let mut fair_share_triggered = false;
         if let Some(bucket) = &resource_group_bucket {
             if bucket.try_allocate(estimated_cpu_us) {
+                if !self.global_bucket.try_allocate(estimated_cpu_us) {
+                    bucket.release(estimated_cpu_us);
+                    return Err(AllocationAttemptFailure {
+                        err: ThrottleError::GlobalCpuExhausted,
+                        fair_share_triggered: false,
+                    });
+                }
                 resource_group_allocated_us = estimated_cpu_us;
-            } else if config.enable_burst {
+            } else if self.is_burst_enabled_for_group(resource_group) {
+                fair_share_triggered = try_allocate_burst_tokens(
+                    self.global_bucket.as_ref(),
+                    self.resource_group_weights.as_ref(),
+                    self.total_resource_group_weight.as_ref(),
+                    self.burst_inflight_state.as_ref(),
+                    self.usage_state.as_ref(),
+                    config.as_ref(),
+                    resource_group,
+                    estimated_cpu_us,
+                )?;
                 is_burst = true;
             } else {
-                self.global_bucket.release(estimated_cpu_us);
-                return Err(ThrottleError::ResourceGroupCpuExhausted);
+                return Err(resource_group_exhausted_without_burst());
             }
+        } else if !self.global_bucket.try_allocate(estimated_cpu_us) {
+            return Err(AllocationAttemptFailure {
+                err: ThrottleError::GlobalCpuExhausted,
+                fair_share_triggered: false,
+            });
         }
 
         let handle = CpuTokenHandle {
@@ -1695,8 +1994,15 @@ impl CpuThrottleManager {
             },
             request_deadline,
             config,
+            resource_group_weights: self.resource_group_weights.clone(),
+            total_resource_group_weight: self.total_resource_group_weight.clone(),
+            global_burst_enabled: self.global_burst_enabled.clone(),
+            resource_group_burst_enabled: self.resource_group_burst_enabled.clone(),
+            burst_inflight_state: self.burst_inflight_state.clone(),
+            usage_state: self.usage_state.clone(),
             adaptive_estimator: self.adaptive_estimator.read().unwrap().clone(),
             is_burst: AtomicBool::new(is_burst),
+            fair_share_ever_triggered: AtomicBool::new(fair_share_triggered),
             info_log_state: self.info_log_state.clone(),
         };
         if resource_group_allocated_us > 0 {
@@ -1804,7 +2110,10 @@ impl CpuThrottleManager {
             return;
         }
 
-        let (fair_share_status, fair_share_triggered) = fair_share_log_state(&handle.config);
+        let (fair_share_status, fair_share_triggered) = fair_share_log_state(
+            &handle.config,
+            handle.fair_share_ever_triggered.load(Ordering::Acquire),
+        );
         info!(
             "[CPU throttle] cpu throttle token allocation succeeded";
             "resource_group" => handle.resource_group.as_str(),
@@ -1812,7 +2121,7 @@ impl CpuThrottleManager {
             "wait_duration" => ?wait_duration,
             "allocation_result" => handle.allocation_result_label(),
             "is_burst" => handle.is_burst.load(Ordering::Acquire),
-            "burst_enabled" => handle.config.enable_burst,
+            "burst_enabled" => handle.burst_enabled(),
             "fair_share_triggered" => fair_share_triggered,
             "fair_share_status" => fair_share_status,
             "global_allocated_us" => handle.global_allocated_us.load(Ordering::Acquire),
@@ -1834,6 +2143,7 @@ impl CpuThrottleManager {
         wait_duration: Duration,
         err: &ThrottleError,
         timed_out: bool,
+        fair_share_triggered: bool,
     ) {
         if !self.info_log_state.should_log(
             CpuThrottleInfoLogEvent::InitialAllocationFailure,
@@ -1844,7 +2154,8 @@ impl CpuThrottleManager {
         }
 
         let config = self.current_config();
-        let (fair_share_status, fair_share_triggered) = fair_share_log_state(&config);
+        let (fair_share_status, fair_share_triggered) =
+            fair_share_log_state(&config, fair_share_triggered);
         info!(
             "[CPU throttle] cpu throttle token allocation failed";
             "resource_group" => resource_group,
@@ -1853,7 +2164,7 @@ impl CpuThrottleManager {
             "allocation_result" => if timed_out { "timeout" } else { "error" },
             "failure_reason" => %err,
             "is_burst" => false,
-            "burst_enabled" => config.enable_burst,
+            "burst_enabled" => self.is_burst_enabled_for_group(resource_group),
             "fair_share_triggered" => fair_share_triggered,
             "fair_share_status" => fair_share_status,
             "global_available_us" => self.global_bucket.available(),
@@ -2031,6 +2342,17 @@ impl CpuThrottleManager {
         deregister_cpu_throttle_metrics(resource_group);
     }
 
+    fn refresh_total_resource_group_weight(&self) -> u64 {
+        let total_weight = self
+            .resource_group_weights
+            .iter()
+            .map(|entry| *entry.value())
+            .sum();
+        self.total_resource_group_weight
+            .store(total_weight, Ordering::Release);
+        total_weight
+    }
+
     fn current_config(&self) -> Arc<CpuThrottleConfig> {
         self.config.read().unwrap().clone()
     }
@@ -2155,10 +2477,22 @@ mod tests {
             .get()
     }
 
+    fn current_burst_limit(manager: &CpuThrottleManager, resource_group: &str) -> u64 {
+        let group_weight = *manager.resource_group_weights.get(resource_group).unwrap();
+        let total_weight = manager.total_resource_group_weight.load(Ordering::Acquire);
+        let burst_pool_us = {
+            let burst_inflight_state = manager.burst_inflight_state.lock().unwrap();
+            manager
+                .global_bucket
+                .available()
+                .saturating_add(burst_inflight_state.total_inflight_us)
+        };
+        fair_share_limit_us(group_weight, total_weight, burst_pool_us).unwrap()
+    }
+
     #[test]
     fn test_allocate_with_wait_records_global_timeout_cause() {
         let manager = CpuThrottleManager::new(test_config());
-        manager.on_resource_group_changed("global-timeout", 100);
 
         let before = allocation_metric_value("global-timeout", "global_exhausted");
         let _handle = block_on(manager.allocate_with_wait(
@@ -2206,6 +2540,307 @@ mod tests {
         assert_eq!(
             allocation_metric_value("rg-timeout", "resource_group_exhausted"),
             before + 1
+        );
+    }
+
+    #[test]
+    fn test_initial_group_exhaustion_stays_group_classified_when_global_is_empty() {
+        let mut config = test_config();
+        config.enable_burst = false;
+        let manager = CpuThrottleManager::new(config);
+        manager.on_resource_group_changed("rg1", 100);
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let rg1_capacity = manager
+            .resource_group_buckets
+            .get("rg1")
+            .unwrap()
+            .capacity();
+        let _handle = manager
+            .try_allocate_canonicalized("rg1", rg1_capacity, deadline)
+            .unwrap();
+
+        let err = manager
+            .try_allocate_canonicalized("rg1", 1, deadline)
+            .unwrap_err();
+        assert_eq!(err.err, ThrottleError::ResourceGroupCpuExhausted);
+        assert!(!err.fair_share_triggered);
+    }
+
+    #[test]
+    fn test_runtime_group_exhaustion_stays_group_classified_when_global_is_empty() {
+        let mut config = test_config();
+        config.enable_burst = false;
+        let manager = CpuThrottleManager::new(config);
+        manager.on_resource_group_changed("rg1", 100);
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let rg1_capacity = manager
+            .resource_group_buckets
+            .get("rg1")
+            .unwrap()
+            .capacity();
+        let handle = manager
+            .try_allocate_canonicalized("rg1", rg1_capacity, deadline)
+            .unwrap();
+
+        let err = handle.try_allocate_more(1).unwrap_err();
+        assert_eq!(err.err, ThrottleError::ResourceGroupCpuExhausted);
+        assert!(!err.fair_share_triggered);
+    }
+
+    #[test]
+    fn test_fair_allocation_limits_initial_burst_by_weight_under_high_pressure() {
+        let mut config = test_config();
+        config.enable_burst = true;
+        config.enable_fair_allocation = true;
+        config.fair_allocation_threshold = 0.7;
+        let manager = CpuThrottleManager::new(config);
+        manager.sync_resource_groups(vec![("rg1".to_owned(), 100), ("rg2".to_owned(), 300)]);
+        manager.update_usage(0.8, HashMap::new());
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let rg1_capacity = manager
+            .resource_group_buckets
+            .get("rg1")
+            .unwrap()
+            .capacity();
+        let _rg1_quota = manager
+            .try_allocate_canonicalized("rg1", rg1_capacity, deadline)
+            .unwrap();
+
+        let burst_limit = current_burst_limit(&manager, "rg1");
+        assert!(burst_limit > 0);
+
+        let err = manager
+            .try_allocate_canonicalized("rg1", burst_limit + 1, deadline)
+            .unwrap_err();
+        assert_eq!(err.err, ThrottleError::ResourceGroupCpuExhausted);
+        assert!(err.fair_share_triggered);
+
+        let burst_handle = manager
+            .try_allocate_canonicalized("rg1", burst_limit, deadline)
+            .unwrap();
+        assert!(burst_handle.is_burst.load(Ordering::Acquire));
+        assert!(
+            burst_handle
+                .fair_share_ever_triggered
+                .load(Ordering::Acquire)
+        );
+    }
+
+    #[test]
+    fn test_fair_allocation_limits_runtime_burst_by_weight_under_high_pressure() {
+        let mut config = test_config();
+        config.enable_burst = true;
+        config.enable_fair_allocation = true;
+        config.fair_allocation_threshold = 0.7;
+        let manager = CpuThrottleManager::new(config);
+        manager.sync_resource_groups(vec![("rg1".to_owned(), 100), ("rg2".to_owned(), 300)]);
+        manager.update_usage(0.8, HashMap::new());
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let rg1_capacity = manager
+            .resource_group_buckets
+            .get("rg1")
+            .unwrap()
+            .capacity();
+        let handle = manager
+            .try_allocate_canonicalized("rg1", rg1_capacity, deadline)
+            .unwrap();
+
+        let burst_limit = current_burst_limit(&manager, "rg1");
+        assert!(burst_limit > 0);
+
+        let err = handle.try_allocate_more(burst_limit + 1).unwrap_err();
+        assert_eq!(err.err, ThrottleError::ResourceGroupCpuExhausted);
+        assert!(err.fair_share_triggered);
+
+        let snapshot = handle.try_allocate_more(burst_limit).unwrap();
+        assert!(snapshot.is_burst);
+        assert!(snapshot.fair_share_triggered);
+        assert!(handle.is_burst.load(Ordering::Acquire));
+        assert!(handle.fair_share_ever_triggered.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn test_fair_allocation_keeps_peer_burst_share_after_first_borrower() {
+        let mut config = test_config();
+        config.enable_burst = true;
+        config.enable_fair_allocation = true;
+        config.fair_allocation_threshold = 0.7;
+        let manager = CpuThrottleManager::new(config);
+        manager.sync_resource_groups(vec![
+            ("rg1".to_owned(), 100),
+            ("rg2".to_owned(), 100),
+            ("rg3".to_owned(), 200),
+        ]);
+        manager.update_usage(0.8, HashMap::new());
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let rg1_capacity = manager
+            .resource_group_buckets
+            .get("rg1")
+            .unwrap()
+            .capacity();
+        let rg2_capacity = manager
+            .resource_group_buckets
+            .get("rg2")
+            .unwrap()
+            .capacity();
+        let _rg1_quota = manager
+            .try_allocate_canonicalized("rg1", rg1_capacity, deadline)
+            .unwrap();
+        let _rg2_quota = manager
+            .try_allocate_canonicalized("rg2", rg2_capacity, deadline)
+            .unwrap();
+
+        let burst_limit = current_burst_limit(&manager, "rg1");
+        assert!(burst_limit > 0);
+
+        let _rg1_burst = manager
+            .try_allocate_canonicalized("rg1", burst_limit, deadline)
+            .unwrap();
+
+        let rg2_burst = manager
+            .try_allocate_canonicalized("rg2", burst_limit, deadline)
+            .unwrap();
+        assert!(rg2_burst.is_burst.load(Ordering::Acquire));
+        assert!(rg2_burst.fair_share_ever_triggered.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn test_resource_group_burst_override_falls_back_to_global_setting() {
+        let mut config = test_config();
+        config.enable_burst = false;
+        config.resource_group_burst_enabled = "rg1:true".to_owned();
+        let manager = CpuThrottleManager::new(config);
+        manager.sync_resource_groups(vec![("rg1".to_owned(), 100), ("rg2".to_owned(), 100)]);
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let rg1_capacity = manager
+            .resource_group_buckets
+            .get("rg1")
+            .unwrap()
+            .capacity();
+        let rg1_handle = manager
+            .try_allocate_canonicalized("rg1", rg1_capacity, deadline)
+            .unwrap();
+        let rg1_burst = manager
+            .try_allocate_canonicalized("rg1", 1, deadline)
+            .unwrap();
+        assert!(rg1_handle.resource_group_bucket.is_some());
+        assert!(rg1_burst.is_burst.load(Ordering::Acquire));
+        drop(rg1_burst);
+        drop(rg1_handle);
+
+        let rg2_capacity = manager
+            .resource_group_buckets
+            .get("rg2")
+            .unwrap()
+            .capacity();
+        let rg2_handle = manager
+            .try_allocate_canonicalized("rg2", rg2_capacity, deadline)
+            .unwrap();
+        let err = manager
+            .try_allocate_canonicalized("rg2", 1, deadline)
+            .unwrap_err();
+        assert_eq!(err.err, ThrottleError::ResourceGroupCpuExhausted);
+        assert!(!err.fair_share_triggered);
+        drop(rg2_handle);
+    }
+
+    #[test]
+    fn test_resource_group_burst_override_hot_update_affects_runtime_top_up() {
+        let mut config = test_config();
+        config.enable_burst = true;
+        let manager = CpuThrottleManager::new(config.clone());
+        manager.sync_resource_groups(vec![("rg1".to_owned(), 100), ("rg2".to_owned(), 100)]);
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let rg1_capacity = manager
+            .resource_group_buckets
+            .get("rg1")
+            .unwrap()
+            .capacity();
+        let handle = manager
+            .try_allocate_canonicalized("rg1", rg1_capacity, deadline)
+            .unwrap();
+        assert!(handle.burst_enabled());
+
+        let mut updated = config;
+        updated.resource_group_burst_enabled = "rg1:false".to_owned();
+        manager.refresh_config(updated);
+
+        assert!(!manager.is_burst_enabled_for_group("rg1"));
+        assert!(!handle.burst_enabled());
+
+        let err = handle.try_allocate_more(1).unwrap_err();
+        assert_eq!(err.err, ThrottleError::ResourceGroupCpuExhausted);
+        assert!(!err.fair_share_triggered);
+    }
+
+    #[test]
+    fn test_fair_allocation_denies_burst_when_weight_is_temporarily_missing() {
+        let mut config = test_config();
+        config.enable_burst = true;
+        config.enable_fair_allocation = true;
+        config.fair_allocation_threshold = 0.7;
+        let manager = CpuThrottleManager::new(config);
+        manager.sync_resource_groups(vec![("rg1".to_owned(), 100), ("rg2".to_owned(), 100)]);
+        manager.update_usage(0.8, HashMap::new());
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let rg1_capacity = manager
+            .resource_group_buckets
+            .get("rg1")
+            .unwrap()
+            .capacity();
+        let _rg1_quota = manager
+            .try_allocate_canonicalized("rg1", rg1_capacity, deadline)
+            .unwrap();
+
+        manager.resource_group_weights.remove("rg1");
+
+        let err = manager
+            .try_allocate_canonicalized("rg1", 1, deadline)
+            .unwrap_err();
+        assert_eq!(err.err, ThrottleError::ResourceGroupCpuExhausted);
+        assert!(err.fair_share_triggered);
+    }
+
+    #[test]
+    fn test_total_resource_group_weight_cache_tracks_group_updates() {
+        let manager = CpuThrottleManager::new(test_config());
+
+        manager.sync_resource_groups(vec![("rg1".to_owned(), 100), ("rg2".to_owned(), 300)]);
+        assert_eq!(
+            manager.total_resource_group_weight.load(Ordering::Acquire),
+            400
+        );
+
+        manager.on_resource_group_changed("rg2", 200);
+        assert_eq!(
+            manager.total_resource_group_weight.load(Ordering::Acquire),
+            300
+        );
+
+        manager.on_resource_group_changed("rg3", 50);
+        assert_eq!(
+            manager.total_resource_group_weight.load(Ordering::Acquire),
+            350
+        );
+
+        manager.on_resource_group_removed("rg1");
+        assert_eq!(
+            manager.total_resource_group_weight.load(Ordering::Acquire),
+            250
+        );
+
+        manager.sync_resource_groups(vec![]);
+        assert_eq!(
+            manager.total_resource_group_weight.load(Ordering::Acquire),
+            0
         );
     }
 
@@ -2302,6 +2937,40 @@ mod tests {
 
         let deltas = manager.take_per_resource_group_dag_cpu_deltas();
         assert_eq!(deltas.get("rg1").copied(), Some(321));
+    }
+
+    #[test]
+    fn test_cpu_token_handle_drop_releases_burst_inflight_state() {
+        let mut config = test_config();
+        config.enable_burst = true;
+        let manager = CpuThrottleManager::new(config);
+        manager.on_resource_group_changed("rg1", 100);
+        manager.on_resource_group_changed("rg2", 100);
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let rg1_capacity = manager
+            .resource_group_buckets
+            .get("rg1")
+            .unwrap()
+            .capacity();
+        let handle = manager
+            .try_allocate_canonicalized("rg1", rg1_capacity, deadline)
+            .unwrap();
+
+        let snapshot = handle.try_allocate_more(1).unwrap();
+        assert!(snapshot.is_burst);
+
+        {
+            let burst_inflight_state = manager.burst_inflight_state.lock().unwrap();
+            assert_eq!(burst_inflight_state.total_inflight_us, 1);
+            assert_eq!(burst_inflight_state.inflight_for_group("rg1"), 1);
+        }
+
+        drop(handle);
+
+        let burst_inflight_state = manager.burst_inflight_state.lock().unwrap();
+        assert_eq!(burst_inflight_state.total_inflight_us, 0);
+        assert_eq!(burst_inflight_state.inflight_for_group("rg1"), 0);
     }
 
     #[test]

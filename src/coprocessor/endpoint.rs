@@ -2493,6 +2493,22 @@ mod tests {
     }
 
     #[test]
+    fn test_make_error_response_for_cpu_throttled() {
+        let resp = make_error_response(Error::CpuThrottled(
+            "request timeout waiting for cpu tokens".to_owned(),
+        ));
+        let region_err = resp.get_region_error();
+        assert_eq!(
+            region_err.get_server_is_busy().reason,
+            "request timeout waiting for cpu tokens"
+        );
+        assert_eq!(
+            region_err.get_message(),
+            "Coprocessor task canceled by cpu throttle: request timeout waiting for cpu tokens"
+        );
+    }
+
+    #[test]
     fn test_memory_quota() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::from(build_read_pool_for_test(

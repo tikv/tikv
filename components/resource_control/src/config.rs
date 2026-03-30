@@ -17,6 +17,7 @@ pub struct CpuThrottleSettings {
     pub enabled: bool,
     pub estimated_cpu_per_request_us: u64,
     pub resource_group_estimated_cpu_per_request_us: String,
+    pub resource_group_burst_enabled: String,
     pub enable_adaptive_estimated_cpu_per_request_us: bool,
     pub stats_interval: ReadableDuration,
     pub window_size: ReadableDuration,
@@ -43,6 +44,7 @@ impl Default for CpuThrottleSettings {
             enabled: false,
             estimated_cpu_per_request_us: 1_000,
             resource_group_estimated_cpu_per_request_us: String::new(),
+            resource_group_burst_enabled: String::new(),
             enable_adaptive_estimated_cpu_per_request_us: true,
             stats_interval: ReadableDuration::secs(1),
             window_size: ReadableDuration::minutes(1),
@@ -175,6 +177,7 @@ impl Config {
                 .cpu_throttle
                 .resource_group_estimated_cpu_per_request_us
                 .clone(),
+            resource_group_burst_enabled: self.cpu_throttle.resource_group_burst_enabled.clone(),
             enable_adaptive_estimated_cpu_per_request_us: self
                 .cpu_throttle
                 .enable_adaptive_estimated_cpu_per_request_us,
@@ -394,5 +397,25 @@ mod tests {
 
         let cpu_throttle_manager = resource_manager.get_cpu_throttle_manager().unwrap();
         assert!(cpu_throttle_manager.is_debug_logging_enabled());
+    }
+
+    #[test]
+    fn test_config_manager_refreshes_resource_group_burst_override() {
+        let resource_manager = Arc::new(ResourceGroupManager::new(Config::default()));
+        let cpu_throttle_manager = Arc::new(CpuThrottleManager::new(
+            Config::default().to_cpu_throttle_config(),
+        ));
+        cpu_throttle_manager.on_resource_group_changed("rg1", 100);
+        resource_manager.set_cpu_throttle_manager(cpu_throttle_manager.clone());
+        let mut manager = ResourceContrlCfgMgr::new(resource_manager);
+
+        let mut updated = Config::default();
+        updated.cpu_throttle.enable_burst = true;
+        updated.cpu_throttle.resource_group_burst_enabled = "rg1:false".to_owned();
+
+        manager.dispatch(Config::default().diff(&updated)).unwrap();
+
+        assert!(!cpu_throttle_manager.is_burst_enabled_for_group("rg1"));
+        assert!(cpu_throttle_manager.is_burst_enabled_for_group("missing"));
     }
 }
