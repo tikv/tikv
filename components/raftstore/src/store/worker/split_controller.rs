@@ -22,6 +22,9 @@ use tikv_util::{
     debug, info,
     metrics::ThreadInfoStatistics,
     store::{is_read_query, QueryStats},
+    thread_name_prefix::{
+        GRPC_SERVER_THREAD, UNIFIED_READ_POOL_THREAD, matches_thread_name_prefix,
+    },
     time::Instant,
     warn,
 };
@@ -747,7 +750,7 @@ impl AutoSplitController {
         thread_stats
             .get_cpu_usages()
             .iter()
-            .filter(|(thread_name, _)| thread_name.contains(name))
+            .filter(|(thread_name, _)| matches_thread_name_prefix(thread_name, name))
             .fold(0, |cpu_usage_sum, (_, cpu_usage)| {
                 // `cpu_usage` is in [0, 100].
                 cpu_usage_sum + cpu_usage
