@@ -183,8 +183,18 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             return;
         }
 
-        self.do_adjust(ResourceType::Cpu, dur_secs, bg_util_limit, bg_resource_threshold);
-        self.do_adjust(ResourceType::Io, dur_secs, bg_util_limit, bg_resource_threshold);
+        self.do_adjust(
+            ResourceType::Cpu,
+            dur_secs,
+            bg_util_limit,
+            bg_resource_threshold,
+        );
+        self.do_adjust(
+            ResourceType::Io,
+            dur_secs,
+            bg_util_limit,
+            bg_resource_threshold,
+        );
         self.adjust_write_io_by_compaction_pressure();
     }
 
@@ -225,8 +235,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         }
         let background_consumed = (stats_delta / dur_secs).total_consumed as f64;
 
-        let background_util =
-            (background_consumed / resource_stats.total_quota * 100.0) as u64;
+        let background_util = (background_consumed / resource_stats.total_quota * 100.0) as u64;
         let resource_util = resource_stats.current_used / resource_stats.total_quota * 100.0;
         BACKGROUND_TASK_RESOURCE_UTILIZATION_VEC
             .with_label_values(&[resource_type.as_str()])
@@ -274,7 +283,8 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
 
     /// Adjust the write-only IO limiter based on compaction pressure.
     /// When pressure >= threshold, linearly scale write IO from ceiling to
-    /// floor. Below threshold, write IO ramps up 10% per tick capped at ceiling.
+    /// floor. Below threshold, write IO ramps up 10% per tick capped at
+    /// ceiling.
     fn adjust_write_io_by_compaction_pressure(&self) {
         let pressure = self.compaction_pending_bytes_ratio.load(Ordering::Relaxed) as f64;
         let config = self.resource_ctl.get_config().value().clone();
@@ -297,7 +307,9 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             (ceiling * (1.0 - pressure_ratio) + floor * pressure_ratio).max(floor)
         };
 
-        self.bg_limiter.get_write_io_limiter().set_rate_limit(new_limit);
+        self.bg_limiter
+            .get_write_io_limiter()
+            .set_rate_limit(new_limit);
     }
 }
 
@@ -1203,8 +1215,7 @@ mod tests {
         grp_a.mut_background_settings().set_utilization_limit(80);
         resource_ctl.add_resource_group(grp_a);
 
-        let grp_b =
-            new_background_resource_group_ru("group_b".into(), 1000, 8, vec!["br".into()]);
+        let grp_b = new_background_resource_group_ru("group_b".into(), 1000, 8, vec!["br".into()]);
         resource_ctl.add_resource_group(grp_b);
 
         let limiter_a = resource_ctl
@@ -1238,14 +1249,20 @@ mod tests {
             limiter_a.get_limiter(ResourceType::Cpu).get_rate_limit(),
             5.6 * MICROS_PER_SEC,
         );
-        check(limiter_a.get_limiter(ResourceType::Io).get_rate_limit(), 7000.0);
+        check(
+            limiter_a.get_limiter(ResourceType::Io).get_rate_limit(),
+            7000.0,
+        );
 
         // limiter_b is the same Arc so it reflects the same rates.
         check(
             limiter_b.get_limiter(ResourceType::Cpu).get_rate_limit(),
             5.6 * MICROS_PER_SEC,
         );
-        check(limiter_b.get_limiter(ResourceType::Io).get_rate_limit(), 7000.0);
+        check(
+            limiter_b.get_limiter(ResourceType::Io).get_rate_limit(),
+            7000.0,
+        );
 
         // Under heavy load (100% CPU) the budget scales down to min_floor for
         // the single global limiter — not independently per group.
@@ -1260,6 +1277,9 @@ mod tests {
             limiter_a.get_limiter(ResourceType::Cpu).get_rate_limit(),
             1.0 * MICROS_PER_SEC,
         );
-        check(limiter_a.get_limiter(ResourceType::Io).get_rate_limit(), 2000.0);
+        check(
+            limiter_a.get_limiter(ResourceType::Io).get_rate_limit(),
+            2000.0,
+        );
     }
 }
