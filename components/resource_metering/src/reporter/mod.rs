@@ -296,6 +296,7 @@ mod tests {
                 cpu_time: 1,
                 read_keys: 2,
                 write_keys: 3,
+                ..Default::default()
             },
         );
         r.run(Task::Records(Arc::new(RawRecords {
@@ -342,6 +343,7 @@ mod tests {
                 cpu_time: 1,
                 read_keys: 2,
                 write_keys: 3,
+                ..Default::default()
             },
         );
 

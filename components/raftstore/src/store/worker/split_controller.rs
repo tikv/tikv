@@ -22,6 +22,7 @@ use tikv_util::{
     debug, info,
     metrics::ThreadInfoStatistics,
     store::{is_read_query, QueryStats},
+    thread_name_prefix::matches_thread_name_prefix,
     time::Instant,
     warn,
 };
@@ -747,7 +748,7 @@ impl AutoSplitController {
         thread_stats
             .get_cpu_usages()
             .iter()
-            .filter(|(thread_name, _)| thread_name.contains(name))
+            .filter(|(thread_name, _)| matches_thread_name_prefix(thread_name, name))
             .fold(0, |cpu_usage_sum, (_, cpu_usage)| {
                 // `cpu_usage` is in [0, 100].
                 cpu_usage_sum + cpu_usage
@@ -1426,6 +1427,7 @@ mod tests {
                     cpu_time: cpu_times[idx],
                     read_keys: 0,
                     write_keys: 0,
+                    ..Default::default()
                 },
             );
         }
@@ -1902,6 +1904,7 @@ mod tests {
                     cpu_time: test_case.0,
                     read_keys: 0,
                     write_keys: 0,
+                    ..Default::default()
                 },
             );
             // ["c", "d"] with (test_case.1)ms CPU time.
@@ -1911,6 +1914,7 @@ mod tests {
                     cpu_time: test_case.1,
                     read_keys: 0,
                     write_keys: 0,
+                    ..Default::default()
                 },
             );
             // Multiple key ranges with (test_case.2)ms CPU time.
@@ -1920,6 +1924,7 @@ mod tests {
                     cpu_time: test_case.2,
                     read_keys: 0,
                     write_keys: 0,
+                    ..Default::default()
                 },
             );
             // Empty key range with (test_case.3)ms CPU time.
@@ -1929,6 +1934,7 @@ mod tests {
                     cpu_time: test_case.3,
                     read_keys: 0,
                     write_keys: 0,
+                    ..Default::default()
                 },
             );
 

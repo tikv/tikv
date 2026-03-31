@@ -35,17 +35,74 @@ pub fn find_kth_cpu_time<'a>(
     kth
 }
 
+/// Identifies which thread pool a CPU sample was taken from.
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum ThreadPoolType {
+    /// Thread pool type is unknown or not classified.
+    #[default]
+    Unknown = 0,
+    /// Unified read pool threads (prefix "unified-read").
+    UnifiedRead = 1,
+    /// Scheduler worker threads (prefix "sched").
+    Scheduler = 2,
+}
+
+/// Per-region CPU time accumulator with per-thread-pool breakdown.
+///
+/// Used by the PD heartbeat path to track how much CPU each region consumed
+/// on different thread pools between heartbeats.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct RegionCpuRecord {
+    /// Total CPU time in milliseconds (sum of all pools + unknown).
+    pub cpu_time_ms: u32,
+    /// CPU time on unified-read-pool threads (ms).
+    pub unified_read_cpu_time_ms: u32,
+    /// CPU time on scheduler-pool threads (ms).
+    pub scheduler_cpu_time_ms: u32,
+}
+
+impl RegionCpuRecord {
+    /// Accumulate a [`RawRecord`]'s CPU fields into this record.
+    #[inline]
+    pub fn merge_raw_record(&mut self, raw: &RawRecord) {
+        self.cpu_time_ms += raw.cpu_time;
+        self.unified_read_cpu_time_ms += raw.unified_read_cpu_time;
+        self.scheduler_cpu_time_ms += raw.scheduler_cpu_time;
+    }
+}
+
 /// Raw resource statistics record.
 #[derive(Debug, Default, Copy, Clone, PartialEq)]
 pub struct RawRecord {
     pub cpu_time: u32, // ms
+    /// CPU time consumed on unified-read-pool threads (ms).
+    pub unified_read_cpu_time: u32,
+    /// CPU time consumed on scheduler-pool threads (ms).
+    pub scheduler_cpu_time: u32,
     pub read_keys: u32,
     pub write_keys: u32,
 }
 
 impl RawRecord {
+    /// Add CPU time delta and attribute it to the given thread pool type.
+    pub fn add_cpu_time(&mut self, delta_ms: u32, pool_type: ThreadPoolType) {
+        self.cpu_time += delta_ms;
+        match pool_type {
+            ThreadPoolType::UnifiedRead => {
+                self.unified_read_cpu_time += delta_ms;
+            }
+            ThreadPoolType::Scheduler => {
+                self.scheduler_cpu_time += delta_ms;
+            }
+            ThreadPoolType::Unknown => {}
+        }
+    }
+
     pub fn merge(&mut self, other: &Self) {
         self.cpu_time += other.cpu_time;
+        self.unified_read_cpu_time += other.unified_read_cpu_time;
+        self.scheduler_cpu_time += other.scheduler_cpu_time;
         self.read_keys += other.read_keys;
         self.write_keys += other.write_keys;
     }
@@ -179,6 +236,7 @@ impl From<Records> for Vec<ResourceUsageRecord> {
                     cpu_time,
                     read_keys,
                     write_keys,
+                    ..
                 },
             ) in records.others
             {
@@ -384,6 +442,7 @@ mod tests {
                 cpu_time: 111,
                 read_keys: 222,
                 write_keys: 333,
+                ..Default::default()
             },
         );
         raw_map.insert(
@@ -392,6 +451,7 @@ mod tests {
                 cpu_time: 444,
                 read_keys: 555,
                 write_keys: 666,
+                ..Default::default()
             },
         );
         raw_map.insert(
@@ -400,6 +460,7 @@ mod tests {
                 cpu_time: 777,
                 read_keys: 888,
                 write_keys: 999,
+                ..Default::default()
             },
         );
         let raw = RawRecords {
@@ -443,6 +504,7 @@ mod tests {
                 cpu_time: 111,
                 read_keys: 222,
                 write_keys: 333,
+                ..Default::default()
             },
         );
         records.insert(
@@ -451,6 +513,7 @@ mod tests {
                 cpu_time: 444,
                 read_keys: 555,
                 write_keys: 666,
+                ..Default::default()
             },
         );
         records.insert(
@@ -459,6 +522,7 @@ mod tests {
                 cpu_time: 777,
                 read_keys: 888,
                 write_keys: 999,
+                ..Default::default()
             },
         );
         let rs = RawRecords {
@@ -539,6 +603,7 @@ mod tests {
                 cpu_time: 111,
                 read_keys: 111,
                 write_keys: 111,
+                ..Default::default()
             },
         );
         raw_records.records.insert(
@@ -547,6 +612,7 @@ mod tests {
                 cpu_time: 111,
                 read_keys: 111,
                 write_keys: 111,
+                ..Default::default()
             },
         );
         raw_records.records.insert(
@@ -555,6 +621,7 @@ mod tests {
                 cpu_time: 111,
                 read_keys: 111,
                 write_keys: 111,
+                ..Default::default()
             },
         );
 
@@ -630,6 +697,7 @@ mod tests {
                 cpu_time: 111,
                 read_keys: 222,
                 write_keys: 333,
+                ..Default::default()
             },
         );
         records.insert(
@@ -638,6 +706,7 @@ mod tests {
                 cpu_time: 444,
                 read_keys: 555,
                 write_keys: 666,
+                ..Default::default()
             },
         );
         records.insert(
@@ -646,6 +715,7 @@ mod tests {
                 cpu_time: 777,
                 read_keys: 888,
                 write_keys: 999,
+                ..Default::default()
             },
         );
         records.insert(
@@ -654,6 +724,7 @@ mod tests {
                 cpu_time: 1110,
                 read_keys: 2220,
                 write_keys: 3330,
+                ..Default::default()
             },
         );
         records.insert(
@@ -662,6 +733,7 @@ mod tests {
                 cpu_time: 4440,
                 read_keys: 5550,
                 write_keys: 6660,
+                ..Default::default()
             },
         );
         records.insert(
@@ -670,6 +742,7 @@ mod tests {
                 cpu_time: 7770,
                 read_keys: 8880,
                 write_keys: 9990,
+                ..Default::default()
             },
         );
         let rs = RawRecords {
