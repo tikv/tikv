@@ -6,9 +6,10 @@ use serde::{Deserialize, Serialize};
 use tikv_util::{
     config::{ReadableDuration, VersionTrack},
     info,
+    worker::Worker,
 };
 
-use crate::{cpu_config::CpuThrottleConfig, ResourceGroupManager};
+use crate::{cpu_config::CpuThrottleConfig, start_cpu_throttle_monitor, ResourceGroupManager};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
@@ -95,6 +96,15 @@ impl Config {
         if self.max_read_cpu_ratio <= 0.0 || self.max_read_cpu_ratio > 1.0 {
             return Err("resource-control.max-read-cpu-ratio must be in range (0.0, 1.0]".into());
         }
+        // The throttle manager is constructed whenever resource control is
+        // enabled so online config can turn CPU throttling on without a
+        // restart. Keep this invariant aligned with CpuThrottleManager::new.
+        if self.enabled
+            && self.cpu_throttle.throttle_default_group
+            && self.cpu_throttle.default_group_weight.unwrap_or(0) == 0
+        {
+            return Err("resource-control.cpu-throttle.default-group-weight must be set when throttle-default-group = true".into());
+        }
         if self.cpu_throttle.enabled {
             if self.cpu_throttle.refill_interval.0 < Duration::from_millis(1) {
                 return Err(
@@ -154,11 +164,6 @@ impl Config {
                     "resource-control.cpu-throttle.burst-threshold must be in range (0.0, 1.0]"
                         .into(),
                 );
-            }
-            if self.cpu_throttle.throttle_default_group
-                && self.cpu_throttle.default_group_weight.unwrap_or(0) == 0
-            {
-                return Err("resource-control.cpu-throttle.default-group-weight must be set when throttle-default-group = true".into());
             }
         }
         Ok(())
@@ -265,6 +270,7 @@ impl TryFrom<ConfigValue> for PriorityCtlStrategy {
 pub struct ResourceContrlCfgMgr {
     resource_manager: Arc<ResourceGroupManager>,
     config: Arc<VersionTrack<Config>>,
+    background_worker: Option<Worker>,
 }
 
 impl ResourceContrlCfgMgr {
@@ -272,6 +278,18 @@ impl ResourceContrlCfgMgr {
         Self {
             config: resource_manager.get_config().clone(),
             resource_manager,
+            background_worker: None,
+        }
+    }
+
+    pub fn with_background_worker(
+        resource_manager: Arc<ResourceGroupManager>,
+        background_worker: Worker,
+    ) -> Self {
+        Self {
+            config: resource_manager.get_config().clone(),
+            resource_manager,
+            background_worker: Some(background_worker),
         }
     }
 }
@@ -291,7 +309,14 @@ impl ConfigManager for ResourceContrlCfgMgr {
             let new_cpu_config = self.config.value().to_cpu_throttle_config();
             if old_cpu_config != new_cpu_config {
                 self.resource_manager
-                    .refresh_cpu_throttle_config(new_cpu_config);
+                    .refresh_cpu_throttle_config(new_cpu_config.clone());
+                if new_cpu_config.enabled
+                    && let Some(background_worker) = self.background_worker.as_ref()
+                    && let Some(cpu_throttle_manager) =
+                        self.resource_manager.get_cpu_throttle_manager()
+                {
+                    start_cpu_throttle_monitor(background_worker, cpu_throttle_manager);
+                }
             }
             info!("update resource control config"; "change" => cfg_str);
         }
@@ -304,7 +329,7 @@ mod tests {
     use std::sync::Arc;
 
     use online_config::{ConfigManager as _, OnlineConfig};
-    use tikv_util::config::ReadableDuration;
+    use tikv_util::{config::ReadableDuration, worker::Builder as WorkerBuilder};
 
     use super::{Config, ResourceContrlCfgMgr};
     use crate::{CpuThrottleManager, ResourceGroupManager};
@@ -323,7 +348,24 @@ mod tests {
     }
 
     #[test]
-    fn test_config_manager_rejects_invalid_default_group_weight_update() {
+    fn test_validate_rejects_invalid_default_group_weight_when_cpu_throttle_disabled() {
+        let mut config = Config::default();
+        config.cpu_throttle.throttle_default_group = true;
+
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_allows_invalid_default_group_weight_when_resource_control_disabled() {
+        let mut config = Config::default();
+        config.enabled = false;
+        config.cpu_throttle.throttle_default_group = true;
+
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn test_config_manager_rejects_invalid_default_group_weight_update_with_disabled_throttle() {
         let resource_manager = Arc::new(ResourceGroupManager::new(Config::default()));
         resource_manager.set_cpu_throttle_manager(Arc::new(CpuThrottleManager::new(
             Config::default().to_cpu_throttle_config(),
@@ -331,7 +373,6 @@ mod tests {
         let config = resource_manager.get_config().clone();
         let mut manager = ResourceContrlCfgMgr::new(resource_manager);
         let mut updated = Config::default();
-        updated.cpu_throttle.enabled = true;
         updated.cpu_throttle.throttle_default_group = true;
 
         let result = manager.dispatch(Config::default().diff(&updated));
@@ -380,6 +421,45 @@ mod tests {
                 tikv_util::resource_control::DEFAULT_RESOURCE_GROUP_NAME
             )
         );
+    }
+
+    #[test]
+    fn test_start_cpu_throttle_monitor_skips_disabled_manager() {
+        let background_worker = WorkerBuilder::new("cpu-monitor-disabled")
+            .thread_count(1)
+            .create();
+        let cpu_throttle_manager = Arc::new(CpuThrottleManager::new(
+            Config::default().to_cpu_throttle_config(),
+        ));
+
+        crate::start_cpu_throttle_monitor(&background_worker, cpu_throttle_manager.clone());
+
+        assert!(!cpu_throttle_manager.is_cpu_monitor_running());
+        background_worker.stop();
+    }
+
+    #[test]
+    fn test_config_manager_starts_cpu_monitor_when_throttle_enabled_online() {
+        let resource_manager = Arc::new(ResourceGroupManager::new(Config::default()));
+        let cpu_throttle_manager = Arc::new(CpuThrottleManager::new(
+            Config::default().to_cpu_throttle_config(),
+        ));
+        resource_manager.set_cpu_throttle_manager(cpu_throttle_manager.clone());
+        let background_worker = WorkerBuilder::new("cpu-monitor-online-enable")
+            .thread_count(1)
+            .create();
+        let mut manager = ResourceContrlCfgMgr::with_background_worker(
+            resource_manager,
+            background_worker.clone(),
+        );
+
+        let mut updated = Config::default();
+        updated.cpu_throttle.enabled = true;
+
+        manager.dispatch(Config::default().diff(&updated)).unwrap();
+
+        assert!(cpu_throttle_manager.is_cpu_monitor_running());
+        background_worker.stop();
     }
 
     #[test]

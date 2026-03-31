@@ -701,7 +701,15 @@ where
         if let Some(resource_ctl) = &self.resource_manager {
             cfg_controller.register(
                 tikv::config::Module::ResourceControl,
-                Box::new(ResourceContrlCfgMgr::new(resource_ctl.clone())),
+                Box::new(unified_read_pool.as_ref().map_or_else(
+                    || ResourceContrlCfgMgr::new(resource_ctl.clone()),
+                    |_| {
+                        ResourceContrlCfgMgr::with_background_worker(
+                            resource_ctl.clone(),
+                            self.core.background_worker.clone(),
+                        )
+                    },
+                )),
             );
         }
 

@@ -19,6 +19,16 @@ use tikv_util::{
 
 use crate::cpu_throttle::CpuThrottleManager;
 
+struct CpuThrottleMonitorGuard {
+    manager: Arc<CpuThrottleManager>,
+}
+
+impl Drop for CpuThrottleMonitorGuard {
+    fn drop(&mut self) {
+        self.manager.on_cpu_monitor_stopped();
+    }
+}
+
 struct ThreadCollector {
     process_id: Pid,
     thread_prefix: String,
@@ -219,6 +229,10 @@ async fn sleep_async(duration: Duration) {
 }
 
 pub fn start_cpu_throttle_monitor(bg_worker: &Worker, manager: Arc<CpuThrottleManager>) {
+    if !manager.try_start_cpu_monitor() {
+        return;
+    }
+
     let mut monitor = CpuUsageMonitor::new(manager.clone());
     info!(
         "[CPU throttle] start cpu throttle monitor";
@@ -227,10 +241,20 @@ pub fn start_cpu_throttle_monitor(bg_worker: &Worker, manager: Arc<CpuThrottleMa
         "thread_prefix" => "unified-read-pool",
     );
     bg_worker.spawn_async_task(async move {
-        monitor.tick();
+        let _monitor_guard = CpuThrottleMonitorGuard {
+            manager: manager.clone(),
+        };
         loop {
-            sleep_async(manager.stats_interval()).await;
+            if !manager.is_enabled() {
+                manager.reset_cpu_monitor_state();
+                info!(
+                    "[CPU throttle] stop cpu throttle monitor";
+                    "thread_prefix" => "unified-read-pool",
+                );
+                return;
+            }
             monitor.tick();
+            sleep_async(manager.stats_interval()).await;
         }
     });
 }
