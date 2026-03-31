@@ -18,7 +18,9 @@
 
 #![crate_type = "lib"]
 #![cfg_attr(test, feature(test))]
-#![recursion_limit = "400"]
+// The coprocessor endpoint wraps async-stream request handlers with CPU token
+// checks; that macro expansion exceeds the old recursion limit.
+#![recursion_limit = "800"]
 #![feature(proc_macro_hygiene)]
 #![feature(min_specialization)]
 #![feature(box_patterns)]

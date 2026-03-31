@@ -6613,6 +6613,7 @@ name = "resource_control"
 version = "0.0.1"
 dependencies = [
  "collections",
+ "cpu-time",
  "crossbeam",
  "dashmap",
  "fail",

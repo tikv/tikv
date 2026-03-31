@@ -1,0 +1,322 @@
+// Copyright 2026 TiKV Project Authors. Licensed under Apache-2.0.
+
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+    time::{Duration, Instant},
+};
+
+use cpu_time::ThreadTime;
+use futures::future::BoxFuture;
+use pin_project::pin_project;
+
+use crate::{CpuTokenHandle, ThrottleError};
+
+#[derive(Debug)]
+pub enum CpuTokenError {
+    Timeout,
+}
+
+impl std::fmt::Display for CpuTokenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CpuTokenError::Timeout => write!(f, "request timeout waiting for runtime cpu tokens"),
+        }
+    }
+}
+
+impl std::error::Error for CpuTokenError {}
+
+#[derive(Clone, Copy)]
+struct RuntimeTokenConfig {
+    check_interval: Duration,
+    additional_allocation_threshold: f64,
+    per_allocation_us: u64,
+}
+
+enum CheckState {
+    Executing {
+        last_check_time: Instant,
+    },
+    AllocatingTokens {
+        allocation_future: BoxFuture<'static, Result<u64, ThrottleError>>,
+    },
+    Completed,
+    TimedOut,
+}
+
+#[pin_project]
+pub struct CpuTokenCheckFuture<F> {
+    #[pin]
+    delegate: F,
+    token_handle: Arc<CpuTokenHandle>,
+    state: CheckState,
+    runtime_config: Option<RuntimeTokenConfig>,
+    total_duration: Duration,
+    timer: Option<ThreadTime>,
+}
+
+impl<F> CpuTokenCheckFuture<F> {
+    pub fn new(inner: F, token_handle: Arc<CpuTokenHandle>) -> Self {
+        Self {
+            delegate: inner,
+            runtime_config: token_handle.get_runtime_config().map(
+                |(check_interval, additional_allocation_threshold, per_allocation_us)| {
+                    RuntimeTokenConfig {
+                        check_interval,
+                        additional_allocation_threshold,
+                        per_allocation_us,
+                    }
+                },
+            ),
+            token_handle,
+            state: CheckState::Executing {
+                last_check_time: Instant::now(),
+            },
+            total_duration: Duration::ZERO,
+            timer: None,
+        }
+    }
+}
+
+impl<F: Future> Future for CpuTokenCheckFuture<F> {
+    type Output = Result<F::Output, CpuTokenError>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut this = self.project();
+
+        loop {
+            match this.state {
+                CheckState::Executing { last_check_time } => {
+                    *this.timer = Some(ThreadTime::now());
+                    let result = this.delegate.as_mut().poll(cx);
+                    if let Some(timer) = this.timer.take() {
+                        *this.total_duration += timer.elapsed();
+                    }
+
+                    match result {
+                        Poll::Ready(result) => {
+                            this.token_handle
+                                .record_actual_usage(this.total_duration.as_micros() as u64);
+                            *this.state = CheckState::Completed;
+                            return Poll::Ready(Ok(result));
+                        }
+                        Poll::Pending => {
+                            let Some(runtime_config) = this.runtime_config.as_ref() else {
+                                return Poll::Pending;
+                            };
+                            let now = Instant::now();
+                            if now.duration_since(*last_check_time) < runtime_config.check_interval
+                            {
+                                return Poll::Pending;
+                            }
+
+                            let current_cpu_us = this.total_duration.as_micros() as u64;
+                            let threshold_us = (this.token_handle.allocated() as f64
+                                * runtime_config.additional_allocation_threshold)
+                                as u64;
+                            if current_cpu_us <= threshold_us {
+                                *last_check_time = now;
+                                return Poll::Pending;
+                            }
+
+                            let token_handle = this.token_handle.clone();
+                            let per_allocation_us = runtime_config.per_allocation_us;
+                            this.token_handle.log_runtime_check_trigger(
+                                current_cpu_us,
+                                threshold_us,
+                                per_allocation_us,
+                            );
+                            *this.state = CheckState::AllocatingTokens {
+                                allocation_future: Box::pin(async move {
+                                    token_handle
+                                        .allocate_more_with_wait(per_allocation_us)
+                                        .await
+                                }),
+                            };
+                            continue;
+                        }
+                    }
+                }
+                CheckState::AllocatingTokens { allocation_future } => {
+                    match allocation_future.as_mut().poll(cx) {
+                        Poll::Ready(Ok(_)) => {
+                            *this.state = CheckState::Executing {
+                                last_check_time: Instant::now(),
+                            };
+                            continue;
+                        }
+                        Poll::Ready(Err(_)) => {
+                            this.token_handle
+                                .record_actual_usage(this.total_duration.as_micros() as u64);
+                            *this.state = CheckState::TimedOut;
+                            return Poll::Ready(Err(CpuTokenError::Timeout));
+                        }
+                        Poll::Pending => return Poll::Pending,
+                    }
+                }
+                CheckState::Completed => unreachable!(),
+                CheckState::TimedOut => return Poll::Ready(Err(CpuTokenError::Timeout)),
+            }
+        }
+    }
+}
+
+// SAFETY: `ThreadTime` is not `Send`, so this future must never carry a live
+// `ThreadTime` across thread boundaries. We uphold that invariant by creating
+// `ThreadTime::now()` only inside `CheckState::Executing` and always taking it
+// back out before `poll` returns `Pending` or `Ready`. That means moving the
+// future between polls never moves a `ThreadTime` to another thread.
+//
+// If a wake causes the next poll to run on a different worker thread, that poll
+// creates a fresh `ThreadTime` for the current thread, which is the intended
+// behavior because we want to measure CPU time consumed by whichever thread is
+// executing the future at that moment.
+unsafe impl<F: Future + Send> Send for CpuTokenCheckFuture<F> {}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        future::Future,
+        pin::Pin,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        task::{Context, Poll},
+        time::{Duration, Instant},
+    };
+
+    use futures::executor::block_on;
+
+    use super::{CpuTokenCheckFuture, CpuTokenError};
+    use crate::{CpuThrottleConfig, CpuThrottleManager};
+
+    struct SpinFuture {
+        polls_before_ready: usize,
+        polls: Arc<AtomicUsize>,
+        busy_for: Duration,
+    }
+
+    impl Future for SpinFuture {
+        type Output = usize;
+
+        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            let busy_until = Instant::now() + self.busy_for;
+            while Instant::now() < busy_until {
+                std::hint::spin_loop();
+            }
+            let polls = self.polls.fetch_add(1, Ordering::AcqRel) + 1;
+            if polls >= self.polls_before_ready {
+                Poll::Ready(polls)
+            } else {
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+        }
+    }
+
+    fn test_config() -> CpuThrottleConfig {
+        CpuThrottleConfig {
+            enabled: true,
+            max_read_cpu_ratio: 0.1,
+            estimated_cpu_per_request_us: 1,
+            refill_interval_ms: 100,
+            enable_runtime_token_management: false,
+            runtime_check_interval_us: 1,
+            additional_allocation_threshold: f64::EPSILON,
+            per_allocation_us: 1,
+            ..CpuThrottleConfig::default()
+        }
+    }
+
+    fn test_manager(config: CpuThrottleConfig) -> CpuThrottleManager {
+        CpuThrottleManager::new(config)
+    }
+
+    #[test]
+    fn test_cpu_token_check_future_passthrough_without_runtime_config() {
+        let manager = test_manager(test_config());
+        let token_handle = Arc::new(
+            block_on(manager.allocate_with_wait(
+                "rg",
+                1,
+                Instant::now() + Duration::from_millis(100),
+            ))
+            .unwrap(),
+        );
+        let polls = Arc::new(AtomicUsize::new(0));
+
+        let result = block_on(CpuTokenCheckFuture::new(
+            SpinFuture {
+                polls_before_ready: 2,
+                polls: polls.clone(),
+                busy_for: Duration::ZERO,
+            },
+            token_handle.clone(),
+        ))
+        .unwrap();
+
+        assert_eq!(result, 2);
+        assert_eq!(polls.load(Ordering::Acquire), 2);
+        assert_eq!(token_handle.allocated(), 1);
+    }
+
+    #[test]
+    fn test_cpu_token_check_future_allocates_runtime_tokens() {
+        let mut config = test_config();
+        config.enable_runtime_token_management = true;
+        let manager = test_manager(config);
+        let token_handle = Arc::new(
+            block_on(manager.allocate_with_wait(
+                "rg",
+                1,
+                Instant::now() + Duration::from_millis(100),
+            ))
+            .unwrap(),
+        );
+        let polls = Arc::new(AtomicUsize::new(0));
+
+        let result = block_on(CpuTokenCheckFuture::new(
+            SpinFuture {
+                polls_before_ready: 2,
+                polls,
+                busy_for: Duration::from_millis(2),
+            },
+            token_handle.clone(),
+        ))
+        .unwrap();
+
+        assert_eq!(result, 2);
+        assert!(token_handle.allocated() > 1);
+    }
+
+    #[test]
+    fn test_cpu_token_check_future_returns_timeout_when_runtime_allocation_fails() {
+        let mut config = test_config();
+        config.enable_runtime_token_management = true;
+        let manager = test_manager(config);
+        let token_handle = Arc::new(
+            block_on(manager.allocate_with_wait(
+                "rg",
+                manager.global_capacity_us(),
+                Instant::now() + Duration::from_millis(1),
+            ))
+            .unwrap(),
+        );
+        std::thread::sleep(Duration::from_millis(2));
+
+        let result = block_on(CpuTokenCheckFuture::new(
+            SpinFuture {
+                polls_before_ready: usize::MAX,
+                polls: Arc::new(AtomicUsize::new(0)),
+                busy_for: Duration::from_millis(2),
+            },
+            token_handle,
+        ));
+
+        assert!(matches!(result, Err(CpuTokenError::Timeout)));
+    }
+}

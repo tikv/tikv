@@ -5,6 +5,15 @@ use std::sync::{Arc, atomic::AtomicU32};
 
 use pd_client::RpcClient;
 
+mod cpu_config;
+pub use cpu_config::CpuThrottleConfig;
+mod cpu_monitor;
+mod cpu_throttle;
+pub use cpu_monitor::start_cpu_throttle_monitor;
+pub use cpu_throttle::{CpuThrottleManager, CpuTokenBucket, CpuTokenHandle, ThrottleError};
+mod cpu_token_check_future;
+pub use cpu_token_check_future::{CpuTokenCheckFuture, CpuTokenError};
+
 mod resource_group;
 pub use resource_group::{
     AdmissionDecision, DelaySlotGuard, MIN_PRIORITY_UPDATE_INTERVAL, ResourceConsumeType,

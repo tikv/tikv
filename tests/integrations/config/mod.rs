@@ -929,7 +929,58 @@ fn test_serde_custom_tikv_config() {
         historical_usage_window_mins: 15,
         baseline_burst_pct: 20.0,
         admission_max_delayed_count: 10_000,
+        ..ResourceControlConfig::default()
     };
+    value.resource_control.max_read_cpu_ratio = 0.25;
+    value.resource_control.cpu_throttle.enabled = true;
+    value
+        .resource_control
+        .cpu_throttle
+        .estimated_cpu_per_request_us = 2000;
+    value
+        .resource_control
+        .cpu_throttle
+        .resource_group_estimated_cpu_per_request_us = "rg1:3000".to_owned();
+    value
+        .resource_control
+        .cpu_throttle
+        .resource_group_burst_enabled = "rg1:false".to_owned();
+    value
+        .resource_control
+        .cpu_throttle
+        .enable_adaptive_estimated_cpu_per_request_us = true;
+    value.resource_control.cpu_throttle.stats_interval = ReadableDuration::secs(2);
+    value.resource_control.cpu_throttle.window_size = ReadableDuration::secs(4);
+    value.resource_control.cpu_throttle.refill_interval = ReadableDuration::millis(200);
+    value
+        .resource_control
+        .cpu_throttle
+        .enable_dynamic_adjustment = true;
+    value.resource_control.cpu_throttle.high_watermark = 0.9;
+    value.resource_control.cpu_throttle.low_watermark = 0.4;
+    value.resource_control.cpu_throttle.enable_fair_allocation = true;
+    value
+        .resource_control
+        .cpu_throttle
+        .fair_allocation_threshold = 0.75;
+    value.resource_control.cpu_throttle.enable_burst = true;
+    value.resource_control.cpu_throttle.burst_threshold = 0.2;
+    value
+        .resource_control
+        .cpu_throttle
+        .enable_runtime_token_management = true;
+    value
+        .resource_control
+        .cpu_throttle
+        .runtime_check_interval_us = 500;
+    value
+        .resource_control
+        .cpu_throttle
+        .additional_allocation_threshold = 0.8;
+    value.resource_control.cpu_throttle.per_allocation_us = 800;
+    value.resource_control.cpu_throttle.throttle_default_group = true;
+    value.resource_control.cpu_throttle.default_group_weight = Some(300);
+    value.resource_control.cpu_throttle.debug = true;
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");
     let mut load: TikvConfig = toml::from_str(&custom).unwrap();
