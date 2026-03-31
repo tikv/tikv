@@ -11,6 +11,14 @@ use std::{
     time::Duration,
 };
 
+// Duration of each bucket in the historical RU sliding window.
+const BUCKET_DURATION_SECS: u64 = 60;
+// Scale factor applied to reservation_tag increments so that integer division
+// of (vt_delta / cached_reservation) retains enough precision even for small
+// per-task deltas. All reservation_tag values and last_min_r_tag are in these
+// scaled units, so comparisons remain consistent.
+const RESERVATION_TAG_SCALE: u64 = 1_000_000;
+
 use collections::HashMap;
 use dashmap::{DashMap, mapref::one::Ref};
 use fail::fail_point;
@@ -50,6 +58,74 @@ const HIGH_PRIORITY: u32 = 16;
 // time of all groups are bigger than half of this value, we rest them to avoid
 // virtual time overflow.
 const RESET_VT_THRESHOLD: u64 = (u64::MAX >> 4) / 2;
+
+/// Sliding-window tracker for VT consumption history.
+///
+/// Tracks per-group VT consumption in 1-minute buckets over a configurable
+/// window. Used to compute the historical VT rate for dynamic reservation.
+pub(crate) struct RuTracker {
+    // Ring buffer of per-bucket VT totals.
+    buckets: Vec<u64>,
+    current_bucket: usize,
+    last_rotation: Instant,
+}
+
+impl RuTracker {
+    fn new(window_secs: u64) -> Self {
+        let num_buckets = (window_secs / BUCKET_DURATION_SECS).max(1) as usize;
+        Self {
+            buckets: vec![0; num_buckets],
+            current_bucket: 0,
+            last_rotation: Instant::now_coarse(),
+        }
+    }
+
+    /// Record `vt_delta` (consumed * weight) into the current bucket,
+    /// rotating stale buckets first if a minute or more has elapsed.
+    fn record(&mut self, vt_delta: u64) {
+        let elapsed_secs = self
+            .last_rotation
+            .saturating_elapsed()
+            .as_secs();
+        if elapsed_secs >= BUCKET_DURATION_SECS {
+            let rotations =
+                (elapsed_secs / BUCKET_DURATION_SECS) as usize;
+            let n = self.buckets.len();
+            let clear = rotations.min(n);
+            for i in 0..clear {
+                let idx = (self.current_bucket + 1 + i) % n;
+                self.buckets[idx] = 0;
+            }
+            self.current_bucket = (self.current_bucket + rotations) % n;
+            // Advance last_rotation by the number of full buckets elapsed so
+            // sub-minute remainder is preserved.
+            self.last_rotation = Instant::now_coarse();
+        }
+        self.buckets[self.current_bucket] =
+            self.buckets[self.current_bucket].saturating_add(vt_delta);
+    }
+
+    /// Returns the average VT consumption rate in VT-units per second over
+    /// the full window.
+    pub(crate) fn get_vt_rate_per_second(&self) -> u64 {
+        let total: u64 = self.buckets.iter().sum();
+        let window_secs = self.buckets.len() as u64 * BUCKET_DURATION_SECS;
+        total / window_secs
+    }
+}
+
+/// Encodes a two-phase scheduling priority.
+///
+/// Format: `[4-bit group_priority | 4-bit phase | 56-bit tag]`
+///
+/// Phase 0 (reservation) always sorts before phase 1 (weight) within the
+/// same group priority tier because phase bits contribute 0 vs 1<<56.
+fn encode_two_phase_priority(group_priority: u32, phase: u8, tag: u64) -> u64 {
+    assert!((1..=16).contains(&group_priority));
+    let tag = tag & ((1u64 << 56) - 1);
+    let phase_bits = ((phase & 0xf) as u64) << 56;
+    (!((group_priority - 1) as u64) << 60) | phase_bits | tag
+}
 
 pub enum ResourceConsumeType {
     CpuTime(Duration),
@@ -251,7 +327,7 @@ impl ResourceGroupManager {
     }
 
     pub fn derive_controller(&self, name: String, is_read: bool) -> Arc<ResourceController> {
-        let controller = Arc::new(ResourceController::new(name, is_read));
+        let controller = Arc::new(ResourceController::new(name, is_read, self.config.clone()));
         self.registry.write().push(controller.clone());
         for g in &self.resource_groups {
             let ru_quota = Self::get_ru_setting(&g.value().group, controller.is_read);
@@ -449,6 +525,12 @@ pub struct ResourceController {
     customized: AtomicBool,
     // whether any resource group has background settings configured
     has_background: AtomicBool,
+    // The minimum reservation_tag across all groups. Used as the phase-0
+    // threshold: groups with reservation_tag <= last_min_r_tag are in phase 0.
+    // Only meaningful for read controllers with enable_dynamic_reservation.
+    last_min_r_tag: AtomicU64,
+    // Shared config. Read on the hot path to check enable_dynamic_reservation.
+    config: Arc<VersionTrack<Config>>,
 }
 
 // we are ensure to visit the `last_rest_vt_time` by only 1 thread so it's
@@ -457,7 +539,7 @@ unsafe impl Send for ResourceController {}
 unsafe impl Sync for ResourceController {}
 
 impl ResourceController {
-    fn new(name: String, is_read: bool) -> Self {
+    fn new(name: String, is_read: bool, config: Arc<VersionTrack<Config>>) -> Self {
         Self {
             name,
             is_read,
@@ -467,11 +549,14 @@ impl ResourceController {
             last_rest_vt_time: Cell::new(Instant::now_coarse()),
             customized: AtomicBool::new(false),
             has_background: AtomicBool::new(false),
+            last_min_r_tag: AtomicU64::new(0),
+            config,
         }
     }
 
     pub fn new_for_test(name: String, is_read: bool) -> Self {
-        let controller = Self::new(name, is_read);
+        let controller =
+            Self::new(name, is_read, Arc::new(VersionTrack::new(Config::default())));
         // add the "default" resource group.
         controller.add_resource_group(
             DEFAULT_RESOURCE_GROUP_NAME.as_bytes().to_owned(),
@@ -522,12 +607,39 @@ impl ResourceController {
         } else {
             0
         };
+        // static_reservation = ru_quota * weight, the VT rate at which a group
+        // consuming exactly its configured quota would accumulate virtual time.
+        let static_reservation = ru_quota.saturating_mul(weight).max(1);
+        let window_secs = self
+            .config
+            .value()
+            .ru_historical_window
+            .as_secs();
+        let (ru_tracker, reservation_tag_init) = if self.is_read {
+            // Preserve reservation_tag from an existing entry so a group
+            // re-registration doesn't reset its phase position.
+            let prev_r_tag = self
+                .resource_consumptions
+                .read()
+                .get(&name)
+                .map(|g| g.reservation_tag.load(Ordering::Relaxed))
+                .unwrap_or_else(|| self.last_min_r_tag.load(Ordering::Acquire));
+            (
+                Some(Mutex::new(RuTracker::new(window_secs))),
+                prev_r_tag,
+            )
+        } else {
+            (None, 0)
+        };
         let group = GroupPriorityTracker {
             ru_quota,
             group_priority,
             weight,
             virtual_time: AtomicU64::new(self.last_min_vt.load(Ordering::Acquire)),
             vt_delta_for_get,
+            reservation_tag: AtomicU64::new(reservation_tag_init),
+            cached_reservation: AtomicU64::new(static_reservation),
+            ru_tracker,
         };
 
         // maybe update existed group
@@ -555,6 +667,11 @@ impl ResourceController {
             .iter_mut()
             .for_each(|(_, tracker)| {
                 tracker.weight = Self::calculate_factor(max_ru_quota, tracker.ru_quota);
+                let static_reservation =
+                    tracker.ru_quota.saturating_mul(tracker.weight).max(1);
+                tracker
+                    .cached_reservation
+                    .store(static_reservation, Ordering::Relaxed);
             });
     }
 
@@ -598,6 +715,13 @@ impl ResourceController {
     }
 
     pub fn update_min_virtual_time(&self) {
+        // Reservation state must be refreshed every call regardless of VT
+        // spread, so that last_min_r_tag and cached_reservation stay current
+        // even when the system is idle.
+        if self.is_read {
+            self.update_reservation_state();
+        }
+
         let start = Instant::now_coarse();
         let mut min_vt = u64::MAX;
         let mut max_vt = 0;
@@ -647,9 +771,79 @@ impl ResourceController {
         self.last_min_vt.store(max_vt, Ordering::Relaxed);
     }
 
+    /// Refreshes each group's `cached_reservation` from its `RuTracker` (when
+    /// dynamic reservation is enabled) and updates `last_min_r_tag`.
+    ///
+    /// Called once per second from `update_min_virtual_time`.
+    fn update_reservation_state(&self) {
+        let dynamic = self.config.value().enable_dynamic_reservation;
+        let mut min_r_tag = u64::MAX;
+
+        // First pass: refresh cached_reservation, find global minimum R.
+        self.resource_consumptions
+            .read()
+            .iter()
+            .for_each(|(_, tracker)| {
+                if let Some(ru_tracker) = &tracker.ru_tracker {
+                    if dynamic {
+                        let historical_rate = ru_tracker.lock().unwrap().get_vt_rate_per_second();
+                        // When there is no history yet (e.g. a brand-new or
+                        // idle group), use the cost of a single read task per
+                        // second as the reservation baseline. This is
+                        // intentionally small so that a sudden burst
+                        // immediately pushes R above last_min_r_tag and lands
+                        // the group in phase 1. Using ru_quota * weight as a
+                        // fallback would be too large for unlimited-quota
+                        // groups and would prevent phase transitions entirely.
+                        let reservation = if historical_rate > 0 {
+                            historical_rate
+                        } else {
+                            (DEFAULT_PRIORITY_PER_READ_TASK * tracker.weight).max(1)
+                        };
+                        tracker
+                            .cached_reservation
+                            .store(reservation, Ordering::Relaxed);
+                    }
+                    let r = tracker.reservation_tag.load(Ordering::Relaxed);
+                    min_r_tag = min(min_r_tag, r);
+                }
+            });
+
+        if min_r_tag == u64::MAX {
+            return;
+        }
+
+        // Second pass: normalize all reservation_tags by subtracting the
+        // global minimum. This prevents unbounded growth and, crucially,
+        // avoids the idle-group problem: without normalization an idle group
+        // (R=0) would drag last_min_r_tag to 0 and put every other group into
+        // phase 1. After normalization the lagging group's tag stays at 0
+        // while active groups accumulate relative excess above 0.
+        if min_r_tag > 0 {
+            self.resource_consumptions
+                .read()
+                .iter()
+                .for_each(|(_, tracker)| {
+                    if tracker.ru_tracker.is_some() {
+                        tracker
+                            .reservation_tag
+                            .fetch_sub(min_r_tag, Ordering::Relaxed);
+                    }
+                });
+        }
+
+        // Phase-0 threshold: groups with normalized R <= RESERVATION_TAG_SCALE
+        // are considered within their reservation. This gives a small grace
+        // band so that a group consuming slightly above its historical rate
+        // is not immediately penalized.
+        self.last_min_r_tag
+            .store(RESERVATION_TAG_SCALE, Ordering::Relaxed);
+    }
+
     pub fn get_priority(&self, name: &[u8], pri: CommandPri) -> u64 {
         let level = Self::command_pri_to_level(pri);
-        self.resource_group(name).get_priority(level, None, true)
+        self.resource_group(name)
+            .get_priority(level, None, true, self.two_phase_threshold())
     }
 
     /// Returns the priority for the given task metadata without incrementing
@@ -662,7 +856,18 @@ impl ResourceController {
         } else {
             Some(metadata.override_priority())
         };
-        group.get_priority(level, override_priority, false)
+        group.get_priority(level, override_priority, false, self.two_phase_threshold())
+    }
+
+    /// Returns `Some(last_min_r_tag)` when two-phase scheduling is active
+    /// (read controller with enable_dynamic_reservation), `None` otherwise.
+    #[inline]
+    fn two_phase_threshold(&self) -> Option<u64> {
+        if self.is_read && self.config.value().enable_dynamic_reservation {
+            Some(self.last_min_r_tag.load(Ordering::Relaxed))
+        } else {
+            None
+        }
     }
 
     fn command_pri_to_level(pri: CommandPri) -> usize {
@@ -685,6 +890,7 @@ impl TaskPriorityProvider for ResourceController {
                 Some(metadata.override_priority())
             },
             true,
+            self.two_phase_threshold(),
         )
     }
 }
@@ -706,24 +912,82 @@ struct GroupPriorityTracker {
     virtual_time: AtomicU64,
     // the constant delta value for each `get_priority` call,
     vt_delta_for_get: u64,
+    // --- Two-phase scheduling fields (populated for read controllers only) ---
+    // Accumulated R tag: sum of (vt_delta / static_reservation) over all
+    // consume() calls. Compared against last_min_r_tag to choose phase.
+    reservation_tag: AtomicU64,
+    // Cached static reservation = ru_quota * weight. Refreshed when the group
+    // is (re-)registered. For dynamic mode this is overwritten each second
+    // with the historical VT rate from ru_tracker.
+    cached_reservation: AtomicU64,
+    // Historical VT consumption tracker. None for write controllers.
+    ru_tracker: Option<Mutex<RuTracker>>,
 }
 
 impl GroupPriorityTracker {
     /// Computes the scheduling priority for a task at the given level.
+    ///
     /// When `advance_vt` is true, atomically increments the virtual time
     /// (used when actually scheduling a task). When false, reads virtual
     /// time without advancing it (used for priority comparison only).
-    fn get_priority(&self, level: usize, override_priority: Option<u32>, advance_vt: bool) -> u64 {
+    ///
+    /// `last_min_r_tag`: when `Some`, enables two-phase scheduling for this
+    /// read controller. The group is placed in phase 0 (reservation, high
+    /// priority) if its reservation_tag is at or below the threshold, and
+    /// phase 1 (weight-based) otherwise.
+    fn get_priority(
+        &self,
+        level: usize,
+        override_priority: Option<u32>,
+        advance_vt: bool,
+        last_min_r_tag: Option<u64>,
+    ) -> u64 {
         let task_extra_priority = TASK_EXTRA_FACTOR_BY_LEVEL[level] * 1000 * self.weight;
-        let vt = (if advance_vt && self.vt_delta_for_get > 0 {
-            self.virtual_time
-                .fetch_add(self.vt_delta_for_get, Ordering::Relaxed)
-                + self.vt_delta_for_get
-        } else {
-            self.virtual_time.load(Ordering::Relaxed) + self.vt_delta_for_get
-        }) + task_extra_priority;
         let priority = override_priority.unwrap_or(self.group_priority);
-        concat_priority_vt(priority, vt)
+
+        if let Some(min_r_tag) = last_min_r_tag {
+            // Two-phase path: advance both VT and reservation_tag.
+            let vt_delta = self.vt_delta_for_get;
+            let vt = if advance_vt && vt_delta > 0 {
+                self.virtual_time
+                    .fetch_add(vt_delta, Ordering::Relaxed)
+                    + vt_delta
+            } else {
+                self.virtual_time.load(Ordering::Relaxed) + vt_delta
+            } + task_extra_priority;
+
+            // Advance reservation_tag by vt_delta * SCALE / cached_reservation.
+            // The scale factor preserves precision when vt_delta << cached_reservation.
+            let reservation = self.cached_reservation.load(Ordering::Relaxed);
+            let r_delta = vt_delta
+                .saturating_mul(RESERVATION_TAG_SCALE)
+                / reservation.max(1);
+            let r_tag = if advance_vt && r_delta > 0 {
+                self.reservation_tag
+                    .fetch_add(r_delta, Ordering::Relaxed)
+                    + r_delta
+            } else {
+                self.reservation_tag.load(Ordering::Relaxed) + r_delta
+            };
+
+            if r_tag <= min_r_tag {
+                // Phase 0: within reservation, highest priority.
+                encode_two_phase_priority(priority, 0, r_tag)
+            } else {
+                // Phase 1: over reservation, fall back to weight-based VT.
+                encode_two_phase_priority(priority, 1, vt)
+            }
+        } else {
+            // Single-phase path: existing behaviour.
+            let vt = (if advance_vt && self.vt_delta_for_get > 0 {
+                self.virtual_time
+                    .fetch_add(self.vt_delta_for_get, Ordering::Relaxed)
+                    + self.vt_delta_for_get
+            } else {
+                self.virtual_time.load(Ordering::Relaxed) + self.vt_delta_for_get
+            }) + task_extra_priority;
+            concat_priority_vt(priority, vt)
+        }
     }
 
     #[inline]
@@ -749,6 +1013,19 @@ impl GroupPriorityTracker {
             ResourceConsumeType::IoBytes(bytes) => bytes,
         } * self.weight;
         self.increase_vt(vt_delta);
+
+        // Update reservation_tag and historical tracker for read controllers.
+        if let Some(ru_tracker) = &self.ru_tracker {
+            ru_tracker.lock().unwrap().record(vt_delta);
+            let reservation = self.cached_reservation.load(Ordering::Relaxed);
+            let r_delta = vt_delta
+                .saturating_mul(RESERVATION_TAG_SCALE)
+                / reservation.max(1);
+            if r_delta > 0 {
+                self.reservation_tag
+                    .fetch_add(r_delta, Ordering::Relaxed);
+            }
+        }
     }
 }
 
@@ -1233,6 +1510,147 @@ pub(crate) mod tests {
 
         let v5 = concat_priority_vt(HIGH_PRIORITY, 10);
         assert!(v5 < v1);
+    }
+
+    #[test]
+    fn test_ru_tracker_rate() {
+        let window_secs = 120; // 2 buckets of 60s each
+        let mut tracker = RuTracker::new(window_secs);
+
+        // Record 6000 VT in the first bucket (rate = 6000/120 = 50/s).
+        tracker.record(6000);
+        assert_eq!(tracker.get_vt_rate_per_second(), 50);
+
+        // Simulate bucket rotation by directly advancing last_rotation.
+        tracker.last_rotation =
+            Instant::now_coarse() - Duration::from_secs(BUCKET_DURATION_SECS);
+        tracker.record(3000); // adds 3000 to the new bucket
+        // total = 6000 + 3000 = 9000, window = 120s → 75/s
+        assert_eq!(tracker.get_vt_rate_per_second(), 75);
+
+        // Rotate past the whole window: old data should be cleared.
+        tracker.last_rotation =
+            Instant::now_coarse() - Duration::from_secs(window_secs + BUCKET_DURATION_SECS);
+        tracker.record(1200); // only this bucket should count
+        assert_eq!(tracker.get_vt_rate_per_second(), 10);
+    }
+
+    #[test]
+    fn test_encode_two_phase_priority_ordering() {
+        // Phase 0 (reservation) must sort before phase 1 (weight) for the
+        // same group_priority and a larger tag value.
+        let phase0 = encode_two_phase_priority(MEDIUM_PRIORITY, 0, 9999);
+        let phase1 = encode_two_phase_priority(MEDIUM_PRIORITY, 1, 1);
+        assert!(phase0 < phase1, "phase 0 must be higher priority than phase 1");
+
+        // Within phase 0, lower tag = higher priority.
+        let p0_low = encode_two_phase_priority(MEDIUM_PRIORITY, 0, 100);
+        let p0_high = encode_two_phase_priority(MEDIUM_PRIORITY, 0, 200);
+        assert!(p0_low < p0_high);
+
+        // group_priority still dominates across phases.
+        let high_phase1 = encode_two_phase_priority(HIGH_PRIORITY, 1, u64::MAX >> 8);
+        let low_phase0 = encode_two_phase_priority(LOW_PRIORITY, 0, 0);
+        assert!(high_phase1 < low_phase0);
+    }
+
+    #[test]
+    fn test_two_phase_scheduling_spike_protection() {
+        // Build a manager with dynamic reservation enabled.
+        let mut cfg = Config::default();
+        cfg.enable_dynamic_reservation = true;
+        cfg.ru_historical_window = tikv_util::config::ReadableDuration::minutes(10);
+        let mgr = ResourceGroupManager::new(cfg);
+
+        // steady: quota=1000, has been consuming for a while.
+        // spike:  quota=1000, brand-new (no history).
+        let steady = new_resource_group_ru("steady".into(), 1000, MEDIUM_PRIORITY);
+        let spike = new_resource_group_ru("spike".into(), 1000, MEDIUM_PRIORITY);
+        mgr.add_resource_group(steady);
+        mgr.add_resource_group(spike);
+
+        let ctl = mgr.derive_controller("read".into(), true);
+
+        // Simulate the steady group having a long consumption history.
+        // Record a large VT total into its tracker so cached_reservation is high.
+        {
+            let groups = ctl.resource_consumptions.read();
+            let g = groups.get(b"steady".as_ref()).unwrap();
+            // Record 60_000 VT per bucket × 10 buckets → rate = 100/s.
+            if let Some(t) = &g.ru_tracker {
+                let mut tracker = t.lock().unwrap();
+                for _ in 0..10 {
+                    let idx = tracker.current_bucket;
+                    tracker.buckets[idx] = 60_000;
+                    let len = tracker.buckets.len();
+                    tracker.current_bucket = (idx + 1) % len;
+                }
+            }
+        }
+
+        // Trigger reservation refresh so cached_reservation reflects history.
+        mgr.advance_min_virtual_time();
+
+        // Now simulate a burst: spike consumes a huge amount.
+        for _ in 0..200 {
+            ctl.consume(b"spike", ResourceConsumeType::CpuTime(Duration::from_micros(500)));
+        }
+
+        // After normalization last_min_r_tag is set to RESERVATION_TAG_SCALE.
+        // steady has consumed nothing → normalized R = 0 ≤ threshold → phase 0.
+        // spike burst adds large r_delta → normalized R >> threshold → phase 1.
+        let threshold = ctl.last_min_r_tag.load(Ordering::Relaxed);
+        assert_eq!(
+            threshold, RESERVATION_TAG_SCALE,
+            "last_min_r_tag should be RESERVATION_TAG_SCALE after normalization"
+        );
+
+        let spike_r_tag = ctl
+            .resource_consumptions
+            .read()
+            .get(b"spike".as_ref())
+            .unwrap()
+            .reservation_tag
+            .load(Ordering::Relaxed);
+        let steady_r_tag = ctl
+            .resource_consumptions
+            .read()
+            .get(b"steady".as_ref())
+            .unwrap()
+            .reservation_tag
+            .load(Ordering::Relaxed);
+
+        assert!(
+            spike_r_tag > threshold,
+            "spike should be in phase 1 (r_tag={} > threshold={})",
+            spike_r_tag,
+            threshold
+        );
+        assert!(
+            steady_r_tag <= threshold,
+            "steady should remain in phase 0 (r_tag={} <= threshold={})",
+            steady_r_tag,
+            threshold
+        );
+
+        // Confirm the encoded priority of steady < spike (steady is scheduled first).
+        let two_phase = Some(threshold);
+        let steady_pri = ctl
+            .resource_consumptions
+            .read()
+            .get(b"steady".as_ref())
+            .unwrap()
+            .get_priority(1, None, false, two_phase);
+        let spike_pri = ctl
+            .resource_consumptions
+            .read()
+            .get(b"spike".as_ref())
+            .unwrap()
+            .get_priority(1, None, false, two_phase);
+        assert!(
+            steady_pri < spike_pri,
+            "steady (phase 0) must be scheduled before spike (phase 1)"
+        );
     }
 
     #[test]

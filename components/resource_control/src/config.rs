@@ -3,7 +3,7 @@ use std::{fmt, sync::Arc};
 
 use online_config::{ConfigManager, ConfigValue, OnlineConfig};
 use serde::{Deserialize, Serialize};
-use tikv_util::config::{ReadableSize, VersionTrack};
+use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
@@ -24,6 +24,16 @@ pub struct Config {
     /// Minimum write IO rate that background tasks are always allowed,
     /// even under maximum compaction pressure.
     pub bg_write_io_floor: ReadableSize,
+    /// When true, each resource group's reservation is computed from its
+    /// historical VT consumption rate rather than the static configured quota.
+    /// This protects sustained workloads from sudden traffic spikes by pushing
+    /// bursting groups into the lower-priority weight-based phase.
+    pub enable_dynamic_reservation: bool,
+    /// Duration of the sliding window used to compute historical VT consumption
+    /// rates for dynamic reservation. The window is divided into 1-minute
+    /// buckets. Not hot-reloadable; changing this requires a restart.
+    #[online_config(skip)]
+    pub ru_historical_window: ReadableDuration,
 }
 
 impl Default for Config {
@@ -35,6 +45,8 @@ impl Default for Config {
             bg_compaction_pressure_threshold: 70.0,
             bg_write_io_ceiling: ReadableSize::gb(100),
             bg_write_io_floor: ReadableSize::mb(10),
+            enable_dynamic_reservation: false,
+            ru_historical_window: ReadableDuration::minutes(10),
         }
     }
 }
