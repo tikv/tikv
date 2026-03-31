@@ -88,11 +88,6 @@ pub fn create_cloud_backend(config: &KmsConfig) -> Result<Box<KmsBackend>> {
             if cloud_config.gcp.is_none() {
                 return Err(Error::Other(box_err!("invalid configurations for GCP KMS")));
             }
-            if cfg!(target_os = "macos") && option_env!("ENABLE_FIPS") == Some("1") {
-                return Err(Error::Other(box_err!(
-                    "GCP KMS v2 is not supported on macOS FIPS builds; use provider `gcp` or a non-FIPS build"
-                )));
-            }
             let kms_provider = GcpKmsV2::new(cloud_config)
                 .map_err(cloud_convert_error("new GCP KMS".to_owned()))?;
             Ok(Box::new(KmsBackend::new(Box::new(kms_provider))?))

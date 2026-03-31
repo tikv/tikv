@@ -73,9 +73,14 @@ pub(crate) fn ensure_rustls_fips_provider() -> io::Result<()> {
             "failed to install the rustls ring provider",
         )),
 
-        #[cfg(feature = "fips")]
+        #[cfg(all(feature = "fips", not(target_os = "macos")))]
         None => Err(io::Error::other(
             "failed to install the rustls aws-lc-rs FIPS provider",
+        )),
+
+        #[cfg(all(feature = "fips", target_os = "macos"))]
+        None => Err(io::Error::other(
+            "failed to install the rustls aws-lc-rs FIPS provider on macOS; make sure the required aws_lc_* dylib is available to the TiKV process (for example via DYLD_LIBRARY_PATH)",
         )),
     }
 }
