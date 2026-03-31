@@ -2571,7 +2571,7 @@ mod tests {
 
         assert!(
             allocation_metric_value(UNKNOWN_RESOURCE_GROUP_LABEL, "global_only")
-                >= initial_allocations + 1
+                > initial_allocations
         );
 
         let aggregated_unknown_group_key = CpuThrottleInfoLogState::log_key(
