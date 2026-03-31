@@ -74,12 +74,6 @@ fn create_backend(
         }
         Backend::Gcs(config) => {
             if backend_config.gcp_v2_enable {
-                if cfg!(target_os = "macos") && option_env!("ENABLE_FIPS") == Some("1") {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Unsupported,
-                        "gcp_v2 external storage is not supported on macOS FIPS builds; disable gcp_v2_enable or use a non-FIPS build",
-                    ));
-                }
                 info!("external storage selected: gcp_v2");
                 blob_store(GcsStorageV2::from_input(config.clone())?)
             } else {

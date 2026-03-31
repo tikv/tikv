@@ -150,9 +150,7 @@ export TIKV_BUILD_GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2> /dev/
 ifeq ($(ENABLE_FIPS),1)
 DOCKER_IMAGE_TAG := ${DOCKER_IMAGE_TAG}-fips
 DOCKER_FILE := ${DOCKER_FILE}.FIPS
-ifneq ($(findstring apple-darwin,$(TIKV_BUILD_RUSTC_TARGET)),apple-darwin)
 ENABLE_FEATURES += gcp_v2/fips
-endif
 else
 ENABLE_FEATURES += openssl-vendored
 endif
