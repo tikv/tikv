@@ -101,6 +101,13 @@ ignore = [
     # RUSTSEC-2026-0002 (Stacked Borrows UB). Upstream dependency
     # constraints prevent upgrading at the moment.
     "RUSTSEC-2026-0002",
+    # bytes can be upgraded in isolation, but we are temporarily ignoring
+    # this advisory until we refresh the lockfile in a dedicated dependency
+    # update.
+    "RUSTSEC-2026-0007",
+    # azure depends on time 0.3.x, but upgrading to a fixed version is
+    # currently blocked by raft-engine pinning serde to =1.0.194.
+    "RUSTSEC-2026-0009",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,
