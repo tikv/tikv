@@ -250,9 +250,14 @@
 ## Whether to throttle the default resource group as well.
 # throttle-default-group = false
 
-## Weight assigned to the default resource group when throttle-default-group is enabled.
+## Equivalent `ru_quota`/weight assigned to the default resource group when
+## throttle-default-group is enabled.
+## TiKV uses this as the default group's expected share weight in the same
+## weighted split as other groups' configured `fill_rate`.
+## This is not a percentage.
 ## This option is unset by default. If you enable default-group throttling, set a positive value explicitly.
-# default-group-weight = 0
+## Example:
+## default-group-weight = 100
 
 ## Whether to emit extra debug logs for CPU throttling.
 ## This option supports online updates.
