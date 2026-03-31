@@ -1368,7 +1368,7 @@ def ThreadCPU() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_thread_cpu_seconds_total",
-                            label_selectors=['name=~"sst_.*"'],
+                            label_selectors=['name=~"(sst_|impwkr_).*"'],
                         ),
                     ),
                 ],
@@ -2964,6 +2964,20 @@ def YatpPool(
                 yaxis=yaxis(format=UNITS.SECONDS),
                 metric="tikv_yatp_pool_schedule_wait_duration_bucket",
                 label_selectors=[f'name=~"{pool_name_prefix}.*"'],
+            ),
+            graph_panel(
+                title="Running threads",
+                description="The number of concurrently running threads in the yatp thread pool.",
+                targets=[
+                    target(
+                        expr=expr_sum_aggr_over_time(
+                            "tikv_unified_read_pool_thread_count",
+                            "avg",
+                            "1m",
+                        ),
+                        additional_groupby=True,
+                    ),
+                ],
             ),
         ]
     )

@@ -133,6 +133,7 @@ use tikv_util::{
     config::VersionTrack,
     memory::MemoryQuota,
     mpsc as TikvMpsc,
+    mvcc_read_tracker::init_mvcc_read_tracker,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
     sys::{disk, path_in_diff_mount_point, register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
@@ -780,8 +781,10 @@ where
                     unified_read_pool.as_ref().unwrap().handle(),
                     unified_read_pool_scale_notifier,
                     &self.core.background_worker,
+                    self.core.config.readpool.unified.min_thread_count,
                     self.core.config.readpool.unified.max_thread_count,
                     self.core.config.readpool.unified.auto_adjust_pool_size,
+                    self.core.config.readpool.unified.cpu_threshold,
                 )),
             );
             unified_read_pool_scale_receiver = Some(rx);
@@ -1083,6 +1086,19 @@ where
             .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
         if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point) {
             fatal!("failed to start auto_gc on storage, error: {}", e);
+        }
+
+        // Initialize MVCC read tracker for load-based compaction prioritization
+        init_mvcc_read_tracker();
+        // Update tracker config from gc_worker config
+        if let Some(tracker) = tikv_util::mvcc_read_tracker::MVCC_READ_TRACKER.get() {
+            let cfg_manager = gc_worker.get_config_manager();
+            let cfg = cfg_manager.value();
+            let enabled = cfg.mvcc_read_aware_enabled;
+            let threshold = cfg.mvcc_scan_threshold;
+            let weight = cfg.mvcc_read_weight;
+            drop(cfg);
+            tracker.update_config(enabled, threshold, weight);
         }
 
         initial_metric(&self.core.config.metric);

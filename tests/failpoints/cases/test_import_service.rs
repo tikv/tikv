@@ -125,62 +125,48 @@ fn test_concurrent_download_sst_with_fail() {
 #[test]
 fn test_concurrent_download_sst() {
     let mut config = TikvConfig::default();
-    config.import.num_threads = 4;
+    // neet set server threads to a large number;
+    config.import.num_threads = 10;
     let (_cluster, ctx, tikv, import) = open_cluster_and_tikv_import_client(Some(config));
     let temp_dir = Builder::new()
         .prefix("test_concurrent_download_sst")
         .tempdir()
         .unwrap();
 
-    let temp_path = temp_dir.path().to_owned();
-    let local_backend = external_storage::make_local_backend(&temp_path);
-
-    fail::cfg("create_local_storage_yield", "return(100)").unwrap();
-    let metas: Arc<Mutex<Vec<_>>> = Arc::new(Mutex::new(
-        (0..10)
-            .map(|i| {
-                let file_name: String = format!("test_{}.sst", i);
-                let sst_path = temp_path.clone().join(&file_name);
-                let sst_range: (u8, u8) = (i, (i + 1) * 2);
-                let (mut meta, _) = gen_sst_file(sst_path, sst_range);
-                meta.set_region_id(ctx.get_region_id());
-                meta.set_region_epoch(ctx.get_region_epoch().clone());
-                (meta, file_name, sst_range)
-            })
-            .collect(),
-    ));
-
+    let metas = Arc::new(Mutex::new(Vec::new()));
     let threads: Vec<_> = (0..10)
-        .flat_map(|i: u8| vec![i, i]) // duplciate sst file
         .map(|i| {
+            let file_name = format!("test_{}.sst", i);
+            let sst_path = temp_dir.path().join(&file_name);
+            let sst_range = (i, (i + 1) * 2);
+            let (mut meta, _) = gen_sst_file(sst_path, sst_range);
+            meta.set_region_id(ctx.get_region_id());
+            meta.set_region_epoch(ctx.get_region_epoch().clone());
+
+            // Run multiple concurrent downloads
+            let mut download = DownloadRequest::default();
+            download.set_sst(meta.clone());
+            download.set_storage_backend(external_storage::make_local_backend(temp_dir.path()));
+            download.set_name(file_name);
+            download.mut_sst().mut_range().set_start(vec![sst_range.1]);
+            download
+                .mut_sst()
+                .mut_range()
+                .set_end(vec![sst_range.1 + 1]);
+            download.mut_sst().mut_range().set_start(Vec::new());
+            download.mut_sst().mut_range().set_end(Vec::new());
             let import = import.clone();
+            let download = download.clone();
             let metas = Arc::clone(&metas);
-            let local_backend = local_backend.clone();
 
             std::thread::spawn(move || {
-                // Run multiple concurrent downloads
-                let mut download = DownloadRequest::default();
-                let (meta, file_name, sst_range) = metas.lock().unwrap()[i as usize].clone();
-                download.set_sst(meta);
-                download.set_storage_backend(local_backend);
-                download.set_name(file_name);
-                // make the same cache key for different requests,
-                // so that dashmap will get a lock with same entry.
-                // to verify there is no dead locks.
-                download.set_storage_cache_id("cache".to_string());
-                download.mut_sst().mut_range().set_start(vec![sst_range.1]);
-                download
-                    .mut_sst()
-                    .mut_range()
-                    .set_end(vec![sst_range.1 + 1]);
-                download.mut_sst().mut_range().set_start(Vec::new());
-                download.mut_sst().mut_range().set_end(Vec::new());
-                let download = download.clone();
-
                 let result: DownloadResponse = import.download(&download).unwrap();
-                // all download requests should success, even it's duplicated
+                assert!(!result.get_is_empty());
                 assert_eq!(result.get_range().get_start(), &[sst_range.0]);
                 assert_eq!(result.get_range().get_end(), &[sst_range.1 - 1]);
+                // Only store meta after successful download
+                metas.lock().unwrap().push((meta, sst_range));
+                println!("Thread {} completed download", i);
             })
         })
         .collect();
@@ -189,11 +175,9 @@ fn test_concurrent_download_sst() {
     for handle in threads {
         handle.join().unwrap();
     }
-    fail::remove("create_local_storage_yield");
-
     // Now ingest all SSTs in order
     let metas = metas.lock().unwrap();
-    for (meta, _, sst_range) in metas.iter() {
+    for (meta, sst_range) in metas.iter() {
         must_ingest_sst(&import, ctx.clone(), meta.clone());
         check_ingested_kvs(&tikv, &ctx, *sst_range);
     }
@@ -244,7 +228,7 @@ fn test_download_sst_blocking_sst_writer() {
 }
 
 #[test]
-fn test_download_to_full_disk() {
+fn test_download_to_full_resource() {
     let (_cluster, ctx, _tikv, import) = new_cluster_and_tikv_import_client();
     let temp_dir = Builder::new()
         .prefix("test_download_sst_blocking_sst_writer")
@@ -278,6 +262,48 @@ fn test_download_to_full_disk() {
         "TiKV disk space is not enough."
     );
     disk::set_disk_status(DiskUsage::Normal);
+
+    // high memory usage reach both limit: usage + ratio
+    fail::cfg("mock_memory_usage", "return(10307921510)").unwrap(); // 9.5G
+    fail::cfg("mock_memory_limit", "return(10737418240)").unwrap(); // 10G
+    let result: DownloadResponse = import.download(&download).unwrap();
+    assert!(!result.get_is_empty());
+    assert!(result.has_error());
+    assert!(
+        result
+            .get_error()
+            .get_message()
+            .contains("Memory usage too high")
+    );
+
+    // only usage below 1G won't report error
+    fail::cfg("mock_memory_usage", "return(8589934593)").unwrap(); // 8G
+    fail::cfg("mock_memory_limit", "return(9663676416)").unwrap(); // 9G
+    let result: DownloadResponse = import.download(&download).unwrap();
+    assert!(!result.has_error());
+
+    // incorrect mem limit(0) won't report error to client
+    fail::cfg("mock_memory_limit", "return(0)").unwrap(); // 9G
+    let result: DownloadResponse = import.download(&download).unwrap();
+    assert!(!result.has_error());
+
+    // incorrect mem limit(< usage) won't report error to client
+    fail::cfg("mock_memory_limit", "return(1)").unwrap(); // 9G
+    let result: DownloadResponse = import.download(&download).unwrap();
+    assert!(!result.has_error());
+
+    fail::cfg("mock_memory_limit", "return(8589934594)").unwrap(); // 8G + 1B
+    let result: DownloadResponse = import.download(&download).unwrap();
+    assert!(result.has_error());
+    assert!(
+        result
+            .get_error()
+            .get_message()
+            .contains("Memory usage too high")
+    );
+
+    fail::remove("mock_memory_usage");
+    fail::remove("mock_memory_limit");
 }
 
 #[test]

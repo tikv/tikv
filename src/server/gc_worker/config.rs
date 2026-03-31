@@ -5,6 +5,7 @@ use std::sync::Arc;
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 use tikv_util::{
     config::{ReadableSize, VersionTrack},
+    mvcc_read_tracker::MVCC_READ_TRACKER,
     yatp_pool::FuturePool,
 };
 
@@ -12,6 +13,11 @@ const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
 pub const DEFAULT_GC_BATCH_KEYS: usize = 512;
 // No limit
 const DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC: u64 = 0;
+
+// MVCC-read-aware compaction defaults
+const DEFAULT_MVCC_READ_AWARE_ENABLED: bool = false;
+const DEFAULT_MVCC_SCAN_THRESHOLD: u64 = 1000;
+const DEFAULT_MVCC_READ_WEIGHT: f64 = 3.0;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
@@ -27,6 +33,12 @@ pub struct GcConfig {
     pub compaction_filter_skip_version_check: bool,
     /// gc threads count
     pub num_threads: usize,
+    /// Enable MVCC-read-aware compaction prioritization
+    pub mvcc_read_aware_enabled: bool,
+    /// Minimum MVCC versions scanned per request to record
+    pub mvcc_scan_threshold: u64,
+    /// Weight multiplier for MVCC read activity in scoring
+    pub mvcc_read_weight: f64,
 }
 
 impl Default for GcConfig {
@@ -38,6 +50,9 @@ impl Default for GcConfig {
             enable_compaction_filter: true,
             compaction_filter_skip_version_check: false,
             num_threads: 1,
+            mvcc_read_aware_enabled: DEFAULT_MVCC_READ_AWARE_ENABLED,
+            mvcc_scan_threshold: DEFAULT_MVCC_SCAN_THRESHOLD,
+            mvcc_read_weight: DEFAULT_MVCC_READ_WEIGHT,
         }
     }
 }
@@ -49,6 +64,9 @@ impl GcConfig {
         }
         if self.num_threads == 0 {
             return Err("gc.thread_count should not be 0".into());
+        }
+        if self.mvcc_scan_threshold == 0 {
+            return Err("gc.mvcc_scan_threshold should not be 0".into());
         }
         Ok(())
     }
@@ -76,6 +94,15 @@ impl ConfigManager for GcWorkerConfigManager {
             }
             self.0
                 .update(move |cfg: &mut GcConfig| cfg.update(change))?;
+        }
+        // Propagate MVCC read tracker config changes
+        let cfg = self.0.value();
+        if let Some(tracker) = MVCC_READ_TRACKER.get() {
+            tracker.update_config(
+                cfg.mvcc_read_aware_enabled,
+                cfg.mvcc_scan_threshold,
+                cfg.mvcc_read_weight,
+            );
         }
         info!(
             "GC worker config changed";

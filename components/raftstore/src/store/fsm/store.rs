@@ -74,7 +74,7 @@ use tikv_util::{
     warn,
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
     yatp_pool::FuturePool,
-    Either, RingQueue,
+    Either, RingQueue, GLOBAL_SERVER_READINESS,
 };
 use time::{self, Timespec};
 
@@ -2724,6 +2724,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         // Start from last checked key.
         let mut ranges_need_check =
             Vec::with_capacity(self.ctx.cfg.region_compact_check_step() as usize + 1);
+        let mut region_ids = Vec::with_capacity(self.ctx.cfg.region_compact_check_step() as usize);
         ranges_need_check.push(self.fsm.store.last_compact_checked_key.clone());
 
         let largest_key = {
@@ -2736,16 +2737,17 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 return;
             }
 
-            // Collect continuous ranges.
+            // Collect continuous ranges and their region IDs.
             let left_ranges = meta.region_ranges.range((
                 Excluded(self.fsm.store.last_compact_checked_key.clone()),
                 Unbounded::<Key>,
             ));
-            ranges_need_check.extend(
-                left_ranges
-                    .take(self.ctx.cfg.region_compact_check_step() as usize)
-                    .map(|(k, _)| k.to_owned()),
-            );
+            for (end_key, region_id) in
+                left_ranges.take(self.ctx.cfg.region_compact_check_step() as usize)
+            {
+                ranges_need_check.push(end_key.to_owned());
+                region_ids.push(*region_id);
+            }
 
             // Update last_compact_checked_key.
             meta.region_ranges.keys().last().unwrap().to_vec()
@@ -2769,6 +2771,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             CompactTask::CheckAndCompact {
                 cf_names,
                 ranges: ranges_need_check,
+                region_ids,
                 compact_threshold: CompactThreshold::new(
                     self.ctx.cfg.region_compact_min_tombstones,
                     self.ctx.cfg.region_compact_tombstones_percent,
@@ -2929,13 +2932,26 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             busy_apply_peers_count,
             completed_apply_peers_count,
         );
-        // If the store already pass the check, it should clear the
-        // `completed_apply_peers_count` to skip the check next time.
-        if !busy_on_apply && completed_apply_peers_count.is_some() {
-            let mut meta = self.ctx.store_meta.lock().unwrap();
-            meta.completed_apply_peers_count = None;
-            meta.busy_apply_peers.clear();
+
+        if !busy_on_apply {
+            // If the store already passes the check, it should clear the
+            // `completed_apply_peers_count` to skip the check next time.
+            if completed_apply_peers_count.is_some() {
+                let mut meta = self.ctx.store_meta.lock().unwrap();
+                meta.completed_apply_peers_count = None;
+                meta.busy_apply_peers.clear();
+            }
+
+            if GLOBAL_SERVER_READINESS
+                .raft_peers_caught_up
+                .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                // Log when the server readiness condition changes.
+                info!("ServerReadiness: Raft pending peers have caught up applying logs");
+            }
         }
+
         let store_is_busy = self
             .ctx
             .global_stat

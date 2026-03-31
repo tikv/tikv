@@ -17,7 +17,7 @@ use dashmap::DashMap;
 use encryption::{BackupEncryptionManager, EncrypterReader, Iv, MultiMasterKeyBackend};
 use encryption_export::create_async_backend;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use external_storage::{create_storage, BackendConfig, ExternalStorage, UnpinReader};
+use external_storage::{create_storage, BackendConfig, ExternalStorage, HdfsConfig, UnpinReader};
 use file_system::Sha256Reader;
 use futures::io::Cursor;
 use kvproto::{
@@ -160,6 +160,7 @@ pub struct FlushContext<'a> {
     pub store_id: u64,
     pub resolved_regions: &'a ResolvedRegions,
     pub resolved_ts: TimeStamp,
+    pub flush_ts: TimeStamp,
 }
 
 impl ApplyEvents {
@@ -340,6 +341,7 @@ pub struct Config {
     pub temp_file_size_limit: u64,
     pub temp_file_memory_quota: u64,
     pub max_flush_interval: Duration,
+    pub s3_multi_part_size: usize,
 }
 
 impl From<BackupStreamConfig> for Config {
@@ -348,11 +350,13 @@ impl From<BackupStreamConfig> for Config {
         let temp_file_size_limit = value.file_size_limit.0;
         let temp_file_memory_quota = value.temp_file_memory_quota.0;
         let max_flush_interval = value.max_flush_interval.0;
+        let s3_multi_part_size = value.s3_multi_part_size.0 as usize;
         Self {
             prefix,
             temp_file_size_limit,
             temp_file_memory_quota,
             max_flush_interval,
+            s3_multi_part_size,
         }
     }
 }
@@ -410,6 +414,9 @@ pub struct RouterInner {
 
     /// Backup encryption manager
     backup_encryption_manager: BackupEncryptionManager,
+
+    /// S3 multi part size
+    s3_multi_part_size: AtomicUsize,
 }
 
 impl std::fmt::Debug for RouterInner {
@@ -437,6 +444,7 @@ impl RouterInner {
             temp_file_memory_quota: AtomicU64::new(config.temp_file_memory_quota),
             max_flush_interval: SyncRwLock::new(config.max_flush_interval),
             backup_encryption_manager,
+            s3_multi_part_size: AtomicUsize::new(config.s3_multi_part_size),
         }
     }
 
@@ -509,12 +517,17 @@ impl RouterInner {
         let cfg = self.tempfile_config_for_task(&task);
         let backup_encryption_manager =
             self.build_backup_encryption_manager_for_task(&task).await?;
+        let backend_config = BackendConfig {
+            s3_multi_part_size: self.s3_multi_part_size.load(Ordering::Relaxed),
+            hdfs_config: HdfsConfig::default(),
+        };
         let stream_task = StreamTaskHandler::new(
             task,
             ranges.clone(),
             merged_file_size_limit,
             cfg,
             backup_encryption_manager,
+            backend_config,
         )
         .await?;
         self.tasks.insert(task_name.clone(), Arc::new(stream_task));
@@ -617,6 +630,26 @@ impl RouterInner {
     pub fn get_task_by_key(&self, key: &[u8]) -> Option<String> {
         let r = self.ranges.read().unwrap();
         r.get_value_by_point(key).cloned()
+    }
+
+    pub fn select_task_handler(
+        &self,
+        selector: TaskSelectorRef<'_>,
+    ) -> impl Iterator<Item = Arc<StreamTaskHandler>> {
+        self.tasks
+            .iter()
+            .filter(|entry| {
+                let (name, info) = entry.pair();
+                selector.matches(
+                    name.as_str(),
+                    info.ranges
+                        .iter()
+                        .map(|(s, e)| (s.as_slice(), e.as_slice())),
+                )
+            })
+            .map(|entry| entry.value().clone())
+            .collect::<Vec<_>>()
+            .into_iter()
     }
 
     pub fn select_task(&self, selector: TaskSelectorRef<'_>) -> Vec<String> {
@@ -998,13 +1031,11 @@ impl StreamTaskHandler {
         merged_file_size_limit: u64,
         temp_pool_cfg: tempfiles::Config,
         backup_encryption_manager: BackupEncryptionManager,
+        backend_config: BackendConfig,
     ) -> Result<Self> {
         let temp_dir = &temp_pool_cfg.swap_files;
         tokio::fs::create_dir_all(temp_dir).await?;
-        let storage = Arc::from(create_storage(
-            task.info.get_storage(),
-            BackendConfig::default(),
-        )?);
+        let storage = Arc::from(create_storage(task.info.get_storage(), backend_config)?);
         let start_ts = task.info.get_start_ts();
         Ok(Self {
             task,
@@ -1394,9 +1425,21 @@ impl StreamTaskHandler {
     }
 
     #[instrument(skip_all)]
-    pub async fn flush_backup_metadata(&self, metadata_info: MetadataInfo) -> Result<()> {
+    pub async fn flush_backup_metadata(
+        &self,
+        metadata_info: MetadataInfo,
+        flush_ts: TimeStamp,
+    ) -> Result<()> {
         if !metadata_info.file_groups.is_empty() {
-            let meta_path = metadata_info.path_to_meta();
+            let mut min_begin_ts = u64::MAX;
+            for file_group in metadata_info.file_groups.as_slice() {
+                assert!(!file_group.data_files_info.is_empty());
+                for d in file_group.data_files_info.as_slice() {
+                    assert_ne!(d.min_begin_ts_in_default_cf, 0);
+                    min_begin_ts = min_begin_ts.min(d.min_begin_ts_in_default_cf)
+                }
+            }
+            let meta_path = metadata_info.path_to_meta(min_begin_ts, flush_ts.into_inner());
             let meta_buff = metadata_info.marshal_to()?;
             let buflen = meta_buff.len();
 
@@ -1463,7 +1506,8 @@ impl StreamTaskHandler {
             // flush meta file to storage.
             self.fill_region_info(cx, &mut backup_metadata);
             // flush backup metadata to external storage.
-            self.flush_backup_metadata(backup_metadata).await?;
+            self.flush_backup_metadata(backup_metadata, cx.flush_ts)
+                .await?;
             crate::metrics::FLUSH_DURATION
                 .with_label_values(&["save_files"])
                 .observe(sw.lap().as_secs_f64());
@@ -1720,6 +1764,7 @@ pub struct MetadataInfo {
     // the field files is deprecated in v6.3.0
     // pub files: Vec<DataFileInfo>,
     pub file_groups: Vec<DataFileGroup>,
+    // deprecated
     pub min_resolved_ts: Option<u64>,
     pub min_ts: Option<u64>,
     pub max_ts: Option<u64>,
@@ -1767,11 +1812,13 @@ impl MetadataInfo {
             .map_err(|err| Error::Other(box_err!("failed to marshal proto: {}", err)))
     }
 
-    fn path_to_meta(&self) -> String {
+    fn path_to_meta(&self, min_begin_ts: u64, flush_ts: u64) -> String {
         format!(
-            "v1/backupmeta/{}-{}.meta",
-            self.min_resolved_ts.unwrap_or_default(),
-            uuid::Uuid::new_v4()
+            "v1/backupmeta/{:016X}-{:016X}-{:016X}-{:016X}.meta",
+            flush_ts,
+            min_begin_ts,
+            self.min_ts.unwrap_or_default(),
+            self.max_ts.unwrap_or_default(),
         )
     }
 }
@@ -2070,6 +2117,7 @@ mod tests {
                 temp_file_size_limit: 1024,
                 temp_file_memory_quota: 1024 * 2,
                 max_flush_interval: Duration::from_secs(300),
+                s3_multi_part_size: ReadableSize::mb(5).0 as usize,
             },
             BackupEncryptionManager::default(),
         );
@@ -2169,6 +2217,7 @@ mod tests {
                 temp_file_size_limit: 32,
                 temp_file_memory_quota: 32 * 2,
                 max_flush_interval: Duration::from_secs(300),
+                s3_multi_part_size: ReadableSize::mb(5).0 as usize,
             },
             BackupEncryptionManager::default(),
         );
@@ -2234,7 +2283,10 @@ mod tests {
             }
         }
 
-        task_handler.flush_backup_metadata(meta).await.unwrap();
+        task_handler
+            .flush_backup_metadata(meta, TimeStamp::new(1))
+            .await
+            .unwrap();
         task_handler.clear_flushing_files().await;
 
         drop(router);
@@ -2247,10 +2299,34 @@ mod tests {
 
         let mut meta_count = 0;
         let mut log_count = 0;
+
         for entry in walkdir::WalkDir::new(storage_path) {
             let entry = entry.unwrap();
-            let filename = entry.file_name();
             if entry.path().extension() == Some(OsStr::new("meta")) {
+                let filename = entry.path().file_stem().unwrap().to_os_string();
+                let parts: Vec<&str> = filename.to_str().unwrap().split('-').collect();
+
+                assert!(
+                    parts.len() >= 4,
+                    "Invalid meta file name format: expected at least 4 parts, got {}, file: {:?}",
+                    parts.len(),
+                    entry.file_name(),
+                );
+
+                for (i, label) in ["flushTs", "minDefaultTs", "minTs", "maxTs"]
+                    .iter()
+                    .enumerate()
+                {
+                    let val = u64::from_str_radix(parts[i], 16);
+                    assert!(
+                        val.is_ok(),
+                        "Failed to parse '{}' as u64 (hex) for {} in file name: {:?}",
+                        parts[i],
+                        label,
+                        entry.file_name(),
+                    );
+                }
+
                 meta_count += 1;
             } else if entry.path().extension() == Some(OsStr::new("log")) {
                 log_count += 1;
@@ -2258,7 +2334,7 @@ mod tests {
                 assert!(
                     f.len() > 10,
                     "the log file {:?} is too small (size = {}B)",
-                    filename,
+                    entry.file_name(),
                     f.len()
                 );
             }
@@ -2297,6 +2373,7 @@ mod tests {
             merged_file_size_limit,
             make_tempfiles_cfg(tmp_dir.path()),
             BackupEncryptionManager::default(),
+            BackendConfig::default(),
         )
         .await
         .unwrap();
@@ -2314,6 +2391,7 @@ mod tests {
             store_id: 1,
             resolved_regions: &EMPTY_RESOLVE,
             resolved_ts: TimeStamp::new(1),
+            flush_ts: TimeStamp::new(1),
         };
         task_handler.do_flush(cx).await.unwrap();
         assert_eq!(task_handler.flush_failure_count(), 0);
@@ -2425,6 +2503,7 @@ mod tests {
                 temp_file_size_limit: 1,
                 temp_file_memory_quota: 2,
                 max_flush_interval: Duration::from_secs(300),
+                s3_multi_part_size: ReadableSize::mb(5).0 as usize,
             },
             BackupEncryptionManager::default(),
         ));
@@ -2433,6 +2512,7 @@ mod tests {
             store_id: 42,
             resolved_regions: &EMPTY_RESOLVE,
             resolved_ts: TimeStamp::max(),
+            flush_ts: TimeStamp::max(),
         };
         let (task, _path) = task_handler("error_prone".to_owned()).await?;
         must_register_table(router.as_ref(), task, 1).await;
@@ -2463,6 +2543,7 @@ mod tests {
                 temp_file_size_limit: 32,
                 temp_file_memory_quota: 32 * 2,
                 max_flush_interval: Duration::from_secs(300),
+                s3_multi_part_size: ReadableSize::mb(5).0 as usize,
             },
             BackupEncryptionManager::default(),
         );
@@ -2489,6 +2570,7 @@ mod tests {
             store_id: 1,
             resolved_regions: &EMPTY_RESOLVE,
             resolved_ts: ts,
+            flush_ts: ts,
         };
         let rts = router.do_flush(cx).await.unwrap();
         assert_eq!(ts.into_inner(), rts);
@@ -2505,6 +2587,7 @@ mod tests {
                 temp_file_size_limit: 1,
                 temp_file_memory_quota: 2,
                 max_flush_interval: Duration::from_secs(300),
+                s3_multi_part_size: ReadableSize::mb(5).0 as usize,
             },
             BackupEncryptionManager::default(),
         ));
@@ -2560,6 +2643,7 @@ mod tests {
                 temp_file_size_limit: 1,
                 temp_file_memory_quota: 2,
                 max_flush_interval: Duration::from_secs(300),
+                s3_multi_part_size: ReadableSize::mb(5).0 as usize,
             },
             BackupEncryptionManager::default(),
         ));
@@ -2573,6 +2657,7 @@ mod tests {
             store_id: 42,
             resolved_regions: &EMPTY_RESOLVE,
             resolved_ts: TimeStamp::zero(),
+            flush_ts: TimeStamp::new(1),
         };
         for i in 0..=FLUSH_FAILURE_BECOME_FATAL_THRESHOLD {
             check_on_events_result(&router.on_events(build_kv_event((i * 10) as _, 10)).await);
@@ -2696,6 +2781,7 @@ mod tests {
             0x100000,
             make_tempfiles_cfg(tmp_dir.path()),
             backup_encryption_manager,
+            BackendConfig::default(),
         )
         .await
         .unwrap();
@@ -2853,6 +2939,7 @@ mod tests {
                 temp_file_size_limit: 1,
                 temp_file_memory_quota: 2,
                 max_flush_interval: cfg.max_flush_interval.0,
+                s3_multi_part_size: cfg.s3_multi_part_size.0 as usize,
             },
             BackupEncryptionManager::default(),
         ));
@@ -2910,6 +2997,7 @@ mod tests {
                 temp_file_size_limit: 1000,
                 temp_file_memory_quota: 2,
                 max_flush_interval: Duration::from_secs(300),
+                s3_multi_part_size: ReadableSize::mb(5).0 as usize,
             },
             BackupEncryptionManager::default(),
         ));
@@ -2965,6 +3053,7 @@ mod tests {
             store_id: 42,
             resolved_regions: &EMPTY_RESOLVE,
             resolved_ts: TimeStamp::max(),
+            flush_ts: TimeStamp::new(1),
         };
         // set flush status to true, because we disabled the auto flush.
         t.set_flushing_status(true);
@@ -3061,6 +3150,7 @@ mod tests {
             merged_file_size_limit,
             make_tempfiles_cfg(tempfile::tempdir().unwrap().path()),
             backup_encryption_manager.clone(),
+            BackendConfig::default(),
         )
         .await
         .unwrap();
@@ -3076,6 +3166,7 @@ mod tests {
             store_id: 1,
             resolved_regions: &EMPTY_RESOLVE,
             resolved_ts: TimeStamp::new(1),
+            flush_ts: TimeStamp::new(1),
         };
         task_handler.do_flush(cx).await?;
         let duration = start.saturating_elapsed();
@@ -3147,7 +3238,22 @@ mod tests {
         for entry in walkdir::WalkDir::new(path) {
             let entry = entry.unwrap();
             if entry.path().extension() == Some(OsStr::new("meta")) {
-                meta_files.push(entry.path().to_path_buf());
+                if let Some(filename) = entry.path().file_stem().and_then(OsStr::to_str) {
+                    // v1/backupmeta/{a}-{b}-{c}-{d}.meta
+                    let parts: Vec<&str> = filename.split('-').collect();
+                    if parts.len() == 4 {
+                        for p in parts {
+                            assert!(
+                                u64::from_str_radix(p, 16).is_ok(),
+                                "Part '{}' is not a valid hex u64",
+                                p
+                            );
+                        }
+                        meta_files.push(entry.path().to_path_buf());
+                    } else {
+                        panic!("backup meta file format changed")
+                    }
+                }
             }
         }
         meta_files

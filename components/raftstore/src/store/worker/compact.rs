@@ -44,8 +44,11 @@ pub enum Task {
     CheckAndCompact {
         // Column families need to compact
         cf_names: Vec<String>,
-        // Ranges need to check
+        // Ranges need to check (region end keys)
         ranges: Vec<Key>,
+        // Region IDs corresponding to each range (len = ranges.len() - 1)
+        // region_ids[i] is the region between ranges[i] and ranges[i+1]
+        region_ids: Vec<u64>,
         // The minimum RocksDB tombstones/duplicate versions a range that need compacting has
         compact_threshold: CompactThreshold,
     },
@@ -175,6 +178,7 @@ impl Display for Task {
             Task::CheckAndCompact {
                 ref cf_names,
                 ref ranges,
+                ref region_ids,
                 ref compact_threshold,
             } => f
                 .debug_struct("CheckAndCompact")
@@ -186,6 +190,7 @@ impl Display for Task {
                         ranges.last().as_ref().map(|k| log_wrappers::Value::key(k)),
                     ),
                 )
+                .field("region_ids_count", &region_ids.len())
                 .field(
                     "tombstones_num_threshold",
                     &compact_threshold.tombstones_num_threshold,
@@ -411,8 +416,14 @@ where
             Task::CheckAndCompact {
                 cf_names,
                 ranges,
+                region_ids,
                 compact_threshold,
-            } => match collect_ranges_need_compact(&self.engine, ranges, compact_threshold) {
+            } => match collect_ranges_need_compact(
+                &self.engine,
+                ranges,
+                region_ids,
+                compact_threshold,
+            ) {
                 Ok(mut ranges) => {
                     for (start, end) in ranges.drain(..) {
                         for cf in &cf_names {
@@ -437,7 +448,11 @@ where
     }
 }
 
-pub fn need_compact(range_stats: &RangeStats, compact_threshold: &CompactThreshold) -> bool {
+pub fn need_compact(
+    range_stats: &RangeStats,
+    compact_threshold: &CompactThreshold,
+    region_id: Option<u64>,
+) -> bool {
     if range_stats.num_entries < range_stats.num_versions {
         return false;
     }
@@ -446,17 +461,48 @@ pub fn need_compact(range_stats: &RangeStats, compact_threshold: &CompactThresho
     // redundant keys, both of which can severly impact scan operation:
     let estimate_num_del = range_stats.num_entries - range_stats.num_versions;
     let redundant_keys = range_stats.redundant_keys();
-    (redundant_keys >= compact_threshold.redundant_rows_threshold
+    if (redundant_keys >= compact_threshold.redundant_rows_threshold
         && redundant_keys * 100
             >= compact_threshold.redundant_rows_percent_threshold * range_stats.num_entries)
         || (estimate_num_del >= compact_threshold.tombstones_num_threshold
             && estimate_num_del * 100
                 >= compact_threshold.tombstones_percent_threshold * range_stats.num_entries)
+    {
+        return true;
+    }
+
+    // Check MVCC read-aware compaction
+    if let Some(rid) = region_id {
+        use tikv_util::mvcc_read_tracker::MVCC_READ_TRACKER;
+        if let Some(tracker) = MVCC_READ_TRACKER.get() {
+            if tracker.is_enabled() {
+                let mvcc_versions_per_sec = tracker.get_mvcc_versions_scanned(rid);
+                let tracked_regions = tracker.tracked_region_count();
+                debug!(
+                    "checking MVCC read stats for compaction";
+                    "region_id" => rid,
+                    "mvcc_versions_per_sec" => mvcc_versions_per_sec,
+                    "tracked_regions" => tracked_regions,
+                );
+                if mvcc_versions_per_sec > 0 {
+                    info!(
+                        "triggering compaction due to MVCC read activity";
+                        "region_id" => rid,
+                        "mvcc_versions_per_sec" => mvcc_versions_per_sec,
+                    );
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
 }
 
 fn collect_ranges_need_compact(
     engine: &impl KvEngine,
     ranges: Vec<Key>,
+    region_ids: Vec<u64>,
     compact_threshold: CompactThreshold,
 ) -> Result<VecDeque<(Key, Key)>, Error> {
     // Check the SST properties for each range, and TiKV will compact a range if the
@@ -465,12 +511,16 @@ fn collect_ranges_need_compact(
     let mut ranges_need_compact = VecDeque::new();
     let mut compact_start = None;
     let mut compact_end = None;
-    for range in ranges.windows(2) {
+    for (i, range) in ranges.windows(2).enumerate() {
+        // Get region_id for this range (region_ids[i] corresponds to range between
+        // ranges[i] and ranges[i+1])
+        let region_id = region_ids.get(i).copied();
+
         // Get total entries and total versions in this range and checks if it needs to
         // be compacted.
         if let Some(range_stats) = box_try!(engine.get_range_stats(CF_WRITE, &range[0], &range[1]))
         {
-            if need_compact(&range_stats, &compact_threshold) {
+            if need_compact(&range_stats, &compact_threshold, region_id) {
                 if compact_start.is_none() {
                     // The previous range doesn't need compacting.
                     compact_start = Some(range[0].clone());
@@ -499,6 +549,12 @@ fn collect_ranges_need_compact(
     }
     if let (Some(cs), Some(ce)) = (compact_start, compact_end) {
         ranges_need_compact.push_back((cs, ce));
+    }
+
+    // Reset MVCC read tracker stats after reading all stats
+    use tikv_util::mvcc_read_tracker::MVCC_READ_TRACKER;
+    if let Some(tracker) = MVCC_READ_TRACKER.get() {
+        tracker.reset_stats();
     }
 
     Ok(ranges_need_compact)
@@ -720,6 +776,7 @@ mod tests {
         let ranges_need_to_compact = collect_ranges_need_compact(
             &engine,
             vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
+            vec![1, 2], // placeholder region_ids for test
             CompactThreshold::new(4, 30, 100, 100),
         )
         .unwrap();
@@ -732,6 +789,7 @@ mod tests {
         let ranges_need_to_compact = collect_ranges_need_compact(
             &engine,
             vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
+            vec![1, 2], // placeholder region_ids for test
             CompactThreshold::new(100, 100, 5, 50),
         )
         .unwrap();
@@ -753,6 +811,7 @@ mod tests {
         let ranges_need_to_compact = collect_ranges_need_compact(
             &engine,
             vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
+            vec![1, 2], // placeholder region_ids for test
             CompactThreshold::new(3, 25, 100, 100),
         )
         .unwrap();
@@ -764,6 +823,7 @@ mod tests {
         let ranges_need_to_compact = collect_ranges_need_compact(
             &engine,
             vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
+            vec![1, 2], // placeholder region_ids for test
             CompactThreshold::new(100, 100, 3, 35),
         )
         .unwrap();
@@ -882,7 +942,8 @@ mod tests {
         };
         assert!(need_compact(
             &range_stats,
-            &CompactThreshold::new(10, 30, 100, 100)
+            &CompactThreshold::new(10, 30, 100, 100),
+            None,
         ));
 
         // many mvcc put case
@@ -894,7 +955,8 @@ mod tests {
         };
         assert!(need_compact(
             &range_stats,
-            &CompactThreshold::new(100, 100, 100, 30)
+            &CompactThreshold::new(100, 100, 100, 30),
+            None,
         ));
 
         // many mvcc delete case
@@ -906,7 +968,8 @@ mod tests {
         };
         assert!(need_compact(
             &range_stats,
-            &CompactThreshold::new(100, 100, 100, 30)
+            &CompactThreshold::new(100, 100, 100, 30),
+            None,
         ));
     }
 }

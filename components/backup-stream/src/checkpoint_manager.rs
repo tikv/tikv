@@ -53,7 +53,6 @@ impl std::fmt::Debug for CheckpointManager {
 enum SubscriptionOp {
     Add(Subscription),
     Emit(Box<[FlushEvent]>),
-    #[cfg(test)]
     Inspect(Box<dyn FnOnce(&SubscriptionManager) + Send>),
 }
 
@@ -76,7 +75,6 @@ impl SubscriptionManager {
                 SubscriptionOp::Emit(events) => {
                     self.emit_events(events).await;
                 }
-                #[cfg(test)]
                 SubscriptionOp::Inspect(f) => {
                     f(&self);
                 }
@@ -392,8 +390,7 @@ impl CheckpointManager {
         self.resolved_ts.values().map(|x| x.checkpoint).min()
     }
 
-    #[cfg(test)]
-    fn sync_with_subs_mgr<T: Send + 'static>(
+    pub fn sync_with_subs_mgr<T: Send + 'static>(
         &mut self,
         f: impl FnOnce(&SubscriptionManager) -> T + Send + 'static,
     ) -> T {
@@ -896,8 +893,8 @@ pub mod tests {
         let r = flush_observer.after(&task, rts).await;
         assert_eq!(r.is_ok(), true);
 
-        let serivce_id = format!("backup-stream-{}-{}", task, store_id);
-        let r = pd_cli.get_service_safe_point(serivce_id).unwrap();
+        let service_id = format!("backup-stream-{}-{}", task, store_id);
+        let r = pd_cli.get_service_safe_point(service_id).unwrap();
         assert_eq!(r.into_inner(), rts - 1);
     }
 }

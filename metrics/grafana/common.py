@@ -492,7 +492,7 @@ def expr_count_rate(
 
     count(rate(
         tikv_thread_cpu_seconds_total
-        {k8s_cluster="$k8s_cluster",tidb_cluster="$tidb_cluster",instance=~"$instance",name=~"sst_.*"}
+        {k8s_cluster="$k8s_cluster",tidb_cluster="$tidb_cluster",instance=~"$instance",name=~"(sst_|impwkr).*"}
         [$__rate_interval]
     )) by (instance)
     """
