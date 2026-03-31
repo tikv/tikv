@@ -48,6 +48,13 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+
+    pub static ref TWO_PHASE_THROTTLED_REQUESTS: IntCounterVec = register_int_counter_vec!(
+        "tikv_resource_control_two_phase_throttled_requests_total",
+        "Total requests assigned to phase 1 (over historical rate limit) per resource group",
+        &["resource_group"]
+    )
+    .unwrap();
 }
 
 pub fn deregister_metrics(name: &str) {
@@ -56,4 +63,5 @@ pub fn deregister_metrics(name: &str) {
         _ = BACKGROUND_RESOURCE_CONSUMPTION.remove_label_values(&[name, ty]);
     }
     _ = BACKGROUND_TASKS_WAIT_DURATION.remove_label_values(&[name]);
+    _ = TWO_PHASE_THROTTLED_REQUESTS.remove_label_values(&[name]);
 }
