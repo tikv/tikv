@@ -91,6 +91,13 @@ pub struct BatchExecutorsRunner<SS> {
     /// current page.
     paging_size: Option<u64>,
 
+    /// If set, paging_size_bytes indicates the byte budget for the current page.
+    /// When accumulated output bytes reach this limit, the scan stops early.
+    /// TODO: Currently tracks encoded output bytes (chunk rows_data). For
+    /// accurate RU alignment, this should track processed_versions_size (MVCC
+    /// scanned bytes) from the storage layer instead.
+    paging_size_bytes: Option<u64>,
+
     quota_limiter: Arc<QuotaLimiter>,
 
     /// Information for intermediate output channels.
@@ -612,6 +619,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         stream_row_limit: usize,
         is_streaming: bool,
         paging_size: Option<u64>,
+        paging_size_bytes: Option<u64>,
         quota_limiter: Arc<QuotaLimiter>,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
@@ -627,7 +635,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             extra_storage_accessor,
             ranges,
             config.clone(),
-            is_streaming || paging_size.is_some(), /* For streaming and paging request,
+            is_streaming || paging_size.is_some() || paging_size_bytes.is_some(), /* For streaming and paging request,
                                                     * executors will continue scan from range
                                                     * end where last scan is finished */
         )?;
@@ -698,6 +706,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             stream_row_limit,
             encode_type,
             paging_size,
+            paging_size_bytes,
             quota_limiter,
             intermediate_channels,
             reserved_intermediate_results: None,
@@ -742,6 +751,10 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut warnings = self.config.new_eval_warnings();
         let mut ctx = EvalContext::new(self.config.clone());
         let mut record_all = 0;
+        // TODO: bytes_all accumulates encoded output bytes (rows_data). For
+        // production use, replace with processed_versions_size from the storage
+        // layer to align with RU accounting.
+        let mut bytes_all: usize = 0;
         let mut intermediate_output_chunks = if self.intermediate_channels.is_empty() {
             vec![]
         } else {
@@ -782,12 +795,20 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             if record_len > 0 {
                 record_all += record_len;
             }
+            if read_bytes_len > 0 {
+                bytes_all += read_bytes_len;
+            }
 
             if chunk.has_rows_data() {
                 chunks.push(chunk);
             }
 
-            if drained.stop() || self.paging_size.is_some_and(|p| record_all >= p as usize) {
+            if drained.stop()
+                || self.paging_size.is_some_and(|p| record_all >= p as usize)
+                || self
+                    .paging_size_bytes
+                    .is_some_and(|p| bytes_all >= p as usize)
+            {
                 self.out_most_executor
                     .collect_exec_stats(&mut self.exec_stats);
                 tidb_query_common::metrics::record_coprocessor_executor_iterations(
@@ -797,12 +818,14 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                         .map(|s| s.num_iterations as u64)
                         .sum(),
                 );
+                let is_paging =
+                    self.paging_size.is_some() || self.paging_size_bytes.is_some();
                 let range = if drained == BatchExecIsDrain::Drain {
                     None
+                } else if is_paging {
+                    Some(self.out_most_executor.take_scanned_range())
                 } else {
-                    // It's not allowed to stop paging when BatchExecIsDrain::PagingDrain.
-                    self.paging_size
-                        .map(|_| self.out_most_executor.take_scanned_range())
+                    None
                 };
 
                 let mut sel_resp = SelectResponse::default();

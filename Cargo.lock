@@ -4420,7 +4420,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#678ff92b1edd0cf321336a0ac4530edcb9686995"
+source = "git+https://github.com/JmPotato/kvproto?branch=demo/ru-paging-size#48e3f28d9c74bf31ff30841155976ee2eec8fb97"
 dependencies = [
  "bytes",
  "futures 0.3.15",
