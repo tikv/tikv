@@ -12,9 +12,17 @@ pub struct Config {
     #[online_config(skip)]
     pub enabled: bool,
     pub priority_ctl_strategy: PriorityCtlStrategy,
-    /// Overall resource utilization percentage above which background tasks
-    /// are throttled. Also caps the background utilization limit.
+    /// CPU utilization percentage at which background task throttling begins.
+    /// Background budget scales linearly from full down to zero between this
+    /// value and bg_resource_threshold.
+    pub bg_scale_start_threshold: f64,
+    /// CPU utilization percentage at which background tasks are fully throttled
+    /// to their minimum floor. Also caps the background utilization limit.
     pub bg_resource_threshold: f64,
+    /// CPU utilization percentage at which low-priority foreground task
+    /// throttling begins. Scales linearly to zero at low_pri_cpu_end_threshold.
+    /// Should equal bg_resource_threshold so the tiers are contiguous.
+    pub low_pri_cpu_end_threshold: f64,
     /// Compaction pressure percentage at which background write IO throttling
     /// begins. Dynamically configurable at runtime.
     pub bg_compaction_pressure_threshold: f64,
@@ -31,7 +39,9 @@ impl Default for Config {
         Self {
             enabled: true,
             priority_ctl_strategy: PriorityCtlStrategy::Moderate,
+            bg_scale_start_threshold: 60.0,
             bg_resource_threshold: 70.0,
+            low_pri_cpu_end_threshold: 80.0,
             bg_compaction_pressure_threshold: 70.0,
             bg_write_io_ceiling: ReadableSize::gb(100),
             bg_write_io_floor: ReadableSize::mb(10),

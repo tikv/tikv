@@ -15,7 +15,6 @@ use file_system::{IoBytes, IoType, fetch_io_bytes};
 use prometheus::Histogram;
 use strum::EnumCount;
 use tikv_util::{
-    debug,
     resource_control::{DEFAULT_RESOURCE_GROUP_NAME, TaskPriority},
     sys::{SysQuota, cpu_time::ProcessStat},
     thread_name_prefix::{SCHEDULE_WORKER_PRIORITY_THREAD, UNIFIED_READ_POOL_THREAD},
@@ -160,16 +159,15 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         if bg_util_limit == 0 {
             bg_util_limit = 100;
         }
-        let bg_resource_threshold = self
-            .resource_ctl
-            .get_config()
-            .value()
-            .bg_resource_threshold
-            .clamp(1.0, 99.0);
-        // Cap utilization limit to bg_resource_threshold. Background
-        // tasks should never consume more than this fraction of total resources.
-        // When CPU utilization exceeds the threshold, the headroom goes negative
-        // and the background rate limit is reduced.
+        let (bg_scale_start, bg_resource_threshold) = {
+            let config = self.resource_ctl.get_config().value();
+            let start = config.bg_scale_start_threshold.clamp(1.0, 99.0);
+            let end = config.bg_resource_threshold.clamp(start, 99.0);
+            (start, end)
+        };
+        // Cap utilization limit to bg_resource_threshold. Background tasks should
+        // never consume more than this fraction of total resources. Scale-down
+        // begins at bg_scale_start and reaches min_floor at bg_resource_threshold.
         bg_util_limit = bg_util_limit.min(bg_resource_threshold as u64);
 
         BACKGROUND_TASK_RESOURCE_UTILIZATION_VEC
@@ -197,6 +195,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             ResourceType::Cpu,
             dur_secs,
             bg_util_limit,
+            bg_scale_start,
             bg_resource_threshold,
             &mut background_groups,
         );
@@ -204,6 +203,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             ResourceType::Io,
             dur_secs,
             bg_util_limit,
+            bg_scale_start,
             bg_resource_threshold,
             &mut background_groups,
         );
@@ -226,6 +226,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         resource_type: ResourceType,
         dur_secs: f64,
         utilization_limit: u64,
+        bg_scale_start: f64,
         bg_resource_threshold: f64,
         bg_group_stats: &mut [GroupStats],
     ) {
@@ -308,19 +309,17 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         .min(target);
 
         let mut new_total_bg_budget = target;
-        if resource_util > bg_resource_threshold {
-            // System is overloaded. Linearly scale budget from target down to
-            // min_floor as utilization goes from threshold (70%) to 100%.
-            // This aggressively throttles background regardless of how much
-            // it's consuming, freeing resources for online traffic.
-            let pressure =
-                (resource_util - bg_resource_threshold) / (100.0 - bg_resource_threshold);
+        if resource_util > bg_scale_start {
+            // Linearly scale budget from target down to min_floor as utilization
+            // goes from bg_scale_start (60%) to bg_resource_threshold (70%).
+            let range = (bg_resource_threshold - bg_scale_start).max(1.0);
+            let pressure = ((resource_util - bg_scale_start) / range).clamp(0.0, 1.0);
             new_total_bg_budget = target * (1.0 - pressure) + min_floor * pressure;
         } else if current_total_bg_limit > target {
             // Background limit exceeds its allowed share; reset to target.
             new_total_bg_budget = target;
         } else if current_total_bg_limit < 0.9 * target
-            && resource_util < 0.9 * bg_resource_threshold
+            && resource_util < 0.9 * bg_scale_start
         {
             // System is idle; increase limit incrementally from current limit.
             new_total_bg_budget = current_total_bg_limit + 0.1 * current_total_bg_limit;
@@ -444,25 +443,30 @@ impl<R: ResourceStatsProvider> PriorityLimiterAdjustWorker<R> {
         }
         self.last_adjust_time = now;
 
-        // fast path for only the default resource group which means resource
-        // control is not used at all.
+        // Fast path: only the default resource group means resource control is not used.
         let group_count = self.resource_ctl.get_group_count();
         if group_count == 1 {
             if self.is_last_single_group {
                 return;
             }
             self.is_last_single_group = true;
-            self.trackers.iter().skip(1).for_each(|t| {
-                t.limiter
-                    .get_limiter(ResourceType::Cpu)
-                    .set_rate_limit(f64::INFINITY)
-            });
+            let low_limiter = &self.trackers[TaskPriority::Low as usize].limiter;
+            low_limiter
+                .get_limiter(ResourceType::Cpu)
+                .set_rate_limit(f64::INFINITY);
+            PRIORITY_QUOTA_LIMIT_VEC
+                .get_metric_with_label_values(&[TaskPriority::Low.as_str()])
+                .unwrap()
+                .set(0);
             return;
         }
         self.is_last_single_group = false;
 
-        let stats: [_; TaskPriority::PRIORITY_COUNT] =
-            array::from_fn(|i| self.trackers[i].get_and_update_last_stats(dur.as_secs_f64()));
+        // Update per-priority CPU stats for metrics only.
+        let dur_secs = dur.as_secs_f64();
+        for tracker in &mut self.trackers {
+            tracker.get_and_update_last_stats(dur_secs);
+        }
 
         let process_cpu_stats = match self
             .resource_quota_getter
@@ -470,85 +474,57 @@ impl<R: ResourceStatsProvider> PriorityLimiterAdjustWorker<R> {
         {
             Ok(s) => s,
             Err(e) => {
-                warn!("get process total cpu failed; skip adjusment."; "err" => ?e);
+                warn!("get process total cpu failed; skip adjustment."; "err" => ?e);
                 return;
             }
         };
 
-        if process_cpu_stats.current_used < process_cpu_stats.total_quota * 0.3 {
-            if self.is_last_low_cpu {
-                return;
-            }
-            self.is_last_low_cpu = true;
-            self.trackers.iter().skip(1).for_each(|t| {
-                t.limiter
+        let config = self.resource_ctl.get_config().value();
+        // Low-priority scale-down: linearly throttle from bg_resource_threshold (70%)
+        // to low_pri_cpu_end_threshold (80%), mirroring how background traffic is
+        // handled in the bg_scale_start→bg_resource_threshold range.
+        let low_pri_start = config.bg_resource_threshold.clamp(1.0, 99.0);
+        let low_pri_end = config
+            .low_pri_cpu_end_threshold
+            .clamp(low_pri_start + 1.0, 100.0);
+
+        let cpu_util = if process_cpu_stats.total_quota > f64::EPSILON {
+            process_cpu_stats.current_used / process_cpu_stats.total_quota * 100.0
+        } else {
+            0.0
+        };
+
+        let low_limiter = &self.trackers[TaskPriority::Low as usize].limiter;
+        if cpu_util <= low_pri_start {
+            if !self.is_last_low_cpu {
+                self.is_last_low_cpu = true;
+                low_limiter
                     .get_limiter(ResourceType::Cpu)
                     .set_rate_limit(f64::INFINITY);
-                // 0 represent infinity
                 PRIORITY_QUOTA_LIMIT_VEC
-                    .get_metric_with_label_values(&[t.priority])
+                    .get_metric_with_label_values(&[TaskPriority::Low.as_str()])
                     .unwrap()
                     .set(0);
-            });
+            }
             return;
         }
         self.is_last_low_cpu = false;
 
-        let total_cpus: f64 = stats.iter().map(|s| s.cpu_secs).sum();
-        let max_cpus = stats.iter().map(|s| s.cpu_secs).fold(0.0, f64::max);
-        // there is only 1 active priority, do not restrict.
-        if total_cpus * 0.99 <= max_cpus {
-            self.trackers
-                .iter()
-                .skip(1)
-                .for_each(|t: &PriorityLimiterStatsTracker| {
-                    t.limiter
-                        .get_limiter(ResourceType::Cpu)
-                        .set_rate_limit(f64::INFINITY)
-                });
-            return;
-        }
+        // 1% of total CPU as minimum floor for low-priority tasks.
+        let min_floor = process_cpu_stats.total_quota * 0.01;
+        let range = (low_pri_end - low_pri_start).max(1.0);
+        let pressure = ((cpu_util - low_pri_start) / range).clamp(0.0, 1.0);
+        let low_pri_limit =
+            (process_cpu_stats.total_quota * (1.0 - pressure) + min_floor * pressure)
+                .max(min_floor);
 
-        let cpu_duration: [_; TaskPriority::PRIORITY_COUNT] = array::from_fn(|i| stats[i].cpu_secs);
-        let real_cpu_total: f64 = cpu_duration.iter().sum();
-
-        let available_quota_percentage = self
-            .resource_ctl
-            .get_config()
-            .value()
-            .priority_ctl_strategy
-            .to_resource_util_percentage();
-        let expect_pool_cpu_total = real_cpu_total
-            * (process_cpu_stats.total_quota * available_quota_percentage)
-            / process_cpu_stats.current_used;
-        let mut limits = [0.0; 2];
-        let level_expected: [_; TaskPriority::PRIORITY_COUNT] =
-            array::from_fn(|i| stats[i].cpu_secs + stats[i].wait_secs);
-        // substract the cpu time usage for priority high.
-        let mut expect_cpu_time_total = expect_pool_cpu_total - level_expected[0];
-
-        // still reserve a minimal cpu quota
-        let minimal_quota = process_cpu_stats.total_quota / MICROS_PER_SEC * 0.1;
-        for i in 1..self.trackers.len() {
-            if expect_cpu_time_total < minimal_quota {
-                expect_cpu_time_total = minimal_quota;
-            }
-            let limit = expect_cpu_time_total * MICROS_PER_SEC;
-            self.trackers[i]
-                .limiter
-                .get_limiter(ResourceType::Cpu)
-                .set_rate_limit(limit);
-            PRIORITY_QUOTA_LIMIT_VEC
-                .get_metric_with_label_values(&[self.trackers[i].priority])
-                .unwrap()
-                .set(limit as i64);
-            limits[i - 1] = limit;
-            expect_cpu_time_total -= level_expected[i];
-        }
-        debug!("adjsut cpu limiter by priority"; "cpu_quota" => process_cpu_stats.total_quota,
-            "process_cpu" => process_cpu_stats.current_used, "expected_cpu" => ?level_expected,
-            "cpu_costs" => ?cpu_duration, "limits" => ?limits,
-            "limit_cpu_total" => expect_pool_cpu_total, "pool_cpu_cost" => real_cpu_total);
+        low_limiter
+            .get_limiter(ResourceType::Cpu)
+            .set_rate_limit(low_pri_limit);
+        PRIORITY_QUOTA_LIMIT_VEC
+            .get_metric_with_label_values(&[TaskPriority::Low.as_str()])
+            .unwrap()
+            .set(low_pri_limit as i64);
     }
 }
 
@@ -760,9 +736,10 @@ mod tests {
             check(limiter.get_limiter(ResourceType::Io).get_rate_limit(), io);
         }
 
-        // util_limit configured at 80% but capped to 70%.
+        // util_limit configured at 80% but capped to bg_resource_threshold=70%.
         // CPU target = 8 * 0.7 = 5.6 cores, IO target = 10000 * 0.7 = 7000
         // CPU min_floor = 1 core, IO min_floor = 1000
+        // bg_scale_start=60%, bg_resource_threshold=70% (scale range: 60→70).
 
         // No load: initial infinity → treated as target → budget = target.
         reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
@@ -774,48 +751,42 @@ mod tests {
         worker.adjust_quota();
         check_limiter_rates(&limiter, 5.6, 7000.0);
 
-        // Under target (50% CPU): resource_util < 70%, current == target,
+        // Under target (50% CPU): resource_util < 60%, current == target,
         // so none of the branches fire → budget = target.
         reset_quota(&mut worker, 4.0, 2000.0, Duration::from_secs(1));
         worker.adjust_quota();
         check_limiter_rates(&limiter, 5.6, 7000.0);
 
-        // Above 70% (80% CPU, 80% IO): resource_util > 70 branch fires.
-        // Budget linearly interpolates from target to min_floor.
-        // CPU: pressure = (80-70)/(100-70) = 1/3. budget = 5.6*(1-1/3) + 1.0*(1/3) ≈
-        // 4.067 IO: pressure = (80-70)/(100-70) = 1/3. budget = 7000*(2/3) +
-        // 1000*(1/3) ≈ 5000
+        // 80% CPU, 80% IO: resource_util > 60% (bg_scale_start).
+        // pressure = (80-60)/(70-60) = 2.0 clamped to 1.0 → min_floor.
+        // CPU: budget = min_floor = 1.0. IO: budget = min_floor = 1000.
         reset_quota(&mut worker, 6.4, 8000.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter_rates(&limiter, 4.067, 5000.0);
+        check_limiter_rates(&limiter, 1.0, 1000.0);
 
-        // 100% CPU, 95% IO: heavier pressure.
-        // CPU: pressure = (100-70)/30 = 1.0. budget = 5.6*0 + 1.0*1.0 = 1.0 (min_floor)
-        // IO: pressure = (95-70)/30 = 25/30 = 5/6. budget = 7000*(1/6) + 1000*(5/6) ≈
-        // 2000
+        // 100% CPU, 95% IO: pressure still clamped 1.0 → min_floor.
         reset_quota(&mut worker, 8.0, 9500.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter_rates(&limiter, 1.0, 2000.0);
+        check_limiter_rates(&limiter, 1.0, 1000.0);
 
         // Still at 100% CPU, 95% IO: same result (deterministic, no decay).
         reset_quota(&mut worker, 8.0, 9500.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter_rates(&limiter, 1.0, 2000.0);
+        check_limiter_rates(&limiter, 1.0, 1000.0);
 
-        // 85% CPU, 80% IO: moderate pressure.
-        // CPU: pressure = (85-70)/30 = 0.5. budget = 5.6*0.5 + 1.0*0.5 = 3.3
-        // IO: pressure = (80-70)/30 = 1/3. budget = 7000*(2/3) + 1000*(1/3) = 5000
-        reset_quota(&mut worker, 6.8, 8000.0, Duration::from_secs(1));
+        // 65% CPU, 65% IO: in the scale range (60-70%).
+        // CPU: pressure = (65-60)/(70-60) = 0.5. budget = 5.6*0.5 + 1.0*0.5 = 3.3
+        // IO: pressure = 0.5. budget = 7000*0.5 + 1000*0.5 = 4000
+        reset_quota(&mut worker, 5.2, 6500.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter_rates(&limiter, 3.3, 5000.0);
+        check_limiter_rates(&limiter, 3.3, 4000.0);
 
-        // Load drops (50% CPU, 20% IO): resource_util < 63%, current < 0.9*target
+        // Load drops (50% CPU, 20% IO): resource_util < 54% (0.9*60%), current < 0.9*target
         // → incremental increase: budget = current * 1.1
-        // CPU: 3.3 * 1.1 = 3.63
-        // IO: 5000 * 1.1 = 5500
+        // CPU: 3.3 * 1.1 = 3.63. IO: 4000 * 1.1 = 4400
         reset_quota(&mut worker, 4.0, 2000.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter_rates(&limiter, 3.63, 5500.0);
+        check_limiter_rates(&limiter, 3.63, 4400.0);
 
         // --- Multi-group: proportional distribution by RU quota ---
         let bg = new_background_resource_group_ru(
@@ -833,22 +804,22 @@ mod tests {
         // No load: default at 3.63M, bg at infinity → target/2 = 2.8M
         // current_total = 3.63M + 2.8M = 6.43M > target (5.6M) → budget = target = 5.6M
         // default: 5.6 * 2/3 ≈ 3.733, bg: 5.6/3 ≈ 1.867
-        // IO: current_total = 5500 + 3500 = 9000 > 7000 → budget = 7000
-        // default: 7000 * 2/3 ≈ 4667, bg: 7000/3 ≈ 2333
+        // IO: current_total = 4400 + 3500 = 7900 > 7000 → budget = 7000
+        // default: 7000 * 2/3 ≈ 4666.7, bg: 7000/3 ≈ 2333.3
         reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
         worker.adjust_quota();
         check_limiter_rates(&limiter, 3.733, 4666.7);
         check_limiter_rates(&bg_limiter, 1.867, 2333.3);
 
-        // Over 70% (100% CPU, 95% IO): budget scales down from target.
-        // CPU: pressure = 1.0. budget = min_floor = 1.0M
+        // Over 60% (100% CPU, 95% IO): budget scales down from target.
+        // CPU: pressure = (100-60)/(70-60) = 4.0 clamped 1.0 → min_floor = 1.0M.
         //   default: 1.0M * 2/3 ≈ 0.667, bg: 1.0M/3 ≈ 0.333
-        // IO: pressure = 25/30 = 5/6. budget = 7000*(1/6) + 1000*(5/6) = 2000
-        //   default: 2000 * 2/3 ≈ 1333.3, bg: 2000/3 ≈ 666.7
+        // IO: pressure clamped 1.0 → min_floor = 1000.
+        //   default: 1000 * 2/3 ≈ 666.7, bg: 1000/3 ≈ 333.3
         reset_quota(&mut worker, 8.0, 9500.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter_rates(&limiter, 0.667, 1333.3);
-        check_limiter_rates(&bg_limiter, 0.333, 666.7);
+        check_limiter_rates(&limiter, 0.667, 666.7);
+        check_limiter_rates(&bg_limiter, 0.333, 333.3);
 
         // --- Limiter version change ---
         let bg = new_resource_group_ru(BACKGROUND_WORKER_THREAD.into(), 1000, 15);
@@ -880,14 +851,14 @@ mod tests {
 
         // New bg limiter at infinity → target/2 = 2.8M.
         // default at 0.667M. current_total = 0.667M + 2.8M = 3.467M
-        // 3.467M < 5.04M → incremental: budget = 3.467 * 1.1 = 3.8137M
+        // 3.467M < 5.04M and util=0% < 54% → incremental: budget = 3.467 * 1.1 = 3.8137M
         // default: 3.8137 * 2/3 ≈ 2.542, new_bg: 3.8137/3 ≈ 1.271
-        // IO: default 1333.3, bg inf→3500, total=4833.3 < 6300 → 4833.3*1.1=5316.6
-        // default: 5316.6 * 2/3 ≈ 3544.4, new_bg: 5316.6/3 ≈ 1772.2
+        // IO: default 666.7, new_bg inf→3500, total=4166.7 < 6300 → 4166.7*1.1=4583.4
+        // default: 4583.4 * 2/3 ≈ 3055.6, new_bg: 4583.4/3 ≈ 1527.8
         reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter_rates(&limiter, 2.542, 3544.4);
-        check_limiter_rates(&new_bg_limiter, 1.271, 1772.2);
+        check_limiter_rates(&limiter, 2.542, 3055.6);
+        check_limiter_rates(&new_bg_limiter, 1.271, 1527.8);
     }
 
     #[test]
@@ -902,6 +873,7 @@ mod tests {
 
         // 1 background group with no explicit utilization limit.
         // bg_util_limit defaults to 100, capped to 70 by bg_resource_threshold.
+        // bg_scale_start=60%, bg_resource_threshold=70%.
         let bg = new_background_resource_group_ru("bg_worker".into(), 5000, 8, vec!["br".into()]);
         resource_ctl.add_resource_group(bg);
         let limiter = resource_ctl
@@ -952,9 +924,9 @@ mod tests {
             7000.0,
         );
 
-        // --- Saturate CPU (100%, 80% IO) → budget scales down from target ---
-        // CPU: pressure = (100-70)/30 = 1.0. budget = min_floor = 1.0
-        // IO: pressure = (80-70)/30 = 1/3. budget = 7000*(2/3) + 1000*(1/3) = 5000
+        // --- Saturate CPU (100%, 80% IO) → budget scales to min_floor ---
+        // CPU: pressure = (100-60)/(70-60) = 4.0 clamped 1.0 → min_floor = 1.0
+        // IO: pressure = (80-60)/(70-60) = 2.0 clamped 1.0 → min_floor = 1000
         reset_quota(&mut worker, 8.0, 8000.0, Duration::from_secs(1));
         worker.adjust_quota();
         check(
@@ -963,13 +935,12 @@ mod tests {
         );
         check(
             limiter.get_limiter(ResourceType::Io).get_rate_limit(),
-            5000.0,
+            1000.0,
         );
 
         // --- Unsaturate CPU (25%) → budget recovers incrementally ---
-        // CPU: resource_util = 25% < 63, current 1.0M < 5.04M → budget = 1.0 * 1.1 =
-        // 1.1 IO: resource_util = 20% < 63, current 5000 < 6300 → budget = 5000
-        // * 1.1 = 5500
+        // CPU: resource_util = 25% < 54% (0.9*60%), current 1.0M < 5.04M → 1.0 * 1.1 = 1.1
+        // IO: resource_util = 20% < 54%, current 1000 < 6300 → 1000 * 1.1 = 1100
         reset_quota(&mut worker, 2.0, 2000.0, Duration::from_secs(1));
         worker.adjust_quota();
         check(
@@ -978,13 +949,13 @@ mod tests {
         );
         check(
             limiter.get_limiter(ResourceType::Io).get_rate_limit(),
-            5500.0,
+            1100.0,
         );
 
-        // --- 85% CPU, 80% IO: moderate pressure ---
-        // CPU: pressure = (85-70)/30 = 0.5. budget = 5.6*0.5 + 1.0*0.5 = 3.3
-        // IO: pressure = (80-70)/30 = 1/3. budget = 7000*(2/3) + 1000*(1/3) = 5000
-        reset_quota(&mut worker, 6.8, 8000.0, Duration::from_secs(1));
+        // --- 65% CPU, 65% IO: in scale range (60-70%) ---
+        // CPU: pressure = (65-60)/(70-60) = 0.5. budget = 5.6*0.5 + 1.0*0.5 = 3.3
+        // IO: pressure = 0.5. budget = 7000*0.5 + 1000*0.5 = 4000
+        reset_quota(&mut worker, 5.2, 6500.0, Duration::from_secs(1));
         worker.adjust_quota();
         check(
             limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
@@ -992,7 +963,7 @@ mod tests {
         );
         check(
             limiter.get_limiter(ResourceType::Io).get_rate_limit(),
-            5000.0,
+            4000.0,
         );
     }
 
@@ -1000,6 +971,9 @@ mod tests {
     fn test_adjust_priority_resource_limiter() {
         let resource_ctl = Arc::new(ResourceGroupManager::default());
         let priority_limiters = resource_ctl.get_priority_resource_limiters();
+        // 8 CPU cores. low_pri_start=70% (bg_resource_threshold default),
+        // low_pri_end=80% (low_pri_cpu_end_threshold default).
+        // min_floor = 8M * 0.01 = 0.08M µs = 0.08 cores.
         let test_provider = TestResourceStatsProvider::new(8.0, f64::INFINITY);
         let mut worker =
             PriorityLimiterAdjustWorker::with_quota_getter(resource_ctl.clone(), test_provider);
@@ -1008,12 +982,6 @@ mod tests {
                            cpu: f64| {
             worker.resource_quota_getter.cpu_used = cpu;
             worker.last_adjust_time = Instant::now_coarse() - Duration::from_secs(10);
-            priority_limiters[1]
-                .get_limiter(ResourceType::Cpu)
-                .set_rate_limit(f64::INFINITY);
-            priority_limiters[2]
-                .get_limiter(ResourceType::Cpu)
-                .set_rate_limit(f64::INFINITY);
         };
 
         #[track_caller]
@@ -1027,7 +995,7 @@ mod tests {
             );
         }
 
-        let check_limiter = |high: f64, medium: f64, low: f64| {
+        let check_limiters = |high: f64, medium: f64, low: f64| {
             check(
                 priority_limiters[0]
                     .get_limiter(ResourceType::Cpu)
@@ -1048,117 +1016,211 @@ mod tests {
             );
         };
 
-        // only default group, always return infinity.
+        // Only default group: always infinity for all priorities.
         reset_quota(&mut worker, 6.4);
-        priority_limiters[1].consume(Duration::from_secs(50), IoBytes::default(), true, false);
         worker.adjust();
-        check_limiter(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+        check_limiters(f64::INFINITY, f64::INFINITY, f64::INFINITY);
 
         let rg1 = new_resource_group_ru("test_high".into(), 1000, 16);
         resource_ctl.add_resource_group(rg1);
         let rg2 = new_resource_group_ru("test_low".into(), 2000, 1);
         resource_ctl.add_resource_group(rg2);
 
-        reset_quota(&mut worker, 6.4);
-        priority_limiters[1].consume(Duration::from_secs(64), IoBytes::default(), true, false);
+        // CPU=60% (4.8 cores) ≤ 70% (low_pri_start) → low priority unlimited.
+        reset_quota(&mut worker, 4.8);
         worker.adjust();
-        check_limiter(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+        check_limiters(f64::INFINITY, f64::INFINITY, f64::INFINITY);
 
-        reset_quota(&mut worker, 6.4);
-        for _i in 0..100 {
-            priority_limiters[0].consume(
-                Duration::from_millis(240),
-                IoBytes::default(),
-                true,
-                false,
-            );
-            priority_limiters[1].consume(
-                Duration::from_millis(400),
-                IoBytes::default(),
-                true,
-                false,
-            );
-        }
+        // CPU=70% (5.6 cores): exactly at threshold → low priority unlimited.
+        reset_quota(&mut worker, 5.6);
         worker.adjust();
-        check_limiter(f64::INFINITY, 3.2, 0.8);
+        check_limiters(f64::INFINITY, f64::INFINITY, f64::INFINITY);
 
-        reset_quota(&mut worker, 6.4);
-        for _i in 0..100 {
-            priority_limiters[0].consume(
-                Duration::from_millis(120),
-                IoBytes::default(),
-                true,
-                false,
-            );
-            priority_limiters[1].consume(
-                Duration::from_millis(200),
-                IoBytes::default(),
-                true,
-                false,
-            );
-        }
-        worker.adjust();
-        check_limiter(f64::INFINITY, 1.6, 0.8);
-
-        reset_quota(&mut worker, 6.4);
-        for _i in 0..100 {
-            priority_limiters[2].consume(
-                Duration::from_millis(200),
-                IoBytes::default(),
-                true,
-                false,
-            );
-        }
-        worker.adjust();
-        check_limiter(f64::INFINITY, f64::INFINITY, f64::INFINITY);
-
-        reset_quota(&mut worker, 8.0);
-        for _i in 0..100 {
-            priority_limiters[0].consume(
-                Duration::from_millis(240),
-                IoBytes::default(),
-                true,
-                false,
-            );
-            priority_limiters[1].consume(
-                Duration::from_millis(240),
-                IoBytes::default(),
-                true,
-                false,
-            );
-            priority_limiters[2].consume(
-                Duration::from_millis(320),
-                IoBytes::default(),
-                true,
-                false,
-            );
-        }
-        worker.adjust();
-        check_limiter(f64::INFINITY, 3.2, 0.8);
-
+        // CPU=75% (6.0 cores): pressure = (75-70)/(80-70) = 0.5.
+        // limit = 8M*(1-0.5) + 0.08M*0.5 = 4M + 0.04M = 4.04M µs = 4.04 cores.
+        // High and medium stay infinity.
         reset_quota(&mut worker, 6.0);
-        for _i in 0..100 {
-            priority_limiters[0].consume(
-                Duration::from_millis(240),
-                IoBytes::default(),
-                true,
-                false,
-            );
-            priority_limiters[2].consume(
-                Duration::from_millis(360),
-                IoBytes::default(),
-                true,
-                false,
-            );
-        }
         worker.adjust();
-        check_limiter(f64::INFINITY, 3.2, 3.2);
+        check_limiters(f64::INFINITY, f64::INFINITY, 4.04);
 
-        // duration too small, unchanged.
-        worker.resource_quota_getter.cpu_used = 6.0;
+        // CPU=80% (6.4 cores): pressure = 1.0 → min_floor = 0.08 cores.
+        reset_quota(&mut worker, 6.4);
+        worker.adjust();
+        check_limiters(f64::INFINITY, f64::INFINITY, 0.08);
+
+        // CPU=100% (8.0 cores): pressure clamped 1.0 → min_floor = 0.08 cores.
+        reset_quota(&mut worker, 8.0);
+        worker.adjust();
+        check_limiters(f64::INFINITY, f64::INFINITY, 0.08);
+
+        // CPU drops back to 65% ≤ 70% → low priority restored to infinity.
+        reset_quota(&mut worker, 5.2);
+        worker.adjust();
+        check_limiters(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+
+        // Duration too small: limits unchanged.
+        worker.resource_quota_getter.cpu_used = 8.0;
         worker.last_adjust_time = Instant::now_coarse() - Duration::from_millis(500);
         worker.adjust();
-        check_limiter(f64::INFINITY, 3.2, 3.2);
+        check_limiters(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+    }
+
+    /// Verifies that the three load-shedding tiers are contiguous and do not
+    /// bleed into each other:
+    ///
+    /// - 0–60% CPU   : background full, low-priority unlimited
+    /// - 60–70% CPU  : background linearly throttled, low-priority unlimited
+    /// - 70–80% CPU  : background at min_floor, low-priority linearly throttled
+    /// - >80% CPU    : both at min_floor
+    #[test]
+    fn test_tiered_load_shedding() {
+        let resource_ctl = Arc::new(ResourceGroupManager::default());
+
+        // One background group (bg_util_limit from default = 100% capped to 70%).
+        let bg = new_background_resource_group_ru("bg".into(), 1000, 8, vec!["br".into()]);
+        resource_ctl.add_resource_group(bg);
+        let bg_limiter = resource_ctl
+            .get_background_resource_limiter("bg", "br")
+            .unwrap();
+
+        // Two foreground groups so group_count > 1 and low-priority limiter fires.
+        resource_ctl.add_resource_group(new_resource_group_ru("fg_high".into(), 1000, 16));
+        resource_ctl.add_resource_group(new_resource_group_ru("fg_low".into(), 1000, 1));
+
+        let priority_limiters = resource_ctl.get_priority_resource_limiters();
+        let low_limiter = &priority_limiters[TaskPriority::Low as usize];
+
+        let compaction_pending_bytes_ratio = Arc::new(AtomicU32::new(0));
+        let mut bg_worker = GroupQuotaAdjustWorker::with_quota_getter(
+            resource_ctl.clone(),
+            TestResourceStatsProvider::new(8.0, 10000.0),
+            compaction_pending_bytes_ratio,
+        );
+        let mut pri_worker = PriorityLimiterAdjustWorker::with_quota_getter(
+            resource_ctl.clone(),
+            TestResourceStatsProvider::new(8.0, f64::INFINITY),
+        );
+
+        // bg: target = 8 * 0.7 = 5.6 cores, min_floor = 1.0 core.
+        // low: total = 8M µs, min_floor = 8M * 0.01 = 0.08M µs = 0.08 cores.
+        const BG_TARGET: f64 = 5.6;
+        const BG_FLOOR: f64 = 1.0;
+        const LOW_FLOOR: f64 = 0.08;
+
+        #[track_caller]
+        fn approx(val: f64, expected: f64) {
+            assert!(
+                (val.is_infinite() && expected.is_infinite())
+                    || (expected * 0.99 < val && val < expected * 1.01),
+                "actual: {val}, expected: {expected}"
+            );
+        }
+
+        macro_rules! tick {
+            ($cpu:expr) => {{
+                bg_worker.resource_quota_getter.cpu_used = $cpu;
+                bg_worker.last_adjust_time = Instant::now_coarse() - Duration::from_secs(10);
+                bg_worker.adjust_quota();
+                pri_worker.resource_quota_getter.cpu_used = $cpu;
+                pri_worker.last_adjust_time = Instant::now_coarse() - Duration::from_secs(10);
+                pri_worker.adjust();
+            }};
+        }
+
+        // 50% CPU — below bg_scale_start (60%): bg=full, low=unlimited.
+        tick!(4.0);
+        approx(
+            bg_limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
+            BG_TARGET * MICROS_PER_SEC,
+        );
+        approx(
+            low_limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
+            f64::INFINITY,
+        );
+
+        // 60% CPU — exactly at bg_scale_start: condition is `> 60%`, so no
+        // scale-down yet. bg=full, low=unlimited.
+        tick!(4.8);
+        approx(
+            bg_limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
+            BG_TARGET * MICROS_PER_SEC,
+        );
+        approx(
+            low_limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
+            f64::INFINITY,
+        );
+
+        // 65% CPU — mid bg range (60–70%): pressure = (65-60)/(70-60) = 0.5.
+        // bg = 5.6*0.5 + 1.0*0.5 = 3.3 cores. low = unlimited.
+        tick!(5.2);
+        approx(
+            bg_limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
+            3.3 * MICROS_PER_SEC,
+        );
+        approx(
+            low_limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
+            f64::INFINITY,
+        );
+
+        // 70% CPU — bg fully throttled (pressure=1.0 → min_floor).
+        // low_pri_start = bg_resource_threshold = 70%: condition is `> 70%`, so
+        // low-priority is still unlimited at exactly 70%.
+        tick!(5.6);
+        approx(
+            bg_limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
+            BG_FLOOR * MICROS_PER_SEC,
+        );
+        approx(
+            low_limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
+            f64::INFINITY,
+        );
+
+        // 75% CPU — bg stays at min_floor; low enters scale range (70–80%).
+        // low pressure = (75-70)/(80-70) = 0.5.
+        // low limit = 8M*(1-0.5) + 0.08M*0.5 = 4.04 cores.
+        tick!(6.0);
+        approx(
+            bg_limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
+            BG_FLOOR * MICROS_PER_SEC,
+        );
+        approx(
+            low_limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
+            4.04 * MICROS_PER_SEC,
+        );
+
+        // 80% CPU — both at min_floor.
+        tick!(6.4);
+        approx(
+            bg_limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
+            BG_FLOOR * MICROS_PER_SEC,
+        );
+        approx(
+            low_limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
+            LOW_FLOOR * MICROS_PER_SEC,
+        );
+
+        // 90% CPU — still both at min_floor (pressure clamped to 1.0).
+        tick!(7.2);
+        approx(
+            bg_limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
+            BG_FLOOR * MICROS_PER_SEC,
+        );
+        approx(
+            low_limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
+            LOW_FLOOR * MICROS_PER_SEC,
+        );
+
+        // Recovery: CPU drops to 50% — bg ramps up incrementally, low=unlimited.
+        tick!(4.0);
+        let bg_rate = bg_limiter.get_limiter(ResourceType::Cpu).get_rate_limit();
+        assert!(
+            bg_rate > BG_FLOOR * MICROS_PER_SEC && bg_rate < BG_TARGET * MICROS_PER_SEC,
+            "bg should be recovering, got {bg_rate}"
+        );
+        approx(
+            low_limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
+            f64::INFINITY,
+        );
     }
 
     #[test]

@@ -285,17 +285,9 @@ impl ResourceGroupManager {
         }
     }
 
-    // only enable priority quota limiter when there is at least 1 user-defined
-    // resource group.
-    #[inline]
-    fn enable_priority_limiter(&self) -> bool {
-        // TODO: reenable it once when we fix https://github.com/tikv/tikv/issues/18939
-        // self.get_group_count() > 1
-        false
-    }
-
     // Always return the background resource limiter if any;
-    // Only return the foregroup limiter when priority is enabled.
+    // For foreground traffic, only throttle low-priority tasks via the shared
+    // low-priority limiter adjusted by PriorityLimiterAdjustWorker.
     pub fn get_resource_limiter(
         &self,
         rg: &str,
@@ -308,18 +300,20 @@ impl ResourceGroupManager {
             return limiter;
         }
 
-        // if there is only 1 resource group, priority quota limiter is useless so just
-        // return None for better performance.
-        if !self.enable_priority_limiter() {
+        // Only throttle low-priority foreground tasks when multiple groups exist.
+        // Higher-priority tasks are never rate-limited here to avoid latency impact.
+        if self.get_group_count() <= 1 {
             return None;
         }
-
-        // request priority has higher priority, 0 means priority is not set.
-        let mut task_priority = override_priority as u32;
-        if task_priority == 0 {
-            task_priority = group_priority;
+        let task_priority_val = if override_priority != 0 {
+            override_priority as u32
+        } else {
+            group_priority
+        };
+        if TaskPriority::from(task_priority_val) != TaskPriority::Low {
+            return None;
         }
-        Some(self.priority_limiters[TaskPriority::from(task_priority) as usize].clone())
+        Some(self.priority_limiters[TaskPriority::Low as usize].clone())
     }
 
     // return a ResourceLimiter for background tasks only.
@@ -1253,9 +1247,14 @@ pub(crate) mod tests {
             .clone()
             .unwrap();
 
+        // Only 1 group (default): foreground always returns None.
         assert!(mgr.get_resource_limiter("default", "query", 0).is_none());
         assert!(
             mgr.get_resource_limiter("default", "query", HIGH_PRIORITY as u64)
+                .is_none()
+        );
+        assert!(
+            mgr.get_resource_limiter("default", "query", LOW_PRIORITY as u64)
                 .is_none()
         );
 
@@ -1302,9 +1301,25 @@ pub(crate) mod tests {
             &default_limiter
         ));
 
+        // Background path still takes priority for "stats" source.
         assert!(Arc::ptr_eq(
             &mgr.get_resource_limiter("test1", "stats", 0).unwrap(),
             &default_limiter
         ));
+
+        // Multiple groups: LOW-priority foreground gets the shared low limiter.
+        let low_limiter = &mgr.get_priority_resource_limiters()[TaskPriority::Low as usize];
+        assert!(Arc::ptr_eq(
+            &mgr.get_resource_limiter("test1", "query", LOW_PRIORITY as u64)
+                .unwrap(),
+            low_limiter
+        ));
+
+        // HIGH and MEDIUM foreground return None (not throttled this way).
+        assert!(
+            mgr.get_resource_limiter("test1", "query", HIGH_PRIORITY as u64)
+                .is_none()
+        );
+        assert!(mgr.get_resource_limiter("test1", "query", 0).is_none());
     }
 }
