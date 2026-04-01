@@ -166,6 +166,7 @@ endif
 
 # If both python and python3 are installed, it will choose python as a preferred option.
 PYTHON := $(shell command -v python 2> /dev/null || command -v python3 2> /dev/null)
+CARGO_SORT_VERSION ?= 1.0.9
 
 # Almost all the rules in this Makefile are PHONY
 # Declaring a rule as PHONY could improve correctness
@@ -345,7 +346,9 @@ unset-override:
 
 pre-format: unset-override
 	@rustup component add rustfmt
-	@which cargo-sort &> /dev/null || cargo +nightly install -q cargo-sort@1.0.9
+	@if ! command -v cargo-sort >/dev/null 2>&1 || ! cargo-sort --version 2>/dev/null | grep -q "^cargo-sort $(CARGO_SORT_VERSION)$$"; then \
+		cargo +nightly install -q cargo-sort@$(CARGO_SORT_VERSION); \
+	fi
 
 format: pre-format
 	@cargo fmt
