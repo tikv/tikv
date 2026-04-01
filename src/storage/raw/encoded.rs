@@ -210,6 +210,10 @@ impl IterMetricsCollector for RawEncodeIterMetricsCollector {
     fn internal_key_skipped_count(&self) -> u64 {
         PerfContext::get().internal_key_skipped_count()
     }
+
+    fn block_read_count(&self) -> u64 {
+        PerfContext::get().block_read_count()
+    }
 }
 
 impl<I: Iterator, F: KvFormat> MetricsExt for RawEncodeIterator<I, F> {

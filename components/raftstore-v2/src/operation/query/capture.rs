@@ -54,12 +54,12 @@ impl<EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport> PeerFsmDelega
         let id = self.fsm.peer().region_id();
         let term = self.fsm.peer().term();
         let (ch, _) = QueryResChannel::with_callback(Box::new(move |res| {
-            if let QueryResult::Response(resp) = res
-                && resp.get_header().has_error()
-            {
-                // Return error
-                capture_change.snap_cb.report_error(resp.clone());
-                return;
+            if let QueryResult::Response(resp) = res {
+                if resp.get_header().has_error() {
+                    // Return error
+                    capture_change.snap_cb.report_error(resp.clone());
+                    return;
+                }
             }
             if let Some(scheduler) = apply_scheduler {
                 scheduler.send(ApplyTask::CaptureApply(capture_change))

@@ -13,7 +13,7 @@ async-compression = { version = "0.4.27", features = [
   "futures-io",
   "zstd",
 ] }
-bytes = "1"
+bytes = { workspace = true }
 chrono = { workspace = true }
 cloud = { workspace = true }
 codec = { workspace = true }
@@ -69,5 +69,5 @@ pprof = { version = "0.15", default-features = false, features = [
   "flamegraph",
   "protobuf-codec",
 ] }
-tempdir = "0.3"
+tempfile = "3.0"
 test_util = { workspace = true }

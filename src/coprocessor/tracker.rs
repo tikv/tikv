@@ -254,6 +254,7 @@ impl<E: Engine> Tracker<E> {
         detail_v2.set_total_versions(self.total_storage_stats.write.total_op_count() as u64);
         with_tls_tracker(|tracker| tracker.write_scan_detail(&mut detail_v2));
         exec_details_v2.set_scan_detail_v2(detail_v2);
+        with_tls_tracker(|tracker| tracker.write_ru_v2(exec_details_v2.mut_ru_v2()));
 
         (exec_details, exec_details_v2)
     }
@@ -402,6 +403,21 @@ impl<E: Engine> Tracker<E> {
                 self.buckets.as_ref(),
             );
         }
+
+        // Track MVCC read activity for compaction prioritization
+        // Use internal_key_skipped_count + internal_delete_skipped_count as proxy for
+        // MVCC versions scanned
+        with_tls_tracker(|tracker| {
+            let versions_scanned = tracker.metrics.internal_key_skipped_count
+                + tracker.metrics.deleted_key_skipped_count;
+            if versions_scanned > 0 {
+                use crate::storage::mvcc::mvcc_read_tracker::MVCC_READ_TRACKER;
+                if let Some(tracker) = MVCC_READ_TRACKER.get() {
+                    tracker.record_read(region_id, versions_scanned);
+                }
+            }
+        });
+
         self.current_stage = TrackerState::Tracked;
     }
 

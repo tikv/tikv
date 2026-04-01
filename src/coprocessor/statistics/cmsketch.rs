@@ -146,11 +146,7 @@ mod tests {
                 datum::encode_value(&mut EvalContext::default(), from_ref(&Datum::U64(*val)))
                     .unwrap();
             let estimate = c.query(&bytes);
-            let err = if *num > estimate {
-                *num - estimate
-            } else {
-                estimate - *num
-            };
+            let err = (*num).abs_diff(estimate);
             total += u64::from(err)
         }
         total / map.len() as u64

@@ -18,7 +18,7 @@ use std::{
     str::FromStr,
     sync::{
         Arc,
-        atomic::AtomicU64,
+        atomic::{AtomicU32, AtomicU64},
         mpsc::{self, sync_channel},
     },
     time::Duration,
@@ -264,6 +264,7 @@ struct TikvServer<ER: RaftEngine> {
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
+    compaction_pending_bytes_ratio: Arc<AtomicU32>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
     resolved_ts_scheduler: Option<Scheduler<Task>>,
@@ -358,10 +359,12 @@ where
             config.quota.background_cpu_time,
             config.quota.background_write_bandwidth,
             config.quota.background_read_bandwidth,
+            config.quota.background_iops_limit,
             config.quota.max_delay_duration,
             config.quota.enable_auto_tune,
         ));
 
+        let compaction_pending_bytes_ratio = Arc::new(AtomicU32::new(0));
         let resource_manager = if config.resource_control.enabled {
             let mgr = Arc::new(ResourceGroupManager::new(config.resource_control.clone()));
             let io_bandwidth = config.storage.io_rate_limit.max_bytes_per_sec.0;
@@ -370,6 +373,7 @@ where
                 pd_client.clone(),
                 &background_worker,
                 io_bandwidth,
+                compaction_pending_bytes_ratio.clone(),
             );
             Some(mgr)
         } else {
@@ -426,6 +430,7 @@ where
             sst_worker: None,
             quota_limiter,
             resource_manager,
+            compaction_pending_bytes_ratio,
             causal_ts_provider,
             tablet_registry: None,
             resolved_ts_scheduler: None,
@@ -727,10 +732,14 @@ where
         self.core.to_stop.push(cdc_worker);
 
         // Create resolved ts.
+        let rts_memory_quota = Arc::new(MemoryQuota::new(
+            self.core.config.resolved_ts.memory_quota.0 as usize,
+        ));
         if self.core.config.resolved_ts.enable {
             let mut rts_worker = Box::new(LazyWorker::new(RESOLVED_TS_WORKER_THREAD));
             // Register the resolved ts observer
-            let resolved_ts_ob = resolved_ts::Observer::new(rts_worker.scheduler());
+            let resolved_ts_ob =
+                resolved_ts::Observer::new(rts_worker.scheduler(), rts_memory_quota.clone());
             resolved_ts_ob.register_to(self.coprocessor_host.as_mut().unwrap());
             // Register config manager for resolved ts worker
             cfg_controller.register(
@@ -749,6 +758,7 @@ where
                 self.env.clone(),
                 self.security_mgr.clone(),
                 storage.get_scheduler().get_txn_status_cache(),
+                rts_memory_quota,
             );
             self.resolved_ts_scheduler = Some(rts_worker.scheduler());
             rts_worker.start_with_timer(rts_endpoint);
@@ -875,6 +885,7 @@ where
             true,
         )
         .unwrap();
+        importer.set_backend_config(backup::storage_backend_config(&self.core.config.backup));
         for (cf_name, compression_type) in &[
             (
                 CF_DEFAULT,
@@ -1660,6 +1671,7 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
             registry,
             raft_engine.as_rocks_engine().cloned(),
             180, // max_samples_to_preserve
+            self.compaction_pending_bytes_ratio.clone(),
         ));
 
         let router = RaftRouter::new(node.id(), router);
@@ -1735,7 +1747,10 @@ fn pre_start() {
 
 #[cfg(test)]
 mod test {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{
+        collections::HashMap,
+        sync::{Arc, atomic::AtomicU32},
+    };
 
     use engine_rocks::raw::Env;
     use engine_traits::{
@@ -1799,7 +1814,13 @@ mod test {
 
         assert!(old_pending_compaction_bytes > new_pending_compaction_bytes);
 
-        let engines_info = Arc::new(EnginesResourceInfo::new(&config, reg, None, 10));
+        let engines_info = Arc::new(EnginesResourceInfo::new(
+            &config,
+            reg,
+            None,
+            10,
+            Arc::new(AtomicU32::new(0)),
+        ));
 
         let mut cached_latest_tablets = HashMap::default();
         engines_info.update(Instant::now(), &mut cached_latest_tablets);

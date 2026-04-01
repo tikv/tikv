@@ -1,7 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::assert_matches::assert_matches;
-
 use engine_traits::RaftEngineReadOnly;
 use kvproto::metapb::Store;
 use raftstore_v2::Bootstrap;
@@ -32,7 +30,10 @@ fn test_bootstrap_half_way_failure() {
     fail::cfg("node_after_bootstrap_store", "return").unwrap();
     let s = format!("{}", bootstrap().unwrap_err());
     assert!(s.contains("node_after_bootstrap_store"), "{}", s);
-    assert_matches!(engines.raft.get_prepare_bootstrap_region(), Ok(None));
+    assert!(matches!(
+        engines.raft.get_prepare_bootstrap_region(),
+        Ok(None)
+    ));
 
     let ident = engines.raft.get_store_ident().unwrap().unwrap();
     assert_ne!(ident.get_store_id(), 0);
@@ -42,20 +43,32 @@ fn test_bootstrap_half_way_failure() {
     fail::cfg("node_after_prepare_bootstrap_cluster", "return").unwrap();
     let s = format!("{}", bootstrap().unwrap_err());
     assert!(s.contains("node_after_prepare_bootstrap_cluster"), "{}", s);
-    assert_matches!(engines.raft.get_prepare_bootstrap_region(), Ok(Some(_)));
+    assert!(matches!(
+        engines.raft.get_prepare_bootstrap_region(),
+        Ok(Some(_))
+    ));
 
     fail::remove("node_after_prepare_bootstrap_cluster");
     fail::cfg("node_after_bootstrap_cluster", "return").unwrap();
     let s = format!("{}", bootstrap().unwrap_err());
     assert!(s.contains("node_after_bootstrap_cluster"), "{}", s);
-    assert_matches!(engines.raft.get_prepare_bootstrap_region(), Ok(Some(_)));
+    assert!(matches!(
+        engines.raft.get_prepare_bootstrap_region(),
+        Ok(Some(_))
+    ));
 
     // Although aborted by error, rebootstrap should continue.
     bootstrap().unwrap().unwrap();
-    assert_matches!(engines.raft.get_prepare_bootstrap_region(), Ok(None));
+    assert!(matches!(
+        engines.raft.get_prepare_bootstrap_region(),
+        Ok(None)
+    ));
 
     // Second bootstrap should be noop.
     assert_eq!(bootstrap().unwrap(), None);
 
-    assert_matches!(engines.raft.get_prepare_bootstrap_region(), Ok(None));
+    assert!(matches!(
+        engines.raft.get_prepare_bootstrap_region(),
+        Ok(None)
+    ));
 }

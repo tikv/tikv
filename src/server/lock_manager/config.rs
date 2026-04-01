@@ -173,8 +173,8 @@ mod tests {
         let config: Config = toml::from_str(conf).unwrap();
         assert_eq!(config.wait_for_lock_timeout.as_millis(), 10);
         assert_eq!(config.wake_up_delay_duration.as_millis(), 100);
-        assert_eq!(config.pipelined, false);
-        assert_eq!(config.in_memory, false);
+        assert!(!config.pipelined);
+        assert!(!config.in_memory);
         assert_eq!(config.in_memory_peer_size_limit.0, 512 << 10);
         assert_eq!(config.in_memory_instance_size_limit.0, 100 << 20);
     }

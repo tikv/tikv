@@ -212,6 +212,8 @@ tame-oauth = { git = "https://github.com/tikv/tame-oauth", branch = "fips-0.9" }
 
 # remove this when https://github.com/danburkert/fs2-rs/pull/42 is merged.
 fs2 = { git = "https://github.com/tikv/fs2-rs", branch = "tikv" }
+# tempdir pulls in remove_dir_all 0.5.x via the benchmark-only perfcnt stack.
+tempdir = { path = "patches/tempdir" }
 
 # Remove this when a new version is release. We need to solve rust-lang/cmake-rs#143.
 cmake = { git = "https://github.com/rust-lang/cmake-rs" }
@@ -313,6 +315,7 @@ external_storage = { path = "components/external_storage" }
 file_system = { path = "components/file_system" }
 crypto = { path = "components/crypto" }
 gcp = { path = "components/cloud/gcp" }
+gcp_v2 = { path = "components/cloud/gcp_v2" }
 health_controller = { path = "components/health_controller" }
 into_other = { path = "components/into_other" }
 keys = { path = "components/keys" }
@@ -355,7 +358,7 @@ tikv_alloc = { path = "components/tikv_alloc" }
 tikv_kv = { path = "components/tikv_kv", default-features = false }
 tikv_util = { path = "components/tikv_util" }
 tipb_helper = { path = "components/tipb_helper" }
-time = { version = "0.1" }
+time = { version = "0.2.23" }
 tracker = { path = "components/tracker" }
 txn_types = { path = "components/txn_types" }
 # External libs
@@ -396,6 +399,7 @@ openssl = "0.10"
 openssl-sys = "0.9"
 compact-log-backup = { path = "components/compact-log-backup" }
 heck = "0.3"
+bytes = "1.11"
 crossbeam = "0.8"
 crossbeam-channel = "0.5"
 crossbeam-utils = "0.8"
@@ -421,7 +425,7 @@ opt-level = 1
 [profile.dev]
 opt-level = 0
 debug = 0
-codegen-units = 4
+codegen-units = 256
 lto = false
 incremental = true
 panic = 'unwind'

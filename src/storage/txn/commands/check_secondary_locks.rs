@@ -174,17 +174,18 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
                     released_lock = lock_released;
                     (status, need_rollback, rollback_overlapped_write)
                 }
-                Some(Either::Right(_shared_locks)) => {
-                    unimplemented!("SharedLocks returned from load_lock is not supported here")
-                }
+                // Async commit transactions don't write shared locks, so if we get SharedLocks,
+                // check the write CF for the commit record directly.
+                Some(Either::Right(_)) => check_determined_txn_status(&mut reader, &key)?,
                 // Searches the write CF for the commit record of the lock and returns the commit
                 // timestamp (0 if the lock is not committed).
                 l => {
-                    mismatch_lock = l.map(|lock| match lock {
-                        Either::Left(lock) => lock,
-                        Either::Right(_shared_locks) => unimplemented!(
-                            "SharedLocks returned from load_lock is not supported here"
-                        ),
+                    // SharedLocks is already handled by the previous match arm, so this is
+                    // unreachable.
+                    mismatch_lock = l.map(|lock_or_shared_locks| {
+                        lock_or_shared_locks
+                            .left()
+                            .expect("SharedLocks is handled above, should not reach here")
                     });
                     check_determined_txn_status(&mut reader, &key)?
                 }

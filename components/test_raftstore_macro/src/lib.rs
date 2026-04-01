@@ -10,6 +10,7 @@ use syn::{Ident, ItemFn, Path, parse_macro_input, parse_quote};
 /// methods using Cluster in the related util modules.
 ///
 /// ex:
+/// ```text
 /// #[test_case(test_raftstore::new_node_cluster)]
 /// #[test_case(test_raftstore::new_server_cluster)]
 /// #[test_case(test_raftstore_v2::new_node_cluster)]
@@ -39,6 +40,7 @@ use syn::{Ident, ItemFn, Path, parse_macro_input, parse_quote};
 ///         let mut cluster = new_cluster(0, 1);
 ///     }
 /// }
+/// ```
 #[proc_macro_attribute]
 pub fn test_case(arg: TokenStream, input: TokenStream) -> TokenStream {
     let mut fn_item = parse_macro_input!(input as ItemFn);

@@ -988,6 +988,38 @@ pub fn must_prewrite_lock_err<E: Engine>(
     .unwrap_err();
 }
 
+pub fn must_shared_prewrite_lock<E: Engine>(
+    engine: &mut E,
+    key: &[u8],
+    pk: &[u8],
+    ts: impl Into<TimeStamp>,
+    for_update_ts: impl Into<TimeStamp>,
+) {
+    let ctx = Context::default();
+    let snapshot = engine.snapshot(Default::default()).unwrap();
+    let for_update_ts = for_update_ts.into();
+    let cm = ConcurrencyManager::new_for_test(for_update_ts);
+    let ts = ts.into();
+    let mut txn = MvccTxn::new(ts, cm);
+    let mut reader = SnapshotReader::new(ts, snapshot, true);
+
+    let mutation = Mutation::make_shared_lock(Key::from_raw(key));
+    prewrite(
+        &mut txn,
+        &mut reader,
+        &default_txn_props(ts, pk, for_update_ts),
+        mutation,
+        &None,
+        DoPessimisticCheck,
+        None,
+    )
+    .unwrap();
+
+    engine
+        .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
+        .unwrap();
+}
+
 pub fn must_pessimistic_prewrite_lock<E: Engine>(
     engine: &mut E,
     key: &[u8],

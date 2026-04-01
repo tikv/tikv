@@ -57,7 +57,7 @@ pub const CDC_THREAD: &str = "cdc";
 
 pub const PD_WORKER_THREAD: &str = "pd-worker";
 
-pub const UNIFIED_READ_POOL_THREAD: &str = "unified-read";
+pub const UNIFIED_READ_POOL_THREAD: &str = "unified-read-pool";
 
 pub const DEBUGGER_THREAD: &str = "debugger";
 
@@ -70,6 +70,8 @@ pub const SCHEDULE_WORKER_POOL_THREAD: &str = "sched-pool";
 pub const SCHEDULE_WORKER_HIGH_PRI_THREAD: &str = "sched-high";
 
 pub const SCHEDULE_WORKER_PRIORITY_THREAD: &str = "sched-pri";
+
+pub const SCHEDULE_THREAD_PREFIX: &str = "sched";
 
 pub const RESOLVED_TS_WORKER_THREAD: &str = "resolved-ts";
 
@@ -154,3 +156,68 @@ pub const SNAP_SENDER_THREAD: &str = "snap-sender";
 pub const TABLET_SNAP_SENDER_THREAD: &str = "tablet-snap";
 
 pub const STATUS_SERVER_THREAD: &str = "status-server";
+
+const LINUX_THREAD_NAME_MAX_LEN: usize = 15;
+
+/// Returns whether `thread_name` belongs to a thread name family whose prefix
+/// is `prefix`.
+///
+/// On Linux, thread names observed via `/proc` come from the `comm` field,
+/// which is truncated to at most 15 visible characters. For long TiKV prefixes
+/// (for example, `"unified-read-pool"`), the observed thread name may only
+/// contain the first 15 bytes of the prefix. We therefore match both:
+/// 1. the full prefix (normal case), and
+/// 2. the 15-byte truncated prefix (Linux truncation case).
+#[inline]
+pub fn matches_thread_name_prefix(thread_name: &str, prefix: &str) -> bool {
+    if thread_name.starts_with(prefix) {
+        return true;
+    }
+    if prefix.len() <= LINUX_THREAD_NAME_MAX_LEN {
+        return false;
+    }
+    // Thread name prefixes are ASCII constants in TiKV; byte slicing is safe.
+    thread_name.starts_with(&prefix[..LINUX_THREAD_NAME_MAX_LEN])
+}
+
+#[inline]
+pub fn matches_scheduler_thread_name(thread_name: &str) -> bool {
+    matches_thread_name_prefix(thread_name, SCHEDULE_THREAD_PREFIX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        LINUX_THREAD_NAME_MAX_LEN, matches_scheduler_thread_name, matches_thread_name_prefix,
+    };
+
+    #[test]
+    fn test_matches_thread_name_prefix_basic() {
+        assert!(matches_thread_name_prefix("unified-read-1", "unified-read"));
+        assert!(!matches_thread_name_prefix(
+            "foo-unified-read",
+            "unified-read"
+        ));
+    }
+
+    #[test]
+    fn test_matches_thread_name_prefix_truncated() {
+        let long_prefix = "unified-read-pool";
+        let truncated = &long_prefix[..LINUX_THREAD_NAME_MAX_LEN];
+        let thread_name = format!("{truncated}-1");
+        assert!(matches_thread_name_prefix(&thread_name, long_prefix));
+        assert!(!matches_thread_name_prefix(
+            &format!("x{thread_name}"),
+            long_prefix
+        ));
+    }
+
+    #[test]
+    fn test_matches_scheduler_thread_name() {
+        assert!(matches_scheduler_thread_name("sched-pool-1"));
+        assert!(matches_scheduler_thread_name("sched-high-1"));
+        assert!(matches_scheduler_thread_name("sched-pri-1"));
+        assert!(matches_scheduler_thread_name("scheduler-worker-pool-1"));
+        assert!(!matches_scheduler_thread_name("foo-sched-pool-1"));
+    }
+}

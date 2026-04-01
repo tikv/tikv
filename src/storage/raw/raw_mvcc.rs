@@ -247,6 +247,10 @@ impl IterMetricsCollector for RawMvccIterMetricsCollector {
     fn internal_key_skipped_count(&self) -> u64 {
         PerfContext::get().internal_key_skipped_count()
     }
+
+    fn block_read_count(&self) -> u64 {
+        PerfContext::get().block_read_count()
+    }
 }
 
 impl<I: Iterator> MetricsExt for RawMvccIterator<I> {
@@ -362,6 +366,6 @@ mod tests {
         assert_eq!(pairs, ret_data);
 
         // two way direction scan is not supported.
-        assert_eq!(iter.next().is_err(), true);
+        iter.next().unwrap_err();
     }
 }

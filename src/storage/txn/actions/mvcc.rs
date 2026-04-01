@@ -19,10 +19,13 @@ pub fn find_mvcc_infos_by_key<S: Snapshot>(
 ) -> crate::storage::txn::Result<LockWritesVals> {
     let mut writes = vec![];
     let mut values = vec![];
-    let lock = reader.load_lock(key)?.map(|lock| match lock {
-        Either::Left(lock) => lock,
-        Either::Right(_shared_locks) => {
-            unimplemented!("SharedLocks returned from load_lock is not supported here")
+    let lock = reader.load_lock(key)?.and_then(|lock| match lock {
+        Either::Left(lock) => Some(lock),
+        // For SharedLocks, we return the first lock for debug purposes.
+        // This function is only used for collecting MVCC info for debugging.
+        Either::Right(mut shared_locks) => {
+            let first_ts = shared_locks.iter_ts().next().cloned();
+            first_ts.and_then(|ts| shared_locks.get_lock(&ts).ok().flatten().cloned())
         }
     });
     let mut ts = TimeStamp::max();

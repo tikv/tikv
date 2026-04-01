@@ -21,8 +21,7 @@ use raftstore::{
     },
 };
 use slog::debug;
-use tikv_util::time::monotonic_raw_now;
-use time::Timespec;
+use tikv_util::time::{Timespec, monotonic_raw_now};
 use tracker::GLOBAL_TRACKERS;
 
 use crate::{
@@ -191,11 +190,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         for (req, ch, mut read_index) in read_index_req.take_cmds().drain(..) {
             ch.read_tracker().map(|tracker| {
                 GLOBAL_TRACKERS.with_tracker(tracker, |t| {
-                    t.metrics.read_index_confirm_wait_nanos = (time - read_index_req.propose_time)
-                        .to_std()
-                        .unwrap()
-                        .as_nanos()
-                        as u64;
+                    t.metrics.read_index_confirm_wait_nanos =
+                        std::time::Duration::try_from(time - read_index_req.propose_time)
+                            .unwrap()
+                            .as_nanos() as u64;
                 })
             });
 

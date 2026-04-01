@@ -42,7 +42,9 @@ use tikv::{
         IoRateLimitConfig, MaxTsConfig,
     },
 };
-use tikv_util::config::{LogFormat, ReadableDuration, ReadableSchedule, ReadableSize};
+use tikv_util::config::{
+    LogFormat, ReadableDuration, ReadableSchedule, ReadableSize, ReadableSizeOrPercent,
+};
 
 mod dynamic;
 mod graceful_shutdown_config;
@@ -80,7 +82,7 @@ fn test_serde_custom_tikv_config() {
     value.slow_log_file = "slow_foo".to_owned();
     value.slow_log_threshold = ReadableDuration::secs(1);
     value.abort_on_panic = true;
-    value.memory_usage_limit = Some(ReadableSize::gb(10));
+    value.memory_usage_limit = Some(ReadableSizeOrPercent::gb(10));
     value.memory_usage_high_water = 0.65;
     value.memory.enable_heap_profiling = false;
     value.memory.profiling_sample_per_bytes = ReadableSize::mb(1);
@@ -756,7 +758,7 @@ fn test_serde_custom_tikv_config() {
         },
         block_cache: BlockCacheConfig {
             shared: None,
-            capacity: Some(ReadableSize::gb(40)),
+            capacity: Some(ReadableSizeOrPercent::gb(40)),
             num_shard_bits: 10,
             strict_capacity_limit: true,
             high_pri_pool_ratio: 0.8,
@@ -868,6 +870,9 @@ fn test_serde_custom_tikv_config() {
             redundant_rows_threshold: 50000,
             redundant_rows_percent_threshold: 20,
             bottommost_level_force: false,
+            mvcc_read_aware_enabled: true,
+            mvcc_scan_threshold: 10000,
+            mvcc_read_weight: 3.0,
         },
     };
     value.pessimistic_txn = PessimisticTxnConfig {
@@ -898,6 +903,8 @@ fn test_serde_custom_tikv_config() {
         scan_lock_pool_size: 1,
         memory_quota: ReadableSize::mb(1),
         incremental_scan_concurrency: 7,
+        memory_quota_active_check_interval: ReadableDuration::secs(2),
+        memory_quota_exceeded_backoff_duration: ReadableDuration::secs(1),
     };
     value.causal_ts = CausalTsConfig {
         renew_interval: ReadableDuration::millis(100),
@@ -911,6 +918,10 @@ fn test_serde_custom_tikv_config() {
     value.resource_control = ResourceControlConfig {
         enabled: false,
         priority_ctl_strategy: PriorityCtlStrategy::Aggressive,
+        bg_resource_threshold: 70.0,
+        bg_compaction_pressure_threshold: 70.0,
+        bg_write_io_ceiling: ReadableSize::gb(100),
+        bg_write_io_floor: ReadableSize::mb(10),
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");

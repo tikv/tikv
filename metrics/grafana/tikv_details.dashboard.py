@@ -945,7 +945,7 @@ def Server() -> RowPanel:
             ),
             graph_panel(
                 title="Disk IO bytes per second",
-                yaxes=yaxes(left_format=UNITS.NANO_SECONDS),
+                yaxes=yaxes(left_format=UNITS.BYTES_SEC_IEC),
                 lines=False,
                 stack=True,
                 targets=[
@@ -2355,22 +2355,23 @@ def RaftPropose() -> RowPanel:
                     target(
                         expr=expr_histogram_quantile(
                             0.99,
-                            "tikv_raftstore_store_perf_context_time_duration_secs",
-                            by_labels=["type"],
-                            is_optional_quantile=True,
-                        ),
-                        legend_format="store-{{type}}-" + OPTIONAL_QUANTILE_INPUT,
-                        additional_groupby=True,
-                    ),
-                    target(
-                        expr=expr_histogram_quantile(
-                            0.99,
                             "tikv_raftstore_apply_perf_context_time_duration_secs",
                             by_labels=["type"],
                             is_optional_quantile=True,
                         ),
                         legend_format="apply-{{type}}-" + OPTIONAL_QUANTILE_INPUT,
                         additional_groupby=True,
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_raftstore_store_perf_context_time_duration_secs",
+                            by_labels=["type"],
+                            is_optional_quantile=True,
+                        ),
+                        legend_format="store-{{type}}-" + OPTIONAL_QUANTILE_INPUT,
+                        additional_groupby=True,
+                        hide=True,
                     ),
                 ],
             ),
@@ -4193,6 +4194,42 @@ def GC() -> RowPanel:
             ),
         ]
     )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Auto Compaction Num Tombstones",
+                description="Histogram of number of tombstones in compaction candidates",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                metric="tikv_auto_compaction_num_tombstones",
+                hide_count=True,
+            ),
+            graph_panel_histogram_quantiles(
+                title="Auto Compaction Num Discardable",
+                description="Histogram of number of discardable MVCC versions in compaction candidates",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                metric="tikv_auto_compaction_num_discardable",
+                hide_count=True,
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Auto Compaction MVCC Versions Scanned",
+                description="Histogram of average MVCC versions scanned per request for compaction candidates",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                metric="tikv_auto_compaction_mvcc_versions_scanned",
+                hide_count=True,
+            ),
+            graph_panel_histogram_quantiles(
+                title="Auto Compaction Score",
+                description="Histogram of compaction scores for candidates",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                metric="tikv_auto_compaction_score",
+                hide_count=True,
+            ),
+        ]
+    )
 
     return layout.row_panel
 
@@ -4224,6 +4261,14 @@ def Snapshot() -> RowPanel:
                             "tikv_raftstore_snapshot_traffic_total",
                             by_labels=["type"],
                         ),
+                        additional_groupby=True,
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_pending_delete_ranges_of_stale_peer",
+                            by_labels=[],
+                        ),
+                        legend_format="pending delete",
                         additional_groupby=True,
                     ),
                 ],
@@ -6972,6 +7017,31 @@ def RocksDB() -> RowPanel:
                             "tikv_storage_ingest_external_file_allow_write_counter",
                             by_labels=["type"],
                         ),
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Rocksdb block read count per second",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                lines=False,
+                stack=True,
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_storage_rocksdb_perf",
+                            label_selectors=['metric="block_read_count"'],
+                            by_labels=["req"],
+                        ),
+                        additional_groupby=True,
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_coprocessor_rocksdb_perf",
+                            label_selectors=['metric="block_read_count"'],
+                            by_labels=["req"],
+                        ),
+                        legend_format="copr-{{req}}",
                         additional_groupby=True,
                     ),
                 ],
@@ -10483,6 +10553,57 @@ def ResourceControl() -> RowPanel:
                             "tikv_resource_control_priority_quota_limit",
                             by_labels=["instance", "priority"],
                         ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Analyze read ops per second (total vs block read)",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_analyze_metrics_total",
+                            label_selectors=['metric="read_total_op_count"'],
+                            by_labels=["instance"],
+                        ),
+                        legend_format="total-op/{{instance}}",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_analyze_metrics_total",
+                            label_selectors=['metric="read_iops"'],
+                            by_labels=["instance"],
+                        ),
+                        legend_format="block-read/{{instance}}",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_coprocessor_rocksdb_perf",
+                            label_selectors=[
+                                'req="analyze_full_sampling"',
+                                'metric="block_read_count"',
+                            ],
+                            by_labels=["instance"],
+                        ),
+                        legend_format="copr-block-read/{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Analyze next batch count per second",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_analyze_metrics_total",
+                            label_selectors=['metric="next_batch_count"'],
+                            by_labels=["instance"],
+                        ),
+                        legend_format="{{instance}}",
                     ),
                 ],
             ),

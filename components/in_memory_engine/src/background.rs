@@ -740,16 +740,15 @@ impl BackgroundRunnerCore {
             regions_to_delete.extend(deletable_regions);
         }
 
-        if !regions_to_delete.is_empty() {
-            if let Err(e) = delete_range_scheduler
+        if !regions_to_delete.is_empty()
+            && let Err(e) = delete_range_scheduler
                 .schedule_force(BackgroundTask::DeleteRegions(regions_to_delete))
-            {
-                error!(
-                    "ime schedule delete range failed";
-                    "err" => ?e,
-                );
-                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
-            }
+        {
+            error!(
+                "ime schedule delete range failed";
+                "err" => ?e,
+            );
+            assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
         }
         for _ in 0..evict_count {
             if rx.recv().await.is_none() {

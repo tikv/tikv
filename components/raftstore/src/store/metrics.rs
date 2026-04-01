@@ -348,6 +348,17 @@ make_static_metric! {
         },
     }
 
+    pub struct StoreCpuPoolGaugeVec: IntGauge {
+        "pool" => {
+            unified_read,
+            scheduler,
+        },
+        "source" => {
+            store_level,
+            region_sum,
+        },
+    }
+
     pub struct SnapshotGenerateBytesTypeVec: IntCounter {
         "type" => SnapshotGenerateBytesType,
     }
@@ -425,6 +436,20 @@ lazy_static! {
         register_histogram!(
             "tikv_raftstore_store_write_msg_block_wait_duration_seconds",
             "Bucketed histogram of write msg block wait duration.",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    /// Actual wait duration passed to spin_at_least in wait_for_a_while (after trend adjustment).
+    pub static ref STORE_WRITE_SPIN_ACTUAL_WAIT_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_write_spin_actual_wait_duration_seconds",
+            "Bucketed histogram of actual spin wait duration used in wait_for_a_while (after trend).",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    /// Adaptive wait duration (wait_duration_adaptive) for observing difference from actual spin.
+    pub static ref STORE_WRITE_ADAPTIVE_WAIT_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_write_adaptive_wait_duration_seconds",
+            "Bucketed histogram of adaptive wait duration (wait_duration_adaptive) in batching.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
 
@@ -1035,4 +1060,11 @@ lazy_static! {
             "Is raft process busy or not",
             &["type"]
         ).unwrap();
+
+    pub static ref STORE_CPU_POOL_GAUGE_VEC: StoreCpuPoolGaugeVec = register_static_int_gauge_vec!(
+        StoreCpuPoolGaugeVec,
+        "tikv_raftstore_cpu_pool_usage",
+        "CPU usage comparison between store-level (ThreadInfoStatistics) and region-level sum (resource metering) per thread pool.",
+        &["pool", "source"]
+    ).unwrap();
 }

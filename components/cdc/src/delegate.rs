@@ -68,9 +68,10 @@ impl Default for DownstreamId {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum DownstreamState {
     /// It's just created and rejects change events and resolved timestamps.
+    #[default]
     Uninitialized,
     /// It has got a snapshot for incremental scan, and change events will be
     /// accepted. However, it still rejects resolved timestamps.
@@ -79,12 +80,6 @@ pub enum DownstreamState {
     /// now.
     Normal,
     Stopped,
-}
-
-impl Default for DownstreamState {
-    fn default() -> Self {
-        Self::Uninitialized
-    }
 }
 
 /// Should only be called when it's uninitialized or stopped. Return false if
@@ -962,6 +957,7 @@ impl Delegate {
                 }
                 // lock_heap initialized and there is lock_modified_counts, update the lock_heap
                 // to avoid the resolved-ts stuck.
+                #[allow(clippy::unnecessary_unwrap)]
                 if !lock_modified_counts.is_empty() && downstream.lock_heap.is_some() {
                     let lock_heap = downstream.lock_heap.as_mut().unwrap();
                     lock_modified_counts.iter().for_each(|modified| {
@@ -1650,7 +1646,7 @@ mod tests {
 
     #[test]
     fn test_observed_range() {
-        for case in vec![
+        for case in [
             (b"".as_slice(), b"".as_slice(), false),
             (b"a", b"", false),
             (b"", b"b", false),

@@ -89,7 +89,11 @@ impl LocalHealthStatistics {
     #[inline]
     fn avg(&self) -> Duration {
         if self.count > 0 {
-            Duration::from_micros(self.duration_sum.as_micros() as u64 / self.count)
+            Duration::from_micros(
+                (self.duration_sum.as_micros() as u64)
+                    .checked_div(self.count)
+                    .unwrap_or(0),
+            )
         } else {
             Duration::default()
         }

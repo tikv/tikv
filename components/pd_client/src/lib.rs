@@ -1,7 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![feature(let_chains)]
-
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
@@ -58,9 +56,13 @@ pub struct RegionStat {
     pub approximate_size: u64,
     pub approximate_keys: u64,
     pub last_report_ts: UnixSecs,
-    // cpu_usage is the CPU time usage of the leader region since the last heartbeat,
-    // which is calculated by cpu_time_delta/heartbeat_reported_interval.
+    // Deprecated in kvproto (`pdpb.RegionHeartbeatRequest.cpu_usage`).
+    // Keep this for backward compatibility while rolling upgrades are in progress.
+    // New PD-side logic should prefer `cpu_stats`.
     pub cpu_usage: u64,
+    // cpu_stats contains detailed CPU usage for the leader and is the preferred
+    // field for PD-side read CPU accounting.
+    pub cpu_stats: pdpb::CpuStats,
 }
 
 #[derive(Clone, Debug, PartialEq)]

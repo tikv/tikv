@@ -43,6 +43,7 @@ pub mod impl_time;
 pub mod impl_vec;
 
 use tidb_query_common::Result;
+#[allow(unused_imports)]
 use tidb_query_datatype::{
     Charset, Collation, FieldTypeAccessor, FieldTypeFlag,
     codec::{
@@ -722,6 +723,8 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::IsIPv4Mapped => is_ipv4_mapped_fn_meta(),
         ScalarFuncSig::IsIPv6 => is_ipv6_fn_meta(),
         ScalarFuncSig::Uuid => uuid_fn_meta(),
+        ScalarFuncSig::UuidVersion => uuid_version_fn_meta(),
+        ScalarFuncSig::UuidTimestamp => uuid_timestamp_fn_meta(),
         // impl_op
         ScalarFuncSig::IntIsNull => is_null_fn_meta::<Int>(),
         ScalarFuncSig::RealIsNull => is_null_fn_meta::<Real>(),

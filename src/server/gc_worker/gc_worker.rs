@@ -279,8 +279,7 @@ fn get_regions_for_range_of_keys(
 fn get_keys_in_region(keys: &mut Peekable<IntoIter<Key>>, region: &Region) -> Vec<Key> {
     let mut keys_in_region = Vec::new();
 
-    loop {
-        let Some(key) = keys.peek() else { break };
+    while let Some(key) = keys.peek() {
         let key = key.as_encoded().as_slice();
 
         if key < region.get_start_key() {
@@ -443,11 +442,7 @@ impl<E: Engine> GcRunnerCore<E> {
         let count = keys.len();
         let range_start_key = keys.first().unwrap().clone();
         let range_end_key = {
-            let mut k = keys
-                .last()
-                .unwrap()
-                .to_raw()
-                .map_err(|e| EngineError::Codec(e))?;
+            let mut k = keys.last().unwrap().to_raw().map_err(EngineError::Codec)?;
             k.push(0);
             Key::from_raw(&k)
         };
@@ -564,11 +559,7 @@ impl<E: Engine> GcRunnerCore<E> {
     ) -> Result<(usize, usize)> {
         let range_start_key = keys.first().unwrap().clone();
         let range_end_key = {
-            let mut k = keys
-                .last()
-                .unwrap()
-                .to_raw()
-                .map_err(|e| EngineError::Codec(e))?;
+            let mut k = keys.last().unwrap().to_raw().map_err(EngineError::Codec)?;
             k.push(0);
             Key::from_raw(&k)
         };
@@ -1312,6 +1303,10 @@ where
             }
         };
 
+        // Initialize the global MVCC read tracker with config manager
+        use crate::storage::mvcc::mvcc_read_tracker::init_mvcc_read_tracker;
+        init_mvcc_read_tracker(self.config_manager.clone());
+
         let compaction_runner = CompactionRunner::new(
             safe_point_provider,
             region_info_provider,
@@ -1579,6 +1574,7 @@ pub mod test_gc_worker {
         }
     }
 
+    #[allow(dead_code)]
     #[derive(Clone, Default)]
     pub struct MultiRocksEngine {
         pub engines: Arc<Mutex<HashMap<u64, PrefixedEngine>>>,
