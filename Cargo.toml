@@ -325,6 +325,7 @@ azure = { path = "components/cloud/azure" }
 backup = { path = "components/backup", default-features = false }
 backup-stream = { path = "components/backup-stream", default-features = false }
 batch-system = { path = "components/batch-system" }
+bytes = "1.11"
 case_macros = { path = "components/case_macros" }
 causal_ts = { path = "components/causal_ts" }
 cdc = { path = "components/cdc", default-features = false }
