@@ -1265,7 +1265,13 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                             build_resolver.store(true, Ordering::Release);
                         }
                     }
-                    _ => return,
+                    _ => {
+                        // The delegate has been deregistered or replaced (e.g. due to
+                        // split/merge/re-subscribe). cb() must still be called to unblock
+                        // the barrier future in the initializer task.
+                        cb();
+                        return;
+                    }
                 }
                 if let Err(e) = sink.unbounded_send(incremental_scan_barrier, true) {
                     warn!("cdc failed to schedule barrier for delta before delta scan";
@@ -1273,6 +1279,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                         "observe_id" => ?observe_id,
                         "downstream_id" => ?downstream_id,
                         "error" => ?e);
+                    // cb() must be called to unblock the barrier future even on error,
+                    // otherwise the initializer task will hang indefinitely.
+                    cb();
                     return;
                 }
                 if on_init_downstream(&downstream_state) {
@@ -2704,6 +2713,120 @@ mod tests {
             "{:?}",
             event
         );
+    }
+
+    /// When `InitDownstream` runs with a stale `observe_id` (delegate replaced or gone),
+    /// the barrier future in the initializer must still be unblocked via `cb()`.
+    #[test]
+    fn test_init_downstream_cb_when_observe_id_mismatches() {
+        let cfg = CdcConfig {
+            min_ts_interval: ReadableDuration(Duration::from_secs(60)),
+            ..Default::default()
+        };
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
+        suite.add_region(1, 100);
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let (conn_tx, _conn_rx) = channel::channel(ConnId::default(), 1, quota.clone());
+        let (sink, _drain) = channel::channel(ConnId::default(), 1, quota);
+
+        let conn = Conn::new(ConnId::default(), conn_tx, String::new());
+        let conn_id = conn.get_id();
+        suite.run(Task::OpenConn { conn });
+        suite.run(set_conn_version_task(
+            conn_id,
+            FeatureGate::batch_resolved_ts(),
+        ));
+
+        let mut req = ChangeDataRequest::default();
+        req.set_region_id(1);
+        let region_epoch = req.get_region_epoch().clone();
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch,
+            RequestId(0),
+            conn_id,
+            ChangeDataRequestKvApi::TiDb,
+            false,
+            ObservedRange::default(),
+        );
+        suite.run(Task::Register {
+            request: req,
+            downstream,
+        });
+
+        let cb_called = Arc::new(AtomicBool::new(false));
+        let cb_flag = cb_called.clone();
+        suite.run(Task::InitDownstream {
+            region_id: 1,
+            observe_id: ObserveId::new(),
+            downstream_id: DownstreamId::new(),
+            downstream_state: Arc::new(AtomicCell::new(DownstreamState::Normal)),
+            sink,
+            build_resolver: Arc::new(AtomicBool::new(false)),
+            incremental_scan_barrier: CdcEvent::Barrier(Some(Box::new(|()| {}))),
+            cb: Box::new(move || {
+                cb_flag.store(true, Ordering::SeqCst);
+            }),
+        });
+        assert!(cb_called.load(Ordering::SeqCst));
+    }
+
+    /// If the incremental-scan barrier cannot be sent to the sink, `cb()` must still run
+    /// so the initializer does not hang waiting on the barrier future.
+    #[test]
+    fn test_init_downstream_cb_when_sink_send_fails() {
+        let cfg = CdcConfig {
+            min_ts_interval: ReadableDuration(Duration::from_secs(60)),
+            ..Default::default()
+        };
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
+        suite.add_region(1, 100);
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let (conn_tx, _conn_rx) = channel::channel(ConnId::default(), 1, quota.clone());
+        let (sink, drain) = channel::channel(ConnId::default(), 1, quota);
+        drop(drain);
+
+        let conn = Conn::new(ConnId::default(), conn_tx, String::new());
+        let conn_id = conn.get_id();
+        suite.run(Task::OpenConn { conn });
+        suite.run(set_conn_version_task(
+            conn_id,
+            FeatureGate::batch_resolved_ts(),
+        ));
+
+        let mut req = ChangeDataRequest::default();
+        req.set_region_id(1);
+        let region_epoch = req.get_region_epoch().clone();
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch,
+            RequestId(0),
+            conn_id,
+            ChangeDataRequestKvApi::TiDb,
+            false,
+            ObservedRange::default(),
+        );
+        suite.run(Task::Register {
+            request: req,
+            downstream,
+        });
+        let observe_id = suite.capture_regions[&1].handle.id;
+
+        let cb_called = Arc::new(AtomicBool::new(false));
+        let cb_flag = cb_called.clone();
+        suite.run(Task::InitDownstream {
+            region_id: 1,
+            observe_id,
+            downstream_id: DownstreamId::new(),
+            downstream_state: Arc::new(AtomicCell::new(DownstreamState::Normal)),
+            sink,
+            build_resolver: Arc::new(AtomicBool::new(false)),
+            incremental_scan_barrier: CdcEvent::Barrier(Some(Box::new(|()| {}))),
+            cb: Box::new(move || {
+                cb_flag.store(true, Ordering::SeqCst);
+            }),
+        });
+        assert!(cb_called.load(Ordering::SeqCst));
     }
 
     #[test]
