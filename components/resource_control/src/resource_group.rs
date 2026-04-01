@@ -32,7 +32,7 @@ use yatp::queue::priority::TaskPriorityProvider;
 
 use crate::{
     config::Config,
-    metrics::{TWO_PHASE_THROTTLED_REQUESTS, deregister_metrics},
+    metrics::{RESOURCE_GROUP_VT_RATE, TWO_PHASE_THROTTLED_REQUESTS, deregister_metrics},
     resource_limiter::ResourceLimiter,
 };
 
@@ -67,6 +67,8 @@ pub(crate) struct RuTracker {
     buckets: Vec<u64>,
     current_bucket: usize,
     last_rotation: Instant,
+    // Cached rate (VT/s) recomputed only on bucket rotation (once per minute).
+    cached_rate: u64,
 }
 
 impl RuTracker {
@@ -76,19 +78,17 @@ impl RuTracker {
             buckets: vec![0; num_buckets],
             current_bucket: 0,
             last_rotation: Instant::now_coarse(),
+            cached_rate: 0,
         }
     }
 
     /// Record `vt_delta` (consumed * weight) into the current bucket,
     /// rotating stale buckets first if a minute or more has elapsed.
+    /// The cached rate is recomputed only on rotation.
     fn record(&mut self, vt_delta: u64) {
-        let elapsed_secs = self
-            .last_rotation
-            .saturating_elapsed()
-            .as_secs();
+        let elapsed_secs = self.last_rotation.saturating_elapsed().as_secs();
         if elapsed_secs >= BUCKET_DURATION_SECS {
-            let rotations =
-                (elapsed_secs / BUCKET_DURATION_SECS) as usize;
+            let rotations = (elapsed_secs / BUCKET_DURATION_SECS) as usize;
             let n = self.buckets.len();
             let clear = rotations.min(n);
             for i in 0..clear {
@@ -96,20 +96,29 @@ impl RuTracker {
                 self.buckets[idx] = 0;
             }
             self.current_bucket = (self.current_bucket + rotations) % n;
-            // Advance last_rotation by the number of full buckets elapsed so
-            // sub-minute remainder is preserved.
             self.last_rotation = Instant::now_coarse();
+            // Recompute the rate now that stale buckets are cleared.
+            let total: u64 = self.buckets.iter().sum();
+            let window_secs = n as u64 * BUCKET_DURATION_SECS;
+            self.cached_rate = total / window_secs;
         }
         self.buckets[self.current_bucket] =
             self.buckets[self.current_bucket].saturating_add(vt_delta);
     }
 
-    /// Returns the average VT consumption rate in VT-units per second over
-    /// the full window.
+    /// Returns the cached average VT consumption rate (VT-units per second)
+    /// over the full window. Updated once per minute on bucket rotation.
     pub(crate) fn get_vt_rate_per_second(&self) -> u64 {
+        self.cached_rate
+    }
+
+    /// Recomputes cached_rate from current bucket state. Use in tests when
+    /// bucket values are set directly without triggering a rotation.
+    #[cfg(test)]
+    pub(crate) fn force_recompute_rate(&mut self) {
         let total: u64 = self.buckets.iter().sum();
         let window_secs = self.buckets.len() as u64 * BUCKET_DURATION_SECS;
-        total / window_secs
+        self.cached_rate = total / window_secs;
     }
 }
 
@@ -607,7 +616,7 @@ impl ResourceController {
         } else {
             0
         };
-        let window_secs = self.config.value().ru_historical_window.as_secs();
+        let window_secs = self.config.value().ru_historical_window_mins * 60;
         let ru_tracker = if self.is_read {
             Some(Mutex::new(RuTracker::new(window_secs)))
         } else {
@@ -762,20 +771,24 @@ impl ResourceController {
         self.resource_consumptions
             .read()
             .iter()
-            .for_each(|(_, tracker)| {
+            .for_each(|(name, tracker)| {
                 if let Some(ru_tracker) = &tracker.ru_tracker {
-                    if dynamic {
+                    let rate = ru_tracker.lock().unwrap().get_vt_rate_per_second();
+
+                    // Emit per-group VT rate metric (updated once per minute on rotation).
+                    if let Ok(name_str) = std::str::from_utf8(name) {
+                        RESOURCE_GROUP_VT_RATE
+                            .with_label_values(&[name_str])
+                            .set(rate as i64);
+                    }
+
+                    if dynamic && rate > 0 {
                         // Update cached_reservation from sliding-window history.
                         // 0 is left as-is for groups with no history yet, which
                         // keeps them in phase 1 until history is established.
-                        let rate = ru_tracker.lock().unwrap().get_vt_rate_per_second();
-                        if rate > 0 {
-                            tracker.cached_reservation.store(rate, Ordering::Relaxed);
-                        }
+                        tracker.cached_reservation.store(rate, Ordering::Relaxed);
                     }
                     // Leaky bucket: group earns back one second of reservation.
-                    // This prevents allocated_vt from growing unboundedly and
-                    // lets a group recover phase 0 after a burst subsides.
                     let rate = tracker.cached_reservation.load(Ordering::Relaxed);
                     let alloc = tracker.allocated_vt.load(Ordering::Relaxed);
                     tracker
@@ -1451,21 +1464,31 @@ pub(crate) mod tests {
         let window_secs = 120; // 2 buckets of 60s each
         let mut tracker = RuTracker::new(window_secs);
 
-        // Record 6000 VT in the first bucket (rate = 6000/120 = 50/s).
+        // Fill bucket[0] with 6000 VT, then rotate.
+        // At rotation time buckets = [6000, 0] → rate = 6000/120 = 50/s.
         tracker.record(6000);
-        assert_eq!(tracker.get_vt_rate_per_second(), 50);
-
-        // Simulate bucket rotation by directly advancing last_rotation.
         tracker.last_rotation =
             Instant::now_coarse() - Duration::from_secs(BUCKET_DURATION_SECS);
-        tracker.record(3000); // adds 3000 to the new bucket
-        // total = 6000 + 3000 = 9000, window = 120s → 75/s
-        assert_eq!(tracker.get_vt_rate_per_second(), 75);
+        tracker.record(0); // triggers rotation, recomputes cached_rate from completed buckets
+        assert_eq!(tracker.get_vt_rate_per_second(), 50);
 
-        // Rotate past the whole window: old data should be cleared.
+        // Fill bucket[1] with 3000 VT, then rotate.
+        // Rotation clears bucket[0] (stale), so buckets = [0, 3000] → rate = 3000/120 = 25/s.
+        tracker.record(3000);
+        tracker.last_rotation =
+            Instant::now_coarse() - Duration::from_secs(BUCKET_DURATION_SECS);
+        tracker.record(0);
+        assert_eq!(tracker.get_vt_rate_per_second(), 25);
+
+        // Rotate past the whole window: all old data is cleared.
+        // Record 1200 in the new bucket, then rotate once more to count it.
+        // rate = 1200/120 = 10/s.
         tracker.last_rotation =
             Instant::now_coarse() - Duration::from_secs(window_secs + BUCKET_DURATION_SECS);
-        tracker.record(1200); // only this bucket should count
+        tracker.record(1200);
+        tracker.last_rotation =
+            Instant::now_coarse() - Duration::from_secs(BUCKET_DURATION_SECS);
+        tracker.record(0);
         assert_eq!(tracker.get_vt_rate_per_second(), 10);
     }
 
@@ -1493,7 +1516,7 @@ pub(crate) mod tests {
         // Build a manager with dynamic reservation enabled.
         let mut cfg = Config::default();
         cfg.enable_dynamic_reservation = true;
-        cfg.ru_historical_window = tikv_util::config::ReadableDuration::minutes(10);
+        cfg.ru_historical_window_mins = 10;
         let mgr = ResourceGroupManager::new(cfg);
 
         // steady: quota=1000, has been consuming for a while.
@@ -1519,6 +1542,9 @@ pub(crate) mod tests {
                 for b in tracker.buckets.iter_mut() {
                     *b = 3_000_000;
                 }
+                // Buckets were set directly (no rotation), so force a rate
+                // recompute so cached_rate reflects the new values.
+                tracker.force_recompute_rate();
             }
         }
 

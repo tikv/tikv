@@ -55,6 +55,13 @@ lazy_static! {
         &["resource_group"]
     )
     .unwrap();
+
+    pub static ref RESOURCE_GROUP_VT_RATE: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_resource_control_resource_group_vt_rate",
+        "Historical VT consumption rate (VT-units per second) per resource group",
+        &["resource_group"]
+    )
+    .unwrap();
 }
 
 pub fn deregister_metrics(name: &str) {
@@ -64,4 +71,5 @@ pub fn deregister_metrics(name: &str) {
     }
     _ = BACKGROUND_TASKS_WAIT_DURATION.remove_label_values(&[name]);
     _ = TWO_PHASE_THROTTLED_REQUESTS.remove_label_values(&[name]);
+    _ = RESOURCE_GROUP_VT_RATE.remove_label_values(&[name]);
 }

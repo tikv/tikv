@@ -3,7 +3,7 @@ use std::{fmt, sync::Arc};
 
 use online_config::{ConfigManager, ConfigValue, OnlineConfig};
 use serde::{Deserialize, Serialize};
-use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
+use tikv_util::config::{ReadableSize, VersionTrack};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
@@ -29,11 +29,11 @@ pub struct Config {
     /// This protects sustained workloads from sudden traffic spikes by pushing
     /// bursting groups into the lower-priority weight-based phase.
     pub enable_dynamic_reservation: bool,
-    /// Duration of the sliding window used to compute historical VT consumption
-    /// rates for dynamic reservation. The window is divided into 1-minute
-    /// buckets. Not hot-reloadable; changing this requires a restart.
+    /// Size of the sliding window (in minutes) used to compute historical VT
+    /// consumption rates for dynamic reservation. The window is divided into
+    /// 1-minute buckets. Not hot-reloadable; changing this requires a restart.
     #[online_config(skip)]
-    pub ru_historical_window: ReadableDuration,
+    pub ru_historical_window_mins: u64,
 }
 
 impl Default for Config {
@@ -46,7 +46,7 @@ impl Default for Config {
             bg_write_io_ceiling: ReadableSize::gb(100),
             bg_write_io_floor: ReadableSize::mb(10),
             enable_dynamic_reservation: false,
-            ru_historical_window: ReadableDuration::minutes(10),
+            ru_historical_window_mins: 10,
         }
     }
 }
