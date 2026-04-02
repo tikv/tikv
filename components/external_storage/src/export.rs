@@ -5,7 +5,7 @@ use std::{io, path::Path, sync::Arc};
 use async_trait::async_trait;
 pub use aws::{Config as S3Config, S3Storage};
 pub use azure::{AzureStorage, Config as AzureConfig};
-pub use cloud::blob::BlobObject;
+pub use cloud::blob::{BlobObject, BlobObjectHeader};
 use cloud::blob::{BlobStorage, DeletableStorage, IterableStorage, PutResource};
 use encryption::DataKeyManager;
 use futures_util::{future::LocalBoxFuture, stream::LocalBoxStream};
@@ -237,6 +237,10 @@ impl<S: ExternalStorage> ExternalStorage for AutoEncryptLocalRestoredFileExterna
     fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
         self.storage.delete(name)
     }
+
+    async fn head_object(&self, name: &str) -> io::Result<BlobObjectHeader> {
+        self.storage.head_object(name).await
+    }
 }
 
 #[async_trait]
@@ -277,6 +281,10 @@ impl<Blob: BlobStorage + IterableStorage + DeletableStorage> ExternalStorage for
 
     fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
         (**self).delete(name)
+    }
+
+    async fn head_object(&self, name: &str) -> io::Result<BlobObjectHeader> {
+        (**self).head_object(name).await
     }
 }
 

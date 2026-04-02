@@ -37,6 +37,15 @@ impl<'a> From<Box<dyn AsyncRead + Send + Unpin + 'a>> for PutResource<'a> {
     }
 }
 
+#[derive(Clone)]
+pub enum ReplicationStatus {
+    Replicated,
+    Pending,
+}
+pub struct BlobObjectHeader {
+    pub replication_status: Option<ReplicationStatus>,
+}
+
 /// An abstraction for blob storage.
 /// Currently the same as ExternalStorage
 #[async_trait]
@@ -52,6 +61,9 @@ pub trait BlobStorage: 'static + Send + Sync {
 
     /// Read part of contents of the given path.
     fn get_part(&self, name: &str, off: u64, len: u64) -> BlobStream<'_>;
+
+    /// head the object to get the metadata.
+    async fn head_object(&self, name: &str) -> io::Result<BlobObjectHeader>;
 }
 
 pub trait DeletableStorage {
@@ -122,6 +134,10 @@ impl BlobStorage for Box<dyn BlobStorage> {
 
     fn get_part(&self, name: &str, off: u64, len: u64) -> BlobStream<'_> {
         (**self).get_part(name, off, len)
+    }
+
+    async fn head_object(&self, name: &str) -> io::Result<BlobObjectHeader> {
+        (**self).head_object(name).await
     }
 }
 

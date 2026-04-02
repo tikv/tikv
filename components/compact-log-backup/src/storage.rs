@@ -7,9 +7,10 @@ use std::{
     pin::Pin,
     sync::Arc,
     task::{Context, Poll, ready},
+    time::Duration,
 };
 
-use cloud::blob::read_to_end;
+use cloud::blob::{ReplicationStatus, read_to_end};
 use derive_more::Display;
 use external_storage::{BlobObject, ExternalStorage, UnpinReader};
 use futures::{
@@ -42,6 +43,7 @@ pub const METADATA_PREFIX: &str = "v1/backupmeta";
 pub const DEFAULT_COMPACTION_OUT_PREFIX: &str = "v1/compaction_out";
 pub const MIGRATION_PREFIX: &str = "v1/migrations";
 pub const LOCK_PREFIX: &str = "v1/LOCK";
+const WAIT_FILE_SYNC_CONCURRENCY: usize = 16;
 
 /// The in-memory presentation of the message [`brpb::Metadata`].
 #[derive(Debug, PartialEq, Eq)]
@@ -195,6 +197,7 @@ impl std::fmt::Debug for LogFileId {
     }
 }
 
+#[derive(Clone)]
 /// Extra config for loading metadata.
 pub struct LoadFromExt<'a> {
     /// The [`tracing::Span`] of loading remote tasks.
@@ -208,6 +211,8 @@ pub struct LoadFromExt<'a> {
     pub prefetch_running_count: usize,
     /// Max number of spawning tasks to fetch metadatas
     pub prefetch_buffer_count: usize,
+    /// Whether to start from a replication external storage.
+    pub from_replication_storage: bool,
 }
 
 impl LoadFromExt<'_> {
@@ -223,6 +228,7 @@ impl Default for LoadFromExt<'_> {
             meta_prefix: METADATA_PREFIX,
             prefetch_running_count: 128,
             prefetch_buffer_count: 1024,
+            from_replication_storage: false,
         }
     }
 }
@@ -417,7 +423,8 @@ impl<'a> StreamMetaStorage<'a> {
     ) -> Result<Self> {
         let files = s.iter_prefix(ext.meta_prefix).fuse();
         let mig_ext = MigrationStorageWrapper::new(s);
-        let skip_map = MetaEditFilters::from_migrations(mig_ext.load().await?);
+        let skip_map =
+            MetaEditFilters::from_migrations(mig_ext.load(ext.from_replication_storage).await?);
         Ok(Self {
             prefetch: VecDeque::new(),
             files,
@@ -730,6 +737,8 @@ impl MetaEditFilter {
 pub struct MigrationStorageWrapper<'a> {
     storage: &'a dyn ExternalStorage,
     migrations_prefix: &'a str,
+
+    wait_time: Duration,
 }
 
 impl<'a> MigrationStorageWrapper<'a> {
@@ -737,10 +746,11 @@ impl<'a> MigrationStorageWrapper<'a> {
         Self {
             storage,
             migrations_prefix: MIGRATION_PREFIX,
+            wait_time: Duration::from_secs(3),
         }
     }
 
-    pub async fn load(&self) -> Result<Vec<Migration>> {
+    pub async fn load(&self, from_replication_storage: bool) -> Result<Vec<Migration>> {
         self.storage
             .iter_prefix(self.migrations_prefix)
             .err_into()
@@ -748,6 +758,9 @@ impl<'a> MigrationStorageWrapper<'a> {
                 let mut content = vec![];
                 read_to_end(self.storage.read(&item.key), &mut content).await?;
                 protobuf::parse_from_bytes(&content).adapt_err()
+            })
+            .try_filter_map(|m: Migration| async move {
+                Ok((!from_replication_storage || m.replicated).then_some(m))
             })
             .try_collect()
             .await
@@ -774,6 +787,7 @@ impl<'a> MigrationStorageWrapper<'a> {
         )
         .await
         .map_err(|err| err.0)?;
+        self.try_wait_for_sync(&full_name, migration).await?;
         Ok(())
     }
 
@@ -792,6 +806,72 @@ impl<'a> MigrationStorageWrapper<'a> {
             })
             .try_fold(u64::MIN, |val, new| futures::future::ok(val.max(new)))
             .await
+    }
+
+    // wait for the migration and its compactions to be synced to the downstream
+    // storage.
+    async fn try_wait_for_sync(
+        &self,
+        migration_filename: &str,
+        mut migration: Migration,
+    ) -> Result<()> {
+        use protobuf::Message;
+
+        if self.wait_file_for_sync(migration_filename).await?.is_none() {
+            return Ok(());
+        };
+
+        for compaction in migration.get_compactions() {
+            for dir in [compaction.get_artifacts(), compaction.get_generated_files()] {
+                if dir.is_empty() {
+                    continue;
+                }
+                self.storage
+                    .iter_prefix(dir)
+                    .err_into::<Error>()
+                    .try_for_each_concurrent(WAIT_FILE_SYNC_CONCURRENCY, |file| async move {
+                        self.wait_file_for_sync(&file.key).await.map(|_| ())
+                    })
+                    .await?;
+            }
+        }
+
+        migration.set_replicated(true);
+        let bytes = migration.write_to_bytes()?;
+        retry_expr!(
+            self.storage
+                .write(
+                    migration_filename,
+                    UnpinReader(Box::new(Cursor::new(&bytes))),
+                    bytes.len() as u64
+                )
+                .map_err(|err| JustRetry(err))
+        )
+        .await
+        .map_err(|err| err.0)?;
+
+        Ok(())
+    }
+
+    async fn wait_file_for_sync(&self, filename: &str) -> Result<Option<()>> {
+        loop {
+            let replication_status = retry_expr!(
+                self.storage
+                    .head_object(filename)
+                    .map_err(|err| JustRetry(err))
+            )
+            .await
+            .map_err(|err| err.0)?
+            .replication_status;
+            match replication_status {
+                None => return Ok(None),
+                // Storage backends without replication status should skip this waiting.
+                Some(ReplicationStatus::Replicated) => return Ok(Some(())),
+                Some(ReplicationStatus::Pending) => {
+                    tokio::time::sleep(self.wait_time).await;
+                }
+            }
+        }
     }
 }
 
@@ -845,18 +925,131 @@ pub fn hash_meta_edit(meta_edit: &brpb::MetaEdit) -> u64 {
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
+    use std::{
+        collections::HashMap,
+        io,
+        sync::{Arc, Mutex},
+    };
 
-    use external_storage::ExternalStorage;
-    use futures::stream::TryStreamExt;
+    use external_storage::{BlobObject, BlobObjectHeader, ExternalStorage, UnpinReader};
+    use futures::{
+        AsyncReadExt,
+        future::LocalBoxFuture,
+        stream::{LocalBoxStream, StreamExt, TryStreamExt},
+    };
     use kvproto::brpb::{DeleteSpansOfFile, MetaEdit, Migration, Span};
-    use protobuf::Chars;
+    use protobuf::{Chars, parse_from_bytes};
+    use url::Url;
 
     use super::{LoadFromExt, MetaFile, StreamMetaStorage};
     use crate::{
-        storage::{LogFileId, MetaEditFilters, MigrationStorageWrapper},
+        storage::{LogFileId, MetaEditFilters, MigrationStorageWrapper, ReplicationStatus},
         test_util::{KvGen, LogFileBuilder, TmpStorage, gen_step},
     };
+
+    struct MockReplicationStorage {
+        data: Mutex<HashMap<String, Vec<u8>>>,
+        head_calls: Mutex<HashMap<String, usize>>,
+        replication_status: Mutex<Option<ReplicationStatus>>,
+    }
+
+    impl MockReplicationStorage {
+        fn new(initial_replication_status: Option<ReplicationStatus>) -> Self {
+            Self {
+                data: Default::default(),
+                head_calls: Default::default(),
+                replication_status: Mutex::new(initial_replication_status),
+            }
+        }
+
+        fn insert_bytes(&self, key: String, bytes: Vec<u8>) {
+            self.data.lock().unwrap().insert(key, bytes);
+        }
+
+        fn get_bytes(&self, key: &str) -> Vec<u8> {
+            self.data
+                .lock()
+                .unwrap()
+                .get(key)
+                .cloned()
+                .unwrap_or_default()
+        }
+
+        fn head_calls_total(&self) -> usize {
+            self.head_calls.lock().unwrap().values().sum::<usize>()
+        }
+
+        fn head_calls_for(&self, key: &str) -> usize {
+            *self.head_calls.lock().unwrap().get(key).unwrap_or(&0)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ExternalStorage for MockReplicationStorage {
+        fn name(&self) -> &'static str {
+            "mock-replication-storage"
+        }
+
+        fn url(&self) -> io::Result<Url> {
+            Url::parse("mock://localhost").map_err(|e| io::Error::other(e.to_string()))
+        }
+
+        async fn write(
+            &self,
+            name: &str,
+            mut reader: UnpinReader<'_>,
+            _content_length: u64,
+        ) -> io::Result<()> {
+            let mut bytes = Vec::new();
+            // Read all contents from the async reader into memory.
+            reader.0.read_to_end(&mut bytes).await?;
+            self.insert_bytes(name.to_string(), bytes);
+            Ok(())
+        }
+
+        fn read(&self, name: &str) -> external_storage::ExternalData<'_> {
+            let bytes = self.get_bytes(name);
+            Box::new(futures::io::Cursor::new(bytes))
+        }
+
+        fn read_part(&self, name: &str, off: u64, len: u64) -> external_storage::ExternalData<'_> {
+            let bytes = self.get_bytes(name);
+            let off = off as usize;
+            let end = (off + len as usize).min(bytes.len());
+            Box::new(futures::io::Cursor::new(bytes[off..end].to_vec()))
+        }
+
+        fn iter_prefix(&self, prefix: &str) -> LocalBoxStream<'_, io::Result<BlobObject>> {
+            let keys = self
+                .data
+                .lock()
+                .unwrap()
+                .keys()
+                .filter(|k| k.starts_with(prefix))
+                .cloned()
+                .collect::<Vec<_>>();
+            futures::stream::iter(keys.into_iter().map(|key| Ok(BlobObject { key }))).boxed_local()
+        }
+
+        fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
+            let name = name.to_string();
+            Box::pin(async move {
+                self.data.lock().unwrap().remove(&name);
+                Ok(())
+            })
+        }
+
+        async fn head_object(&self, name: &str) -> io::Result<BlobObjectHeader> {
+            let mut head_calls = self.head_calls.lock().unwrap();
+            let mut replication_status = self.replication_status.lock().unwrap();
+            let current_replication_status = replication_status.clone();
+            *replication_status = Some(cloud::blob::ReplicationStatus::Replicated);
+            *head_calls.entry(name.to_string()).or_insert(0) += 1;
+            Ok(BlobObjectHeader {
+                replication_status: current_replication_status,
+            })
+        }
+    }
 
     async fn construct_storage(
         st: &TmpStorage,
@@ -1071,5 +1264,99 @@ mod test {
         let stat = sst.take_statistic();
         assert_eq!(stat.log_filtered_out_by_migration, 12);
         assert_eq!(stat.meta_filtered_out_by_migration, 1);
+    }
+
+    #[tokio::test]
+    async fn test_load_from_replication_storage_filters_replicated() {
+        let st = TmpStorage::create();
+        let s = MigrationStorageWrapper::new(st.storage().as_ref());
+
+        let mut mig_not_replicated = Migration::new();
+        mig_not_replicated.set_replicated(false);
+        s.write(mig_not_replicated.clone().into()).await.unwrap();
+
+        let mut mig_replicated = Migration::new();
+        mig_replicated.set_replicated(true);
+        s.write(mig_replicated.clone().into()).await.unwrap();
+
+        let loaded_replicated = s.load(true).await.unwrap();
+        assert_eq!(loaded_replicated.len(), 1);
+        assert!(loaded_replicated[0].get_replicated());
+
+        let loaded_all = s.load(false).await.unwrap();
+        assert_eq!(loaded_all.len(), 2);
+    }
+
+    async fn prepare_migration_and_compaction_files(
+        storage: Arc<MockReplicationStorage>,
+    ) -> (Migration, Vec<String>, Vec<String>) {
+        let mut wrapped = MigrationStorageWrapper::new(storage.as_ref());
+        wrapped.wait_time = core::time::Duration::from_secs(0);
+
+        // Seed a dummy migration so `largest_id()` returns 0 and the new migration gets
+        // id=1.
+        let dummy = format!("{}/00000000_dummy.mgrt", super::MIGRATION_PREFIX);
+        storage.insert_bytes(dummy, vec![]);
+
+        // Seed compaction artifacts & outputs files.
+        let artifacts_dir = "v1/compaction_out/test1/metas".to_string();
+        let outputs_dir = "v1/compaction_out/test1/outputs".to_string();
+        let artifacts_files = [
+            format!("{}/file-0.cmeta", artifacts_dir),
+            format!("{}/file-1.cmeta", artifacts_dir),
+        ];
+        let outputs_files = [
+            format!("{}/file-0.sst", outputs_dir),
+            format!("{}/file-1.sst", outputs_dir),
+        ];
+        for f in artifacts_files.iter().chain(outputs_files.iter()) {
+            storage.insert_bytes(f.clone(), vec![1, 2, 3]);
+        }
+
+        // Create a migration that points to both directories.
+        let mut migration = Migration::new();
+        migration.set_replicated(false);
+        let mut compaction = kvproto::brpb::LogFileCompaction::new();
+        compaction.set_artifacts(artifacts_dir);
+        compaction.set_generated_files(outputs_dir);
+        migration.mut_compactions().push(compaction);
+
+        // This will indirectly call `try_wait_for_sync` inside `write`.
+        wrapped.write(migration.clone().into()).await.unwrap();
+
+        (migration, artifacts_files.to_vec(), outputs_files.to_vec())
+    }
+
+    #[tokio::test]
+    async fn test_try_wait_for_sync_iterates_compaction_files() {
+        let storage = Arc::new(MockReplicationStorage::new(Some(
+            ReplicationStatus::Pending,
+        )));
+
+        let (migration, artifacts_files, outputs_files) =
+            prepare_migration_and_compaction_files(storage.clone()).await;
+
+        let expected_name = super::name_of_migration(1, &migration);
+        let expected_key = format!("{}/{}", super::MIGRATION_PREFIX, expected_name);
+        let migration_bytes = storage.get_bytes(&expected_key);
+        let parsed: Migration = parse_from_bytes(&migration_bytes).unwrap();
+        assert!(parsed.get_replicated());
+
+        // Expect head_object to be called for:
+        // - the migration itself (1)
+        // - all files under artifacts/ & outputs/ (2 + 2)
+        assert_eq!(storage.head_calls_total(), 6);
+        for f in artifacts_files.iter().chain(outputs_files.iter()) {
+            assert_eq!(storage.head_calls_for(f), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_try_wait_but_no_replication() {
+        let storage = Arc::new(MockReplicationStorage::new(None));
+
+        let _ = prepare_migration_and_compaction_files(storage.clone()).await;
+
+        assert_eq!(storage.head_calls_total(), 1);
     }
 }

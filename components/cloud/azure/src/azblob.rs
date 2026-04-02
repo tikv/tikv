@@ -789,6 +789,12 @@ impl BlobStorage for AzureStorage {
     fn get_part(&self, name: &str, off: u64, len: u64) -> cloud::blob::BlobStream<'_> {
         self.get_range(name, Some(off..off + len))
     }
+
+    async fn head_object(&self, _name: &str) -> io::Result<cloud::blob::BlobObjectHeader> {
+        Ok(cloud::blob::BlobObjectHeader {
+            replication_status: None,
+        })
+    }
 }
 
 impl IterableStorage for AzureStorage {

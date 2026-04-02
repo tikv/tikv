@@ -61,6 +61,8 @@ pub struct ExecutionConfig {
     ///
     /// If `None`, we will use the default level of the selected algorithm.
     pub compression_level: Option<i32>,
+    /// Whether to start from a replication external storage.
+    pub from_replication_storage: bool,
 }
 
 impl slog::KV for ExecutionConfig {
@@ -160,6 +162,7 @@ impl Execution {
         ));
         ext.prefetch_running_count = self.cfg.prefetch_running_count as usize;
         ext.prefetch_buffer_count = self.cfg.prefetch_buffer_count as usize;
+        ext.from_replication_storage = self.cfg.from_replication_storage;
 
         let ExecuteCtx {
             ref storage,
@@ -175,7 +178,7 @@ impl Execution {
         hooks.before_execution_started(cx).await?;
 
         let storage = Arc::clone(storage);
-        let meta = StreamMetaStorage::load_from_ext(&storage, ext).await?;
+        let meta = StreamMetaStorage::load_from_ext(&storage, ext.clone()).await?;
         let stream = meta.flat_map(|file| match file {
             Ok(file) => stream::iter(file.into_logs()).map(Ok).left_stream(),
             Err(err) => stream::once(futures::future::err(err)).right_stream(),
@@ -254,6 +257,7 @@ impl Execution {
         let cx = AfterFinishCtx {
             async_rt: &Handle::current(),
             storage: &storage,
+            ext,
         };
         hooks.after_execution_finished(cx).await?;
 

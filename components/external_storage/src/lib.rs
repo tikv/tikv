@@ -36,7 +36,7 @@ use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use url::Url;
 
 mod hdfs;
-pub use cloud::blob::{BlobObject, IterableStorage};
+pub use cloud::blob::{BlobObject, BlobObjectHeader, IterableStorage};
 pub use hdfs::{HdfsConfig, HdfsStorage};
 pub mod local;
 pub use local::LocalStorage;
@@ -191,6 +191,8 @@ pub trait ExternalStorage: 'static + Send + Sync + Any {
     ) -> LocalBoxStream<'_, std::result::Result<BlobObject, io::Error>>;
 
     fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>>;
+
+    async fn head_object(&self, name: &str) -> io::Result<BlobObjectHeader>;
 }
 
 #[track_caller]
@@ -260,6 +262,10 @@ impl ExternalStorage for Arc<dyn ExternalStorage> {
     fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
         (**self).delete(name)
     }
+
+    async fn head_object(&self, name: &str) -> io::Result<BlobObjectHeader> {
+        (**self).head_object(name).await
+    }
 }
 
 #[async_trait]
@@ -317,6 +323,10 @@ impl ExternalStorage for Box<dyn ExternalStorage> {
 
     fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
         self.as_ref().delete(name)
+    }
+
+    async fn head_object(&self, name: &str) -> io::Result<BlobObjectHeader> {
+        self.as_ref().head_object(name).await
     }
 }
 

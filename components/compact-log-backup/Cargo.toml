@@ -65,9 +65,11 @@ uuid = { version = "0.8", features = ["v4", "serde"] }
 zstd = "0.11"
 
 [dev-dependencies]
+async-trait = "0.1"
 pprof = { version = "0.15", default-features = false, features = [
   "flamegraph",
   "protobuf-codec",
 ] }
 tempfile = "3.0"
 test_util = { workspace = true }
+url = "2"

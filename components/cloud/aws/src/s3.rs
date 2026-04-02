@@ -13,7 +13,7 @@ use aws_sdk_s3::{
     Client,
     config::{HttpClient, StalledStreamProtectionConfig},
     operation::get_object::GetObjectError,
-    types::{CompletedMultipartUpload, CompletedPart},
+    types::{CompletedMultipartUpload, CompletedPart, ReplicationStatus},
 };
 use bytes::Bytes;
 use cloud::{
@@ -780,6 +780,40 @@ impl BlobStorage for S3Storage {
     fn get_part(&self, name: &str, off: u64, len: u64) -> cloud::blob::BlobStream<'_> {
         // inclusive, bytes=0-499 -> [0, 499]
         self.get_range(name, Some(format!("bytes={}-{}", off, off + len - 1)))
+    }
+
+    async fn head_object(&self, name: &str) -> io::Result<cloud::blob::BlobObjectHeader> {
+        let key = self.maybe_prefix_key(name);
+        let bucket = self.config.bucket.bucket.clone();
+
+        let response = self
+            .client
+            .head_object()
+            .key(key)
+            .bucket((*bucket).clone())
+            .send()
+            .await
+            .map_err(|e| io::Error::other(e))?;
+
+        let replication_status = if let Some(status) = response.replication_status {
+            Some(match status {
+                ReplicationStatus::Complete
+                | ReplicationStatus::Completed
+                | ReplicationStatus::Replica => cloud::blob::ReplicationStatus::Replicated,
+                ReplicationStatus::Pending => cloud::blob::ReplicationStatus::Pending,
+                ReplicationStatus::Failed => return Err(io::Error::other("replication failed")),
+                _ => {
+                    return Err(io::Error::other(format!(
+                        "unknown replication status: {}",
+                        status
+                    )));
+                }
+            })
+        } else {
+            None
+        };
+
+        Ok(cloud::blob::BlobObjectHeader { replication_status })
     }
 }
 

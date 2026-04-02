@@ -407,6 +407,7 @@ fn main() {
             prefetch_running_count,
             prefetch_buffer_count,
             gcp_v2_enable,
+            from_replication_storage,
         } => {
             let tmp_engine =
                 TemporaryRocks::new(&cfg).expect("failed to create temp engine for writing SSTs.");
@@ -437,6 +438,7 @@ fn main() {
                 prefetch_buffer_count,
                 compression,
                 compression_level,
+                from_replication_storage,
             };
             let mut exec = compact_log::Execution {
                 out_prefix: ccfg.recommended_prefix(&name),

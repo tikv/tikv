@@ -1992,7 +1992,7 @@ mod tests {
 
     use async_compression::tokio::bufread::ZstdDecoder;
     use encryption::{DecrypterReader, FileConfig, MasterKeyConfig, MultiMasterKeyBackend};
-    use external_storage::{BlobObject, ExternalData, NoopStorage};
+    use external_storage::{BlobObject, BlobObjectHeader, ExternalData, NoopStorage};
     use futures::{AsyncReadExt, future::LocalBoxFuture, stream::LocalBoxStream};
     use kvproto::{
         brpb::{CipherInfo, Noop, StorageBackend, StreamBackupTaskInfo},
@@ -2477,6 +2477,10 @@ mod tests {
         fn delete(&self, _name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
             unreachable!()
         }
+
+        async fn head_object(&self, _name: &str) -> io::Result<BlobObjectHeader> {
+            unreachable!()
+        }
     }
 
     fn build_kv_event(base: i32, count: i32) -> ApplyEvents {
@@ -2881,6 +2885,10 @@ mod tests {
         }
 
         fn delete(&self, _name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
+            unreachable!()
+        }
+
+        async fn head_object(&self, _name: &str) -> io::Result<BlobObjectHeader> {
             unreachable!()
         }
     }

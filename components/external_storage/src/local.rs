@@ -9,7 +9,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use cloud::blob::BlobObject;
+use cloud::blob::{BlobObject, BlobObjectHeader};
 use futures::{io::AllowStdIo, prelude::Stream};
 use futures_util::{
     future::{FutureExt, LocalBoxFuture},
@@ -241,6 +241,12 @@ impl ExternalStorage for LocalStorage {
             self.base_dir.sync_all().await
         }
         .boxed_local()
+    }
+
+    async fn head_object(&self, _name: &str) -> io::Result<BlobObjectHeader> {
+        Ok(BlobObjectHeader {
+            replication_status: None,
+        })
     }
 }
 

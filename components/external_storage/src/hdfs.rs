@@ -3,7 +3,7 @@
 use std::{io, path, process::Stdio};
 
 use async_trait::async_trait;
-use cloud::blob::BlobObject;
+use cloud::blob::{BlobObject, BlobObjectHeader};
 use futures_util::{
     future::{FutureExt, LocalBoxFuture},
     stream::LocalBoxStream,
@@ -157,6 +157,12 @@ impl ExternalStorage for HdfsStorage {
 
     fn delete(&self, _name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
         Box::pin(futures::future::err(crate::unimplemented()))
+    }
+
+    async fn head_object(&self, _name: &str) -> io::Result<BlobObjectHeader> {
+        Ok(BlobObjectHeader {
+            replication_status: None,
+        })
     }
 }
 

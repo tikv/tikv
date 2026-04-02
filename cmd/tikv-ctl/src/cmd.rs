@@ -728,6 +728,9 @@ pub enum Cmd {
             help("whether to enable GCP v2 external storage backend for compact-log-backup")
         )]
         gcp_v2_enable: bool,
+
+        #[structopt(long, help("whether to start from a replication external storage"))]
+        from_replication_storage: bool,
     },
     /// Get the state of a region's RegionReadProgress.
     GetRegionReadProgress {

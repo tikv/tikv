@@ -12,6 +12,7 @@ use crate::{
     errors::Result,
     execute::Execution,
     statistic::{CollectSubcompactionStatistic, LoadMetaStatistic},
+    storage::LoadFromExt,
 };
 
 pub struct NoHooks;
@@ -37,8 +38,10 @@ pub struct BeforeStartCtx<'a> {
     pub storage: &'a dyn ExternalStorage,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct AfterFinishCtx<'a> {
+    /// Reference to the extra config for loading metadata.
+    pub ext: LoadFromExt<'a>,
     /// The asynchronous runtime that we are about to use.
     pub async_rt: &'a Handle,
     /// The target external storage of this compaction.
@@ -175,7 +178,7 @@ impl<T: ExecHooks, U: ExecHooks> ExecHooks for (T, U) {
 
     async fn after_execution_finished(&mut self, cx: AfterFinishCtx<'_>) -> Result<()> {
         futures::future::try_join(
-            self.0.after_execution_finished(cx),
+            self.0.after_execution_finished(cx.clone()),
             self.1.after_execution_finished(cx),
         )
         .await?;

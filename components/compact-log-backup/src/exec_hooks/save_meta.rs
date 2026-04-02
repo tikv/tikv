@@ -169,7 +169,7 @@ impl ExecHooks for SaveMeta {
         self.collector.mut_meta().set_comments(comments);
         let begin = Instant::now();
         self.collector
-            .write_migration(Arc::clone(cx.storage))
+            .write_migration(Arc::clone(cx.storage), cx.ext.clone())
             .await?;
         info!("Migration written."; "duration" => ?begin.elapsed());
         Ok(())

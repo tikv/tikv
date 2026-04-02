@@ -261,8 +261,12 @@ impl CompactionRunInfoBuilder {
         &mut self.compaction
     }
 
-    pub async fn write_migration(&self, s: Arc<dyn ExternalStorage>) -> Result<()> {
-        let migration = self.migration_of(self.find_expiring_files(s.clone()).await?);
+    pub async fn write_migration(
+        &self,
+        s: Arc<dyn ExternalStorage>,
+        ext: LoadFromExt<'_>,
+    ) -> Result<()> {
+        let migration = self.migration_of(self.find_expiring_files(s.clone(), ext).await?);
         let wrapped_storage = MigrationStorageWrapper::new(s.as_ref());
         wrapped_storage.write(migration.into()).await?;
         Ok(())
@@ -284,14 +288,15 @@ impl CompactionRunInfoBuilder {
             migration.edit_meta.push(medit);
         }
         migration.mut_compactions().push(self.compaction.clone());
+        migration.set_replicated(false);
         migration
     }
 
     async fn find_expiring_files(
         &self,
         s: Arc<dyn ExternalStorage>,
+        ext: LoadFromExt<'_>,
     ) -> Result<Vec<ExpiringFilesOfMeta>> {
-        let ext = LoadFromExt::default();
         let mut storage = StreamMetaStorage::load_from_ext(&s, ext).await?;
 
         let mut result = vec![];
@@ -382,12 +387,13 @@ mod test {
     use super::CompactionRunInfoBuilder;
     use crate::{
         compaction::{Subcompaction, SubcompactionResult, exec::SubcompactionExec},
+        storage::LoadFromExt,
         test_util::{KvGen, LogFileBuilder, TmpStorage, gen_min_max},
     };
 
     impl CompactionRunInfoBuilder {
         async fn mig(&self, s: Arc<dyn ExternalStorage>) -> crate::Result<brpb::Migration> {
-            Ok(self.migration_of(self.find_expiring_files(s).await?))
+            Ok(self.migration_of(self.find_expiring_files(s, LoadFromExt::default()).await?))
         }
     }
 

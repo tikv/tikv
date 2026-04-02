@@ -403,6 +403,12 @@ impl BlobStorage for GcsStorage {
         // inclusive, bytes=0-499 -> [0, 499]
         self.get_range(name, Some(format!("bytes={}-{}", off, off + len - 1)))
     }
+
+    async fn head_object(&self, _name: &str) -> io::Result<cloud::blob::BlobObjectHeader> {
+        Ok(cloud::blob::BlobObjectHeader {
+            replication_status: None,
+        })
+    }
 }
 
 struct GcsPrefixIter<'cli> {

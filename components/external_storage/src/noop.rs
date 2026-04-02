@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use async_trait::async_trait;
-use cloud::blob::BlobObject;
+use cloud::blob::{BlobObject, BlobObjectHeader};
 use futures_util::{
     future::{self, LocalBoxFuture},
     stream::{self, LocalBoxStream},
@@ -60,6 +60,12 @@ impl ExternalStorage for NoopStorage {
 
     fn delete(&self, _name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
         Box::pin(future::ok(()))
+    }
+
+    async fn head_object(&self, _name: &str) -> io::Result<BlobObjectHeader> {
+        Ok(BlobObjectHeader {
+            replication_status: None,
+        })
     }
 }
 

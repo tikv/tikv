@@ -73,6 +73,7 @@ pub fn create_compaction(st: StorageBackend) -> Execution {
             compression_level: None,
             prefetch_buffer_count: 128,
             prefetch_running_count: 128,
+            from_replication_storage: false,
         },
         max_concurrent_subcompaction: 3,
         external_storage: st,
