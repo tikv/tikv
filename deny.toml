@@ -88,15 +88,10 @@ ignore = [
     # replace FxHash. Currently, this package is stable and there are no known
     # exploitable vulnerabilities affecting our use case.
     "RUSTSEC-2025-0057",
-    # Ignore RUSTSEC-2026-0002 temporarily. This advisory comes from the
-    # aws-sdk-s3 -> lru 0.12.x dependency chain, and the published fix requires
-    # a breaking upgrade to lru >= 0.16.3 that is not available as a lockfile
-    # only update in the current AWS SDK version.
-    "RUSTSEC-2026-0002",
     # Ignore RUSTSEC-2026-0009 temporarily. This advisory comes from the
-    # transitive cloud SDK dependency chain pulling in time 0.3.41. The fixed
+    # transitive cloud SDK dependency chain pulling in time 0.3.47. The fixed
     # time release requires serde 1.0.220 through serde_core, but the current
-    # raft-engine revision in this workspace still hard-pins serde = 1.0.194,
+    # raft-engine revision in this workspace still hard-pins serde = 1.0.228,
     # so this cannot be resolved with a lockfile-only update.
     "RUSTSEC-2026-0009",
 ]
