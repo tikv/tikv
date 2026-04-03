@@ -183,6 +183,7 @@ impl BatchDagHandler {
                 is_streaming,
                 paging_size,
                 paging_size_bytes,
+                |s: &Statistics| s.processed_size,
                 quota_limiter,
             )?,
             data_version,

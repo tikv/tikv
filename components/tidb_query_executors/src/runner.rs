@@ -92,10 +92,8 @@ pub struct BatchExecutorsRunner<SS> {
     paging_size: Option<u64>,
 
     /// If set, paging_size_bytes indicates the byte budget for the current page.
-    /// When accumulated output bytes reach this limit, the scan stops early.
-    /// TODO: Currently tracks encoded output bytes (chunk rows_data). For
-    /// accurate RU alignment, this should track processed_versions_size (MVCC
-    /// scanned bytes) from the storage layer instead.
+    /// When accumulated MVCC scanned bytes reach this limit, the scan stops
+    /// early.
     paging_size_bytes: Option<u64>,
 
     quota_limiter: Arc<QuotaLimiter>,
@@ -108,6 +106,13 @@ pub struct BatchExecutorsRunner<SS> {
     /// It is None when BatchExecutorsRunner is created
     /// and will be set to Some by the inner code by demand
     reserved_intermediate_results: Option<Vec<Vec<BatchExecuteResult>>>,
+
+    /// Function to extract scanned bytes from storage stats.
+    scanned_bytes_fn: fn(&SS) -> usize,
+    /// Storage stats accumulated across all batches. collect_storage_stats
+    /// adds to (not overwrites) dest, so draining into the same object each
+    /// iteration naturally accumulates complete stats for RU accounting.
+    accumulated_storage_stats: SS,
 }
 
 // We assign a dummy type `()` so that we can omit the type when calling
@@ -609,7 +614,7 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
     Ok(executor)
 }
 
-impl<SS: 'static> BatchExecutorsRunner<SS> {
+impl<SS: 'static + Default> BatchExecutorsRunner<SS> {
     pub fn from_request<S: Storage<Statistics = SS> + 'static, F: KvFormat>(
         mut req: DagRequest,
         ranges: Vec<KeyRange>,
@@ -620,6 +625,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         is_streaming: bool,
         paging_size: Option<u64>,
         paging_size_bytes: Option<u64>,
+        scanned_bytes_fn: fn(&SS) -> usize,
         quota_limiter: Arc<QuotaLimiter>,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
@@ -710,6 +716,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             quota_limiter,
             intermediate_channels,
             reserved_intermediate_results: None,
+            scanned_bytes_fn,
+            accumulated_storage_stats: SS::default(),
         })
     }
 
@@ -751,10 +759,9 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut warnings = self.config.new_eval_warnings();
         let mut ctx = EvalContext::new(self.config.clone());
         let mut record_all = 0;
-        // TODO: bytes_all accumulates encoded output bytes (rows_data). For
-        // production use, replace with processed_versions_size from the storage
-        // layer to align with RU accounting.
-        let mut bytes_all: usize = 0;
+        // Accumulates MVCC scanned bytes from the storage layer for
+        // paging_size_bytes truncation, collected via collect_storage_stats.
+        let mut scanned_bytes_all: usize = 0;
         let mut intermediate_output_chunks = if self.intermediate_channels.is_empty() {
             vec![]
         } else {
@@ -795,8 +802,15 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             if record_len > 0 {
                 record_all += record_len;
             }
-            if read_bytes_len > 0 {
-                bytes_all += read_bytes_len;
+
+            // Drain incremental storage stats into the accumulator.
+            // collect_storage_stats adds to (not overwrites) dest, so the
+            // accumulator naturally holds complete stats across all batches.
+            if self.paging_size_bytes.is_some() {
+                self.out_most_executor
+                    .collect_storage_stats(&mut self.accumulated_storage_stats);
+                scanned_bytes_all =
+                    (self.scanned_bytes_fn)(&self.accumulated_storage_stats);
             }
 
             if chunk.has_rows_data() {
@@ -807,7 +821,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 || self.paging_size.is_some_and(|p| record_all >= p as usize)
                 || self
                     .paging_size_bytes
-                    .is_some_and(|p| bytes_all >= p as usize)
+                    .is_some_and(|p| scanned_bytes_all >= p as usize)
             {
                 self.out_most_executor
                     .collect_exec_stats(&mut self.exec_stats);
@@ -920,7 +934,11 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
     }
 
     pub fn collect_storage_stats(&mut self, dest: &mut SS) {
-        self.out_most_executor.collect_storage_stats(dest);
+        // Drain any remaining stats from the executor into the accumulator,
+        // then move the complete accumulated stats to the caller.
+        self.out_most_executor
+            .collect_storage_stats(&mut self.accumulated_storage_stats);
+        std::mem::swap(dest, &mut self.accumulated_storage_stats);
     }
 
     pub fn can_be_cached(&self) -> bool {
@@ -1132,6 +1150,7 @@ mod tests {
     use std::{any::type_name, time::Duration};
 
     use api_version::ApiV1;
+    use async_trait::async_trait;
     use futures::executor::block_on;
     use kvproto::metapb::Region;
     use tidb_query_common::execute_stats::ExecSummaryCollectorEnabled;
@@ -1327,6 +1346,8 @@ mod tests {
             1024,
             false,
             None,
+            None,
+            |_: &()| 0,
             Arc::new(QuotaLimiter::default()),
         )
     }
@@ -2279,6 +2300,211 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("invalid parent index: 3, for executor with index: 3, executors len: 5")
+        );
+    }
+
+    // --- Tests for paging_size_bytes with MVCC scanned bytes ---
+
+    /// Stats type that carries scanned byte information for testing.
+    #[derive(Default, Debug, Clone)]
+    struct MockStats {
+        scanned_bytes: usize,
+    }
+
+    /// Mock executor that simulates real TikvStorage drain semantics:
+    /// `next_batch` accumulates pending bytes, `collect_storage_stats` drains
+    /// them into dest. This matches how `TikvStorage::collect_statistics`
+    /// adds to dest and resets its backlog.
+    struct MockStatsExecutor {
+        schema: Vec<FieldType>,
+        results: std::vec::IntoIter<BatchExecuteResult>,
+        bytes_per_batch: Vec<usize>,
+        batch_idx: usize,
+        pending_bytes: usize,
+    }
+
+    impl MockStatsExecutor {
+        fn new(
+            schema: Vec<FieldType>,
+            results: Vec<BatchExecuteResult>,
+            bytes_per_batch: Vec<usize>,
+        ) -> Self {
+            assert_eq!(results.len(), bytes_per_batch.len());
+            Self {
+                schema,
+                results: results.into_iter(),
+                bytes_per_batch,
+                batch_idx: 0,
+                pending_bytes: 0,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl BatchExecutor for MockStatsExecutor {
+        type StorageStats = MockStats;
+
+        fn schema(&self) -> &[FieldType] {
+            &self.schema
+        }
+
+        fn intermediate_schema(&self, _: usize) -> Result<&[FieldType]> {
+            unreachable!()
+        }
+
+        fn consume_and_fill_intermediate_results(
+            &mut self,
+            _: &mut [Vec<BatchExecuteResult>],
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
+            if self.batch_idx < self.bytes_per_batch.len() {
+                self.pending_bytes += self.bytes_per_batch[self.batch_idx];
+                self.batch_idx += 1;
+            }
+            self.results.next().unwrap()
+        }
+
+        fn collect_exec_stats(&mut self, _dest: &mut ExecuteStats) {}
+
+        fn collect_storage_stats(&mut self, dest: &mut MockStats) {
+            dest.scanned_bytes += self.pending_bytes;
+            self.pending_bytes = 0;
+        }
+
+        fn take_scanned_range(&mut self) -> IntervalRange {
+            IntervalRange {
+                lower_inclusive: vec![0],
+                upper_exclusive: vec![0xFF],
+            }
+        }
+
+        fn can_be_cached(&self) -> bool {
+            false
+        }
+    }
+
+    fn build_runner_with_mock_stats(
+        executor: MockStatsExecutor,
+        paging_size_bytes: Option<u64>,
+    ) -> BatchExecutorsRunner<MockStats> {
+        let config = Arc::new(EvalConfig::default());
+        BatchExecutorsRunner {
+            deadline: Deadline::from_now(Duration::from_secs(300)),
+            out_most_executor: Box::new(executor),
+            output_offsets: vec![0],
+            config,
+            collect_exec_summary: false,
+            exec_stats: ExecuteStats::new(1),
+            stream_row_limit: 1024,
+            encode_type: EncodeType::TypeChunk,
+            paging_size: None,
+            paging_size_bytes,
+            quota_limiter: Arc::new(QuotaLimiter::default()),
+            intermediate_channels: vec![],
+            reserved_intermediate_results: None,
+            scanned_bytes_fn: |s: &MockStats| s.scanned_bytes,
+            accumulated_storage_stats: MockStats::default(),
+        }
+    }
+
+    /// Verifies that paging_size_bytes truncates based on MVCC scanned bytes,
+    /// not encoded output bytes.
+    #[test]
+    fn test_paging_size_bytes_truncates_on_scanned_bytes() {
+        let field_types: Vec<FieldType> = vec![FieldTypeTp::Long.into()];
+        // 3 batches, each with 1 row but reporting 1000 scanned bytes.
+        // With paging_size_bytes=1500, should stop after batch 2 (2000 >= 1500).
+        let executor = MockStatsExecutor::new(
+            field_types,
+            vec![
+                build_n_rows_int_result(0, 1),
+                build_n_rows_int_result(10, 1),
+                {
+                    let mut r = build_n_rows_int_result(20, 1);
+                    r.is_drained = Ok(BatchExecIsDrain::Drain);
+                    r
+                },
+            ],
+            vec![1000, 1000, 1000],
+        );
+
+        let mut runner = build_runner_with_mock_stats(executor, Some(1500));
+        let (resp, range) = block_on(runner.handle_request()).unwrap();
+
+        // Paging should have truncated — range returned for next page.
+        assert!(range.is_some(), "should return scanned range for paging");
+        // Only 2 batches processed, so 2 chunks.
+        assert_eq!(resp.get_chunks().len(), 2);
+    }
+
+    /// Verifies that stats collected during the paging loop are fully preserved
+    /// for the final collect_storage_stats call (used by endpoint.rs for RU
+    /// accounting).
+    #[test]
+    fn test_paging_size_bytes_preserves_complete_stats() {
+        let field_types: Vec<FieldType> = vec![FieldTypeTp::Long.into()];
+        let executor = MockStatsExecutor::new(
+            field_types,
+            vec![
+                build_n_rows_int_result(0, 1),
+                build_n_rows_int_result(10, 1),
+                {
+                    let mut r = build_n_rows_int_result(20, 1);
+                    r.is_drained = Ok(BatchExecIsDrain::Drain);
+                    r
+                },
+            ],
+            vec![500, 800, 700],
+        );
+
+        // Budget 1200: batch 1 (500) + batch 2 (800) = 1300 >= 1200, truncate.
+        let mut runner = build_runner_with_mock_stats(executor, Some(1200));
+        let (_resp, range) = block_on(runner.handle_request()).unwrap();
+        assert!(range.is_some());
+
+        // The final collect_storage_stats must return complete stats from all
+        // processed batches, not just the last one.
+        let mut stats = MockStats::default();
+        runner.collect_storage_stats(&mut stats);
+        assert_eq!(
+            stats.scanned_bytes, 1300,
+            "must preserve complete stats for RU accounting"
+        );
+    }
+
+    /// Verifies the non-paging stats path is not broken: when paging_size_bytes
+    /// is None, collect_storage_stats still returns complete stats via the
+    /// standard single-drain path.
+    #[test]
+    fn test_no_paging_bytes_stats_path_unchanged() {
+        let field_types: Vec<FieldType> = vec![FieldTypeTp::Long.into()];
+        let executor = MockStatsExecutor::new(
+            field_types,
+            vec![
+                build_n_rows_int_result(0, 2),
+                {
+                    let mut r = build_n_rows_int_result(10, 3);
+                    r.is_drained = Ok(BatchExecIsDrain::Drain);
+                    r
+                },
+            ],
+            vec![500, 800],
+        );
+
+        // No paging — all batches processed, no incremental drain in loop.
+        let mut runner = build_runner_with_mock_stats(executor, None);
+        let (_resp, range) = block_on(runner.handle_request()).unwrap();
+        assert!(range.is_none(), "non-paging should not return range");
+
+        // Final collect_storage_stats drains everything at once.
+        let mut stats = MockStats::default();
+        runner.collect_storage_stats(&mut stats);
+        assert_eq!(
+            stats.scanned_bytes, 1300,
+            "non-paging path must collect all stats"
         );
     }
 }
