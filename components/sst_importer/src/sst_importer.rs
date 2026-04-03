@@ -368,7 +368,10 @@ impl<E: KvEngine> SstImporter<E> {
             // Defense-in-depth: canonicalize to catch symlink-based escapes.
             let canonical_root = self.dir.get_root_dir().canonicalize().map_err(Error::Io)?;
             let canonical_path = path.canonicalize().map_err(Error::Io)?;
-            if !canonical_path.starts_with(&canonical_root) {
+            // Reject paths that escape the root or resolve to the root itself.
+            // "" and "." both canonicalize to the root, so an equality check is
+            // required in addition to the prefix check.
+            if canonical_path == canonical_root || !canonical_path.starts_with(&canonical_root) {
                 // Return the raw user-supplied prefix, not the resolved path.
                 return Err(Error::InvalidSstPath(PathBuf::from(prefix)));
             }
@@ -5548,6 +5551,19 @@ mod tests {
             importer.remove_dir("/tmp"),
             Err(Error::InvalidSstPath(_))
         ));
+
+        // Empty prefix resolves to the import root itself: must be rejected.
+        assert!(matches!(
+            importer.remove_dir(""),
+            Err(Error::InvalidSstPath(_))
+        ));
+        // "." also resolves to the import root itself: must be rejected.
+        assert!(matches!(
+            importer.remove_dir("."),
+            Err(Error::InvalidSstPath(_))
+        ));
+        // The import root directory must still exist after both rejections.
+        assert!(import_dir.path().exists());
 
         // The error must carry the raw user-supplied prefix, not a resolved
         // server-side path (i.e. it must not start with the import root).
