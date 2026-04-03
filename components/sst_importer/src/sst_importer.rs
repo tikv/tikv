@@ -351,8 +351,13 @@ impl<E: KvEngine> SstImporter<E> {
     pub fn remove_dir(&self, prefix: &str) -> Result<()> {
         let path = self.dir.get_root_dir().join(prefix);
         if path.exists() {
-            file_system::remove_dir_all(&path)?;
-            info!("directory {:?} has been removed", path);
+            let canonical_root = self.dir.get_root_dir().canonicalize().map_err(Error::Io)?;
+            let canonical_path = path.canonicalize().map_err(Error::Io)?;
+            if !canonical_path.starts_with(&canonical_root) {
+                return Err(Error::InvalidSstPath(path));
+            }
+            file_system::remove_dir_all(&canonical_path)?;
+            info!("directory {:?} has been removed", canonical_path);
         }
         Ok(())
     }
