@@ -129,7 +129,7 @@ num_cpus = "1"
 online_config = { workspace = true }
 openssl = { workspace = true }
 parking_lot = "0.12"
-pastey="0.2.1"
+pastey = "0.2.1"
 pd_client = { workspace = true }
 pin-project = "1.0"
 pnet_datalink = "0.23"
