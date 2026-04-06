@@ -402,6 +402,7 @@ fn test_atomic_basic() {
             Some(b"v2".to_vec()),
             b"v3".to_vec(),
             0,
+            false,
         )
         .unwrap();
     assert!(!succeed);
@@ -414,6 +415,7 @@ fn test_atomic_basic() {
             Some(b"v1".to_vec()),
             b"v2".to_vec(),
             0,
+            false,
         )
         .unwrap();
     assert!(succeed);
@@ -422,6 +424,26 @@ fn test_atomic_basic() {
         .raw_get(ctx.clone(), "default".to_string(), b"k1".to_vec())
         .unwrap();
     assert_eq!(b"v2".to_vec(), value.unwrap());
+
+    // Test compare and swap with delete=true
+    let (prev_val, succeed) = storage
+        .raw_compare_and_swap_atomic(
+            ctx.clone(),
+            "default".to_string(),
+            b"k1".to_vec(),
+            Some(b"v2".to_vec()),
+            b"".to_vec(), // value is ignored when delete=true
+            0,
+            true, // delete=true
+        )
+        .unwrap();
+    assert!(succeed);
+    assert_eq!(prev_val, Some(b"v2".to_vec()));
+    let value = storage
+        .raw_get(ctx.clone(), "default".to_string(), b"k1".to_vec())
+        .unwrap();
+    assert!(value.is_none());
+
     storage
         .raw_batch_delete_atomic(ctx.clone(), "default".to_string(), vec![b"k1".to_vec()])
         .unwrap();

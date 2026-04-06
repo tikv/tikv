@@ -64,11 +64,10 @@ use tikv_util::{
     mpsc::{LooseBoundedSender, Receiver, loose_bounded},
     safe_panic, slow_log,
     store::{find_peer, find_peer_by_id, find_peer_mut, is_learner, remove_peer},
-    time::{Instant, duration_to_sec},
+    time::{Instant, Timespec, duration_to_sec},
     warn,
     worker::Scheduler,
 };
-use time::Timespec;
 use tracker::{GLOBAL_TRACKERS, TrackerToken, TrackerTokenArray};
 use uuid::Builder as UuidBuilder;
 
