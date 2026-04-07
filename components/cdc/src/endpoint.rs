@@ -809,10 +809,10 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             Some(conn) => conn,
             None => {
                 info!("cdc register region on an deregistered connection, ignore";
-                    "region_id" => region_id,
-                    "conn_id" => ?conn_id,
+                    "downstream_id" => ?downstream_id,
                     "req_id" => ?request_id,
-                    "downstream_id" => ?downstream_id);
+                    "region_id" => region_id,
+                    "conn_id" => ?conn_id);
                 return;
             }
         };
@@ -908,11 +908,11 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
         let observe_id = delegate.handle.id;
         info!("cdc register region";
-            "region_id" => region_id,
-            "conn_id" => ?conn.get_id(),
-            "req_id" => ?request_id,
             "observe_id" => ?observe_id,
-            "downstream_id" => ?downstream_id);
+            "downstream_id" => ?downstream_id,
+            "region_id" => region_id,
+            "req_id" => ?request_id,
+            "conn_id" => ?conn.get_id());
 
         let observed_range = downstream.observed_range.clone();
         let downstream_state = downstream.get_state();
@@ -1263,22 +1263,22 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 }
                 if let Err(e) = sink.unbounded_send(incremental_scan_barrier, true) {
                     warn!("cdc failed to schedule barrier for delta before delta scan";
-                        "region_id" => region_id,
+                        "error" => ?e,
                         "observe_id" => ?observe_id,
                         "downstream_id" => ?downstream_id,
-                        "error" => ?e);
+                        "region_id" => region_id);
                     return;
                 }
                 if on_init_downstream(&downstream_state) {
                     info!("cdc downstream starts to initialize";
-                        "region_id" => region_id,
                         "observe_id" => ?observe_id,
-                        "downstream_id" => ?downstream_id);
+                        "downstream_id" => ?downstream_id,
+                        "region_id" => region_id);
                 } else {
                     warn!("cdc downstream fails to initialize: canceled";
-                        "region_id" => region_id,
                         "observe_id" => ?observe_id,
-                        "downstream_id" => ?downstream_id);
+                        "downstream_id" => ?downstream_id,
+                        "region_id" => region_id);
                 }
                 cb();
             }

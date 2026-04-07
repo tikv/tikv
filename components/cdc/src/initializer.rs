@@ -171,7 +171,7 @@ impl<E: KvEngine> Initializer<E> {
                     incremental_scan_barrier: barrier,
                     cb: Box::new(move || cb(resp)),
                 }) {
-                    error!("cdc schedule cdc task failed"; "error" => ?e);
+                    error!("cdc schedule init downstream task failed"; "error" => ?e);
                 }
             })),
         ) {
@@ -264,17 +264,6 @@ impl<E: KvEngine> Initializer<E> {
         } else {
             end_key = self.observed_range.end_key_encoded.clone();
         }
-
-        debug!(
-            "cdc async incremental scan";
-            "region_id" => region_id,
-            "downstream_id" => ?downstream_id,
-            "observe_id" => ?observe_id,
-            "conn_id" => ?conn_id,
-            "all_key_covered" => ?self.observed_range.all_key_covered,
-            "start_key" => log_wrappers::Value::key(start_key.as_encoded()),
-            "end_key" => log_wrappers::Value::key(end_key.as_encoded())
-        );
 
         if self.build_resolver.load(Ordering::Acquire) {
             // Scan and collect locks if build_resolver is true. The range
@@ -548,22 +537,18 @@ impl<E: KvEngine> Initializer<E> {
 
     fn finish_scan_locks(&self, region: Region, locks: BTreeMap<Key, MiniLock>) {
         let observe_id = self.observe_handle.id;
-        info!(
-            "cdc has scanned all incremental scan locks";
+        info!("cdc has scanned all incremental scan locks";
+            "lock_count" => locks.len(),
             "region_id" => region.get_id(),
             "conn_id" => ?self.conn_id,
-            "downstream_id" => ?self.downstream_id,
-            "lock_count" => locks.len(),
-            "observe_id" => ?observe_id,
         );
-
         fail_point!("before_schedule_resolver_ready");
         if let Err(e) = self.sched.schedule(Task::FinishScanLocks {
             observe_id,
             region,
             locks,
         }) {
-            error!("cdc schedule task failed"; "error" => ?e);
+            error!("cdc schedule finish scan locks task failed"; "error" => ?e);
         }
     }
 
@@ -592,7 +577,7 @@ impl<E: KvEngine> Initializer<E> {
         };
 
         if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
-            error!("cdc schedule cdc task failed"; "error" => ?e);
+            error!("cdc schedule deregister task failed"; "error" => ?e);
         }
     }
 
