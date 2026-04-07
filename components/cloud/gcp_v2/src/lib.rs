@@ -26,7 +26,7 @@ use url::Url;
 mod credentials;
 mod kms;
 use credentials::{
-    CredentialsMode, build_credentials, ensure_rustls_fips_provider, validate_credentials_json,
+    CredentialsMode, build_credentials, resolve_rustls_provider, validate_credentials_json,
 };
 pub use kms::GcpKms;
 
@@ -336,7 +336,8 @@ const DEFAULT_SEP: char = '/';
 
 impl GcsStorage {
     pub fn from_input(input: InputConfig) -> io::Result<Self> {
-        ensure_rustls_fips_provider()?;
+        let rustls_provider = resolve_rustls_provider();
+        rustls_provider.ensure_default()?;
         let bucket = input.bucket.clone();
         let url_prefix = input.prefix.clone();
         let prefix = url_prefix.trim_end_matches(DEFAULT_SEP).to_owned();
