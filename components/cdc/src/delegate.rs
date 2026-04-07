@@ -575,9 +575,8 @@ impl Delegate {
         self.mark_failed();
         self.stop_observing();
 
-        info!("cdc met region error";
-            "region_id" => self.region_id, "error" => ?err);
         let region_id = self.region_id;
+        info!("cdc send region error"; "error" => ?err, "region_id" => region_id);
         let error = err.into_error_event(self.region_id);
         let send = move |downstream: &Downstream| {
             downstream.state.store(DownstreamState::Stopped);
@@ -585,11 +584,6 @@ impl Delegate {
             if let Err(err) = downstream.sink_error_event(region_id, error_event) {
                 warn!("cdc send region error failed";
                     "region_id" => region_id, "error" => ?err, "origin_error" => ?error,
-                    "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
-                    "request_id" => ?downstream.req_id, "conn_id" => ?downstream.conn_id);
-            } else {
-                info!("cdc send region error success";
-                    "region_id" => region_id, "origin_error" => ?error,
                     "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
                     "request_id" => ?downstream.req_id, "conn_id" => ?downstream.conn_id);
             }
