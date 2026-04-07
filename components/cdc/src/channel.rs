@@ -157,7 +157,7 @@ impl EventBatcher {
     pub fn push(&mut self, event: CdcEvent) {
         let size = event.size();
         if size >= CDC_RESP_MAX_BYTES {
-            warn!("cdc event too large"; "size" => size, "event" => ?event);
+            warn!("cdc event too large"; "size" => size);
         }
         match event {
             CdcEvent::Event(e) => {
