@@ -186,7 +186,7 @@ impl RegionChangeObserver for BackupStreamObserver {
 
 #[cfg(test)]
 mod tests {
-    use std::{assert_matches::assert_matches, sync::Arc, time::Duration};
+    use std::{sync::Arc, time::Duration};
 
     use dashmap::DashMap;
     use engine_panic::PanicEngine;
@@ -272,9 +272,9 @@ mod tests {
         let mut cmd_batches = vec![cb];
         o.on_flush_applied_cmd_batch(ObserveLevel::All, &mut cmd_batches, &mock_engine);
         let task = rx.recv_timeout(Duration::from_secs(0)).unwrap().unwrap();
-        assert_matches!(task, Task::BatchEvent(batches) if
+        assert!(matches!(task, Task::BatchEvent(batches) if
             batches.len() == 1 && batches[0].region_id == 42 && batches[0].cdc_id == handle.id
-        );
+        ));
 
         // Test event from other region should not be send.
         let observe_info = CmdObserveInfo::from_handle(
@@ -310,10 +310,10 @@ mod tests {
         let mut ctx = ObserverContext::new(&r);
         o.on_role_change(&mut ctx, &RoleChange::new_for_test(StateRole::Follower));
         let task = rx.recv_timeout(Duration::from_millis(20));
-        assert_matches!(
+        assert!(matches!(
             task,
             Ok(Some(Task::ModifyObserve(ObserveOp::Stop { region, .. }))) if region.id == 42
-        );
+        ));
     }
 
     #[test]

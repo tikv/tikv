@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{assert_matches::assert_matches, time::Duration};
+use std::time::Duration;
 
 use engine_traits::{CF_DEFAULT, Peekable};
 use futures::executor::block_on;
@@ -30,7 +30,7 @@ fn put_data(
 
     // router.wait_applied_to_current_term(2, Duration::from_secs(3));
     let snap = router.stale_snapshot(region_id);
-    assert_matches!(snap.get_value(key), Ok(None));
+    assert!(matches!(snap.get_value(key), Ok(None)));
 
     let header = Box::new(router.new_request_for(region_id).take_header());
     let mut put = SimpleWriteEncoder::with_capacity(64);
@@ -57,7 +57,7 @@ fn put_data(
     // Because of skip bcast commit, the data should not be applied yet.
     router = &mut cluster.routers[node_off_for_verify];
     let snap = router.stale_snapshot(region_id);
-    assert_matches!(snap.get_value(key), Ok(None));
+    assert!(matches!(snap.get_value(key), Ok(None)));
     // Trigger heartbeat explicitly to commit on follower.
     router = &mut cluster.routers[node_off];
     for _ in 0..2 {

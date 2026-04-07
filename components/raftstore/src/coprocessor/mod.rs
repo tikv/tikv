@@ -567,6 +567,8 @@ impl CmdBatch {
 
     pub fn size(&self) -> usize {
         let mut cmd_bytes = 0;
+        cmd_bytes += std::mem::size_of::<Self>();
+        cmd_bytes += std::mem::size_of::<Cmd>() * self.cmds.capacity();
         for cmd in self.cmds.iter() {
             let Cmd {
                 ref request,
@@ -574,10 +576,22 @@ impl CmdBatch {
                 ..
             } = cmd;
             if !response.get_header().has_error() && !request.has_admin_request() {
+                cmd_bytes += std::mem::size_of::<kvproto::raft_cmdpb::Request>()
+                    * request.requests.capacity();
                 for req in request.requests.iter() {
-                    let put = req.get_put();
-                    cmd_bytes += put.get_key().len();
-                    cmd_bytes += put.get_value().len();
+                    if req.has_put() {
+                        let put = req.get_put();
+                        cmd_bytes += put.get_cf().len();
+                        cmd_bytes += put.get_key().len();
+                        cmd_bytes += put.get_value().len();
+                        cmd_bytes += std::mem::size_of::<kvproto::raft_cmdpb::PutRequest>();
+                    }
+                    if req.has_delete() {
+                        let delete = req.get_delete();
+                        cmd_bytes += delete.get_cf().len();
+                        cmd_bytes += delete.get_key().len();
+                        cmd_bytes += std::mem::size_of::<kvproto::raft_cmdpb::DeleteRequest>();
+                    }
                 }
             }
         }

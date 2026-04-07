@@ -68,13 +68,20 @@ use tikv_util::{
         cpu_time::ProcessStat,
         disk::{DiskUsage, get_disk_status},
     },
-    time::{Instant as TiInstant, SlowTimer, duration_to_sec, monotonic_raw_now},
+    thread_name_prefix::{
+        APPLY_WORKER_THREAD, CLEANUP_WORKER_THREAD, PURGE_WORKER_THREAD,
+        RAFTLOG_FETCH_WORKER_THREAD, RAFTSTORE_THREAD, REFRESH_CONFIG_WORKER_THREAD,
+        REGION_WORKER_THREAD, SNAP_GENERATOR_THREAD, STORE_WRITER_THREAD,
+    },
+    time::{
+        Instant as TiInstant, SlowTimer, Timespec, duration_to_sec, get_time, monotonic_raw_now,
+    },
     timer::SteadyTimer,
     warn,
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
     yatp_pool::FuturePool,
 };
-use time::{self, Timespec};
+use time;
 
 use crate::{
     Error, Result, bytes_capacity,
@@ -952,7 +959,7 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             );
         }
         self.fsm.store.id = store.get_id();
-        self.fsm.store.start_time = Some(time::get_time());
+        self.fsm.store.start_time = Some(get_time());
         self.register_cleanup_import_sst_tick();
         self.register_full_compact_tick();
         self.register_load_metrics_window_tick();
@@ -1513,7 +1520,7 @@ where
                 self.cfg.value().raft_election_timeout_ticks as u32
             };
         let unsafe_vote_deadline =
-            Some(self.node_start_time + time::Duration::from_std(election_timeout).unwrap());
+            Some(self.node_start_time + time::Duration::try_from(election_timeout).unwrap());
         let mut ctx = PollContext {
             cfg: self.cfg.value().clone(),
             store: self.store.clone(),
@@ -1707,7 +1714,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let purge_worker = if engines.raft.need_manual_purge()
             && !cfg.value().raft_engine_purge_interval.0.is_zero()
         {
-            let worker = Worker::new("purge-worker");
+            let worker = Worker::new(PURGE_WORKER_THREAD);
             let raft_clone = engines.raft.clone();
             let router_clone = self.router();
             worker.spawn_interval_task(cfg.value().raft_engine_purge_interval.0, move || {
@@ -1733,20 +1740,20 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             None
         };
         let bgworker_remote = background_worker.remote();
-        let snap_gen_worker = WorkerBuilder::new("snap-generator")
+        let snap_gen_worker = WorkerBuilder::new(SNAP_GENERATOR_THREAD)
             .thread_count(cfg.value().snap_generator_pool_size)
             .thread_count_limits(1, SNAP_GENERATOR_MAX_POOL_SIZE)
             .create();
         let mut workers = Workers {
             pd_worker,
             background_worker,
-            cleanup_worker: Worker::new("cleanup-worker"),
+            cleanup_worker: Worker::new(CLEANUP_WORKER_THREAD),
             snap_gen_worker,
-            region_worker: Worker::new("region-worker"),
+            region_worker: Worker::new(REGION_WORKER_THREAD),
             purge_worker,
-            raftlog_fetch_worker: Worker::new("raftlog-fetch-worker"),
+            raftlog_fetch_worker: Worker::new(RAFTLOG_FETCH_WORKER_THREAD),
             coprocessor_host: coprocessor_host.clone(),
-            refresh_config_worker: LazyWorker::new("refreash-config-worker"),
+            refresh_config_worker: LazyWorker::new(REFRESH_CONFIG_WORKER_THREAD),
             on_stop_hooks: vec![],
         };
         // Ideally, we should not stop split_check_scheduler when Workers stop, since
@@ -1782,10 +1789,10 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let snap_generator_pool = workers.snap_gen_worker.pool();
         let snap_gen_scheduler: Scheduler<SnapGenTask<<EK as KvEngine>::Snapshot>> = workers
             .snap_gen_worker
-            .start("snap-generator", snap_gen_runner);
+            .start(SNAP_GENERATOR_THREAD, snap_gen_runner);
         let region_scheduler = workers
             .region_worker
-            .start_with_timer("region-worker", region_runner);
+            .start_with_timer(REGION_WORKER_THREAD, region_runner);
         // Same as split_check_scheduler, region worker also runs a infinite
         // loop, that will not stop when shutting down the threadpool, causing the
         // reference to the kv engine inside the scheduler to be dangle. So we need
@@ -1811,7 +1818,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         }));
 
         let raftlog_fetch_scheduler = workers.raftlog_fetch_worker.start(
-            "raftlog-fetch-worker",
+            RAFTLOG_FETCH_WORKER_THREAD,
             ReadRunner::new(self.router.clone(), engines.raft.clone()),
         );
 
@@ -1826,7 +1833,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             CleanupRunner::new(compact_runner, cleanup_sst_runner, gc_snapshot_runner);
         let cleanup_scheduler: Scheduler<CleanupTask> = workers
             .cleanup_worker
-            .start("cleanup-worker", cleanup_runner);
+            .start(CLEANUP_WORKER_THREAD, cleanup_runner);
         let consistency_check_runner =
             ConsistencyCheckRunner::<EK, _>::new(self.router.clone(), coprocessor_host.clone());
         let consistency_check_scheduler = workers
@@ -1939,7 +1946,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
 
         let (raft_builder, apply_builder) = (builder.clone(), apply_poller_builder.clone());
 
-        let tag = format!("raftstore-{}", store.get_id());
+        let tag = format!("{}-{}", RAFTSTORE_THREAD, store.get_id());
         let coprocessor_host = builder.coprocessor_host.clone();
         self.system.spawn(tag, builder);
         let mut mailboxes = Vec::with_capacity(region_peers.len());
@@ -1964,7 +1971,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .unwrap();
 
         self.apply_system
-            .spawn("apply".to_owned(), apply_poller_builder);
+            .spawn(APPLY_WORKER_THREAD.to_owned(), apply_poller_builder);
 
         let refresh_config_runner = RefreshConfigRunner::new(
             StoreWritersContext {
@@ -2053,7 +2060,7 @@ pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine>(
         cfg,
         resource_manager
             .as_ref()
-            .map(|m| m.derive_controller("apply".to_owned(), false)),
+            .map(|m| m.derive_controller(APPLY_WORKER_THREAD.to_owned(), false)),
     );
     let (router, system) = batch_system::create_system(
         &cfg.store_batch_system,
@@ -2071,7 +2078,7 @@ pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine>(
         store_writers: StoreWriters::new(
             resource_manager
                 .as_ref()
-                .map(|m| m.derive_controller("store-writer".to_owned(), false)),
+                .map(|m| m.derive_controller(STORE_WRITER_THREAD.to_owned(), false)),
         ),
         node_start_time: monotonic_raw_now(),
     };
@@ -2772,7 +2779,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
 
         let completed_apply_peers_count = completed_apply_peers_count.unwrap();
         let during_starting_stage = {
-            (time::get_time().sec as u32).saturating_sub(start_ts_sec)
+            (get_time().sec as u32).saturating_sub(start_ts_sec)
                 <= STORE_CHECK_PENDING_APPLY_DURATION.as_secs() as u32
         };
         // If the store is busy in handling applying logs when starting, it should not

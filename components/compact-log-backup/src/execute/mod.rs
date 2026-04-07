@@ -20,7 +20,6 @@ use tikv_util::config::ReadableSize;
 use tokio::runtime::Handle;
 use tracing::{Instrument, trace_span};
 use tracing_active_tree::{frame, root};
-use txn_types::TimeStamp;
 
 use self::hooking::AbortedCtx;
 use super::{
@@ -73,14 +72,9 @@ impl slog::KV for ExecutionConfig {
         serializer.emit_u64("from_ts", self.from_ts)?;
         serializer.emit_u64("until_ts", self.until_ts)?;
         let date = |pts| {
-            let ts = TimeStamp::new(pts).physical();
-            chrono::DateTime::<Utc>::from_utc(
-                chrono::NaiveDateTime::from_timestamp(
-                    ts as i64 / 1000,
-                    (ts % 1000) as u32 * 1_000_000,
-                ),
-                Utc,
-            )
+            chrono::DateTime::<Utc>::from_timestamp_millis(pts as i64)
+                .map(|dt| dt.to_string())
+                .unwrap_or_else(|| format!("invalid_ts({pts})"))
         };
         serializer.emit_arguments("from_date", &format_args!("{}", date(self.from_ts)))?;
         serializer.emit_arguments("until_date", &format_args!("{}", date(self.until_ts)))?;
@@ -125,6 +119,8 @@ pub struct Execution<DB: SstExt = RocksEngine> {
     pub max_concurrent_subcompaction: u64,
     /// The external storage for input and output.
     pub external_storage: StorageBackend,
+    /// Backend configuration for constructing external storage.
+    pub backend_config: BackendConfig,
     /// The RocksDB instance for creating `SstWriter`.
     /// By design little or no data will be written to the instance, for now
     /// this is only used for loading the user collected properties
@@ -266,7 +262,7 @@ impl Execution {
 
     pub fn run(self, mut hooks: impl ExecHooks) -> Result<()> {
         let storage =
-            external_storage::create_storage(&self.external_storage, BackendConfig::default())?;
+            external_storage::create_storage(&self.external_storage, self.backend_config.clone())?;
         let storage: Arc<dyn ExternalStorage> = Arc::from(storage);
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()

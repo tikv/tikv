@@ -374,7 +374,11 @@ mod tests {
         lock_iter.seek_to_first().unwrap();
         let mut remaining_locks = vec![];
         while lock_iter.valid().unwrap() {
-            let lock = Lock::parse(lock_iter.value()).unwrap().to_owned();
+            let lock = txn_types::parse_lock(lock_iter.value())
+                .unwrap()
+                .left()
+                .unwrap()
+                .to_owned();
             let key = lock_iter.key().to_vec();
             lock_iter.next().unwrap();
             remaining_locks.push((key, lock));

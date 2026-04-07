@@ -76,7 +76,6 @@ impl AsyncBackend for FileBackend {
 #[cfg(test)]
 mod tests {
     use hex::FromHex;
-    use matches::assert_matches;
 
     use super::{super::metadata::MetadataKey, *};
     use crate::*;
@@ -121,19 +120,19 @@ mod tests {
             .mut_metadata()
             .get_mut(MetadataKey::AesGcmTag.as_str())
             .unwrap()[0] ^= 0b11111111u8;
-        assert_matches!(
+        assert!(matches!(
             backend.decrypt(&encrypted_content1).unwrap_err(),
             Error::WrongMasterKey(_)
-        );
+        ));
 
         // Must checksum not found
         let mut encrypted_content2 = encrypted_content;
         encrypted_content2
             .mut_metadata()
             .remove(MetadataKey::AesGcmTag.as_str());
-        assert_matches!(
+        assert!(matches!(
             backend.decrypt(&encrypted_content2).unwrap_err(),
             Error::Other(_)
-        );
+        ));
     }
 }

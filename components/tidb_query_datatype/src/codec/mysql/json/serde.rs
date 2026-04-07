@@ -6,7 +6,10 @@ use serde::{
     de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor},
     ser::{Error as SerError, Serialize, SerializeMap, SerializeTuple, Serializer},
 };
-use serde_json::Serializer as JsonSerializer;
+use serde_json::{
+    Serializer as JsonSerializer,
+    ser::{CompactFormatter, Formatter as _},
+};
 
 use super::{Json, JsonRef, JsonType};
 use crate::codec::{Error, convert::ToStringValue};
@@ -49,11 +52,41 @@ impl serde_json::ser::Formatter for MySqlFormatter {
             writer.write_all(b", ")
         }
     }
+
+    #[inline]
+    fn write_f32<W>(&mut self, writer: &mut W, value: f32) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        write_mysql_finite_float(writer, value as f64)
+    }
+
+    #[inline]
+    fn write_f64<W>(&mut self, writer: &mut W, value: f64) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        write_mysql_finite_float(writer, value)
+    }
 }
 
 impl MySqlFormatter {
     pub fn new() -> Self {
         MySqlFormatter {}
+    }
+}
+
+fn write_mysql_finite_float<W>(writer: &mut W, value: f64) -> std::io::Result<()>
+where
+    W: ?Sized + std::io::Write,
+{
+    let mut formatted = Vec::with_capacity(32);
+    CompactFormatter.write_f64(&mut formatted, value)?;
+    if let Some(pos) = formatted.windows(2).position(|window| window == b"e+") {
+        writer.write_all(&formatted[..=pos])?;
+        writer.write_all(&formatted[(pos + 2)..])
+    } else {
+        writer.write_all(&formatted)
     }
 }
 

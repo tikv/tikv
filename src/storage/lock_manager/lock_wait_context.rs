@@ -419,6 +419,7 @@ mod tests {
                     ..Default::default()
                 },
                 should_not_exist: false,
+                is_shared_lock: false,
                 lock_wait_token: token,
                 req_states: ctx.get_shared_states().clone(),
                 legacy_wake_up_index: None,

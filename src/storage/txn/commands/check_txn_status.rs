@@ -1,15 +1,16 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use tikv_util::Either;
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
     ProcessResult, Snapshot, TxnStatus,
     kv::WriteData,
     lock_manager::LockManager,
-    mvcc::{MvccTxn, SnapshotReader},
+    mvcc::{ErrorInner, MvccTxn, SnapshotReader},
     txn::{
-        Result,
+        Error, Result,
         actions::check_txn_status::*,
         commands::{
             Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
@@ -113,7 +114,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
         ));
 
         let (txn_status, released) = match reader.load_lock(&self.primary_key)? {
-            Some(lock) if lock.ts == self.lock_ts => check_txn_status_lock_exists(
+            Some(Either::Left(lock)) if lock.ts == self.lock_ts => check_txn_status_lock_exists(
                 &mut txn,
                 &mut reader,
                 self.primary_key,
@@ -125,17 +126,35 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
                 self.verify_is_primary,
                 self.rollback_if_not_exist,
             )?,
-            l => (
-                check_txn_status_missing_lock(
-                    &mut txn,
-                    &mut reader,
-                    self.primary_key,
-                    l,
-                    MissingLockAction::rollback(self.rollback_if_not_exist),
-                    self.resolving_pessimistic_lock,
-                )?,
-                None,
-            ),
+            Some(Either::Right(shared_locks)) => {
+                // a shared-locked key cannot be the primary key of a transaction thus reject
+                // the request directly.
+                warn!("reject check_txn_status on shared lock";
+                    "lock_ts" => self.lock_ts,
+                    "key" => ?&self.primary_key,
+                );
+                return Err(Error::from_mvcc(ErrorInner::PrimaryMismatch(
+                    shared_locks.into_lock_info(self.primary_key.into_raw()?),
+                )));
+            }
+            l => {
+                // Either no lock or lock with different ts - extract lock if present
+                let lock = l.and_then(|lock_or_shared| match lock_or_shared {
+                    Either::Left(lock) => Some(lock),
+                    Either::Right(_) => None, // SharedLocks already handled above
+                });
+                (
+                    check_txn_status_missing_lock(
+                        &mut txn,
+                        &mut reader,
+                        self.primary_key,
+                        lock,
+                        MissingLockAction::rollback(self.rollback_if_not_exist),
+                        self.resolving_pessimistic_lock,
+                    )?,
+                    None,
+                )
+            }
         };
 
         let mut released_locks = ReleasedLocks::new();
@@ -1286,6 +1305,10 @@ pub mod tests {
             b"k2",
             kvrpcpb::Op::Put,
         );
+
+        must_acquire_shared_pessimistic_lock(&mut engine, b"k2", b"k3", 2, 2, 100);
+        let e = must_err(&mut engine, b"k2", 1, 3, 3, true, false, true);
+        check_error(e, b"k2", b"", kvrpcpb::Op::SharedLock);
     }
 
     #[test]

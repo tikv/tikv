@@ -10,10 +10,10 @@ use kvproto::{
 };
 use raftstore::store::{LocksStatus, PeerPessimisticLocks};
 use tikv_kv::{SEEK_BOUND, SnapshotExt};
-use tikv_util::time::Instant;
+use tikv_util::{Either, time::Instant};
 use txn_types::{
-    Key, LastChange, Lock, OldValue, PessimisticLock, TimeStamp, TxnLockRef, Value, Write,
-    WriteRef, WriteType,
+    Key, LastChange, Lock, LockOrSharedLocks, OldValue, PessimisticLock, TimeStamp, TxnLockRef,
+    Value, Write, WriteRef, WriteType,
 };
 
 use crate::storage::{
@@ -63,7 +63,7 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
     }
 
     #[inline(always)]
-    pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
+    pub fn load_lock(&mut self, key: &Key) -> Result<Option<LockOrSharedLocks>> {
         self.reader.load_lock(key)
     }
 
@@ -230,9 +230,9 @@ impl<S: EngineSnapshot> MvccReader<S> {
         }
     }
 
-    pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
+    pub fn load_lock(&mut self, key: &Key) -> Result<Option<LockOrSharedLocks>> {
         if let Some(pessimistic_lock) = self.load_in_memory_pessimistic_lock(key)? {
-            return Ok(Some(pessimistic_lock));
+            return Ok(Some(Either::Left(pessimistic_lock)));
         }
 
         if self.scan_mode.is_some() {
@@ -241,13 +241,13 @@ impl<S: EngineSnapshot> MvccReader<S> {
 
         let res = if let Some(ref mut cursor) = self.lock_cursor {
             match cursor.get(key, &mut self.statistics.lock)? {
-                Some(v) => Some(Lock::parse(v)?),
+                Some(v) => Some(txn_types::parse_lock(v)?),
                 None => None,
             }
         } else {
             self.statistics.lock.get += 1;
             match self.snapshot.get_cf(CF_LOCK, key)? {
-                Some(v) => Some(Lock::parse(&v)?),
+                Some(v) => Some(txn_types::parse_lock(&v)?),
                 None => None,
             }
         };
@@ -288,7 +288,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
         filter: F,
         limit: usize,
         source: ScanLockReadTimeSource,
-    ) -> Result<(Vec<(Key, Lock)>, bool)>
+    ) -> Result<(Vec<(Key, LockOrSharedLocks)>, bool)>
     where
         F: Fn(&Key, TxnLockRef<'_>) -> bool,
     {
@@ -299,18 +299,22 @@ impl<S: EngineSnapshot> MvccReader<S> {
             limit,
             source,
         )?;
+        let memory_locks: Vec<(Key, LockOrSharedLocks)> = memory_locks
+            .into_iter()
+            .map(|(k, l)| (k, Either::Left(l)))
+            .collect();
         if memory_locks.is_empty() {
             return self.scan_locks_from_storage(
                 start_key,
                 end_key,
-                |k, l| filter(k, l.into()),
+                |k, l| filter(k, TxnLockRef::Persisted(l)),
                 limit,
             );
         }
 
         let mut lock_cursor_seeked = false;
         let mut storage_iteration_finished = false;
-        let mut next_pair_from_storage = || -> Result<Option<(Key, Lock)>> {
+        let mut next_pair_from_storage = || -> Result<Option<(Key, LockOrSharedLocks)>> {
             if storage_iteration_finished {
                 return Ok(None);
             }
@@ -338,10 +342,24 @@ impl<S: EngineSnapshot> MvccReader<S> {
                         return Ok(None);
                     }
                 }
-                let lock = Lock::parse(cursor.value(&mut self.statistics.lock))?;
-                if filter(&key, TxnLockRef::Persisted(&lock)) {
-                    self.statistics.lock.processed_keys += 1;
-                    return Ok(Some((key, lock)));
+                let mut lock_or_shared_locks =
+                    txn_types::parse_lock(cursor.value(&mut self.statistics.lock))?;
+                match &mut lock_or_shared_locks {
+                    Either::Left(l) => {
+                        if filter(&key, TxnLockRef::Persisted(l)) {
+                            self.statistics.lock.processed_keys += 1;
+                            return Ok(Some((key, lock_or_shared_locks)));
+                        }
+                    }
+                    Either::Right(shared_locks) => {
+                        shared_locks.filter_shared_locks(|shared_lock| {
+                            filter(&key, TxnLockRef::Persisted(shared_lock))
+                        })?;
+                        if !shared_locks.is_empty() {
+                            self.statistics.lock.processed_keys += 1;
+                            return Ok(Some((key, lock_or_shared_locks)));
+                        }
+                    }
                 }
                 cursor.next(&mut self.statistics.lock);
             }
@@ -349,7 +367,8 @@ impl<S: EngineSnapshot> MvccReader<S> {
             Ok(None)
         };
 
-        let mut locks: Vec<(Key, Lock)> = Vec::with_capacity(limit.min(memory_locks.len()));
+        let mut locks: Vec<(Key, LockOrSharedLocks)> =
+            Vec::with_capacity(limit.min(memory_locks.len()));
         let mut memory_iter = memory_locks.into_iter();
         let mut memory_pair = memory_iter.next();
         let mut storage_pair = next_pair_from_storage()?;
@@ -705,7 +724,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
         end: Option<&Key>,
         filter: F,
         limit: usize,
-    ) -> Result<(Vec<(Key, Lock)>, bool)>
+    ) -> Result<(Vec<(Key, LockOrSharedLocks)>, bool)>
     where
         F: Fn(&Key, &Lock) -> bool,
     {
@@ -719,6 +738,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             return Ok((vec![], false));
         }
         let mut locks = Vec::with_capacity(limit);
+        let mut lock_count: usize = 0;
         let mut has_remain = false;
         while cursor.valid()? {
             let key = Key::from_encoded_slice(cursor.key(&mut self.statistics.lock));
@@ -729,17 +749,37 @@ impl<S: EngineSnapshot> MvccReader<S> {
                 }
             }
 
-            let lock = Lock::parse(cursor.value(&mut self.statistics.lock))?;
-            if filter(&key, &lock) {
-                locks.push((key, lock));
-                if limit > 0 && locks.len() == limit {
-                    has_remain = true;
-                    break;
+            let mut lock_or_shared_locks =
+                txn_types::parse_lock(cursor.value(&mut self.statistics.lock))?;
+            match &mut lock_or_shared_locks {
+                Either::Left(l) => {
+                    if filter(&key, l) {
+                        lock_count += 1;
+                        locks.push((key, lock_or_shared_locks));
+                    }
                 }
+                Either::Right(shared_locks) => {
+                    shared_locks.filter_shared_locks(|shared_lock| filter(&key, shared_lock))?;
+                    if !shared_locks.is_empty() {
+                        if limit > 0 {
+                            let remaining = limit - lock_count;
+                            if shared_locks.len() > remaining {
+                                shared_locks.truncate_to(remaining);
+                                has_remain = true;
+                            }
+                        }
+                        lock_count += shared_locks.len();
+                        locks.push((key, lock_or_shared_locks));
+                    }
+                }
+            }
+            if limit > 0 && lock_count >= limit {
+                has_remain = true;
+                break;
             }
             cursor.next(&mut self.statistics.lock);
         }
-        self.statistics.lock.processed_keys += locks.len();
+        self.statistics.lock.processed_keys += lock_count;
         Ok((locks, has_remain))
     }
 
@@ -969,7 +1009,7 @@ pub mod tests {
     };
     use pd_client::FeatureGate;
     use raftstore::store::RegionSnapshot;
-    use txn_types::{LastChange, LockType, Mutation};
+    use txn_types::{LastChange, Lock, LockType, Mutation, SharedLocks, TimeStamp};
 
     use super::*;
     use crate::storage::{
@@ -1132,6 +1172,7 @@ pub mod tests {
                 false,
                 TimeStamp::zero(),
                 true,
+                false,
                 false,
                 false,
             )
@@ -1328,16 +1369,16 @@ pub mod tests {
 
             for (i, expect_ts) in res.iter().enumerate() {
                 if i == 0 {
-                    assert_eq!(iter.seek_to_first().unwrap(), true);
+                    assert!(iter.seek_to_first().unwrap());
                 } else {
-                    assert_eq!(iter.next().unwrap(), true);
+                    assert!(iter.next().unwrap());
                 }
 
                 let ts = Key::decode_ts_from(iter.key()).unwrap();
                 assert_eq!(ts.into_inner(), *expect_ts);
             }
 
-            assert_eq!(iter.next().unwrap(), false);
+            assert!(!iter.next().unwrap());
         }
     }
 
@@ -1375,7 +1416,7 @@ pub mod tests {
         let mut iter = snap.iter(CF_WRITE, iopt).unwrap();
 
         // Must not omit the latest deletion of key1 to prevent seeing outdated record.
-        assert_eq!(iter.seek_to_first().unwrap(), true);
+        assert!(iter.seek_to_first().unwrap());
         assert_eq!(
             Key::from_encoded_slice(iter.key())
                 .to_raw()
@@ -1383,7 +1424,7 @@ pub mod tests {
                 .as_slice(),
             key2
         );
-        assert_eq!(iter.next().unwrap(), false);
+        assert!(!iter.next().unwrap());
     }
 
     #[test]
@@ -1859,21 +1900,23 @@ pub mod tests {
         .map(|(k, lock_type, short_value, ts, for_update_ts)| {
             (
                 Key::from_raw(&k),
-                Lock::new(
-                    lock_type,
-                    b"k1".to_vec(),
-                    ts,
-                    0,
-                    short_value,
-                    for_update_ts,
-                    0,
-                    TimeStamp::zero(),
-                    false,
-                )
-                .set_last_change(LastChange::from_parts(
-                    TimeStamp::zero(),
-                    (lock_type == LockType::Lock || lock_type == LockType::Pessimistic) as u64,
-                )),
+                Either::Left(
+                    Lock::new(
+                        lock_type,
+                        b"k1".to_vec(),
+                        ts,
+                        0,
+                        short_value,
+                        for_update_ts,
+                        0,
+                        TimeStamp::zero(),
+                        false,
+                    )
+                    .set_last_change(LastChange::from_parts(
+                        TimeStamp::zero(),
+                        (lock_type == LockType::Lock || lock_type == LockType::Pessimistic) as u64,
+                    )),
+                ),
             )
         })
         .collect();
@@ -1953,6 +1996,142 @@ pub mod tests {
             &visible_locks[..2],
             true,
         );
+    }
+
+    #[test]
+    fn test_scan_locks_from_storage_shared_locks_limit() {
+        // This test guarantees that the limit parameter take effect on shared locks as
+        // well.
+        let path = tempfile::Builder::new()
+            .prefix("_test_storage_mvcc_reader_scan_locks_from_storage_shared_locks_limit")
+            .tempdir()
+            .unwrap();
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![], vec![]);
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(&db, &region);
+
+        // Create a SharedLocks with 5 individual locks on key "k1"
+        let mut shared_locks = SharedLocks::new();
+        for i in 1..=5u64 {
+            let lock = Lock::new(
+                LockType::Pessimistic,
+                format!("k{}", i).into_bytes(),
+                i.into(),
+                100,
+                None,
+                TimeStamp::zero(),
+                0,
+                TimeStamp::zero(),
+                false,
+            );
+            shared_locks.insert_lock(lock).unwrap();
+        }
+
+        // Write SharedLocks directly to CF_LOCK
+        let key = Key::from_raw(b"shared_lock_key");
+        engine.write(vec![Modify::Put(
+            CF_LOCK,
+            key.clone(),
+            shared_locks.to_bytes(),
+        )]);
+
+        // Scan with limit=1
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.clone(), region.clone());
+        let mut reader = MvccReader::new(snap, None, false);
+        let (locks, _has_remain) = reader
+            .scan_locks_from_storage(None, None, |_, _| true, 1)
+            .unwrap();
+
+        // Count total individual locks returned
+        let total_locks: usize = locks
+            .iter()
+            .map(|(_, lor)| match lor {
+                Either::Left(_) => 1,
+                Either::Right(shared) => shared.len(),
+            })
+            .sum();
+
+        assert!(
+            total_locks <= 1,
+            "Expected at most 1 lock when limit=1, but got {} locks.",
+            total_locks
+        );
+    }
+
+    #[test]
+    fn test_scan_locks_shared_limit_across_keys_keeps_smallest_ts() {
+        let path = tempfile::Builder::new()
+            .prefix("_test_storage_mvcc_reader_scan_locks_shared_limit_across_keys")
+            .tempdir()
+            .unwrap();
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![], vec![]);
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(&db, &region);
+
+        // Put one exclusive lock key before the shared-lock key.
+        engine.prewrite(
+            Mutation::make_put(Key::from_raw(b"exclusive_lock_key"), b"v".to_vec()),
+            b"exclusive_lock_key",
+            50,
+        );
+
+        // Put one shared-lock key with multiple sub-locks in unsorted timestamps.
+        let mut shared_locks = SharedLocks::new();
+        for ts in [8_u64, 2_u64, 6_u64, 1_u64] {
+            let lock = Lock::new(
+                LockType::Pessimistic,
+                format!("pk_{}", ts).into_bytes(),
+                ts.into(),
+                100,
+                None,
+                TimeStamp::zero(),
+                0,
+                TimeStamp::zero(),
+                false,
+            );
+            shared_locks.insert_lock(lock).unwrap();
+        }
+        let shared_key = Key::from_raw(b"shared_lock_key");
+        engine.write(vec![Modify::Put(
+            CF_LOCK,
+            shared_key.clone(),
+            shared_locks.to_bytes(),
+        )]);
+
+        // Limit=3 means 1 exclusive lock + 2 shared sub-locks. This forces
+        // truncation inside the shared container.
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.clone(), region.clone());
+        let mut reader = MvccReader::new(snap, None, false);
+        let (locks, has_remain) = reader
+            .scan_locks_from_storage(None, None, |_, _| true, 3)
+            .unwrap();
+
+        assert!(has_remain);
+        assert_eq!(locks.len(), 2);
+        assert_eq!(locks[0].0, Key::from_raw(b"exclusive_lock_key"));
+        assert_eq!(locks[1].0, shared_key);
+        assert!(matches!(locks[0].1, Either::Left(_)));
+
+        let total_locks: usize = locks
+            .iter()
+            .map(|(_, lock_or_shared_locks)| match lock_or_shared_locks {
+                Either::Left(_) => 1,
+                Either::Right(shared) => shared.len(),
+            })
+            .sum();
+        assert_eq!(total_locks, 3);
+
+        let mut retained_shared_ts = match &locks[1].1 {
+            Either::Right(shared) => shared
+                .iter_ts()
+                .map(|ts| ts.into_inner())
+                .collect::<Vec<_>>(),
+            Either::Left(_) => panic!("expected shared locks on shared_lock_key"),
+        };
+        retained_shared_ts.sort_unstable();
+        assert_eq!(retained_shared_ts, vec![1, 2]);
     }
 
     #[test]
@@ -2079,7 +2258,7 @@ pub mod tests {
             expect_is_remain: bool,
         }
 
-        let cases = vec![
+        let cases = [
             // Test the limit.
             Case {
                 start_key: None,

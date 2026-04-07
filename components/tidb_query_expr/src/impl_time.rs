@@ -1694,16 +1694,16 @@ fn get_micro_timestamp(time: &DateTime, tz: &Tz) -> Result<i64> {
 
             // year, month, day, hour, minute and second is enough
             let time_with_tz = chrono::Utc
-                .ymd(year, month, day)
-                .and_hms(hour, minute, second)
+                .with_ymd_and_hms(year, month, day, hour, minute, second)
+                .unwrap()
                 .with_timezone(&chrono_tz);
             match find_zone_transition(time_with_tz) {
-                Ok(val) => return Ok(val.naive_utc().timestamp_micros()),
+                Ok(val) => return Ok(val.naive_utc().and_utc().timestamp_micros()),
                 Err(err) => return Err(err),
             }
         }
     };
-    Ok(res.naive_utc().timestamp_micros())
+    Ok(res.naive_utc().and_utc().timestamp_micros())
 }
 
 #[rpn_fn(capture = [ctx])]

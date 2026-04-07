@@ -46,7 +46,7 @@ const MEDIUM_PRIORITY: u32 = 8;
 #[cfg(test)]
 const HIGH_PRIORITY: u32 = 16;
 
-// the global maxinum of virtual time is u64::MAX / 16, so when the virtual
+// the global maximum of virtual time is u64::MAX / 16, so when the virtual
 // time of all groups are bigger than half of this value, we rest them to avoid
 // virtual time overflow.
 const RESET_VT_THRESHOLD: u64 = (u64::MAX >> 4) / 2;
@@ -163,6 +163,17 @@ impl ResourceGroupManager {
         {
             self.group_count.fetch_add(1, Ordering::Relaxed);
         }
+        self.update_has_background();
+    }
+
+    fn update_has_background(&self) {
+        let any_has_bg = self
+            .resource_groups
+            .iter()
+            .any(|g| !g.background_source_types.is_empty());
+        self.registry.read().iter().for_each(|controller| {
+            controller.set_has_background(any_has_bg);
+        });
     }
 
     fn build_resource_limiter(
@@ -196,6 +207,7 @@ impl ResourceGroupManager {
             info!("remove resource group"; "name"=> name);
             self.group_count.fetch_sub(1, Ordering::Relaxed);
         }
+        self.update_has_background();
     }
 
     pub fn retain(&self, mut f: impl FnMut(&String, &PbResourceGroup) -> bool) {
@@ -414,7 +426,7 @@ pub struct ResourceController {
     #[allow(dead_code)]
     name: String,
     // We handle the priority differently between read and write request:
-    // 1. the priority factor is calculate based on read/write RU settings.
+    // 1. the priority factor is calculated based on read/write RU settings.
     // 2. for read request, we increase a constant virtual time delta at each `get_priority` call
     //    because the cost can't be calculated at start, so we only increase a constant delta and
     //    increase the real cost after task is executed; but don't increase it at write because the
@@ -424,7 +436,7 @@ pub struct ResourceController {
     // factor = max_ru_quota / group_ru_quota * 10.0
     // We use mutex here to ensure when we need to change this value and do adjust all resource
     // groups' factors, it can't be changed concurrently.
-    // NOTE: becuase the ru config for "default" group is very large and it can cause very big
+    // NOTE: because the ru config for "default" group is very large, and it can cause very big
     // group weight, we will not count this value by default.
     max_ru_quota: Mutex<u64>,
     // record consumption of each resource group, name --> resource_group
@@ -433,8 +445,10 @@ pub struct ResourceController {
     last_min_vt: AtomicU64,
     // the last time min vt is overflow
     last_rest_vt_time: Cell<Instant>,
-    // whether the settings is customized by user
+    // whether the settings are customized by user
     customized: AtomicBool,
+    // whether any resource group has background settings configured
+    has_background: AtomicBool,
 }
 
 // we are ensure to visit the `last_rest_vt_time` by only 1 thread so it's
@@ -452,6 +466,7 @@ impl ResourceController {
             max_ru_quota: Mutex::new(DEFAULT_MAX_RU_QUOTA),
             last_rest_vt_time: Cell::new(Instant::now_coarse()),
             customized: AtomicBool::new(false),
+            has_background: AtomicBool::new(false),
         }
     }
 
@@ -559,7 +574,11 @@ impl ResourceController {
     }
 
     pub fn is_customized(&self) -> bool {
-        self.customized.load(Ordering::Acquire)
+        self.customized.load(Ordering::Acquire) || self.has_background.load(Ordering::Acquire)
+    }
+
+    pub fn set_has_background(&self, has_background: bool) {
+        self.has_background.store(has_background, Ordering::Release);
     }
 
     #[inline]
@@ -629,12 +648,29 @@ impl ResourceController {
     }
 
     pub fn get_priority(&self, name: &[u8], pri: CommandPri) -> u64 {
-        let level = match pri {
-            CommandPri::Low => 2,
-            CommandPri::Normal => 1,
-            CommandPri::High => 0,
+        let level = Self::command_pri_to_level(pri);
+        self.resource_group(name).get_priority(level, None, true)
+    }
+
+    /// Returns the priority for the given task metadata without incrementing
+    /// virtual time. Used for pre-spawn eviction comparison.
+    pub fn peek_priority_of(&self, metadata: &TaskMetadata<'_>, pri: CommandPri) -> u64 {
+        let level = Self::command_pri_to_level(pri);
+        let group = self.resource_group(metadata.group_name());
+        let override_priority = if metadata.override_priority() == 0 {
+            None
+        } else {
+            Some(metadata.override_priority())
         };
-        self.resource_group(name).get_priority(level, None)
+        group.get_priority(level, override_priority, false)
+    }
+
+    fn command_pri_to_level(pri: CommandPri) -> usize {
+        match pri {
+            CommandPri::High => 0,
+            CommandPri::Normal => 1,
+            CommandPri::Low => 2,
+        }
     }
 }
 
@@ -648,6 +684,7 @@ impl TaskPriorityProvider for ResourceController {
             } else {
                 Some(metadata.override_priority())
             },
+            true,
         )
     }
 }
@@ -672,14 +709,18 @@ struct GroupPriorityTracker {
 }
 
 impl GroupPriorityTracker {
-    fn get_priority(&self, level: usize, override_priority: Option<u32>) -> u64 {
+    /// Computes the scheduling priority for a task at the given level.
+    /// When `advance_vt` is true, atomically increments the virtual time
+    /// (used when actually scheduling a task). When false, reads virtual
+    /// time without advancing it (used for priority comparison only).
+    fn get_priority(&self, level: usize, override_priority: Option<u32>, advance_vt: bool) -> u64 {
         let task_extra_priority = TASK_EXTRA_FACTOR_BY_LEVEL[level] * 1000 * self.weight;
-        let vt = (if self.vt_delta_for_get > 0 {
+        let vt = (if advance_vt && self.vt_delta_for_get > 0 {
             self.virtual_time
                 .fetch_add(self.vt_delta_for_get, Ordering::Relaxed)
                 + self.vt_delta_for_get
         } else {
-            self.virtual_time.load(Ordering::Relaxed)
+            self.virtual_time.load(Ordering::Relaxed) + self.vt_delta_for_get
         }) + task_extra_priority;
         let priority = override_priority.unwrap_or(self.group_priority);
         concat_priority_vt(priority, vt)
@@ -842,7 +883,7 @@ pub(crate) mod tests {
         assert!(group3.current_vt() >= group1_vt / 2);
         drop(group3);
 
-        // test resource gorup resource limiter.
+        // test resource group resource limiter.
         let group1 = resource_manager.get_resource_group("test").unwrap();
         assert!(group1.limiter.is_none());
         assert!(

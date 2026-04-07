@@ -68,6 +68,7 @@ use tikv_util::{
     escape,
     future::block_on_timeout,
     mpsc::future,
+    thread_name_prefix::SST_RECOVERY_THREAD,
     time::{Instant, ThreadReadId},
     worker::LazyWorker,
 };
@@ -439,6 +440,8 @@ pub fn make_cb_rocks(
     make_cb(cmd)
 }
 
+#[allow(unused_assignments)]
+#[allow(unused_variables)]
 pub fn make_cb(
     cmd: &RaftCmdRequest,
 ) -> (Callback<RocksSnapshot>, future::Receiver<RaftCmdResponse>) {
@@ -461,7 +464,7 @@ pub fn make_cb(
     (cb, rx)
 }
 
-pub fn make_cb_ext<EK: KvEngine>(
+pub fn make_cb_ext(
     cmd: &RaftCmdRequest,
     proposed: Option<ExtCallback>,
     committed: Option<ExtCallback>,
@@ -767,7 +770,7 @@ pub fn start_test_engine(
         .build_shared_rocks_env(key_manager.clone(), limiter)
         .unwrap();
 
-    let sst_worker = LazyWorker::new("sst-recovery");
+    let sst_worker = LazyWorker::new(SST_RECOVERY_THREAD);
     let scheduler = sst_worker.scheduler();
 
     let (raft_engine, raft_statistics) = RaftTestEngine::build(&cfg, &env, &key_manager, &cache);

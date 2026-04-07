@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{assert_matches::assert_matches, time::Duration};
+use std::time::Duration;
 
 use engine_traits::{
     CF_DEFAULT, CF_RAFT, CF_WRITE, CompactExt, DbOptionsExt, ManualCompactionOptions, MiscExt,
@@ -57,7 +57,7 @@ fn test_write_batch_rollback() {
     assert!(!resp.get_header().has_error(), "{:?}", resp);
 
     let snap = router.stale_snapshot(2);
-    assert_matches!(snap.get_value(b"key"), Ok(None));
+    assert!(matches!(snap.get_value(b"key"), Ok(None)));
     assert_eq!(snap.get_value(b"key1").unwrap().unwrap(), b"value");
 
     fail::cfg("APPLY_COMMITTED_ENTRIES", "pause").unwrap();
@@ -93,7 +93,7 @@ fn test_write_batch_rollback() {
     let resp = block_on(sub1.result()).unwrap();
     assert!(!resp.get_header().has_error(), "{:?}", resp);
     let snap = router.stale_snapshot(2);
-    assert_matches!(snap.get_value(b"key2"), Ok(None));
+    assert!(matches!(snap.get_value(b"key2"), Ok(None)));
     assert_eq!(snap.get_value(b"key3").unwrap().unwrap(), b"value");
 }
 

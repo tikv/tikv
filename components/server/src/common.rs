@@ -376,10 +376,7 @@ impl TikvServerCore {
                     } else {
                         cputime_limit / 1000_f64
                     };
-                    let cpu_usage = match proc_stats.cpu_usage() {
-                        Ok(r) => r,
-                        Err(_e) => 0.0,
-                    };
+                    let cpu_usage = proc_stats.cpu_usage().unwrap_or(0.0);
                     // Try tuning quota when cpu_usage is correctly collected.
                     // rule based tuning:
                     // - if instance is busy, shrink cpu quota for analyze by one quota pace until
@@ -483,6 +480,8 @@ pub struct EnginesResourceInfo {
     raft_engine: Option<RocksEngine>,
     latest_normalized_pending_bytes: AtomicU32,
     normalized_pending_bytes_collector: MovingAvgU32,
+    // Shared compaction pressure (0-100+) read by GroupQuotaAdjustWorker.
+    compaction_pending_bytes_ratio: Arc<AtomicU32>,
 }
 
 impl EnginesResourceInfo {
@@ -493,6 +492,7 @@ impl EnginesResourceInfo {
         tablet_registry: TabletRegistry<RocksEngine>,
         raft_engine: Option<RocksEngine>,
         max_samples_to_preserve: usize,
+        compaction_pending_bytes_ratio: Arc<AtomicU32>,
     ) -> Self {
         // Match DATA_CFS.
         let base_max_compactions = [
@@ -506,6 +506,7 @@ impl EnginesResourceInfo {
             raft_engine,
             latest_normalized_pending_bytes: AtomicU32::new(0),
             normalized_pending_bytes_collector: MovingAvgU32::new(max_samples_to_preserve),
+            compaction_pending_bytes_ratio,
         }
     }
 
@@ -575,7 +576,9 @@ impl EnginesResourceInfo {
             if evict_threshold > 0 {
                 normalized_pending_bytes = cmp::max(
                     normalized_pending_bytes,
-                    (*pending * EnginesResourceInfo::SCALE_FACTOR / evict_threshold) as u32,
+                    (*pending * EnginesResourceInfo::SCALE_FACTOR)
+                        .checked_div(evict_threshold)
+                        .unwrap_or(0) as u32,
                 );
                 let base = self.base_max_compactions[i];
                 if base > 0 {
@@ -640,10 +643,11 @@ impl EnginesResourceInfo {
         let (_, avg) = self
             .normalized_pending_bytes_collector
             .add(normalized_pending_bytes);
-        self.latest_normalized_pending_bytes.store(
-            std::cmp::max(normalized_pending_bytes, avg),
-            Ordering::Relaxed,
-        );
+        let effective_pressure = std::cmp::max(normalized_pending_bytes, avg);
+        self.latest_normalized_pending_bytes
+            .store(effective_pressure, Ordering::Relaxed);
+        self.compaction_pending_bytes_ratio
+            .store(effective_pressure, Ordering::Relaxed);
     }
 
     #[cfg(test)]
@@ -1050,9 +1054,7 @@ impl DiskUsageChecker {
                     }
                 };
                 let raft_disk_available = cmp::min(
-                    raft_disk_cap
-                        .checked_sub(raft_used_size)
-                        .unwrap_or_default(),
+                    raft_disk_cap.saturating_sub(raft_used_size),
                     raft_disk_avail,
                 );
                 if raft_disk_available <= raft_already_full_thd {
@@ -1087,10 +1089,7 @@ impl DiskUsageChecker {
         } else {
             self.config_disk_capacity
         };
-        let available = cmp::min(
-            capacity.checked_sub(kvdb_used_size).unwrap_or_default(),
-            disk_avail,
-        );
+        let available = cmp::min(capacity.saturating_sub(kvdb_used_size), disk_avail);
         let cur_kv_disk_status = if available <= kvdb_already_full_thd {
             disk::DiskUsage::AlreadyFull
         } else if available <= self.kvdb_almost_full_thd {

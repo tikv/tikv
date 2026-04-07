@@ -30,8 +30,8 @@ use kvproto::{
 };
 use security::SecurityManager;
 use tikv_util::{
-    Either, HandyRwLock, box_err, debug, error, info, thd_name, time::Instant,
-    timer::GLOBAL_TIMER_HANDLE, warn,
+    Either, HandyRwLock, box_err, debug, error, info, thd_name,
+    thread_name_prefix::PD_MONITOR_THREAD, time::Instant, timer::GLOBAL_TIMER_HANDLE, warn,
 };
 use txn_types::TimeStamp;
 use yatp::{ThreadPool, task::future::TaskCell};
@@ -84,7 +84,7 @@ impl RpcClient {
             v => v.saturating_add(1),
         };
         let monitor = Arc::new(
-            yatp::Builder::new(thd_name!("pdmonitor"))
+            yatp::Builder::new(thd_name!(PD_MONITOR_THREAD))
                 .max_thread_count(1)
                 .build_future_pool(),
         );
@@ -164,7 +164,7 @@ impl RpcClient {
                     return Ok(rpc_client);
                 }
                 Err(e) => {
-                    if i as usize % cfg.retry_log_every == 0 {
+                    if (i as usize).is_multiple_of(cfg.retry_log_every) {
                         warn!("validate PD endpoints failed"; "err" => ?e);
                     }
                     let _ = GLOBAL_TIMER_HANDLE
@@ -606,6 +606,7 @@ impl PdClient for RpcClient {
         req.set_approximate_size(region_stat.approximate_size);
         req.set_approximate_keys(region_stat.approximate_keys);
         req.set_cpu_usage(region_stat.cpu_usage);
+        req.set_cpu_stats(region_stat.cpu_stats);
         if let Some(s) = replication_status {
             req.set_replication_status(s);
         }

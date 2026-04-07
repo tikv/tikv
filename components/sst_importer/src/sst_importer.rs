@@ -7,7 +7,7 @@ use std::{
     io::{self, BufReader, ErrorKind, Read},
     ops::Bound,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, SystemTime},
 };
 
@@ -22,8 +22,8 @@ use engine_traits::{
     util::check_key_in_range,
 };
 use external_storage::{
-    ExternalStorage, RestoreConfig, compression_reader_dispatcher, encrypt_wrap_reader,
-    wrap_with_checksum_reader_if_needed,
+    BackendConfig, ExternalStorage, RestoreConfig, compression_reader_dispatcher,
+    encrypt_wrap_reader, wrap_with_checksum_reader_if_needed,
 };
 use file_system::{IoType, OpenOptions, get_io_rate_limiter};
 use kvproto::{
@@ -43,6 +43,7 @@ use tikv_util::{
     memory::{MemoryQuota, OwnedAllocated},
     resizable_threadpool::DeamonRuntimeHandle,
     sys::{SysQuota, thread::ThreadBuildWrapper},
+    thread_name_prefix::SST_IMPORT_MISC_THREAD,
     time::{Instant, Limiter},
 };
 use tokio::{runtime::Runtime, sync::OnceCell};
@@ -50,7 +51,10 @@ use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
     Config, ConfigManager as ImportConfigManager, Error, Result,
-    caching::cache_map::{CacheMap, ShareOwned},
+    caching::{
+        cache_map::{CacheMap, ShareOwned},
+        storage_cache::StorageBackendFactory,
+    },
     import_file::{ImportDir, ImportFile},
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     import_mode2::{HashRange, ImportModeSwitcherV2},
@@ -163,7 +167,8 @@ pub struct SstImporter<E: KvEngine> {
     api_version: ApiVersion,
     compression_types: HashMap<CfName, SstCompressionType>,
 
-    cached_storage: CacheMap<StorageBackend>,
+    backend_config: BackendConfig,
+    cached_storage: CacheMap<StorageBackendFactory>,
     // We need to keep reference to the runtime so background tasks won't be dropped.
     _download_rt: Runtime,
     file_locks: Arc<DashMap<String, (CacheKvFile, Instant)>>,
@@ -191,7 +196,7 @@ impl<E: KvEngine> SstImporter<E> {
         // enough.
         let download_rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
-            .thread_name("sst_import_misc")
+            .thread_name(SST_IMPORT_MISC_THREAD)
             .with_sys_and_custom_hooks(
                 || {
                     file_system::set_io_type(IoType::Import);
@@ -217,12 +222,17 @@ impl<E: KvEngine> SstImporter<E> {
             switcher,
             api_version,
             compression_types: HashMap::with_capacity(2),
+            backend_config: Default::default(),
             file_locks: Arc::new(DashMap::default()),
             cached_storage,
             _download_rt: download_rt,
             memory_quota: Arc::new(MemoryQuota::new(memory_limit as _)),
             multi_master_keys_backend: MultiMasterKeyBackend::new(),
         })
+    }
+
+    pub fn set_backend_config(&mut self, backend_config: BackendConfig) {
+        self.backend_config = backend_config;
     }
 
     pub fn ranges_enter_import_mode(&self, ranges: Vec<Range>) {
@@ -410,7 +420,6 @@ impl<E: KvEngine> SstImporter<E> {
     ) -> Result<Option<Range>> {
         debug!("download start";
             "meta" => ?meta,
-            "url" => ?backend,
             "name" => name,
             "rewrite_rule" => ?rewrite_rule,
             "speed_limit" => speed_limiter.speed_limit(),
@@ -455,12 +464,16 @@ impl<E: KvEngine> SstImporter<E> {
     ) -> Result<Option<Range>> {
         debug!("download start";
             "metas" => ?basic_meta,
-            "url" => ?backend,
             "rewrite_rule" => ?rewrite_rule,
             "speed_limit" => speed_limiter.speed_limit(),
         );
         let mut sst_readers = Vec::new();
-        let mut clean_paths = Vec::new();
+        let clean_paths = Mutex::new(Vec::new());
+        defer! {
+            for path in clean_paths.lock().unwrap().iter() {
+                self.remove_file_no_throw(path)
+            }
+        };
         for (name, meta) in metas {
             let path = self.dir.join_for_write(meta)?;
             let dst_file_name = self
@@ -481,8 +494,13 @@ impl<E: KvEngine> SstImporter<E> {
             sst_reader.verify_checksum()?;
 
             sst_readers.push(sst_reader);
-            clean_paths.push(path.temp);
+            clean_paths.lock().unwrap().push(path.temp);
         }
+
+        fail::fail_point!("download_files_ext_after_download", |msg| {
+            let msg = msg.unwrap_or_else(|| "download files ext injected error".to_string());
+            Err(Error::ErrorWrapper(msg))
+        });
 
         let mut iter_option = IterOptions::default();
         iter_option.set_fill_cache(false);
@@ -506,11 +524,6 @@ impl<E: KvEngine> SstImporter<E> {
                 engine,
                 ext.req_type,
                 Instant::now(),
-                || {
-                    for path in clean_paths {
-                        let _ = file_system::remove_file(path);
-                    }
-                },
             )
             .await;
 
@@ -598,10 +611,13 @@ impl<E: KvEngine> SstImporter<E> {
         // TODO: pass a config to support hdfs
         let ext_storage = if cache_id.is_empty() {
             EXT_STORAGE_CACHE_COUNT.with_label_values(&["skip"]).inc();
-            let s = external_storage::create_storage(backend, Default::default())?;
+            let s = external_storage::create_storage(backend, self.backend_config.clone())?;
             Arc::from(s)
         } else {
-            self.cached_storage.cached_or_create(cache_id, backend)?
+            let backend_factory =
+                StorageBackendFactory::new(backend.clone(), self.backend_config.clone());
+            self.cached_storage
+                .cached_or_create(cache_id, &backend_factory)?
         };
         Ok(ext_storage)
     }
@@ -1995,7 +2011,7 @@ impl<E: KvEngine> SstImporter<E> {
         Ok((range_start, range_end))
     }
 
-    async fn do_rewrite_keys<'a, Iter: Iterator, F>(
+    async fn do_rewrite_keys<'a, Iter: Iterator>(
         &'a self,
         dst_file_name: PathBuf,
         rewrite_rule: &'a RewriteRule,
@@ -2006,16 +2022,12 @@ impl<E: KvEngine> SstImporter<E> {
         engine: E,
         req_type: DownloadRequestType,
         start_rewrite: Instant,
-        clean_files: F,
     ) -> Result<
         Option<(
             Range,
             <<E as SstExt>::SstWriter as SstWriter>::ExternalSstFileInfo,
         )>,
-    >
-    where
-        F: FnOnce(),
-    {
+    > {
         let old_prefix = rewrite_rule.get_old_key_prefix();
         let new_prefix = rewrite_rule.get_new_key_prefix();
         // perform iteration and key rewrite.
@@ -2139,8 +2151,6 @@ impl<E: KvEngine> SstImporter<E> {
                 first_key = Some(keys::origin_key(&data_key).to_vec());
             }
         }
-
-        clean_files();
 
         IMPORTER_DOWNLOAD_DURATION
             .with_label_values(&["rewrite"])
@@ -2893,6 +2903,41 @@ mod tests {
             mem_quota_old / 3,
             mem_quota_new
         );
+    }
+
+    #[test]
+    fn test_external_storage_uses_backup_backend_config() {
+        let import_dir = tempfile::tempdir().unwrap();
+        let mut importer = SstImporter::<TestEngine>::new(
+            &Config::default(),
+            import_dir.path(),
+            None,
+            ApiVersion::V1,
+            false,
+        )
+        .unwrap();
+
+        let mut gcs = kvproto::brpb::Gcs::default();
+        gcs.bucket = "test-bucket".to_owned();
+        gcs.endpoint = "http://127.0.0.1:1".to_owned();
+        gcs.credentials_blob = r#"{"type":"external_account"}"#.to_owned();
+        let mut backend = StorageBackend::default();
+        backend.set_gcs(gcs);
+
+        let mut backend_config = BackendConfig::default();
+        backend_config.gcp_v2_enable = true;
+        importer.set_backend_config(backend_config);
+        importer.external_storage_or_cache(&backend, "").unwrap();
+        importer
+            .external_storage_or_cache(&backend, "cached-gcs-v2")
+            .unwrap();
+
+        importer.set_backend_config(BackendConfig::default());
+        match importer.external_storage_or_cache(&backend, "") {
+            Ok(_) => panic!("gcs v1 should reject external_account credentials"),
+            Err(Error::Io(err)) => assert_eq!(err.kind(), io::ErrorKind::InvalidInput),
+            Err(err) => panic!("unexpected error: {err}"),
+        }
     }
 
     #[test]
@@ -3718,7 +3763,9 @@ mod tests {
             meta.set_length(0); // disable validation.
             meta.set_crc32(0);
             let meta_info = importer.validate(&meta).unwrap();
-            importer.ingest(&[meta_info.clone()], &db).unwrap();
+            importer
+                .ingest(std::slice::from_ref(&meta_info), &db)
+                .unwrap();
             // key1 = "zt9102_r01", value1 = "abc", len = 13
             // key2 = "zt9102_r04", value2 = "xyz", len = 13
             // key3 = "zt9102_r07", value3 = "pqrst", len = 15
@@ -4840,6 +4887,54 @@ mod tests {
 
         // Should fail due to invalid SST file
         result.unwrap_err();
+    }
+
+    #[test]
+    #[cfg(feature = "failpoints")]
+    fn test_download_files_ext_cleanup_temp_files_on_error() {
+        let (_ext_sst_dir, backend, file_metas) = create_multiple_external_sst_files(2).unwrap();
+
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
+        let db = create_sst_test_engine().unwrap();
+
+        let metas: HashMap<String, SstMeta> = file_metas
+            .iter()
+            .map(|(name, meta)| (name.clone(), meta.clone()))
+            .collect();
+        let temp_paths: Vec<_> = metas
+            .values()
+            .map(|meta| importer.dir.join_for_write(meta).unwrap().temp)
+            .collect();
+
+        let _fp = fail::FailScenario::setup();
+        fail::cfg("download_files_ext_after_download", "return(injected)").unwrap();
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let result = runtime.block_on(importer.download_files_ext(
+            &file_metas[0].1,
+            &metas,
+            &backend,
+            &RewriteRule::default(),
+            None,
+            Limiter::new(f64::INFINITY),
+            db,
+            DownloadExt::default(),
+        ));
+
+        fail::remove("download_files_ext_after_download");
+        result.unwrap_err();
+
+        for path in temp_paths {
+            assert!(
+                !path.exists(),
+                "temporary download file {:?} should be cleaned up",
+                path
+            );
+        }
     }
 
     #[test]

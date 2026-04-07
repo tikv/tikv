@@ -944,7 +944,6 @@ pub mod merge_helper {
 }
 
 pub mod life_helper {
-    use std::assert_matches::assert_matches;
 
     use engine_traits::RaftEngineDebug;
     use kvproto::raft_serverpb::{ExtraMessageType, PeerState};
@@ -985,13 +984,16 @@ pub mod life_helper {
         let mut buf = vec![];
         raft_engine.get_all_entries_to(region_id, &mut buf).unwrap();
         assert!(buf.is_empty(), "{:?}", buf);
-        assert_matches!(raft_engine.get_raft_state(region_id), Ok(None));
-        assert_matches!(raft_engine.get_apply_state(region_id, u64::MAX), Ok(None));
+        assert!(matches!(raft_engine.get_raft_state(region_id), Ok(None)));
+        assert!(matches!(
+            raft_engine.get_apply_state(region_id, u64::MAX),
+            Ok(None)
+        ));
         let region_state = raft_engine
             .get_region_state(region_id, u64::MAX)
             .unwrap()
             .unwrap();
-        assert_matches!(region_state.get_state(), PeerState::Tombstone);
+        assert!(matches!(region_state.get_state(), PeerState::Tombstone));
         assert!(
             region_state.get_region().get_peers().contains(peer),
             "{:?}",

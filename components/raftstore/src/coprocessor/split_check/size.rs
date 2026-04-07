@@ -234,7 +234,7 @@ pub fn get_approximate_split_keys(
 
 #[cfg(test)]
 pub mod tests {
-    use std::{assert_matches::assert_matches, iter, sync::mpsc};
+    use std::{iter, sync::mpsc};
 
     use collections::HashSet;
     use engine_test::{
@@ -474,7 +474,9 @@ pub mod tests {
             None,
         ));
         // size has not reached the max_size 100 yet.
-        assert_matches!(rx.try_recv(), Ok(SchedTask::UpdateApproximateSize { region_id, .. }) if region_id == region.get_id());
+        assert!(
+            matches!(rx.try_recv(), Ok(SchedTask::UpdateApproximateSize { region_id, .. }) if region_id == region.get_id())
+        );
 
         for i in 7..11 {
             let s = keys::data_key(format!("{:04}", i).as_bytes());

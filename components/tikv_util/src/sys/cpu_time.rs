@@ -127,6 +127,7 @@ mod imp {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(deprecated)]
 mod imp {
     use std::{io, ptr};
 

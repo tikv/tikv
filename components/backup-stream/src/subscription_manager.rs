@@ -14,8 +14,8 @@ use raftstore::{
 use rand::Rng;
 use tikv::storage::Statistics;
 use tikv_util::{
-    box_err, debug, info, memory::MemoryQuota, sys::thread::ThreadBuildWrapper, time::Instant,
-    warn, worker::Scheduler,
+    box_err, debug, info, memory::MemoryQuota, sys::thread::ThreadBuildWrapper,
+    thread_name_prefix::LOG_BACKUP_SCAN_THREAD, time::Instant, warn, worker::Scheduler,
 };
 use tokio::sync::mpsc::{Receiver, Sender, WeakSender, channel, error::SendError};
 use tracing::instrument;
@@ -313,7 +313,7 @@ fn create_scan_pool(num_threads: usize) -> ScanPool {
             },
             || {},
         )
-        .thread_name("log-backup-scan")
+        .thread_name(LOG_BACKUP_SCAN_THREAD)
         .enable_time()
         .worker_threads(num_threads)
         .build()
@@ -1033,9 +1033,14 @@ mod test {
             );
             let memory_manager = Arc::new(MemoryQuota::new(1024));
             let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+            let tmp = std::env::temp_dir().join(format!("br-stream-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&tmp).unwrap();
+            let mut bs_cfg = BackupStreamConfig::default();
+            bs_cfg.temp_path = tmp.to_string_lossy().into_owned();
+            bs_cfg.gcp_v2_enable = true;
             let router = RouterInner::new(
                 scheduler.clone(),
-                BackupStreamConfig::default().into(),
+                crate::router::Config::from_backup_stream_config(bs_cfg),
                 BackupEncryptionManager::default(),
             );
             let mut task = StreamBackupTaskInfo::new();

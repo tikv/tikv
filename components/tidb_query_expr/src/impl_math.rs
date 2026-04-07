@@ -13,6 +13,7 @@ use tidb_query_datatype::{
     },
     expr::EvalContext,
 };
+use tikv_util::time::get_time;
 
 const MAX_I64_DIGIT_LENGTH: i64 = 19;
 const MAX_U64_DIGIT_LENGTH: i64 = 20;
@@ -693,7 +694,7 @@ pub struct MySqlRng {
 
 impl MySqlRng {
     fn new() -> Self {
-        let current_time = time::get_time();
+        let current_time = get_time();
         let nsec = i64::from(current_time.nsec);
         Self::new_with_seed(nsec)
     }

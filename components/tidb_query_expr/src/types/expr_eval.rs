@@ -84,7 +84,7 @@ impl RpnStackNodeVectorValue<'_> {
     }
 
     /// Gets a reference to the logical rows.
-    pub fn logical_rows_struct(&self) -> LogicalRows {
+    pub fn logical_rows_struct(&self) -> LogicalRows<'_> {
         match self {
             RpnStackNodeVectorValue::Generated { physical_value } => LogicalRows::Ref {
                 logical_rows: &IDENTICAL_LOGICAL_ROWS[0..physical_value.len()],
