@@ -11,6 +11,7 @@ use std::{
 use collections::{HashMap, HashMapEntry};
 use crossbeam::atomic::AtomicCell;
 use futures::{
+    SinkExt,
     compat::Stream01CompatExt,
     stream::{StreamExt, TryStreamExt},
 };
@@ -660,7 +661,7 @@ async fn sleep_before_drain_change_event() {
 mod tests {
     use std::{sync::Arc, time::Duration};
 
-    use futures::{SinkExt, executor::block_on};
+    use futures::executor::block_on;
     use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder, WriteFlags};
     use kvproto::cdcpb::{ChangeDataClient, ResolvedTs, create_change_data};
     use tikv_util::future::block_on_timeout;

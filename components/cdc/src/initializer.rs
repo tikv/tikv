@@ -44,7 +44,7 @@ use tikv_util::{
     codec::number,
     debug, defer, error, info,
     sys::inspector::{ThreadInspector, self_thread_inspector},
-    time::{Instant, Limiter, duration_to_sec},
+    time::{Instant, Limiter},
     warn,
     worker::Scheduler,
 };
