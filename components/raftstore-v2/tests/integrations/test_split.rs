@@ -211,6 +211,7 @@ fn test_split_region_heartbeat_to_pd() {
     let region_id = 2;
     let region = router.region_detail(region_id);
     let peer = region.get_peers()[0].clone();
+    let peer_id = peer.get_id();
     router.wait_applied_to_current_term(region_id, Duration::from_secs(3));
 
     // Split region 2 into region 2 ["", "k22"] and region 1000 ["k22", ""]
@@ -231,7 +232,7 @@ fn test_split_region_heartbeat_to_pd() {
     // Verify both regions have leaders reported to PD.
     // The split_region helper already waits 1 second for split to complete,
     // which is enough time for leader election and heartbeat.
-    for (rid, expected_peer_id) in [(region_id, peer.get_id()), (split_region_id, 10)] {
+    for (rid, expected_peer_id) in [(region_id, peer_id), (split_region_id, 10)] {
         let mut found = false;
         for _ in 0..10 {
             let resp = block_on(cluster.node(0).pd_client().get_region_leader_by_id(rid)).unwrap();
