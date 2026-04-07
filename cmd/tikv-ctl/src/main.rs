@@ -410,8 +410,6 @@ fn main() {
             prefetch_running_count,
             prefetch_buffer_count,
         } => {
-            let tmp_engine =
-                TemporaryRocks::new(&cfg).expect("failed to create temp engine for writing SSTs.");
             let maybe_external_storage = base64::decode(storage_base64)
                 .map_err(|err| format!("cannot parse base64: {}", err))
                 .and_then(|storage_bytes| {
@@ -441,8 +439,22 @@ fn main() {
                 compression,
                 compression_level,
             };
+            let out_prefix = ccfg.recommended_prefix(&name);
+            if force_regenerate {
+                clap::Error {
+                    message: format!(
+                        "--force-regenerate is no longer supported. Please use a different --name to generate a new compaction prefix, or manually clean the existing prefix `{}` before rerunning.",
+                        out_prefix
+                    ),
+                    kind: ErrorKind::ValueValidation,
+                    info: None,
+                }
+                .exit();
+            }
+            let tmp_engine =
+                TemporaryRocks::new(&cfg).expect("failed to create temp engine for writing SSTs.");
             let exec = compact_log::Execution {
-                out_prefix: ccfg.recommended_prefix(&name),
+                out_prefix,
                 cfg: ccfg,
                 max_concurrent_subcompaction: max_compaction_num,
                 external_storage,
@@ -480,13 +492,9 @@ fn main() {
 
             let log_to_term = compact_log_hooks::observability::Observability::default();
             let save_meta = compact_log_hooks::save_meta::SaveMeta::default();
+            let checkpoint = Some(compact_log_hooks::checkpoint::Checkpoint::default());
             let with_lock = compact_log_hooks::consistency::StorageConsistencyGuard::default();
             let with_status_server = ExportTiKVInfo { cfg: cfg.clone() };
-            let checkpoint = if force_regenerate {
-                None
-            } else {
-                Some(compact_log_hooks::checkpoint::Checkpoint::default())
-            };
             let skip_small_compaction = SkipSmallCompaction::new(minimal_compaction_size.0);
             let hooks = (
                 (

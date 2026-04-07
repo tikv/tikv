@@ -707,7 +707,7 @@ pub enum Cmd {
         #[structopt(
             long,
             help(
-                "if set, all checkpoints will be ignored. i.e. all finished compaction will be regenerated."
+                "deprecated stub; no longer supported. use a different --name or manually clean the target compaction prefix instead."
             )
         )]
         force_regenerate: bool,

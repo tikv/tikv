@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, path::Path, sync::Arc, time::Instant};
+use std::{sync::Arc, time::Instant};
 
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 use chrono::Local;
@@ -10,15 +10,18 @@ use futures::{
     stream::TryStreamExt,
 };
 use kvproto::brpb;
-use protobuf::{Message, parse_from_bytes};
+use protobuf::Message;
+use serde::{Deserialize, Serialize};
 use tikv_util::{
     info,
     stream::{JustRetry, retry},
     warn,
 };
+use uuid::Uuid;
 
 use super::CollectStatistic;
 use crate::{
+    ErrorKind, OtherErrExt,
     compaction::{META_OUT_REL, SST_OUT_REL, meta::CompactionRunInfoBuilder},
     errors::Result,
     execute::hooking::{
@@ -27,6 +30,8 @@ use crate::{
     },
     statistic::CompactLogBackupStatistic,
 };
+
+const CHECKPOINT_META_OUT_REL: &str = "checkpoint_meta";
 
 /// Save the metadata to external storage after every subcompaction. After
 /// everything done, it saves the whole compaction to a "migration" that can be
@@ -55,6 +60,7 @@ pub struct SaveMeta {
     stats: CollectStatistic,
     begin: chrono::DateTime<Local>,
     meta_writer: Option<MetaBatchWriter>,
+    batch_cfg: BatchConfig,
 }
 
 impl Default for SaveMeta {
@@ -64,96 +70,158 @@ impl Default for SaveMeta {
             stats: Default::default(),
             begin: Local::now(),
             meta_writer: None,
+            batch_cfg: BatchConfig::default(),
         }
     }
 }
 
-/// A rolling batch writer for `.cmeta` objects.
-///
-/// It reduces object-count by writing batched `.cmeta` payloads, while still
-/// persisting every finished subcompaction through immutable snapshots of the
-/// current batch.
-///
-/// Each append writes a new `batch_{seq}_{version}.cmeta`, then deletes the
-/// previous snapshot of the same batch only after the new snapshot is durable.
-/// On resume we fall back to the latest valid snapshot, so a torn write can
-/// lose at most the newest subcompaction of the active batch instead of the
-/// entire batch.
-struct MetaBatchWriter {
-    dir: String,
-    current_seq: u64,
-    buffer: brpb::LogFileSubcompactions,
-    current_snapshot_key: Option<String>,
-    max_subcompactions_per_cmeta: usize,
-    target_bytes_per_cmeta: usize,
+#[derive(Clone, Copy)]
+struct BatchConfig {
+    max_subcompactions_per_batch: usize,
+    target_bytes_per_batch: usize,
 }
 
-#[derive(Debug, Clone)]
-struct BatchSnapshot {
-    seq: u64,
-    version: u64,
-    key: String,
-}
-
-impl BatchSnapshot {
-    fn from_key(key: &str) -> Option<Self> {
-        let file_name = Path::new(key).file_name()?.to_str()?;
-        let body = file_name.strip_prefix("batch_")?.strip_suffix(".cmeta")?;
-        let (seq, version) = match body.split_once('_') {
-            Some((seq, version)) => (seq.parse().ok()?, version.parse().ok()?),
-            None => (body.parse().ok()?, 0),
-        };
-        Some(Self {
-            seq,
-            version,
-            key: key.to_owned(),
-        })
-    }
-
-    fn new(dir: &str, seq: u64, version: u64) -> Self {
+impl Default for BatchConfig {
+    fn default() -> Self {
         Self {
-            seq,
-            version,
-            key: format!("{}/batch_{:06}_{:06}.cmeta", dir, seq, version),
+            max_subcompactions_per_batch: 128,
+            target_bytes_per_batch: 4 * 1024 * 1024,
         }
     }
+}
+
+struct MetaBatchWriter {
+    artifacts_dir: String,
+    checkpoint_dir: String,
+    run_id: String,
+    next_batch_seq: u64,
+    buffer: brpb::LogFileSubcompactions,
+    subcompaction_ids: Vec<u64>,
+    cfg: BatchConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct CheckpointMetaEntry {
+    pub cmeta_key: String,
+    pub subcompaction_ids: Vec<u64>,
+}
+
+pub(crate) struct LoadedCheckpointBatch {
+    pub(crate) subcompaction_ids: Vec<u64>,
+}
+
+impl CheckpointMetaEntry {
+    pub(crate) fn new(cmeta_key: String, subcompaction_ids: Vec<u64>) -> Self {
+        Self {
+            cmeta_key,
+            subcompaction_ids,
+        }
+    }
+
+    pub(crate) fn to_bytes(&self) -> Result<Vec<u8>> {
+        serde_json::to_vec(self).adapt_err()
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        serde_json::from_slice(bytes).adapt_err()
+    }
+}
+
+fn final_artifacts_prefix(out_prefix: &str) -> String {
+    format!("{}/{}", out_prefix, META_OUT_REL)
+}
+
+pub(crate) fn checkpoint_meta_prefix(out_prefix: &str) -> String {
+    format!("{}/{}", out_prefix, CHECKPOINT_META_OUT_REL)
+}
+
+pub(crate) async fn list_checkpoint_meta_keys(
+    storage: &dyn ExternalStorage,
+    checkpoint_prefix: &str,
+) -> Result<Vec<String>> {
+    let mut stream = storage.iter_prefix(checkpoint_prefix);
+    let mut keys = Vec::new();
+    while let Some(item) = stream.try_next().await? {
+        if item.key.ends_with(".ckpt") {
+            keys.push(item.key);
+        }
+    }
+    keys.sort();
+    Ok(keys)
+}
+
+pub(crate) async fn read_checkpoint_meta_entry(
+    storage: &dyn ExternalStorage,
+    key: &str,
+) -> Result<CheckpointMetaEntry> {
+    let mut content = vec![];
+    storage.read(key).read_to_end(&mut content).await?;
+    CheckpointMetaEntry::from_bytes(&content)
+}
+
+async fn read_validated_checkpoint_batch(
+    storage: &dyn ExternalStorage,
+    key: &str,
+) -> Result<LoadedCheckpointBatch> {
+    let checkpoint = read_checkpoint_meta_entry(storage, key).await?;
+
+    let mut content = vec![];
+    storage
+        .read(&checkpoint.cmeta_key)
+        .read_to_end(&mut content)
+        .await?;
+    let metas = protobuf::parse_from_bytes::<brpb::LogFileSubcompactions>(&content)?;
+    if metas.subcompactions.len() != checkpoint.subcompaction_ids.len() {
+        return Err(crate::Error::from(ErrorKind::Other(format!(
+            "checkpoint entry and cmeta batch size mismatch: key={}, checkpoint_ids={}, cmeta_subcompactions={}",
+            checkpoint.cmeta_key,
+            checkpoint.subcompaction_ids.len(),
+            metas.subcompactions.len()
+        ))));
+    }
+
+    Ok(LoadedCheckpointBatch {
+        subcompaction_ids: checkpoint.subcompaction_ids,
+    })
+}
+
+pub(crate) async fn load_validated_checkpoint_batches(
+    storage: &dyn ExternalStorage,
+    checkpoint_prefix: &str,
+) -> Result<Vec<LoadedCheckpointBatch>> {
+    let mut batches = Vec::new();
+    for key in list_checkpoint_meta_keys(storage, checkpoint_prefix).await? {
+        match read_validated_checkpoint_batch(storage, &key).await {
+            Ok(batch) => batches.push(batch),
+            Err(err) => {
+                warn!("SaveMeta: failed to load checkpointed batch, ignoring it.";
+                    "key" => %key,
+                    "err" => %err);
+            }
+        }
+    }
+    Ok(batches)
 }
 
 impl MetaBatchWriter {
-    const DEFAULT_MAX_SUBCOMPACTIONS_PER_CMETA: usize = 128;
-    const DEFAULT_TARGET_BYTES_PER_CMETA: usize = 4 * 1024 * 1024;
-
-    fn new(
-        dir: String,
-        current_seq: u64,
-        buffer: brpb::LogFileSubcompactions,
-        current_snapshot_key: Option<String>,
-    ) -> Self {
+    fn new(out_prefix: &str, cfg: BatchConfig) -> Self {
         Self {
-            dir,
-            current_seq,
-            buffer,
-            current_snapshot_key,
-            max_subcompactions_per_cmeta: Self::DEFAULT_MAX_SUBCOMPACTIONS_PER_CMETA,
-            target_bytes_per_cmeta: Self::DEFAULT_TARGET_BYTES_PER_CMETA,
+            artifacts_dir: final_artifacts_prefix(out_prefix),
+            checkpoint_dir: checkpoint_meta_prefix(out_prefix),
+            run_id: Uuid::new_v4().to_string(),
+            next_batch_seq: 0,
+            buffer: brpb::LogFileSubcompactions::new(),
+            subcompaction_ids: Vec::new(),
+            cfg,
         }
     }
 
-    fn should_rotate(&self, current_bytes: usize) -> bool {
-        self.buffer.subcompactions.len() >= self.max_subcompactions_per_cmeta
-            || current_bytes >= self.target_bytes_per_cmeta
+    fn should_flush(&self, current_bytes: usize) -> bool {
+        self.subcompaction_ids.len() >= self.cfg.max_subcompactions_per_batch
+            || current_bytes >= self.cfg.target_bytes_per_batch
     }
 
-    async fn read_snapshot(
-        storage: &dyn ExternalStorage,
-        key: &str,
-    ) -> Result<brpb::LogFileSubcompactions> {
-        let mut content = vec![];
-        storage.read(key).read_to_end(&mut content).await?;
-        Ok(parse_from_bytes(&content)?)
-    }
-
-    async fn write_snapshot(storage: &dyn ExternalStorage, key: &str, bytes: &[u8]) -> Result<()> {
+    async fn write_bytes(storage: &dyn ExternalStorage, key: &str, bytes: &[u8]) -> Result<()> {
         retry(|| async {
             let reader = UnpinReader(Box::new(Cursor::new(bytes)));
             storage
@@ -166,140 +234,61 @@ impl MetaBatchWriter {
         Ok(())
     }
 
-    async fn delete_snapshot(storage: &dyn ExternalStorage, key: &str) -> Result<()> {
-        retry(|| async { storage.delete(key).map_err(JustRetry).await })
-            .await
-            .map_err(|err| err.0)?;
-        Ok(())
-    }
-
-    async fn cleanup_snapshots(
-        storage: &dyn ExternalStorage,
-        snapshots: impl IntoIterator<Item = String>,
-    ) -> Result<()> {
-        for key in snapshots {
-            Self::delete_snapshot(storage, &key).await?;
-        }
-        Ok(())
-    }
-
-    async fn load_or_new(storage: &dyn ExternalStorage, out_prefix: &str) -> Result<Self> {
-        let dir = format!("{}/{}", out_prefix, META_OUT_REL);
-        let list_prefix = format!("{}/", dir);
-
-        let mut snapshots_by_seq = BTreeMap::<u64, Vec<BatchSnapshot>>::new();
-        let mut stream = storage.iter_prefix(&list_prefix);
-        while let Some(item) = stream.try_next().await? {
-            let Some(snapshot) = BatchSnapshot::from_key(&item.key) else {
-                continue;
-            };
-            snapshots_by_seq
-                .entry(snapshot.seq)
-                .or_default()
-                .push(snapshot);
-        }
-
-        let Some((max_seq, mut snapshots)) = snapshots_by_seq.into_iter().next_back() else {
-            return Ok(Self::new(dir, 0, brpb::LogFileSubcompactions::new(), None));
-        };
-        snapshots.sort_by(|lhs, rhs| rhs.version.cmp(&lhs.version));
-
-        let mut chosen = None;
-        for (idx, snapshot) in snapshots.iter().enumerate() {
-            match Self::read_snapshot(storage, &snapshot.key).await {
-                Ok(buffer) => {
-                    if snapshot.version > 0
-                        && buffer.subcompactions.len() as u64 != snapshot.version
-                    {
-                        warn!(
-                            "SaveMeta: cmeta batch snapshot size mismatch, ignoring it.";
-                            "key" => %snapshot.key,
-                            "expected_subcompactions" => snapshot.version,
-                            "actual_subcompactions" => buffer.subcompactions.len()
-                        );
-                        continue;
-                    }
-                    chosen = Some((idx, buffer));
-                    break;
-                }
-                Err(err) => {
-                    warn!(
-                        "SaveMeta: failed to parse existing cmeta batch, ignoring it.";
-                        "key" => %snapshot.key,
-                        "err" => %err
-                    );
-                }
-            }
-        }
-
-        match chosen {
-            Some((chosen_idx, buffer)) => {
-                let chosen_snapshot = snapshots[chosen_idx].clone();
-                let stale = snapshots
-                    .iter()
-                    .enumerate()
-                    .filter(|(idx, _)| *idx != chosen_idx)
-                    .map(|(_, snapshot)| snapshot.key.clone())
-                    .collect::<Vec<_>>();
-                Self::cleanup_snapshots(storage, stale).await?;
-
-                let mut this = Self::new(dir, max_seq, buffer, Some(chosen_snapshot.key.clone()));
-                let current_bytes = this.buffer.write_to_bytes()?.len();
-                if this.should_rotate(current_bytes) {
-                    this.current_seq = max_seq + 1;
-                    this.buffer = brpb::LogFileSubcompactions::new();
-                    this.current_snapshot_key = None;
-                }
-                Ok(this)
-            }
-            None => {
-                warn!(
-                    "SaveMeta: no valid cmeta batch snapshot found, starting a new batch.";
-                    "seq" => max_seq
-                );
-                Self::cleanup_snapshots(
-                    storage,
-                    snapshots.into_iter().map(|snapshot| snapshot.key),
-                )
-                .await?;
-                Ok(Self::new(
-                    dir,
-                    max_seq + 1,
-                    brpb::LogFileSubcompactions::new(),
-                    None,
-                ))
-            }
-        }
-    }
-
-    async fn append_and_flush(
+    async fn append_and_flush_if_needed(
         &mut self,
         storage: &dyn ExternalStorage,
+        subcompaction_id: u64,
         subcompaction: brpb::LogFileSubcompaction,
     ) -> Result<()> {
         self.buffer.mut_subcompactions().push(subcompaction);
+        self.subcompaction_ids.push(subcompaction_id);
         let bytes = self.buffer.write_to_bytes()?;
-        let snapshot = BatchSnapshot::new(
-            &self.dir,
-            self.current_seq,
-            self.buffer.subcompactions.len() as u64,
-        );
-        Self::write_snapshot(storage, &snapshot.key, &bytes).await?;
-
-        if let Some(prev_key) = self.current_snapshot_key.replace(snapshot.key.clone()) {
-            Self::delete_snapshot(storage, &prev_key).await?;
+        if self.should_flush(bytes.len()) {
+            self.flush_bytes(storage, &bytes).await?;
         }
+        Ok(())
+    }
 
-        if self.should_rotate(bytes.len()) {
-            self.current_seq += 1;
-            self.buffer = brpb::LogFileSubcompactions::new();
-            self.current_snapshot_key = None;
+    async fn flush(&mut self, storage: &dyn ExternalStorage) -> Result<()> {
+        if self.subcompaction_ids.is_empty() {
+            return Ok(());
         }
+        let bytes = self.buffer.write_to_bytes()?;
+        self.flush_bytes(storage, &bytes).await
+    }
+
+    async fn flush_bytes(&mut self, storage: &dyn ExternalStorage, bytes: &[u8]) -> Result<()> {
+        let batch_id = format!("{}_{}", self.run_id, self.next_batch_seq);
+        let batch_file_name = format!("batch_{}.cmeta", batch_id);
+        let batch_key = format!("{}/{}", self.artifacts_dir, batch_file_name);
+        Self::write_bytes(storage, &batch_key, bytes).await?;
+
+        let checkpoint = CheckpointMetaEntry::new(batch_key, self.subcompaction_ids.clone());
+        let checkpoint_key = format!("{}/checkpoint_{}.ckpt", self.checkpoint_dir, batch_id);
+        let checkpoint_bytes = checkpoint.to_bytes()?;
+        Self::write_bytes(storage, &checkpoint_key, &checkpoint_bytes).await?;
+
+        self.next_batch_seq += 1;
+        self.buffer = brpb::LogFileSubcompactions::new();
+        self.subcompaction_ids.clear();
         Ok(())
     }
 }
 
 impl SaveMeta {
+    #[cfg(test)]
+    pub(crate) fn with_batch_limits(
+        mut self,
+        max_subcompactions_per_batch: usize,
+        target_bytes_per_batch: usize,
+    ) -> Self {
+        self.batch_cfg = BatchConfig {
+            max_subcompactions_per_batch: max_subcompactions_per_batch.max(1),
+            target_bytes_per_batch: target_bytes_per_batch.max(1),
+        };
+        self
+    }
+
     fn comments(&self) -> String {
         let now = Local::now();
         let stat = CompactLogBackupStatistic {
@@ -321,22 +310,14 @@ impl SaveMeta {
 impl ExecHooks for SaveMeta {
     async fn before_execution_started(&mut self, cx: BeforeStartCtx<'_>) -> Result<()> {
         self.begin = Local::now();
-        self.meta_writer =
-            Some(MetaBatchWriter::load_or_new(cx.storage, &cx.this.out_prefix).await?);
-        let run_info = &mut self.collector;
-        run_info.mut_meta().set_name(cx.this.gen_name());
-        run_info
-            .mut_meta()
-            .set_compaction_from_ts(cx.this.cfg.from_ts);
-        run_info
-            .mut_meta()
-            .set_compaction_until_ts(cx.this.cfg.until_ts);
-        run_info
-            .mut_meta()
-            .set_artifacts(format!("{}/{}", cx.this.out_prefix, META_OUT_REL));
-        run_info
-            .mut_meta()
-            .set_generated_files(format!("{}/{}", cx.this.out_prefix, SST_OUT_REL));
+        self.meta_writer = Some(MetaBatchWriter::new(&cx.this.out_prefix, self.batch_cfg));
+
+        let meta = self.collector.mut_meta();
+        meta.set_name(cx.this.gen_name());
+        meta.set_compaction_from_ts(cx.this.cfg.from_ts);
+        meta.set_compaction_until_ts(cx.this.cfg.until_ts);
+        meta.set_artifacts(final_artifacts_prefix(&cx.this.out_prefix));
+        meta.set_generated_files(format!("{}/{}", cx.this.out_prefix, SST_OUT_REL));
         Ok(())
     }
 
@@ -360,14 +341,17 @@ impl ExecHooks for SaveMeta {
         self.collector.add_subcompaction(cx.result);
         self.stats.update_subcompaction(cx.result);
 
-        let Some(writer) = self.meta_writer.as_mut() else {
-            return Err(crate::ErrorKind::Other(
-                "SaveMeta: meta writer not initialized".to_owned(),
-            )
-            .into());
-        };
+        let writer = self.meta_writer.as_mut().ok_or_else(|| {
+            crate::Error::from(ErrorKind::Other(
+                "SaveMeta: meta writer hasn't been initialized".to_owned(),
+            ))
+        })?;
         writer
-            .append_and_flush(cx.external_storage, cx.result.meta.clone())
+            .append_and_flush_if_needed(
+                cx.external_storage,
+                cx.result.origin.crc64(),
+                cx.result.meta.clone(),
+            )
             .await?;
         Result::Ok(())
     }
@@ -377,6 +361,10 @@ impl ExecHooks for SaveMeta {
             warn!("Nothing to write, skipping saving meta.");
             return Ok(());
         }
+        if let Some(writer) = self.meta_writer.as_mut() {
+            writer.flush(cx.storage.as_ref()).await?;
+        }
+
         let comments = self.comments();
         self.collector.mut_meta().set_comments(comments);
         let begin = Instant::now();
@@ -385,131 +373,5 @@ impl ExecHooks for SaveMeta {
             .await?;
         info!("Migration written."; "duration" => ?begin.elapsed());
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use external_storage::ExternalStorage;
-    use futures::{io::Cursor, stream::TryStreamExt};
-    use kvproto::brpb;
-    use protobuf::Message;
-
-    use super::MetaBatchWriter;
-    use crate::{compaction::META_OUT_REL, test_util::TmpStorage};
-
-    fn sample_subcompaction(region_id: u64) -> brpb::LogFileSubcompaction {
-        let mut meta = brpb::LogFileSubcompactionMeta::new();
-        meta.set_region_id(region_id);
-        meta.set_cf("default".to_owned());
-        meta.set_ty(brpb::FileType::Put);
-        meta.set_size(region_id);
-        meta.set_input_min_ts(region_id);
-        meta.set_input_max_ts(region_id + 10);
-        meta.set_compact_from_ts(1);
-        meta.set_compact_until_ts(100);
-
-        let mut subc = brpb::LogFileSubcompaction::new();
-        subc.set_meta(meta);
-        subc
-    }
-
-    async fn write_batch(
-        storage: &dyn ExternalStorage,
-        key: &str,
-        subcompactions: Vec<brpb::LogFileSubcompaction>,
-    ) {
-        let mut batch = brpb::LogFileSubcompactions::new();
-        batch.set_subcompactions(subcompactions.into());
-        let bytes = batch.write_to_bytes().unwrap();
-        storage
-            .write(key, Cursor::new(bytes.clone()).into(), bytes.len() as u64)
-            .await
-            .unwrap();
-    }
-
-    async fn list_cmeta_keys(storage: &dyn ExternalStorage, prefix: &str) -> Vec<String> {
-        let mut keys = storage
-            .iter_prefix(prefix)
-            .map_ok(|item| item.key)
-            .try_collect::<Vec<_>>()
-            .await
-            .unwrap();
-        keys.sort();
-        keys
-    }
-
-    #[tokio::test]
-    async fn test_meta_batch_writer_keeps_only_latest_snapshot() {
-        let st = TmpStorage::create();
-        let dir = format!("test-output/{}", META_OUT_REL);
-        let mut writer =
-            MetaBatchWriter::new(dir.clone(), 0, brpb::LogFileSubcompactions::new(), None);
-
-        writer
-            .append_and_flush(st.storage().as_ref(), sample_subcompaction(1))
-            .await
-            .unwrap();
-        assert_eq!(
-            list_cmeta_keys(st.storage().as_ref(), &dir).await,
-            vec![format!("{}/batch_000000_000001.cmeta", dir)]
-        );
-
-        writer
-            .append_and_flush(st.storage().as_ref(), sample_subcompaction(2))
-            .await
-            .unwrap();
-        assert_eq!(
-            list_cmeta_keys(st.storage().as_ref(), &dir).await,
-            vec![format!("{}/batch_000000_000002.cmeta", dir)]
-        );
-
-        let subcs = st.load_subcompactions(&dir).await.unwrap();
-        assert_eq!(subcs.len(), 2);
-        assert_eq!(subcs[0].get_meta().get_region_id(), 1);
-        assert_eq!(subcs[1].get_meta().get_region_id(), 2);
-    }
-
-    #[tokio::test]
-    async fn test_meta_batch_writer_loads_previous_valid_snapshot() {
-        let st = TmpStorage::create();
-        let out_prefix = "test-output";
-        let dir = format!("{}/{}", out_prefix, META_OUT_REL);
-        let valid_key = format!("{}/batch_000000_000001.cmeta", dir);
-        let corrupt_key = format!("{}/batch_000000_000002.cmeta", dir);
-
-        write_batch(
-            st.storage().as_ref(),
-            &valid_key,
-            vec![sample_subcompaction(7)],
-        )
-        .await;
-        st.storage()
-            .write(
-                &corrupt_key,
-                Cursor::new(b"definitely-not-a-protobuf".to_vec()).into(),
-                25,
-            )
-            .await
-            .unwrap();
-
-        let writer = MetaBatchWriter::load_or_new(st.storage().as_ref(), out_prefix)
-            .await
-            .unwrap();
-
-        assert_eq!(writer.current_seq, 0);
-        assert_eq!(writer.buffer.subcompactions.len(), 1);
-        assert_eq!(
-            writer.buffer.subcompactions[0].get_meta().get_region_id(),
-            7
-        );
-        assert_eq!(
-            writer.current_snapshot_key.as_deref(),
-            Some(valid_key.as_str())
-        );
-        assert_eq!(
-            list_cmeta_keys(st.storage().as_ref(), &dir).await,
-            vec![valid_key]
-        );
     }
 }

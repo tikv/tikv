@@ -1,7 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     future::Future,
     ops::RangeInclusive,
     sync::{
@@ -12,7 +12,7 @@ use std::{
 
 use engine_rocks::RocksEngine;
 use external_storage::ExternalStorage;
-use futures::{future::FutureExt, stream::TryStreamExt};
+use futures::{future::FutureExt, io::AsyncReadExt, stream::TryStreamExt};
 use kvproto::brpb::StorageBackend;
 use tokio::sync::mpsc::Sender;
 
@@ -22,7 +22,11 @@ use crate::{
     compaction::SubcompactionResult,
     errors::OtherErrExt,
     exec_hooks::{
-        checkpoint::Checkpoint, consistency::StorageConsistencyGuard, save_meta::SaveMeta,
+        checkpoint::Checkpoint,
+        consistency::StorageConsistencyGuard,
+        save_meta::{
+            SaveMeta, checkpoint_meta_prefix, list_checkpoint_meta_keys, read_checkpoint_meta_entry,
+        },
         skip_small_compaction::SkipSmallCompaction,
     },
     execute::hooking::{CId, ExecHooks, SubcompactionFinishCtx},
@@ -147,26 +151,20 @@ fn out_prefix_from_artifacts(artifacts: &str) -> &str {
 async fn load_migrations_by_out_prefix(
     st: &TmpStorage,
 ) -> HashMap<String, kvproto::brpb::Migration> {
-    let mut migs = st
-        .load_migrations()
+    st.load_migrations()
         .await
         .unwrap()
         .into_iter()
         .filter(|(id, _)| *id > 0)
-        .collect::<Vec<_>>();
-    migs.sort_by_key(|(id, _)| *id);
-
-    let mut mig_by_out_prefix = HashMap::<String, kvproto::brpb::Migration>::new();
-    for (_id, mig) in migs {
-        let artifacts = mig
-            .compactions
-            .get(0)
-            .map(|c| c.get_artifacts())
-            .unwrap_or_default();
-        let out_prefix = out_prefix_from_artifacts(artifacts).to_owned();
-        mig_by_out_prefix.insert(out_prefix, mig);
-    }
-    mig_by_out_prefix
+        .map(|(_id, mig)| {
+            let artifacts = mig
+                .compactions
+                .first()
+                .map(|c| c.get_artifacts())
+                .unwrap_or_default();
+            (out_prefix_from_artifacts(artifacts).to_owned(), mig)
+        })
+        .collect()
 }
 
 fn meta_edits_by_path(mig: &kvproto::brpb::Migration) -> HashMap<String, kvproto::brpb::MetaEdit> {
@@ -221,7 +219,7 @@ async fn test_exec_simple() {
 }
 
 #[tokio::test]
-async fn test_checkpointing() {
+async fn test_checkpointing_reuses_only_committed_batches() {
     let st = TmpStorage::create();
     let mut cm = HashMap::new();
 
@@ -235,52 +233,100 @@ async fn test_checkpointing() {
     }
 
     #[derive(Clone)]
-    struct AbortEvery3TimesAndRecordFinishCount(Arc<AtomicU64>);
+    struct AbortAfterNFinishes {
+        seen: Arc<AtomicU64>,
+        abort_at: u64,
+    }
 
     const ERR_MSG: &str = "nameless you. back to where you from";
 
-    impl ExecHooks for AbortEvery3TimesAndRecordFinishCount {
+    impl ExecHooks for AbortAfterNFinishes {
         async fn after_a_subcompaction_end(
             &mut self,
-            cid: CId,
+            _cid: CId,
             _res: SubcompactionFinishCtx<'_>,
         ) -> crate::Result<()> {
-            if cid.0 == 4 {
+            let seen = self.seen.fetch_add(1, Ordering::SeqCst) + 1;
+            if seen >= self.abort_at {
                 Err(crate::ErrorKind::Other(ERR_MSG.to_owned()).into())
             } else {
-                self.0.fetch_add(1, Ordering::SeqCst);
                 Ok(())
             }
         }
     }
 
-    let be = st.backend();
-    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
-    let cnt = Arc::new(AtomicU64::default());
-    let cloneable_hooks = (
-        AbortEvery3TimesAndRecordFinishCount(cnt.clone()),
-        CompactionSpy(tx),
-    );
-    let hooks = move || {
-        (
-            (SaveMeta::default(), Checkpoint::default()),
-            cloneable_hooks.clone(),
-        )
-    };
-    let bg_exec = tokio::task::spawn_blocking(move || {
-        while let Err(err) = create_compaction(be.clone()).run(hooks()) {
-            if !err.kind.to_string().contains(ERR_MSG) {
-                return Err(err);
-            }
+    let first_err = tokio::task::spawn_blocking({
+        let be = st.backend();
+        move || {
+            create_compaction(be).run((
+                SaveMeta::default().with_batch_limits(2, usize::MAX),
+                AbortAfterNFinishes {
+                    seen: Arc::new(AtomicU64::new(0)),
+                    abort_at: 5,
+                },
+            ))
         }
-        Ok(())
+    })
+    .await
+    .unwrap()
+    .unwrap_err();
+    assert!(first_err.kind.to_string().contains(ERR_MSG));
+    assert!(st.load_migrations().await.unwrap().is_empty());
+
+    let mut committed_before = Vec::new();
+    for key in list_checkpoint_meta_keys(
+        st.storage().as_ref(),
+        &checkpoint_meta_prefix("test-output"),
+    )
+    .await
+    .unwrap()
+    {
+        let checkpoint = read_checkpoint_meta_entry(st.storage().as_ref(), &key)
+            .await
+            .unwrap();
+        let mut content = vec![];
+        st.storage()
+            .read(&checkpoint.cmeta_key)
+            .read_to_end(&mut content)
+            .await
+            .unwrap();
+        let metas =
+            protobuf::parse_from_bytes::<kvproto::brpb::LogFileSubcompactions>(&content).unwrap();
+        committed_before.extend(metas.subcompactions.into_iter());
+    }
+    let committed_regions = committed_before
+        .iter()
+        .map(|subc| subc.get_meta().get_region_id())
+        .collect::<HashSet<_>>();
+    assert!(!committed_regions.is_empty());
+    assert!(committed_regions.len() < 15);
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+    let executed_count = tokio::task::spawn_blocking({
+        let be = st.backend();
+        move || {
+            create_compaction(be)
+                .run((
+                    (
+                        SaveMeta::default().with_batch_limits(2, usize::MAX),
+                        Checkpoint::default(),
+                    ),
+                    CompactionSpy(tx),
+                ))
+                .unwrap();
+        }
     });
 
+    let mut executed_regions = HashSet::new();
     while let Some(item) = rx.recv().await {
-        let rid = item.meta.get_meta().get_region_id() as usize;
-        st.verify_result(item, cm.remove(&rid).unwrap());
+        let rid = item.meta.get_meta().get_region_id();
+        assert!(!committed_regions.contains(&rid));
+        executed_regions.insert(rid);
+        st.verify_result(item, cm.remove(&(rid as usize)).unwrap());
     }
-    bg_exec.await.unwrap().unwrap();
+    executed_count.await.unwrap();
+
+    assert_eq!(executed_regions.len() + committed_regions.len(), 15);
 
     let mut migs = st.load_migrations().await.unwrap();
     assert_eq!(migs.len(), 1);
@@ -297,22 +343,6 @@ async fn test_checkpointing() {
         .await
         .unwrap();
     assert_eq!(subc.len(), 15);
-    assert_eq!(cnt.load(Ordering::SeqCst), 15);
-
-    let artifacts = mig.compactions[0].get_artifacts();
-    let mut cmeta_objects = 0usize;
-    let mut s = st.storage().iter_prefix(artifacts);
-    while let Some(obj) = s.try_next().await.unwrap() {
-        if obj.key.ends_with(".cmeta") {
-            cmeta_objects += 1;
-        }
-    }
-    assert!(
-        cmeta_objects < subc.len(),
-        "expected cmeta batching to reduce object count, got {} objects for {} subcompactions",
-        cmeta_objects,
-        subc.len()
-    );
 }
 
 async fn put_checkpoint(storage: &dyn ExternalStorage, store: u64, cp: u64) {
@@ -490,19 +520,14 @@ async fn test_sharding_by_store_and_union_matches_unsharded() {
         .expect("missing shard2 migration");
     assert!(mig_by_out_prefix.is_empty());
 
-    for edit in &mig1.edit_meta {
-        let store_id = *meta_path_to_store_id
-            .get(edit.get_path())
-            .expect("unknown meta edit path");
-        assert!(shard1.contains_store_id(store_id));
-        assert!(!shard2.contains_store_id(store_id));
-    }
-    for edit in &mig2.edit_meta {
-        let store_id = *meta_path_to_store_id
-            .get(edit.get_path())
-            .expect("unknown meta edit path");
-        assert!(shard2.contains_store_id(store_id));
-        assert!(!shard1.contains_store_id(store_id));
+    for (mig, include_shard, exclude_shard) in [(&mig1, shard1, shard2), (&mig2, shard2, shard1)] {
+        for edit in &mig.edit_meta {
+            let store_id = *meta_path_to_store_id
+                .get(edit.get_path())
+                .expect("unknown meta edit path");
+            assert!(include_shard.contains_store_id(store_id));
+            assert!(!exclude_shard.contains_store_id(store_id));
+        }
     }
 
     let out_prefix_all = run_exec(st_unsharded.backend(), None, "sharding_test").await;
