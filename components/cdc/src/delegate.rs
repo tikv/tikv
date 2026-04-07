@@ -152,7 +152,7 @@ impl fmt::Debug for Downstream {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Downstream")
             .field("id", &self.id)
-            .field("req_id", &self.req_id)
+            .field("request_id", &self.req_id)
             .field("conn_id", &self.conn_id)
             .finish()
     }
@@ -199,7 +199,9 @@ impl Downstream {
         event.set_request_id(self.req_id.0);
         if self.sink.is_none() {
             info!("cdc drop event, no sink";
-                "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => ?self.req_id);
+                "downstream_id" => ?self.id,
+                "request_id" => ?self.req_id,
+                "conn_id" => ?self.conn_id);
             return Err(Error::Sink(SendError::Disconnected));
         }
         let sink = self.sink.as_ref().unwrap();
@@ -207,13 +209,17 @@ impl Downstream {
             Ok(_) => Ok(()),
             Err(SendError::Disconnected) => {
                 debug!("cdc send event failed, disconnected";
-                    "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => ?self.req_id);
+                    "downstream_id" => ?self.id,
+                    "request_id" => ?self.req_id,
+                    "conn_id" => ?self.conn_id);
                 Err(Error::Sink(SendError::Disconnected))
             }
             // TODO handle errors.
             Err(e @ SendError::Full) | Err(e @ SendError::Congested) => {
                 info!("cdc send event failed, full";
-                    "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => ?self.req_id);
+                    "downstream_id" => ?self.id,
+                    "request_id" => ?self.req_id,
+                    "conn_id" => ?self.conn_id);
                 Err(Error::Sink(e))
             }
         }
@@ -224,7 +230,10 @@ impl Downstream {
     /// `sink_error_event` is called.
     pub fn sink_error_event(&self, region_id: u64, err_event: EventError) -> Result<()> {
         info!("cdc downstream meets region error";
-            "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => ?self.req_id);
+            "downstream_id" => ?self.id,
+            "request_id" => ?self.req_id,
+            "region_id" => region_id,
+            "conn_id" => ?self.conn_id);
 
         self.scan_truncated.store(true, Ordering::Release);
         let mut change_data_event = Event::default();
@@ -1110,11 +1119,11 @@ impl Delegate {
         ) {
             info!(
                 "cdc fail to subscribe downstream";
-                "region_id" => region.id,
+                "error" => ?e,
                 "downstream_id" => ?downstream.id,
+                "request_id" => ?downstream.req_id,
+                "region_id" => region.id,
                 "conn_id" => ?downstream.conn_id,
-                "req_id" => ?downstream.req_id,
-                "err" => ?e
             );
             // Downstream is outdated, mark stop.
             downstream.state.store(DownstreamState::Stopped);

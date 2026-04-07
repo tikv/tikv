@@ -136,7 +136,7 @@ impl fmt::Debug for Deregister {
                 .field("request_id", request_id)
                 .field("region_id", region_id)
                 .field("downstream_id", downstream_id)
-                .field("err", err)
+                .field("error", err)
                 .finish(),
             Deregister::Delegate {
                 ref region_id,
@@ -146,7 +146,7 @@ impl fmt::Debug for Deregister {
                 .field("deregister", &"delegate")
                 .field("region_id", region_id)
                 .field("observe_id", observe_id)
-                .field("err", err)
+                .field("error", err)
                 .finish(),
         }
     }
@@ -810,7 +810,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             None => {
                 info!("cdc register region on an deregistered connection, ignore";
                     "downstream_id" => ?downstream_id,
-                    "req_id" => ?request_id,
+                    "request_id" => ?request_id,
                     "region_id" => region_id,
                     "conn_id" => ?conn_id);
                 return;
@@ -851,11 +851,11 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         });
         if scan_task_count >= self.config.incremental_scan_concurrency_limit as isize {
             debug!("cdc rejects registration, too many scan tasks";
+                "incremental_scan_concurrency_limit" => self.config.incremental_scan_concurrency_limit,
+                "scan_task_count" => scan_task_count,
+                "request_id" => ?request_id,
                 "region_id" => region_id,
                 "conn_id" => ?conn_id,
-                "req_id" => ?request_id,
-                "scan_task_count" => scan_task_count,
-                "incremental_scan_concurrency_limit" => self.config.incremental_scan_concurrency_limit,
             );
             // To avoid OOM (e.g., https://github.com/tikv/tikv/issues/16035),
             // TiKV needs to reject and return error immediately.
@@ -886,10 +886,10 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             err_event.set_duplicate_request(err);
             let _ = downstream.sink_error_event(region_id, err_event);
             error!("cdc duplicate register";
+                "downstream_id" => ?downstream_id,
+                "request_id" => ?request_id,
                 "region_id" => region_id,
-                "conn_id" => ?conn_id,
-                "req_id" => ?request_id,
-                "downstream_id" => ?downstream_id);
+                "conn_id" => ?conn_id);
             return;
         }
 
@@ -910,9 +910,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         info!("cdc register region";
             "observe_id" => ?observe_id,
             "downstream_id" => ?downstream_id,
+            "request_id" => ?request_id,
             "region_id" => region_id,
-            "req_id" => ?request_id,
-            "conn_id" => ?conn.get_id());
+            "conn_id" => ?conn_id);
 
         let observed_range = downstream.observed_range.clone();
         let downstream_state = downstream.get_state();
@@ -1367,11 +1367,12 @@ impl TxnExtraScheduler for CdcTxnExtraScheduler {
         if let Err(e) = self.memory_quota.alloc(size) {
             CDC_DROP_TXN_EXTRA_TASKS_COUNT.inc();
             debug!("cdc schedule txn extra failed on alloc memory quota";
-                "in_use" => self.memory_quota.in_use(), "err" => ?e);
+                "error" => ?e,
+                "in_use" => self.memory_quota.in_use());
             return;
         }
         if let Err(e) = self.scheduler.schedule(Task::TxnExtra(txn_extra)) {
-            error!("cdc schedule txn extra failed"; "err" => ?e);
+            error!("cdc schedule txn extra failed"; "error" => ?e);
         }
     }
 }

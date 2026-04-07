@@ -357,13 +357,13 @@ impl Service {
             .unwrap_or_else(|e| {
                 warn!(
                     "cdc invalid observed start key or end key version";
-                    "downstream" => ?peer,
-                    "region_id" => request.region_id,
-                    "request_id" => request.region_id,
-                    "error" => ?e,
                     "start_key" => log_wrappers::Value::key(&request.start_key),
                     "end_key" => log_wrappers::Value::key(&request.end_key),
-                );
+                    "downstream" => ?peer,
+                    "error" => ?e,
+                    "request_id" => request.get_request_id(),
+                    "region_id" => request.region_id,
+                    "conn_id" => ?conn_id);
                 ObservedRange::default()
             });
         let downstream = Downstream::new(
