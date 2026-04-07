@@ -1188,8 +1188,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
     }
 
     fn on_open_conn(&mut self, conn: Conn) {
-        self.connections.insert(conn.get_id(), conn);
-        CDC_CONNECTION_COUNT.inc();
+        if self.connections.insert(conn.get_id(), conn).is_none() {
+            CDC_CONNECTION_COUNT.inc();
+        }
     }
 
     fn on_set_conn_version(
