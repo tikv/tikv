@@ -44,9 +44,7 @@ pub(crate) fn resolve_rustls_provider() -> RustlsProvider {
 }
 
 impl RustlsProvider {
-    fn install_default(
-        self,
-    ) -> Result<(), std::sync::Arc<rustls::crypto::CryptoProvider>> {
+    fn install_default(self) -> Result<(), std::sync::Arc<rustls::crypto::CryptoProvider>> {
         match self {
             #[cfg(feature = "fips")]
             Self::AwsLcRsFips => rustls::crypto::default_fips_provider().install_default(),
@@ -55,10 +53,7 @@ impl RustlsProvider {
         }
     }
 
-    fn matches_default(
-        self,
-        provider: &std::sync::Arc<rustls::crypto::CryptoProvider>,
-    ) -> bool {
+    fn matches_default(self, provider: &std::sync::Arc<rustls::crypto::CryptoProvider>) -> bool {
         match self {
             #[cfg(feature = "fips")]
             Self::AwsLcRsFips => provider.fips(),
@@ -77,7 +72,9 @@ impl RustlsProvider {
                 "rustls crypto provider is already initialized without FIPS; gcp_v2 requires the aws-lc-rs FIPS provider",
             ),
             #[cfg(not(feature = "fips"))]
-            Self::ProcessDefault => unreachable!("process-default rustls provider accepts any initialized provider"),
+            Self::ProcessDefault => {
+                unreachable!("process-default rustls provider accepts any initialized provider")
+            }
         }
     }
 
