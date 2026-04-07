@@ -933,12 +933,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let control = self.split_flow_control_mut();
             control.approximate_size = split_init.approximate_size;
             control.approximate_keys = split_init.approximate_keys;
-            // Skip heartbeat here: the peer is still a Candidate after
-            // campaign(), so pending_peers would be reported as
-            // empty (progress is only available for Leaders). The
-            // first heartbeat will be sent from on_role_changed()
-            // after the election completes, with correct pending_peers
-            // information.
+            // Skip heartbeat here: the peer may still be in Candidate state
+            // or not yet be Leader immediately after campaign(), so
+            // pending_peers would be reported as empty (progress is only
+            // available for Leaders). The first heartbeat will be sent from
+            // on_role_changed() after the election completes, with correct
+            // pending_peers information.
         }
 
         if split_init.check_split {

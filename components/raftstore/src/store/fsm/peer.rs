@@ -4836,12 +4836,15 @@ where
                 new_peer.peer.set_approximate_size(share_size);
                 new_peer.peer.set_approximate_keys(share_keys);
                 *new_peer.peer.txn_ext.pessimistic_locks.write() = locks;
-                // Skip heartbeat here: the peer is still a Candidate after
-                // maybe_campaign(), so pending_peers would be reported as empty
-                // (raft progress is only available for Leaders). The first
-                // heartbeat will be sent from on_role_changed()
-                // after the election completes, with correct
-                // pending_peers information.
+                // Skip heartbeat here: after maybe_campaign() the peer may
+                // still be in the middle of election (e.g.
+                // Candidate), so Raft progress
+                // and thus pending_peers are not yet reliably reflecting the
+                // final leader's view. The first heartbeat will
+                // be sent from on_role_changed() after the
+                // election completes, when the peer is
+                // confirmed as Leader and PD can record both the correct leader
+                // and pending_peers.
             }
 
             new_peer.peer.activate(self.ctx);

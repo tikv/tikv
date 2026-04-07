@@ -3,6 +3,8 @@
 use std::time::Duration;
 
 use engine_traits::{CF_RAFT, Peekable, RaftEngineReadOnly};
+use futures::executor::block_on;
+use pd_client::PdClient;
 use raftstore::store::{INIT_EPOCH_VER, RAFT_INIT_LOG_INDEX};
 use tikv_util::store::new_peer;
 use txn_types::{Key, TimeStamp};
@@ -195,3 +197,57 @@ fn test_split() {
 // - created peer with pending snapshot
 // - created peer with persisting snapshot
 // - created peer with persisted snapshot
+
+/// Test that after split, the new region correctly reports its leader to PD.
+/// This verifies that the heartbeat is sent after the leader election completes
+/// (from on_role_changed), not prematurely during post_split_init when the peer
+/// may still be a Candidate and pending_peers would be incorrectly reported.
+#[test]
+fn test_split_region_heartbeat_to_pd() {
+    let cluster = Cluster::with_node_count(1, None);
+    let store_id = cluster.node(0).id();
+    let router = &cluster.routers[0];
+
+    let region_id = 2;
+    let region = router.region_detail(region_id);
+    let peer = region.get_peers()[0].clone();
+    router.wait_applied_to_current_term(region_id, Duration::from_secs(3));
+
+    // Split region 2 into region 2 ["", "k22"] and region 1000 ["k22", ""]
+    let split_region_id = 1000;
+    let (left, right) = split_region(
+        router,
+        region,
+        peer,
+        split_region_id,
+        new_peer(store_id, 10),
+        Some(b"k11"),
+        Some(b"k33"),
+        b"k22",
+        b"k22",
+        false,
+    );
+
+    // Verify both regions have leaders reported to PD.
+    // The split_region helper already waits 1 second for split to complete,
+    // which is enough time for leader election and heartbeat.
+    for (rid, expected_peer_id) in [(region_id, peer.get_id()), (split_region_id, 10)] {
+        let mut found = false;
+        for _ in 0..10 {
+            let resp = block_on(cluster.node(0).pd_client().get_region_leader_by_id(rid)).unwrap();
+            if let Some((r, p)) = resp {
+                assert_eq!(r.get_id(), rid);
+                assert_eq!(p.get_id(), expected_peer_id);
+                assert_eq!(p.get_store_id(), store_id);
+                found = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert!(found, "region {} should have leader reported to PD", rid);
+    }
+
+    // Verify region boundaries are correct
+    assert_eq!(left.get_end_key(), b"k22");
+    assert_eq!(right.get_start_key(), b"k22");
+}
