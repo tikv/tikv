@@ -516,7 +516,7 @@ impl Service {
                 }
                 result = event_drain.forward(&mut sink, Some(&last_flush_time_for_forward)) => {
                     if let Err(e) = result {
-                        warn!("cdc send failed, set the sink to fail"; "error" => ?e, "downstream" => peer.clone(), "conn_id" => ?conn_id);
+                        warn!("cdc send failed, set the sink to fail"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
                         let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN,  format!("{:?}", e));
                         let _ = sink.fail(status).await;
                     } else {

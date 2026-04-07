@@ -237,7 +237,7 @@ lazy_static! {
 
     pub static ref CDC_EVENTS_PENDING_DURATION: Histogram = register_histogram!(
         "tikv_cdc_events_pending_duration",
-        "Pending duration for all events, in milliseconds",
+        "Pending duration for all events",
         exponential_buckets(0.01, 2.0, 17).unwrap(),
     )
     .unwrap();

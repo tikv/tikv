@@ -229,7 +229,7 @@ impl Downstream {
     /// events or ResolvedTs will be sent to the downstream after
     /// `sink_error_event` is called.
     pub fn sink_error_event(&self, region_id: u64, err_event: EventError) -> Result<()> {
-        info!("cdc downstream meets region error";
+        info!("cdc downstream send region error";
             "downstream_id" => ?self.id,
             "request_id" => ?self.req_id,
             "region_id" => region_id,
@@ -585,7 +585,6 @@ impl Delegate {
         self.stop_observing();
 
         let region_id = self.region_id;
-        info!("cdc send region error"; "error" => ?err, "region_id" => region_id);
         let error = err.into_error_event(self.region_id);
         let send = move |downstream: &Downstream| {
             downstream.state.store(DownstreamState::Stopped);
