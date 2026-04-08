@@ -580,9 +580,9 @@ impl Service {
                         // Check if last flush was more than the warning threshold
                         if elapsed > Duration::from_secs(CDC_IDLE_WARNING_THRESHOLD_SECS) {
                             warn!("cdc connection idle too long";
-                                  "downstream" => peer_clone.clone(),
-                                  "conn_id" => ?conn_id,
-                                  "seconds_since_last_flush" => elapsed.as_secs());
+                                "seconds_since_last_flush" => elapsed.as_secs(),
+                                "downstream" => peer_clone.clone(),
+                                "conn_id" => ?conn_id);
                         }
 
                         let _idle_threshold = CDC_IDLE_DEREGISTER_THRESHOLD_SECS;
@@ -607,9 +607,9 @@ impl Service {
                         if elapsed > Duration::from_secs(_idle_threshold)
                             && memory_quota.used_ratio() >= CDC_MEMORY_QUOTA_ABORT_THRESHOLD {
                             error!("cdc connection idle for too long, aborting connection";
-                                   "downstream" => peer_clone.clone(),
-                                   "conn_id" => ?conn_id,
-                                   "seconds_since_last_flush" => elapsed.as_secs());
+                                "seconds_since_last_flush" => elapsed.as_secs(),
+                                "downstream" => peer_clone.clone(),
+                                "conn_id" => ?conn_id);
                             // Cancel the gRPC connection
                             let _ = cancel_tx.send(());
                             break;
