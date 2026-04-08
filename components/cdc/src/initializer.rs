@@ -364,11 +364,14 @@ impl<E: KvEngine> Initializer<E> {
             let entries = self
                 .scan_batch(&mut scanner, cursors, &mut scan_stat)
                 .await?;
-            total_scanned_entries += entries.len();
+
+            let mut scanned_length = entries.len();
             if let Some(None) = entries.last() {
                 // If the last element is None, it means scanning is finished.
                 done = true;
+                scanned_length = scanned_length.saturating_sub(1);
             }
+            total_scanned_entries += scanned_length;
             debug!("cdc scan entries"; "len" => entries.len(), "region_id" => region_id);
             fail_point!("before_schedule_incremental_scan");
             let start_sink = Instant::now_coarse();
