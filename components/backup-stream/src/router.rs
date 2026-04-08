@@ -16,13 +16,8 @@ use std::{
 use dashmap::DashMap;
 use encryption::{BackupEncryptionManager, EncrypterReader, Iv, MultiMasterKeyBackend};
 use encryption_export::create_async_backend;
-<<<<<<< HEAD
-use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use external_storage::{create_storage, BackendConfig, ExternalStorage, UnpinReader};
-=======
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE, CfName};
 use external_storage::{BackendConfig, ExternalStorage, HdfsConfig, UnpinReader, create_storage};
->>>>>>> 4ff2839065 (Fix multipart S3 uploads, customizable log-backup multipart threshold (#19163))
 use file_system::Sha256Reader;
 use futures::io::Cursor;
 use kvproto::{
