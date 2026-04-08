@@ -323,7 +323,6 @@ impl<E: KvEngine> Initializer<E> {
         };
 
         fail_point!("cdc_incremental_scan_start");
-        let mut done = false;
         let start = Instant::now_coarse();
         let mut sink_time = Duration::default();
 
@@ -339,6 +338,7 @@ impl<E: KvEngine> Initializer<E> {
             CDC_SCAN_LONG_DURATION_REGIONS.dec();
         });
 
+        let mut done = false;
         let mut total_scanned_entries = 0;
         while !done {
             // Add metrics to observe long time incremental scan region count
@@ -365,13 +365,15 @@ impl<E: KvEngine> Initializer<E> {
                 .scan_batch(&mut scanner, cursors, &mut scan_stat)
                 .await?;
 
-            let mut scanned_length = entries.len();
-            if let Some(None) = entries.last() {
-                // If the last element is None, it means scanning is finished.
-                done = true;
-                scanned_length = scanned_length.saturating_sub(1);
-            }
+            // If the last element is None, it means scanning is finished.
+            done = matches!(entries.last(), Some(None));
+            let scanned_length = if done {
+                entries.len().saturating_sub(1)
+            } else {
+                entries.len()
+            };
             total_scanned_entries += scanned_length;
+
             debug!("cdc scan entries"; "len" => entries.len(), "region_id" => region_id);
             fail_point!("before_schedule_incremental_scan");
             let start_sink = Instant::now_coarse();
