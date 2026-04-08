@@ -126,6 +126,7 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
         &mut self,
         result: &mut BatchExecuteResult,
         idx: usize,
+        decode_all_rows: bool,
     ) -> Result<()> {
         let src_schema = self.src.schema();
         let single_logical_row = [result.logical_rows[idx]];
@@ -134,7 +135,11 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
             &self.truncate_keys_exps,
             src_schema,
             &mut result.physical_columns,
-            &single_logical_row,
+            if decode_all_rows {
+                &result.logical_rows
+            } else {
+                &single_logical_row
+            },
         )?;
 
         self.current_truncate_keys_unsafe.clear();
@@ -319,7 +324,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
 
                 if self.remaining_rows == 0 {
                     // Record truncate key values for further search
-                    let res = self.record_truncate_key_values(&mut result, output_row_num - 1);
+                    let res =
+                        self.record_truncate_key_values(&mut result, output_row_num - 1, false);
                     match res {
                         Ok(_) => {}
                         Err(err) => {
@@ -336,8 +342,11 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
                 // When self.remaining_rows == 0, it means that previous truncate key values
                 // have been recorded before.
                 if self.remaining_rows != 0 {
-                    // Record truncate key values for further search
-                    let res = self.record_truncate_key_values(&mut result, self.remaining_rows - 1);
+                    // Record truncate key values for further search. This chunk
+                    // will be reused for full-batch truncate-key evaluation
+                    // below, so decode all logical rows up front.
+                    let res =
+                        self.record_truncate_key_values(&mut result, self.remaining_rows - 1, true);
                     match res {
                         Ok(_) => {}
                         Err(err) => {
@@ -433,13 +442,25 @@ mod tests {
     use tidb_query_datatype::{
         Collation, FieldTypeTp,
         builder::FieldTypeBuilder,
-        codec::{batch::LazyBatchColumnVec, data_type::VectorValue},
-        expr::EvalWarnings,
+        codec::{
+            Datum, batch::{LazyBatchColumn, LazyBatchColumnVec}, data_type::VectorValue, datum,
+        },
+        expr::{EvalContext, EvalWarnings},
     };
     use tidb_query_expr::RpnExpressionBuilder;
 
     use super::*;
     use crate::util::mock_executor::{MockExecutor, MockScanExecutor};
+
+    fn get_bytes_raw_column(from: &[&[u8]]) -> LazyBatchColumn {
+        let mut ctx = EvalContext::default();
+        let mut col = LazyBatchColumn::raw_with_capacity(from.len());
+        for value in from {
+            let datum_raw = datum::encode_value(&mut ctx, &[Datum::Bytes((*value).to_vec())]).unwrap();
+            col.mut_raw().push(&datum_raw);
+        }
+        col
+    }
 
     #[test]
     fn test_limit_0() {
@@ -820,6 +841,58 @@ mod tests {
             }
             assert!(exec.executed_in_rank_limit_for_test);
         }
+    }
+
+    #[test]
+    fn test_rank_limit_decodes_full_chunk_when_reused_for_compare() {
+        let src_exec = MockExecutor::new(
+            vec![
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::VarString)
+                    .collation(Collation::Binary)
+                    .build(),
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::VarString)
+                    .collation(Collation::Binary)
+                    .build(),
+            ],
+            vec![BatchExecuteResult {
+                physical_columns: LazyBatchColumnVec::from(vec![
+                    get_bytes_raw_column(&[b"group1", b"group1", b"group1", b"group2"]),
+                    get_bytes_raw_column(&[b"val1", b"val2", b"val3", b"val4"]),
+                ]),
+                logical_rows: vec![0, 1, 2, 3],
+                warnings: EvalWarnings::default(),
+                is_drained: Ok(BatchExecIsDrain::Drain),
+            }],
+        );
+
+        let config = Arc::new(EvalConfig::default());
+        let truncate_key_exp = RpnExpressionBuilder::new_for_test()
+            .push_column_ref_for_test(0)
+            .build_for_test();
+        let mut exec = BatchLimitExecutor::new_rank_limit_for_test(
+            src_exec,
+            2,
+            true,
+            config,
+            vec![truncate_key_exp],
+        )
+        .unwrap();
+
+        let r = block_on(exec.next_batch(10));
+        assert_eq!(r.logical_rows, vec![0, 1, 2]);
+        assert!(r.is_drained.unwrap().stop());
+        assert!(r.physical_columns[0].is_decoded());
+        assert_eq!(
+            r.physical_columns[0].decoded().to_bytes_vec(),
+            &[
+                Some(b"group1".to_vec()),
+                Some(b"group1".to_vec()),
+                Some(b"group1".to_vec()),
+                Some(b"group2".to_vec()),
+            ],
+        );
     }
 
     #[test]
