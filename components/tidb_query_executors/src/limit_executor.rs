@@ -443,7 +443,10 @@ mod tests {
         Collation, FieldTypeTp,
         builder::FieldTypeBuilder,
         codec::{
-            Datum, batch::{LazyBatchColumn, LazyBatchColumnVec}, data_type::VectorValue, datum,
+            Datum,
+            batch::{LazyBatchColumn, LazyBatchColumnVec},
+            data_type::VectorValue,
+            datum,
         },
         expr::{EvalContext, EvalWarnings},
     };
@@ -456,7 +459,8 @@ mod tests {
         let mut ctx = EvalContext::default();
         let mut col = LazyBatchColumn::raw_with_capacity(from.len());
         for value in from {
-            let datum_raw = datum::encode_value(&mut ctx, &[Datum::Bytes((*value).to_vec())]).unwrap();
+            let datum_raw =
+                datum::encode_value(&mut ctx, &[Datum::Bytes((*value).to_vec())]).unwrap();
             col.mut_raw().push(&datum_raw);
         }
         col
