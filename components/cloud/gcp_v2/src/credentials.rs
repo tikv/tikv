@@ -23,98 +23,65 @@ pub(crate) fn validate_credentials_json(creds_json: &str) -> io::Result<()> {
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum RustlsProvider {
-    #[cfg(feature = "fips")]
-    AwsLcRsFips,
-    #[cfg(not(feature = "fips"))]
-    ProcessDefault,
-}
+#[cfg(feature = "fips")]
+mod rustls_provider {
+    use std::io;
 
-pub(crate) fn resolve_rustls_provider() -> RustlsProvider {
-    #[cfg(feature = "fips")]
-    {
-        RustlsProvider::AwsLcRsFips
-    }
-
-    #[cfg(not(feature = "fips"))]
-    {
-        RustlsProvider::ProcessDefault
-    }
-}
-
-impl RustlsProvider {
-    fn install_default(self) -> Result<(), std::sync::Arc<rustls::crypto::CryptoProvider>> {
-        match self {
-            #[cfg(feature = "fips")]
-            Self::AwsLcRsFips => rustls::crypto::default_fips_provider().install_default(),
-            #[cfg(not(feature = "fips"))]
-            Self::ProcessDefault => rustls::crypto::ring::default_provider().install_default(),
-        }
-    }
-
-    fn matches_default(self, provider: &std::sync::Arc<rustls::crypto::CryptoProvider>) -> bool {
-        match self {
-            #[cfg(feature = "fips")]
-            Self::AwsLcRsFips => provider.fips(),
-            #[cfg(not(feature = "fips"))]
-            Self::ProcessDefault => {
-                let _ = provider;
-                true
-            }
-        }
-    }
-
-    fn mismatch_error(self) -> io::Error {
-        match self {
-            #[cfg(feature = "fips")]
-            Self::AwsLcRsFips => io::Error::other(
-                "rustls crypto provider is already initialized without FIPS; gcp_v2 requires the aws-lc-rs FIPS provider",
-            ),
-            #[cfg(not(feature = "fips"))]
-            Self::ProcessDefault => {
-                unreachable!("process-default rustls provider accepts any initialized provider")
-            }
-        }
-    }
-
-    fn install_error(self) -> io::Error {
-        match self {
-            #[cfg(not(feature = "fips"))]
-            Self::ProcessDefault => io::Error::other("failed to install the rustls ring provider"),
-
-            #[cfg(all(feature = "fips", not(target_os = "macos")))]
-            Self::AwsLcRsFips => {
-                io::Error::other("failed to install the rustls aws-lc-rs FIPS provider")
-            }
-
-            #[cfg(all(feature = "fips", target_os = "macos"))]
-            Self::AwsLcRsFips => io::Error::other(
-                "failed to install the rustls aws-lc-rs FIPS provider on macOS; make sure the required aws_lc_* dylib is available to the TiKV process (for example via DYLD_LIBRARY_PATH)",
-            ),
-        }
-    }
-
-    pub(crate) fn ensure_default(self) -> io::Result<()> {
+    pub(crate) fn ensure_default_rustls_provider() -> io::Result<()> {
         if let Some(provider) = rustls::crypto::CryptoProvider::get_default() {
-            return if self.matches_default(provider) {
-                Ok(())
-            } else {
-                Err(self.mismatch_error())
-            };
+            if provider.fips() {
+                return Ok(());
+            }
+            return Err(io::Error::other(
+                "rustls crypto provider is already initialized without FIPS; gcp_v2 requires the aws-lc-rs FIPS provider",
+            ));
         }
 
-        if self.install_default().is_ok() {
+        if rustls::crypto::default_fips_provider()
+            .install_default()
+            .is_ok()
+        {
             return Ok(());
         }
 
         match rustls::crypto::CryptoProvider::get_default() {
-            Some(provider) if self.matches_default(provider) => Ok(()),
-            Some(_) => Err(self.mismatch_error()),
-            None => Err(self.install_error()),
+            Some(provider) if provider.fips() => Ok(()),
+            Some(_) => Err(io::Error::other(
+                "rustls crypto provider is already initialized without FIPS; gcp_v2 requires the aws-lc-rs FIPS provider",
+            )),
+            None => Err(io::Error::other(
+                "failed to install the rustls aws-lc-rs FIPS provider",
+            )),
         }
     }
 }
+
+#[cfg(not(feature = "fips"))]
+mod rustls_provider {
+    use std::io;
+
+    pub(crate) fn ensure_default_rustls_provider() -> io::Result<()> {
+        if rustls::crypto::CryptoProvider::get_default().is_some() {
+            return Ok(());
+        }
+
+        if rustls::crypto::ring::default_provider()
+            .install_default()
+            .is_ok()
+        {
+            return Ok(());
+        }
+
+        match rustls::crypto::CryptoProvider::get_default() {
+            Some(_) => Ok(()),
+            None => Err(io::Error::other(
+                "failed to install the rustls ring provider",
+            )),
+        }
+    }
+}
+
+pub(crate) use rustls_provider::ensure_default_rustls_provider;
 
 pub(crate) fn build_credentials(
     mode: &CredentialsMode,
@@ -161,16 +128,13 @@ pub(crate) fn build_credentials(
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_rustls_provider;
+    use super::ensure_default_rustls_provider;
 
     #[test]
-    fn test_resolve_rustls_provider() {
-        resolve_rustls_provider().ensure_default().unwrap();
+    fn test_ensure_default_rustls_provider() {
+        ensure_default_rustls_provider().unwrap();
         let provider = rustls::crypto::CryptoProvider::get_default().unwrap();
-        #[cfg(feature = "fips")]
-        assert!(provider.fips());
-        #[cfg(not(feature = "fips"))]
-        assert!(!provider.fips());
-        resolve_rustls_provider().ensure_default().unwrap();
+        assert_eq!(provider.fips(), cfg!(feature = "fips"));
+        ensure_default_rustls_provider().unwrap();
     }
 }
