@@ -197,7 +197,9 @@ pub enum Task {
     // The result of ChangeCmd should be returned from CDC Endpoint to ensure
     // the downstream switches to Normal after the previous commands was sunk.
     InitDownstream {
+        conn_id: ConnId,
         region_id: u64,
+        request_id: RequestId,
         observe_id: ObserveId,
         downstream_id: DownstreamId,
         downstream_state: Arc<AtomicCell<DownstreamState>>,
@@ -274,15 +276,19 @@ impl fmt::Debug for Task {
                 de.field("event_time", &event_time).finish()
             }
             Task::InitDownstream {
+                ref conn_id,
                 ref region_id,
+                ref request_id,
                 ref observe_id,
                 ref downstream_id,
                 ..
             } => de
                 .field("type", &"init_downstream")
+                .field("conn_id", &conn_id)
                 .field("region_id", &region_id)
+                .field("request_id", &request_id)
+                .field("downstream_id", &downstream_id)
                 .field("observe_id", &observe_id)
-                .field("downstream", &downstream_id)
                 .finish(),
             Task::TxnExtra(_) => de.field("type", &"txn_extra").finish(),
             Task::Validate(validate) => match validate {
@@ -1246,7 +1252,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 event_time,
             } => self.register_min_ts_event(leader_resolver, event_time),
             Task::InitDownstream {
+                conn_id,
                 region_id,
+                request_id,
                 observe_id,
                 downstream_id,
                 downstream_state,
@@ -1268,19 +1276,25 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                         "error" => ?e,
                         "observe_id" => ?observe_id,
                         "downstream_id" => ?downstream_id,
-                        "region_id" => region_id);
+                        "request_id" => ?request_id,
+                        "region_id" => region_id,
+                        "conn_id" => ?conn_id);
                     return;
                 }
                 if on_init_downstream(&downstream_state) {
                     info!("cdc downstream starts to initialize";
                         "observe_id" => ?observe_id,
                         "downstream_id" => ?downstream_id,
-                        "region_id" => region_id);
+                        "request_id" => ?request_id,
+                        "region_id" => region_id,
+                        "conn_id" => ?conn_id);
                 } else {
                     warn!("cdc downstream fails to initialize: canceled";
                         "observe_id" => ?observe_id,
                         "downstream_id" => ?downstream_id,
-                        "region_id" => region_id);
+                        "request_id" => ?request_id,
+                        "region_id" => region_id,
+                        "conn_id" => ?conn_id);
                 }
                 cb();
             }

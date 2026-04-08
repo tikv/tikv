@@ -130,15 +130,17 @@ impl<E: KvEngine> Initializer<E> {
 
         let region_id = self.region_id;
         let downstream_id = self.downstream_id;
+        let conn_id = self.conn_id;
+        let request_id = self.request_id;
         let observe_id = self.observe_handle.id;
         // when there are a lot of pending incremental scan tasks, they may be stopped,
         // check the state here to accelerate tasks cancel process.
         if self.downstream_state.load() == DownstreamState::Stopped {
             info!("cdc async incremental scan canceled before start";
-                "region_id" => region_id,
                 "downstream_id" => ?downstream_id,
-                "observe_id" => ?observe_id,
-                "conn_id" => ?self.conn_id);
+                "request_id" => ?request_id,
+                "region_id" => region_id,
+                "conn_id" => ?conn_id);
             return Err(Error::Other(box_err!("scan canceled")));
         }
 
@@ -162,7 +164,9 @@ impl<E: KvEngine> Initializer<E> {
             // without check and compare snapshot sequence number.
             Callback::read(Box::new(move |resp| {
                 if let Err(e) = sched.schedule(Task::InitDownstream {
+                    conn_id,
                     region_id,
+                    request_id,
                     observe_id,
                     downstream_id,
                     downstream_state,
@@ -171,12 +175,21 @@ impl<E: KvEngine> Initializer<E> {
                     incremental_scan_barrier: barrier,
                     cb: Box::new(move || cb(resp)),
                 }) {
-                    error!("cdc schedule init downstream task failed"; "error" => ?e);
+                    error!("cdc schedule init downstream task failed";
+                        "error" => ?e,
+                        "downstream_id" => ?downstream_id,
+                        "request_id" => ?request_id,
+                        "region_id" => region_id,
+                        "conn_id" => ?conn_id);
                 }
             })),
         ) {
             warn!("cdc send capture change cmd failed";
-            "region_id" => self.region_id, "error" => ?e);
+                "error" => ?e,
+                "downstream_id" => ?downstream_id,
+                "request_id" => ?request_id,
+                "region_id" => region_id,
+                "conn_id" => ?conn_id);
             return Err(Error::request(e.into()));
         }
 
@@ -230,16 +243,14 @@ impl<E: KvEngine> Initializer<E> {
 
         let region_id = self.region_id;
         let downstream_id = self.downstream_id;
-        let observe_id = self.observe_handle.id;
+        let request_id = self.request_id;
         let conn_id = self.conn_id;
         let on_cancel = || -> Result<ScanStat> {
-            info!(
-                "cdc async incremental scan canceled";
-                "region_id" => region_id,
+            info!("cdc async incremental scan canceled";
                 "downstream_id" => ?downstream_id,
-                "observe_id" => ?observe_id,
-                "conn_id" =>?conn_id,
-            );
+                "request_id" => ?request_id,
+                "region_id" => region_id,
+                "conn_id" => ?conn_id);
             Err(box_err!("scan canceled"))
         };
 
@@ -351,8 +362,8 @@ impl<E: KvEngine> Initializer<E> {
                     "cdc incremental scan takes too long";
                     "scanned_bytes" => scan_stat.emit, "scanned_entries" => total_scanned_entries,
                     "sink_takes" => ?sink_time, "takes" => ?start.saturating_elapsed(),
-                    "downstream_id" => ?self.downstream_id, "request_id" => ?self.request_id,
-                    "region_id" => region_id, "conn_id" => ?self.conn_id,
+                    "downstream_id" => ?downstream_id, "request_id" => ?request_id,
+                    "region_id" => region_id, "conn_id" => ?conn_id,
                 );
             }
             // When downstream_state is Stopped, it means the corresponding
@@ -392,7 +403,7 @@ impl<E: KvEngine> Initializer<E> {
             "sink_takes" => ?sink_time,
             "takes" => ?takes,
             "downstream_id" => ?downstream_id,
-            "request_id" => ?self.request_id,
+            "request_id" => ?request_id,
             "region_id" => region_id,
             "conn_id" => ?conn_id,
         );
@@ -548,9 +559,12 @@ impl<E: KvEngine> Initializer<E> {
 
     fn finish_scan_locks(&self, region: Region, locks: BTreeMap<Key, MiniLock>) {
         let observe_id = self.observe_handle.id;
+        let region_id = region.get_id();
         info!("cdc has scanned all incremental scan locks";
             "lock_count" => locks.len(),
-            "region_id" => region.get_id(),
+            "downstream_id" => ?self.downstream_id,
+            "request_id" => ?self.request_id,
+            "region_id" => region_id,
             "conn_id" => ?self.conn_id,
         );
         fail_point!("before_schedule_resolver_ready");
@@ -559,7 +573,12 @@ impl<E: KvEngine> Initializer<E> {
             region,
             locks,
         }) {
-            error!("cdc schedule finish scan locks task failed"; "error" => ?e);
+            error!("cdc schedule finish scan locks task failed";
+                "error" => ?e,
+                "downstream_id" => ?self.downstream_id,
+                "request_id" => ?self.request_id,
+                "region_id" => region_id,
+                "conn_id" => ?self.conn_id);
         }
     }
 
@@ -588,7 +607,12 @@ impl<E: KvEngine> Initializer<E> {
         };
 
         if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
-            error!("cdc schedule deregister task failed"; "error" => ?e);
+            error!("cdc schedule deregister task failed";
+                "error" => ?e,
+                "downstream_id" => ?self.downstream_id,
+                "request_id" => ?self.request_id,
+                "region_id" => self.region_id,
+                "conn_id" => ?self.conn_id);
         }
     }
 

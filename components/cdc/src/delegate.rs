@@ -577,6 +577,11 @@ impl Delegate {
     /// It broadcasts errors to all downstream and stops.
     pub fn stop(&mut self, err: Error) {
         self.mark_failed();
+        info!("cdc region met error";
+            "error" => ?err,
+            "downstream_count" => self.downstreams.len(),
+            "observe_id" => ?self.handle.id,
+            "region_id" => self.region_id);
         self.stop_observing();
 
         let region_id = self.region_id;
@@ -1146,7 +1151,10 @@ impl Delegate {
     }
 
     fn stop_observing(&self) {
-        info!("cdc stop observing"; "region_id" => self.region_id, "failed" => self.failed);
+        info!("cdc stop observing";
+            "failed" => self.failed,
+            "observe_id" => ?self.handle.id,
+            "region_id" => self.region_id);
         // Stop observe further events.
         self.handle.stop_observing();
         // To inform transaction layer no more old values are required for the region.
