@@ -132,10 +132,6 @@ You can see [this manual](./doc/deploy.md) of production-like cluster deployment
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
-> **Note:**
->
-> If you build TiKV with `ENABLE_FIPS=1` on macOS, TiKV will still enable the `gcp_v2` FIPS path. In that case, you must provide the matching `aws_lc_*` FIPS `.dylib` to the TiKV process yourself, for example through `DYLD_LIBRARY_PATH` or another standard macOS dynamic library search path.
-
 ## Client drivers
 
 - [Go](https://github.com/tikv/client-go) (The most stable and widely used)

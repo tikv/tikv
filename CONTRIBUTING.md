@@ -122,6 +122,8 @@ RUSTFLAGS=-Cdebuginfo=1 cargo build
 
 When building with make, cargo will automatically use [pipelined][p] compilation to increase the parallelism of the build. To turn on pipelining while using cargo directly, set `CARGO_BUILD_PIPELINING=true`.
 
+If you build TiKV with `ENABLE_FIPS=1` on macOS, TiKV will still enable the `gcp_v2` FIPS path. In that case, you must provide the matching `aws_lc_*` FIPS `.dylib` to the TiKV process yourself, for example through `DYLD_LIBRARY_PATH` or another standard macOS dynamic library search path.
+
 [p]: https://internals.rust-lang.org/t/evaluating-pipelined-rustc-compilation/10199
 
 ## Running TiKV
