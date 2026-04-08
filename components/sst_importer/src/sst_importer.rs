@@ -5507,9 +5507,14 @@ mod tests {
     #[test]
     fn test_remove_dir_path_traversal() {
         let import_dir = tempfile::tempdir().unwrap();
-        let importer =
-            SstImporter::<TestEngine>::new(&Config::default(), import_dir.path(), None, ApiVersion::V1, false)
-                .unwrap();
+        let importer = SstImporter::<TestEngine>::new(
+            &Config::default(),
+            import_dir.path(),
+            None,
+            ApiVersion::V1,
+            false,
+        )
+        .unwrap();
 
         // Non-existent valid subdirectory: no-op, should succeed.
         assert!(importer.remove_dir("subdir").is_ok());
@@ -5586,9 +5591,14 @@ mod tests {
     fn test_remove_dir_symlink_escape() {
         let import_dir = tempfile::tempdir().unwrap();
         let outside_dir = tempfile::tempdir().unwrap();
-        let importer =
-            SstImporter::<TestEngine>::new(&Config::default(), import_dir.path(), None, ApiVersion::V1, false)
-                .unwrap();
+        let importer = SstImporter::<TestEngine>::new(
+            &Config::default(),
+            import_dir.path(),
+            None,
+            ApiVersion::V1,
+            false,
+        )
+        .unwrap();
 
         // Create a symlink inside import_dir pointing outside the root.
         let symlink_path = import_dir.path().join("escape_link");
