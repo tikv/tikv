@@ -5517,19 +5517,19 @@ mod tests {
         .unwrap();
 
         // Non-existent valid subdirectory: no-op, should succeed.
-        assert!(importer.remove_dir("subdir").is_ok());
+        importer.remove_dir("subdir").unwrap();
 
         // Existing valid subdirectory: should be removed.
         let legit = import_dir.path().join("legit");
         std::fs::create_dir_all(&legit).unwrap();
         assert!(legit.exists());
-        assert!(importer.remove_dir("legit").is_ok());
+        importer.remove_dir("legit").unwrap();
         assert!(!legit.exists());
 
         // Nested valid subdirectory.
         let nested = import_dir.path().join("a").join("b");
         std::fs::create_dir_all(&nested).unwrap();
-        assert!(importer.remove_dir("a/b").is_ok());
+        importer.remove_dir("a/b").unwrap();
         assert!(!nested.exists());
 
         // `..` component: must be rejected before path.exists() is called.
