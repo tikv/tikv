@@ -65848,6 +65848,21 @@
               "refId": "",
               "step": 10,
               "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum((\n    tikv_pending_delete_ranges_of_stale_peer\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by ($additional_groupby) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "pending delete {{$additional_groupby}}",
+              "metric": "",
+              "query": "sum((\n    tikv_pending_delete_ranges_of_stale_peer\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by ($additional_groupby) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
             }
           ],
           "thresholds": [],
