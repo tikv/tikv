@@ -126,13 +126,6 @@ export DOCKER_IMAGE_TAG ?= latest
 export DEV_DOCKER_IMAGE_NAME ?= pingcap/tikv_dev
 export ENABLE_FIPS ?= 0
 
-ifeq ($(ENABLE_FIPS),1)
-DOCKER_IMAGE_TAG := ${DOCKER_IMAGE_TAG}-fips
-DOCKER_FILE := ${DOCKER_FILE}.FIPS
-else
-ENABLE_FEATURES += openssl-vendored
-endif
-
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 
 BIN_PATH = $(CURDIR)/bin
@@ -141,12 +134,21 @@ CARGO_TARGET_DIR ?= $(CURDIR)/target
 # Build-time environment, captured for reporting by the application binary
 BUILD_INFO_GIT_FALLBACK := "Unknown (no git or not git repo)"
 BUILD_INFO_RUSTC_FALLBACK := "Unknown"
-export TIKV_ENABLE_FEATURES := ${ENABLE_FEATURES}
 export TIKV_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
 export TIKV_BUILD_RUSTC_TARGET := $(shell rustc -vV | awk '/host/ { print $$2 }')
 export TIKV_BUILD_GIT_HASH ?= $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_GIT_TAG ?= $(shell git describe --tag || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
+
+ifeq ($(ENABLE_FIPS),1)
+DOCKER_IMAGE_TAG := ${DOCKER_IMAGE_TAG}-fips
+DOCKER_FILE := ${DOCKER_FILE}.FIPS
+ENABLE_FEATURES += gcp_v2/fips
+else
+ENABLE_FEATURES += openssl-vendored
+endif
+
+export TIKV_ENABLE_FEATURES := ${ENABLE_FEATURES}
 
 # Turn on cargo pipelining to add more build parallelism. This has shown decent
 # speedups in TiKV.
