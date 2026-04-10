@@ -4584,6 +4584,7 @@ dependencies = [
  "protobuf",
  "raft",
  "raftstore",
+ "rand 0.8.5",
  "security",
  "slog",
  "slog-global",

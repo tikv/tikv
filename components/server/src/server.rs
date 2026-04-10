@@ -935,10 +935,14 @@ where
         );
 
         // Create resolved ts worker
+        let rts_memory_quota = Arc::new(MemoryQuota::new(
+            self.config.resolved_ts.memory_quota.0 as usize,
+        ));
         let rts_worker = if self.config.resolved_ts.enable {
             let worker = Box::new(LazyWorker::new("resolved-ts"));
             // Register the resolved ts observer
-            let resolved_ts_ob = resolved_ts::Observer::new(worker.scheduler());
+            let resolved_ts_ob =
+                resolved_ts::Observer::new(worker.scheduler(), rts_memory_quota.clone());
             resolved_ts_ob.register_to(self.coprocessor_host.as_mut().unwrap());
             // Register config manager for resolved ts worker
             cfg_controller.register(
@@ -1213,6 +1217,7 @@ where
                 self.concurrency_manager.clone(),
                 server.env(),
                 self.security_mgr.clone(),
+                rts_memory_quota,
             );
             self.resolved_ts_scheduler = Some(rts_worker.scheduler());
             rts_worker.start_with_timer(rts_endpoint);

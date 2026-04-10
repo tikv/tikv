@@ -68,7 +68,6 @@ impl TestSuite {
             endpoints.insert(id, worker);
         }
 
-        cluster.run();
         for (id, worker) in &mut endpoints {
             let sim = cluster.sim.wl();
             let raft_router = sim.get_server_router(*id);
@@ -101,6 +100,10 @@ impl TestSuite {
             tikv_cli: HashMap::default(),
             import_cli: HashMap::default(),
         }
+    }
+
+    pub fn run(&mut self) {
+        self.cluster.run();
     }
 
     pub fn stop(mut self) {
