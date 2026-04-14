@@ -26,7 +26,6 @@ use protobuf::{Chars, ProtobufEnum};
 use tikv_util::{
     info, retry_expr,
     stream::{JustRetry, RetryExt},
-    warn,
 };
 use tokio::time::Instant;
 use tokio_stream::Stream;
@@ -37,7 +36,7 @@ use super::{
     errors::{Error, Result},
     statistic::LoadMetaStatistic,
 };
-use crate::{OtherErrExt, compaction::EpochHint, errors::ErrorKind, util};
+use crate::{OtherErrExt, ShardConfig, compaction::EpochHint, errors::ErrorKind, util};
 
 pub const METADATA_PREFIX: &str = "v1/backupmeta";
 pub const DEFAULT_COMPACTION_OUT_PREFIX: &str = "v1/compaction_out";
@@ -52,11 +51,6 @@ const BACKUP_META_MAX_TS_PREFIX: char = 'u';
 #[derive(Debug, PartialEq, Eq)]
 pub struct MetaFile {
     pub name: Arc<str>,
-    /// The store ID recorded by backup-stream in `brpb::Metadata`.
-    ///
-    /// Older metadata may leave this unset, in which case callers can fall
-    /// back to parsing the physical log path layout.
-    pub store_id: Option<u64>,
     pub physical_files: Vec<PhysicalLogFile>,
     pub min_ts: u64,
     pub max_ts: u64,
@@ -71,7 +65,6 @@ impl From<Metadata> for MetaFile {
 impl MetaFile {
     pub fn from_file(name: Arc<str>, mut meta_file: Metadata) -> Self {
         let mut log_files = vec![];
-        let store_id = (meta_file.store_id > 0).then_some(meta_file.store_id as u64);
         let min_ts = meta_file.min_ts;
         let max_ts = meta_file.max_ts;
 
@@ -90,58 +83,16 @@ impl MetaFile {
 
         Self {
             name,
-            store_id,
             physical_files: log_files,
             min_ts,
             max_ts,
         }
-    }
-}
-
-impl MetaFile {
-    pub fn resolved_store_id(&self) -> Option<u64> {
-        let parsed_from_backupmeta = parse_store_id_from_backupmeta_path(self.name.as_ref());
-        if let (Some(path_store_id), Some(meta_store_id)) = (parsed_from_backupmeta, self.store_id)
-        {
-            if path_store_id != meta_store_id {
-                warn!(
-                    "backup metadata store id mismatch";
-                    "meta_path" => %self.name,
-                    "store_id.from_path" => path_store_id,
-                    "store_id.from_metadata" => meta_store_id,
-                );
-            }
-        }
-
-        self.store_id
-            .or(parsed_from_backupmeta)
-            .or_else(|| self.resolve_store_id_from_physical_paths())
     }
 
     pub fn into_logs(self) -> impl Iterator<Item = LogFile> {
         self.physical_files
             .into_iter()
             .flat_map(|g| g.files.into_iter())
-    }
-
-    fn resolve_store_id_from_physical_paths(&self) -> Option<u64> {
-        let store_ids = self
-            .physical_files
-            .iter()
-            .filter_map(|group| parse_store_id_from_log_path(group.name.as_ref()))
-            .collect::<BTreeSet<_>>();
-        match store_ids.len() {
-            0 => None,
-            1 => store_ids.into_iter().next(),
-            _ => {
-                warn!(
-                    "backup metadata physical log paths resolve to multiple store ids";
-                    "meta_path" => %self.name,
-                    "store_ids" => ?store_ids,
-                );
-                None
-            }
-        }
     }
 }
 
@@ -246,6 +197,30 @@ fn parse_store_id_from_backupmeta_path(path: &str) -> Option<u64> {
     parse_backupmeta_filename(stem)
 }
 
+fn store_id_for_sharding_from_path(path: &str) -> Result<u64> {
+    parse_store_id_from_backupmeta_path(path).ok_or_else(|| {
+        Error::from(ErrorKind::Other(format!(
+            "cannot parse store id from backup metadata path: {}",
+            path
+        )))
+    })
+}
+
+fn validate_store_id_for_sharding(
+    meta_path: &str,
+    meta_store_id: Option<u64>,
+    path_store_id: u64,
+) -> Result<()> {
+    if let Some(meta_store_id) = meta_store_id.filter(|id| *id != path_store_id) {
+        return Err(ErrorKind::Other(format!(
+            "backup metadata store id mismatch: meta_path={}, store_id.from_path={}, store_id.from_metadata={}",
+            meta_path, path_store_id, meta_store_id,
+        ))
+        .into());
+    }
+    Ok(())
+}
+
 fn parse_backupmeta_filename(name: &str) -> Option<u64> {
     fn parse_hex_u64(part: &str) -> Option<u64> {
         if part.len() != 16 {
@@ -299,51 +274,6 @@ fn parse_backupmeta_filename(name: &str) -> Option<u64> {
     parse_hex_u64(&prefix[16..])
 }
 
-fn is_backup_stream_log_basename(name: &str) -> bool {
-    let stem = match name.strip_suffix(".log") {
-        Some(v) => v,
-        None => return false,
-    };
-    let (min_ts, uuid) = match stem.split_once('-') {
-        Some(v) => v,
-        None => return false,
-    };
-    min_ts.parse::<u64>().is_ok() && uuid::Uuid::parse_str(uuid).is_ok()
-}
-
-/// Parse the store ID from a backup-stream log path.
-///
-/// Backup-stream log path formats:
-/// - `v1/{date}/{hour}/{store_id}/{min_ts}-{uuid}.log`
-/// - `v1/{date}/{hour}/{store_id}/tXXXXXXXX/{min_ts}-{uuid}.log`
-/// - `v1/{date}/{hour}/{store_id}/schema-meta/{min_ts}-{uuid}.log`
-fn parse_store_id_from_log_path(path: &str) -> Option<u64> {
-    let mut segs = path.split('/');
-    let (Some("v1"), Some(_date), Some(_hour), Some(store_id), Some(next)) = (
-        segs.next(),
-        segs.next(),
-        segs.next(),
-        segs.next(),
-        segs.next(),
-    ) else {
-        return None;
-    };
-    let store_id = store_id.parse().ok()?;
-    match (next, segs.next(), segs.next()) {
-        (name, None, None) if is_backup_stream_log_basename(name) => Some(store_id),
-        ("schema-meta", Some(name), None) if is_backup_stream_log_basename(name) => Some(store_id),
-        (table, Some(name), None)
-            if table.len() == 9
-                && table.starts_with('t')
-                && table[1..].bytes().all(|c| c.is_ascii_hexdigit())
-                && is_backup_stream_log_basename(name) =>
-        {
-            Some(store_id)
-        }
-        _ => None,
-    }
-}
-
 impl std::fmt::Debug for LogFileId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("Id")
@@ -362,6 +292,9 @@ pub struct LoadFromExt<'a> {
     /// The prefix of metadata in the external storage.
     /// By default it is `v1/backupmeta`.
     pub meta_prefix: &'a str,
+    /// Optional shard filter applied from the backupmeta path before reading
+    /// the metadata file.
+    pub shard: Option<ShardConfig>,
     /// Max number of running tasks to fetch metadatas
     pub prefetch_running_count: usize,
     /// Max number of spawning tasks to fetch metadatas
@@ -379,6 +312,7 @@ impl Default for LoadFromExt<'_> {
         Self {
             loading_content_span: None,
             meta_prefix: METADATA_PREFIX,
+            shard: None,
             prefetch_running_count: 128,
             prefetch_buffer_count: 1024,
         }
@@ -429,6 +363,10 @@ impl<F: Future> Prefetch<F> {
 
     fn new(f: F) -> Self {
         Self::Polling(f)
+    }
+
+    fn ready(v: <F as Future>::Output) -> Self {
+        Self::Ready(v)
     }
 }
 
@@ -514,14 +452,39 @@ impl<'a> StreamMetaStorage<'a> {
             };
             match res {
                 Poll::Ready(Some(load)) => {
-                    let load = load?;
+                    let load = match load {
+                        Ok(load) => load,
+                        Err(err) => {
+                            self.prefetch.push_back(Prefetch::ready(Err(err.into())));
+                            cx.waker().wake_by_ref();
+                            return Poll::Pending;
+                        }
+                    };
                     if self.skip_map.should_fully_skip(&load.key) {
                         info!("Skipping a metadata by migration."; "name" => %load.key);
                         self.stat.meta_filtered_out_by_migration += 1;
                         continue;
                     }
+                    let path_store_id = match self.ext.shard {
+                        Some(shard) => {
+                            let store_id = match store_id_for_sharding_from_path(&load.key) {
+                                Ok(store_id) => store_id,
+                                Err(err) => {
+                                    self.prefetch.push_back(Prefetch::ready(Err(err)));
+                                    cx.waker().wake_by_ref();
+                                    return Poll::Pending;
+                                }
+                            };
+                            if !shard.contains_store_id(store_id) {
+                                continue;
+                            }
+                            Some(store_id)
+                        }
+                        None => None,
+                    };
                     let storage = Arc::clone(&self.ext_storage);
-                    let handle = tokio::spawn(MetaFile::load_from_owned(storage, load));
+                    let handle =
+                        tokio::spawn(MetaFile::load_from_owned(storage, load, path_store_id));
                     let mut fut = Prefetch::new(async move { handle.await.unwrap() }.boxed());
                     // start the execution of this future.
                     let poll = fut.poll_unpin(cx);
@@ -603,14 +566,16 @@ impl MetaFile {
     async fn load_from_owned(
         s: Arc<dyn ExternalStorage>,
         blob: BlobObject,
+        path_store_id: Option<u64>,
     ) -> Result<(Self, LoadMetaStatistic)> {
-        Self::load_from(s.as_ref(), blob).await
+        Self::load_from(s.as_ref(), blob, path_store_id).await
     }
 
     #[tracing::instrument(skip_all, fields(blob=%blob))]
     async fn load_from(
         s: &dyn ExternalStorage,
         blob: BlobObject,
+        path_store_id: Option<u64>,
     ) -> Result<(Self, LoadMetaStatistic)> {
         use protobuf::{CodedInputStream, Message};
 
@@ -641,6 +606,13 @@ impl MetaFile {
 
         let mut meta_file = Metadata::new();
         meta_file.merge_from(&mut CodedInputStream::from_carllerche_bytes(&content))?;
+        if let Some(path_store_id) = path_store_id {
+            validate_store_id_for_sharding(
+                &blob.key,
+                (meta_file.store_id > 0).then_some(meta_file.store_id as u64),
+                path_store_id,
+            )?;
+        }
         let name = Arc::from(blob.key.into_boxed_str());
         let result = Self::from_file(name, meta_file);
 
@@ -904,10 +876,11 @@ impl<'a> MigrationStorageWrapper<'a> {
         let id = self.largest_id().await?;
         let name = name_of_migration(id + 1, migration);
         let bytes = migration.write_to_bytes()?;
+        let full_name = format!("{}/{}", self.migrations_prefix, name);
         retry_expr!(
             self.storage
                 .write(
-                    &format!("{}/{}", self.migrations_prefix, name),
+                    &full_name,
                     UnpinReader(Box::new(Cursor::new(&bytes))),
                     bytes.len() as u64
                 )
@@ -933,6 +906,7 @@ impl<'a> MigrationStorageWrapper<'a> {
 
     pub async fn write(&self, migration: VersionedMigration) -> Result<()> {
         use external_storage::locking::LockExt;
+        use protobuf::Message;
 
         let migration = migration.0;
 
@@ -943,6 +917,10 @@ impl<'a> MigrationStorageWrapper<'a> {
         let lock = retry_expr!(
             self.storage
                 .lock_for_write(MIGRATION_APPEND_LOCK, hint.clone())
+                .map_err(|err| JustRetry(err))
+        )
+        .await
+        .map_err(|err| err.0)?;
         let id = self.largest_id().await?;
         // Note: perhaps we need to verify that there isn't concurrency writing in the
         // future.
@@ -1050,16 +1028,11 @@ mod test {
     use kvproto::brpb::{DeleteSpansOfFile, MetaEdit, Migration, Span};
     use protobuf::Chars;
 
-    use super::{
-        LoadFromExt, MetaFile, PhysicalLogFile, StreamMetaStorage,
-        parse_store_id_from_backupmeta_path, parse_store_id_from_log_path,
-    };
+    use super::{LoadFromExt, MetaFile, StreamMetaStorage, parse_store_id_from_backupmeta_path};
     use crate::{
         storage::{LogFileId, MetaEditFilters, MigrationStorageWrapper},
         test_util::{KvGen, LogFileBuilder, TmpStorage, gen_step},
     };
-
-    const TEST_LOG_UUID: &str = "00000000-0000-0000-0000-000000000042";
 
     async fn construct_storage(
         st: &TmpStorage,
@@ -1094,12 +1067,6 @@ mod test {
     fn test_parse_store_id_from_backupmeta_path() {
         assert_eq!(
             parse_store_id_from_backupmeta_path(
-                "v1/backupmeta/000000000000012C000000000000002A-d0000000000000032l0000000000000064u00000000000000C8.meta"
-            ),
-            Some(42)
-        );
-        assert_eq!(
-            parse_store_id_from_backupmeta_path(
                 "v1/backupmeta/000000000000012C000000000000002A-d0000000000000032l0000000000000064u00000000000000C8x0000000000000001.meta"
             ),
             Some(42)
@@ -1110,148 +1077,6 @@ mod test {
             ),
             None
         );
-        assert_eq!(
-            parse_store_id_from_backupmeta_path(
-                "v1/backupmeta/000000000000012C000000000000002A-d0000000000000032l0000000000000064.meta"
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn test_parse_store_id_from_log_path() {
-        assert_eq!(
-            parse_store_id_from_log_path(
-                "v1/20260320/12/42/434098800931373064-00000000-0000-0000-0000-000000000042.log"
-            ),
-            Some(42)
-        );
-        assert_eq!(
-            parse_store_id_from_log_path(
-                "v1/20260320/12/42/t00000071/434098800931373064-00000000-0000-0000-0000-000000000042.log"
-            ),
-            Some(42)
-        );
-        assert_eq!(
-            parse_store_id_from_log_path(
-                "v1/20260320/12/42/schema-meta/434055683656384515-00000000-0000-0000-0000-000000000042.log"
-            ),
-            Some(42)
-        );
-        assert_eq!(parse_store_id_from_log_path("store_42.log"), None);
-        assert_eq!(
-            parse_store_id_from_log_path(
-                "v1/20260320/12/not-a-store/434098800931373064-00000000-0000-0000-0000-000000000042.log"
-            ),
-            None
-        );
-        assert_eq!(
-            parse_store_id_from_log_path("v1/20260320/12/42/foo-bar.log"),
-            None
-        );
-        assert_eq!(
-            parse_store_id_from_log_path("v1/20260320/12/42/schema-meta/not-ts-not-uuid.log"),
-            None
-        );
-        assert_eq!(
-            parse_store_id_from_log_path("v1/20260320/12/42/t00000071"),
-            None
-        );
-        assert_eq!(
-            parse_store_id_from_log_path(
-                "v1/20260320/12/42/tbad/434098800931373064-00000000-0000-0000-0000-000000000042.log"
-            ),
-            None
-        );
-    }
-
-    fn one_log_builder() -> LogFileBuilder {
-        let mut builder = LogFileBuilder::new(|v| v.region_id = 1);
-        for kv in KvGen::new(gen_step(1, 1, 1), |_| b"val".to_vec()).take(1) {
-            builder.add_encoded(&kv.key, &kv.value);
-        }
-        builder
-    }
-
-    #[tokio::test]
-    async fn test_resolved_store_id_prefers_metadata_field() {
-        let st = TmpStorage::create();
-        let mf = st
-            .build_flush_with_store_id(
-                7,
-                &format!("v1/20260320/12/42/100-{TEST_LOG_UUID}.log"),
-                "v1/backupmeta/000000000000012C0000000000000009-d0000000000000064l0000000000000064u000000000000012C.meta",
-                [one_log_builder()],
-            )
-            .await;
-        assert_eq!(mf.store_id, Some(7));
-        assert_eq!(mf.resolved_store_id(), Some(7));
-    }
-
-    #[tokio::test]
-    async fn test_resolved_store_id_falls_back_to_backupmeta_name() {
-        let st = TmpStorage::create();
-        let mf = st
-            .build_flush(
-                &format!("v1/20260320/12/42/100-{TEST_LOG_UUID}.log"),
-                "v1/backupmeta/000000000000012C0000000000000009-d0000000000000064l0000000000000064u000000000000012C.meta",
-                [one_log_builder()],
-            )
-            .await;
-        assert_eq!(mf.store_id, None);
-        assert_eq!(mf.resolved_store_id(), Some(9));
-    }
-
-    #[tokio::test]
-    async fn test_resolved_store_id_falls_back_to_metadata_field() {
-        let st = TmpStorage::create();
-        let mf = st
-            .build_flush_with_store_id(
-                7,
-                &format!("v1/20260320/12/42/100-{TEST_LOG_UUID}.log"),
-                "v1/backupmeta/not_backupmeta_format.meta",
-                [one_log_builder()],
-            )
-            .await;
-        assert_eq!(mf.store_id, Some(7));
-        assert_eq!(mf.resolved_store_id(), Some(7));
-    }
-
-    #[tokio::test]
-    async fn test_resolved_store_id_falls_back_to_physical_log_path() {
-        let st = TmpStorage::create();
-        let mf = st
-            .build_flush(
-                &format!("v1/20260320/12/42/100-{TEST_LOG_UUID}.log"),
-                "v1/backupmeta/000000000000012C-0000000000000064-0000000000000064-000000000000012C.meta",
-                [one_log_builder()],
-            )
-            .await;
-        assert_eq!(mf.store_id, None);
-        assert_eq!(mf.resolved_store_id(), Some(42));
-    }
-
-    #[test]
-    fn test_resolved_store_id_ignores_ambiguous_physical_log_paths() {
-        let mf = MetaFile {
-            name: Arc::from("v1/backupmeta/not_backupmeta_format.meta"),
-            store_id: None,
-            physical_files: vec![
-                PhysicalLogFile {
-                    size: 0,
-                    name: Chars::from(format!("v1/20260320/12/41/100-{TEST_LOG_UUID}.log")),
-                    files: Vec::new(),
-                },
-                PhysicalLogFile {
-                    size: 0,
-                    name: Chars::from(format!("v1/20260320/12/42/100-{TEST_LOG_UUID}.log")),
-                    files: Vec::new(),
-                },
-            ],
-            min_ts: 0,
-            max_ts: 0,
-        };
-        assert_eq!(mf.resolved_store_id(), None);
     }
 
     #[tokio::test]

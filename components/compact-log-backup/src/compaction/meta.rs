@@ -14,6 +14,7 @@ use super::{
     collector::CollectSubcompactionConfig,
 };
 use crate::{
+    ShardConfig,
     errors::Result,
     storage::{
         LoadFromExt, LogFile, LogFileId, MetaFile, MigrationStorageWrapper, PhysicalLogFile,
@@ -262,8 +263,12 @@ impl CompactionRunInfoBuilder {
         &mut self.compaction
     }
 
-    pub async fn write_migration(&self, s: Arc<dyn ExternalStorage>) -> Result<()> {
-        let migration = self.migration_of(self.find_expiring_files(s.clone()).await?);
+    pub async fn write_migration(
+        &self,
+        s: Arc<dyn ExternalStorage>,
+        shard: Option<ShardConfig>,
+    ) -> Result<()> {
+        let migration = self.migration_of(self.find_expiring_files(s.clone(), shard).await?);
         let wrapped_storage = MigrationStorageWrapper::new(s.as_ref());
         wrapped_storage.write(migration.into()).await?;
         Ok(())
@@ -291,8 +296,10 @@ impl CompactionRunInfoBuilder {
     async fn find_expiring_files(
         &self,
         s: Arc<dyn ExternalStorage>,
+        shard: Option<ShardConfig>,
     ) -> Result<Vec<ExpiringFilesOfMeta>> {
-        let ext = LoadFromExt::default();
+        let mut ext = LoadFromExt::default();
+        ext.shard = shard;
         let mut storage = StreamMetaStorage::load_from_ext(&s, ext).await?;
 
         let mut result = vec![];
@@ -388,7 +395,7 @@ mod test {
 
     impl CompactionRunInfoBuilder {
         async fn mig(&self, s: Arc<dyn ExternalStorage>) -> crate::Result<brpb::Migration> {
-            Ok(self.migration_of(self.find_expiring_files(s).await?))
+            Ok(self.migration_of(self.find_expiring_files(s, None).await?))
         }
     }
 

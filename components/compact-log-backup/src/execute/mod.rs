@@ -44,8 +44,8 @@ const COMPACTION_V1_PREFIX: &str = "v1/compactions";
 
 /// Sharding configuration for `compact-log-backup`.
 ///
-/// Sharding is defined as: `hash(token) % total == index - 1`, where `index`
-/// is 1-based.
+/// Sharding is defined as: `hash(store_id.to_le_bytes()) % total == index - 1`,
+/// where `index` is 1-based.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShardConfig {
     /// Shard index (1-based).
@@ -85,15 +85,6 @@ impl ShardConfig {
 
     pub fn contains_store_id(&self, store_id: u64) -> bool {
         self.shard_mod(Self::hash64(&store_id.to_le_bytes()))
-    }
-
-    /// Membership test for an input item, using `store_id` when present and
-    /// falling back to hashing a stable path string.
-    pub fn contains(&self, store_id: Option<u64>, fallback_path: &str) -> bool {
-        match store_id {
-            Some(id) if id > 0 => self.contains_store_id(id),
-            _ => self.shard_mod(Self::hash64(fallback_path.as_bytes())),
-        }
     }
 
     pub fn suffix(&self) -> String {
@@ -302,19 +293,12 @@ impl Execution {
         // the parent span is not currently entered (e.g. early-abort paths),
         // which can violate invariants of `tracing-active-tree`.
         ext.loading_content_span = Some(trace_span!("load_meta_file_names"));
+        ext.shard = self.cfg.shard;
 
         let storage = Arc::clone(storage);
         let meta = StreamMetaStorage::load_from_ext(&storage, ext).await?;
-        let shard = self.cfg.shard;
         let stream = meta.flat_map(move |file| match file {
-            Ok(file) => {
-                let meta_name = Arc::clone(&file.name);
-                let store_id = file.resolved_store_id();
-                let logs = file
-                    .into_logs()
-                    .filter(move |_| shard.map_or(true, |s| s.contains(store_id, &meta_name)));
-                stream::iter(logs).map(Ok).left_stream()
-            }
+            Ok(file) => stream::iter(file.into_logs()).map(Ok).left_stream(),
             Err(err) => stream::once(futures::future::err(err)).right_stream(),
         });
         let mut compact_stream = CollectSubcompaction::new(
@@ -422,6 +406,7 @@ impl Execution {
         }
         let cx = AfterFinishCtx {
             async_rt: &Handle::current(),
+            this: self,
             storage: &storage,
         };
         hooks.after_execution_finished(cx).await?;

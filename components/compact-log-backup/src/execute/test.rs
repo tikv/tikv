@@ -14,6 +14,7 @@ use engine_rocks::RocksEngine;
 use external_storage::{BackendConfig, ExternalStorage};
 use futures::{future::FutureExt, io::AsyncReadExt, stream::TryStreamExt};
 use kvproto::brpb::StorageBackend;
+use protobuf::Message;
 use tokio::sync::mpsc::Sender;
 
 use super::{Execution, ExecutionConfig, ShardConfig};
@@ -108,29 +109,29 @@ fn gen_store_builders(store_id: u64) -> Vec<LogFileBuilder> {
         .collect()
 }
 
+fn store_paths(store_id: u64) -> (String, String) {
+    let base_ts = store_id * 1_000;
+    let meta_path = format!(
+        "v1/backupmeta/{:016X}{:016X}-d{:016X}l{:016X}u{:016X}.meta",
+        base_ts + 300,
+        store_id,
+        base_ts + 100,
+        base_ts + 100,
+        base_ts + 300,
+    );
+    let log_path = format!(
+        "v1/20260320/12/{store_id}/{}-00000000-0000-0000-0000-000000000042.log",
+        base_ts + 100
+    );
+    (meta_path, log_path)
+}
+
 async fn populate_stores(st: &TmpStorage, stores: RangeInclusive<u64>) -> HashMap<String, u64> {
     let mut meta_path_to_store_id = HashMap::<String, u64>::new();
     for store_id in stores {
-        let base_ts = store_id * 1_000;
-        let meta_path = format!(
-            "v1/backupmeta/{:016X}{:016X}-d{:016X}l{:016X}u{:016X}.meta",
-            base_ts + 300,
-            store_id,
-            base_ts + 100,
-            base_ts + 100,
-            base_ts + 300,
-        );
-        let log_path = format!(
-            "v1/20260320/12/{store_id}/{}-00000000-0000-0000-0000-000000000042.log",
-            base_ts + 100
-        );
-        st.build_flush_with_store_id(
-            store_id,
-            &log_path,
-            &meta_path,
-            gen_store_builders(store_id),
-        )
-        .await;
+        let (meta_path, log_path) = store_paths(store_id);
+        st.build_flush(&log_path, &meta_path, gen_store_builders(store_id))
+            .await;
         meta_path_to_store_id.insert(meta_path, store_id);
     }
     meta_path_to_store_id
@@ -146,6 +147,33 @@ async fn run_exec(st: StorageBackend, shard: Option<ShardConfig>, name: &str) ->
         .unwrap()
         .unwrap();
     out_prefix
+}
+
+async fn run_exec_err(st: StorageBackend, shard: ShardConfig, name: &str) -> crate::Error {
+    let mut exec = create_compaction(st);
+    exec.cfg.shard = Some(shard);
+    exec.out_prefix = exec.cfg.recommended_prefix(name);
+    tokio::task::spawn_blocking(move || exec.run(SaveMeta::default()))
+        .await
+        .unwrap()
+        .unwrap_err()
+}
+
+async fn set_metadata_store_id(st: &TmpStorage, meta_path: &str, store_id: u64) {
+    let mut content = vec![];
+    st.storage()
+        .read(meta_path)
+        .read_to_end(&mut content)
+        .await
+        .unwrap();
+    let mut meta = protobuf::parse_from_bytes::<kvproto::brpb::Metadata>(&content).unwrap();
+    meta.store_id = store_id as i64;
+    let content = meta.write_to_bytes().unwrap();
+    let len = content.len() as u64;
+    st.storage()
+        .write(meta_path, futures::io::Cursor::new(content).into(), len)
+        .await
+        .unwrap();
 }
 
 fn out_prefix_from_artifacts(artifacts: &str) -> &str {
@@ -495,6 +523,97 @@ async fn test_filter_out_small_compactions() {
     for c in &cs {
         assert!(c.get_meta().get_size() >= 27800, "{:?}", c.get_meta());
     }
+}
+
+#[tokio::test]
+async fn test_store_id_path_validation_only_runs_in_shard_mode() {
+    let log_path = "v1/20260320/12/7/7100-00000000-0000-0000-0000-000000000042.log";
+    let meta_path = "v1/backupmeta/not_backupmeta_format.meta";
+    let shard = ShardConfig::new(1, 2).unwrap();
+
+    let st_unsharded = TmpStorage::create();
+    st_unsharded
+        .build_flush(log_path, meta_path, gen_store_builders(7))
+        .await;
+    run_exec(st_unsharded.backend(), None, "sharding_bad_store_id_path").await;
+
+    let st_sharded = TmpStorage::create();
+    st_sharded
+        .build_flush(log_path, meta_path, gen_store_builders(7))
+        .await;
+    let err = run_exec_err(st_sharded.backend(), shard, "sharding_bad_store_id_path").await;
+    assert!(
+        err.kind
+            .to_string()
+            .contains("cannot parse store id from backup metadata path")
+    );
+}
+
+#[tokio::test]
+async fn test_sharding_rejects_path_and_metadata_store_id_mismatch() {
+    let shard = ShardConfig::new(1, 2).unwrap();
+    let store_id = (1..=16)
+        .find(|&store_id| shard.contains_store_id(store_id))
+        .unwrap();
+    let (meta_path, log_path) = store_paths(store_id);
+
+    let st = TmpStorage::create();
+    st.build_flush(&log_path, &meta_path, gen_store_builders(store_id))
+        .await;
+    set_metadata_store_id(&st, &meta_path, store_id + 1).await;
+
+    let err = run_exec_err(st.backend(), shard, "sharding_store_id_mismatch").await;
+    assert!(
+        err.kind
+            .to_string()
+            .contains("backup metadata store id mismatch")
+    );
+}
+
+#[tokio::test]
+async fn test_sharding_skips_non_matching_meta_before_reading() {
+    let shard = ShardConfig::new(1, 2).unwrap();
+    let mut included_store_id = None;
+    let mut excluded_store_id = None;
+    for store_id in 1..=16 {
+        if shard.contains_store_id(store_id) {
+            included_store_id.get_or_insert(store_id);
+        } else {
+            excluded_store_id.get_or_insert(store_id);
+        }
+        if included_store_id.is_some() && excluded_store_id.is_some() {
+            break;
+        }
+    }
+
+    let included_store_id = included_store_id.unwrap();
+    let excluded_store_id = excluded_store_id.unwrap();
+    let (good_meta_path, good_log_path) = store_paths(included_store_id);
+    let (bad_meta_path, _) = store_paths(excluded_store_id);
+
+    let st = TmpStorage::create();
+    st.build_flush(
+        &good_log_path,
+        &good_meta_path,
+        gen_store_builders(included_store_id),
+    )
+    .await;
+    st.storage()
+        .write(
+            &bad_meta_path,
+            futures::io::Cursor::new(vec![0xFF]).into(),
+            1,
+        )
+        .await
+        .unwrap();
+
+    run_exec(
+        st.backend(),
+        Some(shard),
+        "sharding_skip_non_matching_meta_before_reading",
+    )
+    .await;
+    assert!(!st.load_migrations().await.unwrap().is_empty());
 }
 
 #[tokio::test]

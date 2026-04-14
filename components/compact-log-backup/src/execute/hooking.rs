@@ -41,6 +41,8 @@ pub struct BeforeStartCtx<'a> {
 pub struct AfterFinishCtx<'a> {
     /// The asynchronous runtime that we are about to use.
     pub async_rt: &'a Handle,
+    /// Reference to the execution context.
+    pub this: &'a Execution,
     /// The target external storage of this compaction.
     ///
     /// For now, it is always the same as the source storage.
