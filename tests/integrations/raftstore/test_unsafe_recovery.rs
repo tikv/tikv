@@ -1,6 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{iter::FromIterator, sync::Arc, time::Duration};
+use std::{
+    iter::FromIterator,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use futures::executor::block_on;
 use kvproto::{metapb, pdpb};
@@ -24,6 +31,70 @@ macro_rules! confirm_quorum_is_lost {
             .call_command_on_leader(req, Duration::from_millis(10))
             .unwrap_err();
     }};
+}
+
+fn must_wait_until_hibernated_leader(
+    cluster: &mut Cluster<NodeCluster>,
+    region_id: u64,
+    store_id: u64,
+) {
+    let awakened = Arc::new(AtomicBool::new(false));
+    let filter_enabled = Arc::new(AtomicBool::new(false));
+    let awakened_clone = awakened.clone();
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(region_id, store_id)
+            .direction(Direction::Send)
+            .set_msg_callback(Arc::new(move |_| {
+                awakened_clone.store(true, Ordering::SeqCst);
+            }))
+            .when(filter_enabled.clone()),
+    ));
+
+    let election_timeout = cluster.cfg.raft_store.raft_base_tick_interval.0
+        * cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
+    std::thread::sleep(election_timeout * 3);
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        awakened.store(false, Ordering::SeqCst);
+        filter_enabled.store(true, Ordering::SeqCst);
+        std::thread::sleep(cluster.cfg.raft_store.raft_heartbeat_interval() * 2);
+        filter_enabled.store(false, Ordering::SeqCst);
+        if !awakened.load(Ordering::SeqCst) {
+            cluster.clear_send_filters();
+            return;
+        }
+        std::thread::sleep(election_timeout);
+    }
+
+    cluster.clear_send_filters();
+    panic!(
+        "leader on store {} for region {} did not hibernate in time",
+        store_id, region_id
+    );
+}
+
+fn must_enter_force_leader_with_timeout(
+    cluster: &mut Cluster<NodeCluster>,
+    region_id: u64,
+    store_id: u64,
+    failed_stores: Vec<u64>,
+    timeout: Duration,
+) -> pdpb::StoreReport {
+    cluster.enter_force_leader(region_id, store_id, failed_stores);
+
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        if let Some(report) = cluster.pd_client.must_get_store_report(store_id) {
+            return report;
+        }
+        sleep_ms(100);
+    }
+
+    panic!(
+        "force leader report for region {} on store {} was not generated within {:?}",
+        region_id, store_id, timeout
+    );
 }
 
 #[test_case(test_raftstore::new_node_cluster)]
@@ -791,18 +862,19 @@ fn test_force_leader_on_hibernated_leader() {
     let peer_on_store1 = find_peer(&region, 1).unwrap();
     cluster.must_transfer_leader(region.get_id(), peer_on_store1.clone());
 
-    // wait a while to hibernate
-    std::thread::sleep(Duration::from_millis(
-        cluster.cfg.raft_store.raft_election_timeout_ticks as u64
-            * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
-            * 3,
-    ));
+    must_wait_until_hibernated_leader(&mut cluster, region.get_id(), 1);
 
     cluster.stop_node(3);
     cluster.stop_node(4);
     cluster.stop_node(5);
 
-    cluster.must_enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
+    must_enter_force_leader_with_timeout(
+        &mut cluster,
+        region.get_id(),
+        1,
+        vec![3, 4, 5],
+        Duration::from_secs(5),
+    );
     // remove the peers on failed nodes
     cluster
         .pd_client
