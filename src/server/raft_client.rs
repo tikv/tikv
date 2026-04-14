@@ -685,10 +685,9 @@ where
                     // local variables without return.
                     let mut transport_on_resolve_fp = || {
                         fail_point!(_ON_RESOLVE_FP, |sid| if let Some(sid) = sid {
-                            use std::mem;
                             let sid: u64 = sid.parse().unwrap();
                             if sid == store_id {
-                                mem::swap(&mut addr, &mut Err(box_err!("injected failure")));
+                                addr = Err(box_err!("injected failure"));
                                 // Sleep some time to avoid race between enqueuing message and
                                 // resolving address.
                                 std::thread::sleep(std::time::Duration::from_millis(10));

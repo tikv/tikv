@@ -2156,7 +2156,7 @@ fn test_batch_request() {
     // 2. The expected output results.
     // 3. Should the coprocessor request contain invalid region epoch.
     // 4. Should the scanned key be locked.
-    let cases = vec![
+    let cases = [
         // Basic valid case.
         (
             vec![

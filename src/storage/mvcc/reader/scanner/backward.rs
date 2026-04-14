@@ -77,21 +77,16 @@ impl<S: Snapshot> BackwardKvScanner<S> {
     /// Get the next key-value pair, in backward order.
     pub fn read_next(&mut self) -> Result<Option<(Key, ValueEntry)>> {
         if !self.is_started {
-            if self.cfg.upper_bound.is_some() {
+            if let Some(upper_bound) = &self.cfg.upper_bound {
                 // TODO: `seek_to_last` is better, however it has performance issues currently.
                 // TODO: We have no guarantee about whether or not the upper_bound has a
                 // timestamp suffix, so currently it is not safe to change write_cursor's
                 // reverse_seek to seek_for_prev. However in future, once we have different
                 // types for them, this can be done safely.
-                self.write_cursor.reverse_seek(
-                    self.cfg.upper_bound.as_ref().unwrap(),
-                    &mut self.statistics.write,
-                )?;
+                self.write_cursor
+                    .reverse_seek(upper_bound, &mut self.statistics.write)?;
                 if let Some(lock_cursor) = self.lock_cursor.as_mut() {
-                    lock_cursor.reverse_seek(
-                        self.cfg.upper_bound.as_ref().unwrap(),
-                        &mut self.statistics.lock,
-                    )?;
+                    lock_cursor.reverse_seek(upper_bound, &mut self.statistics.lock)?;
                 }
             } else {
                 self.write_cursor.seek_to_last(&mut self.statistics.write);
@@ -373,9 +368,6 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                 ));
                 Key::decode_ts_from(current_key)?
             };
-            if self.cfg.load_commit_ts {
-                loaded_commit_ts = Some(current_ts);
-            }
             if current_ts <= last_checked_commit_ts {
                 // We reach the last handled key
                 return self.handle_last_version(last_version, user_key, loaded_commit_ts);
@@ -389,6 +381,9 @@ impl<S: Snapshot> BackwardKvScanner<S> {
 
             match write.write_type {
                 WriteType::Put => {
+                    if self.cfg.load_commit_ts {
+                        loaded_commit_ts = Some(current_ts);
+                    }
                     let write = write.to_owned();
                     return Ok(Some(ValueEntry::new(
                         self.reverse_load_data_by_write(write, user_key)?,
@@ -1259,6 +1254,34 @@ mod tests {
         assert_eq!(statistics.write.next, 0);
         assert_eq!(statistics.write.prev, 0);
         assert_eq!(statistics.processed_size, 0);
+    }
+
+    #[test]
+    fn test_load_commit_ts_with_top_lock_versions() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+
+        // One visible PUT and many newer committed LOCK writes on top.
+        must_prewrite_put(&mut engine, b"k", b"v", b"k", 1);
+        must_commit(&mut engine, b"k", 1, 1);
+        for ts in 2..=(REVERSE_SEEK_BOUND + 4) {
+            must_prewrite_lock(&mut engine, b"k", b"k", ts);
+            must_commit(&mut engine, b"k", ts, ts);
+        }
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, (REVERSE_SEEK_BOUND + 2).into())
+            .desc(true)
+            .range(None, None)
+            .set_load_commit_ts(true)
+            .build()
+            .unwrap();
+
+        let (key, entry) = scanner.next_entry().unwrap().unwrap();
+        assert_eq!(key, Key::from_raw(b"k"));
+        assert_eq!(entry.value, b"v".to_vec());
+        // commit_ts should come from the returned PUT version, not newer LOCK versions.
+        assert_eq!(entry.commit_ts.unwrap().into_inner(), 1);
+        assert!(scanner.next_entry().unwrap().is_none());
     }
 
     /// Range is left open right closed.

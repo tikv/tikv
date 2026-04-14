@@ -1,7 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![feature(let_chains)]
-
 #[macro_use]
 extern crate log;
 
@@ -409,6 +407,7 @@ fn main() {
             minimal_compaction_size,
             prefetch_running_count,
             prefetch_buffer_count,
+            gcp_v2_enable,
         } => {
             let maybe_external_storage = base64::decode(storage_base64)
                 .map_err(|err| format!("cannot parse base64: {}", err))
@@ -458,8 +457,10 @@ fn main() {
                 cfg: ccfg,
                 max_concurrent_subcompaction: max_compaction_num,
                 external_storage,
+                backend_config: Default::default(),
                 db: Some(tmp_engine.rocks),
             };
+            exec.backend_config.gcp_v2_enable = gcp_v2_enable;
 
             use tikv::server::status_server::lite::Server as StatusServerLite;
             struct ExportTiKVInfo {

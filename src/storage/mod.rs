@@ -61,7 +61,6 @@ mod read_pool;
 mod types;
 
 use std::{
-    assert_matches::assert_matches,
     borrow::Cow,
     iter,
     marker::PhantomData,
@@ -740,6 +739,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         );
                     }
                     metrics::tls_collect_scan_details(CMD, &statistics);
+                    with_tls_tracker(|tracker| {
+                        tracker.metrics.storage_processed_keys_get =
+                            tracker.metrics.storage_processed_keys_get.saturating_add(1);
+                    });
                     metrics::tls_collect_read_flow(
                         ctx.get_region_id(),
                         Some(key.as_encoded()),
@@ -984,6 +987,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             {
                                 Ok(mut point_getter) => {
                                     let v = point_getter.get_entry(&key, need_commit_ts);
+                                    with_tls_tracker(|tracker| {
+                                        tracker.metrics.storage_processed_keys_get = tracker
+                                            .metrics
+                                            .storage_processed_keys_get
+                                            .saturating_add(1);
+                                    });
                                     let stat = point_getter.take_statistics();
                                     metrics::tls_collect_read_flow(
                                         region_id,
@@ -1125,6 +1134,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let begin_instant = Instant::now();
 
                     let stage_snap_recv_ts = begin_instant;
+                    let requested_keys = keys.len() as u64;
                     let (result, stats) = Self::with_perf_context(CMD, || {
                         let _guard = sample.observe_cpu();
                         let mut reader = MvccReader::new(
@@ -1186,6 +1196,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         (result, reader.statistics)
                     });
                     metrics::tls_collect_scan_details(CMD, &stats);
+                    with_tls_tracker(|tracker| {
+                        tracker.metrics.storage_processed_keys_batch_get = tracker
+                            .metrics
+                            .storage_processed_keys_batch_get
+                            .saturating_add(requested_keys);
+                    });
                     let now = Instant::now();
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
@@ -1335,6 +1351,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let stage_snap_recv_ts = begin_instant;
                     let mut statistics = Vec::with_capacity(keys.len());
                     let buckets = snapshot.ext().get_buckets();
+                    let requested_keys = keys.len() as u64;
                     let (result, stats) = Self::with_perf_context(CMD, || {
                         let _guard = sample.observe_cpu();
                         let snap_store = SnapshotStore::new(
@@ -1395,6 +1412,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         );
                     }
                     metrics::tls_collect_scan_details(CMD, &stats);
+                    if result.is_ok() {
+                        with_tls_tracker(|tracker| {
+                            tracker.metrics.storage_processed_keys_batch_get = tracker
+                                .metrics
+                                .storage_processed_keys_batch_get
+                                .saturating_add(requested_keys);
+                        });
+                    }
                     let now = Instant::now();
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
@@ -3150,6 +3175,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         value: Vec<u8>,
         ttl: u64,
         callback: Callback<(Option<Value>, bool)>,
+        delete: bool,
     ) -> Result<()> {
         const CMD: CommandKind = CommandKind::raw_compare_and_swap;
         let api_version = self.api_version;
@@ -3164,8 +3190,17 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
         self.sched_raw_command(metadata, priority, CMD, async move {
             let key = F::encode_raw_key_owned(key, None);
-            let cmd = RawCompareAndSwap::new(cf, key, previous_value, value, ttl, api_version, ctx);
-            Self::sched_raw_atomic_command(sched, cmd, Box::new(|res| callback(res)));
+            let cmd = RawCompareAndSwap::new(
+                cf,
+                key,
+                previous_value,
+                value,
+                ttl,
+                api_version,
+                delete,
+                ctx,
+            );
+            Self::sched_raw_atomic_command(sched, cmd, callback);
         })
     }
 
@@ -3194,7 +3229,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         self.sched_raw_command(metadata, priority, CMD, async move {
             let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls, None);
             let cmd = RawAtomicStore::new(cf, modifies, ctx);
-            Self::sched_raw_atomic_command(sched, cmd, Box::new(|res| callback(res)));
+            Self::sched_raw_atomic_command(sched, cmd, Box::new(callback));
         })
     }
 
@@ -3219,7 +3254,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 .map(|k| Self::raw_delete_request_to_modify(cf, k, None))
                 .collect();
             let cmd = RawAtomicStore::new(cf, modifies, ctx);
-            Self::sched_raw_atomic_command(sched, cmd, Box::new(|res| callback(res)));
+            Self::sched_raw_atomic_command(sched, cmd, Box::new(callback));
         })
     }
 
@@ -3348,7 +3383,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             self.read_pool
                 .spawn_handle(future, priority, task_id, metadata, resource_limiter)
                 .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-                .and_then(|res| future::ready(res)),
+                .and_then(future::ready),
         )
     }
 
@@ -3374,7 +3409,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 if txn_status.is_completed {
                     // large_txn_cache is only for **ongoing** large txns, so remove it when
                     // completed.
-                    assert_matches!(txn_state, TxnState::Committed { .. } | TxnState::RolledBack);
+                    assert!(matches!(
+                        txn_state,
+                        TxnState::Committed { .. } | TxnState::RolledBack
+                    ));
                     cache.remove_large_txn(txn_status.start_ts.into());
                 }
                 cache.upsert(txn_status.start_ts.into(), txn_state, now);
@@ -7445,30 +7483,21 @@ mod tests {
             (b"c".to_vec(), b"c3".to_vec()),
         ]);
         // TODO: refactor to use `Api` parameter.
-        assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false),
-            true
-        );
+        assert!(<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false));
 
         let ranges = make_ranges(vec![
             (b"a".to_vec(), vec![]),
             (b"b".to_vec(), vec![]),
             (b"c".to_vec(), vec![]),
         ]);
-        assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false),
-            true
-        );
+        assert!(<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false));
 
         let ranges = make_ranges(vec![
             (b"a3".to_vec(), b"a".to_vec()),
             (b"b3".to_vec(), b"b".to_vec()),
             (b"c3".to_vec(), b"c".to_vec()),
         ]);
-        assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false),
-            false
-        );
+        assert!(!<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false));
 
         // if end_key is omitted, the next start_key is used instead. so, false is
         // returned.
@@ -7477,50 +7506,35 @@ mod tests {
             (b"b".to_vec(), vec![]),
             (b"a".to_vec(), vec![]),
         ]);
-        assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false),
-            false
-        );
+        assert!(!<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false));
 
         let ranges = make_ranges(vec![
             (b"a3".to_vec(), b"a".to_vec()),
             (b"b3".to_vec(), b"b".to_vec()),
             (b"c3".to_vec(), b"c".to_vec()),
         ]);
-        assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true),
-            true
-        );
+        assert!(<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true));
 
         let ranges = make_ranges(vec![
             (b"c3".to_vec(), vec![]),
             (b"b3".to_vec(), vec![]),
             (b"a3".to_vec(), vec![]),
         ]);
-        assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true),
-            true
-        );
+        assert!(<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true));
 
         let ranges = make_ranges(vec![
             (b"a".to_vec(), b"a3".to_vec()),
             (b"b".to_vec(), b"b3".to_vec()),
             (b"c".to_vec(), b"c3".to_vec()),
         ]);
-        assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true),
-            false
-        );
+        assert!(!<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true));
 
         let ranges = make_ranges(vec![
             (b"a3".to_vec(), vec![]),
             (b"b3".to_vec(), vec![]),
             (b"c3".to_vec(), vec![]),
         ]);
-        assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true),
-            false
-        );
+        assert!(!<StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true));
     }
 
     #[test]
@@ -7865,6 +7879,7 @@ mod tests {
                 b"v".to_vec(),
                 0,
                 expect_value_callback(tx.clone(), 0, expected),
+                false,
             )
             .unwrap();
         rx.recv().unwrap();
@@ -7880,6 +7895,7 @@ mod tests {
                 b"v1".to_vec(),
                 0,
                 expect_value_callback(tx.clone(), 0, expected),
+                false,
             )
             .unwrap();
         rx.recv().unwrap();
@@ -7895,6 +7911,7 @@ mod tests {
                 b"v2".to_vec(),
                 0,
                 expect_value_callback(tx.clone(), 0, expected),
+                false,
             )
             .unwrap();
         rx.recv().unwrap();
@@ -7910,6 +7927,7 @@ mod tests {
                 b"v2".to_vec(),
                 0,
                 expect_value_callback(tx.clone(), 0, expected),
+                false,
             )
             .unwrap();
         rx.recv().unwrap();
@@ -7970,6 +7988,7 @@ mod tests {
                 b"v4".to_vec(),
                 0,
                 expect_value_callback(tx.clone(), 0, expected),
+                false,
             )
             .unwrap();
         rx.recv().unwrap();
@@ -7996,6 +8015,7 @@ mod tests {
                 b"v".to_vec(),
                 0,
                 expect_value_callback(tx, 0, expected),
+                false,
             )
             .unwrap();
         rx.recv().unwrap();
@@ -8024,6 +8044,197 @@ mod tests {
                 false,
             ))
             .unwrap(),
+        );
+    }
+
+    #[test]
+    fn test_raw_compare_and_swap_delete() {
+        test_kv_format_impl!(test_raw_compare_and_swap_delete_impl);
+    }
+
+    fn test_raw_compare_and_swap_delete_impl<F: KvFormat>() {
+        let storage = TestStorageBuilder::<_, _, F>::new(MockLockManager::new())
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+        let ctx = Context {
+            api_version: F::CLIENT_TAG,
+            ..Default::default()
+        };
+
+        let key = b"r\0delete_key";
+
+        // Test 1: CAS delete with existing_val=v1, expected_val=v1 (should succeed)
+        // Setup: put v1
+        let expected = (None, true);
+        storage
+            .raw_compare_and_swap_atomic(
+                ctx.clone(),
+                "".to_string(),
+                key.to_vec(),
+                None,
+                b"v1".to_vec(),
+                0,
+                expect_value_callback(tx.clone(), 0, expected),
+                false,
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Test: delete v1
+        let expected = (Some(b"v1".to_vec()), true);
+        storage
+            .raw_compare_and_swap_atomic(
+                ctx.clone(),
+                "".to_string(),
+                key.to_vec(),
+                Some(b"v1".to_vec()),
+                b"dummy".to_vec(), // value ignored for deletes
+                0,
+                expect_value_callback(tx.clone(), 0, expected),
+                true,
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            storage
+                .get_concurrency_manager()
+                .global_min_lock_ts()
+                .is_none()
+        );
+
+        // Verify key is deleted
+        expect_none(block_on(storage.raw_get(ctx.clone(), "".to_string(), key.to_vec())).unwrap());
+
+        // Test 2: CAS delete with existing_val=v2, expected_val=v1 (should fail)
+        // Setup: put v2
+        let expected = (None, true);
+        storage
+            .raw_compare_and_swap_atomic(
+                ctx.clone(),
+                "".to_string(),
+                key.to_vec(),
+                None,
+                b"v2".to_vec(),
+                0,
+                expect_value_callback(tx.clone(), 0, expected),
+                false,
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Test: try to delete with wrong expected value
+        let expected = (Some(b"v2".to_vec()), false);
+        storage
+            .raw_compare_and_swap_atomic(
+                ctx.clone(),
+                "".to_string(),
+                key.to_vec(),
+                Some(b"v1".to_vec()),
+                b"dummy".to_vec(),
+                0,
+                expect_value_callback(tx.clone(), 0, expected),
+                true,
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            storage
+                .get_concurrency_manager()
+                .global_min_lock_ts()
+                .is_none()
+        );
+
+        // Verify key still has v2
+        expect_value(
+            b"v2".to_vec(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), key.to_vec())).unwrap(),
+        );
+
+        // Clean up: delete v2
+        storage
+            .raw_batch_delete_atomic(
+                ctx.clone(),
+                "".to_string(),
+                vec![key.to_vec()],
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Test 3: CAS delete with existing_val=nil, expected_val=nil (should succeed as
+        // noop)
+        let expected = (None, true);
+        storage
+            .raw_compare_and_swap_atomic(
+                ctx.clone(),
+                "".to_string(),
+                key.to_vec(),
+                None,
+                b"dummy".to_vec(),
+                0,
+                expect_value_callback(tx.clone(), 0, expected),
+                true,
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            storage
+                .get_concurrency_manager()
+                .global_min_lock_ts()
+                .is_none()
+        );
+
+        // Verify key is still nil
+        expect_none(block_on(storage.raw_get(ctx.clone(), "".to_string(), key.to_vec())).unwrap());
+
+        // Test 4: CAS delete with existing_val=v1, expected_val=nil (should fail)
+        // Setup: put v1
+        let expected = (None, true);
+        storage
+            .raw_compare_and_swap_atomic(
+                ctx.clone(),
+                "".to_string(),
+                key.to_vec(),
+                None,
+                b"v1".to_vec(),
+                0,
+                expect_value_callback(tx.clone(), 0, expected),
+                false,
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Test: try to delete expecting nil
+        let expected = (Some(b"v1".to_vec()), false);
+        storage
+            .raw_compare_and_swap_atomic(
+                ctx.clone(),
+                "".to_string(),
+                key.to_vec(),
+                None,
+                b"dummy".to_vec(),
+                0,
+                expect_value_callback(tx, 0, expected),
+                true,
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            storage
+                .get_concurrency_manager()
+                .global_min_lock_ts()
+                .is_none()
+        );
+
+        // Verify key still has v1
+        expect_value(
+            b"v1".to_vec(),
+            block_on(storage.raw_get(ctx, "".to_string(), key.to_vec())).unwrap(),
         );
     }
 
@@ -9117,14 +9328,14 @@ mod tests {
         let results_values = |res: Vec<Option<Value>>| {
             PessimisticLockResults(
                 res.into_iter()
-                    .map(|v| PessimisticLockKeyResult::Value(v))
+                    .map(PessimisticLockKeyResult::Value)
                     .collect::<Vec<_>>(),
             )
         };
         let results_existence = |res: Vec<bool>| {
             PessimisticLockResults(
                 res.into_iter()
-                    .map(|v| PessimisticLockKeyResult::Existence(v))
+                    .map(PessimisticLockKeyResult::Existence)
                     .collect::<Vec<_>>(),
             )
         };
@@ -10029,7 +10240,7 @@ mod tests {
                         hash: Key::from_raw(&k).gen_hash(),
                     }
                 );
-                assert_eq!(is_first_lock, true);
+                assert!(is_first_lock);
                 assert_eq!(timeout, Some(WaitTimeout::Millis(100)));
             }
 
@@ -10308,7 +10519,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
 
-        let mut h = lock_blocked(&[key.clone()], 105, start_ts.into_inner(), 0);
+        let mut h = lock_blocked(std::slice::from_ref(&key), 105, start_ts.into_inner(), 0);
 
         // Not expire
         storage

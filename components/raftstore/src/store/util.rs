@@ -34,9 +34,9 @@ use tikv_util::{
     codec::number::{NumberEncoder, decode_u64},
     debug, info,
     store::{find_peer_by_id, region},
-    time::{Instant, monotonic_raw_now},
+    time::{Instant, Timespec, monotonic_raw_now},
 };
-use time::{Duration, Timespec};
+use time::Duration;
 use tokio::sync::Notify;
 use txn_types::WriteBatchFlags;
 
@@ -361,10 +361,10 @@ pub fn check_flashback_state(
     skip_not_prepared: bool,
 ) -> Result<()> {
     // The admin flashback cmd could be proposed/applied under any state.
-    if let Some(ty) = admin_type
-        && (ty == AdminCmdType::PrepareFlashback || ty == AdminCmdType::FinishFlashback)
-    {
-        return Ok(());
+    if let Some(ty) = admin_type {
+        if ty == AdminCmdType::PrepareFlashback || ty == AdminCmdType::FinishFlashback {
+            return Ok(());
+        }
     }
     // TODO: only use `flashback_start_ts` to check flashback state.
     let is_in_flashback = is_in_flashback || flashback_start_ts > 0;
@@ -1298,8 +1298,8 @@ impl RegionReadProgressRegistry {
         self.registry
             .lock()
             .unwrap()
-            .iter()
-            .map(|(_, rrp)| rrp.resolved_ts())
+            .values()
+            .map(| rrp| rrp.resolved_ts())
             //TODO: the uninitialized peer should be taken into consideration instead of skipping it(https://github.com/tikv/tikv/issues/15506).
             .filter(|ts| *ts != 0) // ts == 0 means the peer is uninitialized,
             .min()
@@ -1404,10 +1404,10 @@ impl RegionReadProgress {
     }
 
     pub fn notify_advance_resolved_ts(&self) {
-        if let Ok(core) = self.core.try_lock()
-            && let Some(advance_notify) = &core.advance_notify
-        {
-            advance_notify.notify_waiters();
+        if let Ok(core) = self.core.try_lock() {
+            if let Some(advance_notify) = &core.advance_notify {
+                advance_notify.notify_waiters();
+            }
         }
     }
 
@@ -1926,7 +1926,7 @@ mod tests {
         fn sleep_test(duration: TimeDuration, lease: &Lease, state: LeaseState) {
             // In linux, lease uses CLOCK_MONOTONIC_RAW, while sleep uses CLOCK_MONOTONIC
             let monotonic_raw_start = monotonic_raw_now();
-            thread::sleep(duration.to_std().unwrap());
+            thread::sleep(std::time::Duration::try_from(duration).unwrap());
             let mut monotonic_raw_end = monotonic_raw_now();
             // spin wait to make sure pace is aligned with MONOTONIC_RAW clock
             while monotonic_raw_end - monotonic_raw_start < duration {

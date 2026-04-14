@@ -385,6 +385,7 @@ impl Suite {
         let regions = sim.region_info_accessors.get(&id).unwrap().clone();
         let ob = self.obs.get(&id).unwrap().clone();
         cfg.enable = true;
+        cfg.gcp_v2_enable = true;
         cfg.temp_path = format!("/{}/{}", self.temp_files.path().display(), id);
         let resolver = LeadershipResolver::new(
             id,
@@ -546,7 +547,7 @@ impl Suite {
         for sn in (from..(from + n)).map(|x| x * 2) {
             let sn = sn as u64;
             let key = make_record_key(for_table, sn);
-            let value = if sn % 4 == 0 {
+            let value = if sn.is_multiple_of(4) {
                 Self::PROMISED_SHORT_VALUE.to_vec()
             } else {
                 Self::PROMISED_LONG_VALUE.to_vec()

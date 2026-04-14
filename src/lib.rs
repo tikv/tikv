@@ -19,18 +19,15 @@
 #![crate_type = "lib"]
 #![cfg_attr(test, feature(test))]
 #![recursion_limit = "400"]
-#![feature(cell_update)]
 #![feature(proc_macro_hygiene)]
 #![feature(min_specialization)]
 #![feature(box_patterns)]
 #![feature(deadline_api)]
-#![feature(let_chains)]
 #![feature(read_buf)]
 #![feature(type_alias_impl_trait)]
 #![feature(impl_trait_in_assoc_type)]
 #![allow(incomplete_features)]
 #![feature(core_io_borrowed_buf)]
-#![feature(assert_matches)]
 
 #[macro_use(fail_point)]
 extern crate fail;

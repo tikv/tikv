@@ -11,7 +11,7 @@ use std::{
 };
 
 use engine_rocks::RocksEngine;
-use external_storage::ExternalStorage;
+use external_storage::{BackendConfig, ExternalStorage};
 use futures::{future::FutureExt, io::AsyncReadExt, stream::TryStreamExt};
 use kvproto::brpb::StorageBackend;
 use tokio::sync::mpsc::Sender;
@@ -82,6 +82,10 @@ pub fn create_compaction(st: StorageBackend) -> Execution {
         },
         max_concurrent_subcompaction: 3,
         external_storage: st,
+        backend_config: BackendConfig {
+            gcp_v2_enable: true,
+            ..Default::default()
+        },
         db: None,
         out_prefix: "test-output".to_owned(),
     }

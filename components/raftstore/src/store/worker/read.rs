@@ -26,9 +26,8 @@ use tikv_util::{
     debug, error,
     lru::LruCache,
     store::find_peer_by_id,
-    time::{ThreadReadId, monotonic_raw_now},
+    time::{ThreadReadId, Timespec, monotonic_raw_now},
 };
-use time::Timespec;
 use tracker::GLOBAL_TRACKERS;
 use txn_types::{TimeStamp, WriteBatchFlags};
 
@@ -247,9 +246,9 @@ where
         // before and the `cached_read_id` of it is None because only a consecutive
         // requests will have the same cache and the cache will be cleared after the
         // last request of the batch.
-        if self.read_id.is_some() {
+        if let Some(read_id) = &self.read_id {
             if self.snap_cache.cached_read_id == self.read_id
-                && self.read_id.as_ref().unwrap().create_time >= delegate_last_valid_ts
+                && read_id.create_time >= delegate_last_valid_ts
             {
                 // Cache hit
                 return false;
@@ -1447,7 +1446,7 @@ mod tests {
             })),
         );
         assert_eq!(
-            rx.recv_timeout(Duration::seconds(5).to_std().unwrap())
+            rx.recv_timeout(std::time::Duration::try_from(Duration::seconds(5)).unwrap())
                 .unwrap()
                 .request,
             cmd
@@ -1586,7 +1585,7 @@ mod tests {
         must_not_redirect(&mut reader, &rx, task);
 
         // Wait for expiration.
-        thread::sleep(Duration::seconds(1).to_std().unwrap());
+        thread::sleep(std::time::Duration::try_from(Duration::seconds(1)).unwrap());
         must_redirect(&mut reader, &rx, cmd.clone());
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.lease_expire.get()),
@@ -1729,7 +1728,7 @@ mod tests {
             })),
         );
         assert_eq!(
-            rx.recv_timeout(Duration::seconds(5).to_std().unwrap())
+            rx.recv_timeout(std::time::Duration::try_from(Duration::seconds(5)).unwrap())
                 .unwrap()
                 .request,
             cmd9

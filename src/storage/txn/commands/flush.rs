@@ -219,7 +219,6 @@ impl Flush {
 
 #[cfg(test)]
 mod tests {
-    use std::assert_matches::assert_matches;
 
     use kvproto::kvrpcpb::{Assertion, Context};
     use tikv_kv::Engine;
@@ -362,10 +361,10 @@ mod tests {
         let v = b"value";
 
         // generation == 0 will be rejected
-        assert_matches!(
+        assert!(matches!(
             must_flush_put_err(&mut engine, k, *v, k, 1, 0),
             Error(box ErrorInner::Other(s)) if s.to_string().contains("generation should be greater than 0")
-        );
+        ));
 
         must_flush_put(&mut engine, k, *v, k, 1, 2);
         must_locked(&mut engine, k, 1);
@@ -385,17 +384,17 @@ mod tests {
         let v = b"value";
         must_flush_put(&mut engine, k, *v, k, 1, 1);
         must_locked(&mut engine, k, 1);
-        assert_matches!(
+        assert!(matches!(
             must_flush_insert_err(&mut engine, k, *v, k, 1, 2),
             Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::AlreadyExist { key, existing_start_ts})))
             if key == k  && existing_start_ts == 1.into()
-        );
+        ));
         must_commit(&mut engine, k, 1, 2);
-        assert_matches!(
+        assert!(matches!(
             must_flush_insert_err(&mut engine, k, *v, k, 3, 1),
             Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::AlreadyExist { key, existing_start_ts})))
             if key == k  && existing_start_ts == 1.into()
-        );
+        ));
     }
 
     #[test]

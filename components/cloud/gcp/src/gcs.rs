@@ -483,7 +483,6 @@ impl IterableStorage for GcsStorage {
 
 #[cfg(test)]
 mod tests {
-    use matches::assert_matches;
 
     use super::*;
     const HARDCODED_ENDPOINTS: &[&str] = &[
@@ -515,7 +514,7 @@ mod tests {
             &change_host(&endpoint, &format!("{}/foo", h2)).unwrap(),
             "http://example.com/storage/v1/foo"
         );
-        assert_matches!(&change_host(&endpoint, "foo"), None);
+        assert!(&change_host(&endpoint, "foo").is_none());
 
         // if we get the endpoint with suffix "/storage/v1/"
         let endpoint = StringNonEmpty::static_str("http://example.com/storage/v1/");
@@ -533,20 +532,20 @@ mod tests {
 
     #[test]
     fn test_parse_storage_class() {
-        assert_matches!(
+        assert!(matches!(
             parse_storage_class("STANDARD"),
             Ok(Some(StorageClass::Standard))
-        );
-        assert_matches!(parse_storage_class(""), Ok(None));
-        assert_matches!(
+        ));
+        assert!(matches!(parse_storage_class(""), Ok(None)));
+        assert!(matches!(
             parse_storage_class("NOT_A_STORAGE_CLASS"),
             Err("NOT_A_STORAGE_CLASS")
-        );
+        ));
     }
 
     #[test]
     fn test_parse_acl() {
-        // can't use assert_matches!(), PredefinedAcl doesn't even implement Debug.
+        // can't use assert!(matches!(), PredefinedAcl doesn't even implement Debug.
         assert!(matches!(
             parse_predefined_acl("private"),
             Ok(Some(PredefinedAcl::Private))

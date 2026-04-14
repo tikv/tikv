@@ -164,7 +164,7 @@ impl RpcClient {
                     return Ok(rpc_client);
                 }
                 Err(e) => {
-                    if i as usize % cfg.retry_log_every == 0 {
+                    if (i as usize).is_multiple_of(cfg.retry_log_every) {
                         warn!("validate PD endpoints failed"; "err" => ?e);
                     }
                     let _ = GLOBAL_TIMER_HANDLE

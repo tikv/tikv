@@ -154,5 +154,5 @@ tipb_helper = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
 
 [target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dev-dependencies]
-criterion-perf-events = "0.1"
+criterion-perf-events = "0.1.4"
 perfcnt = "0.7"

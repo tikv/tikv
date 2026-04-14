@@ -1168,7 +1168,7 @@ pub mod tests {
             3
         );
         detect_table.clean_up(2.into());
-        assert_eq!(detect_table.wait_for_map.contains_key(&2.into()), false);
+        assert!(!detect_table.wait_for_map.contains_key(&2.into()));
 
         // After cycle is broken, no deadlock.
         assert_eq!(detect_table.detect(3.into(), 1.into(), 1, &[], &[]), None);
@@ -1262,7 +1262,7 @@ pub mod tests {
                 hash: 2,
             },
         );
-        assert_eq!(detect_table.wait_for_map.contains_key(&3.into()), false);
+        assert!(!detect_table.wait_for_map.contains_key(&3.into()));
 
         // Clean up non-exist entry
         detect_table.clean_up(3.into());
