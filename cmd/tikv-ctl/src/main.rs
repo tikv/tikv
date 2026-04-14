@@ -452,7 +452,7 @@ fn main() {
             }
             let tmp_engine =
                 TemporaryRocks::new(&cfg).expect("failed to create temp engine for writing SSTs.");
-            let exec = compact_log::Execution {
+            let mut exec = compact_log::Execution {
                 out_prefix,
                 cfg: ccfg,
                 max_concurrent_subcompaction: max_compaction_num,
