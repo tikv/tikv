@@ -922,23 +922,6 @@ impl<'a> MigrationStorageWrapper<'a> {
         .await
         .map_err(|err| err.0)?;
         let id = self.largest_id().await?;
-        // Note: perhaps we need to verify that there isn't concurrency writing in the
-        // future.
-        let name = name_of_migration(id + 1, &migration);
-        let bytes = migration.write_to_bytes()?;
-        let full_name = format!("{}/{}", self.migrations_prefix, name);
-        retry_expr!(
-            self.storage
-                .write(
-                    &full_name,
-                    UnpinReader(Box::new(Cursor::new(&bytes))),
-                    bytes.len() as u64
-                )
-                .map_err(|err| JustRetry(err))
-        )
-        .await
-        .map_err(|err| err.0)?;
-
         let write_res = self.write_next_migration(&migration).await;
         let unlock_res: Result<()> = lock.unlock(self.storage).await.adapt_err();
 
