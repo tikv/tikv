@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     convert::identity,
     sync::{Arc, Mutex},
     time::Duration,
@@ -1177,7 +1177,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             };
 
             let res = with_resource_limiter(
-                importer.download_files_ext(
+                importer.download_files_ext_with_ssts(
                     &basic_meta,
                     req.get_ssts(),
                     req.get_storage_backend(),
@@ -1196,8 +1196,13 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
 
             let mut resp = DownloadResponse::default();
             match res {
-                Ok(range) => match range {
-                    Some(r) => resp.set_range(r),
+                Ok(result) => match result {
+                    Some(mut r) => {
+                        resp.set_range(r.range);
+                        for sst in r.ssts.drain(..) {
+                            resp.mut_ssts().push(sst);
+                        }
+                    }
                     None => resp.set_is_empty(true),
                 },
                 Err(e) => resp.set_error(e.into()),
@@ -1624,6 +1629,24 @@ fn download_request_dispatcher(req: &DownloadRequest) -> Result<Option<SstMeta>>
     if req.get_ssts().is_empty() {
         return Ok(None);
     }
+    let mut cf_names = HashSet::new();
+    cf_names.insert(req.get_sst().get_cf_name().to_string());
+    for meta in req.get_ssts().values() {
+        cf_names.insert(meta.get_cf_name().to_string());
+    }
+    let is_write_default_mix =
+        cf_names.len() == 2 && cf_names.contains("write") && cf_names.contains("default");
+    if cf_names.len() > 1 && !is_write_default_mix {
+        let error = sst_importer::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "batch download supports a single column family or a write+default mix, got {:?}",
+                cf_names
+            ),
+        ));
+        return Err(error);
+    }
+
     let mut basic_meta = req.get_sst().clone();
     for meta in req.get_ssts().values() {
         if basic_meta.get_region_id() != meta.get_region_id() {
@@ -1648,7 +1671,7 @@ fn download_request_dispatcher(req: &DownloadRequest) -> Result<Option<SstMeta>>
             ));
             return Err(error);
         }
-        if basic_meta.get_cf_name() != meta.get_cf_name() {
+        if basic_meta.get_cf_name() != meta.get_cf_name() && !is_write_default_mix {
             let error = sst_importer::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!(
@@ -1682,6 +1705,9 @@ fn download_request_dispatcher(req: &DownloadRequest) -> Result<Option<SstMeta>>
                 .mut_range()
                 .set_end(meta.get_range().get_end().to_owned());
         }
+    }
+    if is_write_default_mix {
+        basic_meta.set_cf_name(CF_WRITE.to_owned());
     }
     Ok(Some(basic_meta))
 }
