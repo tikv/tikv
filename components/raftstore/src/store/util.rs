@@ -34,9 +34,9 @@ use tikv_util::{
     codec::number::{NumberEncoder, decode_u64},
     debug, info,
     store::{find_peer_by_id, region},
-    time::{Instant, monotonic_raw_now},
+    time::{Instant, Timespec, monotonic_raw_now},
 };
-use time::{Duration, Timespec};
+use time::Duration;
 use tokio::sync::Notify;
 use txn_types::WriteBatchFlags;
 
@@ -1926,7 +1926,7 @@ mod tests {
         fn sleep_test(duration: TimeDuration, lease: &Lease, state: LeaseState) {
             // In linux, lease uses CLOCK_MONOTONIC_RAW, while sleep uses CLOCK_MONOTONIC
             let monotonic_raw_start = monotonic_raw_now();
-            thread::sleep(duration.to_std().unwrap());
+            thread::sleep(std::time::Duration::try_from(duration).unwrap());
             let mut monotonic_raw_end = monotonic_raw_now();
             // spin wait to make sure pace is aligned with MONOTONIC_RAW clock
             while monotonic_raw_end - monotonic_raw_start < duration {

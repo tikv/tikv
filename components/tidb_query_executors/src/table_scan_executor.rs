@@ -9,6 +9,7 @@ use kvproto::coprocessor::KeyRange;
 use smallvec::SmallVec;
 use tidb_query_common::{
     Result,
+    metrics::ExecutorName,
     storage::{IntervalRange, Storage},
 };
 use tidb_query_datatype::{
@@ -103,6 +104,7 @@ impl<S: Storage, F: KvFormat> BatchTableScanExecutor<S, F> {
             is_column_filled,
         };
         let wrapper = ScanExecutor::new(ScanExecutorOptions {
+            executor_name: ExecutorName::batch_table_scan,
             imp,
             storage,
             key_ranges,

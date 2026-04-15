@@ -23,7 +23,7 @@ libc = "0.2"
 tempfile = "3.0"
 
 [dependencies.mimalloc]
-version = "0.1.25"
+version = "0.1.39"
 optional = true
 
 [dependencies.snmalloc-rs]
