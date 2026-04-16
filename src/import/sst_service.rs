@@ -1140,7 +1140,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 .into_option()
                 .filter(|c| c.cipher_type != EncryptionMethod::Plaintext);
 
-            let basic_meta = match download_request_dispatcher(&req) {
+            let basic_meta = match download_request_dispatcher(&req, false) {
                 Ok(Some(meta)) => meta,
                 Ok(None) => {
                     // This should never happen since we've already checked ssts is not empty
@@ -1178,6 +1178,131 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
 
             let res = with_resource_limiter(
                 importer.download_files_ext_with_ssts(
+                    &basic_meta,
+                    req.get_ssts(),
+                    req.get_storage_backend(),
+                    req.get_rewrite_rule(),
+                    cipher,
+                    limiter,
+                    tablet.into_owned(),
+                    DownloadExt::default()
+                        .cache_key(req.get_storage_cache_id())
+                        .req_type(req.get_request_type()),
+                ),
+                resource_limiter,
+                true,
+            )
+            .await;
+
+            let mut resp = DownloadResponse::default();
+            match res {
+                Ok(range) => match range {
+                    Some(r) => resp.set_range(r),
+                    None => resp.set_is_empty(true),
+                },
+                Err(e) => resp.set_error(e.into()),
+            }
+            crate::send_rpc_response!(Ok(resp), sink, label, timer);
+        };
+
+        self.threads.spawn(handle_task);
+    }
+
+    fn batch_download_latest_mvcc(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        req: DownloadRequest,
+        sink: UnarySink<DownloadResponse>,
+    ) {
+        let label = "batch_download_latest_mvcc";
+        IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
+        let timer = Instant::now_coarse();
+
+        if req.get_ssts().is_empty() {
+            let error = sst_importer::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "batch_download_latest_mvcc only accepts multi-file requests",
+            ));
+            let mut resp = DownloadResponse::default();
+            resp.set_error(error.into());
+            let _ = sink
+                .success(resp)
+                .map_err(|e| warn!("send rpc response"; "err" => %e));
+            return;
+        }
+        let importer = Arc::clone(&self.importer);
+        let limiter = self.limiter.clone();
+        let mem_limit = self.mem_limit;
+        let tablets = self.tablets.clone();
+        let start = Instant::now();
+        let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
+            r.get_background_resource_limiter(
+                req.get_context()
+                    .get_resource_control_context()
+                    .get_resource_group_name(),
+                req.get_context().get_request_source(),
+            )
+        });
+
+        let handle_task = async move {
+            defer! { IMPORT_RPC_COUNT.with_label_values(&[label]).dec() }
+            sst_importer::metrics::IMPORTER_DOWNLOAD_DURATION
+                .with_label_values(&["queue"])
+                .observe(start.saturating_elapsed().as_secs_f64());
+
+            let mut resp = DownloadResponse::default();
+            match check_import_resources(mem_limit).await {
+                Ok(()) => (),
+                Err(e) => {
+                    resp.set_error(e.into());
+                    crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    return;
+                }
+            }
+
+            let cipher = req
+                .cipher_info
+                .to_owned()
+                .into_option()
+                .filter(|c| c.cipher_type != EncryptionMethod::Plaintext);
+
+            let basic_meta = match download_request_dispatcher(&req, true) {
+                Ok(Some(meta)) => meta,
+                Ok(None) => {
+                    let error = sst_importer::Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "internal error: download_request_dispatcher returned None despite non-empty ssts",
+                    ));
+                    let mut resp = DownloadResponse::default();
+                    resp.set_error(error.into());
+                    crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    return;
+                }
+                Err(error) => {
+                    let mut resp = DownloadResponse::default();
+                    resp.set_error(error.into());
+                    crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    return;
+                }
+            };
+
+            let region_id = basic_meta.get_region_id();
+            let tablet = match tablets.get(region_id) {
+                Some(tablet) => tablet,
+                None => {
+                    let error = sst_importer::Error::Engine(box_err!(
+                        "region {} not found, maybe it's not a replica of this store",
+                        region_id
+                    ));
+                    let mut resp = DownloadResponse::default();
+                    resp.set_error(error.into());
+                    crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    return;
+                }
+            };
+
+            let res = with_resource_limiter(
+                importer.download_files_ext_with_latest_mvcc(
                     &basic_meta,
                     req.get_ssts(),
                     req.get_storage_backend(),
@@ -1625,7 +1750,10 @@ fn write_needs_restore(write: &[u8]) -> bool {
     }
 }
 
-fn download_request_dispatcher(req: &DownloadRequest) -> Result<Option<SstMeta>> {
+fn download_request_dispatcher(
+    req: &DownloadRequest,
+    allow_write_default_mix: bool,
+) -> Result<Option<SstMeta>> {
     if req.get_ssts().is_empty() {
         return Ok(None);
     }
@@ -1636,7 +1764,7 @@ fn download_request_dispatcher(req: &DownloadRequest) -> Result<Option<SstMeta>>
     }
     let is_write_default_mix =
         cf_names.len() == 2 && cf_names.contains("write") && cf_names.contains("default");
-    if cf_names.len() > 1 && !is_write_default_mix {
+    if cf_names.len() > 1 && (!allow_write_default_mix || !is_write_default_mix) {
         let error = sst_importer::Error::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!(
@@ -1671,7 +1799,9 @@ fn download_request_dispatcher(req: &DownloadRequest) -> Result<Option<SstMeta>>
             ));
             return Err(error);
         }
-        if basic_meta.get_cf_name() != meta.get_cf_name() && !is_write_default_mix {
+        if basic_meta.get_cf_name() != meta.get_cf_name()
+            && (!allow_write_default_mix || !is_write_default_mix)
+        {
             let error = sst_importer::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!(
@@ -1706,7 +1836,7 @@ fn download_request_dispatcher(req: &DownloadRequest) -> Result<Option<SstMeta>>
                 .set_end(meta.get_range().get_end().to_owned());
         }
     }
-    if is_write_default_mix {
+    if allow_write_default_mix && is_write_default_mix {
         basic_meta.set_cf_name(CF_WRITE.to_owned());
     }
     Ok(Some(basic_meta))
