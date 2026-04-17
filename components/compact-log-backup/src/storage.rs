@@ -11,6 +11,7 @@ use std::{
 
 use cloud::blob::read_to_end;
 use derive_more::Display;
+use engine_traits::CfName;
 use external_storage::{BlobObject, ExternalStorage, UnpinReader};
 use futures::{
     future::{FusedFuture, FutureExt, TryFutureExt},
@@ -140,7 +141,7 @@ pub struct LogFile {
     pub number_of_entries: i64,
     pub crc64xor: u64,
     pub region_id: u64,
-    pub cf: &'static str,
+    pub cf: CfName,
     pub min_ts: u64,
     pub max_ts: u64,
     pub min_start_ts: u64,
@@ -193,8 +194,18 @@ pub struct LogFileId {
 /// Format:
 /// `v1/backupmeta/{flush_ts}{store_id}-d{min_begin_ts}l{min_ts}u{max_ts}.meta`
 fn parse_store_id_from_backupmeta_path(path: &str) -> Option<u64> {
-    let stem = Path::new(path).file_stem()?.to_str()?;
-    parse_backupmeta_filename(stem)
+    parse_backupmeta_path(path).map(|v| v.store_id)
+}
+
+#[cfg(test)]
+fn parse_approx_ts_range_from_backupmeta_path(path: &str) -> Option<(u64, u64)> {
+    let parsed = parse_backupmeta_path(path)?;
+    let default_min_ts = parsed.min_begin_ts_in_default_cf.min(parsed.min_ts);
+    Some((default_min_ts, parsed.max_ts))
+}
+
+fn intersects_ts_window(min_ts: u64, max_ts: u64, from_ts: u64, until_ts: u64) -> bool {
+    max_ts >= from_ts && min_ts < until_ts
 }
 
 fn store_id_for_sharding_from_path(path: &str) -> Result<u64> {
@@ -221,7 +232,19 @@ fn validate_store_id_for_sharding(
     Ok(())
 }
 
-fn parse_backupmeta_filename(name: &str) -> Option<u64> {
+struct ParsedBackupMetaName {
+    store_id: u64,
+    min_begin_ts_in_default_cf: u64,
+    min_ts: u64,
+    max_ts: u64,
+}
+
+fn parse_backupmeta_path(path: &str) -> Option<ParsedBackupMetaName> {
+    let stem = Path::new(path).file_stem()?.to_str()?;
+    parse_backupmeta_filename(stem)
+}
+
+fn parse_backupmeta_filename(name: &str) -> Option<ParsedBackupMetaName> {
     fn parse_hex_u64(part: &str) -> Option<u64> {
         if part.len() != 16 {
             return None;
@@ -243,6 +266,9 @@ fn parse_backupmeta_filename(name: &str) -> Option<u64> {
 
     const TAG_VALUE_LEN: usize = 17;
     let mut seen_tags = BTreeSet::new();
+    let mut min_begin_ts_in_default_cf = None;
+    let mut min_ts = None;
+    let mut max_ts = None;
     let suffix_bytes = suffix.as_bytes();
     let mut pos = 0;
     while pos < suffix_bytes.len() {
@@ -255,7 +281,13 @@ fn parse_backupmeta_filename(name: &str) -> Option<u64> {
             return None;
         }
         let hex = &suffix[pos + 1..pos + TAG_VALUE_LEN];
-        let _ = parse_hex_u64(hex)?;
+        let ts = parse_hex_u64(hex)?;
+        match tag {
+            BACKUP_META_MIN_BEGIN_TS_PREFIX => min_begin_ts_in_default_cf = Some(ts),
+            BACKUP_META_MIN_TS_PREFIX => min_ts = Some(ts),
+            BACKUP_META_MAX_TS_PREFIX => max_ts = Some(ts),
+            _ => {}
+        }
         if !seen_tags.insert(tag) {
             return None;
         }
@@ -271,7 +303,12 @@ fn parse_backupmeta_filename(name: &str) -> Option<u64> {
         }
     }
 
-    parse_hex_u64(&prefix[16..])
+    Some(ParsedBackupMetaName {
+        store_id: parse_hex_u64(&prefix[16..])?,
+        min_begin_ts_in_default_cf: min_begin_ts_in_default_cf?,
+        min_ts: min_ts?,
+        max_ts: max_ts?,
+    })
 }
 
 impl std::fmt::Debug for LogFileId {
@@ -550,15 +587,49 @@ impl<'a> StreamMetaStorage<'a> {
         })
     }
 
-    /// Count the number of the metadata prefix.
-    pub async fn count_objects(s: &'a dyn ExternalStorage) -> std::io::Result<u64> {
+    /// Count metadata objects under the metadata prefix.
+    ///
+    /// Also returns `shift_ts`: global minimum `min_begin_ts_in_default_cf`
+    /// among metadata whose `[min_ts, max_ts)` intersects `[from_ts,
+    /// until_ts)`, merged with initial `from_ts`. When `shard` is set,
+    /// paths that do not match the backupmeta filename format are rejected.
+    ///
+    /// Without sharding, unparseable paths are counted but ignored for
+    /// `shift_ts`.
+    pub async fn count_objects(
+        s: &'a dyn ExternalStorage,
+        shard: Option<ShardConfig>,
+        from_ts: u64,
+        until_ts: u64,
+    ) -> std::io::Result<(u64, u64)> {
         let mut n = 0;
+        let mut shift_ts = from_ts;
         // NOTE: should we allow user to specify the prefix?
         let mut items = s.iter_prefix(METADATA_PREFIX);
-        while items.try_next().await?.is_some() {
-            n += 1
+        if shard.is_none() {
+            // Without sharding, unparseable paths are counted but ignored for
+            // `shift_ts` because they may not be valid backup metadata paths.
+            while items.try_next().await?.is_some() {
+                n += 1;
+            }
+            return Ok((n, shift_ts));
         }
-        Ok(n)
+
+        while let Some(item) = items.try_next().await? {
+            let parsed = parse_backupmeta_path(&item.key).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("cannot parse backup metadata path: {}", item.key),
+                )
+            })?;
+            if intersects_ts_window(parsed.min_ts, parsed.max_ts, from_ts, until_ts) {
+                if parsed.min_begin_ts_in_default_cf > 0 {
+                    shift_ts = shift_ts.min(parsed.min_begin_ts_in_default_cf);
+                }
+            }
+            n += 1;
+        }
+        Ok((n, shift_ts))
     }
 }
 
@@ -906,7 +977,6 @@ impl<'a> MigrationStorageWrapper<'a> {
 
     pub async fn write(&self, migration: VersionedMigration) -> Result<()> {
         use external_storage::locking::LockExt;
-        use protobuf::Message;
 
         let migration = migration.0;
 
@@ -921,7 +991,6 @@ impl<'a> MigrationStorageWrapper<'a> {
         )
         .await
         .map_err(|err| err.0)?;
-        let id = self.largest_id().await?;
         let write_res = self.write_next_migration(&migration).await;
         let unlock_res: Result<()> = lock.unlock(self.storage).await.adapt_err();
 
@@ -1011,7 +1080,10 @@ mod test {
     use kvproto::brpb::{DeleteSpansOfFile, MetaEdit, Migration, Span};
     use protobuf::Chars;
 
-    use super::{LoadFromExt, MetaFile, StreamMetaStorage, parse_store_id_from_backupmeta_path};
+    use super::{
+        LoadFromExt, MetaFile, StreamMetaStorage, parse_approx_ts_range_from_backupmeta_path,
+        parse_store_id_from_backupmeta_path,
+    };
     use crate::{
         storage::{LogFileId, MetaEditFilters, MigrationStorageWrapper},
         test_util::{KvGen, LogFileBuilder, TmpStorage, gen_step},
@@ -1059,6 +1131,22 @@ mod test {
                 "v1/backupmeta/000000000000012C-0000000000000032-0000000000000064-00000000000000C8.meta"
             ),
             None
+        );
+    }
+
+    #[test]
+    fn test_parse_approx_ts_range_from_backupmeta_path() {
+        let p = "v1/backupmeta/000000000000012C000000000000002A-d0000000000000032l0000000000000064u00000000000000C8.meta";
+        // min(default begin, min_ts) is used as approximate min_ts.
+        assert_eq!(
+            parse_approx_ts_range_from_backupmeta_path(p),
+            Some((0x32, 0xC8))
+        );
+
+        let p = "v1/backupmeta/000000000000012C000000000000002A-d0000000000000096l0000000000000064u00000000000000C8.meta";
+        assert_eq!(
+            parse_approx_ts_range_from_backupmeta_path(p),
+            Some((0x64, 0xC8))
         );
     }
 
@@ -1246,5 +1334,34 @@ mod test {
         let stat = sst.take_statistic();
         assert_eq!(stat.log_filtered_out_by_migration, 12);
         assert_eq!(stat.meta_filtered_out_by_migration, 1);
+    }
+
+    #[tokio::test]
+    async fn test_count_objects_updates_shift_ts_without_shard() {
+        use external_storage::{ExternalStorage, UnpinReader};
+        use futures::io::Cursor;
+
+        let st = TmpStorage::create();
+        let names = [
+            // in range, min_begin_default=0x20
+            "v1/backupmeta/000000000000012C0000000000000001-d0000000000000020l0000000000000064u00000000000000C8.meta",
+            // out of range (min_ts > until), should not affect shift_ts
+            "v1/backupmeta/000000000000012C0000000000000002-d0000000000000010l0000000000000100u0000000000000120.meta",
+            // unparsable path should be counted but ignored when shard=None
+            "v1/backupmeta/not-a-parsable-meta-name.meta",
+        ];
+        for name in names {
+            st.storage()
+                .write(name, UnpinReader(Box::new(Cursor::new(vec![]))), 0)
+                .await
+                .unwrap();
+        }
+
+        let (count, shift_ts) =
+            StreamMetaStorage::count_objects(st.storage().as_ref(), None, 0x40, 0xD0)
+                .await
+                .unwrap();
+        assert_eq!(count, 3);
+        assert_eq!(shift_ts, 0x20);
     }
 }

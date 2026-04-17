@@ -431,6 +431,7 @@ fn main() {
             };
             let ccfg = compact_log::ExecutionConfig {
                 shard,
+                shift_ts: from_ts,
                 from_ts,
                 until_ts,
                 prefetch_running_count,

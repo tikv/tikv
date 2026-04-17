@@ -74,6 +74,7 @@ pub fn create_compaction(st: StorageBackend) -> Execution {
     Execution::<RocksEngine> {
         cfg: ExecutionConfig {
             shard: None,
+            shift_ts: 0,
             from_ts: 0,
             until_ts: u64::MAX,
             compression: engine_traits::SstCompressionType::Lz4,
