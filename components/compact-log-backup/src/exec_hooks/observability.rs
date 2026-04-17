@@ -115,9 +115,17 @@ impl ExecHooks for Observability {
         };
 
         cx.async_rt.spawn(sigusr1_handler);
-        self.meta_len = StreamMetaStorage::count_objects(cx.storage).await?;
+        let (meta_len, shift_ts) = StreamMetaStorage::count_objects(
+            cx.storage,
+            cx.this.cfg.shard,
+            cx.this.cfg.from_ts,
+            cx.this.cfg.until_ts,
+        )
+        .await?;
+        self.meta_len = meta_len;
+        cx.shift_ts.set(shift_ts);
 
-        info!("About to start compaction."; &cx.this.cfg, 
+        info!("About to start compaction."; &cx.this.cfg,
             "url" => cx.storage.url().map(|v| v.to_string()).unwrap_or_else(|err| format!("<err: {err}>")));
         Ok(())
     }

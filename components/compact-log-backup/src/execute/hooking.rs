@@ -33,6 +33,8 @@ pub struct BeforeStartCtx<'a> {
     pub async_rt: &'a Handle,
     /// Reference to the execution context.
     pub this: &'a Execution,
+    /// Mutable shift ts shared with hooks before execution starts.
+    pub shift_ts: &'a Cell<u64>,
     /// The source external storage of this compaction.
     pub storage: &'a dyn ExternalStorage,
 }

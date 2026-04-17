@@ -130,6 +130,7 @@ impl Subcompaction {
         c.form(
             &key,
             &CollectSubcompactionConfig {
+                compact_shift_from_ts: 0,
                 compact_from_ts: 0,
                 compact_to_ts: u64::MAX,
                 subcompaction_size_threshold: 0,

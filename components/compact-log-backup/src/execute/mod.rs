@@ -135,10 +135,13 @@ pub struct ExecutionConfig {
     /// Optional sharding configuration. When set, only inputs belonging to
     /// this shard will be compacted.
     pub shard: Option<ShardConfig>,
-    /// Filter out files doesn't contain any record with TS great or equal than
+    /// Filter out default CF files don't have any record with TS less than
     /// this.
+    pub shift_ts: u64,
+    /// Filter out write CF files don't have any record with TS less than this.
     pub from_ts: u64,
-    /// Filter out files doesn't contain any record with TS less than this.
+    /// Filter out write CF files don't have any record with TS great or equal
+    /// than this.
     pub until_ts: u64,
     /// The max count of running prefetch tasks.
     pub prefetch_running_count: u64,
@@ -158,6 +161,7 @@ impl slog::KV for ExecutionConfig {
         _record: &slog::Record<'_>,
         serializer: &mut dyn slog::Serializer,
     ) -> slog::Result {
+        serializer.emit_u64("shift_ts", self.shift_ts)?;
         serializer.emit_u64("from_ts", self.from_ts)?;
         serializer.emit_u64("until_ts", self.until_ts)?;
         if let Some(shard) = self.shard {
@@ -169,6 +173,7 @@ impl slog::KV for ExecutionConfig {
                 .map(|dt| dt.to_string())
                 .unwrap_or_else(|| format!("invalid_ts({pts})"))
         };
+        serializer.emit_arguments("shift_date", &format_args!("{}", date(self.shift_ts)))?;
         serializer.emit_arguments("from_date", &format_args!("{}", date(self.from_ts)))?;
         serializer.emit_arguments("until_date", &format_args!("{}", date(self.until_ts)))?;
         serializer.emit_arguments("compression", &format_args!("{:?}", self.compression))?;
@@ -281,11 +286,13 @@ impl Execution {
             ref mut hooks,
             ..
         } = cx;
+        let shift_ts = Cell::new(self.cfg.shift_ts);
 
         let cx = BeforeStartCtx {
             storage: storage.as_ref(),
             async_rt: &tokio::runtime::Handle::current(),
             this: self,
+            shift_ts: &shift_ts,
         };
         hooks.before_execution_started(cx).await?;
 
@@ -304,6 +311,7 @@ impl Execution {
         let mut compact_stream = CollectSubcompaction::new(
             stream,
             CollectSubcompactionConfig {
+                compact_shift_from_ts: shift_ts.get(),
                 compact_from_ts: self.cfg.from_ts,
                 compact_to_ts: self.cfg.until_ts,
                 subcompaction_size_threshold: ReadableSize::mb(128).0,
