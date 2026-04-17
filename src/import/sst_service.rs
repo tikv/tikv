@@ -1758,12 +1758,15 @@ fn download_request_dispatcher(
         return Ok(None);
     }
     let mut cf_names = HashSet::new();
-    cf_names.insert(req.get_sst().get_cf_name().to_string());
+    let base_cf = req.get_sst().get_cf_name();
+    if !base_cf.is_empty() {
+        cf_names.insert(base_cf.to_string());
+    }
     for meta in req.get_ssts().values() {
         cf_names.insert(meta.get_cf_name().to_string());
     }
     let is_write_default_mix =
-        cf_names.len() == 2 && cf_names.contains("write") && cf_names.contains("default");
+        cf_names.len() == 2 && cf_names.contains(CF_WRITE) && cf_names.contains(CF_DEFAULT);
     if cf_names.len() > 1 && (!allow_write_default_mix || !is_write_default_mix) {
         let error = sst_importer::Error::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,

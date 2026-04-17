@@ -459,31 +459,6 @@ impl<E: KvEngine> SstImporter<E> {
         }
     }
 
-    #[cfg(test)]
-    pub async fn download_files_ext(
-        &self,
-        basic_meta: &SstMeta,
-        metas: &HashMap<String, SstMeta>,
-        backend: &StorageBackend,
-        rewrite_rule: &RewriteRule,
-        crypter: Option<CipherInfo>,
-        speed_limiter: Limiter,
-        engine: E,
-        ext: DownloadExt<'_>,
-    ) -> Result<Option<Range>> {
-        self.download_files_ext_with_ssts(
-            basic_meta,
-            metas,
-            backend,
-            rewrite_rule,
-            crypter,
-            speed_limiter,
-            engine,
-            ext,
-        )
-        .await
-    }
-
     pub async fn download_files_ext_with_ssts(
         &self,
         basic_meta: &SstMeta,
@@ -2382,8 +2357,8 @@ impl<E: KvEngine> SstImporter<E> {
     /// inlined as a short value.
     ///
     /// `default_iter` may wrap zero SST iterators (e.g. write-only inputs where
-    /// every latest `Put` has a short value); long values still require matching
-    /// default keys in some default SST.
+    /// every latest `Put` has a short value); long values still require
+    /// matching default keys in some default SST.
     ///
     /// This path only supports keyspace-encoded SST keys
     /// ([`DownloadRequestType::Keyspace`]). Legacy clients must not send
@@ -2427,183 +2402,196 @@ impl<E: KvEngine> SstImporter<E> {
             Bound::Excluded(_) => unreachable!(),
         };
 
-        let mut write_writer = <E as SstExt>::SstWriterBuilder::new()
-            .set_db(&engine)
-            .set_cf(CF_WRITE)
-            .set_compression_type(self.compression_types.get(CF_WRITE).copied())
-            .build(write_dst.to_str().unwrap())
-            .unwrap();
+        let rewrite_res = async {
+            let mut write_writer = <E as SstExt>::SstWriterBuilder::new()
+                .set_db(&engine)
+                .set_cf(CF_WRITE)
+                .set_compression_type(self.compression_types.get(CF_WRITE).copied())
+                .build(write_dst.to_str().unwrap())
+                .unwrap();
 
-        let mut default_writer = <E as SstExt>::SstWriterBuilder::new()
-            .set_db(&engine)
-            .set_cf(CF_DEFAULT)
-            .set_compression_type(self.compression_types.get(CF_DEFAULT).copied())
-            .build(default_dst.to_str().unwrap())
-            .unwrap();
+            let mut default_writer = <E as SstExt>::SstWriterBuilder::new()
+                .set_db(&engine)
+                .set_cf(CF_DEFAULT)
+                .set_compression_type(self.compression_types.get(CF_DEFAULT).copied())
+                .build(default_dst.to_str().unwrap())
+                .unwrap();
 
-        let mut yield_check =
-            RescheduleChecker::new(tokio::task::yield_now, Duration::from_millis(10));
-        let mut count = 0u64;
-        let mut first_origin: Option<Vec<u8>> = None;
-        let mut wrote_default = false;
-        let mut user_key_buf = Vec::new();
-        let mut write_data_key = Vec::new();
-        let mut default_data_key = Vec::new();
-        let mut key_scratch = KeyspaceKeyRewriteScratch::new(old_prefix, new_prefix);
+            let mut yield_check =
+                RescheduleChecker::new(tokio::task::yield_now, Duration::from_millis(10));
+            let mut count = 0u64;
+            let mut first_origin: Option<Vec<u8>> = None;
+            let mut wrote_default = false;
+            let mut user_key_buf = Vec::new();
+            let mut write_data_key = Vec::new();
+            let mut default_data_key = Vec::new();
+            let mut key_scratch = KeyspaceKeyRewriteScratch::new(old_prefix, new_prefix);
 
-        'outer: while write_iter.valid()? {
-            let origin = keys::origin_key(write_iter.key());
-            if is_after_end_bound(origin, &range_end) {
-                break;
-            }
-
-            // Reuse one buffer per outer-iteration to avoid repeated allocations.
-            let user_key = Key::truncate_ts_for(origin)?;
-            user_key_buf.clear();
-            user_key_buf.extend_from_slice(user_key);
-
-            while write_iter.valid()? {
-                let write_origin = keys::origin_key(write_iter.key());
-                if is_after_end_bound(write_origin, &range_end) {
+            'outer: while write_iter.valid()? {
+                let origin = keys::origin_key(write_iter.key());
+                if is_after_end_bound(origin, &range_end) {
                     break;
                 }
-                let cur_user_key = Key::truncate_ts_for(write_origin)?;
-                if cur_user_key != user_key_buf.as_slice() {
-                    break;
-                }
-                let commit_ts = Key::decode_ts_from(write_origin)?;
-                if rewrite_rule.ignore_after_timestamp != 0
-                    && commit_ts > TimeStamp::new(rewrite_rule.ignore_after_timestamp)
-                {
-                    INPORTER_DOWNLOAD_COMPACT_KEYS_COUNT
-                        .with_label_values(&["after"])
-                        .inc();
-                    write_iter.next()?;
-                    continue;
-                }
-                if rewrite_rule.ignore_before_timestamp != 0
-                    && commit_ts < TimeStamp::new(rewrite_rule.ignore_before_timestamp)
-                {
-                    INPORTER_DOWNLOAD_COMPACT_KEYS_COUNT
-                        .with_label_values(&["before"])
-                        .inc();
-                    write_iter.next()?;
-                    continue;
-                }
 
-                let write_ref = WriteRef::parse(write_iter.value()).map_err(|e| {
-                    Error::BadFormat(format!(
-                        "write {}: {}",
-                        log_wrappers::Value::key(write_origin),
-                        e
-                    ))
-                })?;
-                // In log restore, upstream compact-log-backup builds SSTs from full MVCC
-                // history. We replay those versions directly here, so gc_fence-based
-                // latest-version filtering is unnecessary in this merged download path.
+                // Reuse one buffer per outer-iteration to avoid repeated allocations.
+                let user_key = Key::truncate_ts_for(origin)?;
+                user_key_buf.clear();
+                user_key_buf.extend_from_slice(user_key);
 
-                match write_ref.write_type {
-                    WriteType::Put | WriteType::Delete => {
-                        key_scratch.build_download_data_key(&write_origin, &mut write_data_key)?;
+                while write_iter.valid()? {
+                    let write_origin = keys::origin_key(write_iter.key());
+                    if is_after_end_bound(write_origin, &range_end) {
+                        break;
+                    }
+                    let cur_user_key = Key::truncate_ts_for(write_origin)?;
+                    if cur_user_key != user_key_buf.as_slice() {
+                        break;
+                    }
+                    let commit_ts = Key::decode_ts_from(write_origin)?;
+                    if rewrite_rule.ignore_after_timestamp != 0
+                        && commit_ts > TimeStamp::new(rewrite_rule.ignore_after_timestamp)
+                    {
+                        INPORTER_DOWNLOAD_COMPACT_KEYS_COUNT
+                            .with_label_values(&["after"])
+                            .inc();
+                        write_iter.next()?;
+                        continue;
+                    }
+                    if rewrite_rule.ignore_before_timestamp != 0
+                        && commit_ts < TimeStamp::new(rewrite_rule.ignore_before_timestamp)
+                    {
+                        INPORTER_DOWNLOAD_COMPACT_KEYS_COUNT
+                            .with_label_values(&["before"])
+                            .inc();
+                        write_iter.next()?;
+                        continue;
+                    }
 
-                        if write_ref.write_type == WriteType::Put && write_ref.short_value.is_none()
-                        {
-                            default_data_key.clear();
-                            default_data_key.extend_from_slice(keys::DATA_PREFIX_KEY);
-                            default_data_key.extend_from_slice(user_key_buf.as_slice());
-                            default_data_key
-                                .encode_u64_desc(write_ref.start_ts.into_inner())
-                                .unwrap();
-                            if !default_iter.seek_exact(&default_data_key)? {
-                                return Err(Error::BadFormat(format!(
-                                    "default value missing for key {} start_ts {}, may be not log backup compacted",
-                                    log_wrappers::Value::key(user_key_buf.as_slice()),
-                                    write_ref.start_ts
-                                )));
+                    let write_ref = WriteRef::parse(write_iter.value()).map_err(|e| {
+                        Error::BadFormat(format!(
+                            "write {}: {}",
+                            log_wrappers::Value::key(write_origin),
+                            e
+                        ))
+                    })?;
+                    // In log restore, upstream compact-log-backup builds SSTs from full MVCC
+                    // history. We replay those versions directly here, so gc_fence-based
+                    // latest-version filtering is unnecessary in this merged download path.
+
+                    match write_ref.write_type {
+                        WriteType::Put | WriteType::Delete => {
+                            key_scratch
+                                .build_download_data_key(&write_origin, &mut write_data_key)?;
+
+                            if write_ref.write_type == WriteType::Put
+                                && write_ref.short_value.is_none()
+                            {
+                                default_data_key.clear();
+                                default_data_key.extend_from_slice(keys::DATA_PREFIX_KEY);
+                                default_data_key.extend_from_slice(user_key_buf.as_slice());
+                                default_data_key
+                                    .encode_u64_desc(write_ref.start_ts.into_inner())
+                                    .unwrap();
+                                if !default_iter.seek_exact(&default_data_key)? {
+                                    return Err(Error::BadFormat(format!(
+                                        "default value missing for key {} start_ts {}, may be not log backup compacted",
+                                        log_wrappers::Value::key(user_key_buf.as_slice()),
+                                        write_ref.start_ts
+                                    )));
+                                }
+                                let default_origin = keys::origin_key(default_iter.key());
+                                key_scratch.build_download_data_key(
+                                    default_origin,
+                                    &mut default_data_key,
+                                )?;
+                                default_writer.put(&default_data_key, default_iter.value())?;
+                                wrote_default = true;
                             }
-                            let default_origin = keys::origin_key(default_iter.key());
-                            key_scratch.build_download_data_key(
-                                default_origin,
-                                &mut default_data_key,
-                            )?;
-                            default_writer.put(&default_data_key, default_iter.value())?;
-                            wrote_default = true;
+
+                            write_writer.put(&write_data_key, &write_iter.value())?;
+                            if first_origin.is_none() {
+                                first_origin = Some(keys::origin_key(&write_data_key).to_vec());
+                            }
+
+                            while write_iter.valid()? {
+                                let write_origin = keys::origin_key(write_iter.key());
+                                if is_after_end_bound(write_origin, &range_end) {
+                                    break;
+                                }
+                                let cur_user_key = Key::truncate_ts_for(write_origin)?;
+                                if cur_user_key != user_key_buf.as_slice() {
+                                    break;
+                                }
+                                write_iter.next()?;
+                            }
+
+                            count += 1;
+                            if count >= 1024 {
+                                count = 0;
+                                yield_check.check().await;
+                            }
+                            continue 'outer;
                         }
-
-                        write_writer.put(&write_data_key, &write_iter.value())?;
-                        if first_origin.is_none() {
-                            first_origin = Some(keys::origin_key(&write_data_key).to_vec());
-                        }
-
-                        while write_iter.valid()? {
-                            let write_origin = keys::origin_key(write_iter.key());
-                            if is_after_end_bound(write_origin, &range_end) {
-                                break;
-                            }
-                            let cur_user_key = Key::truncate_ts_for(write_origin)?;
-                            if cur_user_key != user_key_buf.as_slice() {
-                                break;
-                            }
+                        WriteType::Lock | WriteType::Rollback => {
                             write_iter.next()?;
                         }
-
-                        count += 1;
-                        if count >= 1024 {
-                            count = 0;
-                            yield_check.check().await;
-                        }
-                        continue 'outer;
-                    }
-                    WriteType::Lock | WriteType::Rollback => {
-                        write_iter.next()?;
                     }
                 }
             }
-        }
 
-        IMPORTER_DOWNLOAD_DURATION
-            .with_label_values(&["rewrite"])
-            .observe(start_rewrite.saturating_elapsed().as_secs_f64());
+            IMPORTER_DOWNLOAD_DURATION
+                .with_label_values(&["rewrite"])
+                .observe(start_rewrite.saturating_elapsed().as_secs_f64());
 
-        if first_origin.is_none() {
-            drop(write_writer);
-            drop(default_writer);
-            self.remove_file_no_throw(&write_dst);
-            self.remove_file_no_throw(&default_dst);
-            return Ok(None);
-        }
+            if first_origin.is_none() {
+                drop(write_writer);
+                drop(default_writer);
+                self.remove_file_no_throw(&write_dst);
+                self.remove_file_no_throw(&default_dst);
+                return Ok(None);
+            }
 
-        let start_finish = Instant::now();
-        let write_info = write_writer.finish()?;
-        IMPORTER_DOWNLOAD_DURATION
-            .with_label_values(&["finish"])
-            .observe(start_finish.saturating_elapsed().as_secs_f64());
-
-        let default_info = if wrote_default {
-            let start_default_finish = Instant::now();
-            let info = default_writer.finish()?;
+            let start_finish = Instant::now();
+            let write_info = write_writer.finish()?;
             IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["finish"])
-                .observe(start_default_finish.saturating_elapsed().as_secs_f64());
-            Some(info)
-        } else {
-            drop(default_writer);
+                .observe(start_finish.saturating_elapsed().as_secs_f64());
+
+            let default_info = if wrote_default {
+                let start_default_finish = Instant::now();
+                let info = default_writer.finish()?;
+                IMPORTER_DOWNLOAD_DURATION
+                    .with_label_values(&["finish"])
+                    .observe(start_default_finish.saturating_elapsed().as_secs_f64());
+                Some(info)
+            } else {
+                drop(default_writer);
+                self.remove_file_no_throw(&default_dst);
+                None
+            };
+
+            let write_end = keys::origin_key(&write_data_key);
+            let end_key = (if wrote_default {
+                cmp::max(write_end, keys::origin_key(&default_data_key))
+            } else {
+                write_end
+            })
+            .to_vec();
+
+            let mut final_range = Range::default();
+            final_range.set_start(first_origin.unwrap());
+            final_range.set_end(end_key);
+            Ok(Some((final_range, write_info, default_info)))
+        }
+        .await;
+
+        if let Err(err) = rewrite_res {
+            self.remove_file_no_throw(&write_dst);
             self.remove_file_no_throw(&default_dst);
-            None
-        };
+            return Err(err);
+        }
 
-        let write_end = keys::origin_key(&write_data_key);
-        let end_key = (if wrote_default {
-            cmp::max(write_end, keys::origin_key(&default_data_key))
-        } else {
-            write_end
-        })
-        .to_vec();
-
-        let mut final_range = Range::default();
-        final_range.set_start(first_origin.unwrap());
-        final_range.set_end(end_key);
-        Ok(Some((final_range, write_info, default_info)))
+        rewrite_res
     }
 }
 
@@ -5092,7 +5080,7 @@ mod tests {
             .collect();
 
         let runtime = tokio::runtime::Runtime::new().unwrap();
-        let result = runtime.block_on(importer.download_files_ext(
+        let result = runtime.block_on(importer.download_files_ext_with_ssts(
             &basic_meta,
             &metas,
             backend,
@@ -5182,7 +5170,7 @@ mod tests {
 
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let range = runtime
-            .block_on(importer.download_files_ext(
+            .block_on(importer.download_files_ext_with_ssts(
                 &basic_meta,
                 &metas,
                 &backend,
@@ -5304,7 +5292,7 @@ mod tests {
         metas.insert("sample_1.sst".to_string(), meta1);
 
         let runtime = tokio::runtime::Runtime::new().unwrap();
-        let result = runtime.block_on(importer.download_files_ext(
+        let result = runtime.block_on(importer.download_files_ext_with_ssts(
             &meta0,
             &metas,
             &backend,
@@ -5344,7 +5332,7 @@ mod tests {
         fail::cfg("download_files_ext_after_download", "return(injected)").unwrap();
 
         let runtime = tokio::runtime::Runtime::new().unwrap();
-        let result = runtime.block_on(importer.download_files_ext(
+        let result = runtime.block_on(importer.download_files_ext_with_ssts(
             &file_metas[0].1,
             &metas,
             &backend,
@@ -5387,7 +5375,7 @@ mod tests {
 
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let range = runtime
-            .block_on(importer.download_files_ext(
+            .block_on(importer.download_files_ext_with_ssts(
                 &basic_meta,
                 &metas,
                 &backend,
@@ -5512,7 +5500,7 @@ mod tests {
 
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let range = runtime
-            .block_on(importer.download_files_ext(
+            .block_on(importer.download_files_ext_with_ssts(
                 &basic_meta,
                 &metas,
                 &backend,
@@ -5605,7 +5593,7 @@ mod tests {
 
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let range = runtime
-            .block_on(importer.download_files_ext(
+            .block_on(importer.download_files_ext_with_ssts(
                 &basic_meta,
                 &metas,
                 &backend,
