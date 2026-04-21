@@ -8,6 +8,7 @@ on:
     branches:
       - master
       - 'feature/**'
+      - release-fts-202602
     paths-ignore:
       - '**.md'
       - '**.png'
