@@ -22,8 +22,8 @@ use engine_traits::{
     util::check_key_in_range,
 };
 use external_storage::{
-    ExternalStorage, RestoreConfig, compression_reader_dispatcher, encrypt_wrap_reader,
-    wrap_with_checksum_reader_if_needed,
+    BackendConfig, ExternalStorage, RestoreConfig, compression_reader_dispatcher,
+    encrypt_wrap_reader, wrap_with_checksum_reader_if_needed,
 };
 use file_system::{IoType, OpenOptions, get_io_rate_limiter};
 use kvproto::{
@@ -51,7 +51,10 @@ use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
     Config, ConfigManager as ImportConfigManager, Error, Result,
-    caching::cache_map::{CacheMap, ShareOwned},
+    caching::{
+        cache_map::{CacheMap, ShareOwned},
+        storage_cache::StorageBackendFactory,
+    },
     import_file::{ImportDir, ImportFile},
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     import_mode2::{HashRange, ImportModeSwitcherV2},
@@ -164,7 +167,8 @@ pub struct SstImporter<E: KvEngine> {
     api_version: ApiVersion,
     compression_types: HashMap<CfName, SstCompressionType>,
 
-    cached_storage: CacheMap<StorageBackend>,
+    backend_config: BackendConfig,
+    cached_storage: CacheMap<StorageBackendFactory>,
     // We need to keep reference to the runtime so background tasks won't be dropped.
     _download_rt: Runtime,
     file_locks: Arc<DashMap<String, (CacheKvFile, Instant)>>,
@@ -218,12 +222,17 @@ impl<E: KvEngine> SstImporter<E> {
             switcher,
             api_version,
             compression_types: HashMap::with_capacity(2),
+            backend_config: Default::default(),
             file_locks: Arc::new(DashMap::default()),
             cached_storage,
             _download_rt: download_rt,
             memory_quota: Arc::new(MemoryQuota::new(memory_limit as _)),
             multi_master_keys_backend: MultiMasterKeyBackend::new(),
         })
+    }
+
+    pub fn set_backend_config(&mut self, backend_config: BackendConfig) {
+        self.backend_config = backend_config;
     }
 
     pub fn ranges_enter_import_mode(&self, ranges: Vec<Range>) {
@@ -340,10 +349,34 @@ impl<E: KvEngine> SstImporter<E> {
     }
 
     pub fn remove_dir(&self, prefix: &str) -> Result<()> {
+        // Validate the prefix lexically before touching the filesystem.
+        // This prevents information leakage via path-existence side-channels
+        // (e.g. an attacker distinguishing "missing" vs "forbidden" out-of-root
+        // paths) and avoids exposing resolved server paths in error messages.
+        let prefix_path = Path::new(prefix);
+        if prefix_path.is_absolute() {
+            return Err(Error::InvalidSstPath(PathBuf::from(prefix)));
+        }
+        for component in prefix_path.components() {
+            if component == std::path::Component::ParentDir {
+                return Err(Error::InvalidSstPath(PathBuf::from(prefix)));
+            }
+        }
+
         let path = self.dir.get_root_dir().join(prefix);
         if path.exists() {
-            file_system::remove_dir_all(&path)?;
-            info!("directory {:?} has been removed", path);
+            // Defense-in-depth: canonicalize to catch symlink-based escapes.
+            let canonical_root = self.dir.get_root_dir().canonicalize().map_err(Error::Io)?;
+            let canonical_path = path.canonicalize().map_err(Error::Io)?;
+            // Reject paths that escape the root or resolve to the root itself.
+            // "" and "." both canonicalize to the root, so an equality check is
+            // required in addition to the prefix check.
+            if canonical_path == canonical_root || !canonical_path.starts_with(&canonical_root) {
+                // Return the raw user-supplied prefix, not the resolved path.
+                return Err(Error::InvalidSstPath(PathBuf::from(prefix)));
+            }
+            file_system::remove_dir_all(&canonical_path)?;
+            info!("directory {:?} has been removed", canonical_path);
         }
         Ok(())
     }
@@ -411,7 +444,6 @@ impl<E: KvEngine> SstImporter<E> {
     ) -> Result<Option<Range>> {
         debug!("download start";
             "meta" => ?meta,
-            "url" => ?backend,
             "name" => name,
             "rewrite_rule" => ?rewrite_rule,
             "speed_limit" => speed_limiter.speed_limit(),
@@ -456,7 +488,6 @@ impl<E: KvEngine> SstImporter<E> {
     ) -> Result<Option<Range>> {
         debug!("download start";
             "metas" => ?basic_meta,
-            "url" => ?backend,
             "rewrite_rule" => ?rewrite_rule,
             "speed_limit" => speed_limiter.speed_limit(),
         );
@@ -604,10 +635,13 @@ impl<E: KvEngine> SstImporter<E> {
         // TODO: pass a config to support hdfs
         let ext_storage = if cache_id.is_empty() {
             EXT_STORAGE_CACHE_COUNT.with_label_values(&["skip"]).inc();
-            let s = external_storage::create_storage(backend, Default::default())?;
+            let s = external_storage::create_storage(backend, self.backend_config.clone())?;
             Arc::from(s)
         } else {
-            self.cached_storage.cached_or_create(cache_id, backend)?
+            let backend_factory =
+                StorageBackendFactory::new(backend.clone(), self.backend_config.clone());
+            self.cached_storage
+                .cached_or_create(cache_id, &backend_factory)?
         };
         Ok(ext_storage)
     }
@@ -2893,6 +2927,41 @@ mod tests {
             mem_quota_old / 3,
             mem_quota_new
         );
+    }
+
+    #[test]
+    fn test_external_storage_uses_backup_backend_config() {
+        let import_dir = tempfile::tempdir().unwrap();
+        let mut importer = SstImporter::<TestEngine>::new(
+            &Config::default(),
+            import_dir.path(),
+            None,
+            ApiVersion::V1,
+            false,
+        )
+        .unwrap();
+
+        let mut gcs = kvproto::brpb::Gcs::default();
+        gcs.bucket = "test-bucket".to_owned();
+        gcs.endpoint = "http://127.0.0.1:1".to_owned();
+        gcs.credentials_blob = r#"{"type":"external_account"}"#.to_owned();
+        let mut backend = StorageBackend::default();
+        backend.set_gcs(gcs);
+
+        let mut backend_config = BackendConfig::default();
+        backend_config.gcp_v2_enable = true;
+        importer.set_backend_config(backend_config);
+        importer.external_storage_or_cache(&backend, "").unwrap();
+        importer
+            .external_storage_or_cache(&backend, "cached-gcs-v2")
+            .unwrap();
+
+        importer.set_backend_config(BackendConfig::default());
+        match importer.external_storage_or_cache(&backend, "") {
+            Ok(_) => panic!("gcs v1 should reject external_account credentials"),
+            Err(Error::Io(err)) => assert_eq!(err.kind(), io::ErrorKind::InvalidInput),
+            Err(err) => panic!("unexpected error: {err}"),
+        }
     }
 
     #[test]
@@ -5433,5 +5502,115 @@ mod tests {
         assert_eq!(collected[0].0, get_encoded_key(b"t123_r01", 1));
         assert_eq!(collected[1].0, get_encoded_key(b"t123_r04", 1));
         assert_eq!(collected[2].0, get_encoded_key(b"t123_r07", 1));
+    }
+
+    #[test]
+    fn test_remove_dir_path_traversal() {
+        let import_dir = tempfile::tempdir().unwrap();
+        let importer = SstImporter::<TestEngine>::new(
+            &Config::default(),
+            import_dir.path(),
+            None,
+            ApiVersion::V1,
+            false,
+        )
+        .unwrap();
+
+        // Non-existent valid subdirectory: no-op, should succeed.
+        importer.remove_dir("subdir").unwrap();
+
+        // Existing valid subdirectory: should be removed.
+        let legit = import_dir.path().join("legit");
+        std::fs::create_dir_all(&legit).unwrap();
+        assert!(legit.exists());
+        importer.remove_dir("legit").unwrap();
+        assert!(!legit.exists());
+
+        // Nested valid subdirectory.
+        let nested = import_dir.path().join("a").join("b");
+        std::fs::create_dir_all(&nested).unwrap();
+        importer.remove_dir("a/b").unwrap();
+        assert!(!nested.exists());
+
+        // `..` component: must be rejected before path.exists() is called.
+        assert!(matches!(
+            importer.remove_dir("../escape"),
+            Err(Error::InvalidSstPath(_))
+        ));
+        assert!(matches!(
+            importer.remove_dir("../../escape"),
+            Err(Error::InvalidSstPath(_))
+        ));
+        // Mixed valid/traversal path.
+        assert!(matches!(
+            importer.remove_dir("a/../../escape"),
+            Err(Error::InvalidSstPath(_))
+        ));
+
+        // Absolute path: must be rejected.
+        assert!(matches!(
+            importer.remove_dir("/etc"),
+            Err(Error::InvalidSstPath(_))
+        ));
+        assert!(matches!(
+            importer.remove_dir("/tmp"),
+            Err(Error::InvalidSstPath(_))
+        ));
+
+        // Empty prefix resolves to the import root itself: must be rejected.
+        assert!(matches!(
+            importer.remove_dir(""),
+            Err(Error::InvalidSstPath(_))
+        ));
+        // "." also resolves to the import root itself: must be rejected.
+        assert!(matches!(
+            importer.remove_dir("."),
+            Err(Error::InvalidSstPath(_))
+        ));
+        // The import root directory must still exist after both rejections.
+        assert!(import_dir.path().exists());
+
+        // The error must carry the raw user-supplied prefix, not a resolved
+        // server-side path (i.e. it must not start with the import root).
+        let root = import_dir.path().to_str().unwrap().to_owned();
+        match importer.remove_dir("../escape") {
+            Err(Error::InvalidSstPath(p)) => {
+                let p_str = p.to_str().unwrap();
+                assert!(
+                    !p_str.starts_with(&root),
+                    "error must not expose resolved path: got {p_str}"
+                );
+                assert_eq!(p_str, "../escape");
+            }
+            other => panic!("expected InvalidSstPath, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_remove_dir_symlink_escape() {
+        let import_dir = tempfile::tempdir().unwrap();
+        let outside_dir = tempfile::tempdir().unwrap();
+        let importer = SstImporter::<TestEngine>::new(
+            &Config::default(),
+            import_dir.path(),
+            None,
+            ApiVersion::V1,
+            false,
+        )
+        .unwrap();
+
+        // Create a symlink inside import_dir pointing outside the root.
+        let symlink_path = import_dir.path().join("escape_link");
+        std::os::unix::fs::symlink(outside_dir.path(), &symlink_path).unwrap();
+
+        // Removal via symlink must be rejected by the canonicalize check.
+        assert!(matches!(
+            importer.remove_dir("escape_link"),
+            Err(Error::InvalidSstPath(_))
+        ));
+
+        // The target directory outside import root must remain untouched.
+        assert!(outside_dir.path().exists());
     }
 }

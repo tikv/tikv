@@ -3053,6 +3053,9 @@ pub struct BackupConfig {
     // Do not expose this config to user.
     // It used to debug s3 503 error.
     pub s3_multi_part_size: ReadableSize,
+    /// Enable GCP v2 external storage backend for full backup.
+    #[serde(alias = "gcp_v2_enable")]
+    pub gcp_v2_enable: bool,
     #[online_config(submodule)]
     pub hadoop: HadoopConfig,
 }
@@ -3102,6 +3105,7 @@ impl Default for BackupConfig {
             io_thread_size: 2,
             // 5MB is the minimum part size that S3 allowed.
             s3_multi_part_size: ReadableSize::mb(5),
+            gcp_v2_enable: true,
             hadoop: Default::default(),
         }
     }
@@ -3119,6 +3123,10 @@ pub struct BackupStreamConfig {
     pub num_threads: usize,
     #[online_config(skip)]
     pub enable: bool,
+    /// Enable GCP v2 external storage backend for log-backup.
+    #[online_config(skip)]
+    #[serde(alias = "gcp_v2_enable")]
+    pub gcp_v2_enable: bool,
     #[online_config(skip)]
     pub temp_path: String,
 
@@ -3199,6 +3207,7 @@ impl Default for BackupStreamConfig {
             // use at most 50% of vCPU by default
             num_threads: (cpu_num * 0.5).clamp(2.0, 12.0) as usize,
             enable: true,
+            gcp_v2_enable: true,
             // TODO: may be use raft store directory
             temp_path: String::new(),
             file_size_limit,
