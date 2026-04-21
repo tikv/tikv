@@ -44,7 +44,7 @@ use tikv_util::{
     codec::number,
     debug, defer, error, info,
     sys::inspector::{ThreadInspector, self_thread_inspector},
-    time::{Instant, Limiter, duration_to_sec},
+    time::{Instant, Limiter},
     warn,
     worker::Scheduler,
 };
@@ -130,15 +130,17 @@ impl<E: KvEngine> Initializer<E> {
 
         let region_id = self.region_id;
         let downstream_id = self.downstream_id;
+        let conn_id = self.conn_id;
+        let request_id = self.request_id;
         let observe_id = self.observe_handle.id;
         // when there are a lot of pending incremental scan tasks, they may be stopped,
         // check the state here to accelerate tasks cancel process.
         if self.downstream_state.load() == DownstreamState::Stopped {
             info!("cdc async incremental scan canceled before start";
-                "region_id" => region_id,
                 "downstream_id" => ?downstream_id,
-                "observe_id" => ?observe_id,
-                "conn_id" => ?self.conn_id);
+                "request_id" => ?request_id,
+                "region_id" => region_id,
+                "conn_id" => ?conn_id);
             return Err(Error::Other(box_err!("scan canceled")));
         }
 
@@ -162,7 +164,9 @@ impl<E: KvEngine> Initializer<E> {
             // without check and compare snapshot sequence number.
             Callback::read(Box::new(move |resp| {
                 if let Err(e) = sched.schedule(Task::InitDownstream {
+                    conn_id,
                     region_id,
+                    request_id,
                     observe_id,
                     downstream_id,
                     downstream_state,
@@ -171,12 +175,21 @@ impl<E: KvEngine> Initializer<E> {
                     incremental_scan_barrier: barrier,
                     cb: Box::new(move || cb(resp)),
                 }) {
-                    error!("cdc schedule cdc task failed"; "error" => ?e);
+                    error!("cdc schedule init downstream task failed";
+                        "error" => ?e,
+                        "downstream_id" => ?downstream_id,
+                        "request_id" => ?request_id,
+                        "region_id" => region_id,
+                        "conn_id" => ?conn_id);
                 }
             })),
         ) {
             warn!("cdc send capture change cmd failed";
-            "region_id" => self.region_id, "error" => ?e);
+                "error" => ?e,
+                "downstream_id" => ?downstream_id,
+                "request_id" => ?request_id,
+                "region_id" => region_id,
+                "conn_id" => ?conn_id);
             return Err(Error::request(e.into()));
         }
 
@@ -230,16 +243,14 @@ impl<E: KvEngine> Initializer<E> {
 
         let region_id = self.region_id;
         let downstream_id = self.downstream_id;
-        let observe_id = self.observe_handle.id;
+        let request_id = self.request_id;
         let conn_id = self.conn_id;
         let on_cancel = || -> Result<ScanStat> {
-            info!(
-                "cdc async incremental scan canceled";
-                "region_id" => region_id,
+            info!("cdc async incremental scan canceled";
                 "downstream_id" => ?downstream_id,
-                "observe_id" => ?observe_id,
-                "conn_id" =>?conn_id,
-            );
+                "request_id" => ?request_id,
+                "region_id" => region_id,
+                "conn_id" => ?conn_id);
             Err(box_err!("scan canceled"))
         };
 
@@ -264,17 +275,6 @@ impl<E: KvEngine> Initializer<E> {
         } else {
             end_key = self.observed_range.end_key_encoded.clone();
         }
-
-        debug!(
-            "cdc async incremental scan";
-            "region_id" => region_id,
-            "downstream_id" => ?downstream_id,
-            "observe_id" => ?observe_id,
-            "conn_id" => ?conn_id,
-            "all_key_covered" => ?self.observed_range.all_key_covered,
-            "start_key" => log_wrappers::Value::key(start_key.as_encoded()),
-            "end_key" => log_wrappers::Value::key(end_key.as_encoded())
-        );
 
         if self.build_resolver.load(Ordering::Acquire) {
             // Scan and collect locks if build_resolver is true. The range
@@ -334,7 +334,6 @@ impl<E: KvEngine> Initializer<E> {
         };
 
         fail_point!("cdc_incremental_scan_start");
-        let mut done = false;
         let start = Instant::now_coarse();
         let mut sink_time = Duration::default();
 
@@ -350,6 +349,8 @@ impl<E: KvEngine> Initializer<E> {
             CDC_SCAN_LONG_DURATION_REGIONS.dec();
         });
 
+        let mut done = false;
+        let mut total_scanned_entries = 0;
         while !done {
             // Add metrics to observe long time incremental scan region count
             if !scan_long_time.load(Ordering::SeqCst)
@@ -358,8 +359,11 @@ impl<E: KvEngine> Initializer<E> {
                 CDC_SCAN_LONG_DURATION_REGIONS.inc();
                 scan_long_time.store(true, Ordering::SeqCst);
                 warn!(
-                    "cdc incremental scan takes too long"; "region_id" => region_id, "conn_id" => ?self.conn_id,
-                    "downstream_id" => ?self.downstream_id, "takes" => ?start.saturating_elapsed()
+                    "cdc incremental scan takes too long";
+                    "scanned_bytes" => scan_stat.emit, "scanned_entries" => total_scanned_entries,
+                    "sink_takes" => ?sink_time, "takes" => ?start.saturating_elapsed(),
+                    "downstream_id" => ?downstream_id, "request_id" => ?request_id,
+                    "region_id" => region_id, "conn_id" => ?conn_id,
                 );
             }
             // When downstream_state is Stopped, it means the corresponding
@@ -371,10 +375,16 @@ impl<E: KvEngine> Initializer<E> {
             let entries = self
                 .scan_batch(&mut scanner, cursors, &mut scan_stat)
                 .await?;
-            if let Some(None) = entries.last() {
-                // If the last element is None, it means scanning is finished.
-                done = true;
-            }
+
+            // If the last element is None, it means scanning is finished.
+            done = matches!(entries.last(), Some(None));
+            let scanned_length = if done {
+                entries.len().saturating_sub(1)
+            } else {
+                entries.len()
+            };
+            total_scanned_entries += scanned_length;
+
             debug!("cdc scan entries"; "len" => entries.len(), "region_id" => region_id);
             fail_point!("before_schedule_incremental_scan");
             let start_sink = Instant::now_coarse();
@@ -388,15 +398,18 @@ impl<E: KvEngine> Initializer<E> {
         }
         let takes = start.saturating_elapsed();
         info!("cdc async incremental scan finished";
-            "region_id" => region_id,
-            "downstream_id" => ?downstream_id,
-            "observe_id" => ?observe_id,
-            "conn_id" => ?conn_id,
+            "scanned_bytes" => scan_stat.emit,
+            "scanned_entries" => total_scanned_entries,
+            "sink_takes" => ?sink_time,
             "takes" => ?takes,
+            "downstream_id" => ?downstream_id,
+            "request_id" => ?request_id,
+            "region_id" => region_id,
+            "conn_id" => ?conn_id,
         );
 
         CDC_SCAN_DURATION_HISTOGRAM.observe(takes.as_secs_f64());
-        CDC_SCAN_SINK_DURATION_HISTOGRAM.observe(duration_to_sec(sink_time));
+        CDC_SCAN_SINK_DURATION_HISTOGRAM.observe(sink_time.as_secs_f64());
         Ok(scan_stat)
     }
 
@@ -525,7 +538,12 @@ impl<E: KvEngine> Initializer<E> {
             .send_all(events, self.scan_truncated.clone())
             .await
         {
-            warn!("cdc send scan event failed"; "err" => ?e, "req_id" => ?self.request_id);
+            warn!("cdc send scan event failed";
+                "error" => ?e,
+                "downstream_id" => ?self.downstream_id,
+                "request_id" => ?self.request_id,
+                "region_id" => self.region_id,
+                "conn_id" => ?self.conn_id);
             return Err(Error::Sink(e));
         }
 
@@ -541,22 +559,26 @@ impl<E: KvEngine> Initializer<E> {
 
     fn finish_scan_locks(&self, region: Region, locks: BTreeMap<Key, MiniLock>) {
         let observe_id = self.observe_handle.id;
-        info!(
-            "cdc has scanned all incremental scan locks";
-            "region_id" => region.get_id(),
-            "conn_id" => ?self.conn_id,
-            "downstream_id" => ?self.downstream_id,
+        let region_id = region.get_id();
+        info!("cdc has scanned all incremental scan locks";
             "lock_count" => locks.len(),
-            "observe_id" => ?observe_id,
+            "downstream_id" => ?self.downstream_id,
+            "request_id" => ?self.request_id,
+            "region_id" => region_id,
+            "conn_id" => ?self.conn_id,
         );
-
         fail_point!("before_schedule_resolver_ready");
         if let Err(e) = self.sched.schedule(Task::FinishScanLocks {
             observe_id,
             region,
             locks,
         }) {
-            error!("cdc schedule task failed"; "error" => ?e);
+            error!("cdc schedule finish scan locks task failed";
+                "error" => ?e,
+                "downstream_id" => ?self.downstream_id,
+                "request_id" => ?self.request_id,
+                "region_id" => region_id,
+                "conn_id" => ?self.conn_id);
         }
     }
 
@@ -585,7 +607,12 @@ impl<E: KvEngine> Initializer<E> {
         };
 
         if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
-            error!("cdc schedule cdc task failed"; "error" => ?e);
+            error!("cdc schedule deregister task failed";
+                "error" => ?e,
+                "downstream_id" => ?self.downstream_id,
+                "request_id" => ?self.request_id,
+                "region_id" => self.region_id,
+                "conn_id" => ?self.conn_id);
         }
     }
 
