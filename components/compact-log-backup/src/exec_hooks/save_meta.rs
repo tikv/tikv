@@ -11,7 +11,6 @@ use futures::{
 };
 use kvproto::brpb;
 use protobuf::Message;
-use serde::{Deserialize, Serialize};
 use tikv_util::{
     info,
     stream::{JustRetry, retry},
@@ -21,8 +20,8 @@ use uuid::Uuid;
 
 use super::CollectStatistic;
 use crate::{
-    ErrorKind, OtherErrExt,
-    compaction::{META_OUT_REL, SST_OUT_REL, meta::CompactionRunInfoBuilder},
+    ErrorKind,
+    compaction::{Input, META_OUT_REL, SST_OUT_REL, Subcompaction, meta::CompactionRunInfoBuilder},
     errors::Result,
     execute::hooking::{
         AfterFinishCtx, BeforeStartCtx, CId, ExecHooks, SkipReason, SubcompactionFinishCtx,
@@ -30,8 +29,6 @@ use crate::{
     },
     statistic::CompactLogBackupStatistic,
 };
-
-const CHECKPOINT_META_OUT_REL: &str = "checkpoint_meta";
 
 /// Save the metadata to external storage after every subcompaction. After
 /// everything done, it saves the whole compaction to a "migration" that can be
@@ -92,38 +89,65 @@ impl Default for BatchConfig {
 
 struct MetaBatchWriter {
     artifacts_dir: String,
-    checkpoint_dir: String,
     run_id: String,
     next_batch_seq: u64,
     buffer: brpb::LogFileSubcompactions,
-    subcompaction_ids: Vec<u64>,
     cfg: BatchConfig,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct CheckpointMetaEntry {
-    pub cmeta_key: String,
-    pub subcompaction_ids: Vec<u64>,
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct CheckpointInput {
+    pub path: String,
+    pub offset: u64,
+    pub length: u64,
 }
 
-pub(crate) struct LoadedCheckpointBatch {
-    pub(crate) subcompaction_ids: Vec<u64>,
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct CheckpointedSubcompaction {
+    pub inputs: Vec<CheckpointInput>,
 }
 
-impl CheckpointMetaEntry {
-    pub(crate) fn new(cmeta_key: String, subcompaction_ids: Vec<u64>) -> Self {
+impl CheckpointInput {
+    fn from_input(input: &Input) -> Self {
         Self {
-            cmeta_key,
-            subcompaction_ids,
+            path: input.id.name.to_string(),
+            offset: input.id.offset,
+            length: input.id.length,
         }
     }
+}
 
-    pub(crate) fn to_bytes(&self) -> Result<Vec<u8>> {
-        serde_json::to_vec(self).adapt_err()
+impl CheckpointedSubcompaction {
+    pub(crate) fn new(mut inputs: Vec<CheckpointInput>) -> Self {
+        inputs.sort_unstable();
+        Self { inputs }
     }
 
-    fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        serde_json::from_slice(bytes).adapt_err()
+    pub(crate) fn from_subcompaction(subcompaction: &Subcompaction) -> Self {
+        Self::new(
+            subcompaction
+                .inputs
+                .iter()
+                .map(CheckpointInput::from_input)
+                .collect(),
+        )
+    }
+
+    fn from_meta(subcompaction: &brpb::LogFileSubcompaction) -> Self {
+        Self::new(
+            subcompaction
+                .get_meta()
+                .get_sources()
+                .iter()
+                .flat_map(|source| {
+                    source.get_spans().iter().map(move |span| CheckpointInput {
+                        path: source.get_path().to_owned(),
+                        offset: span.offset,
+                        length: span.length,
+                    })
+                })
+                .collect(),
+        )
     }
 }
 
@@ -131,18 +155,14 @@ fn final_artifacts_prefix(out_prefix: &str) -> String {
     format!("{}/{}", out_prefix, META_OUT_REL)
 }
 
-pub(crate) fn checkpoint_meta_prefix(out_prefix: &str) -> String {
-    format!("{}/{}", out_prefix, CHECKPOINT_META_OUT_REL)
-}
-
-pub(crate) async fn list_checkpoint_meta_keys(
+async fn list_subcompaction_meta_keys(
     storage: &dyn ExternalStorage,
-    checkpoint_prefix: &str,
+    artifacts_prefix: &str,
 ) -> Result<Vec<String>> {
-    let mut stream = storage.iter_prefix(checkpoint_prefix);
+    let mut stream = storage.iter_prefix(artifacts_prefix);
     let mut keys = Vec::new();
     while let Some(item) = stream.try_next().await? {
-        if item.key.ends_with(".ckpt") {
+        if item.key.ends_with(".cmeta") {
             keys.push(item.key);
         }
     }
@@ -150,74 +170,50 @@ pub(crate) async fn list_checkpoint_meta_keys(
     Ok(keys)
 }
 
-pub(crate) async fn read_checkpoint_meta_entry(
+pub(crate) async fn load_checkpointed_subcompactions(
     storage: &dyn ExternalStorage,
-    key: &str,
-) -> Result<CheckpointMetaEntry> {
-    let mut content = vec![];
-    storage.read(key).read_to_end(&mut content).await?;
-    CheckpointMetaEntry::from_bytes(&content)
-}
-
-async fn read_validated_checkpoint_batch(
-    storage: &dyn ExternalStorage,
-    key: &str,
-) -> Result<LoadedCheckpointBatch> {
-    let checkpoint = read_checkpoint_meta_entry(storage, key).await?;
-
-    let mut content = vec![];
-    storage
-        .read(&checkpoint.cmeta_key)
-        .read_to_end(&mut content)
-        .await?;
-    let metas = protobuf::parse_from_bytes::<brpb::LogFileSubcompactions>(&content)?;
-    if metas.subcompactions.len() != checkpoint.subcompaction_ids.len() {
-        return Err(crate::Error::from(ErrorKind::Other(format!(
-            "checkpoint entry and cmeta batch size mismatch: key={}, checkpoint_ids={}, cmeta_subcompactions={}",
-            checkpoint.cmeta_key,
-            checkpoint.subcompaction_ids.len(),
-            metas.subcompactions.len()
-        ))));
-    }
-
-    Ok(LoadedCheckpointBatch {
-        subcompaction_ids: checkpoint.subcompaction_ids,
-    })
-}
-
-pub(crate) async fn load_validated_checkpoint_batches(
-    storage: &dyn ExternalStorage,
-    checkpoint_prefix: &str,
-) -> Result<Vec<LoadedCheckpointBatch>> {
-    let mut batches = Vec::new();
-    for key in list_checkpoint_meta_keys(storage, checkpoint_prefix).await? {
-        match read_validated_checkpoint_batch(storage, &key).await {
-            Ok(batch) => batches.push(batch),
+    artifacts_prefix: &str,
+) -> Result<Vec<CheckpointedSubcompaction>> {
+    let mut subcompactions = Vec::new();
+    for key in list_subcompaction_meta_keys(storage, artifacts_prefix).await? {
+        let mut content = vec![];
+        match storage.read(&key).read_to_end(&mut content).await {
+            Ok(_) => match protobuf::parse_from_bytes::<brpb::LogFileSubcompactions>(&content) {
+                Ok(metas) => subcompactions.extend(
+                    metas
+                        .subcompactions
+                        .iter()
+                        .map(CheckpointedSubcompaction::from_meta),
+                ),
+                Err(err) => {
+                    warn!("SaveMeta: failed to load subcompaction meta batch, ignoring it.";
+                        "key" => %key,
+                        "err" => %err);
+                }
+            },
             Err(err) => {
-                warn!("SaveMeta: failed to load checkpointed batch, ignoring it.";
+                warn!("SaveMeta: failed to read subcompaction meta batch, ignoring it.";
                     "key" => %key,
                     "err" => %err);
             }
         }
     }
-    Ok(batches)
+    Ok(subcompactions)
 }
 
 impl MetaBatchWriter {
     fn new(out_prefix: &str, cfg: BatchConfig) -> Self {
         Self {
             artifacts_dir: final_artifacts_prefix(out_prefix),
-            checkpoint_dir: checkpoint_meta_prefix(out_prefix),
             run_id: Uuid::new_v4().to_string(),
             next_batch_seq: 0,
             buffer: brpb::LogFileSubcompactions::new(),
-            subcompaction_ids: Vec::new(),
             cfg,
         }
     }
 
     fn should_flush(&self, current_bytes: usize) -> bool {
-        self.subcompaction_ids.len() >= self.cfg.max_subcompactions_per_batch
+        self.buffer.subcompactions.len() >= self.cfg.max_subcompactions_per_batch
             || current_bytes >= self.cfg.target_bytes_per_batch
     }
 
@@ -237,11 +233,9 @@ impl MetaBatchWriter {
     async fn append_and_flush_if_needed(
         &mut self,
         storage: &dyn ExternalStorage,
-        subcompaction_id: u64,
-        subcompaction: brpb::LogFileSubcompaction,
+        subcompaction_meta: brpb::LogFileSubcompaction,
     ) -> Result<()> {
-        self.buffer.mut_subcompactions().push(subcompaction);
-        self.subcompaction_ids.push(subcompaction_id);
+        self.buffer.mut_subcompactions().push(subcompaction_meta);
         let bytes = self.buffer.write_to_bytes()?;
         if self.should_flush(bytes.len()) {
             self.flush_bytes(storage, &bytes).await?;
@@ -250,7 +244,7 @@ impl MetaBatchWriter {
     }
 
     async fn flush(&mut self, storage: &dyn ExternalStorage) -> Result<()> {
-        if self.subcompaction_ids.is_empty() {
+        if self.buffer.subcompactions.is_empty() {
             return Ok(());
         }
         let bytes = self.buffer.write_to_bytes()?;
@@ -263,14 +257,8 @@ impl MetaBatchWriter {
         let batch_key = format!("{}/{}", self.artifacts_dir, batch_file_name);
         Self::write_bytes(storage, &batch_key, bytes).await?;
 
-        let checkpoint = CheckpointMetaEntry::new(batch_key, self.subcompaction_ids.clone());
-        let checkpoint_key = format!("{}/checkpoint_{}.ckpt", self.checkpoint_dir, batch_id);
-        let checkpoint_bytes = checkpoint.to_bytes()?;
-        Self::write_bytes(storage, &checkpoint_key, &checkpoint_bytes).await?;
-
         self.next_batch_seq += 1;
         self.buffer = brpb::LogFileSubcompactions::new();
-        self.subcompaction_ids.clear();
         Ok(())
     }
 }
@@ -347,11 +335,7 @@ impl ExecHooks for SaveMeta {
             ))
         })?;
         writer
-            .append_and_flush_if_needed(
-                cx.external_storage,
-                cx.result.origin.crc64(),
-                cx.result.meta.clone(),
-            )
+            .append_and_flush_if_needed(cx.external_storage, cx.result.meta.clone())
             .await?;
         Result::Ok(())
     }

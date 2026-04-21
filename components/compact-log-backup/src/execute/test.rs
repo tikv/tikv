@@ -20,14 +20,10 @@ use tokio::sync::mpsc::Sender;
 use super::{Execution, ExecutionConfig, ShardConfig};
 use crate::{
     ErrorKind,
-    compaction::SubcompactionResult,
+    compaction::{META_OUT_REL, SubcompactionResult},
     errors::OtherErrExt,
     exec_hooks::{
-        checkpoint::Checkpoint,
-        consistency::StorageConsistencyGuard,
-        save_meta::{
-            SaveMeta, checkpoint_meta_prefix, list_checkpoint_meta_keys, read_checkpoint_meta_entry,
-        },
+        checkpoint::Checkpoint, consistency::StorageConsistencyGuard, save_meta::SaveMeta,
         skip_small_compaction::SkipSmallCompaction,
     },
     execute::hooking::{CId, ExecHooks, SubcompactionFinishCtx},
@@ -288,45 +284,40 @@ async fn test_checkpointing_reuses_only_committed_batches() {
         }
     }
 
-    let first_err = tokio::task::spawn_blocking({
-        let be = st.backend();
-        move || {
-            create_compaction(be).run((
-                SaveMeta::default().with_batch_limits(2, usize::MAX),
-                AbortAfterNFinishes {
+    let failure_count = 3;
+    let run_failed_attempt = |with_checkpoint| {
+        tokio::task::spawn_blocking({
+            let be = st.backend();
+            move || {
+                let mut exec = create_compaction(be);
+                exec.max_concurrent_subcompaction = 1;
+                let save_meta = SaveMeta::default().with_batch_limits(2, usize::MAX);
+                let abort = AbortAfterNFinishes {
                     seen: Arc::new(AtomicU64::new(0)),
                     abort_at: 5,
-                },
-            ))
-        }
-    })
-    .await
-    .unwrap()
-    .unwrap_err();
-    assert!(first_err.kind.to_string().contains(ERR_MSG));
+                };
+                if with_checkpoint {
+                    exec.run(((save_meta, Checkpoint::default()), abort))
+                } else {
+                    exec.run((save_meta, abort))
+                }
+            }
+        })
+    };
+
+    for failed_attempt in 0..failure_count {
+        let err = run_failed_attempt(failed_attempt != 0)
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert!(err.kind.to_string().contains(ERR_MSG));
+    }
     assert!(st.load_migrations().await.unwrap().is_empty());
 
-    let mut committed_before = Vec::new();
-    for key in list_checkpoint_meta_keys(
-        st.storage().as_ref(),
-        &checkpoint_meta_prefix("test-output"),
-    )
-    .await
-    .unwrap()
-    {
-        let checkpoint = read_checkpoint_meta_entry(st.storage().as_ref(), &key)
-            .await
-            .unwrap();
-        let mut content = vec![];
-        st.storage()
-            .read(&checkpoint.cmeta_key)
-            .read_to_end(&mut content)
-            .await
-            .unwrap();
-        let metas =
-            protobuf::parse_from_bytes::<kvproto::brpb::LogFileSubcompactions>(&content).unwrap();
-        committed_before.extend(metas.subcompactions.into_iter());
-    }
+    let committed_before = st
+        .load_subcompactions(&format!("test-output/{}", META_OUT_REL))
+        .await
+        .unwrap();
     let committed_regions = committed_before
         .iter()
         .map(|subc| subc.get_meta().get_region_id())
@@ -338,15 +329,16 @@ async fn test_checkpointing_reuses_only_committed_batches() {
     let executed_count = tokio::task::spawn_blocking({
         let be = st.backend();
         move || {
-            create_compaction(be)
-                .run((
-                    (
-                        SaveMeta::default().with_batch_limits(2, usize::MAX),
-                        Checkpoint::default(),
-                    ),
-                    CompactionSpy(tx),
-                ))
-                .unwrap();
+            let mut exec = create_compaction(be);
+            exec.max_concurrent_subcompaction = 1;
+            exec.run((
+                (
+                    SaveMeta::default().with_batch_limits(2, usize::MAX),
+                    Checkpoint::default(),
+                ),
+                CompactionSpy(tx),
+            ))
+            .unwrap();
         }
     });
 
