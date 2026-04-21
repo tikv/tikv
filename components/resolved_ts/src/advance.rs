@@ -289,7 +289,7 @@ impl LeadershipResolver {
                         // because performing stale read on learners require it.
                         store_req_map
                             .entry(peer.store_id)
-                            .or_insert_with(CheckLeaderRequest::default)
+                            .or_default()
                             .regions
                             .push(leader_info.clone());
                         if peer.get_role() != PeerRole::Learner {
