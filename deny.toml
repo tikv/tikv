@@ -94,6 +94,11 @@ ignore = [
     # raft-engine revision in this workspace still hard-pins serde = 1.0.228,
     # so this cannot be resolved with a lockfile-only update.
     "RUSTSEC-2026-0009",
+    # Ignore RUSTSEC-2026-0097 (unsound issue in rand with a custom logger using
+    # rand::rng()). The vulnerability requires a custom logger that calls
+    # rand::rng() / thread_rng() during logging, which TiKV does not do.
+    # TODO: Upgrade rand to >=0.9.3 or >=0.10.1 when possible.
+    "RUSTSEC-2026-0097",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,

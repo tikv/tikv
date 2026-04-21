@@ -349,10 +349,34 @@ impl<E: KvEngine> SstImporter<E> {
     }
 
     pub fn remove_dir(&self, prefix: &str) -> Result<()> {
+        // Validate the prefix lexically before touching the filesystem.
+        // This prevents information leakage via path-existence side-channels
+        // (e.g. an attacker distinguishing "missing" vs "forbidden" out-of-root
+        // paths) and avoids exposing resolved server paths in error messages.
+        let prefix_path = Path::new(prefix);
+        if prefix_path.is_absolute() {
+            return Err(Error::InvalidSstPath(PathBuf::from(prefix)));
+        }
+        for component in prefix_path.components() {
+            if component == std::path::Component::ParentDir {
+                return Err(Error::InvalidSstPath(PathBuf::from(prefix)));
+            }
+        }
+
         let path = self.dir.get_root_dir().join(prefix);
         if path.exists() {
-            file_system::remove_dir_all(&path)?;
-            info!("directory {:?} has been removed", path);
+            // Defense-in-depth: canonicalize to catch symlink-based escapes.
+            let canonical_root = self.dir.get_root_dir().canonicalize().map_err(Error::Io)?;
+            let canonical_path = path.canonicalize().map_err(Error::Io)?;
+            // Reject paths that escape the root or resolve to the root itself.
+            // "" and "." both canonicalize to the root, so an equality check is
+            // required in addition to the prefix check.
+            if canonical_path == canonical_root || !canonical_path.starts_with(&canonical_root) {
+                // Return the raw user-supplied prefix, not the resolved path.
+                return Err(Error::InvalidSstPath(PathBuf::from(prefix)));
+            }
+            file_system::remove_dir_all(&canonical_path)?;
+            info!("directory {:?} has been removed", canonical_path);
         }
         Ok(())
     }
@@ -5478,5 +5502,115 @@ mod tests {
         assert_eq!(collected[0].0, get_encoded_key(b"t123_r01", 1));
         assert_eq!(collected[1].0, get_encoded_key(b"t123_r04", 1));
         assert_eq!(collected[2].0, get_encoded_key(b"t123_r07", 1));
+    }
+
+    #[test]
+    fn test_remove_dir_path_traversal() {
+        let import_dir = tempfile::tempdir().unwrap();
+        let importer = SstImporter::<TestEngine>::new(
+            &Config::default(),
+            import_dir.path(),
+            None,
+            ApiVersion::V1,
+            false,
+        )
+        .unwrap();
+
+        // Non-existent valid subdirectory: no-op, should succeed.
+        importer.remove_dir("subdir").unwrap();
+
+        // Existing valid subdirectory: should be removed.
+        let legit = import_dir.path().join("legit");
+        std::fs::create_dir_all(&legit).unwrap();
+        assert!(legit.exists());
+        importer.remove_dir("legit").unwrap();
+        assert!(!legit.exists());
+
+        // Nested valid subdirectory.
+        let nested = import_dir.path().join("a").join("b");
+        std::fs::create_dir_all(&nested).unwrap();
+        importer.remove_dir("a/b").unwrap();
+        assert!(!nested.exists());
+
+        // `..` component: must be rejected before path.exists() is called.
+        assert!(matches!(
+            importer.remove_dir("../escape"),
+            Err(Error::InvalidSstPath(_))
+        ));
+        assert!(matches!(
+            importer.remove_dir("../../escape"),
+            Err(Error::InvalidSstPath(_))
+        ));
+        // Mixed valid/traversal path.
+        assert!(matches!(
+            importer.remove_dir("a/../../escape"),
+            Err(Error::InvalidSstPath(_))
+        ));
+
+        // Absolute path: must be rejected.
+        assert!(matches!(
+            importer.remove_dir("/etc"),
+            Err(Error::InvalidSstPath(_))
+        ));
+        assert!(matches!(
+            importer.remove_dir("/tmp"),
+            Err(Error::InvalidSstPath(_))
+        ));
+
+        // Empty prefix resolves to the import root itself: must be rejected.
+        assert!(matches!(
+            importer.remove_dir(""),
+            Err(Error::InvalidSstPath(_))
+        ));
+        // "." also resolves to the import root itself: must be rejected.
+        assert!(matches!(
+            importer.remove_dir("."),
+            Err(Error::InvalidSstPath(_))
+        ));
+        // The import root directory must still exist after both rejections.
+        assert!(import_dir.path().exists());
+
+        // The error must carry the raw user-supplied prefix, not a resolved
+        // server-side path (i.e. it must not start with the import root).
+        let root = import_dir.path().to_str().unwrap().to_owned();
+        match importer.remove_dir("../escape") {
+            Err(Error::InvalidSstPath(p)) => {
+                let p_str = p.to_str().unwrap();
+                assert!(
+                    !p_str.starts_with(&root),
+                    "error must not expose resolved path: got {p_str}"
+                );
+                assert_eq!(p_str, "../escape");
+            }
+            other => panic!("expected InvalidSstPath, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_remove_dir_symlink_escape() {
+        let import_dir = tempfile::tempdir().unwrap();
+        let outside_dir = tempfile::tempdir().unwrap();
+        let importer = SstImporter::<TestEngine>::new(
+            &Config::default(),
+            import_dir.path(),
+            None,
+            ApiVersion::V1,
+            false,
+        )
+        .unwrap();
+
+        // Create a symlink inside import_dir pointing outside the root.
+        let symlink_path = import_dir.path().join("escape_link");
+        std::os::unix::fs::symlink(outside_dir.path(), &symlink_path).unwrap();
+
+        // Removal via symlink must be rejected by the canonicalize check.
+        assert!(matches!(
+            importer.remove_dir("escape_link"),
+            Err(Error::InvalidSstPath(_))
+        ));
+
+        // The target directory outside import root must remain untouched.
+        assert!(outside_dir.path().exists());
     }
 }
