@@ -2463,6 +2463,12 @@ impl<E: KvEngine> SstImporter<E> {
                 user_key_buf.extend_from_slice(user_key);
 
                 while write_iter.valid()? {
+                    count += 1;
+                    if count >= 1024 {
+                        count = 0;
+                        yield_check.check().await;
+                    }
+
                     let write_origin = keys::origin_key(write_iter.key());
                     if is_after_end_bound(write_origin, &range_end) {
                         break;
@@ -2549,11 +2555,6 @@ impl<E: KvEngine> SstImporter<E> {
                                 write_iter.next()?;
                             }
 
-                            count += 1;
-                            if count >= 1024 {
-                                count = 0;
-                                yield_check.check().await;
-                            }
                             continue 'outer;
                         }
                         WriteType::Lock | WriteType::Rollback => {
