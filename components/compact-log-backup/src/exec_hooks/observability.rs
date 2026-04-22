@@ -129,7 +129,7 @@ impl ExecHooks for Observability {
         self.meta_len = meta_len;
         cx.shift_ts.set(shift_ts);
 
-        info!("About to start compaction."; &cx.this.cfg,
+        info!("About to start compaction."; &cx.this.cfg, "shift_ts" => shift_ts,
             "url" => cx.storage.url().map(|v| v.to_string()).unwrap_or_else(|err| format!("<err: {err}>")));
         Ok(())
     }

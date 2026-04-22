@@ -236,9 +236,9 @@ impl MetaBatchWriter {
         subcompaction_meta: brpb::LogFileSubcompaction,
     ) -> Result<()> {
         self.buffer.mut_subcompactions().push(subcompaction_meta);
-        let bytes = self.buffer.write_to_bytes()?;
-        if self.should_flush(bytes.len()) {
-            self.flush_bytes(storage, &bytes).await?;
+        let current_bytes = self.buffer.compute_size();
+        if self.should_flush(current_bytes as usize) {
+            self.flush(storage).await?;
         }
         Ok(())
     }

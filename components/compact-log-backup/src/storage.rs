@@ -205,7 +205,7 @@ fn parse_approx_ts_range_from_backupmeta_path(path: &str) -> Option<(u64, u64)> 
 }
 
 fn intersects_ts_window(min_ts: u64, max_ts: u64, from_ts: u64, until_ts: u64) -> bool {
-    max_ts >= from_ts && min_ts < until_ts
+    max_ts >= from_ts && min_ts <= until_ts
 }
 
 fn store_id_for_sharding_from_path(path: &str) -> Result<u64> {
@@ -622,10 +622,9 @@ impl<'a> StreamMetaStorage<'a> {
                     format!("cannot parse backup metadata path: {}", item.key),
                 )
             })?;
-            if intersects_ts_window(parsed.min_ts, parsed.max_ts, from_ts, until_ts) {
-                if parsed.min_begin_ts_in_default_cf > 0 {
+            if intersects_ts_window(parsed.min_ts, parsed.max_ts, from_ts, until_ts)
+                && parsed.min_begin_ts_in_default_cf > 0 {
                     shift_ts = shift_ts.min(parsed.min_begin_ts_in_default_cf);
-                }
             }
             n += 1;
         }
