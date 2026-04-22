@@ -150,6 +150,11 @@ pub struct Config {
     // When merge raft messages into a batch message, leave a buffer.
     #[online_config(skip)]
     pub raft_client_grpc_send_msg_buffer: usize,
+    // NOTE: the memory of a single item is 216B, so with 16k capacity, the memory of a single
+    // queue is ~3MB.
+    /// the total capacity of raft_client's message queue to specific store.
+    /// The capacity of a single raft_client is:  raft_client_queue_size /
+    /// grpc_raft_conn_num.
     #[online_config(skip)]
     pub raft_client_queue_size: usize,
     // Test only
@@ -500,6 +505,12 @@ impl Config {
         }
         if self.graceful_shutdown_timeout.0.as_secs() == 0 {
             warn!("graceful shutdown timeout is disabled");
+        }
+
+        if self.grpc_raft_conn_num == 0 {
+            return Err(box_err!(
+                "server.grpc_raft_conn_num must be greater than 0"
+            ));
         }
         Ok(())
     }
