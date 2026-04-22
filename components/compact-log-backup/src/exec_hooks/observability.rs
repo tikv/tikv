@@ -13,7 +13,6 @@ use crate::{
         SubcompactionStartCtx,
     },
     statistic::prom,
-    storage::StreamMetaStorage,
     util::storage_url,
 };
 
@@ -119,17 +118,9 @@ impl ExecHooks for Observability {
         };
 
         cx.async_rt.spawn(sigusr1_handler);
-        let (meta_len, shift_ts) = StreamMetaStorage::count_objects(
-            cx.storage,
-            cx.this.cfg.shard,
-            cx.this.cfg.from_ts,
-            cx.this.cfg.until_ts,
-        )
-        .await?;
-        self.meta_len = meta_len;
-        cx.shift_ts.set(shift_ts);
+        self.meta_len = cx.meta_count;
 
-        info!("About to start compaction."; &cx.this.cfg, "shift_ts" => shift_ts,
+        info!("About to start compaction."; &cx.this.cfg,
             "url" => cx.storage.url().map(|v| v.to_string()).unwrap_or_else(|err| format!("<err: {err}>")));
         Ok(())
     }

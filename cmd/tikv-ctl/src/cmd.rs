@@ -673,6 +673,14 @@ pub enum Cmd {
         )]
         until_ts: u64,
         #[structopt(
+            long = "cal-shift-ts",
+            help(
+                "extend the default CF scan lower bound to the minimum min_begin_default_ts in \
+                metadata overlapping [--from, --until)."
+            )
+        )]
+        cal_shift_ts: bool,
+        #[structopt(
             short = "N",
             long = "concurrency",
             default_value = "32",
@@ -966,6 +974,27 @@ mod tests {
 
         match opt.cmd.unwrap() {
             Cmd::CompactLogBackup { gcp_v2_enable, .. } => assert!(!gcp_v2_enable),
+            cmd => panic!("unexpected command: {:?}", std::mem::discriminant(&cmd)),
+        }
+    }
+
+    #[test]
+    fn compact_log_backup_cal_shift_ts_flag() {
+        let opt = Opt::from_iter_safe([
+            "tikv-ctl",
+            "compact-log-backup",
+            "--from",
+            "1",
+            "--until",
+            "2",
+            "--storage-base64",
+            "AA==",
+            "--cal-shift-ts",
+        ])
+        .unwrap();
+
+        match opt.cmd.unwrap() {
+            Cmd::CompactLogBackup { cal_shift_ts, .. } => assert!(cal_shift_ts),
             cmd => panic!("unexpected command: {:?}", std::mem::discriminant(&cmd)),
         }
     }

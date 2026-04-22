@@ -30,7 +30,7 @@ use super::{
         collector::{CollectSubcompaction, CollectSubcompactionConfig},
         exec::{SubcompactExt, SubcompactionExec},
     },
-    storage::{LoadFromExt, StreamMetaStorage},
+    storage::{CountObjectsExt, LoadFromExt, StreamMetaStorage},
 };
 use crate::{
     ErrorKind,
@@ -135,9 +135,11 @@ pub struct ExecutionConfig {
     /// Optional sharding configuration. When set, only inputs belonging to
     /// this shard will be compacted.
     pub shard: Option<ShardConfig>,
-    /// Filter out default CF files don't have any record with TS less than
-    /// this.
+    /// Lower bound for selecting default CF files. Defaults to `from_ts`.
     pub shift_ts: u64,
+    /// Whether to calculate `shift_ts` from backup metadata names before
+    /// collecting subcompactions.
+    pub calculate_shift_ts: bool,
     /// Filter out write CF files don't have any record with TS less than this.
     pub from_ts: u64,
     /// Filter out write CF files don't have any record with TS great or equal
@@ -162,6 +164,7 @@ impl slog::KV for ExecutionConfig {
         serializer: &mut dyn slog::Serializer,
     ) -> slog::Result {
         serializer.emit_u64("shift_ts", self.shift_ts)?;
+        serializer.emit_bool("calculate_shift_ts", self.calculate_shift_ts)?;
         serializer.emit_u64("from_ts", self.from_ts)?;
         serializer.emit_u64("until_ts", self.until_ts)?;
         if let Some(shard) = self.shard {
@@ -200,6 +203,7 @@ impl ExecutionConfig {
         }
         hasher.write(&self.from_ts.to_le_bytes());
         hasher.write(&self.until_ts.to_le_bytes());
+        hasher.write(&[self.calculate_shift_ts as u8]);
         hasher.write(&util::compression_type_to_u8(self.compression).to_le_bytes());
         hasher.write(&self.compression_level.unwrap_or(0).to_le_bytes());
 
@@ -276,7 +280,7 @@ impl Execution {
         )
     }
 
-    async fn run_prepared(&self, cx: &mut ExecuteCtx<'_, impl ExecHooks>) -> Result<()> {
+    async fn run_prepared(&mut self, cx: &mut ExecuteCtx<'_, impl ExecHooks>) -> Result<()> {
         let mut ext = LoadFromExt::default();
         ext.prefetch_running_count = self.cfg.prefetch_running_count as usize;
         ext.prefetch_buffer_count = self.cfg.prefetch_buffer_count as usize;
@@ -286,13 +290,22 @@ impl Execution {
             ref mut hooks,
             ..
         } = cx;
-        let shift_ts = Cell::new(self.cfg.shift_ts);
+        let metadata_scan = StreamMetaStorage::count_objects(
+            storage.as_ref(),
+            CountObjectsExt {
+                calculate_shift_ts: self.cfg.calculate_shift_ts,
+                from_ts: self.cfg.from_ts,
+                until_ts: self.cfg.until_ts,
+            },
+        )
+        .await?;
+        self.cfg.shift_ts = metadata_scan.shift_ts;
 
         let cx = BeforeStartCtx {
             storage: storage.as_ref(),
             async_rt: &tokio::runtime::Handle::current(),
             this: self,
-            shift_ts: &shift_ts,
+            meta_count: metadata_scan.count,
         };
         hooks.before_execution_started(cx).await?;
 
@@ -311,7 +324,7 @@ impl Execution {
         let mut compact_stream = CollectSubcompaction::new(
             stream,
             CollectSubcompactionConfig {
-                compact_shift_from_ts: shift_ts.get(),
+                compact_shift_from_ts: self.cfg.shift_ts,
                 compact_from_ts: self.cfg.from_ts,
                 compact_to_ts: self.cfg.until_ts,
                 subcompaction_size_threshold: ReadableSize::mb(128).0,
@@ -422,7 +435,7 @@ impl Execution {
         Result::Ok(())
     }
 
-    pub fn run(self, mut hooks: impl ExecHooks) -> Result<()> {
+    pub fn run(mut self, mut hooks: impl ExecHooks) -> Result<()> {
         let storage =
             external_storage::create_storage(&self.external_storage, self.backend_config.clone())?;
         let storage: Arc<dyn ExternalStorage> = Arc::from(storage);

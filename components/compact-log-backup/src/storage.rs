@@ -338,6 +338,18 @@ pub struct LoadFromExt<'a> {
     pub prefetch_buffer_count: usize,
 }
 
+pub struct CountObjectsExt {
+    pub calculate_shift_ts: bool,
+    pub from_ts: u64,
+    pub until_ts: u64,
+}
+
+#[derive(Debug)]
+pub struct CountObjectsResult {
+    pub count: u64,
+    pub shift_ts: u64,
+}
+
 impl LoadFromExt<'_> {
     fn enter_load_span(&self) -> Option<Entered<'_>> {
         self.loading_content_span.as_ref().map(|span| span.enter())
@@ -589,46 +601,35 @@ impl<'a> StreamMetaStorage<'a> {
 
     /// Count metadata objects under the metadata prefix.
     ///
-    /// Also returns `shift_ts`: global minimum `min_begin_ts_in_default_cf`
-    /// among metadata whose `[min_ts, max_ts)` intersects `[from_ts,
-    /// until_ts)`, merged with initial `from_ts`. When `shard` is set,
-    /// paths that do not match the backupmeta filename format are rejected.
-    ///
-    /// Without sharding, unparseable paths are counted but ignored for
-    /// `shift_ts`.
+    /// When enabled, also returns the minimum `min_begin_default_ts` from
+    /// metadata overlapping `[from_ts, until_ts]`.
     pub async fn count_objects(
         s: &'a dyn ExternalStorage,
-        shard: Option<ShardConfig>,
-        from_ts: u64,
-        until_ts: u64,
-    ) -> std::io::Result<(u64, u64)> {
-        let mut n = 0;
-        let mut shift_ts = from_ts;
+        ext: CountObjectsExt,
+    ) -> std::io::Result<CountObjectsResult> {
+        let mut count = 0;
+        let mut shift_ts = ext.from_ts;
         // NOTE: should we allow user to specify the prefix?
         let mut items = s.iter_prefix(METADATA_PREFIX);
-        if shard.is_none() {
-            // Without sharding, unparseable paths are counted but ignored for
-            // `shift_ts` because they may not be valid backup metadata paths.
-            while items.try_next().await?.is_some() {
-                n += 1;
-            }
-            return Ok((n, shift_ts));
-        }
-
         while let Some(item) = items.try_next().await? {
+            count += 1;
+            if !ext.calculate_shift_ts {
+                continue;
+            }
+
             let parsed = parse_backupmeta_path(&item.key).ok_or_else(|| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     format!("cannot parse backup metadata path: {}", item.key),
                 )
             })?;
-            if intersects_ts_window(parsed.min_ts, parsed.max_ts, from_ts, until_ts)
-                && parsed.min_begin_ts_in_default_cf > 0 {
-                    shift_ts = shift_ts.min(parsed.min_begin_ts_in_default_cf);
+            if intersects_ts_window(parsed.min_ts, parsed.max_ts, ext.from_ts, ext.until_ts)
+                && parsed.min_begin_ts_in_default_cf > 0
+            {
+                shift_ts = shift_ts.min(parsed.min_begin_ts_in_default_cf);
             }
-            n += 1;
         }
-        Ok((n, shift_ts))
+        Ok(CountObjectsResult { count, shift_ts })
     }
 }
 
@@ -1080,8 +1081,8 @@ mod test {
     use protobuf::Chars;
 
     use super::{
-        LoadFromExt, MetaFile, StreamMetaStorage, parse_approx_ts_range_from_backupmeta_path,
-        parse_store_id_from_backupmeta_path,
+        CountObjectsExt, LoadFromExt, MetaFile, StreamMetaStorage,
+        parse_approx_ts_range_from_backupmeta_path, parse_store_id_from_backupmeta_path,
     };
     use crate::{
         storage::{LogFileId, MetaEditFilters, MigrationStorageWrapper},
@@ -1336,7 +1337,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_count_objects_updates_shift_ts_without_shard() {
+    async fn test_count_objects_can_skip_shift_ts_calculation() {
         use external_storage::{ExternalStorage, UnpinReader};
         use futures::io::Cursor;
 
@@ -1356,11 +1357,80 @@ mod test {
                 .unwrap();
         }
 
-        let (count, shift_ts) =
-            StreamMetaStorage::count_objects(st.storage().as_ref(), None, 0x40, 0xD0)
+        let result = StreamMetaStorage::count_objects(
+            st.storage().as_ref(),
+            CountObjectsExt {
+                calculate_shift_ts: false,
+                from_ts: 0x40,
+                until_ts: 0xD0,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.count, 3);
+        assert_eq!(result.shift_ts, 0x40);
+    }
+
+    #[tokio::test]
+    async fn test_count_objects_updates_shift_ts_when_enabled() {
+        use external_storage::{ExternalStorage, UnpinReader};
+        use futures::io::Cursor;
+
+        let st = TmpStorage::create();
+        let names = [
+            // in range, min_begin_default=0x20
+            "v1/backupmeta/000000000000012C0000000000000001-d0000000000000020l0000000000000064u00000000000000C8.meta",
+            // in range, but min_begin_default is larger.
+            "v1/backupmeta/000000000000012C0000000000000002-d0000000000000030l0000000000000040u00000000000000D0.meta",
+            // out of range (min_ts > until), should not affect shift_ts
+            "v1/backupmeta/000000000000012C0000000000000003-d0000000000000010l0000000000000100u0000000000000120.meta",
+        ];
+        for name in names {
+            st.storage()
+                .write(name, UnpinReader(Box::new(Cursor::new(vec![]))), 0)
                 .await
                 .unwrap();
-        assert_eq!(count, 3);
-        assert_eq!(shift_ts, 0x20);
+        }
+
+        let result = StreamMetaStorage::count_objects(
+            st.storage().as_ref(),
+            CountObjectsExt {
+                calculate_shift_ts: true,
+                from_ts: 0x40,
+                until_ts: 0xD0,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.count, 3);
+        assert_eq!(result.shift_ts, 0x20);
+    }
+
+    #[tokio::test]
+    async fn test_count_objects_requires_parseable_path_when_shift_ts_enabled() {
+        use external_storage::{ExternalStorage, UnpinReader};
+        use futures::io::Cursor;
+
+        let st = TmpStorage::create();
+        st.storage()
+            .write(
+                "v1/backupmeta/not-a-parsable-meta-name.meta",
+                UnpinReader(Box::new(Cursor::new(vec![]))),
+                0,
+            )
+            .await
+            .unwrap();
+
+        let err = StreamMetaStorage::count_objects(
+            st.storage().as_ref(),
+            CountObjectsExt {
+                calculate_shift_ts: true,
+                from_ts: 0x40,
+                until_ts: 0xD0,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 }
