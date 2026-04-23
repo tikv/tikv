@@ -856,7 +856,7 @@ where
                                 Self::handle_resume_grpc(grpc_service_mgr)
                             }
                             (Method::GET, "/async_tasks") => Self::dump_async_trace(),
-                            (Method::GET, "debug/ime/cached_regions") => Self::handle_dumple_cached_regions(in_memory_engine.as_ref()),
+                            (Method::GET, "/debug/ime/cached_regions") => Self::handle_dumple_cached_regions(in_memory_engine.as_ref()),
                             (Method::GET, "/force_partition_ranges") => Self::dump_partition_ranges(&force_partition_range_mgr),
                             (Method::POST, "/force_partition_ranges") => Self::add_partition_ranges(req, &force_partition_range_mgr).await,
                             (Method::DELETE, "/force_partition_ranges") => Self::remove_partition_ranges(req, &force_partition_range_mgr).await,
@@ -999,7 +999,7 @@ where
     }
 }
 
-#[derive(Serialize, Ord, PartialOrd, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Ord, PartialOrd, PartialEq, Eq)]
 struct CachedRegion {
     start: String,
     end: String,
@@ -1330,6 +1330,7 @@ mod tests {
     use http::header::{HeaderValue, ACCEPT_ENCODING};
     use hyper::{body::Buf, client::HttpConnector, Body, Client, Method, Request, StatusCode, Uri};
     use hyper_openssl::HttpsConnector;
+    use in_memory_engine::{InMemoryEngineConfig, InMemoryEngineContext, RegionCacheMemoryEngine};
     use online_config::OnlineConfig;
     use openssl::ssl::{SslConnector, SslFiletype, SslMethod};
     use raftstore::store::region_meta::RegionMeta;
@@ -1337,11 +1338,21 @@ mod tests {
     use service::service_manager::GrpcServiceManager;
     use test_util::new_security_cfg;
     use tikv_kv::RaftExtension;
+<<<<<<< HEAD
     use tikv_util::logger::get_log_level;
 
     use crate::{
         config::{ConfigController, TikvConfig},
         server::status_server::{profile::TEST_PROFILE_MUTEX, LogLevelRequest, StatusServer},
+=======
+    use tikv_util::{GLOBAL_SERVER_READINESS, config::VersionTrack, logger::get_log_level};
+
+    use crate::{
+        config::{ConfigController, TikvConfig},
+        server::status_server::{
+            CachedRegion, LogLevelRequest, StatusServer, profile::TEST_PROFILE_MUTEX,
+        },
+>>>>>>> 988abfcf57 (server: fix ime debug url path (#19547))
         storage::config::EngineType,
     };
 
@@ -2107,4 +2118,122 @@ mod tests {
             status_server.stop();
         }
     }
+<<<<<<< HEAD
+=======
+
+    #[test]
+    fn test_ready_endpoint() {
+        let mut status_server = StatusServer::new(
+            1,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+            None,
+            GrpcServiceManager::dummy(),
+            None,
+            Default::default(),
+        )
+        .unwrap();
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr);
+        let client = Client::new();
+        let uri = Uri::builder()
+            .scheme("http")
+            .authority(status_server.listening_addr().to_string().as_str())
+            .path_and_query("/ready?verbose")
+            .build()
+            .unwrap();
+        let uri2 = uri.clone();
+        // Set one readiness condition to true.
+        GLOBAL_SERVER_READINESS
+            .connected_to_pd
+            .store(true, Ordering::Relaxed);
+        let handle = status_server.thread_pool.spawn(async move {
+            let resp = client.get(uri).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+            let body_bytes = hyper::body::to_bytes(resp.into_body()).await.unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+            assert_eq!(
+                json["connected_to_pd"], true,
+                "connected_to_pd should be false"
+            );
+            assert_eq!(
+                json["raft_peers_caught_up"], false,
+                "raft_peers_caught_up should be false"
+            );
+        });
+        block_on(handle).unwrap();
+
+        // Set the remaining readiness conditions to true.
+        GLOBAL_SERVER_READINESS
+            .raft_peers_caught_up
+            .store(true, Ordering::Relaxed);
+
+        let client = Client::new();
+        let handle2 = status_server.thread_pool.spawn(async move {
+            let resp = client.get(uri2).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+        });
+        block_on(handle2).unwrap();
+
+        status_server.stop();
+    }
+
+    #[test]
+    fn test_debug_in_memory_engine() {
+        let mut cfg = InMemoryEngineConfig::default();
+        cfg.enable = true;
+        let ime_ctx = InMemoryEngineContext::new_for_tests(Arc::new(VersionTrack::new(cfg)));
+        let in_memory_engine = RegionCacheMemoryEngine::new(ime_ctx);
+
+        let mut region = kvproto::metapb::Region::default();
+        region.id = 1;
+        region.start_key = b"a".to_vec();
+        region.end_key = b"b".to_vec();
+        region.mut_region_epoch().version = 1;
+        let mut peer = kvproto::metapb::Peer::default();
+        peer.id = 2;
+        region.mut_peers().push(peer);
+        in_memory_engine.new_region(region);
+
+        let mut status_server = StatusServer::new(
+            1,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+            None,
+            GrpcServiceManager::dummy(),
+            Some(in_memory_engine),
+            Default::default(),
+        )
+        .unwrap();
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr);
+        let client = Client::new();
+        let uri = Uri::builder()
+            .scheme("http")
+            .authority(status_server.listening_addr().to_string().as_str())
+            .path_and_query("/debug/ime/cached_regions")
+            .build()
+            .unwrap();
+        let handle = status_server.thread_pool.spawn(async move {
+            let resp = client.get(uri).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+
+            let body_bytes = hyper::body::to_bytes(resp.into_body()).await.unwrap();
+            let mut regions: Vec<CachedRegion> = serde_json::from_slice(&body_bytes).unwrap();
+            assert_eq!(regions.len(), 1);
+            let region = regions.pop().unwrap();
+
+            assert_eq!(region.id, 1);
+            assert_eq!(region.start, "61");
+            assert_eq!(region.end, "62");
+            assert_eq!(region.epoch_version, 1);
+        });
+        block_on(handle).unwrap();
+
+        status_server.stop();
+    }
+>>>>>>> 988abfcf57 (server: fix ime debug url path (#19547))
 }
