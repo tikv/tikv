@@ -1338,21 +1338,11 @@ mod tests {
     use service::service_manager::GrpcServiceManager;
     use test_util::new_security_cfg;
     use tikv_kv::RaftExtension;
-<<<<<<< HEAD
-    use tikv_util::logger::get_log_level;
+    use tikv_util::{config::VersionTrack, logger::get_log_level};
 
     use crate::{
         config::{ConfigController, TikvConfig},
-        server::status_server::{profile::TEST_PROFILE_MUTEX, LogLevelRequest, StatusServer},
-=======
-    use tikv_util::{GLOBAL_SERVER_READINESS, config::VersionTrack, logger::get_log_level};
-
-    use crate::{
-        config::{ConfigController, TikvConfig},
-        server::status_server::{
-            CachedRegion, LogLevelRequest, StatusServer, profile::TEST_PROFILE_MUTEX,
-        },
->>>>>>> 988abfcf57 (server: fix ime debug url path (#19547))
+        server::status_server::{profile::TEST_PROFILE_MUTEX, CachedRegion, LogLevelRequest, StatusServer},
         storage::config::EngineType,
     };
 
@@ -2118,67 +2108,6 @@ mod tests {
             status_server.stop();
         }
     }
-<<<<<<< HEAD
-=======
-
-    #[test]
-    fn test_ready_endpoint() {
-        let mut status_server = StatusServer::new(
-            1,
-            ConfigController::default(),
-            Arc::new(SecurityConfig::default()),
-            MockRouter,
-            None,
-            GrpcServiceManager::dummy(),
-            None,
-            Default::default(),
-        )
-        .unwrap();
-        let addr = "127.0.0.1:0".to_owned();
-        let _ = status_server.start(addr);
-        let client = Client::new();
-        let uri = Uri::builder()
-            .scheme("http")
-            .authority(status_server.listening_addr().to_string().as_str())
-            .path_and_query("/ready?verbose")
-            .build()
-            .unwrap();
-        let uri2 = uri.clone();
-        // Set one readiness condition to true.
-        GLOBAL_SERVER_READINESS
-            .connected_to_pd
-            .store(true, Ordering::Relaxed);
-        let handle = status_server.thread_pool.spawn(async move {
-            let resp = client.get(uri).await.unwrap();
-            assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
-
-            let body_bytes = hyper::body::to_bytes(resp.into_body()).await.unwrap();
-            let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-            assert_eq!(
-                json["connected_to_pd"], true,
-                "connected_to_pd should be false"
-            );
-            assert_eq!(
-                json["raft_peers_caught_up"], false,
-                "raft_peers_caught_up should be false"
-            );
-        });
-        block_on(handle).unwrap();
-
-        // Set the remaining readiness conditions to true.
-        GLOBAL_SERVER_READINESS
-            .raft_peers_caught_up
-            .store(true, Ordering::Relaxed);
-
-        let client = Client::new();
-        let handle2 = status_server.thread_pool.spawn(async move {
-            let resp = client.get(uri2).await.unwrap();
-            assert_eq!(resp.status(), StatusCode::OK);
-        });
-        block_on(handle2).unwrap();
-
-        status_server.stop();
-    }
 
     #[test]
     fn test_debug_in_memory_engine() {
@@ -2235,5 +2164,4 @@ mod tests {
 
         status_server.stop();
     }
->>>>>>> 988abfcf57 (server: fix ime debug url path (#19547))
 }
