@@ -69,16 +69,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockLite {
             });
         }
 
-        if self.commit_ts.is_zero() || rows > 8 {
-            info!(
-                "resolve_lock_lite";
-                "start_ts" => self.start_ts,
-                "commit_ts" => self.commit_ts,
-                "key_count" => rows,
-                "request_source" => %self.ctx.get_request_source(),
-            );
-        }
-
         let known_txn_status = if !self.commit_ts.is_zero() {
             vec![(self.start_ts, self.commit_ts)]
         } else {
