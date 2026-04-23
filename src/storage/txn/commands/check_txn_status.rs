@@ -117,9 +117,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
             Some(Either::Left(lock)) if lock.ts == self.lock_ts => {
                 let lock_type = lock.lock_type;
                 let ttl = lock.ttl;
-                let for_update_ts = lock.for_update_ts;
-                let use_async_commit = lock.use_async_commit;
-                let min_commit_ts = lock.min_commit_ts;
 
                 let result = check_txn_status_lock_exists(
                     &mut txn,
@@ -134,40 +131,25 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
                     self.rollback_if_not_exist,
                 )?;
 
-                match &result.0 {
-                    TxnStatus::TtlExpire => {
-                        info!(
-                            "check_txn_status rolled back expired lock";
-                            "key" => %self.primary_key,
-                            "lock_ts" => self.lock_ts,
-                            "current_ts" => self.current_ts,
-                            "caller_start_ts" => self.caller_start_ts,
-                            "lock_type" => ?lock_type,
-                            "ttl" => ttl,
-                            "for_update_ts" => for_update_ts,
-                            "use_async_commit" => use_async_commit,
-                            "min_commit_ts" => min_commit_ts,
-                            "resolving_pessimistic_lock" => self.resolving_pessimistic_lock,
-                            "request_source" => %self.ctx.get_request_source(),
-                        );
-                    }
-                    TxnStatus::PessimisticRollBack => {
-                        info!(
-                            "check_txn_status pessimistic rolled back expired lock";
-                            "key" => %self.primary_key,
-                            "lock_ts" => self.lock_ts,
-                            "current_ts" => self.current_ts,
-                            "caller_start_ts" => self.caller_start_ts,
-                            "lock_type" => ?lock_type,
-                            "ttl" => ttl,
-                            "for_update_ts" => for_update_ts,
-                            "use_async_commit" => use_async_commit,
-                            "min_commit_ts" => min_commit_ts,
-                            "resolving_pessimistic_lock" => self.resolving_pessimistic_lock,
-                            "request_source" => %self.ctx.get_request_source(),
-                        );
-                    }
-                    _ => {}
+                if matches!(
+                    &result.0,
+                    TxnStatus::TtlExpire | TxnStatus::PessimisticRollBack
+                ) {
+                    let status_str = match &result.0 {
+                        TxnStatus::TtlExpire => "ttl_expire",
+                        TxnStatus::PessimisticRollBack => "pessimistic_rollback",
+                        _ => unreachable!(),
+                    };
+                    info!(
+                        "check_txn_status rolled back lock";
+                        "status" => status_str,
+                        "lock_ts" => self.lock_ts,
+                        "current_ts" => self.current_ts,
+                        "ttl" => ttl,
+                        "lock_type" => ?lock_type,
+                        "resolving_pessimistic_lock" => self.resolving_pessimistic_lock,
+                        "request_source" => %self.ctx.get_request_source(),
+                    );
                 }
 
                 result
@@ -201,8 +183,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
                 if matches!(result, TxnStatus::LockNotExist) && self.rollback_if_not_exist {
                     info!(
                         "check_txn_status wrote rollback for missing lock";
-                        "key" => %self.primary_key,
                         "lock_ts" => self.lock_ts,
+                        "rollback_if_not_exist" => self.rollback_if_not_exist,
+                        "resolving_pessimistic_lock" => self.resolving_pessimistic_lock,
                         "request_source" => %self.ctx.get_request_source(),
                     );
                 }
