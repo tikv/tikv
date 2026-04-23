@@ -152,9 +152,9 @@ pub struct Config {
     pub raft_client_grpc_send_msg_buffer: usize,
     // NOTE: the memory of a single item is 216B, so with 16k capacity, the memory of a single
     // queue is ~3MB.
-    /// The total capacity of the raft client's message queues for a specific store.
-    /// The capacity of a single connection is `raft_client_queue_size /
-    /// grpc_raft_conn_num`.
+    /// The total capacity of the raft client's message queues for a specific
+    /// store. The capacity of a single connection is
+    /// `raft_client_queue_size / grpc_raft_conn_num`.
     #[online_config(skip)]
     pub raft_client_queue_size: usize,
     // Test only
@@ -513,10 +513,10 @@ impl Config {
             ));
         }
         if self.raft_client_queue_size < self.grpc_raft_conn_num {
-             return Err(box_err!(
-                 "server.raft-client-queue-size must be greater than or equal to server.grpc-raft-conn-num"
-             ));
-         }
+            return Err(box_err!(
+                "server.raft-client-queue-size must be greater than or equal to server.grpc-raft-conn-num"
+            ));
+        }
         Ok(())
     }
 
