@@ -99,6 +99,12 @@ pub enum BackgroundTask {
     ),
     SetRocksEngine(RocksEngine),
     CheckLoadPendingRegions(Scheduler<BackgroundTask>),
+    // Re-resolve all `cache=always` manual-load ranges against the region
+    // info provider and load any regions that are not yet registered in IME.
+    // This is a safety net for the startup race where the hint callback's
+    // one-shot `get_regions_in_range` runs before raftstore has populated
+    // `RegionInfoProvider`.
+    ResolveManualLoadRanges,
 }
 
 impl fmt::Display for BackgroundTask {
@@ -119,6 +125,9 @@ impl fmt::Display for BackgroundTask {
             BackgroundTask::SetRocksEngine(_) => f.debug_struct("SetDiskEngine").finish(),
             BackgroundTask::CheckLoadPendingRegions(_) => {
                 f.debug_struct("CheckLoadPendingRegions").finish()
+            }
+            BackgroundTask::ResolveManualLoadRanges => {
+                f.debug_struct("ResolveManualLoadRanges").finish()
             }
         }
     }
@@ -365,6 +374,20 @@ impl BgWorkManager {
             });
             Duration::from_secs(5)
         })();
+        // Retry interval for re-resolving `cache=always` manual ranges that
+        // could not be translated into regions when the hint callback first
+        // fired (e.g. on startup, before raftstore has registered this
+        // node's regions to `RegionInfoProvider`). Kept relatively short so
+        // a restarted node does not spend long without its `cache=always`
+        // regions warmed up, but long enough that the steady-state cost of
+        // walking the (small) manual-range set is negligible.
+        let resolve_manual_load_ranges_interval = (|| {
+            fail_point!("ime_background_resolve_manual_load_ranges_interval", |t| {
+                let t = t.unwrap().parse::<u64>().unwrap();
+                Duration::from_millis(t)
+            });
+            Duration::from_secs(10)
+        })();
         ticker.spawn_interval_task(interval, move || {
             let mut gc_run_interval = config.value().gc_run_interval.0;
             let mut gc_ticker = tick(gc_run_interval);
@@ -372,6 +395,7 @@ impl BgWorkManager {
             let mut load_evict_ticker = tick(load_evict_interval);
             let mut tso_timeout = std::cmp::min(gc_run_interval, TIMTOUT_FOR_TSO);
             let check_pending_region_ticker = tick(check_load_pending_interval);
+            let resolve_manual_load_ranges_ticker = tick(resolve_manual_load_ranges_interval);
             'LOOP: loop {
                 select! {
                     recv(gc_ticker) -> _ => {
@@ -429,6 +453,14 @@ impl BgWorkManager {
                         if let Err(e) = scheduler.schedule(BackgroundTask::CheckLoadPendingRegions(s)) {
                             error!(
                                 "ime schedule check pending regions failed";
+                                "err" => ?e,
+                            );
+                        }
+                    }
+                    recv(resolve_manual_load_ranges_ticker) -> _ => {
+                        if let Err(e) = scheduler.schedule(BackgroundTask::ResolveManualLoadRanges) {
+                            error!(
+                                "ime schedule resolve manual load ranges failed";
                                 "err" => ?e,
                             );
                         }
@@ -814,6 +846,11 @@ pub struct BackgroundRunner {
     // RocksEngine is used to get the oldest snapshot sequence number.
     rocks_engine: Option<RocksEngine>,
     raft_casual_router: Option<Box<dyn CasualRouter<RocksEngine>>>,
+    // Retained so the `ResolveManualLoadRanges` task can re-resolve
+    // `cache=always` manual ranges that could not be resolved when the
+    // hint service callback first fired (e.g. when raftstore had not yet
+    // populated the provider with this node's regions on startup).
+    region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
 }
 
 impl Drop for BackgroundRunner {
@@ -862,7 +899,7 @@ impl BackgroundRunner {
         let load_evict_worker = Worker::new("ime-evict");
         let load_evict_remote = load_evict_worker.remote();
 
-        let region_stats_manager = region_info_provider.map(|region_info_provider| {
+        let region_stats_manager = region_info_provider.clone().map(|region_info_provider| {
             RegionStatsManager::new(
                 config.clone(),
                 DEFAULT_EVICT_MIN_DURATION,
@@ -892,6 +929,7 @@ impl BackgroundRunner {
                 last_seqno: 0,
                 rocks_engine: None,
                 raft_casual_router,
+                region_info_provider,
             },
             delete_range_scheduler,
         )
@@ -1290,6 +1328,79 @@ impl Runnable for BackgroundRunner {
                 let _ =
                     cross_check_worker.start_with_timer("cross-check-runner", cross_check_runner);
                 self.cross_check_worker = Some(cross_check_worker);
+            }
+            BackgroundTask::ResolveManualLoadRanges => {
+                let Some(ref info_provider) = self.region_info_provider else {
+                    return;
+                };
+                let region_manager = self.core.engine.region_manager();
+                // Snapshot the manual ranges so we don't hold the read lock
+                // across the provider call or `load_region` (which takes the
+                // write lock).
+                let ranges: Vec<CacheRegion> = {
+                    let regions_map = region_manager.regions_map().read();
+                    regions_map.manual_load_ranges().to_vec()
+                };
+                if ranges.is_empty() {
+                    return;
+                }
+                let mut resolved_total = 0usize;
+                for range in &ranges {
+                    let start = origin_key(&range.start);
+                    let end = origin_end_key(&range.end);
+                    let regions = match info_provider.get_regions_in_range(start, end) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            warn!(
+                                "ime resolve manual load ranges: get regions in range failed";
+                                "err" => ?e,
+                                "start" => ?log_wrappers::Value(start),
+                                "end" => ?log_wrappers::Value(end),
+                            );
+                            continue;
+                        }
+                    };
+                    if regions.is_empty() {
+                        continue;
+                    }
+                    // Only load regions that are not yet known to IME. Already
+                    // registered regions either completed loading or are
+                    // already in flight; `load_region` for them would just
+                    // return the "same region" error.
+                    let unknown: Vec<CacheRegion> = {
+                        let regions_map = region_manager.regions_map().read();
+                        regions
+                            .into_iter()
+                            .filter_map(|r| {
+                                if regions_map.region_meta(r.get_id()).is_none() {
+                                    Some(CacheRegion::from_region(&r))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect()
+                    };
+                    for cache_region in unknown {
+                        if let Err(e) = region_manager.load_region(cache_region.clone()) {
+                            if !e.is_caused_by_same_region() {
+                                warn!(
+                                    "ime resolve manual load ranges: load region failed";
+                                    "err" => ?e,
+                                    "region" => ?cache_region,
+                                );
+                            }
+                        } else {
+                            resolved_total += 1;
+                        }
+                    }
+                }
+                if resolved_total > 0 {
+                    info!(
+                        "ime resolve manual load ranges: newly registered regions";
+                        "count" => resolved_total,
+                        "ranges" => ranges.len(),
+                    );
+                }
             }
             BackgroundTask::CheckLoadPendingRegions(s) => {
                 if let Some(router) = &self.raft_casual_router
@@ -3026,24 +3137,27 @@ pub mod tests {
         pd_server.stop();
     }
 
-    // Regression test for "cache=always regions not loaded after TiKV restart".
+    // Pins the behavior of the hint-service callback when the
+    // `RegionInfoProvider` is empty at label-rule time (which happens on a
+    // startup where raftstore has not yet registered this node's regions).
     //
-    // Reproduces the race condition that motivates starting the IME hint
-    // service only AFTER raftstore has registered its regions to
-    // `RegionInfoProvider`. When the hint service fires while the provider is
-    // still empty, the `cache=always` range is recorded in `manual_load_range`,
-    // but the corresponding regions are never translated and loaded: the
-    // callback calls `get_regions_in_range` once, gets an empty list, and does
-    // not retry. No subsequent role-change re-triggers the load for regions
-    // that are already leaders on this node.
-    //
-    // The fix in `components/server/src/server.rs` delays `start_hint_service`
-    // until after raftstore is ready, so this race does not occur during
-    // normal startup. This test pins the underlying callback behavior so a
-    // future change that re-introduces the early-startup ordering can be
-    // detected.
+    // With the `ResolveManualLoadRanges` retry task *disabled*, the callback
+    // alone records the `cache=always` range in `manual_load_range` but
+    // never materializes the load, even after the region is later added to
+    // the provider. This confirms that the hint callback is one-shot and is
+    // why the periodic retry task in `BgWorkManager` is required for
+    // correctness.
+    #[cfg(feature = "failpoints")]
     #[test]
-    fn test_hint_service_misses_regions_not_yet_in_provider() {
+    fn test_hint_service_callback_alone_misses_late_regions() {
+        // Effectively disable the periodic retry for this test so we can
+        // observe the callback-only behavior.
+        fail::cfg(
+            "ime_background_resolve_manual_load_ranges_interval",
+            "return(3600000)",
+        )
+        .unwrap();
+
         let region_info_provider = Arc::new(MockRegionInfoProvider::default());
 
         let mut engine = RegionCacheMemoryEngine::with_region_info_provider(
@@ -3054,7 +3168,7 @@ pub mod tests {
             None,
         );
         let path = Builder::new()
-            .prefix("test_hint_service_misses_regions_not_yet_in_provider")
+            .prefix("test_hint_service_callback_alone_misses_late_regions")
             .tempdir()
             .unwrap();
         let path_str = path.path().to_str().unwrap();
@@ -3062,8 +3176,8 @@ pub mod tests {
         engine.set_disk_engine(rocks_engine.clone());
 
         // Intentionally do NOT add the region to the provider here; this
-        // simulates the pre-fix timing where the hint service callback fires
-        // before raftstore has populated `RegionInfoProvider`.
+        // simulates the startup timing where the hint callback fires before
+        // raftstore has populated `RegionInfoProvider`.
         let region = new_region(1, format!("k{:08}", 10), format!("k{:08}", 15));
         let cache_region = CacheRegion::from_region(&region);
 
@@ -3097,15 +3211,15 @@ pub mod tests {
         );
 
         // The region is registered to the provider after the callback has
-        // already fired. With the current callback implementation, this does
-        // not trigger any automatic load.
+        // already fired. Without the retry task, this does not trigger any
+        // automatic load.
         region_info_provider.add_region(region.clone());
 
-        // Give background workers a chance to notice; nothing should happen.
+        // Give background workers a chance to notice; nothing should happen
+        // because the retry interval is configured to be effectively
+        // infinite for this test.
         std::thread::sleep(Duration::from_millis(500));
 
-        // The region must not be registered in IME: no role-change occurs in
-        // this test and no background worker re-scans `manual_load_range`.
         assert!(
             engine
                 .core
@@ -3114,13 +3228,107 @@ pub mod tests {
                 .read()
                 .region_meta(region.get_id())
                 .is_none(),
-            "Regression: a region registered AFTER the hint service callback \
-             fired must not be silently auto-loaded. This is exactly the race \
-             that the startup-ordering fix (start_hint_service after raftstore \
-             is ready) prevents."
+            "hint callback is one-shot: a region registered AFTER the \
+             callback fired must not be silently auto-loaded by the \
+             callback alone; the periodic retry task is what actually \
+             recovers this case"
         );
 
         pd_server.stop();
+        fail::remove("ime_background_resolve_manual_load_ranges_interval");
+    }
+
+    // Regression test for the real fix: the periodic `ResolveManualLoadRanges`
+    // task re-resolves manual ranges against the provider, so a `cache=always`
+    // region that is only registered to `RegionInfoProvider` *after* the hint
+    // callback fires (typical on TiKV restart, where raftstore populates the
+    // provider asynchronously) is eventually loaded into IME.
+    //
+    // This is the behavior that makes `cache=always` reliable across node
+    // restarts and rolling upgrades.
+    #[cfg(feature = "failpoints")]
+    #[test]
+    fn test_resolve_manual_load_ranges_retry_loads_late_regions() {
+        // Run the retry task every 50ms for this test.
+        fail::cfg(
+            "ime_background_resolve_manual_load_ranges_interval",
+            "return(50)",
+        )
+        .unwrap();
+
+        let region_info_provider = Arc::new(MockRegionInfoProvider::default());
+
+        let mut engine = RegionCacheMemoryEngine::with_region_info_provider(
+            InMemoryEngineContext::new_for_tests(Arc::new(VersionTrack::new(
+                InMemoryEngineConfig::config_for_test(),
+            ))),
+            Some(region_info_provider.clone()),
+            None,
+        );
+        let path = Builder::new()
+            .prefix("test_resolve_manual_load_ranges_retry_loads_late_regions")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
+        engine.set_disk_engine(rocks_engine.clone());
+
+        // Simulate the startup ordering: the hint service fires against an
+        // empty provider, records the range in `manual_load_range`, but
+        // cannot translate it into any region.
+        let region = new_region(1, format!("k{:08}", 10), format!("k{:08}", 15));
+        let cache_region = CacheRegion::from_region(&region);
+
+        let (mut pd_server, pd_client) =
+            new_test_server_and_client(ReadableDuration::millis(100));
+        let cluster_id = pd_client.get_cluster_id().unwrap();
+        let pd_client = Arc::new(pd_client);
+        engine.start_hint_service(PdRangeHintService::from(pd_client.clone()));
+        let meta_client = region_label_meta_client(pd_client.clone());
+        let label_rule = new_region_label_rule(
+            "cache/0",
+            &hex::encode(format!("k{:08}", 0).into_bytes()),
+            &hex::encode(format!("k{:08}", 20).into_bytes()),
+        );
+        add_region_label_rule(meta_client, cluster_id, &label_rule);
+
+        // Wait until the callback has fired and recorded the range.
+        test_util::eventually(
+            Duration::from_millis(10),
+            Duration::from_millis(2000),
+            || {
+                engine
+                    .core
+                    .region_manager()
+                    .regions_map()
+                    .read()
+                    .overlap_with_manual_load_range(&cache_region)
+            },
+        );
+
+        // Simulate raftstore populating the provider asynchronously, which
+        // is what happens shortly after `init_servers` returns on restart.
+        region_info_provider.add_region(region.clone());
+
+        // The retry task must pick up the range on its next tick and load
+        // the region into IME even though no role-change was emitted and the
+        // hint callback already fired.
+        test_util::eventually(
+            Duration::from_millis(50),
+            Duration::from_millis(5000),
+            || {
+                engine
+                    .core
+                    .region_manager()
+                    .regions_map()
+                    .read()
+                    .region_meta(region.get_id())
+                    .is_some()
+            },
+        );
+
+        pd_server.stop();
+        fail::remove("ime_background_resolve_manual_load_ranges_interval");
     }
 
     fn verify_load(

@@ -718,17 +718,16 @@ pub fn build_hybrid_engine(
     // Note: `start_hint_service` is intentionally NOT started here.
     //
     // The hint service watches `cache=always` region label rules on PD and,
-    // when a rule is seen, it must translate the key range into existing
-    // regions via `RegionInfoProvider::get_regions_in_range` and load them
-    // into IME immediately. If the hint service is started before raftstore
-    // has finished registering its regions to the `RegionInfoProvider`, that
-    // translation returns an empty set and the target regions are never
-    // loaded, even if this node later becomes leader for them (no additional
-    // role-change is emitted for the initial leader state after restart).
-    //
-    // To keep `cache=always` reliable across node restarts and rolling
-    // upgrades, the caller is responsible for invoking `start_hint_service`
-    // after raftstore is ready; see `run_impl` in `server.rs`.
+    // when a rule is seen, it translates the key range into existing regions
+    // via `RegionInfoProvider::get_regions_in_range` and loads them into
+    // IME. If the hint service fires before raftstore has finished
+    // registering its regions to the provider, that translation returns an
+    // empty set. To keep `cache=always` reliable across node restarts and
+    // rolling upgrades, the caller is responsible for invoking
+    // `start_hint_service` after raftstore has been started; see `run_impl`
+    // in `server.rs`. The background `ResolveManualLoadRanges` task in the
+    // in-memory engine provides the correctness guarantee by re-resolving
+    // any range that could not be translated on the first try.
 
     memory_engine.start_cross_check(
         disk_engine.clone(),

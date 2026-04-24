@@ -1259,43 +1259,41 @@ fn test_eviction_when_destroy_uninitialized_peer() {
     cluster.must_region_exist(region.get_id(), 2);
 }
 
-// This test reproduces the startup preload bug for cache=always labeled regions.
+// Regression test for the startup preload issue for `cache=always` regions
+// (tikv/tikv#19555).
 //
-// When `cache=always` is configured for a key range (via ALTER TABLE ...
-// ATTRIBUTES 'cache=always'), TiKV's PdRangeHintService calls two things:
-//   1. `add_manual_load_range(range)` – records the intent to always cache this range
-//   2. `get_regions_in_range(start, end)` + `load_region()` – immediately loads regions
+// When `cache=always` is configured for a key range, the PdRangeHintService
+// does two things:
+//   1. `add_manual_load_range(range)` – records the intent to always cache
+//      this range in IME.
+//   2. `get_regions_in_range(start, end)` + `load_region()` – immediately
+//      tries to materialize the load.
 //
-// During startup (or after a TiKV restart), the PdRangeHintService task runs
-// asynchronously. There is a race window where regions have already elected
-// leaders (firing `try_load_region(for_manual_range: true)`) before
-// `add_manual_load_range` is populated, AND the subsequent
-// `get_regions_in_range` call returns empty because `RegionInfoProvider` is
-// not yet fully populated. In that case:
-//   - The role-change event fires before `manual_load_range` is set → no load
-//   - `get_regions_in_range` returns empty → no direct load
-//   - `add_manual_load_range` is set, but no future role-change fires → no load
-//   - `CheckLoadPendingRegions` only rescues `RegionState::Pending` regions → no help
+// On a TiKV restart, step (2) can fire before raftstore has registered this
+// node's regions to `RegionInfoProvider`. In that case `get_regions_in_range`
+// returns empty, the callback does not retry, and no role-change event
+// re-triggers the load (role changes for regions that are already leaders on
+// this node after restart do not fire here). The range remains in
+// `manual_load_range` but the corresponding regions are never loaded.
 //
-// Result: regions remain un-cached despite `cache=always` being configured,
-// and queries are slow until the auto-load heuristic eventually picks them up
-// (which can take up to ~2 hours per tikv/tikv#17562).
-//
-// This test simulates that race by:
-//   1. Starting the cluster (regions become leaders)
-//   2. Adding `manual_load_range` WITHOUT calling `load_region` (simulates the
-//      degenerate case where `get_regions_in_range` returned empty)
-//   3. Asserting the region is NOT in IME even after a wait
+// The fix introduces a periodic `ResolveManualLoadRanges` background task
+// that walks every range in `manual_load_range` and re-resolves it against
+// the current provider, loading any regions that are not yet registered in
+// IME. This test asserts that behavior at the cluster level: if we record a
+// manual range for a region *without* calling `load_region`, the retry task
+// must eventually load the region on its own.
 #[test]
-fn test_cache_always_not_preloaded_when_label_applied_after_leader_election() {
-    // Use a short check_pending interval so CheckLoadPendingRegions runs quickly,
-    // to confirm it does NOT help in this scenario.
+fn test_cache_always_preloaded_via_manual_load_range_retry() {
     fail::cfg("ime_background_check_load_pending_interval", "return(500)").unwrap();
+    fail::cfg(
+        "ime_background_resolve_manual_load_ranges_interval",
+        "return(500)",
+    )
+    .unwrap();
 
     let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
     cluster.run();
 
-    // Ensure the region leader is fully elected and stable before we proceed.
     cluster.must_put(b"k", b"v");
     let r = cluster.get_region(b"k");
     assert!(
@@ -1306,9 +1304,9 @@ fn test_cache_always_not_preloaded_when_label_applied_after_leader_election() {
     let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
     let cache_region = CacheRegion::from_region(&r);
 
-    // Step 1: Simulate only `add_manual_load_range` being called (as would happen
-    // when `get_regions_in_range` returned empty during startup).
-    // We intentionally do NOT call `load_region` here.
+    // Simulate the degenerate startup case: only `add_manual_load_range` is
+    // called (as if `get_regions_in_range` had returned empty). We do NOT
+    // call `load_region` here.
     region_cache_engine
         .core()
         .region_manager()
@@ -1316,22 +1314,15 @@ fn test_cache_always_not_preloaded_when_label_applied_after_leader_election() {
         .write()
         .add_manual_load_range(cache_region.clone());
 
-    // Step 2: Wait long enough for:
-    //   - CheckLoadPendingRegions to fire multiple times (interval = 500ms above)
-    //   - Any other background rescue mechanism to kick in
-    sleep(Duration::from_secs(3));
-
-    // Step 3: Assert the region is NOT in IME.
-    // This demonstrates the bug: add_manual_load_range alone, set after the
-    // initial leader election, never triggers a region load.
-    assert!(
+    // The retry task must re-resolve the manual range against the provider
+    // and load the region into IME on its own, without any role change.
+    eventually(Duration::from_millis(100), Duration::from_secs(10), || {
         region_cache_engine
             .snapshot(cache_region.clone(), u64::MAX, u64::MAX)
-            .is_err(),
-        "BUG: region must NOT be in IME when manual_load_range is set after \
-         leader election and get_regions_in_range returned empty during startup"
-    );
+            .is_ok()
+    });
 
+    fail::remove("ime_background_resolve_manual_load_ranges_interval");
     fail::remove("ime_background_check_load_pending_interval");
 }
 

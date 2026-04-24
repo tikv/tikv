@@ -187,13 +187,22 @@ fn run_impl<CER, F>(
     let (engines, engines_info, in_memory_engine) = tikv.init_raw_engines(listener);
     tikv.init_engines(engines.clone());
     let server_config = tikv.init_servers();
-    // Start the IME hint service only after raftstore has been started inside
-    // `init_servers`. At that point the `RegionInfoProvider` is being populated
-    // with the regions this node hosts, so when the hint service fetches the
-    // existing `cache=always` label rules from PD, it can translate those key
-    // ranges into concrete regions and load them into IME. Starting the hint
-    // service before raftstore is ready would race with the initial leader
-    // election and leave `cache=always` regions un-cached after a restart.
+    // Start the IME hint service after raftstore has been started inside
+    // `init_servers`. This is a best-effort optimization to reduce the
+    // window in which the hint service's initial `cache=always` label
+    // fetch fires against an empty `RegionInfoProvider` (which would leave
+    // `cache=always` ranges recorded in `manual_load_range` but not
+    // materialized as loads).
+    //
+    // IMPORTANT: `init_servers` returning is NOT a strict readiness
+    // barrier for `RegionInfoProvider` — raftstore registers regions
+    // asynchronously, so the initial fetch may still observe an empty
+    // provider. The actual correctness guarantee for eventually loading
+    // `cache=always` regions comes from the periodic
+    // `BackgroundTask::ResolveManualLoadRanges` retry in
+    // `components/in_memory_engine/src/background.rs`, which re-resolves
+    // every recorded manual range against the provider on a fixed
+    // interval. This ordering simply makes the common case faster.
     if let Some(engine) = in_memory_engine.as_ref() {
         engine.start_hint_service(PdRangeHintService::from(tikv.pd_client.clone()));
     }
