@@ -348,7 +348,6 @@ impl ServerCluster {
             let in_memory_engine = build_hybrid_engine(
                 in_memory_engine_context,
                 engines.kv.clone(),
-                None,
                 Some(Arc::new(region_info_accessor.clone())),
                 Box::new(router.clone()),
             );

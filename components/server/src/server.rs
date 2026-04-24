@@ -37,8 +37,8 @@ use engine_rocks::{
 };
 use engine_rocks_helper::sst_recovery::{DEFAULT_CHECK_INTERVAL, RecoveryRunner};
 use engine_traits::{
-    CF_DEFAULT, CF_WRITE, Engines, KvEngine, MiscExt, RaftEngine, SingletonFactory, TabletContext,
-    TabletRegistry,
+    CF_DEFAULT, CF_WRITE, Engines, KvEngine, MiscExt, RaftEngine, RegionCacheEngine,
+    SingletonFactory, TabletContext, TabletRegistry,
 };
 use file_system::{BytesFetcher, MetricsManager as IoMetricsManager, get_io_rate_limiter};
 use futures::executor::block_on;
@@ -49,8 +49,8 @@ use hybrid_engine::observer::{
     RegionCacheWriteBatchObserver,
 };
 use in_memory_engine::{
-    InMemoryEngineContext, InMemoryEngineStatistics, RegionCacheMemoryEngine,
-    config::InMemoryEngineConfigManager,
+    InMemoryEngineContext, InMemoryEngineStatistics, PdRangeHintService,
+    RegionCacheMemoryEngine, config::InMemoryEngineConfigManager,
 };
 use kvproto::{
     brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
@@ -187,6 +187,16 @@ fn run_impl<CER, F>(
     let (engines, engines_info, in_memory_engine) = tikv.init_raw_engines(listener);
     tikv.init_engines(engines.clone());
     let server_config = tikv.init_servers();
+    // Start the IME hint service only after raftstore has been started inside
+    // `init_servers`. At that point the `RegionInfoProvider` is being populated
+    // with the regions this node hosts, so when the hint service fetches the
+    // existing `cache=always` label rules from PD, it can translate those key
+    // ranges into concrete regions and load them into IME. Starting the hint
+    // service before raftstore is ready would race with the initial leader
+    // election and leave `cache=always` regions un-cached after a restart.
+    if let Some(engine) = in_memory_engine.as_ref() {
+        engine.start_hint_service(PdRangeHintService::from(tikv.pd_client.clone()));
+    }
     tikv.register_services();
     tikv.init_metrics_flusher(fetcher, engines_info);
     tikv.init_cgroup_monitor();
@@ -1849,7 +1859,6 @@ where
             let in_memory_engine = build_hybrid_engine(
                 in_memory_engine_context,
                 kv_engine.clone(),
-                Some(self.pd_client.clone()),
                 Some(Arc::new(self.region_info_accessor.clone().unwrap())),
                 Box::new(self.router.clone()),
             );

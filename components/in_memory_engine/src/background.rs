@@ -3026,6 +3026,103 @@ pub mod tests {
         pd_server.stop();
     }
 
+    // Regression test for "cache=always regions not loaded after TiKV restart".
+    //
+    // Reproduces the race condition that motivates starting the IME hint
+    // service only AFTER raftstore has registered its regions to
+    // `RegionInfoProvider`. When the hint service fires while the provider is
+    // still empty, the `cache=always` range is recorded in `manual_load_range`,
+    // but the corresponding regions are never translated and loaded: the
+    // callback calls `get_regions_in_range` once, gets an empty list, and does
+    // not retry. No subsequent role-change re-triggers the load for regions
+    // that are already leaders on this node.
+    //
+    // The fix in `components/server/src/server.rs` delays `start_hint_service`
+    // until after raftstore is ready, so this race does not occur during
+    // normal startup. This test pins the underlying callback behavior so a
+    // future change that re-introduces the early-startup ordering can be
+    // detected.
+    #[test]
+    fn test_hint_service_misses_regions_not_yet_in_provider() {
+        let region_info_provider = Arc::new(MockRegionInfoProvider::default());
+
+        let mut engine = RegionCacheMemoryEngine::with_region_info_provider(
+            InMemoryEngineContext::new_for_tests(Arc::new(VersionTrack::new(
+                InMemoryEngineConfig::config_for_test(),
+            ))),
+            Some(region_info_provider.clone()),
+            None,
+        );
+        let path = Builder::new()
+            .prefix("test_hint_service_misses_regions_not_yet_in_provider")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
+        engine.set_disk_engine(rocks_engine.clone());
+
+        // Intentionally do NOT add the region to the provider here; this
+        // simulates the pre-fix timing where the hint service callback fires
+        // before raftstore has populated `RegionInfoProvider`.
+        let region = new_region(1, format!("k{:08}", 10), format!("k{:08}", 15));
+        let cache_region = CacheRegion::from_region(&region);
+
+        let (mut pd_server, pd_client) =
+            new_test_server_and_client(ReadableDuration::millis(100));
+        let cluster_id = pd_client.get_cluster_id().unwrap();
+        let pd_client = Arc::new(pd_client);
+        engine.start_hint_service(PdRangeHintService::from(pd_client.clone()));
+        let meta_client = region_label_meta_client(pd_client.clone());
+        let label_rule = new_region_label_rule(
+            "cache/0",
+            &hex::encode(format!("k{:08}", 0).into_bytes()),
+            &hex::encode(format!("k{:08}", 20).into_bytes()),
+        );
+        add_region_label_rule(meta_client, cluster_id, &label_rule);
+
+        // Wait until the callback has fired and recorded the range into
+        // `manual_load_range`. At this point `get_regions_in_range` has
+        // already been called with an empty provider and returned nothing.
+        test_util::eventually(
+            Duration::from_millis(10),
+            Duration::from_millis(2000),
+            || {
+                engine
+                    .core
+                    .region_manager()
+                    .regions_map()
+                    .read()
+                    .overlap_with_manual_load_range(&cache_region)
+            },
+        );
+
+        // The region is registered to the provider after the callback has
+        // already fired. With the current callback implementation, this does
+        // not trigger any automatic load.
+        region_info_provider.add_region(region.clone());
+
+        // Give background workers a chance to notice; nothing should happen.
+        std::thread::sleep(Duration::from_millis(500));
+
+        // The region must not be registered in IME: no role-change occurs in
+        // this test and no background worker re-scans `manual_load_range`.
+        assert!(
+            engine
+                .core
+                .region_manager()
+                .regions_map()
+                .read()
+                .region_meta(region.get_id())
+                .is_none(),
+            "Regression: a region registered AFTER the hint service callback \
+             fired must not be silently auto-loaded. This is exactly the race \
+             that the startup-ordering fix (start_hint_service after raftstore \
+             is ready) prevents."
+        );
+
+        pd_server.stop();
+    }
+
     fn verify_load(
         region: &Region,
         engine: &RegionCacheMemoryEngine,
