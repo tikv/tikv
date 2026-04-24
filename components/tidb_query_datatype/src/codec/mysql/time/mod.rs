@@ -689,6 +689,13 @@ mod parser {
             1 | 2 => {
                 let result: i64 = components[0].convert(ctx).ok()?;
                 let whole_time = parse_from_i64(ctx, result, time_type, fsp)?;
+                if whole_time.is_zero() {
+                    // Should handle zero properly to match TiDB behaviors.
+                    return match handle_zero_date(ctx, TimeArgs::zero(fsp as i8, time_type)) {
+                        Ok(Some(args)) => Time::new(ctx, args).ok(),
+                        _ => None,
+                    };
+                }
                 let mut whole = [
                     whole_time.get_year(),
                     whole_time.get_month(),
@@ -3084,6 +3091,8 @@ mod tests {
     #[test]
     fn test_parse_from_real() -> Result<()> {
         let cases = vec![
+            ("0000-00-00 00:00:00", "0", 0),
+            ("0000-00-00 00:00:00.0", "0.0", 1),
             ("2000-03-05 00:00:00", "305", 0),
             ("2000-12-03 00:00:00", "1203", 0),
             ("2003-12-05 00:00:00.0", "31205", 1),
@@ -3116,6 +3125,38 @@ mod tests {
             Time::parse_from_real(&mut ctx, &case, TimeType::DateTime, 0, true).unwrap_err();
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_parse_from_real_zero_date() {
+        let mut ctx = EvalContext::default();
+        for input in ["0", "0.0", "0.000"] {
+            let actual = parser::parse_from_float_string(
+                &mut ctx,
+                input.to_string(),
+                TimeType::DateTime,
+                0,
+                true,
+            );
+            assert!(actual.is_some());
+            assert_eq!(actual.unwrap().to_string(), "0000-00-00 00:00:00");
+        }
+
+        let mut ctx = EvalContext::from(TimeEnv {
+            no_zero_date: true,
+            strict_mode: true,
+            ..TimeEnv::default()
+        });
+        for input in ["0", "0.0", "0.000"] {
+            let actual = parser::parse_from_float_string(
+                &mut ctx,
+                input.to_string(),
+                TimeType::DateTime,
+                0,
+                true,
+            );
+            assert!(actual.is_none());
+        }
     }
 
     #[test]
