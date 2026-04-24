@@ -2066,7 +2066,7 @@ impl<'a> KeyspaceKeyRewriteScratch<'a> {
         self.decoded_key_buf.clear();
         self.decoded_key_buf.extend_from_slice(origin);
         decode_bytes_in_place(&mut self.decoded_key_buf, false)?;
-        if !self.decoded_key_buf.starts_with(&self.old_prefix) {
+        if !self.decoded_key_buf.starts_with(self.old_prefix) {
             return Err(Error::WrongKeyPrefix {
                 what: "Key in SST",
                 key: origin.to_vec(),
@@ -2077,7 +2077,7 @@ impl<'a> KeyspaceKeyRewriteScratch<'a> {
         data_key.extend_from_slice(keys::DATA_PREFIX_KEY);
         self.keyspace_user_key_buf.clear();
         self.keyspace_user_key_buf
-            .extend_from_slice(&self.new_prefix);
+            .extend_from_slice(self.new_prefix);
         self.keyspace_user_key_buf
             .extend_from_slice(&self.decoded_key_buf[self.old_prefix.len()..]);
         data_key.extend(encode_bytes(&self.keyspace_user_key_buf));
@@ -2511,7 +2511,7 @@ impl<E: KvEngine> SstImporter<E> {
                     match write_ref.write_type {
                         WriteType::Put | WriteType::Delete => {
                             key_scratch
-                                .build_download_data_key(&write_origin, &mut write_data_key)?;
+                                .build_download_data_key(write_origin, &mut write_data_key)?;
 
                             if write_ref.write_type == WriteType::Put
                                 && write_ref.short_value.is_none()
@@ -2538,7 +2538,7 @@ impl<E: KvEngine> SstImporter<E> {
                                 wrote_default = true;
                             }
 
-                            write_writer.put(&write_data_key, &write_iter.value())?;
+                            write_writer.put(&write_data_key, write_iter.value())?;
                             if first_origin.is_none() {
                                 first_origin = Some(keys::origin_key(&write_data_key).to_vec());
                             }
