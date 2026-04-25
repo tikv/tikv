@@ -51,9 +51,19 @@ pub const MAX_FLAG: u8 = 250;
 // yields the declared direction. The leading flag byte is the complement of
 // the ordinary ASC flag. `split_datum` and `read_datum` auto-detect these so
 // the coprocessor can decode both ASC and DESC columns without protocol
-// changes. The only theoretical collision — `!FLOAT_FLAG` (0xFA) equals
-// `MAX_FLAG` — is unreachable because `MAX_FLAG` is a range sentinel that
-// never appears in stored rows.
+// changes.
+//
+// Flag-byte collision: `!FLOAT_FLAG` (0xFA) equals `MAX_FLAG`. This is safe
+// in practice because `MAX_FLAG` is a range-bound sentinel emitted only for
+// `Datum::Max` (a single-byte payload — see `DatumEncoder::write_datum`),
+// while a DESC-encoded float carries 8 trailing bytes. The two contexts are
+// disjoint by construction:
+//  * `decode` / `decode_one_with_desc` are invoked on stored row data,
+//    which never contains `Datum::Max`.
+//  * The range-sentinel path encodes `Datum::Max` as a one-byte buffer; if
+//    such a buffer reached `decode_one_with_desc`, `split_datum` would
+//    return "too short" because a DESC-float layout requires 9 bytes total.
+//    `test_decode_one_with_desc_rejects_lone_max_flag` locks that in.
 pub const NIL_DESC_FLAG: u8 = !NIL_FLAG;
 pub const BYTES_DESC_FLAG: u8 = !BYTES_FLAG;
 pub const COMPACT_BYTES_DESC_FLAG: u8 = !COMPACT_BYTES_FLAG;
@@ -2099,6 +2109,27 @@ mod tests {
         let (d1, rem) = decode_one_with_desc(rem).unwrap();
         assert_eq!(d1, Datum::Bytes(b"abc".to_vec()));
         assert!(rem.is_empty());
+    }
+
+    /// `MAX_FLAG` (0xFA) and `FLOAT_DESC_FLAG` (`!FLOAT_FLAG` = 0xFA) are the
+    /// same byte. A bare `[MAX_FLAG]` buffer (the encoding of `Datum::Max`)
+    /// must still error rather than be silently mis-decoded as a DESC float,
+    /// because a DESC float requires 9 bytes total. Locks in the
+    /// "discrimination by length" guarantee documented above the
+    /// FLOAT_DESC_FLAG constant.
+    #[test]
+    fn test_decode_one_with_desc_rejects_lone_max_flag() {
+        assert_eq!(MAX_FLAG, FLOAT_DESC_FLAG);
+        let buf = [MAX_FLAG];
+        let err = decode_one_with_desc(&buf).expect_err(
+            "lone MAX_FLAG / FLOAT_DESC_FLAG must error: a real DESC float carries 8 trailing bytes",
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("too short"),
+            "expected 'too short' from split_datum, got: {}",
+            msg
+        );
     }
 
     #[test]
