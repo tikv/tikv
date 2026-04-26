@@ -49,9 +49,12 @@ pub const MAX_FLAG: u8 = 250;
 // Descending-order index columns (pingcap/tidb#2519) are written by TiDB as
 // bitwise-complemented memcomparable bytes, so a forward RocksDB iterator
 // yields the declared direction. The leading flag byte is the complement of
-// the ordinary ASC flag. `split_datum` and `read_datum` auto-detect these so
-// the coprocessor can decode both ASC and DESC columns without protocol
-// changes.
+// the ordinary ASC flag. `split_datum` auto-detects the DESC layout when
+// computing per-column lengths; `read_datum` itself is ASC-only by design
+// and the DESC-aware decode entrypoints (`decode_one_with_desc` / `decode`)
+// route the bytes through `un_invert_if_desc` before dispatching to it. The
+// coprocessor can therefore decode both ASC and DESC columns without
+// protocol changes.
 //
 // Flag-byte collision: `!FLOAT_FLAG` (0xFA) equals `MAX_FLAG`. This is safe
 // in practice because `MAX_FLAG` is a range-bound sentinel emitted only for
@@ -1253,19 +1256,41 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
             l - v.len()
         }
         // Descending-order encoding of an index column: leading flag and body
-        // are both bitwise-complemented relative to the ASC form. Lengths are
-        // identical to the ASC counterpart, except for variable-length types
-        // that need a complemented scratch buffer to walk the markers.
+        // are both bitwise-complemented relative to the ASC form. Lengths
+        // are identical to the ASC counterpart. For variable-length types
+        // we need to peek complemented marker bytes to find the boundary —
+        // BUT only the small length-prefix matters. Allocating + flipping
+        // the entire tail (which can be megabytes for a long BYTES column)
+        // would turn a constant-time length probe into an O(n) copy on a
+        // hot index-walk path, so each branch below complements only the
+        // few bytes the per-type sizer actually inspects.
         NIL_DESC_FLAG => 0,
         INT_DESC_FLAG | UINT_DESC_FLAG | FLOAT_DESC_FLAG | DURATION_DESC_FLAG => 8,
         BYTES_DESC_FLAG => MemComparableByteCodec::get_first_encoded_len_desc(&buf[1..]),
         COMPACT_BYTES_DESC_FLAG => {
-            let inv: Vec<u8> = buf[1..].iter().map(|b| !b).collect();
-            CompactByteCodec::get_first_encoded_len(&inv)
+            // CompactByteCodec::get_first_encoded_len varint-decodes a
+            // length prefix (max number::MAX_VARINT64_LENGTH bytes), then
+            // returns prefix_len + value. Inline that logic against an
+            // un-inverted prefix so the body itself stays untouched.
+            let tail = &buf[1..];
+            let prefix_len = number::MAX_VARINT64_LENGTH.min(tail.len());
+            let mut inv = [0u8; number::MAX_VARINT64_LENGTH];
+            for (i, b) in tail[..prefix_len].iter().enumerate() {
+                inv[i] = !b;
+            }
+            match NumberCodec::try_decode_var_i64(&inv[..prefix_len]) {
+                Err(_) => tail.len(),
+                Ok((value, decoded_n)) => (value as usize + decoded_n).min(tail.len()),
+            }
         }
         DECIMAL_DESC_FLAG => {
-            let inv: Vec<u8> = buf[1..].iter().map(|b| !b).collect();
-            mysql::dec_encoded_len(&inv)?
+            // dec_encoded_len reads only the first 2 bytes of its input
+            // (precision, frac); complement just those.
+            if buf.len() < 3 {
+                return Err(box_err!("{} is too short", escape(buf)));
+            }
+            let head = [!buf[1], !buf[2]];
+            mysql::dec_encoded_len(&head)?
         }
         f => return Err(invalid_type!("unsupported data type `{}`", f)),
     };
@@ -2084,6 +2109,13 @@ mod tests {
             Datum::Null,
             Datum::Bytes(b"alpha".to_vec()),
             Datum::Bytes(b"this string is longer than nine bytes".to_vec()),
+            // Decimal goes through the DECIMAL_DESC_FLAG branch in
+            // split_datum, which only complements the first 2 bytes
+            // (precision + frac) instead of the whole tail. Lock in
+            // both small and many-fractional-digit shapes so any
+            // regression in that prefix-only optimisation is caught.
+            Datum::Dec(Decimal::from(1)),
+            Datum::Dec("1234567890.12345678901".parse().unwrap()),
         ];
         let mut ctx = EvalContext::default();
         for case in cases {
