@@ -174,13 +174,39 @@ impl Drop for BgWorkManager {
     }
 }
 
-pub struct PdRangeHintService(Arc<RpcClient>);
+/// Source for `cache=always` region-label rules that drive IME manual
+/// preload.
+///
+/// In production this watches PD via a real gRPC client. In test harnesses
+/// that use an in-process simulated PD (e.g. `test_raftstore`), a no-op
+/// variant is provided under the `testexport` feature so callers can still
+/// preserve the "start the hint service after raftstore is ready" contract
+/// without needing an RPC-compatible PD client.
+pub enum PdRangeHintService {
+    /// Watches region labels on a real PD gRPC client.
+    Pd(Arc<RpcClient>),
+    /// Test-only no-op: does not spawn a PD watcher. Intended so tests that
+    /// build a hybrid engine can still call `start_hint_service` after
+    /// raftstore is up, keeping the invocation contract identical to
+    /// production even when no real PD is available.
+    #[cfg(feature = "testexport")]
+    Noop,
+}
 
 impl RangeHintService for PdRangeHintService {}
 
 impl From<Arc<RpcClient>> for PdRangeHintService {
     fn from(pd_client: Arc<RpcClient>) -> Self {
-        PdRangeHintService(pd_client)
+        PdRangeHintService::Pd(pd_client)
+    }
+}
+
+#[cfg(feature = "testexport")]
+impl PdRangeHintService {
+    /// Construct a no-op hint service for test harnesses that do not have a
+    /// real PD gRPC client available.
+    pub fn noop() -> Self {
+        PdRangeHintService::Noop
     }
 }
 
@@ -201,7 +227,18 @@ impl PdRangeHintService {
     where
         F: Fn(&CacheRegion, bool) + Send + Sync + 'static,
     {
-        let pd_client = self.0.clone();
+        let pd_client = match self {
+            PdRangeHintService::Pd(pd_client) => pd_client.clone(),
+            #[cfg(feature = "testexport")]
+            PdRangeHintService::Noop => {
+                // The callback is intentionally not invoked; test harnesses
+                // that use this variant do not have a PD gRPC client to
+                // watch region labels from.
+                drop((remote, range_manager_load_cb));
+                info!("ime hint service started as no-op (testexport)");
+                return;
+            }
+        };
         let region_label_changed_cb: RegionLabelChangedCallback = Arc::new(
             move |label_rule: &LabelRule, is_add: bool| {
                 if !label_rule
@@ -1381,6 +1418,20 @@ impl Runnable for BackgroundRunner {
                             .collect()
                     };
                     for cache_region in unknown {
+                        // Re-check `manual_load_range` membership immediately
+                        // before loading. Between the `manual_load_ranges()`
+                        // snapshot above and this point, the PD watcher
+                        // callback may have removed or shrunk the rule and
+                        // already evicted the region. Without this check we
+                        // would race-load it back and make `cache=always`
+                        // label removals timing-dependent.
+                        let still_manual = {
+                            let regions_map = region_manager.regions_map().read();
+                            regions_map.overlap_with_manual_load_range(&cache_region)
+                        };
+                        if !still_manual {
+                            continue;
+                        }
                         if let Err(e) = region_manager.load_region(cache_region.clone()) {
                             if !e.is_caused_by_same_region() {
                                 warn!(
