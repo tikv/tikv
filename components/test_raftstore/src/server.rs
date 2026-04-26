@@ -15,14 +15,16 @@ use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
 use engine_rocks::{FlowInfo, RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
-use engine_traits::{Engines, MiscExt};
+use engine_traits::{Engines, MiscExt, RegionCacheEngine};
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use health_controller::HealthController;
 use hybrid_engine::observer::{
     HybridSnapshotObserver, LoadEvictionObserver, RegionCacheWriteBatchObserver,
 };
-use in_memory_engine::{InMemoryEngineConfig, InMemoryEngineContext, RegionCacheMemoryEngine};
+use in_memory_engine::{
+    InMemoryEngineConfig, InMemoryEngineContext, PdRangeHintService, RegionCacheMemoryEngine,
+};
 use kvproto::{
     deadlock::create_deadlock,
     debugpb::{DebugClient, create_debug},
@@ -714,6 +716,22 @@ impl ServerCluster {
             GrpcServiceManager::dummy(),
             self.gc_safe_point.clone(),
         )?;
+
+        // Start the IME hint service after raftstore has been started, to
+        // mirror the production startup contract in `components/server/src/server.rs`.
+        // `test_raftstore` uses an in-process simulated PD (`TestPdClient`) that
+        // does not expose a gRPC meta-storage watch compatible with
+        // `PdRangeHintService::Pd`, so we install the `Noop` variant instead.
+        // This keeps the invocation order identical to production (so future
+        // `cache=always` tests cannot silently forget to start the hint
+        // service) while avoiding a dependency on a real PD gRPC endpoint.
+        // The `ResolveManualLoadRanges` retry task still drives `cache=always`
+        // preload from `manual_load_range` entries that test code injects
+        // directly.
+        if let Some(ref in_memory_engine) = in_memory_engine {
+            in_memory_engine.start_hint_service(PdRangeHintService::noop());
+        }
+
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
         if let Some(tmp) = tmp {
