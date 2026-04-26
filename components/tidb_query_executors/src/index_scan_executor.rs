@@ -499,7 +499,16 @@ impl IndexScanExecutorImpl {
                 return Err(other_err!("{}th column is missing value", i));
             }
             let (value, remaining) = datum::split_datum(datum, false)?;
-            column.mut_raw().push(value);
+            // Descending-order index columns (pingcap/tidb#2519) carry a
+            // bitwise-complemented flag and body. `split_datum` is
+            // auto-detect-aware and returns the correct span, but the
+            // per-type decoders downstream (decode_int_datum,
+            // decode_real_datum, ...) only understand ASC flag bytes. Run
+            // the slice through `un_invert_if_desc` here so the canonical
+            // ASC form is what reaches `LazyBatchColumn::Raw` — keeping
+            // DESC awareness confined to one chokepoint per pipeline.
+            let asc = datum::un_invert_if_desc(value);
+            column.mut_raw().push(&asc);
             *datum = remaining;
         }
         Ok(())

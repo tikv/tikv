@@ -987,13 +987,29 @@ pub trait DatumDecoder:
 
 impl<T: BufferReader> DatumDecoder for T {}
 
+/// `un_invert_if_desc` is the single source of truth for the per-column
+/// complement step that turns a descending-order index column
+/// (pingcap/tidb#2519) back into its canonical ASC form. If `value` begins
+/// with a DESC flag byte the entire slice is bitwise-complemented into an
+/// owned buffer; otherwise the input is borrowed unchanged. Callers that
+/// need the ASC form before invoking a type-specific decoder
+/// (`read_datum`, `decode_int_datum`, ...) go through this helper so the
+/// complement logic lives in one place.
+pub fn un_invert_if_desc(value: &[u8]) -> Cow<'_, [u8]> {
+    if !value.is_empty() && is_desc_flag(value[0]) {
+        Cow::Owned(value.iter().map(|b| !b).collect())
+    } else {
+        Cow::Borrowed(value)
+    }
+}
+
 /// `decode_one_with_desc` decodes a single datum from `buf`, transparently
 /// handling descending-order encoded columns (pingcap/tidb#2519). It returns
 /// the decoded datum and the unconsumed tail of `buf`.
 ///
 /// For ascending-encoded datums it is equivalent to calling `read_datum` on
-/// the slice. For descending-encoded ones it bitwise-complements the column's
-/// bytes into a scratch buffer (sized via `split_datum`) and then dispatches
+/// the slice. For descending-encoded ones it routes the column's bytes
+/// through `un_invert_if_desc` (sized via `split_datum`) and then dispatches
 /// through the ascending decoder, so all type-specific decoders are reused
 /// unchanged.
 pub fn decode_one_with_desc(buf: &[u8]) -> Result<(Datum, &[u8])> {
@@ -1006,8 +1022,8 @@ pub fn decode_one_with_desc(buf: &[u8]) -> Result<(Datum, &[u8])> {
         return Ok((datum, slice));
     }
     let (head, tail) = split_datum(buf, false)?;
-    let inv: Vec<u8> = head.iter().map(|b| !b).collect();
-    let mut slice: &[u8] = &inv;
+    let asc = un_invert_if_desc(head);
+    let mut slice: &[u8] = &asc;
     let datum = slice.read_datum()?;
     Ok((datum, tail))
 }
