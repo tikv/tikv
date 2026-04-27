@@ -7,26 +7,25 @@ use std::{
 
 // #[PerformanceCriticalPath]
 use kvproto::kvrpcpb::ExtraOp;
-use txn_types::{insert_old_value_if_resolved, Key, OldValues};
+use txn_types::{Key, OldValues, insert_old_value_if_resolved};
 
 use crate::storage::{
+    Error as StorageError, PessimisticLockKeyResult, ProcessResult, Result as StorageResult,
+    Snapshot,
     lock_manager::{
-        lock_wait_context::LockWaitContextSharedState, lock_waiting_queue::LockWaitEntry,
-        LockManager, LockWaitToken,
+        LockManager, LockWaitToken, lock_wait_context::LockWaitContextSharedState,
+        lock_waiting_queue::LockWaitEntry,
     },
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader},
     txn::{
-        acquire_pessimistic_lock,
+        Error, Result, acquire_pessimistic_lock,
         commands::{
-            acquire_pessimistic_lock::make_write_data, Command, CommandExt, ReleasedLocks,
-            ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
-            WriteResultLockInfo,
+            Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand,
+            WriteContext, WriteResult, WriteResultLockInfo,
+            acquire_pessimistic_lock::make_write_data,
         },
-        Error, Result,
     },
     types::{PessimisticLockParameters, PessimisticLockResults},
-    Error as StorageError, PessimisticLockKeyResult, ProcessResult, Result as StorageResult,
-    Snapshot,
 };
 
 pub struct ResumedPessimisticLockItem {
@@ -261,6 +260,7 @@ mod tests {
 
     use super::*;
     use crate::storage::{
+        TestEngineBuilder,
         lock_manager::{MockLockManager, WaitTimeout},
         mvcc::tests::{must_locked, write},
         txn::{
@@ -268,7 +268,6 @@ mod tests {
             tests::{must_commit, must_pessimistic_locked, must_prewrite_put, must_rollback},
             txn_status_cache::TxnStatusCache,
         },
-        TestEngineBuilder,
     };
 
     #[allow(clippy::vec_box)]

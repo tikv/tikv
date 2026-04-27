@@ -2,7 +2,7 @@
 
 use std::{assert_matches::assert_matches, time::Duration};
 
-use engine_traits::{Peekable, CF_DEFAULT};
+use engine_traits::{CF_DEFAULT, Peekable};
 use futures::executor::block_on;
 use kvproto::{
     metapb,
@@ -10,8 +10,8 @@ use kvproto::{
 };
 use raft::prelude::ConfChangeType;
 use raftstore_v2::{
-    router::{PeerMsg, PeerTick},
     SimpleWriteEncoder,
+    router::{PeerMsg, PeerTick},
 };
 use tikv_util::{store::new_peer, time::Instant};
 

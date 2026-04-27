@@ -5,11 +5,11 @@ use aws::{AwsKms, STORAGE_VENDOR_NAME_AWS};
 use azure::{AzureKms, STORAGE_VENDOR_NAME_AZURE};
 use cloud::STORAGE_VENDOR_NAME_GCP_V2;
 pub use encryption::{
-    clean_up_dir, clean_up_trash, trash_dir_all, AsyncBackend, AzureConfig, Backend,
-    DataKeyImporter, DataKeyManager, DataKeyManagerArgs, DecrypterReader, EncryptionConfig, Error,
-    FileConfig, Iv, KmsBackend, KmsConfig, MasterKeyConfig, Result,
+    AsyncBackend, AzureConfig, Backend, DataKeyImporter, DataKeyManager, DataKeyManagerArgs,
+    DecrypterReader, EncryptionConfig, Error, FileConfig, Iv, KmsBackend, KmsConfig,
+    MasterKeyConfig, Result, clean_up_dir, clean_up_trash, trash_dir_all,
 };
-use encryption::{cloud_convert_error, FileBackend, PlaintextBackend};
+use encryption::{FileBackend, PlaintextBackend, cloud_convert_error};
 use gcp::{GcpKms, STORAGE_VENDOR_NAME_GCP};
 use gcp_v2::GcpKms as GcpKmsV2;
 use tikv_util::{box_err, error, info};

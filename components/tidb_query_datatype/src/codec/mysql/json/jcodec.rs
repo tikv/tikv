@@ -4,10 +4,10 @@ use std::{collections::BTreeMap, convert::TryInto, f64, str};
 
 use codec::{number::NumberCodec, prelude::*};
 
-use super::{constants::*, Json, JsonRef, JsonType};
+use super::{Json, JsonRef, JsonType, constants::*};
 use crate::{
-    codec::{Error, Result},
     FieldTypeTp,
+    codec::{Error, Result},
 };
 
 impl<'a> JsonRef<'a> {

@@ -6,8 +6,9 @@
 use std::io::{Error, ErrorKind, Result};
 
 use prometheus::{
+    IntCounter, IntGauge, Opts,
     core::{Collector, Desc},
-    proto, IntCounter, IntGauge, Opts,
+    proto,
 };
 
 use crate::sys::thread;

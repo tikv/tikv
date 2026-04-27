@@ -6,7 +6,7 @@ use engine_traits::{CacheRegion, FailedReason, KvEngine, RegionCacheEngine};
 use in_memory_engine::{RegionCacheMemoryEngine, RegionCacheSnapshot};
 use kvproto::metapb::Region;
 use raftstore::coprocessor::{
-    dispatcher::BoxSnapshotObserver, CoprocessorHost, ObservedSnapshot, SnapshotObserver,
+    CoprocessorHost, ObservedSnapshot, SnapshotObserver, dispatcher::BoxSnapshotObserver,
 };
 
 use crate::metrics::{

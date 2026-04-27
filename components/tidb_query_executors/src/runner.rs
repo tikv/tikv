@@ -8,19 +8,19 @@ use itertools::Itertools;
 use kvproto::coprocessor::KeyRange;
 use protobuf::Message;
 use tidb_query_common::{
+    Result,
     execute_stats::ExecSummary,
     metrics::*,
     storage::{IntervalRange, RegionStorageAccessor, Storage},
-    Result,
 };
 use tidb_query_datatype::{
+    EvalType, FieldTypeAccessor,
     codec::table::{CommonHandle, IntHandle},
     expr::{EvalConfig, EvalContext, EvalWarnings},
-    EvalType, FieldTypeAccessor,
 };
 use tikv_util::{
     deadline::Deadline,
-    metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC},
+    metrics::{NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC, ThrottleType},
     quota_limiter::QuotaLimiter,
 };
 use tipb::{
@@ -43,7 +43,7 @@ const BATCH_INITIAL_SIZE: usize = 32;
 pub use tidb_query_expr::types::BATCH_MAX_SIZE;
 
 use crate::{
-    index_lookup_executor::{build_index_lookup_executor, BuildIndexLookUpExecutorOptions},
+    index_lookup_executor::{BuildIndexLookUpExecutorOptions, build_index_lookup_executor},
     interface::BatchExecuteResult,
 };
 
@@ -1090,16 +1090,16 @@ mod tests {
     use kvproto::metapb::Region;
     use tidb_query_common::execute_stats::ExecSummaryCollectorEnabled;
     use tidb_query_datatype::{
+        FieldTypeTp,
         codec::{
+            Datum,
             batch::LazyBatchColumnVec,
             chunk,
             data_type::{Real, VectorValue},
             datum,
             mysql::{Time, TimeType},
-            Datum,
         },
         expr::{Flag, SqlMode},
-        FieldTypeTp,
     };
     use tipb::*;
     use tipb_helper::ExprDefBuilder;

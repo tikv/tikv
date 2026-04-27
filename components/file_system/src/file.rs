@@ -13,7 +13,7 @@ use std::{
 // Extention Traits
 use fs2::FileExt;
 
-use super::{get_io_rate_limiter, get_io_type, IoOp, IoRateLimiter};
+use super::{IoOp, IoRateLimiter, get_io_rate_limiter, get_io_type};
 
 /// A wrapper around `std::fs::File` with capability to track and regulate IO
 /// flow.

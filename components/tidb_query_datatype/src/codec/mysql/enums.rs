@@ -9,9 +9,9 @@ use codec::prelude::*;
 use tipb::FieldType;
 
 use crate::{
-    codec::{convert::ToInt, Result},
-    expr::EvalContext,
     FieldTypeTp,
+    codec::{Result, convert::ToInt},
+    expr::EvalContext,
 };
 
 #[derive(Clone, Debug)]

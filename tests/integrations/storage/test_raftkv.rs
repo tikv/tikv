@@ -1,16 +1,16 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
     thread, time,
 };
 
-use engine_traits::{CfName, IterOptions, CF_DEFAULT};
+use engine_traits::{CF_DEFAULT, CfName, IterOptions};
 use futures::executor::block_on;
 use kvproto::kvrpcpb::{Context, KeyRange};
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
-use tikv::storage::{kv::*, CfStatistics};
-use tikv_util::{codec::bytes, HandyRwLock};
+use tikv::storage::{CfStatistics, kv::*};
+use tikv_util::{HandyRwLock, codec::bytes};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
 #[test]

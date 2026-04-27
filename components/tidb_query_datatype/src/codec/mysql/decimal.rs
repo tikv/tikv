@@ -17,10 +17,10 @@ use tikv_util::escape;
 
 use crate::{
     codec::{
+        Error, Result, TEN_POW,
         convert::{self, ConvertTo},
         data_type::*,
         mysql::DEFAULT_DIV_FRAC_INCR,
-        Error, Result, TEN_POW,
     },
     expr::EvalContext,
 };

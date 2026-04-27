@@ -5,10 +5,10 @@ use std::collections::VecDeque;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{metapb::RegionEpoch, raft_serverpb::RaftMessage};
 use raftstore::store::{
-    local_metrics::RaftMetrics, Config, PersistedNotifier, WriteRouter, WriteRouterContext,
-    WriteSenders, WriteTask,
+    Config, PersistedNotifier, WriteRouter, WriteRouterContext, WriteSenders, WriteTask,
+    local_metrics::RaftMetrics,
 };
-use slog::{warn, Logger};
+use slog::{Logger, warn};
 use tikv_util::slog_panic;
 
 use crate::{
