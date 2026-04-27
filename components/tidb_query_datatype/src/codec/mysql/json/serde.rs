@@ -307,7 +307,7 @@ mod tests {
                     Json::from_str_val("value").unwrap().as_ref(),
                 )])
                 .unwrap(),
-                r#"{"key": "value"}"#,
+                r#"{"key":"value"}"#,
             ),
             (
                 Json::from_array(vec![
@@ -315,7 +315,7 @@ mod tests {
                     Json::from_str_val("d2").unwrap(),
                 ])
                 .unwrap(),
-                r#"["d1", "d2"]"#,
+                r#"["d1","d2"]"#,
             ),
             (Json::from_i64(-3).unwrap(), r#"-3"#),
             (Json::from_i64(3).unwrap(), r#"3"#),
