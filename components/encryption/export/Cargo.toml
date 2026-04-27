@@ -19,6 +19,11 @@ derive_more = "0.99.3"
 encryption = { workspace = true }
 error_code = { workspace = true }
 file_system = { workspace = true }
+<<<<<<< HEAD
+=======
+gcp = { workspace = true }
+gcp_v2 = { workspace = true }
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))
 kvproto = { workspace = true }
 openssl = "0.10"
 protobuf = { version = "2.8", features = ["bytes"] }
