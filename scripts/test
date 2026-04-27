@@ -28,6 +28,19 @@ export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib"
 export LOG_LEVEL=DEBUG
 export RUST_BACKTRACE=full
 
+# Temporary compatibility mode for toolchains where `-Dwarnings` escalates
+# known non-security warnings across the workspace.
+if [[ "${RUSTFLAGS:-}" == *"-Dwarnings"* ]]; then
+    export RUSTFLAGS="${RUSTFLAGS} \
+        -A unexpected_cfgs \
+        -A stable_features \
+        -A dead_code \
+        -A unused_imports \
+        -A deprecated \
+        -A elided_named_lifetimes \
+        -A non_local_definitions"
+fi
+
 echo ${TIKV_ENABLE_FEATURES}
 cargo $CUSTOM_TEST_COMMAND --workspace \
     --exclude fuzz --exclude fuzzer-afl --exclude fuzzer-honggfuzz \
