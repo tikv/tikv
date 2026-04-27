@@ -418,10 +418,10 @@ txn_types = { path = "components/txn_types" }
 raft = { version = "0.7.0", default-features = false, features = [
   "protobuf-codec",
 ] }
-raft-engine = { git = "https://github.com/tikv/raft-engine.git", rev = "2f9f6888dc2c88d3e2b582187c26e196b88b8ef3", features = [
+raft-engine = { git = "https://github.com/tikv/raft-engine.git", rev = "03f77d90c09793a6f79411ff5f88233715eb23da", features = [
   "swap",
 ] }
-raft-engine-ctl = { git = "https://github.com/tikv/raft-engine.git", rev = "2f9f6888dc2c88d3e2b582187c26e196b88b8ef3" }
+raft-engine-ctl = { git = "https://github.com/tikv/raft-engine.git", rev = "03f77d90c09793a6f79411ff5f88233715eb23da" }
 grpcio = { version = "0.10.4", default-features = false, features = [
   "openssl",
   "protobuf-codec",

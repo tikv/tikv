@@ -1919,8 +1919,8 @@ impl FromStr for Decimal {
     }
 }
 
-impl ToString for Decimal {
-    fn to_string(&self) -> String {
+impl Decimal {
+    pub fn to_string(&self) -> String {
         let (mut buf, word_start_idx, int_len, int_cnt, frac_cnt) = self.prepare_buf();
         if self.negative {
             buf.push(b'-');

@@ -144,12 +144,6 @@ impl<'a> Serialize for JsonRef<'a> {
     }
 }
 
-impl ToString for Json {
-    fn to_string(&self) -> String {
-        self.as_ref().to_string()
-    }
-}
-
 impl FromStr for Json {
     type Err = Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {

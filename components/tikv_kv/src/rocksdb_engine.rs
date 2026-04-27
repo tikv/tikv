@@ -307,7 +307,7 @@ impl<RE: RaftExtension + 'static> Engine for RocksEngine<RE> {
         })
     }
 
-    type SnapshotRes = impl Future<Output = Result<Self::Snap>> + Send;
+    type SnapshotRes = Pin<Box<dyn Future<Output = Result<Self::Snap>> + Send>>;
     fn async_snapshot(&mut self, _: SnapContext<'_>) -> Self::SnapshotRes {
         let res = (|| {
             fail_point!("rockskv_async_snapshot", |_| Err(box_err!(
@@ -323,7 +323,7 @@ impl<RE: RaftExtension + 'static> Engine for RocksEngine<RE> {
             Ok(rx)
         })();
 
-        async move { Ok(res?.await.unwrap()) }
+        Box::pin(async move { Ok(res?.await.unwrap()) })
     }
 
     type IMSnap = Self::Snap;

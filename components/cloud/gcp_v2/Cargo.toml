@@ -10,10 +10,10 @@ async-trait = "0.1"
 cloud = { workspace = true }
 futures = "0.3"
 futures-util = { version = "0.3", features = ["io"] }
-google-cloud-storage = "1.0.0"
-google-cloud-gax = "1.0.0"
-google-cloud-auth = "1.0.0"
-google-cloud-kms-v1 = "1.0.0"
+google-cloud-storage = "=1.0.0"
+google-cloud-gax = "=1.0.0"
+google-cloud-auth = "=1.0.0"
+google-cloud-kms-v1 = "=1.0.0"
 kvproto = { workspace = true }
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "fips"] }
 tikv_util = { workspace = true }

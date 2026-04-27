@@ -1460,7 +1460,7 @@ pub mod test_gc_worker {
 
     use collections::HashMap;
     use engine_rocks::{RocksEngine, RocksSnapshot};
-    use futures::Future;
+    use futures::future::BoxFuture;
     use kvproto::{
         kvrpcpb::Context,
         metapb::{Peer, Region},
@@ -1553,16 +1553,16 @@ pub mod test_gc_worker {
             self.0.async_write(ctx, batch, subscribed, on_applied)
         }
 
-        type SnapshotRes = impl Future<Output = EngineResult<Self::Snap>> + Send;
+        type SnapshotRes = BoxFuture<'static, EngineResult<Self::Snap>>;
         fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes {
             let f = self.0.async_snapshot(ctx);
-            async move {
+            Box::pin(async move {
                 let snap = f.await?;
                 let mut region = Region::default();
                 // Add a peer to pass initialized check.
                 region.mut_peers().push(Peer::default());
                 Ok(RegionSnapshot::from_snapshot(snap, Arc::new(region)))
-            }
+            })
         }
 
         type IMSnap = Self::Snap;
@@ -1619,7 +1619,7 @@ pub mod test_gc_worker {
                 .async_write(ctx, batch, subscribed, on_applied)
         }
 
-        type SnapshotRes = impl Future<Output = EngineResult<Self::Snap>> + Send;
+        type SnapshotRes = BoxFuture<'static, EngineResult<Self::Snap>>;
         fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes {
             let region_id = ctx.pb_ctx.region_id;
             self.engines

@@ -107,7 +107,7 @@ impl Engine for BTreeEngine {
         stream::once(future::ready(WriteEvent::Finished(res)))
     }
 
-    type SnapshotRes = impl Future<Output = EngineResult<Self::Snap>> + Send;
+    type SnapshotRes = future::Ready<EngineResult<Self::Snap>>;
     /// warning: It returns a fake snapshot whose content will be affected by
     /// the later modifies!
     fn async_snapshot(&mut self, _ctx: SnapContext<'_>) -> Self::SnapshotRes {

@@ -168,7 +168,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
         Ok(())
     }
 
-    type SnapshotRes = impl Future<Output = tikv_kv::Result<Self::Snap>> + Send + 'static;
+    type SnapshotRes = BoxFuture<'static, tikv_kv::Result<Self::Snap>>;
     fn async_snapshot(&mut self, mut ctx: tikv_kv::SnapContext<'_>) -> Self::SnapshotRes {
         let mut req = Request::default();
         req.set_cmd_type(CmdType::Snap);
@@ -214,7 +214,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
             Some(self.router.snapshot(cmd))
         };
 
-        async move {
+        Box::pin(async move {
             res?;
             let res = f.unwrap().await;
             match res {
@@ -272,7 +272,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
                     }
                 }
             }
-        }
+        })
     }
 
     type IMSnap = Self::Snap;

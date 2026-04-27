@@ -43,9 +43,9 @@ dependencies = [
 
 [[package]]
 name = "ahash"
-version = "0.7.7"
+version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a824f2aa7e75a0c98c5a504fceb80649e9c35265d44525b5f94de4771a395cd"
+checksum = "891477e0c6a8957309ee5c45a6368af3ae14bb510732d2684ffa19af310920f9"
 dependencies = [
  "getrandom 0.2.11",
  "once_cell",
@@ -4176,7 +4176,7 @@ version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "16d4bde3a7105e59c66a4104cfe9606453af1c7a0eac78cb7d5bc263eb762a70"
 dependencies = [
- "ahash 0.7.7",
+ "ahash 0.7.8",
  "atty",
  "indexmap 1.9.3",
  "itoa 1.0.1",
@@ -5940,7 +5940,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.2",
  "rustls",
- "socket2 0.5.7",
+ "socket2 0.6.3",
  "thiserror 2.0.12",
  "tokio",
  "tracing",
@@ -5977,7 +5977,7 @@ dependencies = [
  "cfg_aliases",
  "libc 0.2.176",
  "once_cell",
- "socket2 0.5.7",
+ "socket2 0.6.3",
  "tracing",
  "windows-sys 0.52.0",
 ]
@@ -6015,7 +6015,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.4.2"
-source = "git+https://github.com/tikv/raft-engine.git?rev=2f9f6888dc2c88d3e2b582187c26e196b88b8ef3#2f9f6888dc2c88d3e2b582187c26e196b88b8ef3"
+source = "git+https://github.com/tikv/raft-engine.git?rev=03f77d90c09793a6f79411ff5f88233715eb23da#03f77d90c09793a6f79411ff5f88233715eb23da"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -6049,7 +6049,7 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.4.2"
-source = "git+https://github.com/tikv/raft-engine.git?rev=2f9f6888dc2c88d3e2b582187c26e196b88b8ef3#2f9f6888dc2c88d3e2b582187c26e196b88b8ef3"
+source = "git+https://github.com/tikv/raft-engine.git?rev=03f77d90c09793a6f79411ff5f88233715eb23da#03f77d90c09793a6f79411ff5f88233715eb23da"
 dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",
@@ -6685,7 +6685,7 @@ version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f06953bb8b9e4307cb7ccc0d9d018e2ddd25a30d32831f631ce4fe8f17671f7"
 dependencies = [
- "ahash 0.7.7",
+ "ahash 0.7.8",
  "bitflags 1.3.2",
  "instant",
  "num-traits",
@@ -9216,7 +9216,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 1.0.0",
+ "cfg-if 0.1.10",
  "static_assertions",
 ]
 

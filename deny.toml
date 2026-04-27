@@ -107,6 +107,13 @@ ignore = [
     # in master branch. Because the modification is too large,
     # we decided on the release branch to ignore it.
     "RUSTSEC-2026-0009",
+    # rand 0.8.x currently appears through transitive dependencies and triggers
+    # RUSTSEC-2026-0097. Upstream constraints prevent immediate upgrade.
+    "RUSTSEC-2026-0097",
+    # aws-lc-fips-sys is pulled by rustls FIPS stack from gcp_v2.
+    # Upstream patch versions are not yet consumed in this branch lockset.
+    "RUSTSEC-2026-0042",
+    "RUSTSEC-2026-0043",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,

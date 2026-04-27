@@ -3563,14 +3563,14 @@ impl<E: Engine> Engine for TxnTestEngine<E> {
         self.engine.modify_on_kv_engine(region_modifies)
     }
 
-    type SnapshotRes = impl Future<Output = tikv_kv::Result<Self::Snap>> + Send;
+    type SnapshotRes = futures::future::BoxFuture<'static, tikv_kv::Result<Self::Snap>>;
     fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes {
         let txn_ext = self.txn_ext.clone();
         let f = self.engine.async_snapshot(ctx);
-        async move {
+        Box::pin(async move {
             let snapshot = f.await?;
             Ok(TxnTestSnapshot { snapshot, txn_ext })
-        }
+        })
     }
 
     type IMSnap = Self::Snap;
