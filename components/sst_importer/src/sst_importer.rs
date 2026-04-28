@@ -429,7 +429,12 @@ impl SstImporter {
                 Ok(r)
             }
             Err(e) => {
-                error!(%e; "download failed"; "meta" => ?meta, "name" => name,);
+                warn!(
+                    "download failed";
+                    "meta" => ?meta,
+                    "name" => name,
+                    "err" => ?e,
+                );
                 Err(e)
             }
         }
