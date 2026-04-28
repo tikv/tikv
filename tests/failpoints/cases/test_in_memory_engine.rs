@@ -503,7 +503,26 @@ fn test_evictions_after_transfer_leader() {
         .snapshot(cache_region.clone(), 100, 100)
         .unwrap();
 
-    cluster.must_transfer_leader(r.id, new_peer(2, 2));
+    let target = new_peer(2, 2);
+    let mut transferred = false;
+    for _ in 0..20 {
+        cluster.reset_leader_of_region(r.id);
+        let current = cluster.leader_of_region(r.id);
+        if let Some(peer) = current {
+            if peer.get_id() == target.get_id() && peer.get_store_id() == target.get_store_id() {
+                transferred = true;
+                break;
+            }
+        }
+        let _ = cluster.try_transfer_leader_with_timeout(r.id, target.clone(), Duration::from_secs(1));
+        sleep(Duration::from_millis(200));
+    }
+    assert!(
+        transferred,
+        "failed to transfer leader to region {} target {:?}",
+        r.id,
+        target
+    );
     region_cache_engine
         .snapshot(cache_region, 100, 100)
         .unwrap_err();

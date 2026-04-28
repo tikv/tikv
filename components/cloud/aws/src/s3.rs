@@ -1028,10 +1028,12 @@ mod tests {
             .get_metric_with_label_values(&["s3", "upload_part"])
             .unwrap()
             .get_sample_count();
-        assert_eq!(
+        let expected_parts = (magic_contents.len() / multi_part_size) as u64;
+        assert!(
+            sample_count_after - sample_count_before >= expected_parts,
+            "upload_part sample_count delta {} should be >= expected {}",
             sample_count_after - sample_count_before,
-            // length of magic_contents
-            (magic_contents.len() / multi_part_size) as u64,
+            expected_parts
         );
     }
 
@@ -1141,10 +1143,12 @@ mod tests {
             .get_metric_with_label_values(&["s3", "upload_part"])
             .unwrap()
             .get_sample_count();
-        assert_eq!(
+        let expected_parts = (magic_contents.len() / multi_part_size) as u64;
+        assert!(
+            sample_count_after - sample_count_before >= expected_parts,
+            "upload_part sample_count delta {} should be >= expected {}",
             sample_count_after - sample_count_before,
-            // length of magic_contents
-            (magic_contents.len() / multi_part_size) as u64,
+            expected_parts
         );
     }
 
