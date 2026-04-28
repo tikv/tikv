@@ -26,6 +26,15 @@ use crate::{
 
 static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
+<<<<<<< HEAD
+=======
+// CDC connection monitoring constants in seconds
+const CDC_WATCHDOG_CHECK_INTERVAL_SECS: u64 = 2;
+const CDC_IDLE_WARNING_THRESHOLD_SECS: u64 = 60;
+const CDC_IDLE_DEREGISTER_THRESHOLD_SECS: u64 = 60 * 20; // 20 minutes
+const CDC_MEMORY_QUOTA_ABORT_THRESHOLD: f64 = 0.999;
+
+>>>>>>> acf70fc980 (cdc: also consider the memory quota usage when abort idle connection (#18914))
 pub fn validate_kv_api(kv_api: ChangeDataRequestKvApi, api_version: ApiVersion) -> bool {
     kv_api == ChangeDataRequestKvApi::TiDb
         || (kv_api == ChangeDataRequestKvApi::RawKv && api_version == ApiVersion::V2)
@@ -478,10 +487,118 @@ impl Service {
         ctx.spawn(async move {
             #[cfg(feature = "failpoints")]
             sleep_before_drain_change_event().await;
+<<<<<<< HEAD
             if let Err(e) = event_drain.forward(&mut sink).await {
                 warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
             } else {
                 info!("cdc send closed"; "downstream" => peer, "conn_id" => ?conn_id);
+=======
+            tokio::select! {
+                _ = &mut cancel_rx => {
+                    warn!("cdc send cancelled"; "downstream" => peer, "conn_id" => ?conn_id);
+                    let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, "connection cancelled".to_string());
+                    let _ = sink.fail(status).await;
+                    CDC_ABORTED_CONNECTIONS.inc();
+                }
+                result = event_drain.forward(&mut sink, Some(&last_flush_time_for_forward)) => {
+                    if let Err(e) = result {
+                        warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
+                    } else {
+                        info!("cdc send closed"; "downstream" => peer, "conn_id" => ?conn_id);
+                    }
+                    // Send signal when eventDrain.forward exits
+                    let _ = forward_exit_tx.send(());
+                }
+            }
+        });
+
+        // Start watchdog to monitor connection activity
+        Self::start_connection_watchdog(
+            self.pool.clone(),
+            last_flush_time_for_watchdog.clone(),
+            peer_for_watchdog.clone(),
+            conn_id,
+            cancel_tx,
+            forward_exit_rx,
+            self.memory_quota.clone(),
+        );
+    }
+
+    /// Start a watchdog to monitor CDC connection activity.
+    ///
+    /// This function creates a background task that periodically checks if the
+    /// connection has been idle for too long and takes appropriate action
+    /// (warning or aborting).
+    fn start_connection_watchdog(
+        pool: Arc<Worker>,
+        last_flush_time: Arc<AtomicCell<Instant>>,
+        peer: String,
+        conn_id: ConnId,
+        cancel_tx: tokio::sync::oneshot::Sender<()>,
+        mut forward_exit_rx: tokio::sync::oneshot::Receiver<()>,
+        memory_quota: Arc<MemoryQuota>,
+    ) {
+        let last_flush_time_clone = last_flush_time.clone();
+        let peer_clone = peer.clone();
+
+        // Create a custom interval task that can be stopped
+        let _ = pool.pool().spawn(async move {
+            let mut interval = GLOBAL_TIMER_HANDLE
+                .interval(
+                    Instant::now(),
+                    Duration::from_secs(CDC_WATCHDOG_CHECK_INTERVAL_SECS),
+                )
+                .compat();
+
+            loop {
+                tokio::select! {
+                    _ = &mut forward_exit_rx => {
+                        info!("cdc connection forward exit signal received, stopping watchdog");
+                        break;
+                    }
+                    _ = interval.next() => {
+                        let elapsed = last_flush_time_clone.load().elapsed();
+
+                        // Check if last flush was more than the warning threshold
+                        if elapsed > Duration::from_secs(CDC_IDLE_WARNING_THRESHOLD_SECS) {
+                            warn!("cdc connection idle too long";
+                                  "downstream" => peer_clone.clone(),
+                                  "conn_id" => ?conn_id,
+                                  "seconds_since_last_flush" => elapsed.as_secs());
+                        }
+
+                        let _idle_threshold = CDC_IDLE_DEREGISTER_THRESHOLD_SECS;
+
+                        #[cfg(feature = "failpoints")]
+                        let _idle_threshold = {
+                            let should_adjust = || {
+                                fail::fail_point!("cdc_idle_deregister_threshold", |_| true);
+                                false
+                            };
+                            if should_adjust() {
+                                5
+                            } else {
+                                CDC_IDLE_DEREGISTER_THRESHOLD_SECS
+                            }
+                        };
+
+                        // Check if last flush was more than the deregister threshold
+                        // To prevent the case that the connection idle since there are a lot of
+                        // incremental scan tasks queueing so won't send events, also check on the
+                        // memory usage, if the memory quota is almost used up, we abort the connection.
+                        if elapsed > Duration::from_secs(_idle_threshold)
+                            && memory_quota.used_ratio() >= CDC_MEMORY_QUOTA_ABORT_THRESHOLD {
+                            error!("cdc connection idle for too long, aborting connection";
+                                   "downstream" => peer_clone.clone(),
+                                   "conn_id" => ?conn_id,
+                                   "seconds_since_last_flush" => elapsed.as_secs());
+                            // Cancel the gRPC connection
+                            let _ = cancel_tx.send(());
+                            break;
+                        }
+                    }
+                }
+>>>>>>> acf70fc980 (cdc: also consider the memory quota usage when abort idle connection (#18914))
             }
         });
     }
