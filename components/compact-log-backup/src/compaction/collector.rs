@@ -37,6 +37,7 @@ pub struct CollectCachedSubcompaction<S: Stream<Item = Result<LogFile>>> {
     inner: S,
     deferred_file: Option<LogFile>,
     collector: SubcompactionCollector,
+    ready_compactions: Vec<Subcompaction>,
     physical_file_cache_capacity: u64,
     physical_files: HashMap<Chars, u64>,
     physical_files_size: u64,
@@ -94,6 +95,7 @@ impl<S: Stream<Item = Result<LogFile>>> CollectCachedSubcompaction<S> {
                 items: HashMap::new(),
                 stat: CollectSubcompactionStatistic::default(),
             },
+            ready_compactions: Vec::new(),
             physical_file_cache_capacity,
             physical_files: HashMap::new(),
             physical_files_size: 0,
@@ -213,15 +215,18 @@ fn add_physical_file(
 
 fn take_window(
     collector: &mut SubcompactionCollector,
+    ready_compactions: &mut Vec<Subcompaction>,
     physical_files: &mut HashMap<Chars, u64>,
     physical_files_size: &mut u64,
 ) -> Vec<Subcompaction> {
     physical_files.clear();
     *physical_files_size = 0;
-    let compactions = collector.take_pending_subcompactions().collect::<Vec<_>>();
-    for c in &compactions {
+    let mut compactions = std::mem::take(ready_compactions);
+    let pending_compactions = collector.take_pending_subcompactions().collect::<Vec<_>>();
+    for c in pending_compactions {
         collector.stat.bytes_out += c.size;
         collector.stat.compactions_out += 1;
+        compactions.push(c);
     }
     compactions
 }
@@ -241,11 +246,12 @@ impl<S: Stream<Item = Result<LogFile>>> Stream for CollectCachedSubcompaction<S>
             };
             match item {
                 None => {
-                    if this.collector.is_empty() {
+                    if this.collector.is_empty() && this.ready_compactions.is_empty() {
                         return None.into();
                     }
                     return Some(Ok(take_window(
                         this.collector,
+                        this.ready_compactions,
                         this.physical_files,
                         this.physical_files_size,
                     )))
@@ -262,11 +268,13 @@ impl<S: Stream<Item = Result<LogFile>>> Stream for CollectCachedSubcompaction<S>
                         *this.physical_files_size,
                         &item,
                     );
-                    if !this.collector.is_empty() && next_size > *this.physical_file_cache_capacity
+                    if (!this.collector.is_empty() || !this.ready_compactions.is_empty())
+                        && next_size > *this.physical_file_cache_capacity
                     {
                         *this.deferred_file = Some(item);
                         return Some(Ok(take_window(
                             this.collector,
+                            this.ready_compactions,
                             this.physical_files,
                             this.physical_files_size,
                         )))
@@ -274,7 +282,7 @@ impl<S: Stream<Item = Result<LogFile>>> Stream for CollectCachedSubcompaction<S>
                     }
                     add_physical_file(this.physical_files, this.physical_files_size, &item);
                     if let Some(ready) = this.collector.add_new_file(item) {
-                        return Some(Ok(vec![ready])).into();
+                        this.ready_compactions.push(ready);
                     }
                 }
             }
@@ -330,7 +338,10 @@ mod test {
     use kvproto::brpb;
     use protobuf::Chars;
 
-    use super::{CollectSubcompaction, CollectSubcompactionConfig, SubcompactionCollectKey};
+    use super::{
+        CollectCachedSubcompaction, CollectSubcompaction, CollectSubcompactionConfig,
+        SubcompactionCollectKey,
+    };
     use crate::{
         compaction::EpochHint,
         errors::{Error, ErrorKind, Result},
@@ -370,6 +381,11 @@ mod test {
     fn with_ts(mut lf: LogFile, min_ts: u64, max_ts: u64) -> LogFile {
         lf.min_ts = min_ts;
         lf.max_ts = max_ts;
+        lf
+    }
+
+    fn with_physical_size(mut lf: LogFile, physical_file_size: u64) -> LogFile {
+        lf.physical_file_size = physical_file_size;
         lf
     }
 
@@ -593,6 +609,49 @@ mod test {
         let stat = collector.take_statistic();
         assert_eq!(stat.files_in, 1);
         assert_eq!(stat.files_filtered_out, 1);
+    }
+
+    #[tokio::test]
+    async fn test_cached_collector_keeps_ready_subcompactions_in_window() {
+        let r = SubcompactionCollectKey::of_region;
+        let files = vec![
+            with_physical_size(log_file("p1", 70, r(1)), 400),
+            with_physical_size(log_file("p1", 70, r(1)), 400),
+            with_physical_size(log_file("p2", 10, r(2)), 400),
+            with_physical_size(log_file("p3", 10, r(3)), 400),
+        ];
+        let mut collector = CollectCachedSubcompaction::new(
+            stream::iter(files.into_iter().map(Ok)),
+            CollectSubcompactionConfig {
+                compact_shift_from_ts: 0,
+                compact_from_ts: 0,
+                compact_to_ts: u64::MAX,
+                subcompaction_size_threshold: 128,
+            },
+            1000,
+        );
+
+        let mut first_window = collector
+            .next()
+            .await
+            .expect("first window")
+            .unwrap()
+            .into_iter()
+            .map(|v| (v.size, v.region_id))
+            .collect::<Vec<_>>();
+        first_window.sort();
+        assert_eq!(first_window, [(10, 2), (140, 1)]);
+
+        let second_window = collector
+            .next()
+            .await
+            .expect("second window")
+            .unwrap()
+            .into_iter()
+            .map(|v| (v.size, v.region_id))
+            .collect::<Vec<_>>();
+        assert_eq!(second_window, [(10, 3)]);
+        assert!(collector.next().await.is_none());
     }
 
     #[tokio::test]

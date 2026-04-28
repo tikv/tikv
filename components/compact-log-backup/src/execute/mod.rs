@@ -4,7 +4,7 @@ pub mod hooking;
 #[cfg(test)]
 mod test;
 
-use std::{borrow::Cow, cell::Cell, path::Path, str::FromStr, sync::Arc};
+use std::{borrow::Cow, cell::Cell, collections::HashMap, path::Path, str::FromStr, sync::Arc};
 
 use chrono::Utc;
 use engine_rocks::RocksEngine;
@@ -16,6 +16,7 @@ use hooking::{
     AfterFinishCtx, BeforeStartCtx, CId, ExecHooks, SubcompactionFinishCtx, SubcompactionStartCtx,
 };
 use kvproto::brpb::StorageBackend;
+use slog_global::info;
 use tikv_util::config::ReadableSize;
 use tokio::{runtime::Handle, task::JoinError};
 use tokio_stream::Stream;
@@ -452,8 +453,31 @@ impl Execution {
         while let Some(window) = compact_stream.next().await {
             let mut cstat = compact_stream.take_statistic();
             let mut lstat = compact_stream.get_mut().take_load_meta_statistic();
+            let window = window?;
+            let mut physical_files = HashMap::new();
+            let mut logical_files = 0;
+            let mut logical_bytes = 0;
+            for c in &window {
+                logical_files += c.inputs.len();
+                logical_bytes += c.size;
+                for input in &c.inputs {
+                    physical_files
+                        .entry(input.id.name.clone())
+                        .or_insert(input.physical_file_size);
+                }
+            }
+            let physical_bytes = physical_files.values().sum::<u64>();
+            info!(
+                "collected physical file cache window";
+                "subcompactions" => window.len(),
+                "logical_files" => logical_files,
+                "logical_bytes" => logical_bytes,
+                "physical_files" => physical_files.len(),
+                "physical_bytes" => physical_bytes,
+                "physical_file_cache_capacity" => self.cfg.physical_file_cache_capacity,
+            );
             let mut runnable = Vec::new();
-            for c in window? {
+            for c in window {
                 let cstat_diff = std::mem::take(&mut cstat);
                 let lstat_diff = std::mem::take(&mut lstat);
                 if let Some((c, cid)) = self

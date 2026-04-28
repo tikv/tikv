@@ -14,6 +14,7 @@ use futures_io::AsyncWrite;
 use kvproto::brpb;
 use prometheus::core::{Atomic, AtomicU64};
 use protobuf::Chars;
+use slog_global::{debug, info};
 use tikv_util::{
     codec::stream_event::{self, Iterator},
     stream::{JustRetry, RetryExt, retry_all_ext},
@@ -108,6 +109,7 @@ pub struct PhysicalFileCache {
 
 impl PhysicalFileCache {
     pub fn new(capacity: u64) -> Self {
+        info!("create physical file cache"; "capacity" => capacity);
         Self {
             capacity,
             state: tokio::sync::Mutex::new(CacheState::default()),
@@ -116,17 +118,38 @@ impl PhysicalFileCache {
 
     pub async fn register_inputs(&self, inputs: &[Input]) {
         let mut state = self.state.lock().await;
+        let mut registered_spans = 0;
+        let mut new_physical_files = 0;
         for input in inputs {
-            let entry = state
-                .entries
-                .entry(input.id.name.clone())
-                .or_insert_with(CacheEntry::new);
+            let entry = match state.entries.entry(input.id.name.clone()) {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => {
+                    new_physical_files += 1;
+                    entry.insert(CacheEntry::new())
+                }
+            };
             entry.register(input.id.offset, input.id.length);
+            registered_spans += 1;
         }
+        info!(
+            "register physical file cache inputs";
+            "inputs" => inputs.len(),
+            "registered_spans" => registered_spans,
+            "new_physical_files" => new_physical_files,
+            "cached_physical_files" => state.entries.len(),
+            "reserved_bytes" => state.reserved_bytes,
+            "capacity" => self.capacity,
+        );
     }
 
     async fn take_or_reserve(&self, input: &Input) -> CacheDecision {
         if input.physical_file_size > self.capacity {
+            info!(
+                "bypass physical file cache because file exceeds capacity";
+                "physical_file" => ?input.id.name,
+                "physical_size" => input.physical_file_size,
+                "capacity" => self.capacity,
+            );
             self.take_registered_span(input).await;
             return CacheDecision::Bypass;
         }
@@ -147,11 +170,37 @@ impl PhysicalFileCache {
                     state.reserved_bytes = state
                         .reserved_bytes
                         .saturating_sub(input.physical_file_size);
+                    info!(
+                        "release physical file cache entry";
+                        "physical_file" => ?input.id.name,
+                        "physical_size" => input.physical_file_size,
+                        "reserved_bytes" => state.reserved_bytes,
+                        "capacity" => self.capacity,
+                    );
                     drop(state);
+                } else {
+                    debug!(
+                        "hit physical file cache";
+                        "physical_file" => ?input.id.name,
+                        "offset" => input.id.offset,
+                        "length" => input.id.length,
+                        "physical_size" => input.physical_file_size,
+                        "reserved_bytes" => state.reserved_bytes,
+                        "capacity" => self.capacity,
+                    );
                 }
                 return CacheDecision::Ready(part);
             }
             if entry.loading {
+                debug!(
+                    "wait for physical file cache loading";
+                    "physical_file" => ?input.id.name,
+                    "offset" => input.id.offset,
+                    "length" => input.id.length,
+                    "physical_size" => input.physical_file_size,
+                    "reserved_bytes" => reserved_bytes,
+                    "capacity" => self.capacity,
+                );
                 let notify = Arc::clone(&entry.notify);
                 let notified = notify.notified();
                 drop(state);
@@ -162,11 +211,25 @@ impl PhysicalFileCache {
             if reserved_bytes + physical_size <= self.capacity {
                 entry.loading = true;
                 state.reserved_bytes += physical_size;
+                info!(
+                    "reserve physical file cache entry";
+                    "physical_file" => ?input.id.name,
+                    "physical_size" => physical_size,
+                    "reserved_bytes" => state.reserved_bytes,
+                    "capacity" => self.capacity,
+                );
                 return CacheDecision::Download;
             }
             if entry.take_span(input.id.offset, input.id.length) {
                 state.entries.remove(&input.id.name);
             }
+            info!(
+                "bypass physical file cache because capacity is full";
+                "physical_file" => ?input.id.name,
+                "physical_size" => physical_size,
+                "reserved_bytes" => reserved_bytes,
+                "capacity" => self.capacity,
+            );
             return CacheDecision::Bypass;
         }
     }
@@ -201,6 +264,21 @@ impl PhysicalFileCache {
             state.reserved_bytes = state
                 .reserved_bytes
                 .saturating_sub(input.physical_file_size);
+            info!(
+                "downloaded physical file for cache and consumed its last span";
+                "physical_file" => ?input.id.name,
+                "physical_size" => input.physical_file_size,
+                "reserved_bytes" => state.reserved_bytes,
+                "capacity" => self.capacity,
+            );
+        } else {
+            info!(
+                "downloaded physical file into cache";
+                "physical_file" => ?input.id.name,
+                "physical_size" => input.physical_file_size,
+                "reserved_bytes" => state.reserved_bytes,
+                "capacity" => self.capacity,
+            );
         }
         drop(state);
         notify.notify_waiters();
