@@ -514,14 +514,14 @@ fn test_evictions_after_transfer_leader() {
                 break;
             }
         }
-        let _ = cluster.try_transfer_leader_with_timeout(r.id, target.clone(), Duration::from_secs(1));
+        let _ =
+            cluster.try_transfer_leader_with_timeout(r.id, target.clone(), Duration::from_secs(1));
         sleep(Duration::from_millis(200));
     }
     assert!(
         transferred,
         "failed to transfer leader to region {} target {:?}",
-        r.id,
-        target
+        r.id, target
     );
     region_cache_engine
         .snapshot(cache_region, 100, 100)

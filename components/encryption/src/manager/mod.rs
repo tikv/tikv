@@ -420,8 +420,15 @@ fn run_background_rotate_work(
         select! {
             recv(tick(check_period)) -> _ => {
                 info!("Try to rotate data key, current method:{:?}", method);
-                dict.maybe_rotate_data_key(method, master_key)
-                    .expect("Rotating key operation encountered error in the background worker");
+                if let Err(e) = dict.maybe_rotate_data_key(method, master_key) {
+                    // During teardown (especially in tests), dict directory can be removed
+                    // before the background worker receives termination signal.
+                    if let Error::Io(io_err) = &e && io_err.kind() == ErrorKind::NotFound {
+                        info!("Key rotate worker exits because dictionary files are removed"; "err" => %e);
+                        return;
+                    }
+                    error!("Rotating key operation encountered error in the background worker"; "err" => %e);
+                }
             },
             recv(rx) -> r => {
                 match r {
@@ -430,7 +437,9 @@ fn run_background_rotate_work(
                         return;
                     }
                     Ok(RotateTask::Save(tx)) => {
-                        dict.save_key_dict(master_key).expect("Saving key dict encountered error in the background worker");
+                        if let Err(e) = dict.save_key_dict(master_key) {
+                            error!("Saving key dict encountered error in the background worker"; "err" => %e);
+                        }
                         tx.send(()).unwrap();
                     }
                 }
