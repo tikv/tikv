@@ -4,15 +4,15 @@ use std::{
     borrow::Cow,
     cell::RefCell,
     fmt,
-    sync::{atomic::*, mpsc, Arc, Mutex, RwLock},
+    sync::{Arc, Mutex, RwLock, atomic::*, mpsc},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use async_channel::SendError;
 use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{name_to_cf, raw_ttl::ttl_current_ts, CfName, KvEngine, SstCompressionType};
-use external_storage::{create_storage, BackendConfig, ExternalStorage, HdfsConfig};
+use engine_traits::{CfName, KvEngine, SstCompressionType, name_to_cf, raw_ttl::ttl_current_ts};
+use external_storage::{BackendConfig, ExternalStorage, HdfsConfig, create_storage};
 use futures::{channel::mpsc::*, executor::block_on};
 use kvproto::{
     brpb::*,
@@ -23,15 +23,15 @@ use kvproto::{
 use online_config::OnlineConfig;
 use raft::StateRole;
 use raftstore::coprocessor::RegionInfoProvider;
-use resource_control::{with_resource_limiter, ResourceGroupManager, ResourceLimiter};
+use resource_control::{ResourceGroupManager, ResourceLimiter, with_resource_limiter};
 use tikv::{
     config::BackupConfig,
     storage::{
+        Snapshot, Statistics,
         kv::{CursorBuilder, Engine, LocalTablets, ScanMode, SnapContext},
         mvcc::Error as MvccError,
         raw::raw_mvcc::RawMvccSnapshot,
         txn::{EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore},
-        Snapshot, Statistics,
     },
 };
 use tikv_util::{
@@ -48,16 +48,28 @@ use tokio::runtime::{Handle, Runtime};
 use txn_types::{Key, TimeStamp, TsSet};
 
 use crate::{
+    Error,
     metrics::*,
     softlimit::{CpuStatistics, SoftLimit, SoftLimitByCpu},
     utils::KeyValueCodec,
     writer::{BackupWriterBuilder, CfNameWrap},
-    Error, *,
+    *,
 };
 
 const BACKUP_BATCH_LIMIT: usize = 1024;
 // task yield duration when resource limit is on.
 const TASK_YIELD_DURATION: Duration = Duration::from_millis(10);
+
+pub fn storage_backend_config(config: &BackupConfig) -> BackendConfig {
+    BackendConfig {
+        s3_multi_part_size: config.s3_multi_part_size.0 as usize,
+        gcp_v2_enable: config.gcp_v2_enable,
+        hdfs_config: HdfsConfig {
+            hadoop_home: config.hadoop.home.clone(),
+            linux_user: config.hadoop.linux_user.clone(),
+        },
+    }
+}
 
 #[derive(Clone)]
 struct Request {
@@ -642,6 +654,10 @@ impl ConfigManager {
     fn set_num_threads(&self, num_threads: usize) {
         self.0.write().unwrap().num_threads = num_threads;
     }
+
+    fn set_gcp_v2_enable(&self, gcp_v2_enable: bool) {
+        self.0.write().unwrap().gcp_v2_enable = gcp_v2_enable;
+    }
 }
 
 #[derive(Clone)]
@@ -916,20 +932,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
     }
 
     fn get_config(&self) -> BackendConfig {
-        BackendConfig {
-            s3_multi_part_size: self.config_manager.0.read().unwrap().s3_multi_part_size.0 as usize,
-            hdfs_config: HdfsConfig {
-                hadoop_home: self.config_manager.0.read().unwrap().hadoop.home.clone(),
-                linux_user: self
-                    .config_manager
-                    .0
-                    .read()
-                    .unwrap()
-                    .hadoop
-                    .linux_user
-                    .clone(),
-            },
-        }
+        storage_backend_config(&self.config_manager.0.read().unwrap())
     }
 
     fn spawn_backup_worker(
@@ -1337,7 +1340,7 @@ pub mod tests {
         time::Duration,
     };
 
-    use api_version::{api_v2::RAW_KEY_PREFIX, dispatch_api_version, KvFormat, RawValue};
+    use api_version::{KvFormat, RawValue, api_v2::RAW_KEY_PREFIX, dispatch_api_version};
     use collections::HashSet;
     use engine_rocks::RocksSstReader;
     use engine_traits::{IterOptions, Iterator, MiscExt, RefIterable, SstReader};
@@ -1352,9 +1355,9 @@ pub mod tests {
     use tikv::{
         coprocessor::checksum_crc64_xor,
         storage::{
+            RocksEngine, TestEngineBuilder,
             kv::LocalTablets,
             txn::tests::{must_commit, must_prewrite_put},
-            RocksEngine, TestEngineBuilder,
         },
     };
     use tikv_util::{config::ReadableSize, info, store::new_peer};
@@ -1562,6 +1565,15 @@ pub mod tests {
             endpoint.config_manager.0.read().unwrap().s3_multi_part_size,
             ReadableSize::mb(5)
         );
+    }
+
+    #[test]
+    fn test_gcp_v2_enable_online_config() {
+        let (_tmp, endpoint) = new_endpoint();
+        assert!(endpoint.get_config().gcp_v2_enable);
+
+        endpoint.config_manager.set_gcp_v2_enable(false);
+        assert!(!endpoint.get_config().gcp_v2_enable);
     }
 
     #[test]

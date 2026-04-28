@@ -144,12 +144,6 @@ impl<'a> Serialize for JsonRef<'a> {
     }
 }
 
-impl ToString for Json {
-    fn to_string(&self) -> String {
-        self.as_ref().to_string()
-    }
-}
-
 impl FromStr for Json {
     type Err = Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -256,7 +250,7 @@ mod tests {
         let jstr1 = r#"{"a": [1, "2", {"aa": "bb"}, 4.0, null], "c": null,"b": true}"#;
         let j1: Json = jstr1.parse().unwrap();
         let jstr2 = j1.to_string();
-        let expect_str = r#"{"a": [1, "2", {"aa": "bb"}, 4.0, null], "b": true, "c": null}"#;
+        let expect_str = r#"{"a":[1,"2",{"aa":"bb"},4.0,null],"b":true,"c":null}"#;
         assert_eq!(jstr2, expect_str);
     }
 
@@ -313,7 +307,7 @@ mod tests {
                     Json::from_str_val("value").unwrap().as_ref(),
                 )])
                 .unwrap(),
-                r#"{"key": "value"}"#,
+                r#"{"key":"value"}"#,
             ),
             (
                 Json::from_array(vec![
@@ -321,7 +315,7 @@ mod tests {
                     Json::from_str_val("d2").unwrap(),
                 ])
                 .unwrap(),
-                r#"["d1", "d2"]"#,
+                r#"["d1","d2"]"#,
             ),
             (Json::from_i64(-3).unwrap(), r#"-3"#),
             (Json::from_i64(3).unwrap(), r#"3"#),

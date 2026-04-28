@@ -5,8 +5,8 @@ use std::{
     io::{self, Error as IoError, ErrorKind, Result as IoResult},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
     },
     thread::JoinHandle,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -21,6 +21,7 @@ use protobuf::Message;
 use tikv_util::{box_err, debug, error, info, sys::thread::StdThreadBuildWrapper, thd_name, warn};
 
 use crate::{
+    Error, Result,
     config::EncryptionConfig,
     crypter::{self, FileEncryptionInfo, Iv},
     encrypted_file::EncryptedFile,
@@ -28,7 +29,6 @@ use crate::{
     io::{DecrypterReader, EncrypterWriter},
     master_key::Backend,
     metrics::*,
-    Error, Result,
 };
 
 const KEY_DICT_NAME: &str = "key.dict";
@@ -420,8 +420,15 @@ fn run_background_rotate_work(
         select! {
             recv(tick(check_period)) -> _ => {
                 info!("Try to rotate data key, current method:{:?}", method);
-                dict.maybe_rotate_data_key(method, master_key)
-                    .expect("Rotating key operation encountered error in the background worker");
+                if let Err(e) = dict.maybe_rotate_data_key(method, master_key) {
+                    // During teardown (especially in tests), dict directory can be removed
+                    // before the background worker receives termination signal.
+                    if let Error::Io(io_err) = &e && io_err.kind() == ErrorKind::NotFound {
+                        info!("Key rotate worker exits because dictionary files are removed"; "err" => %e);
+                        return;
+                    }
+                    error!("Rotating key operation encountered error in the background worker"; "err" => %e);
+                }
             },
             recv(rx) -> r => {
                 match r {
@@ -430,7 +437,9 @@ fn run_background_rotate_work(
                         return;
                     }
                     Ok(RotateTask::Save(tx)) => {
-                        dict.save_key_dict(master_key).expect("Saving key dict encountered error in the background worker");
+                        if let Err(e) = dict.save_key_dict(master_key) {
+                            error!("Saving key dict encountered error in the background worker"; "err" => %e);
+                        }
                         tx.send(()).unwrap();
                     }
                 }
@@ -1130,7 +1139,7 @@ impl<'a> Drop for DataKeyImporter<'a> {
 
 #[cfg(test)]
 mod tests {
-    use file_system::{remove_file, File};
+    use file_system::{File, remove_file};
     use kvproto::encryptionpb::EncryptionMethod;
     use matches::assert_matches;
     use tempfile::TempDir;
@@ -1138,8 +1147,8 @@ mod tests {
 
     use super::*;
     use crate::master_key::{
-        tests::{decrypt_called, encrypt_called, MockBackend},
         FileBackend, PlaintextBackend,
+        tests::{MockBackend, decrypt_called, encrypt_called},
     };
 
     lazy_static::lazy_static! {

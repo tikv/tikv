@@ -4,19 +4,20 @@ use std::{
     collections::HashMap,
     future::Future,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
 };
 
 use engine_rocks::RocksEngine;
-use external_storage::ExternalStorage;
+use external_storage::{BackendConfig, ExternalStorage};
 use futures::{future::FutureExt, stream::TryStreamExt};
 use kvproto::brpb::StorageBackend;
 use tokio::sync::mpsc::Sender;
 
 use super::{Execution, ExecutionConfig};
 use crate::{
+    ErrorKind,
     compaction::SubcompactionResult,
     errors::OtherErrExt,
     exec_hooks::{
@@ -25,8 +26,7 @@ use crate::{
     },
     execute::hooking::{CId, ExecHooks, SubcompactionFinishCtx},
     storage::LOCK_PREFIX,
-    test_util::{gen_step, CompactInMem, KvGen, LogFileBuilder, TmpStorage},
-    ErrorKind,
+    test_util::{CompactInMem, KvGen, LogFileBuilder, TmpStorage, gen_step},
 };
 
 #[derive(Clone)]
@@ -76,6 +76,10 @@ pub fn create_compaction(st: StorageBackend) -> Execution {
         },
         max_concurrent_subcompaction: 3,
         external_storage: st,
+        backend_config: BackendConfig {
+            gcp_v2_enable: true,
+            ..Default::default()
+        },
         db: None,
         out_prefix: "test-output".to_owned(),
     }

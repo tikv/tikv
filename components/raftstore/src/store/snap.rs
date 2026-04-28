@@ -8,8 +8,8 @@ use std::{
     path::{Path, PathBuf},
     result, str,
     sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex, RwLock,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     thread,
     time::{self, Duration},
@@ -17,13 +17,13 @@ use std::{
 };
 
 use collections::{HashMap, HashMapEntry as Entry};
-use encryption::{create_aes_ctr_crypter, DataKeyManager, Iv};
-use engine_traits::{CfName, KvEngine, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use encryption::{DataKeyManager, Iv, create_aes_ctr_crypter};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE, CfName, KvEngine};
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use fail::fail_point;
 use file_system::{
-    calc_crc32, calc_crc32_and_size, delete_dir_if_exist, delete_file_if_exist, file_exists,
-    get_file_size, sync_dir, File, Metadata, OpenOptions,
+    File, Metadata, OpenOptions, calc_crc32, calc_crc32_and_size, delete_dir_if_exist,
+    delete_file_if_exist, file_exists, get_file_size, sync_dir,
 };
 use keys::{enc_end_key, enc_start_key};
 use kvproto::{
@@ -37,17 +37,17 @@ use protobuf::Message;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 use thiserror::Error;
 use tikv_util::{
-    box_err, box_try,
+    HandyRwLock, box_err, box_try,
     config::ReadableSize,
     debug, error, info,
-    time::{duration_to_sec, Instant, Limiter, UnixSecs},
-    warn, HandyRwLock,
+    time::{Instant, Limiter, UnixSecs, duration_to_sec},
+    warn,
 };
 
 use crate::{
+    Error as RaftStoreError, Result as RaftStoreResult,
     coprocessor::CoprocessorHost,
     store::{metrics::*, peer_storage::JOB_STATUS_CANCELLING},
-    Error as RaftStoreError, Result as RaftStoreResult,
 };
 
 #[path = "snap/io.rs"]
@@ -2535,8 +2535,8 @@ pub mod tests {
         io::{self, Read, Seek, SeekFrom, Write},
         path::{Path, PathBuf},
         sync::{
-            atomic::{AtomicBool, AtomicU64, AtomicUsize},
             Arc,
+            atomic::{AtomicBool, AtomicU64, AtomicUsize},
         },
     };
 
@@ -2548,9 +2548,9 @@ pub mod tests {
         raft::RaftTestEngine,
     };
     use engine_traits::{
-        Engines, ExternalSstFileInfo, KvEngine, RaftEngine, RaftLogBatch,
-        Snapshot as EngineSnapshot, SstExt, SstWriter, SstWriterBuilder, SyncMutable, ALL_CFS,
-        CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+        ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, Engines, ExternalSstFileInfo, KvEngine,
+        RaftEngine, RaftLogBatch, Snapshot as EngineSnapshot, SstExt, SstWriter, SstWriterBuilder,
+        SyncMutable,
     };
     use kvproto::{
         encryptionpb::EncryptionMethod,
@@ -2564,9 +2564,9 @@ pub mod tests {
 
     use super::*;
     use crate::{
-        coprocessor::CoprocessorHost,
-        store::{peer_storage::JOB_STATUS_RUNNING, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER},
         Result,
+        coprocessor::CoprocessorHost,
+        store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER, peer_storage::JOB_STATUS_RUNNING},
     };
 
     const TEST_STORE_ID: u64 = 1;

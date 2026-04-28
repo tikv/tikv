@@ -40,23 +40,23 @@ use kvproto::{
 };
 use raft::eraftpb::MessageType;
 use raftstore::{
+    Error, Result,
     store::{
+        DiskFullPeers, Transport, WriteTask,
         fsm::{
-            apply,
+            Proposal, apply,
             life::{build_peer_destroyed_report, forward_destroy_to_source_peer},
-            Proposal,
         },
         local_metrics::IoType as InspectIoType,
         metrics::RAFT_PEER_PENDING_DURATION,
-        util, DiskFullPeers, Transport, WriteTask,
+        util,
     },
-    Error, Result,
 };
 use slog::{debug, error, info, warn};
 use tikv_util::{
     store::find_peer,
     sys::disk::DiskUsage,
-    time::{duration_to_sec, Instant},
+    time::{Instant, duration_to_sec},
 };
 
 use super::command::SplitInit;

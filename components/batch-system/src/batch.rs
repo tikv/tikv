@@ -10,16 +10,16 @@
 use std::{
     borrow::Cow,
     ops::{Deref, DerefMut},
-    sync::{atomic::AtomicUsize, Arc, Mutex},
-    thread::{self, current, JoinHandle, ThreadId},
+    sync::{Arc, Mutex, atomic::AtomicUsize},
+    thread::{self, JoinHandle, ThreadId, current},
     time::Duration,
 };
 
 use fail::fail_point;
-use file_system::{set_io_type, IoType};
+use file_system::{IoType, set_io_type};
 use resource_control::{
-    channel::{unbounded, Receiver, Sender},
     ResourceController,
+    channel::{Receiver, Sender, unbounded},
 };
 use tikv_util::{
     debug, error, info, mpsc, safe_panic, sys::thread::StdThreadBuildWrapper, thd_name,

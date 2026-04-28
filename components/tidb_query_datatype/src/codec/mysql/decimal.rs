@@ -17,10 +17,10 @@ use tikv_util::escape;
 
 use crate::{
     codec::{
+        Error, Result, TEN_POW,
         convert::{self, ConvertTo},
         data_type::*,
         mysql::DEFAULT_DIV_FRAC_INCR,
-        Error, Result, TEN_POW,
     },
     expr::EvalContext,
 };
@@ -1919,8 +1919,8 @@ impl FromStr for Decimal {
     }
 }
 
-impl ToString for Decimal {
-    fn to_string(&self) -> String {
+impl Decimal {
+    pub fn to_string(&self) -> String {
         let (mut buf, word_start_idx, int_len, int_cnt, frac_cnt) = self.prepare_buf();
         if self.negative {
             buf.push(b'-');

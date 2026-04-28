@@ -4,15 +4,15 @@ use std::{path::PathBuf, sync::Arc};
 
 use ::encryption::DataKeyManager;
 use engine_traits::{
-    Error, ExternalSstFileInfo, ExternalSstFileReader, IterOptions, Iterator, RefIterable, Result,
-    SstCompressionType, SstExt, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT,
+    CF_DEFAULT, Error, ExternalSstFileInfo, ExternalSstFileReader, IterOptions, Iterator,
+    RefIterable, Result, SstCompressionType, SstExt, SstReader, SstWriter, SstWriterBuilder,
 };
 use fail::fail_point;
 use file_system::get_io_rate_limiter;
 use rocksdb::{
-    rocksdb::supported_compression, ColumnFamilyOptions, DBCompressionType, DBIterator, Env,
-    EnvOptions, ExternalSstFileInfo as RawExternalSstFileInfo, SequentialFile, SstFileReader,
-    SstFileWriter, DB,
+    ColumnFamilyOptions, DB, DBCompressionType, DBIterator, Env, EnvOptions,
+    ExternalSstFileInfo as RawExternalSstFileInfo, SequentialFile, SstFileReader, SstFileWriter,
+    rocksdb::supported_compression,
 };
 
 use crate::{engine::RocksEngine, get_env, options::RocksReadOptions, r2e};

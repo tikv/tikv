@@ -8,7 +8,7 @@ use kvproto::kvrpcpb;
 use semver::VersionReq;
 
 use super::{config::Config, plugin_registry::PluginRegistry, raw_storage_impl::RawStorageImpl};
-use crate::storage::{self, lock_manager::LockManager, Engine, Storage};
+use crate::storage::{self, Engine, Storage, lock_manager::LockManager};
 
 #[allow(clippy::large_enum_variant)]
 enum CoprocessorError {

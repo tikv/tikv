@@ -7,10 +7,9 @@ use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::{
     codec::{
-        self,
+        self, Error,
         data_type::*,
-        mysql::{RoundMode, DEFAULT_FSP},
-        Error,
+        mysql::{DEFAULT_FSP, RoundMode},
     },
     expr::EvalContext,
 };
@@ -722,7 +721,7 @@ impl Default for MySqlRng {
 mod tests {
     use std::{f64, i64, str::FromStr};
 
-    use tidb_query_datatype::{builder::FieldTypeBuilder, FieldTypeFlag, FieldTypeTp};
+    use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp, builder::FieldTypeBuilder};
     use tipb::ScalarFuncSig;
 
     use super::*;

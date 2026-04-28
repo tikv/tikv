@@ -6,10 +6,10 @@ use codec::number::NumberCodec;
 
 use super::{
     super::Result,
+    Json, JsonRef, JsonType,
     constants::*,
     json_extract::extract_json,
     path_expr::{PathExpression, PathLeg},
-    Json, JsonRef, JsonType,
 };
 use crate::codec::mysql::json::path_expr::{ArraySelection, KeySelection};
 

@@ -4,7 +4,7 @@ use num_traits::identities::Zero;
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::{
-    codec::{self, data_type::*, div_i64, div_i64_with_u64, div_u64_with_i64, mysql::Res, Error},
+    codec::{self, Error, data_type::*, div_i64, div_i64_with_u64, div_u64_with_i64, mysql::Res},
     expr::EvalContext,
 };
 
@@ -537,10 +537,10 @@ mod tests {
     use std::str::FromStr;
 
     use tidb_query_datatype::{
+        FieldTypeFlag, FieldTypeTp,
         builder::FieldTypeBuilder,
         codec::error::ERR_DIVISION_BY_ZERO,
         expr::{EvalConfig, Flag, SqlMode},
-        FieldTypeFlag, FieldTypeTp,
     };
     use tipb::ScalarFuncSig;
 

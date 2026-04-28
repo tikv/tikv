@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    codec::{error::Error, Result},
+    codec::{Result, error::Error},
     expr::EvalContext,
 };
 

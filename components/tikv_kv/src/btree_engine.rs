@@ -14,10 +14,10 @@ use std::{
 use collections::HashMap;
 use engine_panic::PanicEngine;
 use engine_traits::{
-    CfName, IterMetricsCollector, IterOptions, MetricsExt, ReadOptions, CF_DEFAULT, CF_LOCK,
-    CF_WRITE,
+    CF_DEFAULT, CF_LOCK, CF_WRITE, CfName, IterMetricsCollector, IterOptions, MetricsExt,
+    ReadOptions,
 };
-use futures::{future, stream, Future, Stream};
+use futures::{Future, Stream, future, stream};
 use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
 
@@ -107,7 +107,7 @@ impl Engine for BTreeEngine {
         stream::once(future::ready(WriteEvent::Finished(res)))
     }
 
-    type SnapshotRes = impl Future<Output = EngineResult<Self::Snap>> + Send;
+    type SnapshotRes = future::Ready<EngineResult<Self::Snap>>;
     /// warning: It returns a fake snapshot whose content will be affected by
     /// the later modifies!
     fn async_snapshot(&mut self, _ctx: SnapContext<'_>) -> Self::SnapshotRes {
@@ -329,7 +329,7 @@ pub mod tests {
     use engine_traits::IterOptions;
 
     use super::{
-        super::{tests::*, CfStatistics, TEST_ENGINE_CFS},
+        super::{CfStatistics, TEST_ENGINE_CFS, tests::*},
         *,
     };
     use crate::{Cursor, ScanMode};

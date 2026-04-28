@@ -21,14 +21,15 @@ use std::{
 
 use collections::HashMap;
 use compact_log_backup::{
+    TraceResultExt,
     exec_hooks::{self as compact_log_hooks, skip_small_compaction::SkipSmallCompaction},
-    execute as compact_log, TraceResultExt,
+    execute as compact_log,
 };
 use crypto::fips;
 use encryption_export::{
-    create_backend, data_key_manager_from_config, DataKeyManager, DecrypterReader, Iv,
+    DataKeyManager, DecrypterReader, Iv, create_backend, data_key_manager_from_config,
 };
-use engine_rocks::{get_env, util::new_engine_opt, RocksEngine};
+use engine_rocks::{RocksEngine, get_env, util::new_engine_opt};
 use engine_traits::Peekable;
 use file_system::calc_crc32;
 use futures::{executor::block_on, future::try_join_all};
@@ -49,16 +50,16 @@ use raft_log_engine::ManagedFileSystem;
 use raftstore::store::util::build_key_range;
 use regex::Regex;
 use security::{SecurityConfig, SecurityManager};
-use structopt::{clap::ErrorKind, StructOpt};
+use structopt::{StructOpt, clap::ErrorKind};
 use tempfile::TempDir;
 use tikv::{
     config::TikvConfig,
-    server::{debug::BottommostLevelCompaction, KvEngineFactoryBuilder},
+    server::{KvEngineFactoryBuilder, debug::BottommostLevelCompaction},
     storage::config::EngineType,
 };
 use tikv_util::{
     escape,
-    logger::{get_log_level, Level},
+    logger::{Level, get_log_level},
     run_and_wait_child_process,
     sys::thread::StdThreadBuildWrapper,
     unescape, warn,
@@ -409,6 +410,7 @@ fn main() {
             minimal_compaction_size,
             prefetch_running_count,
             prefetch_buffer_count,
+            gcp_v2_enable,
         } => {
             let tmp_engine =
                 TemporaryRocks::new(&cfg).expect("failed to create temp engine for writing SSTs.");
@@ -440,13 +442,15 @@ fn main() {
                 compression,
                 compression_level,
             };
-            let exec = compact_log::Execution {
+            let mut exec = compact_log::Execution {
                 out_prefix: ccfg.recommended_prefix(&name),
                 cfg: ccfg,
                 max_concurrent_subcompaction: max_compaction_num,
                 external_storage,
+                backend_config: Default::default(),
                 db: Some(tmp_engine.rocks),
             };
+            exec.backend_config.gcp_v2_enable = gcp_v2_enable;
 
             use tikv::server::status_server::lite::Server as StatusServerLite;
             struct ExportTiKVInfo {

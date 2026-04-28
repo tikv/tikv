@@ -10,12 +10,12 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use kvproto::{coprocessor::KeyRange, metapb::Region};
 use tidb_query_common::{
+    Result,
     error::StorageError,
     storage::{
         FindRegionResult, IntervalRange, OwnedKvPairEntry, PointRange, RegionStorageAccessor,
         Result as StorageResult, StateRole, Storage,
     },
-    Result,
 };
 use tidb_query_datatype::{
     codec::{batch::LazyBatchColumnVec, data_type::VectorValue},

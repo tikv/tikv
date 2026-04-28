@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use futures::{executor::block_on, SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt, executor::block_on};
 use grpcio::{RpcStatus, RpcStatusCode};
 use kvproto::meta_storagepb as mpb;
 

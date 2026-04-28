@@ -23,7 +23,7 @@ use encryption::{DecrypterReader, FileEncryptionInfo, Iv};
 use file_system::{File, Sha256Reader};
 use futures::io::BufReader;
 use futures_io::AsyncRead;
-use futures_util::{future::LocalBoxFuture, stream::LocalBoxStream, AsyncReadExt};
+use futures_util::{AsyncReadExt, future::LocalBoxFuture, stream::LocalBoxStream};
 use kvproto::brpb::CompressionType;
 use openssl::hash::{Hasher, MessageDigest};
 use tikv_util::{
@@ -68,9 +68,10 @@ impl<'a, R: AsyncRead + Unpin + Send + 'a> From<R> for UnpinReader<'a> {
 
 pub type ExternalData<'a> = Box<dyn AsyncRead + Unpin + Send + 'a>;
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct BackendConfig {
     pub s3_multi_part_size: usize,
+    pub gcp_v2_enable: bool,
     pub hdfs_config: HdfsConfig,
 }
 

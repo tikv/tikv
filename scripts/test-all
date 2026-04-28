@@ -12,11 +12,13 @@ if [[ -z $MAKEFILE_RUN ]] ; then
     COMMAND="$0 $*" exec make run
 fi
 
-./scripts/test "$@"  && echo
+./scripts/test "$@"
+echo
 # Re-run tests that requires specific environment variables.
 if [[ "$(uname)" == "Linux" ]]; then
     export MALLOC_CONF=prof:true
-    ./scripts/test ifdef_malloc_conf "$@" && echo
+    ./scripts/test ifdef_malloc_conf "$@"
+    echo
 fi
 
 if [[ "$(uname)" = "Linux" ]]; then

@@ -4,8 +4,8 @@ use std::{
     fmt::{self, Debug, Display, Formatter},
     pin::Pin,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
     },
     task::Poll,
     time::Duration,
@@ -14,28 +14,29 @@ use std::{
 use collections::HashMap;
 pub use engine_rocks::RocksSnapshot;
 use engine_rocks::{
-    get_env, RocksCfOptions, RocksDbOptions, RocksEngine as BaseRocksEngine, RocksEngineIterator,
+    RocksCfOptions, RocksDbOptions, RocksEngine as BaseRocksEngine, RocksEngineIterator, get_env,
 };
 use engine_traits::{
     CfName, Engines, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions,
 };
 use file_system::IoRateLimiter;
 use futures::{
+    Future, Stream,
     channel::{mpsc, oneshot},
-    stream, Future, Stream,
+    stream,
 };
 use kvproto::{kvrpcpb::Context, metapb, raft_cmdpb};
 use raftstore::{
-    coprocessor::{CoprocessorHost, RegionInfoProvider},
     SeekRegionCallback,
+    coprocessor::{CoprocessorHost, RegionInfoProvider},
 };
 use tempfile::{Builder, TempDir};
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 use txn_types::{Key, Value};
 
 use super::{
-    write_modifies, Callback, DummySnapshotExt, Engine, Error, ErrorInner,
-    Iterator as EngineIterator, Modify, Result, SnapContext, Snapshot, WriteData,
+    Callback, DummySnapshotExt, Engine, Error, ErrorInner, Iterator as EngineIterator, Modify,
+    Result, SnapContext, Snapshot, WriteData, write_modifies,
 };
 use crate::{FakeExtension, OnAppliedCb, RaftExtension, WriteEvent};
 
@@ -307,7 +308,7 @@ impl<RE: RaftExtension + 'static> Engine for RocksEngine<RE> {
         })
     }
 
-    type SnapshotRes = impl Future<Output = Result<Self::Snap>> + Send;
+    type SnapshotRes = Pin<Box<dyn Future<Output = Result<Self::Snap>> + Send>>;
     fn async_snapshot(&mut self, _: SnapContext<'_>) -> Self::SnapshotRes {
         let res = (|| {
             fail_point!("rockskv_async_snapshot", |_| Err(box_err!(
@@ -323,7 +324,7 @@ impl<RE: RaftExtension + 'static> Engine for RocksEngine<RE> {
             Ok(rx)
         })();
 
-        async move { Ok(res?.await.unwrap()) }
+        Box::pin(async move { Ok(res?.await.unwrap()) })
     }
 
     type IMSnap = Self::Snap;
