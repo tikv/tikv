@@ -43,6 +43,7 @@ pub struct SubcompactionExec<DB> {
 }
 
 /// The extra config of executing a subcompaction.
+#[derive(Clone, Copy)]
 pub struct SubcompactExt {
     /// The number of max concurrency of loading input files.
     pub max_load_concurrency: usize,

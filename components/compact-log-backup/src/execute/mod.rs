@@ -43,6 +43,8 @@ use crate::{
 };
 
 const COMPACTION_V1_PREFIX: &str = "v1/compactions";
+const CACHED_COMPACTION_BATCH_TARGET_BYTES: u64 = ReadableSize::mb(512).0;
+const CACHED_COMPACTION_BATCH_MAX_COUNT: usize = 64;
 
 /// Sharding configuration for `compact-log-backup`.
 ///
@@ -255,7 +257,9 @@ struct ExecuteCtx<'a, H: ExecHooks> {
     hooks: &'a mut H,
 }
 
-type CompactJoin = tokio::task::JoinHandle<Result<(SubcompactionResult, CId)>>;
+type FinishedCompaction = Result<(SubcompactionResult, CId)>;
+type FinishedCompactions = Vec<FinishedCompaction>;
+type CompactJoin = tokio::task::JoinHandle<Result<FinishedCompactions>>;
 
 trait TakeLoadMetaStatistic {
     fn take_load_meta_statistic(&mut self) -> LoadMetaStatistic;
@@ -274,6 +278,31 @@ where
     fn take_load_meta_statistic(&mut self) -> LoadMetaStatistic {
         self.get_mut().take_load_meta_statistic()
     }
+}
+
+fn cached_compaction_batches(
+    runnable: Vec<(Subcompaction, CId)>,
+) -> impl Iterator<Item = Vec<(Subcompaction, CId)>> {
+    let mut batches = Vec::new();
+    let mut batch = Vec::new();
+    let mut batch_bytes = 0;
+
+    for (c, cid) in runnable {
+        if !batch.is_empty()
+            && (batch.len() >= CACHED_COMPACTION_BATCH_MAX_COUNT
+                || batch_bytes + c.size > CACHED_COMPACTION_BATCH_TARGET_BYTES)
+        {
+            batches.push(std::mem::take(&mut batch));
+            batch_bytes = 0;
+        }
+        batch_bytes += c.size;
+        batch.push((c, cid));
+    }
+    if !batch.is_empty() {
+        batches.push(batch);
+    }
+
+    batches.into_iter()
 }
 
 impl Execution {
@@ -335,10 +364,53 @@ impl Execution {
         let ext = self.subcompact_ext();
 
         let compact_work = async move {
-            let res = compact_worker.run(c, ext).await.trace_err()?;
-            res.verify_checksum()
-                .annotate(format_args!("the compaction is {:?}", res.origin))?;
-            Result::Ok((res, cid))
+            let res = async {
+                let res = compact_worker.run(c, ext).await.trace_err()?;
+                res.verify_checksum()
+                    .annotate(format_args!("the compaction is {:?}", res.origin))?;
+                Result::Ok((res, cid))
+            }
+            .await;
+            Result::Ok(vec![res])
+        };
+        tokio::spawn(root!(compact_work))
+    }
+
+    fn spawn_subcompaction_batch(
+        &self,
+        storage: &Arc<dyn ExternalStorage>,
+        batch: Vec<(Subcompaction, CId)>,
+        physical_file_cache: Arc<PhysicalFileCache>,
+    ) -> CompactJoin {
+        let out_prefix = Some(Path::new(&self.out_prefix).to_owned());
+        let db = self.db.clone();
+        let storage = Arc::clone(storage);
+        let ext = self.subcompact_ext();
+
+        let compact_work = async move {
+            let mut results = Vec::with_capacity(batch.len());
+            for (c, cid) in batch {
+                let compact_args = SubcompactionExecArg {
+                    out_prefix: out_prefix.clone(),
+                    db: db.clone(),
+                    storage: Arc::clone(&storage),
+                    physical_file_cache: Some(Arc::clone(&physical_file_cache)),
+                };
+                let compact_worker = SubcompactionExec::from(compact_args);
+                let res = async {
+                    let res = compact_worker.run(c, ext).await.trace_err()?;
+                    res.verify_checksum()
+                        .annotate(format_args!("the compaction is {:?}", res.origin))?;
+                    Result::Ok((res, cid))
+                }
+                .await;
+                let failed = res.is_err();
+                results.push(res);
+                if failed {
+                    break;
+                }
+            }
+            Result::Ok(results)
         };
         tokio::spawn(root!(compact_work))
     }
@@ -350,8 +422,13 @@ impl Execution {
         hooks: &mut impl ExecHooks,
     ) -> Result<()> {
         let join = util::select_vec(pending);
-        let (cres, cid) = Self::unpack_compaction_join(frame!("wait_for_compaction"; join).await)?;
-        self.on_compaction_finish(cid, &cres, storage, hooks).await
+        let finished = Self::unpack_compaction_join(frame!("wait_for_compaction"; join).await)?;
+        for item in finished {
+            let (cres, cid) = item?;
+            self.on_compaction_finish(cid, &cres, storage, hooks)
+                .await?;
+        }
+        Ok(())
     }
 
     async fn drain_compactions(
@@ -361,9 +438,12 @@ impl Execution {
         hooks: &mut impl ExecHooks,
     ) -> Result<()> {
         while let Some(join) = pending.pop() {
-            let (cres, cid) = Self::unpack_compaction_join(frame!("final_wait"; join).await)?;
-            self.on_compaction_finish(cid, &cres, storage, hooks)
-                .await?;
+            let finished = Self::unpack_compaction_join(frame!("final_wait"; join).await)?;
+            for item in finished {
+                let (cres, cid) = item?;
+                self.on_compaction_finish(cid, &cres, storage, hooks)
+                    .await?;
+            }
         }
         Ok(())
     }
@@ -378,6 +458,30 @@ impl Execution {
         physical_file_cache: Option<Arc<PhysicalFileCache>>,
     ) -> Result<()> {
         let join = self.spawn_subcompaction(storage, c, cid, physical_file_cache);
+        pending.push(join);
+        if pending.len() >= self.max_concurrent_subcompaction as _ {
+            self.wait_one_compaction(pending, storage.as_ref(), hooks)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn push_subcompaction_batch(
+        &self,
+        pending: &mut Vec<CompactJoin>,
+        storage: &Arc<dyn ExternalStorage>,
+        hooks: &mut impl ExecHooks,
+        batch: Vec<(Subcompaction, CId)>,
+        physical_file_cache: Arc<PhysicalFileCache>,
+    ) -> Result<()> {
+        let batch_len = batch.len();
+        let batch_bytes = batch.iter().map(|(c, _)| c.size).sum::<u64>();
+        info!(
+            "spawning cached compaction batch";
+            "subcompactions" => batch_len,
+            "logical_bytes" => batch_bytes,
+        );
+        let join = self.spawn_subcompaction_batch(storage, batch, physical_file_cache);
         pending.push(join);
         if pending.len() >= self.max_concurrent_subcompaction as _ {
             self.wait_one_compaction(pending, storage.as_ref(), hooks)
@@ -489,14 +593,13 @@ impl Execution {
                 }
             }
 
-            for (c, cid) in runnable {
-                self.push_subcompaction(
+            for batch in cached_compaction_batches(runnable) {
+                self.push_subcompaction_batch(
                     pending,
                     storage,
                     hooks,
-                    c,
-                    cid,
-                    Some(physical_file_cache.clone()),
+                    batch,
+                    Arc::clone(&physical_file_cache),
                 )
                 .await?;
             }
