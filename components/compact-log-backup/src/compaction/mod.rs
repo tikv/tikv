@@ -18,6 +18,8 @@ pub const META_OUT_REL: &str = "metas";
 #[derive(Debug, Clone)]
 pub struct Input {
     pub id: LogFileId,
+    pub physical_file_size: u64,
+    pub file_real_size: u64,
     pub compression: brpb::CompressionType,
     pub crc64xor: u64,
     pub key_value_size: u64,
@@ -187,6 +189,8 @@ impl SubcompactionCollectKey {
 fn to_input(file: &LogFile) -> Input {
     Input {
         id: file.id.clone(),
+        physical_file_size: file.physical_file_size,
+        file_real_size: file.file_real_size,
         compression: file.compression,
         crc64xor: file.crc64xor,
         key_value_size: file.hacky_key_value_size(),

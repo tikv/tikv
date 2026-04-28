@@ -331,6 +331,7 @@ impl LogFileBuilder {
             crc64xor: self.crc64xor,
             compression: self.compression,
             file_real_size: self.file_real_size,
+            physical_file_size: cnt.get_ref().len() as u64,
 
             id: LogFileId {
                 name: Chars::from(self.name),

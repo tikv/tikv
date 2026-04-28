@@ -23,7 +23,7 @@ use super::{EpochHint, Subcompaction, SubcompactionResult};
 use crate::{
     compaction::SST_OUT_REL,
     errors::{OtherErrExt, Result, TraceResultExt},
-    source::{Record, Source},
+    source::{PhysicalFileCache, Record, Source},
     statistic::{LoadStatistic, SubcompactStatistic, prom::*},
     storage::DEFAULT_COMPACTION_OUT_PREFIX,
     util::{self, Cooperate, ExecuteAllExt},
@@ -73,12 +73,14 @@ pub struct SubcompactionExecArg<DB> {
     pub db: Option<DB>,
     /// The output storage.
     pub storage: Arc<dyn ExternalStorage>,
+    /// Optional cache for raw physical input files.
+    pub physical_file_cache: Option<Arc<PhysicalFileCache>>,
 }
 
 impl<DB> From<SubcompactionExecArg<DB>> for SubcompactionExec<DB> {
     fn from(value: SubcompactionExecArg<DB>) -> Self {
         Self {
-            source: Source::new(Arc::clone(&value.storage)),
+            source: Source::new_with_cache(Arc::clone(&value.storage), value.physical_file_cache),
             output: value.storage,
             out_prefix: value
                 .out_prefix
@@ -99,6 +101,7 @@ impl SubcompactionExec<RocksEngine> {
             storage,
             out_prefix: None,
             db: None,
+            physical_file_cache: None,
         })
     }
 }

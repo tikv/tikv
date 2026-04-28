@@ -2,6 +2,7 @@
 use std::{collections::HashMap, task::ready};
 
 use engine_traits::{CF_DEFAULT, CfName};
+use protobuf::Chars;
 use tokio_stream::Stream;
 
 use super::{SubcompactionCollectKey, UnformedSubcompaction};
@@ -24,6 +25,23 @@ pub struct CollectSubcompaction<S: Stream<Item = Result<LogFile>>> {
     collector: SubcompactionCollector,
 }
 
+/// Collects subcompactions in physical-file cache windows.
+///
+/// Unlike [`CollectSubcompaction`], this stream emits all pending
+/// subcompactions in a window when adding the next physical file would exceed
+/// the cache capacity. This lets the cache mode compact whatever is already
+/// cacheable, even when some groups are smaller than the normal size threshold.
+#[pin_project::pin_project]
+pub struct CollectCachedSubcompaction<S: Stream<Item = Result<LogFile>>> {
+    #[pin]
+    inner: S,
+    deferred_file: Option<LogFile>,
+    collector: SubcompactionCollector,
+    physical_file_cache_capacity: u64,
+    physical_files: HashMap<Chars, u64>,
+    physical_files_size: u64,
+}
+
 impl<S: Stream<Item = Result<LogFile>>> CollectSubcompaction<S> {
     /// Get delta of statistic between last call to this.
     pub fn take_statistic(&mut self) -> CollectSubcompactionStatistic {
@@ -36,6 +54,7 @@ impl<S: Stream<Item = Result<LogFile>>> CollectSubcompaction<S> {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct CollectSubcompactionConfig {
     /// Lower bound of timestamps for default CF.
     /// Files doesn't contain any record with a timestamp greater than or equal
@@ -65,6 +84,33 @@ impl<S: Stream<Item = Result<LogFile>>> CollectSubcompaction<S> {
     }
 }
 
+impl<S: Stream<Item = Result<LogFile>>> CollectCachedSubcompaction<S> {
+    pub fn new(s: S, cfg: CollectSubcompactionConfig, physical_file_cache_capacity: u64) -> Self {
+        CollectCachedSubcompaction {
+            inner: s,
+            deferred_file: None,
+            collector: SubcompactionCollector {
+                cfg,
+                items: HashMap::new(),
+                stat: CollectSubcompactionStatistic::default(),
+            },
+            physical_file_cache_capacity,
+            physical_files: HashMap::new(),
+            physical_files_size: 0,
+        }
+    }
+
+    /// Get delta of statistic between last call to this.
+    pub fn take_statistic(&mut self) -> CollectSubcompactionStatistic {
+        std::mem::take(&mut self.collector.stat)
+    }
+
+    /// Get the mutable internal stream.
+    pub fn get_mut(&mut self) -> &mut S {
+        &mut self.inner
+    }
+}
+
 /// Collects subcompactions by upstream log files.
 /// For now, we collect subcompactions by grouping the input files with
 /// [`SubcompactionCollectKey`]. When each group grows to the specified size, a
@@ -84,16 +130,20 @@ impl SubcompactionCollector {
         }
     }
 
+    fn should_filter_out(&self, file: &LogFile) -> bool {
+        let compact_from_ts = self.lower_bound_of(file.cf);
+        file.is_meta || file.max_ts < compact_from_ts || file.min_ts > self.cfg.compact_to_ts
+    }
+
     /// Adding a new log file input to the collector.
     fn add_new_file(&mut self, file: LogFile) -> Option<Subcompaction> {
         use std::collections::hash_map::Entry;
         let key = SubcompactionCollectKey::by_file(&file);
-        let compact_from_ts = self.lower_bound_of(file.cf);
 
         // Skip out-of-range files and schema meta files.
         // Meta files need to have a simpler format so other BR client can easily open
         // and rewrite it. (Perhaps we can also compact them.)
-        if file.is_meta || file.max_ts < compact_from_ts || file.min_ts > self.cfg.compact_to_ts {
+        if self.should_filter_out(&file) {
             self.stat.files_filtered_out += 1;
             return None;
         }
@@ -121,6 +171,10 @@ impl SubcompactionCollector {
         None
     }
 
+    fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
     /// Force create subcompaction by the current pending unformed
     /// subcompactions. These subcompaction will be undersized.
     fn take_pending_subcompactions(&mut self) -> impl Iterator<Item = Subcompaction> + '_ {
@@ -129,6 +183,102 @@ impl SubcompactionCollector {
             // (At `poll_next`.)
             c.form(&key, &self.cfg)
         })
+    }
+}
+
+fn size_after_adding_physical_file(
+    physical_files: &HashMap<Chars, u64>,
+    physical_files_size: u64,
+    file: &LogFile,
+) -> u64 {
+    match physical_files.get(&file.id.name) {
+        Some(existing) => {
+            physical_files_size.saturating_add(file.physical_file_size.saturating_sub(*existing))
+        }
+        None => physical_files_size.saturating_add(file.physical_file_size),
+    }
+}
+
+fn add_physical_file(
+    physical_files: &mut HashMap<Chars, u64>,
+    physical_files_size: &mut u64,
+    file: &LogFile,
+) {
+    let old = physical_files
+        .insert(file.id.name.clone(), file.physical_file_size)
+        .unwrap_or_default();
+    *physical_files_size =
+        physical_files_size.saturating_add(file.physical_file_size.saturating_sub(old));
+}
+
+fn take_window(
+    collector: &mut SubcompactionCollector,
+    physical_files: &mut HashMap<Chars, u64>,
+    physical_files_size: &mut u64,
+) -> Vec<Subcompaction> {
+    physical_files.clear();
+    *physical_files_size = 0;
+    let compactions = collector.take_pending_subcompactions().collect::<Vec<_>>();
+    for c in &compactions {
+        collector.stat.bytes_out += c.size;
+        collector.stat.compactions_out += 1;
+    }
+    compactions
+}
+
+impl<S: Stream<Item = Result<LogFile>>> Stream for CollectCachedSubcompaction<S> {
+    type Item = Result<Vec<Subcompaction>>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let mut this = self.project();
+        loop {
+            let item = match this.deferred_file.take() {
+                Some(item) => Some(Ok(item)),
+                None => ready!(this.inner.as_mut().poll_next(cx)),
+            };
+            match item {
+                None => {
+                    if this.collector.is_empty() {
+                        return None.into();
+                    }
+                    return Some(Ok(take_window(
+                        this.collector,
+                        this.physical_files,
+                        this.physical_files_size,
+                    )))
+                    .into();
+                }
+                Some(Err(err)) => return Some(Err(err).trace_err()).into(),
+                Some(Ok(item)) => {
+                    if this.collector.should_filter_out(&item) {
+                        this.collector.add_new_file(item);
+                        continue;
+                    }
+                    let next_size = size_after_adding_physical_file(
+                        this.physical_files,
+                        *this.physical_files_size,
+                        &item,
+                    );
+                    if !this.collector.is_empty() && next_size > *this.physical_file_cache_capacity
+                    {
+                        *this.deferred_file = Some(item);
+                        return Some(Ok(take_window(
+                            this.collector,
+                            this.physical_files,
+                            this.physical_files_size,
+                        )))
+                        .into();
+                    }
+                    add_physical_file(this.physical_files, this.physical_files_size, &item);
+                    if let Some(ready) = this.collector.add_new_file(item) {
+                        return Some(Ok(vec![ready])).into();
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -194,6 +344,7 @@ mod test {
                 offset: 0,
                 length: len,
             },
+            physical_file_size: len,
             compression: kvproto::brpb::CompressionType::Zstd,
             crc64xor: 0,
             number_of_entries: 0,

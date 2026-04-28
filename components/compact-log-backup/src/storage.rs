@@ -77,7 +77,8 @@ impl MetaFile {
                 files: Vec::with_capacity(group.data_files_info.len()),
             };
             for log_file in group.take_data_files_info().into_iter() {
-                g.files.push(LogFile::from_pb(group.path.clone(), log_file))
+                g.files
+                    .push(LogFile::from_pb(group.path.clone(), group.length, log_file))
             }
             log_files.push(g);
         }
@@ -137,6 +138,7 @@ impl From<Epoch> for RegionEpoch {
 
 pub struct LogFile {
     pub id: LogFileId,
+    pub physical_file_size: u64,
     pub file_real_size: u64,
     pub number_of_entries: i64,
     pub crc64xor: u64,
@@ -700,7 +702,7 @@ impl MetaFile {
 }
 
 impl LogFile {
-    fn from_pb(host_file: Chars, mut pb_info: DataFileInfo) -> Self {
+    fn from_pb(host_file: Chars, physical_file_size: u64, mut pb_info: DataFileInfo) -> Self {
         let region_epoches = pb_info.region_epoch.is_empty().not().then(|| {
             pb_info
                 .region_epoch
@@ -715,6 +717,7 @@ impl LogFile {
                 offset: pb_info.range_offset,
                 length: pb_info.range_length,
             },
+            physical_file_size,
             file_real_size: pb_info.length,
             region_id: pb_info.region_id as _,
             cf: util::cf_name(&pb_info.cf),
