@@ -261,6 +261,7 @@ impl ResourceGroupManager {
             let ru_quota = Self::get_ru_setting(&g.value().group, controller.is_read);
             controller.add_resource_group(g.key().clone().into_bytes(), ru_quota, g.group.priority);
         }
+        controller.set_has_background(self.has_background.load(Ordering::Acquire));
         controller
     }
 

@@ -10538,7 +10538,7 @@ def ResourceControl() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_resource_control_background_task_wait_duration",
-                            by_labels=["instance", "resource_group"],
+                            by_labels=["instance"],
                         ),
                     ),
                 ],

@@ -104,6 +104,9 @@ pub struct GroupQuotaAdjustWorker<R> {
     bg_limiter: Arc<ResourceLimiter>,
     // Previous statistics snapshot per resource type for delta computation.
     prev_stats: [GroupStatistics; ResourceType::COUNT],
+    // Whether the previous tick had background groups. Used to detect the
+    // empty->non-empty transition and discard stale accumulated consumption.
+    prev_had_background: bool,
 }
 
 impl GroupQuotaAdjustWorker<SysQuotaGetter> {
@@ -140,6 +143,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             compaction_pending_bytes_ratio,
             bg_limiter,
             prev_stats: array::from_fn(|_| GroupStatistics::default()),
+            prev_had_background: false,
         }
     }
 
@@ -180,7 +184,19 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             .set(bg_util_limit as i64);
 
         if !self.resource_ctl.has_background_groups() {
+            self.prev_had_background = false;
             return;
+        }
+        if !self.prev_had_background {
+            // Flush consumption that accumulated while the limiter ran unlimited
+            // during the empty period, and drain the CPU delta so the first real
+            // tick sees a clean baseline.
+            self.prev_stats = [
+                self.bg_limiter.get_limit_statistics(ResourceType::Cpu),
+                self.bg_limiter.get_limit_statistics(ResourceType::Io),
+            ];
+            let _ = self.resource_quota_getter.get_current_stats(ResourceType::Cpu);
+            self.prev_had_background = true;
         }
 
         self.do_adjust(
