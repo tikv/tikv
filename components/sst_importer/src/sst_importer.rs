@@ -15,7 +15,7 @@ use collections::HashSet;
 use dashmap::{DashMap, mapref::entry::Entry};
 use encryption::{DataKeyManager, FileEncryptionInfo, MultiMasterKeyBackend};
 use encryption_export::create_async_backend;
-use engine_rocks::{get_env, RocksSstReader};
+use engine_rocks::{RocksSstReader, get_env};
 use engine_traits::{
     CF_DEFAULT, CF_WRITE, CfName, IterOptions, Iterator, KvEngine, RefIterable, SstCompressionType,
     SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder, name_to_cf,
@@ -25,7 +25,7 @@ use external_storage::{
     ExternalStorage, RestoreConfig, compression_reader_dispatcher, encrypt_wrap_reader,
     wrap_with_checksum_reader_if_needed,
 };
-use file_system::{get_io_rate_limiter, IoType, OpenOptions};
+use file_system::{IoType, OpenOptions, get_io_rate_limiter};
 use kvproto::{
     brpb::{CipherInfo, StorageBackend},
     encryptionpb::{EncryptionMethod, FileEncryptionInfo_oneof_mode, MasterKey},

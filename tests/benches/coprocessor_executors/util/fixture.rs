@@ -7,7 +7,7 @@ use criterion::measurement::Measurement;
 use rand::{Rng, SeedableRng, seq::SliceRandom};
 use rand_xorshift::XorShiftRng;
 use test_coprocessor::*;
-use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_common::{Result, storage::IntervalRange};
 use tidb_query_datatype::{
     FieldTypeTp,
     codec::{

@@ -3,7 +3,7 @@
 use collections::HashMap;
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine};
-use raftstore::{store::TabletSnapKey, Result};
+use raftstore::{Result, store::TabletSnapKey};
 use slog::warn;
 
 use crate::{

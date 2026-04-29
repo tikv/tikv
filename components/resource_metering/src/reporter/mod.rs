@@ -20,13 +20,12 @@ use tikv_util::{
 };
 
 use crate::{
-    find_kth_cpu_time,
+    Config, DataSink, RawRecords, Records, find_kth_cpu_time,
     recorder::{CollectorGuard, CollectorRegHandle},
     reporter::{
         collector_impl::CollectorImpl,
         data_sink_reg::{DataSinkId, DataSinkReg, DataSinkRegHandle},
     },
-    Config, DataSink, RawRecords, Records,
 };
 
 /// A structure for reporting statistics through [Client].
@@ -251,7 +250,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{error::Result, RawRecord, TagInfos};
+    use crate::{RawRecord, TagInfos, error::Result};
 
     #[derive(Default, Clone)]
     struct MockDataSink {

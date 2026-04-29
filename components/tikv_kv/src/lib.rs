@@ -51,8 +51,8 @@ use kvproto::{
 };
 use pd_client::BucketMeta;
 use raftstore::{
-    store::{PessimisticLockPair, TxnExt},
     SeekRegionCallback,
+    store::{PessimisticLockPair, TxnExt},
 };
 use thiserror::Error;
 use tikv_util::{

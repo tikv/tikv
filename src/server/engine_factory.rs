@@ -15,7 +15,7 @@ use engine_traits::{
     TabletContext, TabletFactory,
 };
 use kvproto::kvrpcpb::ApiVersion;
-use raftstore::{store::ForcePartitionRangeManager, RegionInfoAccessor};
+use raftstore::{RegionInfoAccessor, store::ForcePartitionRangeManager};
 use tikv_util::worker::Scheduler;
 
 use crate::{

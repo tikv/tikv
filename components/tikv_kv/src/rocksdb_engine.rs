@@ -27,8 +27,8 @@ use futures::{
 };
 use kvproto::{kvrpcpb::Context, metapb, raft_cmdpb};
 use raftstore::{
-    coprocessor::{CoprocessorHost, RegionInfoProvider},
     SeekRegionCallback,
+    coprocessor::{CoprocessorHost, RegionInfoProvider},
 };
 use tempfile::{Builder, TempDir};
 use tikv_util::worker::{Runnable, Scheduler, Worker};

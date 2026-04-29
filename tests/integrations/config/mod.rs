@@ -32,10 +32,10 @@ use tikv::{
     config::*,
     import::Config as ImportConfig,
     server::{
+        Config as ServerConfig,
         config::GrpcCompressionType,
         gc_worker::{AutoCompactionConfig, GcConfig},
         lock_manager::Config as PessimisticTxnConfig,
-        Config as ServerConfig,
     },
     storage::config::{
         BlockCacheConfig, Config as StorageConfig, EngineType, FlowControlConfig, IoRateLimitConfig,
