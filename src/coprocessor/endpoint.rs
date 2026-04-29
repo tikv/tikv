@@ -6,10 +6,10 @@ use std::{
 };
 
 use ::tracker::{
-    set_tls_tracker_token, with_tls_tracker, RequestInfo, RequestType, GLOBAL_TRACKERS,
+    GLOBAL_TRACKERS, RequestInfo, RequestType, set_tls_tracker_token, with_tls_tracker,
 };
 use anyhow::anyhow;
-use api_version::{dispatch_api_version, KvFormat};
+use api_version::{KvFormat, dispatch_api_version};
 use async_stream::try_stream;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::PerfLevel;
@@ -50,10 +50,10 @@ use crate::{
     read_pool::ReadPoolHandle,
     server::Config,
     storage::{
-        self,
-        kv::{self, with_tls_engine, SnapContext},
+        self, Engine, Snapshot, SnapshotStore,
+        kv::{self, SnapContext, with_tls_engine},
         mvcc::Error as MvccError,
-        need_check_locks, need_check_locks_in_replica_read, Engine, Snapshot, SnapshotStore,
+        need_check_locks, need_check_locks_in_replica_read,
     },
 };
 
@@ -1164,7 +1164,7 @@ impl<E: Engine> RegionStorageAccessor for ExtraSnapStoreAccessor<E> {
 mod tests {
     use std::{
         assert_matches::assert_matches,
-        sync::{atomic, mpsc, Mutex},
+        sync::{Mutex, atomic, mpsc},
         thread, vec,
     };
 
@@ -1174,7 +1174,7 @@ mod tests {
     use raft::StateRole;
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use tidb_query_common::storage::Storage;
-    use tikv_kv::{destroy_tls_engine, set_tls_engine, MockEngine, MockEngineBuilder};
+    use tikv_kv::{MockEngine, MockEngineBuilder, destroy_tls_engine, set_tls_engine};
     use tipb::{Executor, Expr};
     use txn_types::{Key, LockType};
 
@@ -1183,7 +1183,7 @@ mod tests {
         config::CoprReadPoolConfig,
         coprocessor::readpool_impl::build_read_pool_for_test,
         read_pool::ReadPool,
-        storage::{kv::RocksEngine, Store, TestEngineBuilder},
+        storage::{Store, TestEngineBuilder, kv::RocksEngine},
     };
 
     /// A unary `RequestHandler` that always produces a fixture.

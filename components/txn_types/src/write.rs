@@ -3,13 +3,13 @@
 use std::mem::size_of;
 
 use codec::prelude::NumberDecoder;
-use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
+use tikv_util::codec::number::{self, MAX_VAR_U64_LEN, NumberEncoder};
 
 use crate::{
+    Error, ErrorInner, LastChange, Result,
     lock::LockType,
     timestamp::TimeStamp,
-    types::{Value, SHORT_VALUE_PREFIX},
-    Error, ErrorInner, LastChange, Result,
+    types::{SHORT_VALUE_PREFIX, Value},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -105,9 +105,9 @@ pub struct Write {
     ///
     /// 1. `Key_100_put`, `Key_120_del` applied
     /// 2. GC with safepoint = 130 started and `Key_100_put`, `Key_120_del` are
-    /// deleted 3. Finished applying `Key_100_put_R`, which means to rewrite
-    /// `Key_100_put` 4. Read at `140` should get nothing (since it's
-    /// MVCC-deleted at 120) but finds `Key_100_put`
+    ///    deleted 3. Finished applying `Key_100_put_R`, which means to rewrite
+    ///    `Key_100_put` 4. Read at `140` should get nothing (since it's
+    ///    MVCC-deleted at 120) but finds `Key_100_put`
     ///
     /// To solve the problem, when marking `has_overlapped_rollback` on an
     /// already-existed commit record, add a special field `gc_fence` on it. If
@@ -417,6 +417,7 @@ impl WriteRef<'_> {
     ///     found by reading at `read_ts`
     ///   * The `read_ts` is safe, which means, it's not earlier than the
     ///     current GC safepoint.
+    ///
     /// Return:
     ///   Whether the `Write` record is valid, ie. there's no GC fence or GC
     /// fence doesn't points to any other version.
@@ -566,13 +567,13 @@ mod tests {
         let cases: Vec<(Option<u64>, u64, bool)> = vec![
             (None, 10, true),
             (None, 100, true),
-            (None, u64::max_value(), true),
+            (None, u64::MAX, true),
             (Some(0), 100, true),
-            (Some(0), u64::max_value(), true),
+            (Some(0), u64::MAX, true),
             (Some(100), 50, true),
             (Some(100), 100, false),
             (Some(100), 150, false),
-            (Some(100), u64::max_value(), false),
+            (Some(100), u64::MAX, false),
         ];
 
         for case in cases {

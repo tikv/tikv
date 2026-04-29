@@ -3,8 +3,8 @@
 use std::{collections::HashSet, result::Result, sync::Arc};
 
 use dashmap::{
-    mapref::{entry::Entry, one::RefMut as DashRefMut},
     DashMap,
+    mapref::{entry::Entry, one::RefMut as DashRefMut},
 };
 use kvproto::metapb::Region;
 use raftstore::coprocessor::*;
@@ -405,6 +405,7 @@ pub trait Ref {
     type Key;
     type Value;
 
+    #[allow(dead_code)]
     fn key(&self) -> &Self::Key;
     fn value(&self) -> &Self::Value;
 }
@@ -605,7 +606,7 @@ impl TwoPhaseResolver {
         txn_status_cache: Arc<TxnStatusCache>,
     ) -> Self {
         // TODO: limit the memory usage of the resolver.
-        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
+        let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
         Self {
             resolver: Resolver::new(region_id, memory_quota, txn_status_cache),
             future_locks: Default::default(),

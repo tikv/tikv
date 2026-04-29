@@ -4,8 +4,8 @@ use std::{fmt::Display, io::Read};
 
 use encryption::{EncrypterReader, Iv};
 use engine_traits::{
-    CfName, ExternalSstFileInfo, KvEngine, SstCompressionType, SstExt, SstWriter, SstWriterBuilder,
-    CF_DEFAULT, CF_WRITE,
+    CF_DEFAULT, CF_WRITE, CfName, ExternalSstFileInfo, KvEngine, SstCompressionType, SstExt,
+    SstWriter, SstWriterBuilder,
 };
 use external_storage::{ExternalStorage, UnpinReader};
 use file_system::Sha256Reader;
@@ -21,7 +21,7 @@ use tikv_util::{
 };
 use txn_types::KvPair;
 
-use crate::{backup_file_name, metrics::*, utils::KeyValueCodec, Error, Result};
+use crate::{Error, Result, backup_file_name, metrics::*, utils::KeyValueCodec};
 
 #[derive(Debug, Clone, Copy)]
 /// CfNameWrap wraps the CfName type.
@@ -467,7 +467,7 @@ mod tests {
             .unwrap();
             assert_eq!(map.len(), kv.len(), "{} {:?} {:?}", cf, map, kv);
             for (k, v) in *kv {
-                assert_eq!(&v.to_vec(), map.get(&k.to_vec()).unwrap());
+                assert_eq!(&v.to_vec(), map.get(*k).unwrap());
             }
         }
     }
@@ -542,10 +542,7 @@ mod tests {
                 engine_traits::CF_WRITE,
                 &temp.path().join(files[0].get_name()),
             )],
-            &[(
-                engine_traits::CF_WRITE,
-                &[(&keys::data_key(&[b'a']), &[b'a'])],
-            )],
+            &[(engine_traits::CF_WRITE, &[(&keys::data_key(b"a"), b"a")])],
         );
 
         // Test write and default.
@@ -595,16 +592,10 @@ mod tests {
                 ),
             ],
             &[
-                (
-                    engine_traits::CF_DEFAULT,
-                    &[(&keys::data_key(&[b'a']), &[b'a'])],
-                ),
+                (engine_traits::CF_DEFAULT, &[(&keys::data_key(b"a"), b"a")]),
                 (
                     engine_traits::CF_WRITE,
-                    &[
-                        (&keys::data_key(&[b'a']), &[b'a']),
-                        (&keys::data_key(&[b'b']), &[]),
-                    ],
+                    &[(&keys::data_key(b"a"), b"a"), (&keys::data_key(b"b"), &[])],
                 ),
             ],
         );

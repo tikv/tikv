@@ -3,23 +3,22 @@
 // #[PerformanceCriticalPath]
 use kvproto::kvrpcpb::ExtraOp;
 use tikv_kv::Modify;
-use txn_types::{insert_old_value_if_resolved, Key, OldValues, TimeStamp, TxnExtra};
+use txn_types::{Key, OldValues, TimeStamp, TxnExtra, insert_old_value_if_resolved};
 
 use crate::storage::{
+    Error as StorageError, PessimisticLockKeyResult, ProcessResult, Result as StorageResult,
+    Snapshot,
     kv::WriteData,
     lock_manager::{LockManager, WaitTimeout},
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader},
     txn::{
-        acquire_pessimistic_lock,
+        Error, ErrorInner, Result, acquire_pessimistic_lock,
         commands::{
             Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
             WriteCommand, WriteContext, WriteResult, WriteResultLockInfo,
         },
-        Error, ErrorInner, Result,
     },
     types::{PessimisticLockParameters, PessimisticLockResults},
-    Error as StorageError, PessimisticLockKeyResult, ProcessResult, Result as StorageResult,
-    Snapshot,
 };
 
 command! {

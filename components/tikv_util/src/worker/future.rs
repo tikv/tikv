@@ -9,7 +9,7 @@ use std::{
 };
 
 use futures::{
-    channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender},
+    channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded},
     stream::StreamExt,
 };
 use prometheus::IntGauge;

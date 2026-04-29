@@ -18,7 +18,7 @@
 
 use std::{
     mem,
-    sync::{atomic::Ordering, Arc},
+    sync::{Arc, atomic::Ordering},
     time::Duration,
 };
 
@@ -30,12 +30,13 @@ use kvproto::raft_cmdpb::{
 use raft::eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType};
 use raft_proto::ConfChangeI;
 use raftstore::{
+    Error, Result,
     coprocessor::ObserveLevel,
     store::{
-        cmd_resp,
+        Config, ProposalContext, Transport, WriteCallback, cmd_resp,
         fsm::{
-            apply::{self, APPLY_WB_SHRINK_SIZE, SHRINK_PENDING_CMD_QUEUE_CAP},
             Proposal,
+            apply::{self, APPLY_WB_SHRINK_SIZE, SHRINK_PENDING_CMD_QUEUE_CAP},
         },
         local_metrics::RaftMetrics,
         metrics::{
@@ -43,16 +44,14 @@ use raftstore::{
         },
         msg::ErrorCallback,
         util::{self, check_flashback_state},
-        Config, ProposalContext, Transport, WriteCallback,
     },
-    Error, Result,
 };
 use slog::{debug, error, warn};
 use tikv_util::{
     box_err,
     log::SlogFormat,
     slog_panic,
-    time::{duration_to_sec, monotonic_raw_now, Instant},
+    time::{Instant, duration_to_sec, monotonic_raw_now},
 };
 
 use crate::{
@@ -67,9 +66,9 @@ mod control;
 mod write;
 
 pub use admin::{
-    merge_source_path, report_split_init_finish, temp_split_path, AdminCmdResult, CatchUpLogs,
-    CompactLogContext, MergeContext, RequestHalfSplit, RequestSplit, SplitFlowControl, SplitInit,
-    SplitPendingAppend, MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX, SPLIT_PREFIX,
+    AdminCmdResult, CatchUpLogs, CompactLogContext, MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX,
+    MergeContext, RequestHalfSplit, RequestSplit, SPLIT_PREFIX, SplitFlowControl, SplitInit,
+    SplitPendingAppend, merge_source_path, report_split_init_finish, temp_split_path,
 };
 pub use control::ProposalControl;
 use pd_client::{BucketMeta, BucketStat};
@@ -659,7 +658,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 Ok(decoder) => {
                     fail::fail_point!(
                         "on_apply_write_cmd",
-                        cfg!(release) || self.peer_id() == 3,
+                        !cfg!(debug_assertions) || self.peer_id() == 3,
                         |_| {
                             unimplemented!();
                         }

@@ -2,16 +2,16 @@
 
 use std::{
     sync::{
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc::{channel, sync_channel},
-        Arc, Mutex,
     },
     thread,
     time::Duration,
 };
 
 use engine_traits::CF_DEFAULT;
-use futures::{executor::block_on, StreamExt};
+use futures::{StreamExt, executor::block_on};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     kvrpcpb::{
@@ -31,13 +31,13 @@ use storage::{
     txn::{self, commands},
 };
 use test_raftstore::{
-    configure_for_lease_read, new_learner_peer, new_server_cluster, try_kv_prewrite,
-    DropMessageFilter,
+    DropMessageFilter, configure_for_lease_read, new_learner_peer, new_server_cluster,
+    try_kv_prewrite,
 };
 use tikv::{
     server::gc_worker::gc_by_compact,
     storage::{
-        self,
+        self, Snapshot, TestEngineBuilder, TestStorageBuilderApiV1,
         kv::SnapshotExt,
         lock_manager::MockLockManager,
         txn::tests::{
@@ -45,14 +45,13 @@ use tikv::{
             must_pessimistic_prewrite_put, must_pessimistic_prewrite_put_err, must_prewrite_put,
             must_prewrite_put_err, must_rollback,
         },
-        Snapshot, TestEngineBuilder, TestStorageBuilderApiV1,
     },
 };
 use tikv_kv::{Engine, Modify, WriteData, WriteEvent};
 use tikv_util::{
+    HandyRwLock,
     config::ReadableDuration,
     store::{new_peer, peer::new_incoming_voter},
-    HandyRwLock,
 };
 use txn_types::{Key, LastChange, Mutation, PessimisticLock, TimeStamp};
 

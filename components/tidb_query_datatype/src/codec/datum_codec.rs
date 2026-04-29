@@ -9,16 +9,15 @@ use tipb::FieldType;
 
 use super::data_type::*;
 use crate::{
+    FieldTypeAccessor, FieldTypeTp,
     codec::{
-        datum,
+        Error, Result, datum,
         mysql::{
             DecimalDecoder, DecimalEncoder, DurationDecoder, EnumDecoder, EnumEncoder, JsonDecoder,
             JsonEncoder, TimeDecoder, VectorFloat32Decoder, VectorFloat32Encoder,
         },
-        Error, Result,
     },
     expr::EvalContext,
-    FieldTypeAccessor, FieldTypeTp,
 };
 
 /// A decoder to decode the payload part of a datum.
@@ -606,49 +605,49 @@ pub trait RawDatumDecoder<T> {
     fn decode(self, field_type: &FieldType, ctx: &mut EvalContext) -> Result<Option<T>>;
 }
 
-impl<'a> RawDatumDecoder<Int> for &'a [u8] {
+impl RawDatumDecoder<Int> for &[u8] {
     fn decode(self, _field_type: &FieldType, _ctx: &mut EvalContext) -> Result<Option<Int>> {
         decode_int_datum(self)
     }
 }
 
-impl<'a> RawDatumDecoder<Real> for &'a [u8] {
+impl RawDatumDecoder<Real> for &[u8] {
     fn decode(self, field_type: &FieldType, _ctx: &mut EvalContext) -> Result<Option<Real>> {
         decode_real_datum(self, field_type)
     }
 }
 
-impl<'a> RawDatumDecoder<Decimal> for &'a [u8] {
+impl RawDatumDecoder<Decimal> for &[u8] {
     fn decode(self, _field_type: &FieldType, _ctx: &mut EvalContext) -> Result<Option<Decimal>> {
         decode_decimal_datum(self)
     }
 }
 
-impl<'a> RawDatumDecoder<Bytes> for &'a [u8] {
+impl RawDatumDecoder<Bytes> for &[u8] {
     fn decode(self, _field_type: &FieldType, _ctx: &mut EvalContext) -> Result<Option<Bytes>> {
         decode_bytes_datum(self)
     }
 }
 
-impl<'a> RawDatumDecoder<DateTime> for &'a [u8] {
+impl RawDatumDecoder<DateTime> for &[u8] {
     fn decode(self, field_type: &FieldType, ctx: &mut EvalContext) -> Result<Option<DateTime>> {
         decode_date_time_datum(self, field_type, ctx)
     }
 }
 
-impl<'a> RawDatumDecoder<Duration> for &'a [u8] {
+impl RawDatumDecoder<Duration> for &[u8] {
     fn decode(self, field_type: &FieldType, _ctx: &mut EvalContext) -> Result<Option<Duration>> {
         decode_duration_datum(self, field_type)
     }
 }
 
-impl<'a> RawDatumDecoder<Json> for &'a [u8] {
+impl RawDatumDecoder<Json> for &[u8] {
     fn decode(self, _field_type: &FieldType, _ctx: &mut EvalContext) -> Result<Option<Json>> {
         decode_json_datum(self)
     }
 }
 
-impl<'a> RawDatumDecoder<VectorFloat32> for &'a [u8] {
+impl RawDatumDecoder<VectorFloat32> for &[u8] {
     fn decode(
         self,
         _field_type: &FieldType,
@@ -658,13 +657,13 @@ impl<'a> RawDatumDecoder<VectorFloat32> for &'a [u8] {
     }
 }
 
-impl<'a> RawDatumDecoder<Enum> for &'a [u8] {
+impl RawDatumDecoder<Enum> for &[u8] {
     fn decode(self, field_type: &FieldType, _ctx: &mut EvalContext) -> Result<Option<Enum>> {
         decode_enum_datum(self, field_type)
     }
 }
 
-impl<'a> RawDatumDecoder<Set> for &'a [u8] {
+impl RawDatumDecoder<Set> for &[u8] {
     fn decode(self, _field_type: &FieldType, _ctx: &mut EvalContext) -> Result<Option<Set>> {
         unimplemented!()
     }

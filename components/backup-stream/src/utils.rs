@@ -4,21 +4,21 @@ use core::pin::Pin;
 use std::{
     borrow::Borrow,
     cell::RefCell,
-    collections::{hash_map::RandomState, BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, hash_map::RandomState},
     future::Future,
     ops::{Bound, RangeBounds},
     path::Path,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     task::{Context, Waker},
     time::Duration,
 };
 
-use async_compression::{tokio::write::ZstdEncoder, Level};
+use async_compression::{Level, tokio::write::ZstdEncoder};
 use engine_rocks::ReadPerfInstant;
-use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, CfName};
 use futures::{ready, task::Poll};
 use kvproto::{
     brpb::CompressionType,
@@ -27,13 +27,12 @@ use kvproto::{
 };
 use tikv::storage::CfStatistics;
 use tikv_util::{
-    box_err,
+    Either, box_err,
     sys::inspector::{
-        self_thread_inspector, IoStat, ThreadInspector, ThreadInspectorImpl as OsInspector,
+        IoStat, ThreadInspector, ThreadInspectorImpl as OsInspector, self_thread_inspector,
     },
     time::Instant,
     worker::Scheduler,
-    Either,
 };
 use tokio::{
     fs::File,
@@ -43,9 +42,9 @@ use tokio::{
 use txn_types::{Key, Lock, LockType};
 
 use crate::{
+    Task,
     errors::{Error, Result},
     router::TaskSelector,
-    Task,
 };
 
 /// wrap a user key with encoded data key.
@@ -812,8 +811,8 @@ impl<D: std::fmt::Debug, T: Iterator<Item = D>> std::fmt::Debug for DebugIter<D,
 mod test {
     use std::{
         sync::{
-            atomic::{AtomicUsize, Ordering},
             Arc,
+            atomic::{AtomicUsize, Ordering},
         },
         time::Duration,
     };
@@ -824,7 +823,7 @@ mod test {
     use log_wrappers::RedactOption;
     use tokio::io::{AsyncWriteExt, BufReader};
 
-    use crate::utils::{is_in_range, FutureWaitGroup, SegmentMap};
+    use crate::utils::{FutureWaitGroup, SegmentMap, is_in_range};
 
     #[test]
     fn test_redact() {
@@ -993,7 +992,7 @@ mod test {
 
     #[test]
     fn test_recorder() {
-        use engine_traits::{Iterable, KvEngine, Mutable, WriteBatch, WriteBatchExt, CF_DEFAULT};
+        use engine_traits::{CF_DEFAULT, Iterable, KvEngine, Mutable, WriteBatch, WriteBatchExt};
         use tempfile::TempDir;
 
         let p = TempDir::new().unwrap();

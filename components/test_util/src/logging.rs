@@ -9,7 +9,7 @@ use std::{
     time::SystemTime,
 };
 
-use chrono::{offset::Local, DateTime};
+use chrono::{DateTime, offset::Local};
 use slog::{self, Drain, OwnedKVList, Record};
 
 struct Serializer<'a>(&'a mut dyn std::io::Write);

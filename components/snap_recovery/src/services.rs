@@ -6,24 +6,24 @@ use std::{
     future::Future,
     result,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
     },
     thread::Builder,
     time::Instant,
 };
 
 use engine_rocks::{
+    RocksEngine,
     raw::{CompactOptions, DBBottommostLevelCompaction},
     util::get_cf_handle,
-    RocksEngine,
 };
 use engine_traits::{CfNamesExt, CfOptionsExt, Engines, KvEngine, RaftEngine};
 use futures::{
+    FutureExt, SinkExt, StreamExt,
     channel::mpsc,
     executor::{ThreadPool, ThreadPoolBuilder},
     stream::{AbortHandle, Aborted},
-    FutureExt, SinkExt, StreamExt,
 };
 use grpcio::{
     ClientStreamingSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink,
@@ -33,11 +33,11 @@ use kvproto::{raft_serverpb::StoreIdent, recoverdatapb::*};
 use raftstore::{
     router::RaftStoreRouter,
     store::{
+        SnapshotBrWaitApplySyncer,
         fsm::RaftRouter,
         msg::{PeerMsg, SignificantMsg},
         snapshot_backup::{SnapshotBrWaitApplyRequest, SyncReport},
         transport::SignificantRouter,
-        SnapshotBrWaitApplySyncer,
     },
 };
 use thiserror::Error;

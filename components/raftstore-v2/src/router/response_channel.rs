@@ -19,19 +19,19 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
     task::{Context, Poll},
 };
 
-use futures::{task::AtomicWaker, FutureExt, Stream};
+use futures::{FutureExt, Stream, task::AtomicWaker};
 use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, raft_cmdpb::RaftCmdResponse};
 use raftstore::store::{
-    local_metrics::TimeTracker, msg::ErrorCallback, region_meta::RegionMeta, ReadCallback,
-    WriteCallback,
+    ReadCallback, WriteCallback, local_metrics::TimeTracker, msg::ErrorCallback,
+    region_meta::RegionMeta,
 };
-use tracker::{get_tls_tracker_token, TrackerToken};
+use tracker::{TrackerToken, get_tls_tracker_token};
 
 union Tracker {
     read: TrackerToken,
@@ -49,6 +49,7 @@ struct EventCore<Res> {
     /// - 0b01 means the event is fired and not subscribed.
     /// - 0b10 means the event is not fired and subscribed.
     /// - 0b11 means the event is fired and subscribed.
+    ///
     /// Event 0 and Event 31 is reserved as payload and cancel respectively.
     /// Other events should be defined within [1, 30].
     event: AtomicU64,
@@ -729,7 +730,7 @@ pub use flush_channel::{FlushChannel, FlushSubscriber};
 mod tests {
     use std::assert_matches::assert_matches;
 
-    use futures::{executor::block_on, StreamExt};
+    use futures::{StreamExt, executor::block_on};
 
     use super::*;
 
