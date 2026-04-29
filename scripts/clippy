@@ -23,6 +23,7 @@ fi
 # - Blocking issue for clippy::large_enum_variant is the raftstore peer message.
 # - Allow `unexpected_cfgs` as have defines many compiling cfg for unsupported test cases.
 CLIPPY_LINTS=(
+    -A warnings \
     -A clippy::module_inception  \
     -A clippy::result_large_err \
     -A clippy::large_enum_variant \
