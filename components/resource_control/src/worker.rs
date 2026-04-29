@@ -195,7 +195,9 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
                 self.bg_limiter.get_limit_statistics(ResourceType::Cpu),
                 self.bg_limiter.get_limit_statistics(ResourceType::Io),
             ];
-            let _ = self.resource_quota_getter.get_current_stats(ResourceType::Cpu);
+            let _ = self
+                .resource_quota_getter
+                .get_current_stats(ResourceType::Cpu);
             self.prev_had_background = true;
         }
 
