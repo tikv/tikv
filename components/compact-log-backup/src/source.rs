@@ -1,8 +1,15 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
-    collections::{HashMap, hash_map::Entry},
+    collections::{
+        HashMap,
+        hash_map::{DefaultHasher, Entry},
+    },
+    hash::{Hash, Hasher},
     pin::{Pin, pin},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64 as StdAtomicU64, AtomicUsize, Ordering},
+    },
 };
 
 use async_compression::futures::write::ZstdDecoder;
@@ -25,6 +32,7 @@ use super::{statistic::LoadStatistic, util::Cooperate};
 use crate::{compaction::Input, errors::Result};
 
 type SpanKey = (u64, u64);
+const PHYSICAL_FILE_CACHE_SHARDS: usize = 256;
 
 /// The manager of fetching log files from remote for compacting.
 #[derive(Clone)]
@@ -90,9 +98,8 @@ impl CacheEntry {
 }
 
 #[derive(Default)]
-struct CacheState {
+struct CacheShard {
     entries: HashMap<Chars, CacheEntry>,
-    reserved_bytes: u64,
 }
 
 /// A bounded cache for raw physical log files.
@@ -104,27 +111,83 @@ struct CacheState {
 /// soon as outstanding slices finish decompression.
 pub struct PhysicalFileCache {
     capacity: u64,
-    state: tokio::sync::Mutex<CacheState>,
+    reserved_bytes: StdAtomicU64,
+    entry_count: AtomicUsize,
+    shards: Box<[tokio::sync::Mutex<CacheShard>]>,
 }
 
 impl PhysicalFileCache {
     pub fn new(capacity: u64) -> Self {
-        info!("create physical file cache"; "capacity" => capacity);
+        info!(
+            "create physical file cache";
+            "capacity" => capacity,
+            "shards" => PHYSICAL_FILE_CACHE_SHARDS,
+        );
         Self {
             capacity,
-            state: tokio::sync::Mutex::new(CacheState::default()),
+            reserved_bytes: StdAtomicU64::new(0),
+            entry_count: AtomicUsize::new(0),
+            shards: (0..PHYSICAL_FILE_CACHE_SHARDS)
+                .map(|_| tokio::sync::Mutex::new(CacheShard::default()))
+                .collect(),
+        }
+    }
+
+    fn shard(&self, name: &Chars) -> &tokio::sync::Mutex<CacheShard> {
+        let mut hasher = DefaultHasher::new();
+        name.hash(&mut hasher);
+        &self.shards[hasher.finish() as usize % self.shards.len()]
+    }
+
+    fn reserved_bytes(&self) -> u64 {
+        self.reserved_bytes.load(Ordering::Relaxed)
+    }
+
+    fn try_reserve(&self, physical_size: u64) -> Option<u64> {
+        let mut current = self.reserved_bytes();
+        loop {
+            let next = current.checked_add(physical_size)?;
+            if next > self.capacity {
+                return None;
+            }
+            match self.reserved_bytes.compare_exchange_weak(
+                current,
+                next,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return Some(next),
+                Err(actual) => current = actual,
+            }
+        }
+    }
+
+    fn release_reserved(&self, physical_size: u64) -> u64 {
+        let mut current = self.reserved_bytes();
+        loop {
+            let next = current.saturating_sub(physical_size);
+            match self.reserved_bytes.compare_exchange_weak(
+                current,
+                next,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return next,
+                Err(actual) => current = actual,
+            }
         }
     }
 
     pub async fn register_inputs(&self, inputs: &[Input]) {
-        let mut state = self.state.lock().await;
         let mut registered_spans = 0;
         let mut new_physical_files = 0;
         for input in inputs {
-            let entry = match state.entries.entry(input.id.name.clone()) {
+            let mut shard = self.shard(&input.id.name).lock().await;
+            let entry = match shard.entries.entry(input.id.name.clone()) {
                 Entry::Occupied(entry) => entry.into_mut(),
                 Entry::Vacant(entry) => {
                     new_physical_files += 1;
+                    self.entry_count.fetch_add(1, Ordering::Relaxed);
                     entry.insert(CacheEntry::new())
                 }
             };
@@ -136,8 +199,8 @@ impl PhysicalFileCache {
             "inputs" => inputs.len(),
             "registered_spans" => registered_spans,
             "new_physical_files" => new_physical_files,
-            "cached_physical_files" => state.entries.len(),
-            "reserved_bytes" => state.reserved_bytes,
+            "cached_physical_files" => self.entry_count.load(Ordering::Relaxed),
+            "reserved_bytes" => self.reserved_bytes(),
             "capacity" => self.capacity,
         );
     }
@@ -154,30 +217,32 @@ impl PhysicalFileCache {
             return CacheDecision::Bypass;
         }
         loop {
-            let mut state = self.state.lock().await;
-            let reserved_bytes = state.reserved_bytes;
-            let entry = state
-                .entries
-                .entry(input.id.name.clone())
-                .or_insert_with(CacheEntry::new);
+            let mut shard = self.shard(&input.id.name).lock().await;
+            let reserved_bytes = self.reserved_bytes();
+            let entry = match shard.entries.entry(input.id.name.clone()) {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => {
+                    self.entry_count.fetch_add(1, Ordering::Relaxed);
+                    entry.insert(CacheEntry::new())
+                }
+            };
 
             if let Some(content) = entry.content.clone() {
                 let start = input.id.offset as usize;
                 let end = start + input.id.length as usize;
                 let part = content.slice(start..end);
                 if entry.take_span(input.id.offset, input.id.length) {
-                    state.entries.remove(&input.id.name);
-                    state.reserved_bytes = state
-                        .reserved_bytes
-                        .saturating_sub(input.physical_file_size);
+                    shard.entries.remove(&input.id.name);
+                    self.entry_count.fetch_sub(1, Ordering::Relaxed);
+                    let reserved_bytes = self.release_reserved(input.physical_file_size);
                     info!(
                         "release physical file cache entry";
                         "physical_file" => ?input.id.name,
                         "physical_size" => input.physical_file_size,
-                        "reserved_bytes" => state.reserved_bytes,
+                        "reserved_bytes" => reserved_bytes,
                         "capacity" => self.capacity,
                     );
-                    drop(state);
+                    drop(shard);
                 } else {
                     debug!(
                         "hit physical file cache";
@@ -185,7 +250,7 @@ impl PhysicalFileCache {
                         "offset" => input.id.offset,
                         "length" => input.id.length,
                         "physical_size" => input.physical_file_size,
-                        "reserved_bytes" => state.reserved_bytes,
+                        "reserved_bytes" => reserved_bytes,
                         "capacity" => self.capacity,
                     );
                 }
@@ -203,25 +268,25 @@ impl PhysicalFileCache {
                 );
                 let notify = Arc::clone(&entry.notify);
                 let notified = notify.notified();
-                drop(state);
+                drop(shard);
                 notified.await;
                 continue;
             }
             let physical_size = input.physical_file_size;
-            if reserved_bytes + physical_size <= self.capacity {
+            if let Some(reserved_bytes) = self.try_reserve(physical_size) {
                 entry.loading = true;
-                state.reserved_bytes += physical_size;
                 info!(
                     "reserve physical file cache entry";
                     "physical_file" => ?input.id.name,
                     "physical_size" => physical_size,
-                    "reserved_bytes" => state.reserved_bytes,
+                    "reserved_bytes" => reserved_bytes,
                     "capacity" => self.capacity,
                 );
                 return CacheDecision::Download;
             }
             if entry.take_span(input.id.offset, input.id.length) {
-                state.entries.remove(&input.id.name);
+                shard.entries.remove(&input.id.name);
+                self.entry_count.fetch_sub(1, Ordering::Relaxed);
             }
             info!(
                 "bypass physical file cache because capacity is full";
@@ -235,23 +300,27 @@ impl PhysicalFileCache {
     }
 
     async fn take_registered_span(&self, input: &Input) {
-        let mut state = self.state.lock().await;
-        if let Some(entry) = state.entries.get_mut(&input.id.name) {
+        let mut shard = self.shard(&input.id.name).lock().await;
+        if let Some(entry) = shard.entries.get_mut(&input.id.name) {
             if entry.take_span(input.id.offset, input.id.length) {
-                state.entries.remove(&input.id.name);
+                shard.entries.remove(&input.id.name);
+                self.entry_count.fetch_sub(1, Ordering::Relaxed);
             }
         }
     }
 
     async fn finish_download(&self, input: &Input, content: Bytes) -> Bytes {
-        let mut state = self.state.lock().await;
+        let mut shard = self.shard(&input.id.name).lock().await;
         let start = input.id.offset as usize;
         let end = start + input.id.length as usize;
         let (part, remove, notify) = {
-            let entry = state
-                .entries
-                .entry(input.id.name.clone())
-                .or_insert_with(CacheEntry::new);
+            let entry = match shard.entries.entry(input.id.name.clone()) {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => {
+                    self.entry_count.fetch_add(1, Ordering::Relaxed);
+                    entry.insert(CacheEntry::new())
+                }
+            };
             entry.loading = false;
             entry.content = Some(content.clone());
             let notify = Arc::clone(&entry.notify);
@@ -260,15 +329,14 @@ impl PhysicalFileCache {
             (part, remove, notify)
         };
         if remove {
-            state.entries.remove(&input.id.name);
-            state.reserved_bytes = state
-                .reserved_bytes
-                .saturating_sub(input.physical_file_size);
+            shard.entries.remove(&input.id.name);
+            self.entry_count.fetch_sub(1, Ordering::Relaxed);
+            let reserved_bytes = self.release_reserved(input.physical_file_size);
             info!(
                 "downloaded physical file for cache and consumed its last span";
                 "physical_file" => ?input.id.name,
                 "physical_size" => input.physical_file_size,
-                "reserved_bytes" => state.reserved_bytes,
+                "reserved_bytes" => reserved_bytes,
                 "capacity" => self.capacity,
             );
         } else {
@@ -276,26 +344,24 @@ impl PhysicalFileCache {
                 "downloaded physical file into cache";
                 "physical_file" => ?input.id.name,
                 "physical_size" => input.physical_file_size,
-                "reserved_bytes" => state.reserved_bytes,
+                "reserved_bytes" => self.reserved_bytes(),
                 "capacity" => self.capacity,
             );
         }
-        drop(state);
+        drop(shard);
         notify.notify_waiters();
         part
     }
 
     async fn fail_download(&self, input: &Input) {
-        let mut state = self.state.lock().await;
+        let mut shard = self.shard(&input.id.name).lock().await;
         let mut notify = None;
-        if let Some(entry) = state.entries.get_mut(&input.id.name) {
+        if let Some(entry) = shard.entries.get_mut(&input.id.name) {
             entry.loading = false;
             notify = Some(Arc::clone(&entry.notify));
         }
-        state.reserved_bytes = state
-            .reserved_bytes
-            .saturating_sub(input.physical_file_size);
-        drop(state);
+        self.release_reserved(input.physical_file_size);
+        drop(shard);
         if let Some(notify) = notify {
             notify.notify_waiters();
         }
