@@ -2,26 +2,19 @@
 
 use std::{
     cmp,
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     io::Read,
     ops::{Deref, DerefMut},
-<<<<<<< HEAD
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex,
+    },
     u64,
 };
 
 use api_version::{ApiV2, KeyMode, KvFormat};
 use engine_traits::{raw_ttl::ttl_current_ts, MvccProperties, Range, RangeStats};
-=======
-    sync::{
-        Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
-};
-
-use api_version::{ApiV2, KeyMode, KvFormat};
-use engine_traits::{MvccProperties, Range, RangeStats, raw_ttl::ttl_current_ts};
 use lazy_static::lazy_static;
->>>>>>> 91d7ad3b7d (titan: Estimate raw blob size based on Titan metrics (#18628))
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
     UserCollectedProperties,
@@ -32,7 +25,7 @@ use tikv_util::{
         Error, Result,
     },
     info,
-    smoother::Smoother,
+    time::Instant,
 };
 use txn_types::{Key, Write, WriteType};
 
@@ -49,16 +42,59 @@ pub const DEFAULT_PROP_KEYS_INDEX_DISTANCE: u64 = 40 * 1024;
 
 /// Caps the compaction factor to avoid unrealistic estimates.
 pub const TITAN_MAX_COMPACTION_FACTOR: f64 = 5000.0;
+const TITAN_COMPRESSION_FACTOR_WINDOW_CAPACITY: usize = 30;
 const FIVE_MINS_IN_SECONDS: u64 = 5 * 60;
+
+#[derive(Default)]
+pub(crate) struct TitanCompressionFactorSmoother {
+    samples: VecDeque<(f64, Instant)>,
+    total: f64,
+}
+
+impl TitanCompressionFactorSmoother {
+    pub(crate) fn observe(&mut self, sample: f64) {
+        if self.samples.len() == TITAN_COMPRESSION_FACTOR_WINDOW_CAPACITY {
+            if let Some((stale_sample, _)) = self.samples.pop_front() {
+                self.total -= stale_sample;
+            }
+        }
+
+        self.total += sample;
+        self.samples.push_back((sample, Instant::now_coarse()));
+        self.remove_stale_samples();
+    }
+
+    pub(crate) fn get_avg(&self) -> f64 {
+        if self.samples.is_empty() {
+            return 0.0;
+        }
+        self.total / self.samples.len() as f64
+    }
+
+    fn remove_stale_samples(&mut self) {
+        while self.samples.len() > 2 {
+            let is_stale = self.samples.front().is_some_and(|(_, observed_at)| {
+                observed_at.saturating_elapsed_secs() > FIVE_MINS_IN_SECONDS as f64
+            });
+            if !is_stale {
+                break;
+            }
+
+            if let Some((stale_sample, _)) = self.samples.pop_front() {
+                self.total -= stale_sample;
+            }
+        }
+    }
+}
 
 lazy_static! {
     // A global smoother used to estimate the Titan blob compression factor over
     // the last 5 minutes. The window size is 30, roughly matching the number of
     // data points collected in 5 minutes assuming one data point every 10 secs.
-    pub static ref TITAN_COMPRESSION_FACTOR_SMOOTHER: Mutex<Smoother<f64, 30, FIVE_MINS_IN_SECONDS, 0>> =
-        Mutex::new(Smoother::<f64, 30, FIVE_MINS_IN_SECONDS, 0>::default());
-    pub static ref TITAN_COMPRESSION_FACTOR: AtomicU64 = AtomicU64::new(f64::to_bits(1.0));
-    pub static ref TITAN_MAX_BLOB_SIZE_SEEN: AtomicU64 = AtomicU64::new(u64::MAX);
+    pub(crate) static ref TITAN_COMPRESSION_FACTOR_SMOOTHER: Mutex<TitanCompressionFactorSmoother> =
+        Mutex::new(TitanCompressionFactorSmoother::default());
+    pub(crate) static ref TITAN_COMPRESSION_FACTOR: AtomicU64 = AtomicU64::new(f64::to_bits(1.0));
+    pub(crate) static ref TITAN_MAX_BLOB_SIZE_SEEN: AtomicU64 = AtomicU64::new(u64::MAX);
 }
 
 fn get_entry_size(
