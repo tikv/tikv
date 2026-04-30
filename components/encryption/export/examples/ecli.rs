@@ -3,11 +3,11 @@
 use std::io::{Read, Write};
 
 use azure::STORAGE_VENDOR_NAME_AZURE;
+use cloud::STORAGE_VENDOR_NAME_GCP;
 pub use cloud::kms::Config as CloudConfig;
 use encryption::{GcpConfig, KmsBackend};
 use encryption_export::{AzureConfig, Backend, Error, KmsConfig, Result, create_cloud_backend};
 use file_system::{File, OpenOptions};
-use gcp::STORAGE_VENDOR_NAME_GCP;
 use ini::ini::Ini;
 use kvproto::encryptionpb::EncryptedContent;
 use protobuf::Message;

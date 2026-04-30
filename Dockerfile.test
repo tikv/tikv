@@ -27,7 +27,7 @@ RUN yum install -y epel-release && \
 RUN yum install -y centos-release-scl && \
     yum install -y \
       devtoolset-8 \
-      perl cmake3 && \
+      perl cmake3 go && \
     yum clean all
 
 # CentOS gives cmake 3 a weird binary name, so we link it to something more normal
