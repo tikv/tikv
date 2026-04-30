@@ -68,9 +68,10 @@ impl<'a, R: AsyncRead + Unpin + Send + 'a> From<R> for UnpinReader<'a> {
 
 pub type ExternalData<'a> = Box<dyn AsyncRead + Unpin + Send + 'a>;
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct BackendConfig {
     pub s3_multi_part_size: usize,
+    pub gcp_v2_enable: bool,
     pub hdfs_config: HdfsConfig,
 }
 
