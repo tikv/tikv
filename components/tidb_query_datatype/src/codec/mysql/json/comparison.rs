@@ -28,7 +28,7 @@ fn compare_f64_with_epsilon(x: f64, y: f64) -> Option<Ordering> {
     }
 }
 
-impl<'a> JsonRef<'a> {
+impl JsonRef<'_> {
     fn get_precedence(&self) -> i32 {
         match self.get_type() {
             JsonType::Object => PRECEDENCE_OBJECT,
@@ -64,21 +64,21 @@ impl<'a> JsonRef<'a> {
     }
 }
 
-impl<'a> Eq for JsonRef<'a> {}
+impl Eq for JsonRef<'_> {}
 
-impl<'a> Ord for JsonRef<'a> {
+impl Ord for JsonRef<'_> {
     fn cmp(&self, right: &JsonRef<'_>) -> Ordering {
         self.partial_cmp(right).unwrap()
     }
 }
 
-impl<'a> PartialEq for JsonRef<'a> {
+impl PartialEq for JsonRef<'_> {
     fn eq(&self, right: &JsonRef<'_>) -> bool {
         self.partial_cmp(right)
             .is_some_and(|r| r == Ordering::Equal)
     }
 }
-impl<'a> PartialOrd for JsonRef<'a> {
+impl PartialOrd for JsonRef<'_> {
     // See `CompareBinary` in TiDB `types/json/binary_functions.go`
     fn partial_cmp(&self, right: &JsonRef<'_>) -> Option<Ordering> {
         let precedence_diff = self.get_precedence() - right.get_precedence();

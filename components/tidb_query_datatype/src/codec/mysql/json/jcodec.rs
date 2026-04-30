@@ -10,7 +10,7 @@ use crate::{
     codec::{Error, Result},
 };
 
-impl<'a> JsonRef<'a> {
+impl JsonRef<'_> {
     fn encoded_len(&self) -> usize {
         match self.type_code {
             // Literal is encoded inline with value-entry, so nothing will be

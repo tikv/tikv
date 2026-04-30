@@ -73,7 +73,7 @@ pub struct ObserverContext<'a> {
     pub bypass: bool,
 }
 
-impl<'a> ObserverContext<'a> {
+impl ObserverContext<'_> {
     pub fn new(region: &Region) -> ObserverContext<'_> {
         ObserverContext {
             region,

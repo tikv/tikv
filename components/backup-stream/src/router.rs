@@ -103,7 +103,7 @@ pub enum TaskSelectorRef<'a> {
     All,
 }
 
-impl<'a> std::fmt::Debug for TaskSelectorRef<'a> {
+impl std::fmt::Debug for TaskSelectorRef<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ByName(name) => f.debug_tuple("ByName").field(name).finish(),
@@ -121,7 +121,7 @@ impl<'a> std::fmt::Debug for TaskSelectorRef<'a> {
     }
 }
 
-impl<'a> TaskSelectorRef<'a> {
+impl TaskSelectorRef<'_> {
     fn matches<'c, 'd>(
         self,
         task_name: &str,

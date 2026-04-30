@@ -13,7 +13,7 @@ use crate::{
     worker::tablet,
 };
 
-impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
+impl<EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'_, EK, ER, T> {
     #[inline]
     pub fn on_snapshot_gc(&mut self) {
         if let Err(e) = self.fsm.store.on_snapshot_gc(self.store_ctx) {

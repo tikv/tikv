@@ -226,7 +226,7 @@ pub struct TransactionProperties<'a> {
     pub txn_source: u64,
 }
 
-impl<'a> TransactionProperties<'a> {
+impl TransactionProperties<'_> {
     fn max_commit_ts(&self) -> TimeStamp {
         match &self.commit_kind {
             CommitKind::TwoPc => unreachable!(),

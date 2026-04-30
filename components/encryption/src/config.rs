@@ -300,7 +300,7 @@ mod encryption_method_serde {
     {
         struct EncryptionMethodVisitor;
 
-        impl<'de> Visitor<'de> for EncryptionMethodVisitor {
+        impl Visitor<'_> for EncryptionMethodVisitor {
             type Value = EncryptionMethod;
 
             fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
