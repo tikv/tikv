@@ -6039,7 +6039,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.4.2"
-source = "git+https://github.com/tikv/raft-engine.git#b6e85af33fb451314b9e169dd081e067ff5f356d"
+source = "git+https://github.com/tikv/raft-engine.git#55bccdea42718ab2b4f90cdd9068da53b6bf4c39"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -6073,7 +6073,7 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.4.2"
-source = "git+https://github.com/tikv/raft-engine.git#b6e85af33fb451314b9e169dd081e067ff5f356d"
+source = "git+https://github.com/tikv/raft-engine.git#55bccdea42718ab2b4f90cdd9068da53b6bf4c39"
 dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",
