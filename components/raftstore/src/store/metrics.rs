@@ -256,6 +256,14 @@ make_static_metric! {
         no_uncross_key,
         // Split info for the top hot CPU region has been collected, ready to split.
         ready_to_split_cpu_top,
+        // Normal split-key selection failed.
+        normal_key_failed,
+        // CPU fallback is skipped because the unified read pool is not busy.
+        cpu_fallback_unified_not_busy,
+        // CPU fallback is skipped because the region CPU is not hot enough.
+        cpu_fallback_region_not_busy,
+        // CPU fallback is blocked because gRPC poll threads are busy.
+        cpu_fallback_grpc_busy,
         // Hottest key range for the top hot CPU region could not be found.
         empty_hottest_key_range,
         // The top hot CPU region could not be split.
@@ -827,6 +835,13 @@ lazy_static! {
         "Histogram of query balance",
         &["type"],
         linear_buckets(0.0, 0.05, 20).unwrap()
+    ).unwrap();
+
+    pub static ref LOAD_BASE_SPLIT_REGION_LOAD_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_load_base_split_region_load",
+        "Histogram of normalized region load observed by load base split on this TiKV. The type label is cpu_millicores, qps, or bytes_kib.",
+        &["type"],
+        exponential_buckets(1.0, 2.0, 28).unwrap()
     ).unwrap();
 
     pub static ref LOAD_BASE_SPLIT_DURATION_HISTOGRAM : Histogram = register_histogram!(
