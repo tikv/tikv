@@ -123,4 +123,6 @@ pub trait WriteBatch: Mutable {
 
     /// Merge another WriteBatch to itself
     fn merge(&mut self, src: Self) -> Result<()>;
+
+    fn data(&self) -> Option<&[u8]>;
 }

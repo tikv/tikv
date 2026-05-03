@@ -198,6 +198,10 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
         }
         Ok(())
     }
+
+    fn data(&self) -> Option<&[u8]> {
+        Some(self.wbs.first()?.data())
+    }
 }
 
 impl engine_traits::Mutable for RocksWriteBatchVec {
