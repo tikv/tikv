@@ -22,6 +22,8 @@ pub struct Config {
     pub import_mode_timeout: ReadableDuration,
     /// the ratio of system memory used for import.
     pub memory_use_ratio: f64,
+    /// The server-wide max inflight apply-kv writes.
+    pub apply_kv_concurrency: usize,
 }
 
 impl Default for Config {
@@ -31,6 +33,7 @@ impl Default for Config {
             stream_channel_window: 128,
             import_mode_timeout: ReadableDuration::minutes(10),
             memory_use_ratio: 0.3,
+            apply_kv_concurrency: 16,
         }
     }
 }
@@ -54,6 +57,20 @@ impl Config {
         }
         if self.memory_use_ratio > 0.5 || self.memory_use_ratio < 0.0 {
             return Err("import.mem_ratio should belong to [0.0, 0.5].".into());
+        }
+        if self.apply_kv_concurrency == 0 {
+            warn!(
+                "import.apply_kv_concurrency can not be 0, change it to {}",
+                default_cfg.apply_kv_concurrency
+            );
+            self.apply_kv_concurrency = default_cfg.apply_kv_concurrency;
+        }
+        if self.apply_kv_concurrency > u32::MAX as usize {
+            return Err(format!(
+                "import.apply_kv_concurrency should <= {}.",
+                u32::MAX
+            )
+            .into());
         }
         Ok(())
     }
