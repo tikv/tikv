@@ -17,7 +17,7 @@ use cloud::blob::read_to_end;
 use external_storage::ExternalStorage;
 use parking_lot::Mutex;
 use protobuf::Chars;
-use slog_global::{debug, info};
+use slog_global::{debug, info, warn};
 use tokio::sync::futures::OwnedNotified;
 
 use crate::compaction::Input;
@@ -85,6 +85,15 @@ struct CacheRoundState {
     current_round_left_files: usize,
 }
 
+#[derive(Default)]
+struct CacheStatsSnapshot {
+    entries: usize,
+    loaded_entries: usize,
+    loading_entries: usize,
+    cached_content_bytes: u64,
+    remaining_refs: usize,
+}
+
 /// A bounded cache for raw physical log files.
 ///
 /// The cache reserves capacity when a physical file is registered, then stores
@@ -135,6 +144,9 @@ impl<'a> DownloadGuard<'a> {
 impl Drop for DownloadGuard<'_> {
     fn drop(&mut self) {
         if !self.finished {
+            warn!("physical file cache download future was dropped";
+                "name" => %self.name,
+            );
             self.cache.finish_download(&self.name, &self.notify, None);
         }
     }
@@ -162,6 +174,34 @@ impl PhysicalFileCache {
 
     fn reserved_bytes(&self) -> u64 {
         self.reserved_bytes.load(Ordering::Relaxed)
+    }
+
+    fn round_state_snapshot(&self) -> (u64, usize, usize) {
+        let state = self.round_state.lock();
+        (
+            state.current_round,
+            state.last_round_left_files,
+            state.current_round_left_files,
+        )
+    }
+
+    fn cache_stats_snapshot(&self) -> CacheStatsSnapshot {
+        let mut snapshot = CacheStatsSnapshot::default();
+        for shard in self.shards.iter() {
+            let shard = shard.lock();
+            for entry in shard.entries.values() {
+                snapshot.entries += 1;
+                snapshot.remaining_refs += entry.remaining_refs;
+                if entry.loading {
+                    snapshot.loading_entries += 1;
+                }
+                if let Some(content) = entry.content.as_ref() {
+                    snapshot.loaded_entries += 1;
+                    snapshot.cached_content_bytes += content.len() as u64;
+                }
+            }
+        }
+        snapshot
     }
 
     fn try_reserve(&self, physical_size: u64) -> Option<u64> {
@@ -227,9 +267,19 @@ impl PhysicalFileCache {
     pub(crate) fn advance_round_after_force_compaction(&self) {
         let mut state = self.round_state.lock();
         assert_eq!(state.last_round_left_files, 0);
+        let previous_round = state.current_round;
+        let moved_files = state.current_round_left_files;
         state.current_round += 1;
         state.last_round_left_files = state.current_round_left_files;
         state.current_round_left_files = 0;
+        info!("physical file cache forced compaction round advanced";
+            "previous_round" => previous_round,
+            "current_round" => state.current_round,
+            "last_round_left_files" => state.last_round_left_files,
+            "moved_files" => moved_files,
+            "reserved_bytes" => self.reserved_bytes(),
+            "capacity" => self.capacity,
+        );
     }
 
     pub fn register_physical_file(
@@ -242,27 +292,86 @@ impl PhysicalFileCache {
             return RegisterPhysicalFileResult::Registered;
         }
         if file_size > self.capacity {
+            debug!("physical file cache bypasses oversized physical file";
+                "name" => %file_name,
+                "physical_size" => file_size,
+                "capacity" => self.capacity,
+                "ref_count" => ref_count,
+            );
             return RegisterPhysicalFileResult::Bypass;
         }
-        let mut shard = self.shard(file_name).lock();
-        let entry = match shard.entries.entry(file_name.clone()) {
-            Entry::Occupied(entry) => {
-                let entry = entry.into_mut();
-                entry.physical_size = file_size;
-                entry.add_ref(ref_count);
-                return RegisterPhysicalFileResult::Registered;
-            }
-            Entry::Vacant(entry) => {
-                let wait = Arc::clone(&self.capacity_notify).notified_owned();
-                if self.try_reserve(file_size).is_none() {
-                    return RegisterPhysicalFileResult::Full(wait);
+        let mut registered_round = None;
+        let mut total_refs = 0;
+        let full_wait = {
+            let mut shard = self.shard(file_name).lock();
+            match shard.entries.entry(file_name.clone()) {
+                Entry::Occupied(entry) => {
+                    let entry = entry.into_mut();
+                    if entry.physical_size != file_size {
+                        warn!("physical file cache duplicate registration has different size";
+                            "name" => %file_name,
+                            "old_physical_size" => entry.physical_size,
+                            "new_physical_size" => file_size,
+                            "reserved_bytes" => self.reserved_bytes(),
+                        );
+                    }
+                    entry.physical_size = file_size;
+                    entry.add_ref(ref_count);
+                    registered_round = Some(entry.round);
+                    total_refs = entry.remaining_refs;
+                    None
                 }
-                let round = self.register_current_round_file();
-                entry.insert(CacheEntry::new(file_size, round))
+                Entry::Vacant(entry) => {
+                    let wait = Arc::clone(&self.capacity_notify).notified_owned();
+                    if self.try_reserve(file_size).is_none() {
+                        Some(wait)
+                    } else {
+                        let round = self.register_current_round_file();
+                        let entry = entry.insert(CacheEntry::new(file_size, round));
+                        entry.physical_size = file_size;
+                        entry.add_ref(ref_count);
+                        registered_round = Some(round);
+                        total_refs = entry.remaining_refs;
+                        None
+                    }
+                }
             }
         };
-        entry.physical_size = file_size;
-        entry.add_ref(ref_count);
+        if let Some(wait) = full_wait {
+            let (current_round, last_round_left_files, current_round_left_files) =
+                self.round_state_snapshot();
+            let stats = self.cache_stats_snapshot();
+            info!("physical file cache is full when registering physical file";
+                "name" => %file_name,
+                "physical_size" => file_size,
+                "ref_count" => ref_count,
+                "reserved_bytes" => self.reserved_bytes(),
+                "capacity" => self.capacity,
+                "current_round" => current_round,
+                "last_round_left_files" => last_round_left_files,
+                "current_round_left_files" => current_round_left_files,
+                "cache_entries" => stats.entries,
+                "loaded_entries" => stats.loaded_entries,
+                "loading_entries" => stats.loading_entries,
+                "cached_content_bytes" => stats.cached_content_bytes,
+                "remaining_refs" => stats.remaining_refs,
+            );
+            return RegisterPhysicalFileResult::Full(wait);
+        }
+        let (current_round, last_round_left_files, current_round_left_files) =
+            self.round_state_snapshot();
+        debug!("registered physical file into cache";
+            "name" => %file_name,
+            "physical_size" => file_size,
+            "ref_count" => ref_count,
+            "total_refs" => total_refs,
+            "entry_round" => registered_round.unwrap_or_default(),
+            "reserved_bytes" => self.reserved_bytes(),
+            "capacity" => self.capacity,
+            "current_round" => current_round,
+            "last_round_left_files" => last_round_left_files,
+            "current_round_left_files" => current_round_left_files,
+        );
         RegisterPhysicalFileResult::Registered
     }
 
@@ -279,6 +388,7 @@ impl PhysicalFileCache {
     pub(crate) fn drop_physical_file_ref(&self, file_name: &Chars) {
         let mut release_size = None;
         let mut release_round = None;
+        let mut remaining_refs = None;
         {
             let mut shard = self.shard(file_name).lock();
             if let Entry::Occupied(mut entry) = shard.entries.entry(file_name.clone()) {
@@ -287,12 +397,35 @@ impl PhysicalFileCache {
                     release_size = Some(item.physical_size);
                     release_round = Some(item.round);
                     entry.remove();
+                } else {
+                    remaining_refs = Some(item.remaining_refs);
                 }
             }
         }
         if let (Some(physical_size), Some(round)) = (release_size, release_round) {
             self.release_round_file(round);
             self.release_reserved(physical_size);
+            let (current_round, last_round_left_files, current_round_left_files) =
+                self.round_state_snapshot();
+            info!("released physical file from cache";
+                "name" => %file_name,
+                "physical_size" => physical_size,
+                "entry_round" => round,
+                "reserved_bytes" => self.reserved_bytes(),
+                "capacity" => self.capacity,
+                "current_round" => current_round,
+                "last_round_left_files" => last_round_left_files,
+                "current_round_left_files" => current_round_left_files,
+            );
+        } else if let Some(remaining_refs) = remaining_refs {
+            debug!("dropped one physical file cache ref";
+                "name" => %file_name,
+                "remaining_refs" => remaining_refs,
+            );
+        } else {
+            debug!("physical file cache ref drop ignored because entry is absent";
+                "name" => %file_name,
+            );
         }
     }
 
@@ -306,13 +439,41 @@ impl PhysicalFileCache {
         let mut physical_bytes_in = 0;
         loop {
             match self.cache_decision(&name, offset, length)? {
-                CacheDecision::Ready(content) => return Ok(Some((content, physical_bytes_in))),
-                CacheDecision::Wait(notified) => notified.await,
-                CacheDecision::Bypass => return Ok(None),
+                CacheDecision::Ready(content) => {
+                    debug!("physical file cache hit";
+                        "name" => %name,
+                        "offset" => offset,
+                        "length" => length,
+                        "downloaded_bytes_for_wait" => physical_bytes_in,
+                    );
+                    return Ok(Some((content, physical_bytes_in)));
+                }
+                CacheDecision::Wait(notified) => {
+                    debug!("physical file cache waits for loading physical file";
+                        "name" => %name,
+                        "offset" => offset,
+                        "length" => length,
+                    );
+                    notified.await
+                }
+                CacheDecision::Bypass => {
+                    debug!("physical file cache load bypassed";
+                        "name" => %name,
+                        "offset" => offset,
+                        "length" => length,
+                    );
+                    return Ok(None);
+                }
                 CacheDecision::Download {
                     notify,
                     physical_size,
                 } => {
+                    debug!("physical file cache starts downloading physical file";
+                        "name" => %name,
+                        "physical_size" => physical_size,
+                        "reserved_bytes" => self.reserved_bytes(),
+                        "capacity" => self.capacity,
+                    );
                     let guard = DownloadGuard::new(self, name.clone(), notify);
                     let download_res = self
                         .download_physical_file(storage.as_ref(), &name, physical_size)
@@ -370,6 +531,7 @@ impl PhysicalFileCache {
     }
 
     fn finish_download(&self, name: &Chars, notify: &tokio::sync::Notify, content: Option<Bytes>) {
+        let content_len = content.as_ref().map(|content| content.len() as u64);
         let mut shard = self.shard(name).lock();
         if let Some(entry) = shard.entries.get_mut(name) {
             if let Some(content) = content {
@@ -378,6 +540,13 @@ impl PhysicalFileCache {
             entry.loading = false;
         }
         notify.notify_waiters();
+        debug!("physical file cache finished download state update";
+            "name" => %name,
+            "content_bytes" => content_len.unwrap_or(0),
+            "has_content" => content_len.is_some(),
+            "reserved_bytes" => self.reserved_bytes(),
+            "capacity" => self.capacity,
+        );
     }
 }
 

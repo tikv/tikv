@@ -8,6 +8,7 @@ use std::{
 };
 
 use engine_traits::{CF_DEFAULT, CfName};
+use slog_global::{debug, info};
 use tokio_stream::Stream;
 
 use super::{SubcompactionCollectKey, UnformedSubcompaction};
@@ -273,6 +274,12 @@ impl<S: Stream<Item = Result<PhysicalLogFile>>> Stream for CollectCachedSubcompa
                     this.collector.stat.bytes_out += ready.compaction.size;
                     this.collector.stat.compactions_out += 1;
                 }
+                debug!("yield cached subcompaction";
+                    "size" => ready.compaction.size,
+                    "region_id" => ready.compaction.region_id,
+                    "inputs" => ready.compaction.inputs.len(),
+                    "forced_by_cache_full" => ready.update_stat_on_yield,
+                );
                 return Poll::Ready(Some(Ok(ready.compaction)));
             }
 
@@ -316,15 +323,32 @@ impl<S: Stream<Item = Result<PhysicalLogFile>>> Stream for CollectCachedSubcompa
                         RegisterPhysicalFileResult::Bypass => {}
                         RegisterPhysicalFileResult::Full(wait) => {
                             *this.deferred_file = Some(physical_file);
-                            if this.collector.is_empty()
-                                || !this.physical_file_cache.can_force_compaction()
-                            {
+                            let collector_empty = this.collector.is_empty();
+                            let can_force_compaction =
+                                this.physical_file_cache.can_force_compaction();
+                            if collector_empty || !can_force_compaction {
+                                info!("wait before forcing cached subcompactions";
+                                    "deferred_physical_file" => %physical_file_name,
+                                    "deferred_physical_size" => physical_file_size,
+                                    "collector_empty" => collector_empty,
+                                    "can_force_compaction" => can_force_compaction,
+                                );
                                 this.cache_wait.set(Some(wait));
                                 continue;
                             }
                             let pending: Vec<_> =
                                 this.collector.take_pending_subcompactions().collect();
                             if !pending.is_empty() {
+                                let pending_bytes = pending
+                                    .iter()
+                                    .map(|compaction| compaction.size)
+                                    .sum::<u64>();
+                                info!("force cached subcompactions because physical file cache is full";
+                                    "deferred_physical_file" => %physical_file_name,
+                                    "deferred_physical_size" => physical_file_size,
+                                    "pending_compactions" => pending.len(),
+                                    "pending_bytes" => pending_bytes,
+                                );
                                 this.physical_file_cache
                                     .advance_round_after_force_compaction();
                             }
