@@ -59,35 +59,11 @@ pub struct CollectCachedSubcompaction<S: Stream<Item = Result<PhysicalLogFile>>>
     collector: SubcompactionCollector,
     ready_compactions: VecDeque<ReadySubcompaction>,
     physical_file_cache: Arc<PhysicalFileCache>,
-    physical_file_uncollected_refs: HashMap<protobuf::Chars, usize>,
 }
 
 struct ReadySubcompaction {
     compaction: Subcompaction,
     update_stat_on_yield: bool,
-}
-
-fn mark_compaction_collected(
-    physical_file_uncollected_refs: &mut HashMap<protobuf::Chars, usize>,
-    compaction: &Subcompaction,
-) {
-    for input in &compaction.inputs {
-        if let Some(refs) = physical_file_uncollected_refs.get_mut(&input.id.name) {
-            assert!(*refs > 0);
-            *refs -= 1;
-        }
-    }
-}
-
-fn has_fully_collected_cached_physical_file(
-    physical_file_cache: &PhysicalFileCache,
-    physical_file_uncollected_refs: &mut HashMap<protobuf::Chars, usize>,
-) -> bool {
-    physical_file_uncollected_refs
-        .retain(|name, _| physical_file_cache.contains_physical_file(name));
-    physical_file_uncollected_refs
-        .values()
-        .any(|refs| *refs == 0)
 }
 
 impl<S: Stream<Item = Result<PhysicalLogFile>>> CollectCachedSubcompaction<S> {
@@ -152,7 +128,6 @@ impl<S: Stream<Item = Result<PhysicalLogFile>>> CollectCachedSubcompaction<S> {
             },
             ready_compactions: VecDeque::new(),
             physical_file_cache,
-            physical_file_uncollected_refs: HashMap::new(),
         }
     }
 }
@@ -309,7 +284,6 @@ impl<S: Stream<Item = Result<PhysicalLogFile>>> Stream for CollectCachedSubcompa
                 None => {
                     let pending: Vec<_> = this.collector.take_pending_subcompactions().collect();
                     for compaction in pending {
-                        mark_compaction_collected(this.physical_file_uncollected_refs, &compaction);
                         this.ready_compactions.push_back(ReadySubcompaction {
                             compaction,
                             update_stat_on_yield: true,
@@ -338,31 +312,23 @@ impl<S: Stream<Item = Result<PhysicalLogFile>>> Stream for CollectCachedSubcompa
                         physical_file_size,
                         ref_count,
                     ) {
-                        RegisterPhysicalFileResult::Registered => {
-                            *this
-                                .physical_file_uncollected_refs
-                                .entry(physical_file_name)
-                                .or_default() += ref_count;
-                        }
+                        RegisterPhysicalFileResult::Registered => {}
                         RegisterPhysicalFileResult::Bypass => {}
                         RegisterPhysicalFileResult::Full(wait) => {
                             *this.deferred_file = Some(physical_file);
                             if this.collector.is_empty()
-                                || has_fully_collected_cached_physical_file(
-                                    this.physical_file_cache,
-                                    this.physical_file_uncollected_refs,
-                                )
+                                || !this.physical_file_cache.can_force_compaction()
                             {
                                 this.cache_wait.set(Some(wait));
                                 continue;
                             }
                             let pending: Vec<_> =
                                 this.collector.take_pending_subcompactions().collect();
+                            if !pending.is_empty() {
+                                this.physical_file_cache
+                                    .advance_round_after_force_compaction();
+                            }
                             for compaction in pending {
-                                mark_compaction_collected(
-                                    this.physical_file_uncollected_refs,
-                                    &compaction,
-                                );
                                 this.ready_compactions.push_back(ReadySubcompaction {
                                     compaction,
                                     update_stat_on_yield: true,
@@ -377,10 +343,6 @@ impl<S: Stream<Item = Result<PhysicalLogFile>>> Stream for CollectCachedSubcompa
 
                     for file in physical_file.files {
                         if let Some(compaction) = this.collector.add_filtered_in_file(file) {
-                            mark_compaction_collected(
-                                this.physical_file_uncollected_refs,
-                                &compaction,
-                            );
                             this.ready_compactions.push_back(ReadySubcompaction {
                                 compaction,
                                 update_stat_on_yield: false,
@@ -588,28 +550,33 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_collect_cached_subcompaction_waits_instead_of_flushing_when_allowed() {
+    async fn test_collect_cached_subcompaction_waits_before_second_forced_round() {
         let r = SubcompactionCollectKey::of_region;
         let items = vec![
             PhysicalLogFile {
                 name: Chars::from("000"),
-                size: 30,
-                files: vec![log_file("000", 30, r(1))],
+                size: 40,
+                files: vec![log_file("000", 40, r(1))],
             },
             PhysicalLogFile {
                 name: Chars::from("001"),
-                size: 31,
-                files: vec![log_file("001", 31, r(1))],
+                size: 40,
+                files: vec![log_file("001", 40, r(2))],
             },
             PhysicalLogFile {
                 name: Chars::from("002"),
-                size: 30,
-                files: vec![log_file("002", 30, r(2))],
+                size: 40,
+                files: vec![log_file("002", 40, r(3))],
             },
             PhysicalLogFile {
                 name: Chars::from("003"),
-                size: 30,
-                files: vec![log_file("003", 30, r(2))],
+                size: 40,
+                files: vec![log_file("003", 40, r(4))],
+            },
+            PhysicalLogFile {
+                name: Chars::from("004"),
+                size: 40,
+                files: vec![log_file("004", 40, r(5))],
             },
         ];
         let physical_file_cache = Arc::new(PhysicalFileCache::new(100));
@@ -619,25 +586,34 @@ mod test {
                 compact_shift_from_ts: 0,
                 compact_from_ts: 0,
                 compact_to_ts: u64::MAX,
-                subcompaction_size_threshold: 50,
+                subcompaction_size_threshold: u64::MAX,
             },
             Arc::clone(&physical_file_cache),
         );
         tokio::pin!(collector);
 
         let first = collector.as_mut().next().await.unwrap().unwrap();
-        assert_eq!((first.size, first.region_id), (61, 1));
-        assert_eq!(first.inputs.len(), 2);
-
-        assert!(collector.as_mut().next().now_or_never().is_none());
+        let second = collector.as_mut().next().await.unwrap().unwrap();
+        let mut first_round_ids = vec![first.region_id, second.region_id];
+        first_round_ids.sort();
+        assert_eq!(first_round_ids, vec![1, 2]);
+        assert_eq!((first.size, second.size), (40, 40));
 
         for input in &first.inputs {
             physical_file_cache.drop_input_ref(input);
         }
+        assert!(collector.as_mut().next().now_or_never().is_none());
 
-        let second = collector.as_mut().next().await.unwrap().unwrap();
-        assert_eq!((second.size, second.region_id), (60, 2));
-        assert_eq!(second.inputs.len(), 2);
+        for input in &second.inputs {
+            physical_file_cache.drop_input_ref(input);
+        }
+
+        let third = collector.as_mut().next().await.unwrap().unwrap();
+        let fourth = collector.as_mut().next().await.unwrap().unwrap();
+        let mut second_round_ids = vec![third.region_id, fourth.region_id];
+        second_round_ids.sort();
+        assert_eq!(second_round_ids, vec![3, 4]);
+        assert_eq!((third.size, fourth.size), (40, 40));
     }
 
     #[tokio::test]
