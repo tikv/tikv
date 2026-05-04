@@ -744,6 +744,16 @@ pub enum Cmd {
         prefetch_buffer_count: u64,
 
         #[structopt(
+            long,
+            default_value = "0",
+            help(
+                "specify memory reserved for caching physical log files, such as 64G. \
+                Zero disables the cache."
+            )
+        )]
+        physical_file_cache_capacity: ReadableSize,
+
+        #[structopt(
             long = "gcp-v2-enable",
             parse(try_from_str),
             default_value = "true",

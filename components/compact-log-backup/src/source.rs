@@ -7,7 +7,7 @@ use std::{
 use async_compression::futures::write::ZstdDecoder;
 use external_storage::ExternalStorage;
 use futures::io::{AsyncWriteExt, Cursor};
-use futures_io::AsyncWrite;
+use futures_io::{AsyncRead, AsyncWrite};
 use kvproto::brpb;
 use prometheus::core::{Atomic, AtomicU64};
 use tikv_util::{
@@ -17,17 +17,24 @@ use tikv_util::{
 use txn_types::Key;
 
 use super::{statistic::LoadStatistic, util::Cooperate};
-use crate::{compaction::Input, errors::Result};
+use crate::{cache::PhysicalFileCache, compaction::Input, errors::Result};
 
 /// The manager of fetching log files from remote for compacting.
 #[derive(Clone)]
 pub struct Source {
     inner: Arc<dyn ExternalStorage>,
+    physical_file_cache: Option<Arc<PhysicalFileCache>>,
 }
 
 impl Source {
-    pub fn new(inner: Arc<dyn ExternalStorage>) -> Self {
-        Self { inner }
+    pub fn new(
+        inner: Arc<dyn ExternalStorage>,
+        physical_file_cache: Option<Arc<PhysicalFileCache>>,
+    ) -> Self {
+        Self {
+            inner,
+            physical_file_cache,
+        }
     }
 }
 
@@ -64,17 +71,26 @@ impl Source {
             .with_fail_hook(move |_: &JustRetry<std::io::Error>| counter.inc_by(1));
         let fetch = || {
             let storage = self.inner.clone();
+            let physical_file_cache = self.physical_file_cache.clone();
             let id = input.id.clone();
             let compression = input.compression;
+            let file_real_size = input.file_real_size;
             async move {
-                let mut content = Vec::with_capacity(id.length as _);
-                let item = pin!(Cursor::new(&mut content));
-                let mut decompress = decompress(compression, item)?;
+                if let Some(cache) = physical_file_cache {
+                    if let Some((content, physical_bytes_in)) = cache
+                        .load_part(storage.clone(), &id.name, id.offset, id.length)
+                        .await?
+                    {
+                        let (content, _) =
+                            load_compressed(compression, Cursor::new(content), file_real_size)
+                                .await?;
+                        cache.drop_physical_file_ref(&id.name);
+                        return std::io::Result::Ok((content, physical_bytes_in));
+                    }
+                }
+
                 let source = storage.read_part(&id.name, id.offset, id.length);
-                let n = futures::io::copy(source, &mut decompress).await?;
-                decompress.flush().await?;
-                drop(decompress);
-                std::io::Result::Ok((content, n))
+                load_compressed(compression, source, file_real_size).await
             }
         };
         let (content, size) = retry_all_ext(fetch, ext).await?;
@@ -111,6 +127,20 @@ impl Source {
         }
         Ok(())
     }
+}
+
+async fn load_compressed(
+    compression: brpb::CompressionType,
+    source: impl AsyncRead + Unpin,
+    file_real_size: u64,
+) -> std::io::Result<(Vec<u8>, u64)> {
+    let mut content = Vec::with_capacity(file_real_size as usize);
+    let item = pin!(Cursor::new(&mut content));
+    let mut decompress = decompress(compression, item)?;
+    let n = futures::io::copy(source, &mut decompress).await?;
+    decompress.flush().await?;
+    drop(decompress);
+    Ok((content, n))
 }
 
 fn decompress(
@@ -179,7 +209,7 @@ mod tests {
         let st = TmpStorage::create();
         let m = construct_storage(&st).await;
 
-        let so = Source::new(st.storage().clone());
+        let so = Source::new(st.storage().clone(), None);
         for epoch in 0..NUM_FLUSH {
             for seg in 0..NUM_REGION {
                 let input = as_input(&m[epoch].physical_files[0].files[seg]);

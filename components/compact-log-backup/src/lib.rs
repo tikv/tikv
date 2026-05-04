@@ -3,6 +3,7 @@
 #![feature(test)]
 #![feature(custom_test_frameworks)]
 
+mod cache;
 mod compaction;
 mod errors;
 mod source;
