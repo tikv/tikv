@@ -11,6 +11,7 @@ pub(crate) mod check_secondary_locks;
 pub(crate) mod check_txn_status;
 pub(crate) mod cleanup;
 pub(crate) mod commit;
+pub(crate) mod compare_and_delete;
 pub(crate) mod compare_and_swap;
 pub(crate) mod flashback_to_version;
 pub(crate) mod flashback_to_version_read_phase;
@@ -42,6 +43,7 @@ pub use check_secondary_locks::CheckSecondaryLocks;
 pub use check_txn_status::CheckTxnStatus;
 pub use cleanup::Cleanup;
 pub use commit::Commit;
+pub use compare_and_delete::RawCompareAndDelete;
 pub use compare_and_swap::RawCompareAndSwap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 pub use flashback_to_version::FlashbackToVersion;
@@ -110,6 +112,7 @@ pub enum Command {
     MvccByKey(MvccByKey),
     MvccByStartTs(MvccByStartTs),
     RawCompareAndSwap(RawCompareAndSwap),
+    RawCompareAndDelete(RawCompareAndDelete),
     RawAtomicStore(RawAtomicStore),
     FlashbackToVersionReadPhase(FlashbackToVersionReadPhase),
     FlashbackToVersion(FlashbackToVersion),
@@ -678,6 +681,7 @@ impl Command {
             Command::MvccByKey(t) => t,
             Command::MvccByStartTs(t) => t,
             Command::RawCompareAndSwap(t) => t,
+            Command::RawCompareAndDelete(t) => t,
             Command::RawAtomicStore(t) => t,
             Command::FlashbackToVersionReadPhase(t) => t,
             Command::FlashbackToVersion(t) => t,
@@ -706,6 +710,7 @@ impl Command {
             Command::MvccByKey(t) => t,
             Command::MvccByStartTs(t) => t,
             Command::RawCompareAndSwap(t) => t,
+            Command::RawCompareAndDelete(t) => t,
             Command::RawAtomicStore(t) => t,
             Command::FlashbackToVersionReadPhase(t) => t,
             Command::FlashbackToVersion(t) => t,
@@ -749,6 +754,7 @@ impl Command {
             Command::CheckSecondaryLocks(t) => t.process_write(snapshot, context),
             Command::Pause(t) => t.process_write(snapshot, context),
             Command::RawCompareAndSwap(t) => t.process_write(snapshot, context),
+            Command::RawCompareAndDelete(t) => t.process_write(snapshot, context),
             Command::RawAtomicStore(t) => t.process_write(snapshot, context),
             Command::FlashbackToVersion(t) => t.process_write(snapshot, context),
             Command::Flush(t) => t.process_write(snapshot, context),
@@ -857,6 +863,7 @@ impl HeapSize for Command {
                 Command::MvccByKey(t) => t.approximate_heap_size(),
                 Command::MvccByStartTs(t) => t.approximate_heap_size(),
                 Command::RawCompareAndSwap(t) => t.approximate_heap_size(),
+                Command::RawCompareAndDelete(t) => t.approximate_heap_size(),
                 Command::RawAtomicStore(t) => t.approximate_heap_size(),
                 Command::FlashbackToVersionReadPhase(t) => t.approximate_heap_size(),
                 Command::FlashbackToVersion(t) => t.approximate_heap_size(),

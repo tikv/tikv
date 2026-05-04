@@ -1490,7 +1490,6 @@ fn test_atomic_cas_lock_by_latch() {
             b"v1".to_vec(),
             0,
             cb,
-            false,
         )
         .unwrap();
     thread::sleep(Duration::from_secs(1));
@@ -1507,7 +1506,6 @@ fn test_atomic_cas_lock_by_latch() {
             b"v2".to_vec(),
             0,
             cb,
-            false,
         )
         .unwrap();
     thread::sleep(Duration::from_secs(1));

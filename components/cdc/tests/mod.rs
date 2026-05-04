@@ -399,27 +399,26 @@ impl TestSuite {
     }
 
     pub fn must_kv_compare_and_delete(&mut self, region_id: u64, key: Vec<u8>, expect: Vec<u8>) {
-        let mut cas_req = RawCasRequest::default();
-        cas_req.set_context(self.get_context(region_id));
-        cas_req.set_key(key);
-        cas_req.set_previous_value(expect.clone());
-        cas_req.set_delete(true);
+        let mut cad_req = RawCadRequest::default();
+        cad_req.set_context(self.get_context(region_id));
+        cad_req.set_key(key);
+        cad_req.set_previous_value(expect.clone());
 
-        let cas_resp = self
+        let cad_resp = self
             .get_tikv_client(region_id)
-            .raw_compare_and_swap(&cas_req)
+            .raw_compare_and_delete(&cad_req)
             .unwrap();
         assert!(
-            !cas_resp.has_region_error(),
+            !cad_resp.has_region_error(),
             "{:?}",
-            cas_resp.get_region_error()
+            cad_resp.get_region_error()
         );
-        assert!(cas_resp.error.is_empty(), "{:?}", cas_resp.get_error());
+        assert!(cad_resp.error.is_empty(), "{:?}", cad_resp.get_error());
         assert!(
-            cas_resp.get_previous_value() == expect,
+            cad_resp.get_previous_value() == expect,
             "previous value mismatch"
         );
-        assert!(cas_resp.get_succeed(), "compare and delete failed");
+        assert!(cad_resp.get_succeed(), "compare and delete failed");
     }
 
     pub fn must_kv_commit(

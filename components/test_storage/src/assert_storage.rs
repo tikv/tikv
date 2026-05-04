@@ -1030,21 +1030,7 @@ impl<E: Engine, F: KvFormat> AssertionStorage<E, F> {
     ) {
         let result = self
             .store
-            .raw_compare_and_swap_atomic(self.ctx.clone(), cf, key, previous_value, value, 0, false)
-            .unwrap();
-        assert_eq!(result, expect);
-    }
-
-    pub fn raw_compare_and_swap_atomic_delete_ok(
-        &self,
-        cf: String,
-        key: Vec<u8>,
-        previous_value: Option<Vec<u8>>,
-        expect: (Option<Vec<u8>>, bool),
-    ) {
-        let result = self
-            .store
-            .raw_compare_and_swap_atomic(self.ctx.clone(), cf, key, previous_value, vec![], 0, true)
+            .raw_compare_and_swap_atomic(self.ctx.clone(), cf, key, previous_value, value, 0)
             .unwrap();
         assert_eq!(result, expect);
     }
@@ -1057,7 +1043,32 @@ impl<E: Engine, F: KvFormat> AssertionStorage<E, F> {
         value: Vec<u8>,
     ) {
         self.store
-            .raw_compare_and_swap_atomic(self.ctx.clone(), cf, key, previous_value, value, 0, false)
+            .raw_compare_and_swap_atomic(self.ctx.clone(), cf, key, previous_value, value, 0)
+            .unwrap_err();
+    }
+
+    pub fn raw_compare_and_delete_atomic_ok(
+        &self,
+        cf: String,
+        key: Vec<u8>,
+        previous_value: Vec<u8>,
+        expect: (Option<Vec<u8>>, bool),
+    ) {
+        let result = self
+            .store
+            .raw_compare_and_delete_atomic(self.ctx.clone(), cf, key, previous_value)
+            .unwrap();
+        assert_eq!(result, expect);
+    }
+
+    pub fn raw_compare_and_delete_atomic_err(
+        &self,
+        cf: String,
+        key: Vec<u8>,
+        previous_value: Vec<u8>,
+    ) {
+        self.store
+            .raw_compare_and_delete_atomic(self.ctx.clone(), cf, key, previous_value)
             .unwrap_err();
     }
 

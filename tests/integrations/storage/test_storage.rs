@@ -1104,10 +1104,10 @@ fn test_txn_store_rawkv_api_version() {
                     (Some(b"value".to_vec()), true),
                 );
 
-                store.raw_compare_and_swap_atomic_delete_ok(
+                store.raw_compare_and_delete_atomic_ok(
                     cf.to_owned(),
                     key.to_vec(),
-                    Some(b"new_value".to_vec()),
+                    b"new_value".to_vec(),
                     (Some(b"new_value".to_vec()), true),
                 );
 
@@ -1147,6 +1147,12 @@ fn test_txn_store_rawkv_api_version() {
                     key.to_vec(),
                     None,
                     b"value".to_vec(),
+                );
+
+                store.raw_compare_and_delete_atomic_err(
+                    cf.to_owned(),
+                    key.to_vec(),
+                    b"new_value".to_vec(),
                 );
 
                 store.raw_batch_delete_atomic_err(cf.to_owned(), vec![key.to_vec()]);

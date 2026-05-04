@@ -490,7 +490,6 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
         previous_value: Option<Vec<u8>>,
         value: Vec<u8>,
         ttl: u64,
-        delete: bool,
     ) -> Result<(Option<Vec<u8>>, bool)> {
         wait_op!(|cb| self.store.raw_compare_and_swap_atomic(
             ctx,
@@ -499,9 +498,21 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
             previous_value,
             value,
             ttl,
-            cb,
-            delete
+            cb
         ))
+        .unwrap()
+    }
+
+    pub fn raw_compare_and_delete_atomic(
+        &self,
+        ctx: Context,
+        cf: String,
+        key: Vec<u8>,
+        previous_value: Vec<u8>,
+    ) -> Result<(Option<Vec<u8>>, bool)> {
+        wait_op!(|cb| self
+            .store
+            .raw_compare_and_delete_atomic(ctx, cf, key, previous_value, cb))
         .unwrap()
     }
 

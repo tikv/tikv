@@ -487,6 +487,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     );
 
     handle_request!(
+        raw_compare_and_delete,
+        future_raw_compare_and_delete,
+        RawCadRequest,
+        RawCadResponse
+    );
+
+    handle_request!(
         raw_checksum,
         future_raw_checksum,
         RawChecksumRequest,
@@ -1533,6 +1540,8 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
         RawDeleteRange, future_raw_delete_range(storage), raw_delete_range;
         RawBatchScan, future_raw_batch_scan(storage), raw_batch_scan;
         RawCoprocessor, future_raw_coprocessor(copr_v2, storage), coprocessor;
+        RawCompareAndSwap, future_raw_compare_and_swap(storage), raw_compare_and_swap;
+        RawCompareAndDelete, future_raw_compare_and_delete(storage), raw_compare_and_delete;
         PessimisticLock, future_acquire_pessimistic_lock(storage), kv_pessimistic_lock;
         PessimisticRollback, future_pessimistic_rollback(storage), kv_pessimistic_rollback;
         BroadcastTxnStatus, future_broadcast_txn_status(storage), broadcast_txn_status;
@@ -2285,13 +2294,21 @@ fn future_raw_compare_and_swap<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawCasRequest,
 ) -> impl Future<Output = ServerResult<RawCasResponse>> {
+    #[allow(deprecated)]
+    if req.get_delete() {
+        let mut resp = RawCasResponse::default();
+        resp.set_error(
+            "RawCASRequest.delete is deprecated - use RawCompareAndDelete instead".to_owned(),
+        );
+        return async move { Ok(resp) }.left_future();
+    }
+
     let (cb, f) = paired_future_callback();
     let previous_value = if req.get_previous_not_exist() {
         None
     } else {
         Some(req.take_previous_value())
     };
-
     let res = storage.raw_compare_and_swap_atomic(
         req.take_context(),
         req.take_cf(),
@@ -2300,7 +2317,6 @@ fn future_raw_compare_and_swap<E: Engine, L: LockManager, F: KvFormat>(
         req.take_value(),
         req.get_ttl(),
         cb,
-        req.get_delete(),
     );
     async move {
         let v = match res {
@@ -2308,6 +2324,44 @@ fn future_raw_compare_and_swap<E: Engine, L: LockManager, F: KvFormat>(
             Err(e) => Err(e),
         };
         let mut resp = RawCasResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            match v {
+                Ok((val, succeed)) => {
+                    if let Some(val) = val {
+                        resp.set_previous_value(val);
+                    } else {
+                        resp.set_previous_not_exist(true);
+                    }
+                    resp.set_succeed(succeed);
+                }
+                Err(e) => resp.set_error(format!("{}", e)),
+            }
+        }
+        Ok(resp)
+    }
+    .right_future()
+}
+
+fn future_raw_compare_and_delete<E: Engine, L: LockManager, F: KvFormat>(
+    storage: &Storage<E, L, F>,
+    mut req: RawCadRequest,
+) -> impl Future<Output = ServerResult<RawCadResponse>> {
+    let (cb, f) = paired_future_callback();
+    let res = storage.raw_compare_and_delete_atomic(
+        req.take_context(),
+        req.take_cf(),
+        req.take_key(),
+        req.take_previous_value(),
+        cb,
+    );
+    async move {
+        let v = match res {
+            Ok(()) => f.await?,
+            Err(e) => Err(e),
+        };
+        let mut resp = RawCadResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
@@ -2924,6 +2978,49 @@ mod tests {
         };
         poll_future_notify(task);
         assert_eq!(block_on(rx1).unwrap(), 200);
+    }
+
+    #[test]
+    fn test_raw_cas_rejects_deprecated_delete_flag() {
+        // A RawCASRequest with `delete=true` must be rejected with an explicit error
+        // rather than silently executing as a plain CAS write.
+        let storage = crate::storage::TestStorageBuilderApiV1::new(
+            crate::storage::lock_manager::MockLockManager::new(),
+        )
+        .build()
+        .unwrap();
+        let mut req = RawCasRequest::default();
+        req.set_context(Context::default());
+        req.set_key(b"k".to_vec());
+        req.set_value(b"v".to_vec());
+        #[allow(deprecated)]
+        req.set_delete(true);
+        let resp = block_on(future_raw_compare_and_swap(&storage, req)).unwrap();
+        let err = resp.get_error();
+        assert!(!err.is_empty());
+        assert!(err.contains("RawCompareAndDelete"));
+        assert!(!resp.get_succeed());
+    }
+
+    #[test]
+    fn test_raw_cas_delete_false_bypasses_guard() {
+        // A RawCASRequest with `delete=false` (the default) must not be rejected by
+        // the deprecated-flag guard.
+        let storage = crate::storage::TestStorageBuilderApiV1::new(
+            crate::storage::lock_manager::MockLockManager::new(),
+        )
+        .build()
+        .unwrap();
+        let mut req = RawCasRequest::default();
+        req.set_context(Context::default());
+        req.set_key(b"k".to_vec());
+        req.set_value(b"v".to_vec());
+        #[allow(deprecated)]
+        req.set_delete(false);
+        req.set_previous_not_exist(true);
+        let resp = block_on(future_raw_compare_and_swap(&storage, req)).unwrap();
+        assert!(resp.get_error().is_empty());
+        assert!(resp.get_succeed());
     }
 
     #[test]
