@@ -4,6 +4,7 @@ use std::{
     sync::Arc,
 };
 
+use bytes::Bytes;
 use external_storage::ExternalStorage;
 use futures::stream::TryStreamExt;
 use kvproto::brpb::{self, DeleteSpansOfFile};
@@ -148,18 +149,46 @@ impl LogFileId {
     }
 }
 
-#[derive(Eq, PartialEq, Debug)]
-struct SortByOffset(LogFileId);
+#[derive(Debug)]
+struct SortByOffset(brpb::Span);
+
+impl SortByOffset {
+    fn new(id: &LogFileId) -> Self {
+        Self(id.span())
+    }
+
+    fn offset(&self) -> u64 {
+        self.0.get_offset()
+    }
+
+    fn length(&self) -> u64 {
+        self.0.get_length()
+    }
+
+    fn span(&self) -> brpb::Span {
+        self.0.clone()
+    }
+}
+
+impl PartialEq for SortByOffset {
+    fn eq(&self, other: &Self) -> bool {
+        self.offset() == other.offset() && self.length() == other.length()
+    }
+}
+
+impl Eq for SortByOffset {}
 
 impl PartialOrd for SortByOffset {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.0.offset.partial_cmp(&other.0.offset)
+        Some(self.cmp(other))
     }
 }
 
 impl Ord for SortByOffset {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.0.offset.cmp(&other.0.offset)
+        self.offset()
+            .cmp(&other.offset())
+            .then_with(|| self.length().cmp(&other.length()))
     }
 }
 
@@ -168,7 +197,7 @@ impl Ord for SortByOffset {
 /// Finally, it calculates which files can be deleted.
 #[derive(Debug)]
 pub struct CompactionRunInfoBuilder {
-    files: HashMap<Chars, BTreeSet<SortByOffset>>,
+    files: HashMap<Bytes, BTreeSet<SortByOffset>>,
     compaction: brpb::LogFileCompaction,
 }
 
@@ -243,13 +272,16 @@ impl CompactionRunInfoBuilder {
 
     pub fn add_origin_subcompaction(&mut self, c: &Subcompaction) {
         for file in &c.inputs {
-            if !self.files.contains_key(&file.id.name) {
-                self.files.insert(file.id.name.clone(), Default::default());
+            if !self.files.contains_key(file.id.name.as_bytes()) {
+                self.files.insert(
+                    Bytes::copy_from_slice(file.id.name.as_bytes()),
+                    Default::default(),
+                );
             }
             self.files
-                .get_mut(&file.id.name)
+                .get_mut(file.id.name.as_bytes())
                 .unwrap()
-                .insert(SortByOffset(file.id.clone()));
+                .insert(SortByOffset::new(&file.id));
         }
         self.compaction.artifacts_hash ^= c.crc64();
         self.compaction.input_min_ts = self.compaction.input_min_ts.min(c.input_min_ts);
@@ -314,15 +346,15 @@ impl CompactionRunInfoBuilder {
     }
 
     fn full_covers(&self, file: &PhysicalLogFile) -> bool {
-        match self.files.get(&file.name) {
+        match self.files.get(file.name.as_bytes()) {
             None => false,
             Some(spans) => {
                 let mut cur_offset = 0;
                 for span in spans {
-                    if span.0.offset != cur_offset {
+                    if span.offset() != cur_offset {
                         return false;
                     }
-                    cur_offset += span.0.length
+                    cur_offset += span.length()
                 }
                 assert!(
                     cur_offset <= file.size,
@@ -345,13 +377,13 @@ impl CompactionRunInfoBuilder {
             if full_covers {
                 result.logs.push(p.name.clone());
             } else {
-                if let Some(vs) = self.files.get(&p.name) {
+                if let Some(vs) = self.files.get(p.name.as_bytes()) {
                     let segs = result
                         .spans_of_file
                         .entry(p.name.clone())
                         .or_insert_with(|| (vec![], p.size));
                     for f in vs {
-                        segs.0.push(f.0.span());
+                        segs.0.push(f.span());
                     }
                 }
                 all_full_covers = false;
