@@ -3,6 +3,48 @@
 use engine_rocks::RocksSstIterator;
 use engine_traits::Iterator;
 
+/// DefaultSeekIterator is a lightweight helper for point seek on multiple
+/// default CF SST iterators. It only supports exact seek matching and avoids
+/// merge-iteration logic that is unnecessary for this access pattern.
+pub struct DefaultSeekIterator<'a> {
+    sst_iters: Vec<RocksSstIterator<'a>>,
+    matched_idx: Option<usize>,
+}
+
+impl<'a> DefaultSeekIterator<'a> {
+    pub fn new(sst_iters: Vec<RocksSstIterator<'a>>) -> Self {
+        Self {
+            sst_iters,
+            matched_idx: None,
+        }
+    }
+
+    pub fn seek_exact(&mut self, key: &[u8]) -> engine_traits::Result<bool> {
+        self.matched_idx = None;
+        for (idx, iter) in self.sst_iters.iter_mut().enumerate() {
+            if !iter.seek(key)? {
+                continue;
+            }
+            if iter.key() == key {
+                // Keep the first matched iterator. This is consistent with
+                // existing behavior where deterministic tie-breaking among
+                // equal keys is not relied on by current callers.
+                self.matched_idx = Some(idx);
+                break;
+            }
+        }
+        Ok(self.matched_idx.is_some())
+    }
+
+    pub fn key(&self) -> &[u8] {
+        self.sst_iters[self.matched_idx.unwrap()].key()
+    }
+
+    pub fn value(&self) -> &[u8] {
+        self.sst_iters[self.matched_idx.unwrap()].value()
+    }
+}
+
 /// BinaryIterator provides a multi-way merge iterator that can merge multiple
 /// sorted SST files into a single sorted stream with automatic deduplication.
 pub struct BinaryIterator<'a> {
@@ -196,7 +238,7 @@ mod tests {
     use tikv::storage::TestEngineBuilder;
     use txn_types::{Key, TimeStamp};
 
-    use super::BinaryIterator;
+    use super::{BinaryIterator, DefaultSeekIterator};
 
     fn prepare_ssts<E: KvEngine>(name: &str, db: E, path: &Path, suffix_set: &mut HashSet<usize>) {
         let mut writer = <E as SstExt>::SstWriterBuilder::new()
@@ -276,5 +318,82 @@ mod tests {
         }
 
         read_ssts(names, temp.path(), suffix_set.len());
+    }
+
+    #[test]
+    fn test_default_seek_iterator_seek_exact() {
+        let temp = TempDir::new().unwrap();
+        let rocks = TestEngineBuilder::new()
+            .path(temp.path())
+            .cfs([
+                engine_traits::CF_DEFAULT,
+                engine_traits::CF_LOCK,
+                engine_traits::CF_WRITE,
+            ])
+            .build()
+            .unwrap();
+        let db = rocks.get_rocksdb();
+
+        let mk_key = |raw: &[u8], ts: u64| {
+            let mut key = Key::from_encoded(raw.to_vec());
+            key.append_ts_inplace(TimeStamp::new(ts));
+            keys::data_key(key.as_encoded())
+        };
+
+        fn write_entries<E: KvEngine>(db: E, path: &Path, name: &str, entries: &[(&[u8], &[u8])]) {
+            let mut writer = <E as SstExt>::SstWriterBuilder::new()
+                .set_cf(engine_traits::CF_DEFAULT)
+                .set_db(&db)
+                .set_compression_type(None)
+                .set_compression_level(0)
+                .build(path.join(name).to_str().unwrap())
+                .unwrap();
+            for (k, v) in entries {
+                writer.put(k, v).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+
+        // file a: k1@50, k2@30
+        let d1k1 = mk_key(b"k1", 50);
+        let d1k2 = mk_key(b"k2", 30);
+        write_entries(
+            db.clone(),
+            temp.path(),
+            "d1.sst",
+            &[(d1k1.as_slice(), b"v1"), (d1k2.as_slice(), b"v2")],
+        );
+
+        // file b: k3@20
+        let d2k1 = mk_key(b"k3", 20);
+        write_entries(
+            db.clone(),
+            temp.path(),
+            "d2.sst",
+            &[(d2k1.as_slice(), b"v3")],
+        );
+
+        let r1 = RocksSstReader::open_with_env(temp.path().join("d1.sst").to_str().unwrap(), None)
+            .unwrap();
+        let r2 = RocksSstReader::open_with_env(temp.path().join("d2.sst").to_str().unwrap(), None)
+            .unwrap();
+
+        let it1 = r1.iter(IterOptions::default()).unwrap();
+        let it2 = r2.iter(IterOptions::default()).unwrap();
+        let mut seek_iter = DefaultSeekIterator::new(vec![it1, it2]);
+
+        let k1 = mk_key(b"k1", 50);
+        assert!(seek_iter.seek_exact(&k1).unwrap());
+        assert_eq!(seek_iter.key(), k1.as_slice());
+        assert_eq!(seek_iter.value(), b"v1");
+
+        let k3 = mk_key(b"k3", 20);
+        assert!(seek_iter.seek_exact(&k3).unwrap());
+        assert_eq!(seek_iter.key(), k3.as_slice());
+        assert_eq!(seek_iter.value(), b"v3");
+
+        // Existing user key, but absent timestamp.
+        let missing_ts = mk_key(b"k1", 40);
+        assert!(!seek_iter.seek_exact(&missing_ts).unwrap());
     }
 }
