@@ -29429,7 +29429,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Per-region CPU observed when load-base split evaluates hot regions. Unit: millicores. This is decision input, not the final split result. Use additional_groupby=instance only when drilling into a specific TiKV; keep it as none for large clusters.",
+          "description": "Per-region CPU observed when load-base split evaluates hot regions. Unit follows other CPU panels: 100% means one CPU core. This is decision input, not the final split result. Use additional_groupby=instance only when drilling into a specific TiKV; keep it as none for large clusters.",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -29492,37 +29492,14 @@
           "renderer": "flot",
           "repeat": null,
           "repeatDirection": null,
-          "seriesOverrides": [
-            {
-              "alias": "/^count/",
-              "bars": false,
-              "dashLength": 1,
-              "dashes": true,
-              "fill": 2,
-              "fillBelowTo": null,
-              "lines": true,
-              "spaceLength": 1,
-              "transform": "negative-Y",
-              "yaxis": 2,
-              "zindex": -3
-            },
-            {
-              "alias": "/^avg/",
-              "bars": false,
-              "fill": 7,
-              "fillBelowTo": null,
-              "lines": true,
-              "yaxis": 1,
-              "zindex": 0
-            }
-          ],
+          "seriesOverrides": [],
           "span": null,
           "stack": false,
           "steppedLine": false,
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_load_base_split_region_load_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"cpu_millicores\"}\n    [$__rate_interval]\n)) by (le, $additional_groupby) \n    \n    \n))  ",
+              "expr": "(histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_load_base_split_region_load_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"cpu_millicores\"}\n    [$__rate_interval]\n)) by (le, $additional_groupby) \n    \n    \n))   / 1000)",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -29530,14 +29507,14 @@
               "intervalFactor": 1,
               "legendFormat": "99.99% {{$additional_groupby}}",
               "metric": "",
-              "query": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_load_base_split_region_load_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"cpu_millicores\"}\n    [$__rate_interval]\n)) by (le, $additional_groupby) \n    \n    \n))  ",
+              "query": "(histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_load_base_split_region_load_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"cpu_millicores\"}\n    [$__rate_interval]\n)) by (le, $additional_groupby) \n    \n    \n))   / 1000)",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_load_base_split_region_load_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"cpu_millicores\"}\n    [$__rate_interval]\n)) by (le, $additional_groupby) \n    \n    \n))  ",
+              "expr": "(histogram_quantile(0.99,(\n    sum(rate(\n    tikv_load_base_split_region_load_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"cpu_millicores\"}\n    [$__rate_interval]\n)) by (le, $additional_groupby) \n    \n    \n))   / 1000)",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -29545,14 +29522,14 @@
               "intervalFactor": 1,
               "legendFormat": "99% {{$additional_groupby}}",
               "metric": "",
-              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_load_base_split_region_load_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"cpu_millicores\"}\n    [$__rate_interval]\n)) by (le, $additional_groupby) \n    \n    \n))  ",
+              "query": "(histogram_quantile(0.99,(\n    sum(rate(\n    tikv_load_base_split_region_load_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"cpu_millicores\"}\n    [$__rate_interval]\n)) by (le, $additional_groupby) \n    \n    \n))   / 1000)",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "(sum(rate(\n    tikv_load_base_split_region_load_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"cpu_millicores\"}\n    [$__rate_interval]\n)) by ($additional_groupby)  / sum(rate(\n    tikv_load_base_split_region_load_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"cpu_millicores\"}\n    [$__rate_interval]\n)) by ($additional_groupby) )",
+              "expr": "((sum(rate(\n    tikv_load_base_split_region_load_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"cpu_millicores\"}\n    [$__rate_interval]\n)) by ($additional_groupby)  / sum(rate(\n    tikv_load_base_split_region_load_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"cpu_millicores\"}\n    [$__rate_interval]\n)) by ($additional_groupby) ) / 1000)",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -29560,22 +29537,7 @@
               "intervalFactor": 1,
               "legendFormat": "avg {{$additional_groupby}}",
               "metric": "",
-              "query": "(sum(rate(\n    tikv_load_base_split_region_load_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"cpu_millicores\"}\n    [$__rate_interval]\n)) by ($additional_groupby)  / sum(rate(\n    tikv_load_base_split_region_load_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"cpu_millicores\"}\n    [$__rate_interval]\n)) by ($additional_groupby) )",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            },
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_load_base_split_region_load_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"cpu_millicores\"}\n    [$__rate_interval]\n)) by ($additional_groupby) ",
-              "format": "time_series",
-              "hide": true,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "count {{$additional_groupby}}",
-              "metric": "",
-              "query": "sum(rate(\n    tikv_load_base_split_region_load_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"cpu_millicores\"}\n    [$__rate_interval]\n)) by ($additional_groupby) ",
+              "query": "((sum(rate(\n    tikv_load_base_split_region_load_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"cpu_millicores\"}\n    [$__rate_interval]\n)) by ($additional_groupby)  / sum(rate(\n    tikv_load_base_split_region_load_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"cpu_millicores\"}\n    [$__rate_interval]\n)) by ($additional_groupby) ) / 1000)",
               "refId": "",
               "step": 10,
               "target": ""
@@ -29603,7 +29565,7 @@
           "yaxes": [
             {
               "decimals": null,
-              "format": "mcores",
+              "format": "percentunit",
               "label": null,
               "logBase": 1,
               "max": null,

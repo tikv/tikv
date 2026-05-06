@@ -2829,20 +2829,57 @@ def RaftAdmin() -> RowPanel:
     )
     layout.row(
         [
-            graph_panel_histogram_quantiles(
+            graph_panel(
                 title="Observed region CPU for load-base split",
                 description=(
                     "Per-region CPU observed when load-base split evaluates hot "
-                    "regions. Unit: millicores. This is decision input, not the "
-                    "final split result. Use additional_groupby=instance only "
-                    "when drilling into a specific TiKV; keep it as none for "
-                    "large clusters."
+                    "regions. Unit follows other CPU panels: 100% means one CPU "
+                    "core. This is decision input, not the final split result. "
+                    "Use additional_groupby=instance only when drilling into a "
+                    "specific TiKV; keep it as none for large clusters."
                 ),
-                yaxes=yaxes(left_format="mcores"),
-                metric="tikv_load_base_split_region_load",
-                label_selectors=['type="cpu_millicores"'],
-                hide_count=True,
-                additional_groupby=True,
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_operator(
+                            expr_histogram_quantile(
+                                0.9999,
+                                "tikv_load_base_split_region_load",
+                                label_selectors=['type="cpu_millicores"'],
+                            ),
+                            "/",
+                            "1000",
+                        ),
+                        legend_format="99.99%",
+                        additional_groupby=True,
+                    ),
+                    target(
+                        expr=expr_operator(
+                            expr_histogram_quantile(
+                                0.99,
+                                "tikv_load_base_split_region_load",
+                                label_selectors=['type="cpu_millicores"'],
+                            ),
+                            "/",
+                            "1000",
+                        ),
+                        legend_format="99%",
+                        additional_groupby=True,
+                    ),
+                    target(
+                        expr=expr_operator(
+                            expr_histogram_avg(
+                                "tikv_load_base_split_region_load",
+                                label_selectors=['type="cpu_millicores"'],
+                                by_labels=[],
+                            ),
+                            "/",
+                            "1000",
+                        ),
+                        legend_format="avg",
+                        additional_groupby=True,
+                    ),
+                ],
             ),
             graph_panel_histogram_quantiles(
                 title="Observed region QPS for load-base split",
