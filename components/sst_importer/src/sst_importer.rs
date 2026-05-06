@@ -2,6 +2,7 @@
 
 use std::{
     borrow::Cow,
+    cmp,
     collections::HashMap,
     fs::File,
     io::{self, BufReader, ErrorKind, Read},
@@ -17,9 +18,9 @@ use encryption::{DataKeyManager, FileEncryptionInfo, MultiMasterKeyBackend};
 use encryption_export::create_async_backend;
 use engine_rocks::{RocksSstReader, get_env};
 use engine_traits::{
-    CF_DEFAULT, CF_WRITE, CfName, IterOptions, Iterator, KvEngine, RefIterable, SstCompressionType,
-    SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder, name_to_cf,
-    util::check_key_in_range,
+    CF_DEFAULT, CF_WRITE, CfName, ExternalSstFileInfo, IterOptions, Iterator, KvEngine,
+    RefIterable, SstCompressionType, SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder,
+    name_to_cf, util::check_key_in_range,
 };
 use external_storage::{
     BackendConfig, ExternalStorage, RestoreConfig, compression_reader_dispatcher,
@@ -37,6 +38,7 @@ use tikv_util::{
     Either, HandyRwLock,
     codec::{
         bytes::{decode_bytes_in_place, encode_bytes},
+        number::NumberEncoder,
         stream_event::{EventEncoder, EventIterator, Iterator as EIterator},
     },
     future::RescheduleChecker,
@@ -47,7 +49,7 @@ use tikv_util::{
     time::{Instant, Limiter},
 };
 use tokio::{runtime::Runtime, sync::OnceCell};
-use txn_types::{Key, TimeStamp, WriteRef};
+use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
 use crate::{
     Config, ConfigManager as ImportConfigManager, Error, Result,
@@ -59,7 +61,7 @@ use crate::{
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     import_mode2::{HashRange, ImportModeSwitcherV2},
     metrics::*,
-    sst_merge_iter::BinaryIterator,
+    sst_merge_iter::{BinaryIterator, DefaultSeekIterator},
     sst_writer::{RawSstWriter, TxnSstWriter},
     util,
 };
@@ -89,6 +91,12 @@ impl ShareOwned for LoadedFile {
 pub struct DownloadExt<'a> {
     cache_key: Option<&'a str>,
     req_type: DownloadRequestType,
+}
+
+#[derive(Debug)]
+pub struct DownloadFilesExtResult {
+    pub range: Range,
+    pub ssts: Vec<SstMeta>,
 }
 
 impl<'a> DownloadExt<'a> {
@@ -475,7 +483,7 @@ impl<E: KvEngine> SstImporter<E> {
         }
     }
 
-    pub async fn download_files_ext(
+    pub async fn download_files_ext_with_ssts(
         &self,
         basic_meta: &SstMeta,
         metas: &HashMap<String, SstMeta>,
@@ -553,7 +561,136 @@ impl<E: KvEngine> SstImporter<E> {
 
         match res {
             Ok(r) => {
-                let r = r.map(|(range, _)| range);
+                info!("download"; "meta" => ?basic_meta, "range" => ?r);
+                Ok(r)
+            }
+            Err(e) => {
+                error!(%e; "download failed"; "meta" => ?basic_meta,);
+                Err(e)
+            }
+        }
+    }
+
+    pub async fn download_files_ext_with_latest_mvcc(
+        &self,
+        basic_meta: &SstMeta,
+        metas: &HashMap<String, SstMeta>,
+        backend: &StorageBackend,
+        rewrite_rule: &RewriteRule,
+        crypter: Option<CipherInfo>,
+        speed_limiter: Limiter,
+        engine: E,
+        ext: DownloadExt<'_>,
+    ) -> Result<Option<DownloadFilesExtResult>> {
+        debug!("download start";
+            "metas" => ?basic_meta,
+            "rewrite_rule" => ?rewrite_rule,
+            "speed_limit" => speed_limiter.speed_limit(),
+        );
+        let clean_paths = Mutex::new(Vec::new());
+        defer! {
+            for path in clean_paths.lock().unwrap().iter() {
+                self.remove_file_no_throw(path)
+            }
+        };
+        let mut readers_with_cf_name = Vec::with_capacity(metas.len());
+        for (name, meta) in metas {
+            let path = self.dir.join_for_write(meta)?;
+            let dst_file_name = self
+                .do_download_sst_file(
+                    &path,
+                    meta,
+                    backend,
+                    name,
+                    crypter.clone(),
+                    &speed_limiter,
+                    ext.cache_key.unwrap_or(""),
+                )
+                .await?;
+            let env = get_env(self.key_manager.clone(), get_io_rate_limiter())?;
+            let sst_reader = RocksSstReader::open_with_env(&dst_file_name, Some(env))?;
+            sst_reader.verify_checksum()?;
+
+            readers_with_cf_name.push((sst_reader, meta.get_cf_name()));
+            clean_paths.lock().unwrap().push(path.temp);
+        }
+
+        fail::fail_point!("download_files_ext_after_download", |msg| {
+            let msg = msg.unwrap_or_else(|| "download files ext injected error".to_string());
+            Err(Error::ErrorWrapper(msg))
+        });
+
+        let mut iter_option = IterOptions::default();
+        iter_option.set_fill_cache(false);
+        let mut write_sst_iters = Vec::new();
+        let mut default_sst_iters = Vec::new();
+        for (reader, cf_name) in &readers_with_cf_name {
+            let sst_iter = reader.iter(iter_option.clone())?;
+
+            match name_to_cf(cf_name) {
+                Some(CF_WRITE) => write_sst_iters.push(sst_iter),
+                Some(CF_DEFAULT) => default_sst_iters.push(sst_iter),
+                _ => {
+                    return Err(Error::Io(io::Error::new(
+                        ErrorKind::InvalidInput,
+                        format!(
+                            "unexpected column family {} in download_files_ext batch",
+                            cf_name
+                        ),
+                    )));
+                }
+            }
+        }
+
+        let (range_start, range_end) =
+            self.do_pre_rewrite(basic_meta, rewrite_rule, ext.req_type)?;
+        let res = if !write_sst_iters.is_empty() {
+            let mut write_iter = BinaryIterator::new(write_sst_iters);
+            let mut default_iter = DefaultSeekIterator::new(default_sst_iters);
+            let mut wm = basic_meta.clone();
+            wm.set_cf_name(CF_WRITE.to_owned());
+            let write_path = self.dir.join_for_write(&wm)?;
+            let mut dm = basic_meta.clone();
+            dm.set_cf_name(CF_DEFAULT.to_owned());
+            let default_path = self.dir.join_for_write(&dm)?;
+            self.do_rewrite_keys_txn_write_default_merged(
+                write_path.save,
+                default_path.save,
+                rewrite_rule,
+                range_start,
+                range_end,
+                &mut write_iter,
+                &mut default_iter,
+                engine,
+                ext.req_type,
+                Instant::now(),
+            )
+            .await
+            .map(move |res| {
+                res.map(|(range, write_info, default_info)| {
+                    let mut ssts = Vec::with_capacity(2);
+                    let mut write_meta = wm;
+                    write_meta.set_length(write_info.file_size());
+                    ssts.push(write_meta);
+
+                    if let Some(default_info) = default_info {
+                        let mut default_meta = dm;
+                        default_meta.set_length(default_info.file_size());
+                        ssts.push(default_meta);
+                    }
+
+                    DownloadFilesExtResult { range, ssts }
+                })
+            })
+        } else {
+            Err(Error::Io(io::Error::new(
+                ErrorKind::InvalidInput,
+                "batch_download_latest_mvcc requires write CF SSTs, optionally with default CF SSTs when Put records have no short value",
+            )))
+        };
+
+        match res {
+            Ok(r) => {
                 info!("download"; "meta" => ?basic_meta, "range" => ?r);
                 Ok(r)
             }
@@ -1907,6 +2044,48 @@ fn is_after_end_bound<K: AsRef<[u8]>>(value: &[u8], bound: &Bound<K>) -> bool {
     }
 }
 
+struct KeyspaceKeyRewriteScratch<'a> {
+    old_prefix: &'a [u8],
+    new_prefix: &'a [u8],
+    keyspace_user_key_buf: Vec<u8>,
+    decoded_key_buf: Vec<u8>,
+}
+
+impl<'a> KeyspaceKeyRewriteScratch<'a> {
+    fn new(old_prefix: &'a [u8], new_prefix: &'a [u8]) -> Self {
+        Self {
+            old_prefix,
+            new_prefix,
+            keyspace_user_key_buf: Vec::new(),
+            decoded_key_buf: Vec::new(),
+        }
+    }
+
+    fn build_download_data_key(&mut self, origin: &[u8], data_key: &mut Vec<u8>) -> Result<()> {
+        let ts = Key::decode_ts_bytes_from(origin)?.to_owned();
+        self.decoded_key_buf.clear();
+        self.decoded_key_buf.extend_from_slice(origin);
+        decode_bytes_in_place(&mut self.decoded_key_buf, false)?;
+        if !self.decoded_key_buf.starts_with(self.old_prefix) {
+            return Err(Error::WrongKeyPrefix {
+                what: "Key in SST",
+                key: origin.to_vec(),
+                prefix: self.old_prefix.to_vec(),
+            });
+        }
+        data_key.clear();
+        data_key.extend_from_slice(keys::DATA_PREFIX_KEY);
+        self.keyspace_user_key_buf.clear();
+        self.keyspace_user_key_buf
+            .extend_from_slice(self.new_prefix);
+        self.keyspace_user_key_buf
+            .extend_from_slice(&self.decoded_key_buf[self.old_prefix.len()..]);
+        data_key.extend(encode_bytes(&self.keyspace_user_key_buf));
+        data_key.extend_from_slice(&ts);
+        Ok(())
+    }
+}
+
 impl<E: KvEngine> SstImporter<E> {
     async fn do_download_sst_file(
         &self,
@@ -2046,12 +2225,7 @@ impl<E: KvEngine> SstImporter<E> {
         engine: E,
         req_type: DownloadRequestType,
         start_rewrite: Instant,
-    ) -> Result<
-        Option<(
-            Range,
-            <<E as SstExt>::SstWriter as SstWriter>::ExternalSstFileInfo,
-        )>,
-    > {
+    ) -> Result<Option<Range>> {
         let old_prefix = rewrite_rule.get_old_key_prefix();
         let new_prefix = rewrite_rule.get_new_key_prefix();
         // perform iteration and key rewrite.
@@ -2182,7 +2356,7 @@ impl<E: KvEngine> SstImporter<E> {
 
         if let Some(start_key) = first_key {
             let start_finish = Instant::now();
-            let info = sst_writer.finish()?;
+            sst_writer.finish()?;
             IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["finish"])
                 .observe(start_finish.saturating_elapsed().as_secs_f64());
@@ -2190,7 +2364,7 @@ impl<E: KvEngine> SstImporter<E> {
             let mut final_range = Range::default();
             final_range.set_start(start_key);
             final_range.set_end(keys::origin_key(&data_key).to_vec());
-            Ok(Some((final_range, info)))
+            Ok(Some(final_range))
         } else {
             // nothing is written: prevents finishing the SST at all.
             // also delete the empty sst file that is created when creating sst_writer
@@ -2198,6 +2372,251 @@ impl<E: KvEngine> SstImporter<E> {
             self.remove_file_no_throw(&dst_file_name);
             Ok(None)
         }
+    }
+
+    /// Merges multiple write CF SSTs and optional default CF SSTs: for each
+    /// user key, walks write CF in MVCC order (newest commit_ts first)
+    /// until the latest applicable `Put` or `Delete`, then loads the
+    /// default CF value at that `Put`'s `start_ts` when the value is not
+    /// inlined as a short value.
+    ///
+    /// `default_iter` may wrap zero SST iterators (e.g. write-only inputs where
+    /// every latest `Put` has a short value); long values still require
+    /// matching default keys in some default SST.
+    ///
+    /// This path only supports keyspace-encoded SST keys
+    /// ([`DownloadRequestType::Keyspace`]). Legacy clients must not send
+    /// mixed write+default batches; use single-CF download instead.
+    async fn do_rewrite_keys_txn_write_default_merged<'a>(
+        &self,
+        write_dst: PathBuf,
+        default_dst: PathBuf,
+        rewrite_rule: &RewriteRule,
+        range_start: Bound<Vec<u8>>,
+        range_end: Bound<Vec<u8>>,
+        write_iter: &mut BinaryIterator<'a>,
+        default_iter: &mut DefaultSeekIterator<'a>,
+        engine: E,
+        req_type: DownloadRequestType,
+        start_rewrite: Instant,
+    ) -> Result<
+        Option<(
+            Range,
+            <<E as SstExt>::SstWriter as SstWriter>::ExternalSstFileInfo,
+            Option<<<E as SstExt>::SstWriter as SstWriter>::ExternalSstFileInfo>,
+        )>,
+    > {
+        if req_type != DownloadRequestType::Keyspace {
+            return Err(Error::BadFormat(
+                "merged write+default batch download requires DownloadRequestType::Keyspace"
+                    .to_owned(),
+            ));
+        }
+        if rewrite_rule.new_timestamp != 0 {
+            return Err(Error::BadFormat(
+                "new timestamp is not supported for merged write+default batch download".to_owned(),
+            ));
+        }
+        let old_prefix = rewrite_rule.get_old_key_prefix();
+        let new_prefix = rewrite_rule.get_new_key_prefix();
+
+        match range_start {
+            Bound::Unbounded => write_iter.seek_to_first()?,
+            Bound::Included(s) => write_iter.seek(&keys::data_key(&s))?,
+            Bound::Excluded(_) => unreachable!(),
+        };
+
+        let rewrite_res = async {
+            let mut write_writer = <E as SstExt>::SstWriterBuilder::new()
+                .set_db(&engine)
+                .set_cf(CF_WRITE)
+                .set_compression_type(self.compression_types.get(CF_WRITE).copied())
+                .build(write_dst.to_str().unwrap())
+                .unwrap();
+
+            let mut default_writer = <E as SstExt>::SstWriterBuilder::new()
+                .set_db(&engine)
+                .set_cf(CF_DEFAULT)
+                .set_compression_type(self.compression_types.get(CF_DEFAULT).copied())
+                .build(default_dst.to_str().unwrap())
+                .unwrap();
+
+            let mut yield_check =
+                RescheduleChecker::new(tokio::task::yield_now, Duration::from_millis(10));
+            let mut count = 0u64;
+            let mut first_origin: Option<Vec<u8>> = None;
+            let mut wrote_default = false;
+            let mut user_key_buf = Vec::new();
+            let mut write_data_key = Vec::new();
+            let mut default_data_key = Vec::new();
+            let mut key_scratch = KeyspaceKeyRewriteScratch::new(old_prefix, new_prefix);
+
+            'outer: while write_iter.valid()? {
+                let origin = keys::origin_key(write_iter.key());
+                if is_after_end_bound(origin, &range_end) {
+                    break;
+                }
+
+                // Reuse one buffer per outer-iteration to avoid repeated allocations.
+                let user_key = Key::truncate_ts_for(origin)?;
+                user_key_buf.clear();
+                user_key_buf.extend_from_slice(user_key);
+
+                while write_iter.valid()? {
+                    count += 1;
+                    if count >= 1024 {
+                        count = 0;
+                        yield_check.check().await;
+                    }
+
+                    let write_origin = keys::origin_key(write_iter.key());
+                    if is_after_end_bound(write_origin, &range_end) {
+                        break;
+                    }
+                    let cur_user_key = Key::truncate_ts_for(write_origin)?;
+                    if cur_user_key != user_key_buf.as_slice() {
+                        break;
+                    }
+                    let commit_ts = Key::decode_ts_from(write_origin)?;
+                    if rewrite_rule.ignore_after_timestamp != 0
+                        && commit_ts > TimeStamp::new(rewrite_rule.ignore_after_timestamp)
+                    {
+                        INPORTER_DOWNLOAD_COMPACT_KEYS_COUNT
+                            .with_label_values(&["after"])
+                            .inc();
+                        write_iter.next()?;
+                        continue;
+                    }
+                    if rewrite_rule.ignore_before_timestamp != 0
+                        && commit_ts < TimeStamp::new(rewrite_rule.ignore_before_timestamp)
+                    {
+                        INPORTER_DOWNLOAD_COMPACT_KEYS_COUNT
+                            .with_label_values(&["before"])
+                            .inc();
+                        write_iter.next()?;
+                        continue;
+                    }
+
+                    let write_ref = WriteRef::parse(write_iter.value()).map_err(|e| {
+                        Error::BadFormat(format!(
+                            "write {}: {}",
+                            log_wrappers::Value::key(write_origin),
+                            e
+                        ))
+                    })?;
+                    // In log restore, upstream compact-log-backup builds SSTs from full MVCC
+                    // history. We replay those versions directly here, so gc_fence-based
+                    // latest-version filtering is unnecessary in this merged download path.
+
+                    match write_ref.write_type {
+                        WriteType::Put | WriteType::Delete => {
+                            key_scratch
+                                .build_download_data_key(write_origin, &mut write_data_key)?;
+
+                            if write_ref.write_type == WriteType::Put
+                                && write_ref.short_value.is_none()
+                            {
+                                default_data_key.clear();
+                                default_data_key.extend_from_slice(keys::DATA_PREFIX_KEY);
+                                default_data_key.extend_from_slice(user_key_buf.as_slice());
+                                default_data_key
+                                    .encode_u64_desc(write_ref.start_ts.into_inner())
+                                    .unwrap();
+                                if !default_iter.seek_exact(&default_data_key)? {
+                                    return Err(Error::BadFormat(format!(
+                                        "default value missing for key {} start_ts {}, may be not log backup compacted",
+                                        log_wrappers::Value::key(user_key_buf.as_slice()),
+                                        write_ref.start_ts
+                                    )));
+                                }
+                                let default_origin = keys::origin_key(default_iter.key());
+                                key_scratch.build_download_data_key(
+                                    default_origin,
+                                    &mut default_data_key,
+                                )?;
+                                default_writer.put(&default_data_key, default_iter.value())?;
+                                wrote_default = true;
+                            }
+
+                            write_writer.put(&write_data_key, write_iter.value())?;
+                            if first_origin.is_none() {
+                                first_origin = Some(keys::origin_key(&write_data_key).to_vec());
+                            }
+
+                            while write_iter.valid()? {
+                                let write_origin = keys::origin_key(write_iter.key());
+                                if is_after_end_bound(write_origin, &range_end) {
+                                    break;
+                                }
+                                let cur_user_key = Key::truncate_ts_for(write_origin)?;
+                                if cur_user_key != user_key_buf.as_slice() {
+                                    break;
+                                }
+                                write_iter.next()?;
+                            }
+
+                            continue 'outer;
+                        }
+                        WriteType::Lock | WriteType::Rollback => {
+                            write_iter.next()?;
+                        }
+                    }
+                }
+            }
+
+            IMPORTER_DOWNLOAD_DURATION
+                .with_label_values(&["rewrite"])
+                .observe(start_rewrite.saturating_elapsed().as_secs_f64());
+
+            if first_origin.is_none() {
+                drop(write_writer);
+                drop(default_writer);
+                self.remove_file_no_throw(&write_dst);
+                self.remove_file_no_throw(&default_dst);
+                return Ok(None);
+            }
+
+            let start_finish = Instant::now();
+            let write_info = write_writer.finish()?;
+            IMPORTER_DOWNLOAD_DURATION
+                .with_label_values(&["finish"])
+                .observe(start_finish.saturating_elapsed().as_secs_f64());
+
+            let default_info = if wrote_default {
+                let start_default_finish = Instant::now();
+                let info = default_writer.finish()?;
+                IMPORTER_DOWNLOAD_DURATION
+                    .with_label_values(&["finish"])
+                    .observe(start_default_finish.saturating_elapsed().as_secs_f64());
+                Some(info)
+            } else {
+                drop(default_writer);
+                self.remove_file_no_throw(&default_dst);
+                None
+            };
+
+            let write_end = keys::origin_key(&write_data_key);
+            let end_key = (if wrote_default {
+                cmp::max(write_end, keys::origin_key(&default_data_key))
+            } else {
+                write_end
+            })
+            .to_vec();
+
+            let mut final_range = Range::default();
+            final_range.set_start(first_origin.unwrap());
+            final_range.set_end(end_key);
+            Ok(Some((final_range, write_info, default_info)))
+        }
+        .await;
+
+        if let Err(err) = rewrite_res {
+            self.remove_file_no_throw(&write_dst);
+            self.remove_file_no_throw(&default_dst);
+            return Err(err);
+        }
+
+        rewrite_res
     }
 }
 
@@ -4686,7 +5105,7 @@ mod tests {
             .collect();
 
         let runtime = tokio::runtime::Runtime::new().unwrap();
-        let result = runtime.block_on(importer.download_files_ext(
+        let result = runtime.block_on(importer.download_files_ext_with_ssts(
             &basic_meta,
             &metas,
             backend,
@@ -4776,7 +5195,7 @@ mod tests {
 
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let range = runtime
-            .block_on(importer.download_files_ext(
+            .block_on(importer.download_files_ext_with_ssts(
                 &basic_meta,
                 &metas,
                 &backend,
@@ -4898,7 +5317,7 @@ mod tests {
         metas.insert("sample_1.sst".to_string(), meta1);
 
         let runtime = tokio::runtime::Runtime::new().unwrap();
-        let result = runtime.block_on(importer.download_files_ext(
+        let result = runtime.block_on(importer.download_files_ext_with_ssts(
             &meta0,
             &metas,
             &backend,
@@ -4938,7 +5357,7 @@ mod tests {
         fail::cfg("download_files_ext_after_download", "return(injected)").unwrap();
 
         let runtime = tokio::runtime::Runtime::new().unwrap();
-        let result = runtime.block_on(importer.download_files_ext(
+        let result = runtime.block_on(importer.download_files_ext_with_ssts(
             &file_metas[0].1,
             &metas,
             &backend,
@@ -4981,7 +5400,7 @@ mod tests {
 
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let range = runtime
-            .block_on(importer.download_files_ext(
+            .block_on(importer.download_files_ext_with_ssts(
                 &basic_meta,
                 &metas,
                 &backend,
@@ -5106,7 +5525,7 @@ mod tests {
 
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let range = runtime
-            .block_on(importer.download_files_ext(
+            .block_on(importer.download_files_ext_with_ssts(
                 &basic_meta,
                 &metas,
                 &backend,
@@ -5199,7 +5618,7 @@ mod tests {
 
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let range = runtime
-            .block_on(importer.download_files_ext(
+            .block_on(importer.download_files_ext_with_ssts(
                 &basic_meta,
                 &metas,
                 &backend,
@@ -5447,6 +5866,255 @@ mod tests {
         for i in 0..collected.len() - 1 {
             assert!(collected[i].0 < collected[i + 1].0);
         }
+    }
+
+    #[test]
+    fn test_download_files_ext_write_default_merged() {
+        use engine_traits::CF_WRITE;
+
+        let ext_sst_dir = tempfile::tempdir().unwrap();
+        let uuid = Uuid::new_v4();
+
+        let mut base_meta = SstMeta::default();
+        base_meta.set_uuid(uuid.as_bytes().to_vec());
+        base_meta.set_region_id(4);
+        base_meta.mut_region_epoch().set_conf_ver(5);
+        base_meta.mut_region_epoch().set_version(6);
+
+        let write_path = ext_sst_dir.path().join("w.sst");
+        let mut ww = new_sst_writer(write_path.to_str().unwrap());
+        ww.put(
+            &get_encoded_key(b"tmerge_a", 200),
+            &get_write_value(WriteType::Rollback, 50, None),
+        )
+        .unwrap();
+        ww.put(
+            &get_encoded_key(b"tmerge_a", 100),
+            &get_write_value(WriteType::Put, 50, None),
+        )
+        .unwrap();
+        ww.put(
+            &get_encoded_key(b"tmerge_b", 10),
+            &get_write_value(WriteType::Put, 3, None),
+        )
+        .unwrap();
+        let w_info = ww.finish().unwrap();
+
+        let mut write_meta = base_meta.clone();
+        write_meta.set_cf_name(CF_WRITE.to_owned());
+        write_meta.set_length(w_info.file_size());
+
+        let def_path = ext_sst_dir.path().join("d.sst");
+        let mut dw = new_sst_writer(def_path.to_str().unwrap());
+        dw.put(&get_encoded_key(b"tmerge_a", 50), b"va").unwrap();
+        dw.put(&get_encoded_key(b"tmerge_b", 3), b"vb").unwrap();
+        let d_info = dw.finish().unwrap();
+
+        let mut def_meta = base_meta.clone();
+        def_meta.set_cf_name(CF_DEFAULT.to_owned());
+        def_meta.set_length(d_info.file_size());
+
+        let mut metas = HashMap::new();
+        metas.insert("w.sst".to_owned(), write_meta.clone());
+        metas.insert("d.sst".to_owned(), def_meta);
+
+        let backend = external_storage::make_local_backend(ext_sst_dir.path());
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
+        let db = create_sst_test_engine().unwrap();
+        let basic_meta = write_meta.clone();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let result = runtime
+            .block_on(importer.download_files_ext_with_latest_mvcc(
+                &write_meta,
+                &metas,
+                &backend,
+                &RewriteRule::default(),
+                None,
+                Limiter::new(f64::INFINITY),
+                db,
+                DownloadExt::default().req_type(DownloadRequestType::Keyspace),
+            ))
+            .unwrap()
+            .unwrap();
+
+        let expected_start = Key::from_raw(b"tmerge_a")
+            .append_ts(TimeStamp::new(100))
+            .into_encoded();
+        // final range end is max(write_end, default_end) by internal-key ordering.
+        let expected_end = Key::from_raw(b"tmerge_b")
+            .append_ts(TimeStamp::new(3))
+            .into_encoded();
+        assert_eq!(result.range.get_start(), &expected_start);
+        assert_eq!(result.range.get_end(), &expected_end);
+        assert_eq!(result.ssts.len(), 2);
+
+        let mut wm = basic_meta.clone();
+        wm.set_cf_name(CF_WRITE.to_owned());
+        let write_out = importer.dir.join_for_read(&wm).unwrap().save;
+        let write_reader = new_sst_reader(write_out.to_str().unwrap(), None);
+        let mut w_iter = write_reader.iter(IterOptions::default()).unwrap();
+        w_iter.seek_to_first().unwrap();
+        let write_kvs = collect(w_iter);
+        assert_eq!(write_kvs.len(), 2);
+        assert_eq!(write_kvs[0].0, get_encoded_key(b"tmerge_a", 100));
+        assert_eq!(write_kvs[1].0, get_encoded_key(b"tmerge_b", 10));
+
+        let mut dm = basic_meta.clone();
+        dm.set_cf_name(CF_DEFAULT.to_owned());
+        let def_out = importer.dir.join_for_read(&dm).unwrap().save;
+        let def_reader = new_sst_reader(def_out.to_str().unwrap(), None);
+        let mut d_iter = def_reader.iter(IterOptions::default()).unwrap();
+        d_iter.seek_to_first().unwrap();
+        let def_kvs = collect(d_iter);
+        assert_eq!(def_kvs.len(), 2);
+        assert_eq!(def_kvs[0].1, b"va");
+        assert_eq!(def_kvs[1].1, b"vb");
+    }
+
+    #[test]
+    fn test_download_files_ext_write_only_short_value_latest_mvcc() {
+        use engine_traits::CF_WRITE;
+
+        let ext_sst_dir = tempfile::tempdir().unwrap();
+        let uuid = Uuid::new_v4();
+
+        let mut base_meta = SstMeta::default();
+        base_meta.set_uuid(uuid.as_bytes().to_vec());
+        base_meta.set_region_id(4);
+        base_meta.mut_region_epoch().set_conf_ver(5);
+        base_meta.mut_region_epoch().set_version(6);
+
+        let write_path = ext_sst_dir.path().join("w.sst");
+        let mut ww = new_sst_writer(write_path.to_str().unwrap());
+        ww.put(
+            &get_encoded_key(b"tmerge_a", 200),
+            &get_write_value(WriteType::Rollback, 50, None),
+        )
+        .unwrap();
+        ww.put(
+            &get_encoded_key(b"tmerge_a", 100),
+            &get_write_value(WriteType::Put, 50, Some(b"short-a".to_vec())),
+        )
+        .unwrap();
+        ww.put(
+            &get_encoded_key(b"tmerge_b", 10),
+            &get_write_value(WriteType::Put, 3, Some(b"short-b".to_vec())),
+        )
+        .unwrap();
+        let w_info = ww.finish().unwrap();
+
+        let mut write_meta = base_meta.clone();
+        write_meta.set_cf_name(CF_WRITE.to_owned());
+        write_meta.set_length(w_info.file_size());
+
+        let mut metas = HashMap::new();
+        metas.insert("w.sst".to_owned(), write_meta.clone());
+
+        let backend = external_storage::make_local_backend(ext_sst_dir.path());
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
+        let db = create_sst_test_engine().unwrap();
+        let basic_meta = write_meta;
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let result = runtime
+            .block_on(importer.download_files_ext_with_latest_mvcc(
+                &basic_meta,
+                &metas,
+                &backend,
+                &RewriteRule::default(),
+                None,
+                Limiter::new(f64::INFINITY),
+                db,
+                DownloadExt::default().req_type(DownloadRequestType::Keyspace),
+            ))
+            .unwrap()
+            .unwrap();
+
+        let expected_start = Key::from_raw(b"tmerge_a")
+            .append_ts(TimeStamp::new(100))
+            .into_encoded();
+        let expected_end = Key::from_raw(b"tmerge_b")
+            .append_ts(TimeStamp::new(10))
+            .into_encoded();
+        assert_eq!(result.range.get_start(), &expected_start);
+        assert_eq!(result.range.get_end(), &expected_end);
+        assert_eq!(result.ssts.len(), 1);
+
+        let mut wm = basic_meta.clone();
+        wm.set_cf_name(CF_WRITE.to_owned());
+        let write_out = importer.dir.join_for_read(&wm).unwrap().save;
+        let write_reader = new_sst_reader(write_out.to_str().unwrap(), None);
+        let mut w_iter = write_reader.iter(IterOptions::default()).unwrap();
+        w_iter.seek_to_first().unwrap();
+        let write_kvs = collect(w_iter);
+        assert_eq!(write_kvs.len(), 2);
+        assert_eq!(write_kvs[0].0, get_encoded_key(b"tmerge_a", 100));
+        assert_eq!(write_kvs[1].0, get_encoded_key(b"tmerge_b", 10));
+        let w0 = WriteRef::parse(&write_kvs[0].1).unwrap();
+        assert_eq!(w0.short_value, Some(b"short-a".as_ref()));
+        let w1 = WriteRef::parse(&write_kvs[1].1).unwrap();
+        assert_eq!(w1.short_value, Some(b"short-b".as_ref()));
+    }
+
+    #[test]
+    fn test_download_files_ext_write_only_latest_mvcc_requires_default_for_long_value() {
+        use engine_traits::CF_WRITE;
+
+        let ext_sst_dir = tempfile::tempdir().unwrap();
+        let uuid = Uuid::new_v4();
+
+        let mut base_meta = SstMeta::default();
+        base_meta.set_uuid(uuid.as_bytes().to_vec());
+        base_meta.set_region_id(4);
+        base_meta.mut_region_epoch().set_conf_ver(5);
+        base_meta.mut_region_epoch().set_version(6);
+
+        let write_path = ext_sst_dir.path().join("w.sst");
+        let mut ww = new_sst_writer(write_path.to_str().unwrap());
+        ww.put(
+            &get_encoded_key(b"tmerge_a", 100),
+            &get_write_value(WriteType::Put, 50, None),
+        )
+        .unwrap();
+        let w_info = ww.finish().unwrap();
+
+        let mut write_meta = base_meta.clone();
+        write_meta.set_cf_name(CF_WRITE.to_owned());
+        write_meta.set_length(w_info.file_size());
+
+        let mut metas = HashMap::new();
+        metas.insert("w.sst".to_owned(), write_meta.clone());
+
+        let backend = external_storage::make_local_backend(ext_sst_dir.path());
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
+        let db = create_sst_test_engine().unwrap();
+        let basic_meta = write_meta;
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let err = runtime
+            .block_on(importer.download_files_ext_with_latest_mvcc(
+                &basic_meta,
+                &metas,
+                &backend,
+                &RewriteRule::default(),
+                None,
+                Limiter::new(f64::INFINITY),
+                db,
+                DownloadExt::default().req_type(DownloadRequestType::Keyspace),
+            ))
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("default value missing"), "{}", msg);
     }
 
     #[test]
