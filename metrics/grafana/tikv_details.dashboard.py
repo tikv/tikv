@@ -2829,6 +2829,37 @@ def RaftAdmin() -> RowPanel:
     )
     layout.row(
         [
+            graph_panel_histogram_quantiles(
+                title="Load base split region CPU",
+                description="Per-region CPU observed by load-base split. Unit: millicores.",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                metric="tikv_load_base_split_region_load",
+                label_selectors=['type="cpu_millicores"'],
+                hide_count=True,
+                additional_groupby=True,
+            ),
+            graph_panel_histogram_quantiles(
+                title="Load base split region QPS",
+                description="Per-region QPS observed by load-base split.",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                metric="tikv_load_base_split_region_load",
+                label_selectors=['type="qps"'],
+                hide_count=True,
+                additional_groupby=True,
+            ),
+            graph_panel_histogram_quantiles(
+                title="Load base split region bytes",
+                description="Per-region read bytes observed by load-base split. Unit: KiB.",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                metric="tikv_load_base_split_region_load",
+                label_selectors=['type="bytes_kib"'],
+                hide_count=True,
+                additional_groupby=True,
+            ),
+        ]
+    )
+    layout.row(
+        [
             graph_panel(
                 title="Peer in Flashback State",
                 targets=[

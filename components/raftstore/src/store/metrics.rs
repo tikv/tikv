@@ -264,6 +264,10 @@ make_static_metric! {
         cpu_fallback_region_not_busy,
         // CPU fallback is blocked because gRPC poll threads are busy.
         cpu_fallback_grpc_busy,
+        // Load-base split admin command succeeds.
+        split_success,
+        // Load-base split admin command fails.
+        split_failed,
         // Hottest key range for the top hot CPU region could not be found.
         empty_hottest_key_range,
         // The top hot CPU region could not be split.

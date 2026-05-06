@@ -1299,6 +1299,7 @@ where
         if reason != pdpb::SplitReason::Admin && split_validator.is_disabled(region.get_id()) {
             return;
         }
+        let is_load_split = reason == pdpb::SplitReason::Load;
         let resp = pd_client.ask_batch_split(region.clone(), split_keys.len(), reason);
         let f = async move {
             match resp.await {
@@ -1319,7 +1320,12 @@ where
                     );
                     let region_id = region.get_id();
                     let epoch = region.take_region_epoch();
-                    send_admin_request(
+                    let callback = if is_load_split {
+                        Self::load_base_split_callback(callback)
+                    } else {
+                        callback
+                    };
+                    if !send_admin_request(
                         &router,
                         region_id,
                         epoch,
@@ -1327,7 +1333,10 @@ where
                         req,
                         callback,
                         Default::default(),
-                    );
+                    ) && is_load_split
+                    {
+                        LOAD_BASE_SPLIT_EVENT.split_failed.inc();
+                    }
                 }
                 // When rolling update, there might be some old version tikvs that don't support
                 // batch split in cluster. In this situation, PD version check would refuse
@@ -1415,6 +1424,17 @@ where
             }
         };
         self.remote.spawn(f);
+    }
+
+    fn load_base_split_callback(callback: Callback<EK::Snapshot>) -> Callback<EK::Snapshot> {
+        Callback::write(Box::new(move |resp| {
+            if resp.response.get_header().has_error() {
+                LOAD_BASE_SPLIT_EVENT.split_failed.inc();
+            } else {
+                LOAD_BASE_SPLIT_EVENT.split_success.inc();
+            }
+            callback.invoke_with_response(resp.response);
+        }))
     }
 
     fn handle_store_heartbeat(
@@ -2812,7 +2832,8 @@ fn send_admin_request<EK, ER>(
     request: AdminRequest,
     callback: Callback<EK::Snapshot>,
     extra_opts: RaftCmdExtraOpts,
-) where
+) -> bool
+where
     EK: KvEngine,
     ER: RaftEngine,
 {
@@ -2830,7 +2851,9 @@ fn send_admin_request<EK, ER>(
             "send request failed";
             "region_id" => region_id, "cmd_type" => ?cmd_type, "err" => ?e,
         );
+        return false;
     }
+    true
 }
 
 /// Sends a raft message to destroy the specified stale Peer

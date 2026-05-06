@@ -814,11 +814,13 @@ impl AutoSplitController {
                 .fold(0, |flow, region_info| flow + region_info.flow.read_bytes);
             region_qps_histogram.observe(qps as f64);
             region_bytes_histogram.observe(byte as f64 / 1024.0);
-            let (cpu_usage, hottest_key_range) = region_cpu_map
-                .get(&region_id)
-                .map(|(cpu_usage, key_range)| (*cpu_usage, key_range.clone()))
-                .unwrap_or((0.0, None));
-            region_cpu_histogram.observe(cpu_usage * 1000.0);
+            let (cpu_usage, hottest_key_range) =
+                if let Some((cpu_usage, key_range)) = region_cpu_map.get(&region_id) {
+                    region_cpu_histogram.observe(cpu_usage * 1000.0);
+                    (*cpu_usage, key_range.clone())
+                } else {
+                    (0.0, None)
+                };
             let is_region_busy = self.is_region_busy(unified_read_pool_thread_usage, cpu_usage);
             debug!("load base split params";
                 "region_id" => region_id,
