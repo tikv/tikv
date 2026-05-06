@@ -9,7 +9,6 @@ use std::{
     mem,
     ops::{Add, Deref, DerefMut, Div, Mul, Neg, Rem, Sub},
     str::{self, FromStr},
-    string::ToString,
 };
 
 use codec::prelude::*;
@@ -1919,8 +1918,8 @@ impl FromStr for Decimal {
     }
 }
 
-impl ToString for Decimal {
-    fn to_string(&self) -> String {
+impl Decimal {
+    fn to_string_inner(&self) -> String {
         let (mut buf, word_start_idx, int_len, int_cnt, frac_cnt) = self.prepare_buf();
         if self.negative {
             buf.push(b'-');
@@ -1970,7 +1969,7 @@ impl Display for Decimal {
         dec = dec
             .round(self.result_frac_cnt as i8, RoundMode::HalfEven)
             .unwrap();
-        fmt.write_str(&dec.to_string())
+        fmt.write_str(&dec.to_string_inner())
     }
 }
 

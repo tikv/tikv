@@ -177,11 +177,11 @@ impl File {
     }
 
     pub fn try_lock_shared(&self) -> io::Result<()> {
-        self.inner.try_lock_shared()
+        self.inner.try_lock_shared().map(|_| ())
     }
 
     pub fn try_lock_exclusive(&self) -> io::Result<()> {
-        self.inner.try_lock_exclusive()
+        self.inner.try_lock_exclusive().map(|_| ())
     }
 
     pub fn unlock(&self) -> io::Result<()> {

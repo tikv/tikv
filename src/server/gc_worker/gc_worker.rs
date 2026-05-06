@@ -1566,9 +1566,15 @@ pub mod test_gc_worker {
         }
 
         type IMSnap = Self::Snap;
-        type IMSnapshotRes = Self::SnapshotRes;
+        type IMSnapshotRes = impl Future<Output = EngineResult<Self::IMSnap>> + Send;
         fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
-            self.async_snapshot(ctx)
+            let f = self.0.async_snapshot(ctx);
+            async move {
+                let snap = f.await?;
+                let mut region = Region::default();
+                region.mut_peers().push(Peer::default());
+                Ok(RegionSnapshot::from_snapshot(snap, Arc::new(region)))
+            }
         }
     }
 
@@ -1631,9 +1637,15 @@ pub mod test_gc_worker {
         }
 
         type IMSnap = Self::Snap;
-        type IMSnapshotRes = Self::SnapshotRes;
+        type IMSnapshotRes = impl Future<Output = EngineResult<Self::IMSnap>> + Send;
         fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
-            self.async_snapshot(ctx)
+            let region_id = ctx.pb_ctx.region_id;
+            self.engines
+                .lock()
+                .unwrap()
+                .get_mut(&region_id)
+                .unwrap()
+                .async_snapshot(ctx)
         }
     }
 }

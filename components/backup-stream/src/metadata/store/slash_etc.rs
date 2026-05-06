@@ -113,7 +113,7 @@ impl SlashEtc {
             .collect::<Vec<_>>();
         let kvs = mvccs
             .as_slice()
-            .group_by(|k1, k2| k1.0.0 == k2.0.0)
+            .chunk_by(|k1, k2| k1.0.0 == k2.0.0)
             .filter_map(|k| {
                 let (k, v) = k.last()?;
                 match v {

@@ -27,6 +27,20 @@ pub trait ToInt {
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64>;
 }
 
+/// A trait for converting a value to a `String`.
+///
+/// NOTE: we can't reuse the `ToString` trait because this trait may return
+/// different value from `fmt::Display`.
+pub trait ToStringValue {
+    fn to_string_value(&self) -> String;
+}
+
+impl<T: ToString> ToStringValue for T {
+    default fn to_string_value(&self) -> String {
+        self.to_string()
+    }
+}
+
 /// A trait for converting a value to `T`
 pub trait ConvertTo<T> {
     /// Converts the given value to `T` value
@@ -78,22 +92,22 @@ where
 
 impl<T> ConvertTo<String> for T
 where
-    T: ToString + EvaluableRet,
+    T: ToStringValue + EvaluableRet,
 {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<String> {
         // FIXME: There is an additional step `ProduceStrWithSpecifiedTp` in TiDB.
-        Ok(self.to_string())
+        Ok(self.to_string_value())
     }
 }
 
 impl<T> ConvertTo<Bytes> for T
 where
-    T: ToString + EvaluableRet,
+    T: ToStringValue + EvaluableRet,
 {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Bytes> {
-        Ok(self.to_string().into_bytes())
+        Ok(self.to_string_value().into_bytes())
     }
 }
 
@@ -110,21 +124,21 @@ impl ConvertTo<String> for JsonRef<'_> {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<String> {
         // FIXME: There is an additional step `ProduceStrWithSpecifiedTp` in TiDB.
-        Ok(self.to_string())
+        Ok(self.to_string_value())
     }
 }
 
 impl ConvertTo<Bytes> for JsonRef<'_> {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Bytes> {
-        Ok(self.to_string().into_bytes())
+        Ok(self.to_string_value().into_bytes())
     }
 }
 
 impl ConvertTo<Bytes> for EnumRef<'_> {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Bytes> {
-        Ok(self.to_string().into_bytes())
+        Ok(self.to_string_value().into_bytes())
     }
 }
 
