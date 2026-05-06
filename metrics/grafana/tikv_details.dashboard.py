@@ -2830,27 +2830,44 @@ def RaftAdmin() -> RowPanel:
     layout.row(
         [
             graph_panel_histogram_quantiles(
-                title="Load base split region CPU",
-                description="Per-region CPU observed by load-base split. Unit: millicores.",
-                yaxes=yaxes(left_format=UNITS.SHORT),
+                title="Observed region CPU for load-base split",
+                description=(
+                    "Per-region CPU observed when load-base split evaluates hot "
+                    "regions. Unit: millicores. This is decision input, not the "
+                    "final split result. Use additional_groupby=instance only "
+                    "when drilling into a specific TiKV; keep it as none for "
+                    "large clusters."
+                ),
+                yaxes=yaxes(left_format="mcores"),
                 metric="tikv_load_base_split_region_load",
                 label_selectors=['type="cpu_millicores"'],
                 hide_count=True,
                 additional_groupby=True,
             ),
             graph_panel_histogram_quantiles(
-                title="Load base split region QPS",
-                description="Per-region QPS observed by load-base split.",
-                yaxes=yaxes(left_format=UNITS.SHORT),
+                title="Observed region QPS for load-base split",
+                description=(
+                    "Per-region QPS observed when load-base split evaluates hot "
+                    "regions. This is decision input, not the final split "
+                    "result. Use additional_groupby=instance only when drilling "
+                    "into a specific TiKV; keep it as none for large clusters."
+                ),
+                yaxes=yaxes(left_format=UNITS.REQUESTS_PER_SEC),
                 metric="tikv_load_base_split_region_load",
                 label_selectors=['type="qps"'],
                 hide_count=True,
                 additional_groupby=True,
             ),
             graph_panel_histogram_quantiles(
-                title="Load base split region bytes",
-                description="Per-region read bytes observed by load-base split. Unit: KiB.",
-                yaxes=yaxes(left_format=UNITS.SHORT),
+                title="Observed region read bytes for load-base split",
+                description=(
+                    "Per-region read bytes observed when load-base split "
+                    "evaluates hot regions. Unit: KiB. This is decision input, "
+                    "not the final split result. Use additional_groupby=instance "
+                    "only when drilling into a specific TiKV; keep it as none "
+                    "for large clusters."
+                ),
+                yaxes=yaxes(left_format=UNITS.KIBI_BYTES),
                 metric="tikv_load_base_split_region_load",
                 label_selectors=['type="bytes_kib"'],
                 hide_count=True,

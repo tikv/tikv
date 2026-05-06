@@ -29429,7 +29429,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Per-region CPU observed by load-base split. Unit: millicores.",
+          "description": "Per-region CPU observed when load-base split evaluates hot regions. Unit: millicores. This is decision input, not the final split result. Use additional_groupby=instance only when drilling into a specific TiKV; keep it as none for large clusters.",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -29584,7 +29584,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Load base split region CPU",
+          "title": "Observed region CPU for load-base split",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -29603,7 +29603,7 @@
           "yaxes": [
             {
               "decimals": null,
-              "format": "short",
+              "format": "mcores",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -29630,7 +29630,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Per-region QPS observed by load-base split.",
+          "description": "Per-region QPS observed when load-base split evaluates hot regions. This is decision input, not the final split result. Use additional_groupby=instance only when drilling into a specific TiKV; keep it as none for large clusters.",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -29785,7 +29785,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Load base split region QPS",
+          "title": "Observed region QPS for load-base split",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -29804,7 +29804,7 @@
           "yaxes": [
             {
               "decimals": null,
-              "format": "short",
+              "format": "reqps",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -29831,7 +29831,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Per-region read bytes observed by load-base split. Unit: KiB.",
+          "description": "Per-region read bytes observed when load-base split evaluates hot regions. Unit: KiB. This is decision input, not the final split result. Use additional_groupby=instance only when drilling into a specific TiKV; keep it as none for large clusters.",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -29986,7 +29986,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Load base split region bytes",
+          "title": "Observed region read bytes for load-base split",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -30005,7 +30005,7 @@
           "yaxes": [
             {
               "decimals": null,
-              "format": "short",
+              "format": "kbytes",
               "label": null,
               "logBase": 1,
               "max": null,
