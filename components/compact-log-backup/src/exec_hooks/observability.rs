@@ -13,7 +13,6 @@ use crate::{
         SubcompactionStartCtx,
     },
     statistic::prom,
-    storage::StreamMetaStorage,
     util::storage_url,
 };
 
@@ -87,6 +86,10 @@ impl ExecHooks for Observability {
     async fn after_execution_finished(&mut self, cx: AfterFinishCtx<'_>) -> Result<()> {
         if self.stats.load_meta_stat.meta_files_in == 0 {
             let url = storage_url(cx.storage);
+            if cx.this.cfg.shard.is_some() {
+                warn!("No meta files matched shard, skipping compaction."; "url" => %url);
+                return Ok(());
+            }
             warn!("No meta files loaded, maybe wrong storage used?"; "url" => %url);
             return Err(ErrorKind::Other(format!("Nothing loaded from {}", url)).into());
         }
@@ -115,9 +118,9 @@ impl ExecHooks for Observability {
         };
 
         cx.async_rt.spawn(sigusr1_handler);
-        self.meta_len = StreamMetaStorage::count_objects(cx.storage).await?;
+        self.meta_len = cx.meta_count;
 
-        info!("About to start compaction."; &cx.this.cfg, 
+        info!("About to start compaction."; &cx.this.cfg,
             "url" => cx.storage.url().map(|v| v.to_string()).unwrap_or_else(|err| format!("<err: {err}>")));
         Ok(())
     }
