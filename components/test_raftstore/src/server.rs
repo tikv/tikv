@@ -2,7 +2,7 @@
 
 use std::{
     path::Path,
-    sync::{atomic::AtomicU64, Arc, Mutex, RwLock},
+    sync::{Arc, Mutex, RwLock},
     thread,
     time::Duration,
     usize,
@@ -629,7 +629,6 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
             causal_ts_provider,
             DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
-            Arc::new(AtomicU64::new(0)),
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
