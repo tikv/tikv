@@ -2354,7 +2354,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc 0.2.176",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.0",
 ]
 
 [[package]]
@@ -5278,11 +5278,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.4.2"
-<<<<<<< HEAD
-source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-8.5#2f9f6888dc2c88d3e2b582187c26e196b88b8ef3"
-=======
-source = "git+https://github.com/tikv/raft-engine.git#55bccdea42718ab2b4f90cdd9068da53b6bf4c39"
->>>>>>> b96b66319b (*: upgrade raft-engine to optimize the memory usage. (#19574))
+source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-8.5#3d844051b8a922d3df0d45f2d523ab8e9d537721"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -5316,11 +5312,7 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.4.2"
-<<<<<<< HEAD
-source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-8.5#2f9f6888dc2c88d3e2b582187c26e196b88b8ef3"
-=======
-source = "git+https://github.com/tikv/raft-engine.git#55bccdea42718ab2b4f90cdd9068da53b6bf4c39"
->>>>>>> b96b66319b (*: upgrade raft-engine to optimize the memory usage. (#19574))
+source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-8.5#3d844051b8a922d3df0d45f2d523ab8e9d537721"
 dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",
