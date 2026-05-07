@@ -1826,10 +1826,10 @@ fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat>(
     }
 }
 
-async fn future_gc(_: GcRequest) -> ServerResult<GcResponse> {
-    Err(Error::Grpc(GrpcError::RpcFailure(RpcStatus::new(
+fn future_gc(_: GcRequest) -> impl Future<Output = ServerResult<GcResponse>> {
+    std::future::ready(Err(Error::Grpc(GrpcError::RpcFailure(RpcStatus::new(
         RpcStatusCode::UNIMPLEMENTED,
-    ))))
+    )))))
 }
 
 fn future_delete_range<E: Engine, L: LockManager, F: KvFormat>(
