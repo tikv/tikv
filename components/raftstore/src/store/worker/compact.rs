@@ -4,7 +4,10 @@ use std::{
     collections::VecDeque,
     error::Error as StdError,
     fmt::{self, Display, Formatter},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -19,7 +22,8 @@ use tikv_util::{
 use yatp::Remote;
 
 use super::metrics::{
-    COMPACT_RANGE_CF, FULL_COMPACT, FULL_COMPACT_INCREMENTAL, FULL_COMPACT_PAUSE,
+    CHECK_THEN_COMPACT_DURATION, COMPACT_RANGE_CF, FULL_COMPACT, FULL_COMPACT_INCREMENTAL,
+    FULL_COMPACT_PAUSE,
 };
 use crate::store::Config;
 
@@ -48,6 +52,25 @@ pub enum Task {
         ranges: Vec<Key>,
         // The minimum RocksDB tombstones/duplicate versions a range that need compacting has
         compact_threshold: CompactThreshold,
+    },
+
+    CheckThenCompactTopN {
+        // Column families need to compact
+        cf_names: Vec<String>,
+        // Ranges need to check
+        ranges: Vec<Key>,
+        // The minimum RocksDB tombstones/duplicate versions a range that need compacting has
+        compact_threshold: CompactThreshold,
+        compaction_filter_enabled: bool,
+        bottommost_level_force: bool,
+        top_n: usize,
+        // RAII guard to indicate the task is still running. Store FSM will hold a weak ptr to this
+        // guard, and will be aware of the task being dropped.
+        // If the task is dropped, it means the check is finished or failed.
+        // If the task is still running, it will block future checks.
+        // Drop this guard *after* compaction is scheduled, to prevent periodic checks by Store FSM
+        // races with the compaction tasks.
+        finished: Arc<()>,
     },
 }
 
@@ -203,6 +226,36 @@ impl Display for Task {
                     &compact_threshold.redundant_rows_percent_threshold,
                 )
                 .finish(),
+            Task::CheckThenCompactTopN {
+                ref cf_names,
+                ref compact_threshold,
+                ref compaction_filter_enabled,
+                ref bottommost_level_force,
+                ref top_n,
+                ..
+            } => f
+                .debug_struct("CheckThenCompactV2")
+                .field("cf_names", &cf_names)
+                .field(
+                    "tombstones_num_threshold",
+                    &compact_threshold.tombstones_num_threshold,
+                )
+                .field(
+                    "tombstones_percent_threshold",
+                    &compact_threshold.tombstones_percent_threshold,
+                )
+                .field(
+                    "redundant_rows_threshold",
+                    &compact_threshold.redundant_rows_threshold,
+                )
+                .field(
+                    "redundant_rows_percent_threshold",
+                    &compact_threshold.redundant_rows_percent_threshold,
+                )
+                .field("compaction_filter_enabled", &compaction_filter_enabled)
+                .field("bottommost_level_force", &bottommost_level_force)
+                .field("top_n", &top_n)
+                .finish(),
         }
     }
 }
@@ -323,9 +376,6 @@ where
     ) -> Result<(), Error> {
         fail_point!("on_compact_range_cf");
         let timer = Instant::now();
-        let compact_range_timer = COMPACT_RANGE_CF
-            .with_label_values(&[cf_name])
-            .start_coarse_timer();
         let compact_options = ManualCompactionOptions::new(false, 1, bottommost_level_force);
         box_try!(self.engine.compact_range_cf(
             cf_name,
@@ -333,7 +383,6 @@ where
             end_key,
             compact_options.clone()
         ));
-        compact_range_timer.observe_duration();
         info!(
             "compact range finished";
             "range_start" => start_key.map(::log_wrappers::Value::key),
@@ -384,6 +433,7 @@ where
                 bottommost_level_force,
             } => {
                 let cf = &cf_name;
+<<<<<<< HEAD
                 if cf != CF_LOCK {
                     // check whether the config changed for ignoring manual compaction
                     if let Some(incoming) = self.cfg_tracker.any_new() {
@@ -399,6 +449,11 @@ where
                         return;
                     }
                 }
+=======
+                let compact_range_timer = COMPACT_RANGE_CF
+                    .with_label_values(&[cf])
+                    .start_coarse_timer();
+>>>>>>> 31f529e914 (GC: Separating check and compact into 2 phases (#18701))
                 if let Err(e) = self.compact_range_cf(
                     cf,
                     start_key.as_deref(),
@@ -407,6 +462,7 @@ where
                 ) {
                     error!("execute compact range failed"; "cf" => cf, "err" => %e);
                 }
+                compact_range_timer.observe_duration();
             }
             Task::CheckAndCompact {
                 cf_names,
@@ -433,6 +489,87 @@ where
                 }
                 Err(e) => warn!("check ranges need reclaim failed"; "err" => %e),
             },
+            Task::CheckThenCompactTopN {
+                cf_names,
+                ranges,
+                compact_threshold,
+                compaction_filter_enabled,
+                bottommost_level_force,
+                top_n,
+                finished: _,
+            } => {
+                fail_point!("raftstore::compact::CheckThenCompactTopN:NotifyStart");
+                fail_point!("raftstore::compact::CheckThenCompactTopN:Start");
+                match select_compaction_candidates(
+                    &self.engine,
+                    ranges,
+                    compact_threshold,
+                    compaction_filter_enabled,
+                    top_n,
+                ) {
+                    Ok(candidates) => {
+                        fail_point!(
+                            "raftstore::compact::CheckThenCompactTopN:CheckRange2",
+                            candidates.len() == 2
+                                && candidates.iter().any(|c| c.range_stats.num_versions == 10),
+                            |_| {
+                                info!("Found candidate with 10 versions (range 2)");
+                            }
+                        );
+                        fail_point!(
+                            "raftstore::compact::CheckThenCompactTopN:CheckRange3",
+                            candidates.len() == 2
+                                && candidates.iter().any(|c| c.range_stats.num_versions == 20),
+                            |_| {
+                                info!("Found candidate with 15 versions (range 3)");
+                            }
+                        );
+                        if candidates.is_empty() {
+                            // No ranges need compacting.
+                            info!("no ranges need compacting");
+                        } else {
+                            for CompactionCandidate {
+                                start_key,
+                                end_key,
+                                range_stats,
+                                score,
+                            } in candidates
+                            {
+                                info!("check_then_compact found a range to compact";
+                                    "num_entries" => range_stats.num_entries,
+                                    "num_versions" => range_stats.num_versions,
+                                    "num_rows" => range_stats.num_rows,
+                                    "num_deletes" => range_stats.num_deletes,
+                                    "score" => score,
+                                );
+                                let start_time =
+                                    CHECK_THEN_COMPACT_DURATION.compact.start_coarse_timer();
+                                for cf in &cf_names {
+                                    if let Err(e) = self.compact_range_cf(
+                                        cf,
+                                        Some(&start_key),
+                                        Some(&end_key),
+                                        bottommost_level_force,
+                                    ) {
+                                        error!(
+                                            "compact range failed";
+                                            "range_start" => log_wrappers::Value::key(&start_key),
+                                            "range_end" => log_wrappers::Value::key(&end_key),
+                                            "cf" => cf,
+                                            "err" => %e,
+                                        );
+                                    }
+                                }
+                                start_time.observe_duration();
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("get top n ranges to compact failed"; "err" => %e);
+                    }
+                }
+                fail_point!("raftstore::compact::CheckThenCompactTopN:AfterCompact");
+            }
         }
     }
 }
@@ -502,6 +639,141 @@ fn collect_ranges_need_compact(
     }
 
     Ok(ranges_need_compact)
+}
+
+fn get_compact_score(
+    range_stats: &RangeStats,
+    compact_threshold: &CompactThreshold,
+    compaction_filter_enabled: bool,
+) -> f64 {
+    if range_stats.num_entries == 0 || range_stats.num_entries < range_stats.num_versions {
+        return 0.0;
+    }
+
+    if !compaction_filter_enabled {
+        let num_tombstones = range_stats.num_entries - range_stats.num_versions;
+        // Only consider deletes (tombstones)
+        if num_tombstones < compact_threshold.tombstones_num_threshold
+            && num_tombstones * 100
+                < compact_threshold.tombstones_percent_threshold * range_stats.num_entries
+        {
+            return 0.0;
+        }
+        let ratio = num_tombstones as f64 / range_stats.num_entries as f64;
+        return num_tombstones as f64 * ratio;
+    }
+    // When compaction filter is enabled, ignore tombstone threshold,
+    // just add deletes to redundant keys for scoring.
+    let num_discardable = range_stats.redundant_keys();
+    let ratio = num_discardable as f64 / range_stats.num_entries as f64;
+    if num_discardable < compact_threshold.redundant_rows_threshold
+        && num_discardable * 100
+            < compact_threshold.redundant_rows_percent_threshold * range_stats.num_entries
+    {
+        return 0.0;
+    }
+    num_discardable as f64 * ratio
+}
+
+#[derive(Debug, Clone)]
+struct CompactionCandidate {
+    score: f64,
+    start_key: Key,
+    end_key: Key,
+    range_stats: RangeStats,
+}
+
+impl PartialEq for CompactionCandidate {
+    fn eq(&self, other: &Self) -> bool {
+        self.score == other.score
+    }
+}
+
+impl Eq for CompactionCandidate {}
+
+impl PartialOrd for CompactionCandidate {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.score.partial_cmp(&other.score)
+    }
+}
+
+impl Ord for CompactionCandidate {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.partial_cmp(other).unwrap_or(std::cmp::Ordering::Equal)
+    }
+}
+
+fn select_compaction_candidates(
+    engine: &impl KvEngine,
+    ranges: Vec<Key>,
+    compact_threshold: CompactThreshold,
+    compaction_filter_enabled: bool,
+    top_n: usize,
+) -> Result<Vec<CompactionCandidate>, Error> {
+    use std::{cmp::Reverse, collections::BinaryHeap};
+    let check_timer = CHECK_THEN_COMPACT_DURATION.check.start_coarse_timer();
+
+    let capacity = ranges.len().saturating_sub(1);
+    let mut candidates = if top_n == 0 {
+        Vec::with_capacity(capacity)
+    } else {
+        Vec::new()
+    };
+    let mut heap = if top_n != 0 {
+        BinaryHeap::with_capacity(top_n + 1)
+    } else {
+        BinaryHeap::new()
+    };
+
+    for range in ranges.windows(2) {
+        if let Some(range_stats) = engine
+            .get_range_stats(CF_WRITE, &range[0], &range[1])
+            .map_err(|e| Error::Other(Box::new(e)))?
+        {
+            let score =
+                get_compact_score(&range_stats, &compact_threshold, compaction_filter_enabled);
+            if score > 0.0 {
+                let candidate = CompactionCandidate {
+                    score,
+                    start_key: range[0].clone(),
+                    end_key: range[1].clone(),
+                    range_stats,
+                };
+                if top_n == 0 {
+                    candidates.push(candidate);
+                } else if heap.len() < top_n
+                    || score
+                        > heap
+                            .peek()
+                            .map(|r: &Reverse<CompactionCandidate>| r.0.score)
+                            .unwrap_or(f64::MIN)
+                {
+                    heap.push(Reverse(candidate));
+                    if heap.len() > top_n {
+                        heap.pop();
+                    }
+                }
+            }
+        }
+    }
+    check_timer.observe_duration();
+
+    if top_n == 0 {
+        candidates.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        Ok(candidates)
+    } else {
+        let mut result: Vec<_> = heap
+            .into_sorted_vec()
+            .into_iter()
+            .map(|Reverse(t)| t)
+            .collect();
+        result.reverse();
+        Ok(result)
+    }
 }
 
 #[cfg(test)]

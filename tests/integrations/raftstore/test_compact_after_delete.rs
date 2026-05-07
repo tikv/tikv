@@ -51,14 +51,6 @@ fn test_compact_after_delete<T: Simulator<RocksEngine>>(cluster: &mut Cluster<Ro
     }
     let (sender, receiver) = mpsc::channel();
     let sync_sender = Mutex::new(sender);
-    fail::cfg_callback(
-        "raftstore::compact::CheckAndCompact:AfterCompact",
-        move || {
-            let sender = sync_sender.lock().unwrap();
-            sender.send(true).unwrap();
-        },
-    )
-    .unwrap();
     for i in 0..1000 {
         let k = format!("k{}", i);
         let k = gen_delete_k(k.as_bytes(), 2.into());
@@ -68,6 +60,14 @@ fn test_compact_after_delete<T: Simulator<RocksEngine>>(cluster: &mut Cluster<Ro
         engines.kv.flush_cf(CF_WRITE, true).unwrap();
     }
 
+    fail::cfg_callback(
+        "raftstore::compact::CheckThenCompactTopN:AfterCompact",
+        move || {
+            let sender = sync_sender.lock().unwrap();
+            sender.send(true).unwrap();
+        },
+    )
+    .unwrap();
     // wait for compaction.
     receiver.recv_timeout(Duration::from_millis(5000)).unwrap();
 
