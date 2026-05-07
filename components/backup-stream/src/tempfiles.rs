@@ -22,10 +22,10 @@ use std::{
     path::{Path, PathBuf},
     pin::Pin,
     sync::{
-        Arc, Mutex as BlockMutex,
         atomic::{AtomicU8, AtomicUsize, Ordering},
+        Arc, Mutex as BlockMutex,
     },
-    task::{Context, Poll, ready},
+    task::{ready, Context, Poll},
     time::Instant,
 };
 
@@ -339,8 +339,9 @@ impl TempFilePool {
     fn create_relative(&self, p: &Path) -> std::io::Result<SwappedOut> {
         let abs_path = self.cfg.swap_files.join(p);
         #[cfg(test)]
-        if let Some(f) = &self.override_swapout {
-            return Ok(SwappedOut::Dynamic(f(&abs_path)));
+        match &self.override_swapout {
+            Some(f) => return Ok(SwappedOut::Dynamic(f(&abs_path))),
+            None => {}
         }
         let mut file = OsFile::from_std(SyncOsFile::create(&abs_path)?);
         file.set_max_buf_size(self.config().write_buffer_size);
@@ -788,15 +789,15 @@ mod test {
         path::Path,
         pin::Pin,
         sync::{
-            Arc,
             atomic::{AtomicUsize, Ordering},
+            Arc,
         },
     };
 
     use async_compression::tokio::bufread::ZstdDecoder;
     use encryption::{BackupEncryptionManager, DataKeyManager, MultiMasterKeyBackend};
     use kvproto::{brpb::CompressionType, encryptionpb::EncryptionMethod};
-    use tempfile::{TempDir, tempdir};
+    use tempfile::{tempdir, TempDir};
     use test_util::new_test_key_manager;
     use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
     use walkdir::WalkDir;

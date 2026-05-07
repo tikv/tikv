@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use criterion::{BatchSize, Bencher, Criterion, black_box};
+use criterion::{black_box, BatchSize, Bencher, Criterion};
 use engine_traits::CF_DEFAULT;
 use kvproto::kvrpcpb::Context;
 use test_storage::SyncTestStorageBuilderApiV1;
@@ -8,7 +8,7 @@ use test_util::KvGenerator;
 use tikv::storage::kv::Engine;
 use txn_types::{Key, Mutation};
 
-use super::{BenchConfig, DEFAULT_ITERATIONS, EngineFactory};
+use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS};
 
 fn storage_raw_get<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();

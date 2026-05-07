@@ -7,17 +7,17 @@ use std::sync::Arc;
 
 use fail::fail_point;
 pub use future_pool::{Full, FuturePool};
-use futures::{StreamExt, compat::Stream01CompatExt};
+use futures::{compat::Stream01CompatExt, StreamExt};
 use prometheus::local::LocalHistogram;
 use yatp::{
-    ThreadPool,
     pool::{CloneRunnerBuilder, Local, Remote, Runner},
-    queue::{Extras, QueueType, TaskCell as _, multilevel, priority},
+    queue::{multilevel, priority, Extras, QueueType, TaskCell as _},
     task::future::{Runner as FutureRunner, TaskCell},
+    ThreadPool,
 };
 
 use crate::{
-    resource_control::{TaskPriority, priority_from_task_meta},
+    resource_control::{priority_from_task_meta, TaskPriority},
     thread_group::GroupProperties,
     time::{Duration, Instant},
     timer::GLOBAL_TIMER_HANDLE,

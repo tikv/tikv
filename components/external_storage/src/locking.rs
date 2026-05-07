@@ -22,13 +22,13 @@ use std::io;
 
 use chrono::Utc;
 use futures_util::{
-    future::{FutureExt, LocalBoxFuture, ok},
+    future::{ok, FutureExt, LocalBoxFuture},
     io::AsyncReadExt,
     stream::TryStreamExt,
 };
 use tikv_util::sys::{
     hostname,
-    thread::{Pid, process_id},
+    thread::{process_id, Pid},
 };
 use uuid::Uuid;
 
@@ -230,7 +230,7 @@ pub mod requirements {
     }
 }
 
-impl ExclusiveWriteCtx<'_> {
+impl<'a> ExclusiveWriteCtx<'a> {
     pub fn txn_id(&self) -> uuid::Uuid {
         self.txn_id
     }

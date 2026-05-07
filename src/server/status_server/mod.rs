@@ -19,21 +19,22 @@ use std::{
 
 use async_stream::stream;
 use collections::HashMap;
-use flate2::{Compression, write::GzEncoder};
+use flate2::{write::GzEncoder, Compression};
 use futures::{
     compat::Compat01As03,
     future::{ok, poll_fn},
     prelude::*,
 };
-use http::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE, HeaderValue};
+use http::header::{HeaderValue, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE};
 use hyper::{
-    self, Body, Method, Request, Response, Server, StatusCode, header,
+    self, header,
     server::{
-        Builder as HyperBuilder,
         accept::Accept,
         conn::{AddrIncoming, AddrStream},
+        Builder as HyperBuilder,
     },
     service::{make_service_fn, service_fn},
+    Body, Method, Request, Response, Server, StatusCode,
 };
 use in_memory_engine::RegionCacheMemoryEngine;
 use kvproto::resource_manager::ResourceGroup;
@@ -1323,11 +1324,11 @@ mod tests {
     use flate2::read::GzDecoder;
     use futures::{
         executor::block_on,
-        future::{BoxFuture, ok},
+        future::{ok, BoxFuture},
         prelude::*,
     };
-    use http::header::{ACCEPT_ENCODING, HeaderValue};
-    use hyper::{Body, Client, Method, Request, StatusCode, Uri, body::Buf, client::HttpConnector};
+    use http::header::{HeaderValue, ACCEPT_ENCODING};
+    use hyper::{body::Buf, client::HttpConnector, Body, Client, Method, Request, StatusCode, Uri};
     use hyper_openssl::HttpsConnector;
     use online_config::OnlineConfig;
     use openssl::ssl::{SslConnector, SslFiletype, SslMethod};
@@ -1340,7 +1341,7 @@ mod tests {
 
     use crate::{
         config::{ConfigController, TikvConfig},
-        server::status_server::{LogLevelRequest, StatusServer, profile::TEST_PROFILE_MUTEX},
+        server::status_server::{profile::TEST_PROFILE_MUTEX, LogLevelRequest, StatusServer},
         storage::config::EngineType,
     };
 
@@ -1909,7 +1910,7 @@ mod tests {
             String::from_utf8(body_bytes.as_ref().to_owned())
                 .unwrap()
                 .split(' ')
-                .next_back()
+                .last()
                 .unwrap()
                 .starts_with("backtrace::backtrace")
         );

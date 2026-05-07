@@ -5,9 +5,9 @@ use std::{
     iter::Peekable,
     mem,
     sync::{
-        Arc, Mutex,
         atomic::{AtomicU64, AtomicUsize, Ordering},
         mpsc::Sender,
+        Arc, Mutex,
     },
     time::Duration,
     vec::IntoIter,
@@ -18,8 +18,8 @@ use collections::HashMap;
 use concurrency_manager::{ActionOnInvalidMaxTs, ConcurrencyManager};
 use engine_rocks::{FlowInfo, RocksEngine};
 use engine_traits::{
-    CF_DEFAULT, CF_LOCK, CF_WRITE, DeleteStrategy, Error as EngineError, ImportExt, KvEngine,
-    MiscExt, Range, WriteBatch, WriteOptions, raw_ttl::ttl_current_ts,
+    raw_ttl::ttl_current_ts, DeleteStrategy, Error as EngineError, ImportExt, KvEngine, MiscExt,
+    Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use file_system::{IoType, WithIoType};
 use futures::executor::block_on;
@@ -28,17 +28,17 @@ use pd_client::{FeatureGate, PdClient};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
 use tikv_kv::{CfStatistics, CursorBuilder, Modify, SnapContext};
 use tikv_util::{
-    Either,
     config::{Tracker, VersionTrack},
     store::find_peer,
-    time::{Instant, Limiter, SlowTimer, duration_to_sec},
+    time::{duration_to_sec, Instant, Limiter, SlowTimer},
     worker::{Builder as WorkerBuilder, LazyWorker, Runnable, ScheduleError, Scheduler},
+    Either,
 };
 use txn_types::{Key, TimeStamp};
-use yatp::{Remote, task::future::TaskCell};
+use yatp::{task::future::TaskCell, Remote};
 
 use super::{
-    Callback, Error, ErrorInner, Result, check_need_gc,
+    check_need_gc,
     compaction_filter::{
         CompactionFilterInitializer, DeleteBatch, GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED,
         GC_COMPACTION_FILTER_MVCC_DELETION_WASTED, GC_COMPACTION_FILTER_ORPHAN_VERSIONS,
@@ -46,13 +46,14 @@ use super::{
     compaction_runner::{CompactionRunner, CompactionRunnerHandle},
     config::{GcConfig, GcWorkerConfigManager},
     gc_manager::{AutoGcConfig, GcManager, GcManagerHandle},
+    Callback, Error, ErrorInner, Result,
 };
 use crate::{
     server::metrics::*,
     storage::{
-        kv::{Engine, ScanMode, Statistics, metrics::GcKeyMode},
+        kv::{metrics::GcKeyMode, Engine, ScanMode, Statistics},
         mvcc::{GcInfo, MvccReader, MvccTxn},
-        txn::{Error as TxnError, gc},
+        txn::{gc, Error as TxnError},
     },
 };
 
@@ -1465,14 +1466,14 @@ pub mod test_gc_worker {
         metapb::{Peer, Region},
     };
     use raftstore::store::RegionSnapshot;
-    use tikv_kv::{OnAppliedCb, write_modifies};
+    use tikv_kv::{write_modifies, OnAppliedCb};
     use txn_types::{Key, TimeStamp};
 
     use crate::{
         server::gc_worker::{GcSafePointProvider, Result as GcWorkerResult},
         storage::{
-            Engine,
             kv::{self, Modify, Result as EngineResult, SnapContext, WriteData},
+            Engine,
         },
     };
 
@@ -1565,9 +1566,7 @@ pub mod test_gc_worker {
         }
 
         type IMSnap = Self::Snap;
-        // TODO: revert this once https://github.com/rust-lang/rust/issues/140222 is fixed.
-        // type IMSnapshotRes = Self::SnapshotRes;
-        type IMSnapshotRes = impl Future<Output = EngineResult<Self::Snap>> + Send;
+        type IMSnapshotRes = Self::SnapshotRes;
         fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
             self.async_snapshot(ctx)
         }
@@ -1632,9 +1631,7 @@ pub mod test_gc_worker {
         }
 
         type IMSnap = Self::Snap;
-        // TODO: revert this once https://github.com/rust-lang/rust/issues/140222 is fixed.
-        // type IMSnapshotRes = Self::SnapshotRes;
-        type IMSnapshotRes = impl Future<Output = EngineResult<Self::Snap>> + Send;
+        type IMSnapshotRes = Self::SnapshotRes;
         fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
             self.async_snapshot(ctx)
         }
@@ -1652,15 +1649,15 @@ mod tests {
     };
 
     use api_version::{ApiV2, KvFormat, RawValue};
-    use engine_rocks::{RocksEngine, raw::FlushOptions, util::get_cf_handle};
+    use engine_rocks::{raw::FlushOptions, util::get_cf_handle, RocksEngine};
     use engine_traits::Peekable as _;
     use futures::executor::block_on;
     use kvproto::{kvrpcpb::ApiVersion, metapb::Peer};
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use raft::StateRole;
     use raftstore::coprocessor::{
-        CoprocessorHost, RegionChangeEvent,
         region_info_accessor::{MockRegionInfoProvider, RegionInfoAccessor},
+        CoprocessorHost, RegionChangeEvent,
     };
     use tempfile::Builder;
     use tikv_kv::Snapshot;
@@ -1672,12 +1669,11 @@ mod tests {
         config::DbConfig,
         server::gc_worker::{MockSafePointProvider, PrefixedEngine},
         storage::{
-            Engine, Storage, TestStorageBuilderApiV1,
-            kv::{Modify, TestEngineBuilder, WriteData, metrics::GcKeyMode},
+            kv::{metrics::GcKeyMode, Modify, TestEngineBuilder, WriteData},
             lock_manager::MockLockManager,
             mvcc::{
-                MAX_TXN_WRITE_SIZE,
                 tests::{must_get_none, must_get_none_on_region, must_get_on_region},
+                MAX_TXN_WRITE_SIZE,
             },
             txn::{
                 commands,
@@ -1687,6 +1683,7 @@ mod tests {
                     must_rollback,
                 },
             },
+            Engine, Storage, TestStorageBuilderApiV1,
         },
     };
 

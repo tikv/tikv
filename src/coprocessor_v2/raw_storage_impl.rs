@@ -10,10 +10,11 @@ use kvproto::kvrpcpb::Context;
 use tikv_util::future::paired_future_callback;
 
 use crate::storage::{
-    self, Engine, Storage,
+    self,
     errors::extract_kv_pairs,
     kv::{Error as KvError, ErrorInner as KvErrorInner},
     lock_manager::LockManager,
+    Engine, Storage,
 };
 
 /// Implementation of the [`RawStorage`] trait.
@@ -214,7 +215,7 @@ mod test {
     use kvproto::kvrpcpb::{ApiVersion, Context};
 
     use super::*;
-    use crate::storage::{TestStorageBuilder, lock_manager::MockLockManager};
+    use crate::storage::{lock_manager::MockLockManager, TestStorageBuilder};
 
     #[tokio::test]
     async fn test_storage_api() {

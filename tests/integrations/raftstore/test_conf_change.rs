@@ -2,8 +2,8 @@
 
 use std::{
     sync::{
-        Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
     },
     thread,
     time::Duration,

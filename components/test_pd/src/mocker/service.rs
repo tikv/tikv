@@ -1,8 +1,8 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::{
-    Mutex,
     atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+    Mutex,
 };
 
 use collections::HashMap;

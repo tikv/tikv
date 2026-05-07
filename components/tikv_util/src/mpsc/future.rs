@@ -14,7 +14,7 @@ use crossbeam::{
     channel::SendError,
     queue::{ArrayQueue, SegQueue},
 };
-use futures::{Stream, StreamExt, task::AtomicWaker};
+use futures::{task::AtomicWaker, Stream, StreamExt};
 
 use crate::future::block_on_timeout;
 
@@ -287,9 +287,8 @@ where
 mod tests {
     use std::{
         sync::{
-            Arc, Mutex,
             atomic::{AtomicBool, AtomicUsize},
-            mpsc,
+            mpsc, Arc, Mutex,
         },
         thread, time,
     };

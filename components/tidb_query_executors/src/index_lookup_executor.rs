@@ -1,7 +1,7 @@
 // Copyright 2025 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp::{Ordering, min},
+    cmp::{min, Ordering},
     collections::HashSet,
     mem,
     sync::Arc,
@@ -11,32 +11,31 @@ use api_version::{ApiV1, KvFormat};
 use async_trait::async_trait;
 use kvproto::{coprocessor::KeyRange, metapb};
 use tidb_query_common::{
-    Error,
     error::Result,
     execute_stats::{ExecSummary, ExecSummaryCollector, ExecSummaryCollectorEnabled, ExecuteStats},
     metrics::EXECUTOR_COUNT_METRICS,
     storage::{FindRegionResult, IntervalRange, RegionStorageAccessor, StateRole, Storage},
+    Error,
 };
 use tidb_query_datatype::{
     codec::{
         batch::LazyBatchColumnVec,
-        data_type::{BATCH_MAX_SIZE, LogicalRows},
+        data_type::{LogicalRows, BATCH_MAX_SIZE},
         table::RowHandle,
     },
     expr::{EvalConfig, EvalContext, EvalWarnings},
 };
 use tikv_util::{
-    Either,
+    error, Either,
     Either::{Left, Right},
-    error,
 };
 use tipb::{ColumnInfo, FieldType, IndexLookUp, TableScan};
 use txn_types::Key;
 
 use crate::{
-    BatchTableScanExecutor,
     interface::{BatchExecIsDrain, BatchExecuteResult, BatchExecutor, WithSummaryCollector},
     util::scan_executor::field_type_from_column_info,
+    BatchTableScanExecutor,
 };
 
 #[derive(Default)]
@@ -1054,20 +1053,20 @@ pub mod tests {
     use tidb_query_common::{
         error::StorageError,
         storage::{
-            StateRole,
             test_fixture::{ErrorBuilder, FixtureStorage},
+            StateRole,
         },
     };
     use tidb_query_datatype::{
-        Collation, FieldTypeAccessor, FieldTypeTp,
         codec::{
-            Datum,
             batch::{LazyBatchColumn, LazyBatchColumnVec},
             data_type::VectorValue,
             datum::DatumEncoder,
-            table::{IntHandle, encode_row, encode_row_key},
+            table::{encode_row, encode_row_key, IntHandle},
+            Datum,
         },
         expr::{EvalContext, EvalWarnings, Flag},
+        Collation, FieldTypeAccessor, FieldTypeTp,
     };
 
     use super::*;

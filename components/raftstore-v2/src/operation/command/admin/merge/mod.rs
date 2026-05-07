@@ -13,9 +13,9 @@ use kvproto::{
     raft_serverpb::{MergeState, PeerState, RegionLocalState},
 };
 use prepare::PrepareStatus;
-use raft::{INVALID_INDEX, ProgressState};
+use raft::{ProgressState, INVALID_INDEX};
 use raftstore::Result;
-use slog::{Logger, info, warn};
+use slog::{info, warn, Logger};
 use tikv_util::box_err;
 
 use crate::raft::Peer;

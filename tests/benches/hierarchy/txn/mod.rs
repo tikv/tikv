@@ -1,17 +1,17 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use concurrency_manager::ConcurrencyManager;
-use criterion::{BatchSize, Bencher, Criterion, black_box};
+use criterion::{black_box, BatchSize, Bencher, Criterion};
 use kvproto::kvrpcpb::{AssertionLevel, Context, PrewriteRequestPessimisticAction::*};
 use test_util::KvGenerator;
 use tikv::storage::{
     kv::{Engine, WriteData},
     mvcc::{self, MvccTxn, SnapshotReader},
-    txn::{CommitKind, TransactionKind, TransactionProperties, cleanup, commit, prewrite},
+    txn::{cleanup, commit, prewrite, CommitKind, TransactionKind, TransactionProperties},
 };
 use txn_types::{Key, Mutation, TimeStamp};
 
-use super::{BenchConfig, DEFAULT_ITERATIONS, EngineFactory};
+use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS};
 
 fn setup_prewrite<E, F>(
     engine: &mut E,

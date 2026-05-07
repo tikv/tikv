@@ -1,8 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::{
-    Mutex,
     atomic::{AtomicU32, Ordering},
+    Mutex,
 };
 
 struct MovingAvgU32Inner {

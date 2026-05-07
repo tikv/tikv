@@ -2,9 +2,8 @@
 
 use std::{
     sync::{
-        Arc,
         atomic::{AtomicUsize, Ordering},
-        mpsc,
+        mpsc, Arc,
     },
     thread, time,
     time::Duration,
@@ -22,8 +21,8 @@ use kvproto::{
 use raft::eraftpb::Entry;
 use raftstore::errors::DiscardReason;
 use tikv::server::{
-    Config, ConnectionBuilder, RaftClient, StoreAddrResolver, TestRaftStoreRouter,
-    load_statistics::ThreadLoadPool, raftkv::RaftRouterWrap, resolve,
+    load_statistics::ThreadLoadPool, raftkv::RaftRouterWrap, resolve, Config, ConnectionBuilder,
+    RaftClient, StoreAddrResolver, TestRaftStoreRouter,
 };
 use tikv_kv::{FakeExtension, RaftExtension};
 use tikv_util::{

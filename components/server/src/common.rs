@@ -8,30 +8,30 @@ use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
     sync::{
-        Arc,
         atomic::{AtomicU32, Ordering},
-        mpsc,
+        mpsc, Arc,
     },
     time::Duration,
     u64,
 };
 
-use encryption_export::{DataKeyManager, data_key_manager_from_config};
+use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
-    FlowInfo, RocksEngine, RocksStatistics, flush_engine_statistics,
+    flush_engine_statistics,
     raw::{Cache, Env},
+    FlowInfo, RocksEngine, RocksStatistics,
 };
 use engine_traits::{
-    CF_DEFAULT, CachedTablet, CfOptions, CfOptionsExt, DATA_CFS, FlowControlFactorsExt, KvEngine,
-    RaftEngine, RegionCacheEngine, StatisticsReporter, TabletRegistry, data_cf_offset,
+    data_cf_offset, CachedTablet, CfOptions, CfOptionsExt, FlowControlFactorsExt, KvEngine,
+    RaftEngine, RegionCacheEngine, StatisticsReporter, TabletRegistry, CF_DEFAULT, DATA_CFS,
 };
 use error_code::ErrorCodeExt;
-use file_system::{BytesFetcher, File, IoBudgetAdjustor, get_io_rate_limiter, set_io_rate_limiter};
+use file_system::{get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, File, IoBudgetAdjustor};
 use grpcio::Environment;
 use hybrid_engine::HybridEngine;
 use in_memory_engine::{
-    InMemoryEngineContext, InMemoryEngineStatistics, RegionCacheMemoryEngine,
-    flush_in_memory_engine_statistics,
+    flush_in_memory_engine_statistics, InMemoryEngineContext, InMemoryEngineStatistics,
+    RegionCacheMemoryEngine,
 };
 use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
@@ -40,15 +40,15 @@ use security::SecurityManager;
 use tikv::{
     config::{ConfigController, DbConfigManger, DbType, TikvConfig},
     server::{
-        DEFAULT_CLUSTER_ID, gc_worker::compaction_filter::GC_CONTEXT, status_server::StatusServer,
+        gc_worker::compaction_filter::GC_CONTEXT, status_server::StatusServer, DEFAULT_CLUSTER_ID,
     },
 };
 use tikv_util::{
-    config::{RaftDataStateMachine, ensure_dir_exist},
+    config::{ensure_dir_exist, RaftDataStateMachine},
     math::MovingAvgU32,
     metrics::INSTANCE_BACKEND_CPU_QUOTA,
     quota_limiter::QuotaLimiter,
-    sys::{SysQuota, cpu_time::ProcessStat, disk, path_in_diff_mount_point},
+    sys::{cpu_time::ProcessStat, disk, path_in_diff_mount_point, SysQuota},
     time::Instant,
     worker::{LazyWorker, Worker},
 };

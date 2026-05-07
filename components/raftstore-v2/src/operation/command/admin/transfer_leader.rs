@@ -10,13 +10,13 @@ use kvproto::{
         AdminCmdType, AdminRequest, AdminResponse, RaftCmdRequest, TransferLeaderRequest,
     },
 };
-use raft::{ProgressState, Storage, eraftpb};
+use raft::{eraftpb, ProgressState, Storage};
 use raftstore::{
-    Result,
     store::{
-        Config, TransferLeaderContext, Transport, entry_storage::CacheWarmupState,
-        fsm::new_admin_request, make_transfer_leader_response, metrics::PEER_ADMIN_CMD_COUNTER,
+        entry_storage::CacheWarmupState, fsm::new_admin_request, make_transfer_leader_response,
+        metrics::PEER_ADMIN_CMD_COUNTER, Config, TransferLeaderContext, Transport,
     },
+    Result,
 };
 use rand::prelude::SliceRandom;
 use slog::info;

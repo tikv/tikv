@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{Arc, mpsc},
+    sync::{mpsc, Arc},
     thread,
     time::Duration,
 };
@@ -10,7 +10,7 @@ use grpcio::EnvBuilder;
 use kvproto::{metapb::*, pdpb};
 use pd_client::{PdClient, RegionInfo, RegionStat, RpcClient};
 use security::{SecurityConfig, SecurityManager};
-use test_pd::{Server as MockServer, mocker::*, util::*};
+use test_pd::{mocker::*, util::*, Server as MockServer};
 use tikv_util::config::ReadableDuration;
 
 fn new_test_server_and_client(

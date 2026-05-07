@@ -3,8 +3,8 @@
 use std::{collections::HashSet, result::Result, sync::Arc};
 
 use dashmap::{
-    DashMap,
     mapref::{entry::Entry, one::RefMut as DashRefMut},
+    DashMap,
 };
 use kvproto::metapb::Region;
 use raftstore::coprocessor::*;
@@ -413,7 +413,7 @@ pub trait RefMut: Ref {
     fn value_mut(&mut self) -> &mut <Self as Ref>::Value;
 }
 
-impl Ref for ActiveSubscriptionRef<'_> {
+impl<'a> Ref for ActiveSubscriptionRef<'a> {
     type Key = u64;
     type Value = ActiveSubscription;
 
@@ -426,7 +426,7 @@ impl Ref for ActiveSubscriptionRef<'_> {
     }
 }
 
-impl RefMut for ActiveSubscriptionRef<'_> {
+impl<'a> RefMut for ActiveSubscriptionRef<'a> {
     fn value_mut(&mut self) -> &mut <Self as Ref>::Value {
         self.sub_mut()
     }

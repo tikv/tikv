@@ -129,8 +129,8 @@ where
 mod tests {
     use std::{
         sync::{
-            Arc,
             atomic::{AtomicBool, Ordering},
+            Arc,
         },
         thread,
     };

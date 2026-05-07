@@ -3,20 +3,19 @@
 use std::{
     fmt,
     sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
+        Arc,
     },
     time::Duration,
 };
 
 use futures::{
-    SinkExt, Stream, StreamExt,
     channel::mpsc::{
-        Receiver, SendError as FuturesSendError, Sender, TrySendError, UnboundedReceiver,
-        UnboundedSender, channel as bounded, unbounded,
+        channel as bounded, unbounded, Receiver, SendError as FuturesSendError, Sender,
+        TrySendError, UnboundedReceiver, UnboundedSender,
     },
     executor::block_on,
-    stream,
+    stream, SinkExt, Stream, StreamExt,
 };
 use grpcio::WriteFlags;
 use kvproto::cdcpb::{ChangeDataEvent, Event, ResolvedTs};
@@ -486,13 +485,13 @@ where
 mod tests {
     use std::{
         assert_matches::assert_matches,
-        sync::{Arc, mpsc},
+        sync::{mpsc, Arc},
         time::Duration,
     };
 
     use futures::executor::block_on;
     use kvproto::cdcpb::{
-        ChangeDataEvent, Event, Event_oneof_event, EventEntries, EventRow, ResolvedTs,
+        ChangeDataEvent, Event, EventEntries, EventRow, Event_oneof_event, ResolvedTs,
     };
 
     use super::*;

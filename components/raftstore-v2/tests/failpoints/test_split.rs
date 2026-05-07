@@ -5,12 +5,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use engine_traits::{CF_DEFAULT, RaftEngineReadOnly};
+use engine_traits::{RaftEngineReadOnly, CF_DEFAULT};
 use futures::executor::block_on;
 use raftstore::store::RAFT_INIT_LOG_INDEX;
-use raftstore_v2::{SimpleWriteEncoder, router::PeerMsg};
+use raftstore_v2::{router::PeerMsg, SimpleWriteEncoder};
 
-use crate::cluster::{Cluster, split_helper::split_region};
+use crate::cluster::{split_helper::split_region, Cluster};
 
 /// If a node is restarted after metadata is persisted before tablet is not
 /// installed, it should resume install the tablet.

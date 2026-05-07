@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{Arc, Mutex, atomic::*, mpsc},
+    sync::{atomic::*, mpsc, Arc, Mutex},
     thread,
     time::Duration,
 };
@@ -11,7 +11,7 @@ use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use raftstore::store::Callback;
 use test_raftstore::*;
-use tikv_util::{HandyRwLock, config::*};
+use tikv_util::{config::*, HandyRwLock};
 
 fn stale_read_during_splitting(right_derive: bool) {
     let count = 3;

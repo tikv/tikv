@@ -9,8 +9,8 @@ use std::{
     fmt::Debug,
     result,
     sync::{
-        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
     },
 };
 

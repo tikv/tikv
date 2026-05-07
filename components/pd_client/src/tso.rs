@@ -27,7 +27,7 @@ use tikv_util::{box_err, info, sys::thread::StdThreadBuildWrapper};
 use tokio::sync::{mpsc, oneshot, watch};
 use txn_types::TimeStamp;
 
-use crate::{Error, Result, metrics::PD_PENDING_TSO_REQUEST_GAUGE};
+use crate::{metrics::PD_PENDING_TSO_REQUEST_GAUGE, Error, Result};
 
 /// It is an empirical value.
 const MAX_BATCH_SIZE: usize = 64;
@@ -174,7 +174,7 @@ struct TsoRequestStream<'a> {
     self_waker: Rc<AtomicWaker>,
 }
 
-impl Stream for TsoRequestStream<'_> {
+impl<'a> Stream for TsoRequestStream<'a> {
     type Item = (TsoRequest, WriteFlags);
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {

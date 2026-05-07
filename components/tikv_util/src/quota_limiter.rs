@@ -4,8 +4,8 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{
-        Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc,
     },
     task::{Context, Poll},
     time::Duration,

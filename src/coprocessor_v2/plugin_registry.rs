@@ -5,7 +5,7 @@ use std::{
     ffi::{OsStr, OsString},
     ops::Range,
     path::{Path, PathBuf},
-    sync::{Arc, RwLock, mpsc},
+    sync::{mpsc, Arc, RwLock},
     thread,
     time::Duration,
 };
@@ -32,7 +32,9 @@ pub enum PluginLoadingError {
         tikv_rustc: String,
     },
 
-    #[error("target mismatch: plugin was compiled for {plugin_target}, but TiKV for {tikv_target}")]
+    #[error(
+        "target mismatch: plugin was compiled for {plugin_target}, but TiKV for {tikv_target}"
+    )]
     TargetMismatch {
         plugin_target: String,
         tikv_target: String,

@@ -119,11 +119,11 @@ pub struct CollectSubcompactionStatistic {
 
 pub mod prom {
     use prometheus::*;
-    use serde::{Serialize, ser::SerializeMap};
+    use serde::{ser::SerializeMap, Serialize};
 
     struct ShowPromHist<'a>(&'a Histogram);
 
-    impl Serialize for ShowPromHist<'_> {
+    impl<'a> Serialize for ShowPromHist<'a> {
         fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
         where
             S: serde::Serializer,

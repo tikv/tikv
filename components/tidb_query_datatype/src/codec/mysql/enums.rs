@@ -9,12 +9,9 @@ use codec::prelude::*;
 use tipb::FieldType;
 
 use crate::{
-    FieldTypeTp,
-    codec::{
-        Result,
-        convert::{ToInt, ToStringValue},
-    },
+    codec::{convert::ToInt, Result},
     expr::EvalContext,
+    FieldTypeTp,
 };
 
 #[derive(Clone, Debug)]
@@ -148,7 +145,7 @@ impl<'a> EnumRef<'a> {
     }
 }
 
-impl Display for EnumRef<'_> {
+impl<'a> Display for EnumRef<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         if *self.value == 0 {
             return Ok(());
@@ -158,27 +155,27 @@ impl Display for EnumRef<'_> {
     }
 }
 
-impl Eq for EnumRef<'_> {}
+impl<'a> Eq for EnumRef<'a> {}
 
-impl PartialEq for EnumRef<'_> {
+impl<'a> PartialEq for EnumRef<'a> {
     fn eq(&self, other: &Self) -> bool {
         self.value == other.value
     }
 }
 
-impl Ord for EnumRef<'_> {
+impl<'a> Ord for EnumRef<'a> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.value.cmp(other.value)
     }
 }
 
-impl PartialOrd for EnumRef<'_> {
+impl<'a> PartialOrd for EnumRef<'a> {
     fn partial_cmp(&self, right: &Self) -> Option<Ordering> {
         Some(self.cmp(right))
     }
 }
 
-impl ToInt for EnumRef<'_> {
+impl<'a> ToInt for EnumRef<'a> {
     fn to_int(&self, _ctx: &mut EvalContext, _tp: FieldTypeTp) -> Result<i64> {
         Ok(*self.value as i64)
     }
@@ -188,8 +185,8 @@ impl ToInt for EnumRef<'_> {
     }
 }
 
-impl ToStringValue for EnumRef<'_> {
-    fn to_string_value(&self) -> String {
+impl<'a> ToString for EnumRef<'a> {
+    fn to_string(&self) -> String {
         String::from_utf8_lossy(self.name).to_string()
     }
 }

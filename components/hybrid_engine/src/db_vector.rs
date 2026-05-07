@@ -80,7 +80,7 @@ where
     }
 }
 
-impl<EK, EC> PartialEq<&[u8]> for HybridDbVector<EK, EC>
+impl<'a, EK, EC> PartialEq<&'a [u8]> for HybridDbVector<EK, EC>
 where
     EK: KvEngine,
     EC: RegionCacheEngine,

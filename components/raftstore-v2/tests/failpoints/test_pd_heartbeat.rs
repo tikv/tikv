@@ -5,7 +5,7 @@ use pd_client::PdClient;
 use raftstore_v2::router::{StoreMsg, StoreTick};
 use tikv_util::config::ReadableDuration;
 
-use crate::cluster::{Cluster, v2_default_config};
+use crate::cluster::{v2_default_config, Cluster};
 
 #[test]
 fn test_fake_store_heartbeat() {

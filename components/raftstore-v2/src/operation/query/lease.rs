@@ -5,20 +5,21 @@ use std::sync::Mutex;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftRequestHeader};
 use raft::{
-    Storage,
     eraftpb::{self, MessageType},
+    Storage,
 };
 use raftstore::{
-    Error, Result,
     store::{
-        ReadDelegate, ReadIndexRequest, ReadProgress, Transport, can_amend_read, cmd_resp,
+        can_amend_read, cmd_resp,
         fsm::{apply::notify_stale_req, new_read_index_request},
         metrics::RAFT_READ_INDEX_PENDING_COUNT,
         msg::{ErrorCallback, ReadCallback},
         propose_read_index, should_renew_lease,
         simple_write::SimpleWriteEncoder,
-        util::{LeaseState, check_req_region_epoch},
+        util::{check_req_region_epoch, LeaseState},
+        ReadDelegate, ReadIndexRequest, ReadProgress, Transport,
     },
+    Error, Result,
 };
 use slog::debug;
 use tikv_util::time::monotonic_raw_now;
@@ -71,7 +72,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     pub fn pre_read_index(&self) -> Result<()> {
         fail::fail_point!("before_propose_readindex", |s| if s
-            .is_none_or(|s| s.parse().unwrap_or(true))
+            .map_or(true, |s| s.parse().unwrap_or(true))
         {
             Ok(())
         } else {
@@ -339,23 +340,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             None => return false,
         };
         let max_lease = ctx.cfg.raft_store_max_leader_lease();
-        let has_overlapped_reads = self.pending_reads().back().is_some_and(|read| {
+        let has_overlapped_reads = self.pending_reads().back().map_or(false, |read| {
             // If there is any read index whose lease can cover till next heartbeat
             // then we don't need to propose a new one
             read.propose_time + max_lease > renew_bound
         });
-        let has_overlapped_writes = self.proposals().back().is_some_and(|proposal| {
+        let has_overlapped_writes = self.proposals().back().map_or(false, |proposal| {
             // If there is any write whose lease can cover till next heartbeat
             // then we don't need to propose a new one
             proposal
                 .propose_time
-                .is_some_and(|propose_time| propose_time + max_lease > renew_bound)
+                .map_or(false, |propose_time| propose_time + max_lease > renew_bound)
         });
         !has_overlapped_reads && !has_overlapped_writes
     }
 }
 
-impl<EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'_, EK, ER, T> {
+impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
     fn register_check_leader_lease_tick(&mut self) {
         self.schedule_tick(PeerTick::CheckLeaderLease)
     }

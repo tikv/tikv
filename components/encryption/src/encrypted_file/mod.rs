@@ -6,13 +6,13 @@ use std::{
 };
 
 use crypto::rand;
-use file_system::{File, OpenOptions, rename};
+use file_system::{rename, File, OpenOptions};
 use kvproto::encryptionpb::EncryptedContent;
 use protobuf::Message;
 use slog_global::error;
 use tikv_util::time::Instant;
 
-use crate::{Result, master_key::*, metrics::*};
+use crate::{master_key::*, metrics::*, Result};
 
 mod header;
 pub use header::*;

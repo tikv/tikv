@@ -7,7 +7,7 @@ use txn_types::Key;
 
 use crate::{
     coprocessor::Error,
-    storage::{Scanner, Statistics, Store, mvcc::NewerTsCheckState},
+    storage::{mvcc::NewerTsCheckState, Scanner, Statistics, Store},
 };
 
 /// A `Storage` implementation over TiKV's storage.

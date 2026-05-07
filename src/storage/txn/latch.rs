@@ -2,7 +2,7 @@
 
 // #[PerformanceCriticalPath]
 use std::{
-    collections::{VecDeque, hash_map::DefaultHasher},
+    collections::{hash_map::DefaultHasher, VecDeque},
     hash::{Hash, Hasher},
     usize,
 };

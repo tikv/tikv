@@ -3,8 +3,8 @@ use std::{
     collections::BTreeMap,
     num::NonZeroUsize,
     sync::{
-        Arc, Mutex as StdMutex,
         atomic::{AtomicBool, Ordering},
+        Arc, Mutex as StdMutex,
     },
     time::{Duration, Instant},
 };
@@ -21,7 +21,6 @@ use tikv_util::{config::VersionTrack, info, worker::Scheduler};
 use tokio::sync::mpsc;
 
 use crate::{
-    BackgroundTask, InMemoryEngineConfig,
     memory_controller::MemoryController,
     metrics::{
         IN_MEMORY_ENGINE_AUTO_LOAD_EVICT_CACHED_REGION_COP_REQ,
@@ -30,6 +29,7 @@ use crate::{
         IN_MEMORY_ENGINE_AUTO_LOAD_EVICT_TOP_REGION_MVCC_AMP,
     },
     region_manager::CopRequestsSma,
+    BackgroundTask, InMemoryEngineConfig,
 };
 
 /// Do not evict a region if has been cached for less than this duration.
@@ -282,7 +282,7 @@ impl RegionStatsManager {
             let load_time = regions_loaded.entry(crs.region.id).or_insert(now);
             let can_evict = now
                 .checked_duration_since(*load_time)
-                .is_some_and(|d| d > self.evict_min_duration);
+                .map_or(false, |d| d > self.evict_min_duration);
             if !can_evict {
                 continue;
             }
@@ -473,7 +473,7 @@ fn sort_cached_region_stats(
 pub mod tests {
     use futures::executor::block_on;
     use pd_client::{RegionStat, RegionWriteCfCopDetail};
-    use raftstore::coprocessor::{self, RegionInfoProvider, region_info_accessor::TopRegions};
+    use raftstore::coprocessor::{self, region_info_accessor::TopRegions, RegionInfoProvider};
     use tikv_util::{
         box_err,
         config::{ReadableDuration, ReadableSize, VersionTrack},
@@ -482,8 +482,8 @@ pub mod tests {
 
     use super::*;
     use crate::{
-        InMemoryEngineConfig, engine::SkiplistEngine, region_manager::COP_REQUEST_SMA_RECORD_COUNT,
-        test_util::new_region,
+        engine::SkiplistEngine, region_manager::COP_REQUEST_SMA_RECORD_COUNT,
+        test_util::new_region, InMemoryEngineConfig,
     };
 
     struct RegionInfoSimulator {

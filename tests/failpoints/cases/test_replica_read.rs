@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{Arc, Mutex, atomic::AtomicBool},
+    sync::{atomic::AtomicBool, Arc, Mutex},
     thread,
     time::Duration,
 };
@@ -14,7 +14,7 @@ use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
 use tikv::storage::config::EngineType;
-use tikv_util::{HandyRwLock, config::ReadableDuration, future::block_on_timeout};
+use tikv_util::{config::ReadableDuration, future::block_on_timeout, HandyRwLock};
 use txn_types::{Key, Lock, LockType};
 
 #[test_case(test_raftstore::new_node_cluster)]

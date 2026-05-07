@@ -8,8 +8,8 @@ use std::{
 
 use engine_rocks::{RocksEngine, RocksEngineIterator, RocksWriteBatchVec};
 use engine_traits::{
-    CF_DEFAULT, CF_LOCK, CF_WRITE, IterOptions, Iterable, Iterator, Mutable, WriteBatch,
-    WriteBatchExt,
+    IterOptions, Iterable, Iterator, Mutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK,
+    CF_WRITE,
 };
 use tikv_util::sys::thread::StdThreadBuildWrapper;
 use txn_types::{Key, TimeStamp, Write, WriteRef};
@@ -268,7 +268,7 @@ impl ResetToVersionManager {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::{ALL_CFS, CF_LOCK, WriteBatch, WriteBatchExt};
+    use engine_traits::{WriteBatch, WriteBatchExt, ALL_CFS, CF_LOCK};
     use tempfile::Builder;
     use txn_types::{Lock, LockType, WriteType};
 

@@ -2,9 +2,8 @@
 
 use super::{scalar::ScalarValueRef, *};
 use crate::{
-    EvalType, FieldTypeAccessor,
-    codec::{Result, mysql::decimal::DECIMAL_STRUCT_SIZE},
-    match_template_collator, match_template_evaltype,
+    codec::{mysql::decimal::DECIMAL_STRUCT_SIZE, Result},
+    match_template_collator, match_template_evaltype, EvalType, FieldTypeAccessor,
 };
 
 /// A vector value container, a.k.a. column, for all concrete eval types.
@@ -483,8 +482,8 @@ impl VectorValue {
         output: &mut Vec<u8>,
     ) -> Result<()> {
         use crate::{
-            Collation,
             codec::{collation::Collator, datum_codec::EvaluableDatumEncoder},
+            Collation,
         };
 
         match self {

@@ -6,14 +6,14 @@ use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{metapb, pdpb};
 use pd_client::{
-    BucketStat, PdClient, RegionStat, RegionWriteCfCopDetail, metrics::PD_HEARTBEAT_COUNTER_VEC,
+    metrics::PD_HEARTBEAT_COUNTER_VEC, BucketStat, PdClient, RegionStat, RegionWriteCfCopDetail,
 };
 use raftstore::store::{ReadStats, WriteStats};
 use resource_metering::RawRecords;
 use slog::{debug, error, info};
 use tikv_util::{store::QueryStats, time::UnixSecs};
 
-use super::{Runner, requests::*};
+use super::{requests::*, Runner};
 use crate::{
     operation::{RequestHalfSplit, RequestSplit},
     router::{CmdResChannel, PeerMsg},

@@ -13,12 +13,12 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    CF_DEFAULT, KvEngine, Peekable, RaftEngine, RaftEngineReadOnly, RaftLogBatch, ReadOptions,
-    SyncMutable, TabletRegistry,
+    KvEngine, Peekable, RaftEngine, RaftEngineReadOnly, RaftLogBatch, ReadOptions, SyncMutable,
+    TabletRegistry, CF_DEFAULT,
 };
 use file_system::IoRateLimiter;
-use futures::{Future, executor::block_on, future::BoxFuture};
-use keys::{DATA_PREFIX_KEY, data_key, validate_data_key};
+use futures::{executor::block_on, future::BoxFuture, Future};
+use keys::{data_key, validate_data_key, DATA_PREFIX_KEY};
 use kvproto::{
     errorpb::Error as PbError,
     kvrpcpb::ApiVersion,
@@ -35,37 +35,37 @@ use kvproto::{
 };
 use pd_client::PdClient;
 use raftstore::{
-    Error, Result,
     store::{
-        Bucket, BucketRange, Callback, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER, RaftCmdExtraOpts,
-        RegionSnapshot, TabletSnapManager, WriteResponse, cmd_resp, initial_region,
-        region_meta::RegionMeta, util::check_key_in_region,
+        cmd_resp, initial_region, region_meta::RegionMeta, util::check_key_in_region, Bucket,
+        BucketRange, Callback, RaftCmdExtraOpts, RegionSnapshot, TabletSnapManager, WriteResponse,
+        INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
     },
+    Error, Result,
 };
 use raftstore_v2::{
-    SimpleWriteEncoder, StoreMeta, StoreRouter,
     router::{DebugInfoChannel, PeerMsg, QueryResult, StoreMsg, StoreTick},
-    write_initial_states,
+    write_initial_states, SimpleWriteEncoder, StoreMeta, StoreRouter,
 };
 use resource_control::ResourceGroupManager;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{
-    Config, Filter, FilterFactory, PartitionFilterFactory, RawEngine, check_raft_cmd_request,
-    is_error_response, new_admin_request, new_delete_cmd, new_delete_range_cmd, new_get_cf_cmd,
-    new_peer, new_prepare_merge, new_put_cf_cmd, new_put_cmd, new_region_detail_cmd,
-    new_region_leader_cmd, new_request, new_status_request, new_store,
-    new_tikv_config_with_api_ver, new_transfer_leader_cmd, sleep_ms,
+    check_raft_cmd_request, is_error_response, new_admin_request, new_delete_cmd,
+    new_delete_range_cmd, new_get_cf_cmd, new_peer, new_prepare_merge, new_put_cf_cmd, new_put_cmd,
+    new_region_detail_cmd, new_region_leader_cmd, new_request, new_status_request, new_store,
+    new_tikv_config_with_api_ver, new_transfer_leader_cmd, sleep_ms, Config, Filter, FilterFactory,
+    PartitionFilterFactory, RawEngine,
 };
 use tikv::{config::TikvConfig, server::Result as ServerResult, storage::config::EngineType};
 use tikv_util::{
-    HandyRwLock, box_err, box_try, debug, error,
+    box_err, box_try, debug, error,
     future::block_on_timeout,
     safe_panic,
     thread_group::GroupProperties,
     time::{Instant, ThreadReadId},
     warn,
     worker::LazyWorker,
+    HandyRwLock,
 };
 use txn_types::WriteBatchFlags;
 

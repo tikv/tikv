@@ -5,14 +5,14 @@ use std::{
     cmp::{max, min},
     collections::HashSet,
     sync::{
-        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Mutex,
     },
     time::Duration,
 };
 
 use collections::HashMap;
-use dashmap::{DashMap, mapref::one::Ref};
+use dashmap::{mapref::one::Ref, DashMap};
 use fail::fail_point;
 use kvproto::{
     kvrpcpb::{CommandPri, ResourceControlContext},
@@ -22,7 +22,7 @@ use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
 use tikv_util::{
     config::VersionTrack,
     info,
-    resource_control::{DEFAULT_RESOURCE_GROUP_NAME, TaskMetadata, TaskPriority},
+    resource_control::{TaskMetadata, TaskPriority, DEFAULT_RESOURCE_GROUP_NAME},
     time::Instant,
 };
 use yatp::queue::priority::TaskPriorityProvider;
@@ -1095,7 +1095,7 @@ pub(crate) mod tests {
     #[cfg(feature = "failpoints")]
     #[test]
     fn test_reset_resource_group_vt_overflow() {
-        use rand::{RngCore, thread_rng};
+        use rand::{thread_rng, RngCore};
         let resource_manager = ResourceGroupManager::default();
         let resource_ctl = resource_manager.derive_controller("test_write".into(), false);
         let mut rng = thread_rng();

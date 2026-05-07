@@ -6,10 +6,10 @@ use std::{
 };
 
 use ::tracker::{
-    GLOBAL_TRACKERS, RequestInfo, RequestType, set_tls_tracker_token, with_tls_tracker,
+    set_tls_tracker_token, with_tls_tracker, RequestInfo, RequestType, GLOBAL_TRACKERS,
 };
 use anyhow::anyhow;
-use api_version::{KvFormat, dispatch_api_version};
+use api_version::{dispatch_api_version, KvFormat};
 use async_stream::try_stream;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::PerfLevel;
@@ -23,8 +23,8 @@ use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
 use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
 use resource_metering::{
-    FutureExt, ResourceTagFactory, StreamExt, record_logical_read_bytes, record_network_in_bytes,
-    record_network_out_bytes,
+    record_logical_read_bytes, record_network_in_bytes, record_network_out_bytes, FutureExt,
+    ResourceTagFactory, StreamExt,
 };
 use tidb_query_common::{
     error::StorageError,
@@ -53,10 +53,10 @@ use crate::{
     read_pool::ReadPoolHandle,
     server::Config,
     storage::{
-        self, Engine, Snapshot, SnapshotStore,
-        kv::{self, SnapContext, with_tls_engine},
+        self,
+        kv::{self, with_tls_engine, SnapContext},
         mvcc::Error as MvccError,
-        need_check_locks, need_check_locks_in_replica_read,
+        need_check_locks, need_check_locks_in_replica_read, Engine, Snapshot, SnapshotStore,
     },
 };
 
@@ -1216,7 +1216,7 @@ impl<E: Engine> RegionStorageAccessor for ExtraSnapStoreAccessor<E> {
 mod tests {
     use std::{
         assert_matches::assert_matches,
-        sync::{Mutex, atomic, mpsc},
+        sync::{atomic, mpsc, Mutex},
         thread, vec,
     };
 
@@ -1226,7 +1226,7 @@ mod tests {
     use raft::StateRole;
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use tidb_query_common::storage::Storage;
-    use tikv_kv::{MockEngine, MockEngineBuilder, destroy_tls_engine, set_tls_engine};
+    use tikv_kv::{destroy_tls_engine, set_tls_engine, MockEngine, MockEngineBuilder};
     use tipb::{Executor, Expr};
     use txn_types::{Key, LockType};
 
@@ -1235,7 +1235,7 @@ mod tests {
         config::CoprReadPoolConfig,
         coprocessor::readpool_impl::build_read_pool_for_test,
         read_pool::ReadPool,
-        storage::{Store, TestEngineBuilder, kv::RocksEngine},
+        storage::{kv::RocksEngine, Store, TestEngineBuilder},
     };
 
     /// A unary `RequestHandler` that always produces a fixture.

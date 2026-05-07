@@ -3,8 +3,8 @@
 use std::{
     mem,
     sync::{
+        mpsc::{channel, sync_channel, Receiver, SyncSender},
         Arc,
-        mpsc::{Receiver, SyncSender, channel, sync_channel},
     },
     time::Duration,
 };
@@ -15,10 +15,10 @@ use raftstore::coprocessor::{
     BoxRegionChangeObserver, Coprocessor, ObserverContext, RegionChangeEvent, RegionChangeObserver,
     RegionChangeReason,
 };
-use test_raftstore::{Cluster, NodeCluster, new_node_cluster};
+use test_raftstore::{new_node_cluster, Cluster, NodeCluster};
 use tikv_util::{
-    HandyRwLock,
     store::{find_peer, new_peer},
+    HandyRwLock,
 };
 
 #[derive(Clone)]

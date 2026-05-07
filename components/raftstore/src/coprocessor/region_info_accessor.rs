@@ -7,7 +7,7 @@ use std::{
     },
     fmt::{Display, Formatter, Result as FmtResult},
     num::NonZeroUsize,
-    sync::{Arc, Mutex, RwLock, mpsc},
+    sync::{mpsc, Arc, Mutex, RwLock},
     time::Duration,
 };
 
@@ -23,9 +23,9 @@ use tikv_util::{
 };
 
 use super::{
-    BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
-    RegionChangeEvent, RegionChangeObserver, RegionHeartbeatObserver, Result, RoleChange,
-    RoleObserver, dispatcher::BoxRegionHeartbeatObserver, metrics::*,
+    dispatcher::BoxRegionHeartbeatObserver, metrics::*, BoxRegionChangeObserver, BoxRoleObserver,
+    Coprocessor, CoprocessorHost, ObserverContext, RegionChangeEvent, RegionChangeObserver,
+    RegionHeartbeatObserver, Result, RoleChange, RoleObserver,
 };
 
 // TODO(SpadeA): this 100 may be adjusted by observing more workloads.
@@ -1220,7 +1220,8 @@ mod tests {
         if is_regions_equal {
             for (expect_region, expect_role) in regions {
                 is_regions_equal = is_regions_equal
-                    && c.regions.get(&expect_region.get_id()).is_some_and(
+                    && c.regions.get(&expect_region.get_id()).map_or(
+                        false,
                         |RegionInfo { region, role, .. }| {
                             expect_region == region && expect_role == role
                         },
@@ -1316,7 +1317,7 @@ mod tests {
                 assert!(
                     c.region_ranges
                         .get(&RangeKey::from_end_key(old_end_key))
-                        .is_none_or(|id| *id != region.get_id())
+                        .map_or(true, |id| *id != region.get_id())
                 );
             }
         }
@@ -1345,7 +1346,7 @@ mod tests {
             assert!(
                 c.region_ranges
                     .get(&RangeKey::from_end_key(end_key))
-                    .is_none_or(|r| *r != id)
+                    .map_or(true, |r| *r != id)
             );
         }
     }

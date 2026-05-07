@@ -2,12 +2,12 @@
 
 use std::marker::PhantomData;
 
-use engine_traits::{CF_RAFT, KvEngine, Snapshot};
+use engine_traits::{KvEngine, Snapshot, CF_RAFT};
 use kvproto::metapb::Region;
 
 use crate::{
-    Result,
     coprocessor::{ConsistencyCheckMethod, Coprocessor},
+    Result,
 };
 
 pub trait ConsistencyCheckObserver<E: KvEngine>: Coprocessor {

@@ -3,8 +3,8 @@
 use std::{
     fmt::{Debug, Formatter},
     sync::{
-        Arc,
         atomic::{AtomicU64, Ordering},
+        Arc,
     },
     time::Duration,
 };
@@ -19,9 +19,9 @@ pub use crate::storage::lock_manager::lock_wait_context::CancellationCallback;
 use crate::{
     server::lock_manager::{waiter_manager, waiter_manager::Callback},
     storage::{
-        Error as StorageError,
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::Error as TxnError,
+        Error as StorageError,
     },
 };
 

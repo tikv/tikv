@@ -14,10 +14,10 @@ use std::{
 use collections::HashMap;
 use engine_panic::PanicEngine;
 use engine_traits::{
-    CF_DEFAULT, CF_LOCK, CF_WRITE, CfName, IterMetricsCollector, IterOptions, MetricsExt,
-    ReadOptions,
+    CfName, IterMetricsCollector, IterOptions, MetricsExt, ReadOptions, CF_DEFAULT, CF_LOCK,
+    CF_WRITE,
 };
-use futures::{Future, Stream, future, stream};
+use futures::{future, stream, Future, Stream};
 use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
 
@@ -115,9 +115,7 @@ impl Engine for BTreeEngine {
     }
 
     type IMSnap = Self::Snap;
-    // TODO: revert this once https://github.com/rust-lang/rust/issues/140222 is fixed.
-    // type IMSnapshotRes = Self::SnapshotRes;
-    type IMSnapshotRes = impl Future<Output = EngineResult<Self::Snap>> + Send;
+    type IMSnapshotRes = Self::SnapshotRes;
     fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
         self.async_snapshot(ctx)
     }
@@ -331,7 +329,7 @@ pub mod tests {
     use engine_traits::IterOptions;
 
     use super::{
-        super::{CfStatistics, TEST_ENGINE_CFS, tests::*},
+        super::{tests::*, CfStatistics, TEST_ENGINE_CFS},
         *,
     };
     use crate::{Cursor, ScanMode};

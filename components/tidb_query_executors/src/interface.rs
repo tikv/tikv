@@ -8,7 +8,7 @@
 use async_trait::async_trait;
 pub use tidb_query_common::execute_stats::{ExecSummaryCollector, ExecuteStats};
 use tidb_query_common::{
-    Result, execute_stats::ExecSummaryCollectorEnabled, storage::IntervalRange,
+    execute_stats::ExecSummaryCollectorEnabled, storage::IntervalRange, Result,
 };
 use tidb_query_datatype::{codec::batch::LazyBatchColumnVec, expr::EvalWarnings};
 use tipb::FieldType;

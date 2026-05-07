@@ -7,16 +7,16 @@ use std::{
 
 use byteorder::{BigEndian, ByteOrder};
 use crypto::rand;
-use file_system::{File, OpenOptions, rename};
+use file_system::{rename, File, OpenOptions};
 use kvproto::encryptionpb::{EncryptedContent, FileDictionary, FileInfo};
 use protobuf::Message;
 use tikv_util::{box_err, info, set_panic_mark, warn};
 
 use crate::{
-    Error, Result,
-    encrypted_file::{EncryptedFile, Header, TMP_FILE_SUFFIX, Version},
+    encrypted_file::{EncryptedFile, Header, Version, TMP_FILE_SUFFIX},
     master_key::{Backend, PlaintextBackend},
     metrics::*,
+    Error, Result,
 };
 
 #[derive(Debug)]
@@ -412,7 +412,7 @@ mod tests {
     use kvproto::encryptionpb::EncryptionMethod;
 
     use super::*;
-    use crate::{Error, encrypted_file::EncryptedFile};
+    use crate::{encrypted_file::EncryptedFile, Error};
 
     fn test_file_dict_file_normal(enable_log: bool) {
         let tempdir = tempfile::tempdir().unwrap();

@@ -2,19 +2,19 @@
 
 use std::{ffi::CString, fs, path::Path, str::FromStr, sync::Arc};
 
-use engine_traits::{CF_DEFAULT, Engines, Range, Result};
+use engine_traits::{Engines, Range, Result, CF_DEFAULT};
 use fail::fail_point;
 use rocksdb::{
-    CColumnFamilyDescriptor, CFHandle, ColumnFamilyOptions, CompactionFilter,
+    load_latest_options, CColumnFamilyDescriptor, CFHandle, ColumnFamilyOptions, CompactionFilter,
     CompactionFilterContext, CompactionFilterDecision, CompactionFilterFactory,
-    CompactionFilterValueType, DB, DBTableFileCreationReason, Env, Range as RocksRange,
-    SliceTransform, load_latest_options,
+    CompactionFilterValueType, DBTableFileCreationReason, Env, Range as RocksRange, SliceTransform,
+    DB,
 };
 use slog_global::warn;
 
 use crate::{
-    RocksStatistics, cf_options::RocksCfOptions, db_options::RocksDbOptions, engine::RocksEngine,
-    r2e, rocks_metrics_defs::*,
+    cf_options::RocksCfOptions, db_options::RocksDbOptions, engine::RocksEngine, r2e,
+    rocks_metrics_defs::*, RocksStatistics,
 };
 
 pub fn new_temp_engine(path: &tempfile::TempDir) -> Engines<RocksEngine, RocksEngine> {
@@ -529,7 +529,7 @@ impl CompactionFilter for RangeCompactionFilter {
 #[cfg(test)]
 mod tests {
     use engine_traits::{
-        CF_DEFAULT, CfOptionsExt, FlowControlFactorsExt, Iterable, MiscExt, Peekable, SyncMutable,
+        CfOptionsExt, FlowControlFactorsExt, Iterable, MiscExt, Peekable, SyncMutable, CF_DEFAULT,
     };
     use rocksdb::DB;
     use tempfile::Builder;

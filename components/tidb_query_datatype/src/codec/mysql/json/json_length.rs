@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::{super::Result, JsonRef, JsonType, path_expr::PathExpression};
+use super::{super::Result, path_expr::PathExpression, JsonRef, JsonType};
 
-impl JsonRef<'_> {
+impl<'a> JsonRef<'a> {
     fn len(&self) -> i64 {
         match self.get_type() {
             JsonType::Array | JsonType::Object => self.get_elem_count() as i64,
@@ -25,7 +25,7 @@ impl JsonRef<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{Json, path_expr::parse_json_path_expr};
+    use super::super::{path_expr::parse_json_path_expr, Json};
     #[test]
     fn test_json_length() {
         let mut test_cases = vec![

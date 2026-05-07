@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{Arc, mpsc::channel},
+    sync::{mpsc::channel, Arc},
     time::Duration,
 };
 
@@ -9,7 +9,7 @@ use engine_rocks::RocksEngine;
 use grpcio::{EnvBuilder, ResourceQuota};
 use online_config::ConfigManager;
 use raft_log_engine::RaftLogEngine;
-use raftstore::store::{SnapManager, fsm::create_raft_batch_system};
+use raftstore::store::{fsm::create_raft_batch_system, SnapManager};
 use security::SecurityManager;
 use tempfile::TempDir;
 use tikv::{

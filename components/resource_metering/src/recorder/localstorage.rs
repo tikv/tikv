@@ -2,14 +2,14 @@
 
 use std::{
     cell::RefCell,
-    sync::{Arc, Mutex, atomic::AtomicBool},
+    sync::{atomic::AtomicBool, Arc, Mutex},
 };
 
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
 use tikv_util::sys::thread::Pid;
 
-use crate::{TagInfos, model::SummaryRecord};
+use crate::{model::SummaryRecord, TagInfos};
 
 thread_local! {
     /// `STORAGE` is a thread-localized instance of [LocalStorage].

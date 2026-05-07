@@ -352,18 +352,18 @@ mod tests {
         raft_cmdpb::{CmdType, Request},
     };
     use tikv::storage::{
-        Engine,
         kv::{MockEngineBuilder, TestEngineBuilder},
-        mvcc::{Mutation, MvccTxn, SnapshotReader, tests::write},
+        mvcc::{tests::write, Mutation, MvccTxn, SnapshotReader},
         txn::{
-            CommitKind, TransactionKind, TransactionProperties, commands::one_pc_commit, prewrite,
-            tests::*,
+            commands::one_pc_commit, prewrite, tests::*, CommitKind, TransactionKind,
+            TransactionProperties,
         },
+        Engine,
     };
     use tikv_kv::Modify;
     use txn_types::{Key, LockType, WriteType};
 
-    use super::{ChangeLog, ChangeRow, group_row_changes};
+    use super::{group_row_changes, ChangeLog, ChangeRow};
 
     #[test]
     fn test_cmd_encode() {

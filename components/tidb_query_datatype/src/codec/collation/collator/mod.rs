@@ -22,7 +22,7 @@ pub use utf8mb4_binary::*;
 pub use utf8mb4_general_ci::*;
 pub use utf8mb4_uca::*;
 
-use super::{Collator, charset::*};
+use super::{charset::*, Collator};
 use crate::codec::Result;
 
 pub const PADDING_SPACE: char = 0x20 as char;
@@ -52,7 +52,7 @@ pub(crate) fn next_utf8_char(s: &[u8]) -> Option<(char, &[u8])> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Collation, codec::collation::Collator, match_template_collator};
+    use crate::{codec::collation::Collator, match_template_collator, Collation};
 
     #[test]
     #[allow(clippy::string_lit_as_bytes)]

@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use grpcio::*;
-use grpcio_health::{HealthClient, ServingStatus, proto::HealthCheckRequest};
+use grpcio_health::{proto::HealthCheckRequest, HealthClient, ServingStatus};
 use service::service_event::ServiceEvent;
 use test_pd::Server as MockServer;
 use tikv::config::TikvConfig;

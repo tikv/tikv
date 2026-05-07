@@ -220,7 +220,7 @@ pub(super) mod tests {
 
     use crate::{
         smoother::{
-            SMOOTHER_STALE_RECORD_THRESHOLD, SMOOTHER_TIME_RANGE_THRESHOLD, Smoother, Trend,
+            Smoother, Trend, SMOOTHER_STALE_RECORD_THRESHOLD, SMOOTHER_TIME_RANGE_THRESHOLD,
         },
         time::Instant,
     };

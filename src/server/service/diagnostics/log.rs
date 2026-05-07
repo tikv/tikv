@@ -2,7 +2,7 @@
 
 use std::{
     convert::From,
-    fs::{File, read_dir},
+    fs::{read_dir, File},
     io::{BufRead, BufReader, Seek, SeekFrom},
     path::Path,
 };

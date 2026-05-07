@@ -11,8 +11,8 @@ use std::{
     mem,
     ops::{Deref, DerefMut},
     sync::{
-        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Mutex,
     },
     time::{Duration, Instant, SystemTime},
     u64,
@@ -27,15 +27,15 @@ use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
-    CF_LOCK, CF_RAFT, DeleteStrategy, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine,
-    RaftLogBatch, Range, WriteBatch, WriteOptions,
+    DeleteStrategy, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine, RaftLogBatch, Range,
+    WriteBatch, WriteOptions, CF_LOCK, CF_RAFT,
 };
 use fail::fail_point;
 use file_system::{IoType, WithIoType};
-use futures::{FutureExt, compat::Future01CompatExt};
+use futures::{compat::Future01CompatExt, FutureExt};
 use health_controller::{
-    HealthController,
     types::{InspectFactor, LatencyInspector},
+    HealthController,
 };
 use itertools::Itertools;
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -49,14 +49,14 @@ use kvproto::{
 use pd_client::{Feature, FeatureGate, PdClient};
 use protobuf::Message;
 use raft::StateRole;
-use resource_control::{ResourceGroupManager, channel::unbounded};
+use resource_control::{channel::unbounded, ResourceGroupManager};
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
 use sst_importer::SstImporter;
 use strum::{EnumCount, VariantNames};
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
-    Either, RingQueue, box_try,
+    box_try,
     config::{Tracker, VersionTrack},
     debug, defer, error,
     future::poll_future_notify,
@@ -67,23 +67,21 @@ use tikv_util::{
     sys::{
         self as sys_util,
         cpu_time::ProcessStat,
-        disk::{DiskUsage, get_disk_status},
+        disk::{get_disk_status, DiskUsage},
     },
-    time::{Instant as TiInstant, SlowTimer, duration_to_sec, monotonic_raw_now},
+    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, SlowTimer},
     timer::SteadyTimer,
     warn,
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
     yatp_pool::FuturePool,
+    Either, RingQueue,
 };
 use time::{self, Timespec};
 
 use crate::{
-    Error, Result, bytes_capacity,
+    bytes_capacity,
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
     store::{
-        Callback, CasualMessage, FullCompactController, GlobalReplicationState,
-        InspectedRaftMessage, MergeResultKind, PdTask, PeerMsg, PeerTick, RaftCommand,
-        SignificantMsg, SnapManager, StoreMsg, StoreTick,
         async_io::{
             read::{ReadRunner, ReadTask},
             write::{StoreWriters, StoreWritersContext, Worker as WriteWorker, WriteMsg},
@@ -91,13 +89,14 @@ use crate::{
         },
         config::Config,
         fsm::{
-            ApplyBatchSystem, ApplyNotifier, ApplyPollerBuilder, ApplyRes, ApplyRouter,
-            ApplyTaskRes, create_apply_batch_system,
+            create_apply_batch_system,
             life::handle_tombstone_message_on_learner,
             metrics::*,
             peer::{
-                PeerFsm, PeerFsmDelegate, SenderFsmPair, maybe_destroy_source, new_admin_request,
+                maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
             },
+            ApplyBatchSystem, ApplyNotifier, ApplyPollerBuilder, ApplyRes, ApplyRouter,
+            ApplyTaskRes,
         },
         local_metrics::{IoType as InspectIoType, RaftMetrics},
         memory::*,
@@ -105,17 +104,21 @@ use crate::{
         peer_storage,
         transport::Transport,
         util,
-        util::{RegionReadProgressRegistry, is_initial_msg},
+        util::{is_initial_msg, RegionReadProgressRegistry},
         worker::{
             AutoSplitController, CleanupRunner, CleanupSstRunner, CleanupSstTask, CleanupTask,
             CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
             DiskCheckRunner, DiskCheckTask, GcSnapshotRunner, GcSnapshotTask, PdRunner,
             RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RefreshConfigRunner, RefreshConfigTask,
-            RegionRunner, RegionTask, SNAP_GENERATOR_MAX_POOL_SIZE, SnapGenRunner, SnapGenTask,
-            SplitCheckTask,
+            RegionRunner, RegionTask, SnapGenRunner, SnapGenTask, SplitCheckTask,
+            SNAP_GENERATOR_MAX_POOL_SIZE,
         },
         worker_metrics::PROCESS_STAT_CPU_USAGE,
+        Callback, CasualMessage, FullCompactController, GlobalReplicationState,
+        InspectedRaftMessage, MergeResultKind, PdTask, PeerMsg, PeerTick, RaftCommand,
+        SignificantMsg, SnapManager, StoreMsg, StoreTick,
     },
+    Error, Result,
 };
 
 pub const PENDING_MSG_CAP: usize = 100;
@@ -264,7 +267,7 @@ impl StoreMeta {
         reason: RegionChangeReason,
     ) {
         let prev = self.regions.insert(region.get_id(), region.clone());
-        if prev.is_none_or(|r| r.get_id() != region.get_id()) {
+        if prev.map_or(true, |r| r.get_id() != region.get_id()) {
             // TODO: may not be a good idea to panic when holding a lock.
             panic!("{} region corrupted", peer.tag);
         }
@@ -799,8 +802,8 @@ struct StoreFsmDelegate<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T:
     ctx: &'a mut PollContext<EK, ER, T>,
 }
 
-impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
-    StoreFsmDelegate<'_, EK, ER, T>
+impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
+    StoreFsmDelegate<'a, EK, ER, T>
 {
     fn on_tick(&mut self, tick: StoreTick) {
         let timer = TiInstant::now_coarse();
@@ -2086,7 +2089,7 @@ enum CheckMsgStatus {
     NewPeerFirst,
 }
 
-impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T> {
+impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER, T> {
     /// Checks if the message is targeting a stale peer.
     fn check_msg(&mut self, msg: &RaftMessage) -> Result<CheckMsgStatus> {
         let region_id = msg.get_region_id();
@@ -3083,7 +3086,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
 // we will remove 1-week old version 1 SST files.
 const VERSION_1_SST_CLEANUP_DURATION: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
-impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T> {
+impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER, T> {
     fn on_cleanup_import_sst(&mut self) -> Result<()> {
         let mut delete_ssts = Vec::new();
 

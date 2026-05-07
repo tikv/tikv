@@ -3,13 +3,13 @@
 use std::{sync::*, time::Duration};
 
 use cdc::{Task, Validate};
-use futures::{SinkExt, executor::block_on};
+use futures::{executor::block_on, SinkExt};
 use grpcio::WriteFlags;
 use kvproto::{cdcpb::*, kvrpcpb::*};
 use pd_client::PdClient;
 use test_raftstore::*;
 
-use crate::{TestSuiteBuilder, new_event_feed};
+use crate::{new_event_feed, TestSuiteBuilder};
 
 #[test]
 fn test_resolver_track_lock_memory_quota_exceeded() {

@@ -6,7 +6,7 @@ use std::{
 };
 
 use causal_ts::CausalTsProvider;
-use cdc::{CdcObserver, Delegate, FeatureGate, Task, Validate, recv_timeout};
+use cdc::{recv_timeout, CdcObserver, Delegate, FeatureGate, Task, Validate};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
@@ -16,7 +16,7 @@ use grpcio::{
     Environment, MetadataBuilder,
 };
 use kvproto::{
-    cdcpb::{ChangeDataClient, ChangeDataEvent, ChangeDataRequest, create_change_data},
+    cdcpb::{create_change_data, ChangeDataClient, ChangeDataEvent, ChangeDataRequest},
     kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
     tikvpb::TikvClient,
 };
@@ -29,10 +29,10 @@ use tikv::{
     storage::kv::LocalTablets,
 };
 use tikv_util::{
-    HandyRwLock,
     config::ReadableDuration,
     memory::MemoryQuota,
     worker::{Builder, LazyWorker, Runnable},
+    HandyRwLock,
 };
 use txn_types::TimeStamp;
 static INIT: Once = Once::new();

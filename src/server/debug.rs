@@ -12,14 +12,14 @@ use std::{
 use api_version::KvFormat;
 use collections::HashSet;
 use engine_rocks::{
-    RocksEngine, RocksEngineIterator, RocksMvccProperties, RocksStatistics, RocksWriteBatchVec,
     raw::{CompactOptions, DBBottommostLevelCompaction},
     util::get_cf_handle,
+    RocksEngine, RocksEngineIterator, RocksMvccProperties, RocksStatistics, RocksWriteBatchVec,
 };
 use engine_traits::{
-    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, Engines, Error as EngineTraitError, IterOptions,
-    Iterable, Iterator as EngineIterator, MiscExt, Mutable, MvccProperties, Peekable, RaftEngine,
-    RaftLogBatch, Range, RangePropertiesExt, SyncMutable, WriteBatch, WriteBatchExt, WriteOptions,
+    Engines, Error as EngineTraitError, IterOptions, Iterable, Iterator as EngineIterator, MiscExt,
+    Mutable, MvccProperties, Peekable, RaftEngine, RaftLogBatch, Range, RangePropertiesExt,
+    SyncMutable, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use futures::future::Future;
 use kvproto::{
@@ -29,19 +29,19 @@ use kvproto::{
     raft_serverpb::*,
 };
 use protobuf::Message;
-use raft::{self, RawNode, eraftpb::Entry};
+use raft::{self, eraftpb::Entry, RawNode};
 use raftstore::{
     coprocessor::get_region_approximate_middle,
     store::{
-        PeerStorage, local_metrics::RaftMetrics, write_initial_apply_state,
-        write_initial_raft_state, write_peer_state,
+        local_metrics::RaftMetrics, write_initial_apply_state, write_initial_raft_state,
+        write_peer_state, PeerStorage,
     },
 };
 use thiserror::Error;
 use tikv_kv::Engine;
 use tikv_util::{
-    Either, config::ReadableSize, keybuilder::KeyBuilder, store::find_peer,
-    sys::thread::StdThreadBuildWrapper, worker::Worker,
+    config::ReadableSize, keybuilder::KeyBuilder, store::find_peer,
+    sys::thread::StdThreadBuildWrapper, worker::Worker, Either,
 };
 use txn_types::Key;
 
@@ -51,9 +51,9 @@ use crate::{
     config::ConfigController,
     server::reset_to_version::ResetToVersionManager,
     storage::{
-        Storage,
         lock_manager::LockManager,
         mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType},
+        Storage,
     },
 };
 
@@ -431,10 +431,11 @@ where
         let res = handles
             .into_iter()
             .map(|h: JoinHandle<Result<()>>| h.join())
-            .inspect(|r| {
-                if let Err(e) = r {
+            .map(|r| {
+                if let Err(e) = &r {
                     error!("{:?}", e);
                 }
+                r
             })
             .all(|r| r.is_ok());
         if res {
@@ -1617,7 +1618,7 @@ fn set_region_tombstone(
         .get_peers()
         .iter()
         .find(|p| p.get_store_id() == store_id)
-        .is_none_or(|p| p.get_id() != peer_id);
+        .map_or(true, |p| p.get_id() != peer_id);
     if !scheduled {
         return Err(box_err!("The peer is still in target peers"));
     }
@@ -1639,8 +1640,8 @@ fn divide_db(db: &RocksEngine, parts: usize) -> raftstore::Result<Vec<Vec<u8>>> 
 #[cfg(test)]
 mod tests {
     use api_version::ApiV1;
-    use engine_rocks::{RocksCfOptions, RocksDbOptions, RocksEngine, util::new_engine_opt};
-    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, Mutable, SyncMutable};
+    use engine_rocks::{util::new_engine_opt, RocksCfOptions, RocksDbOptions, RocksEngine};
+    use engine_traits::{Mutable, SyncMutable, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::{
         kvrpcpb::ApiVersion,
         metapb::{Peer, PeerRole, Region},

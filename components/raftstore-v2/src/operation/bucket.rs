@@ -12,7 +12,7 @@ use kvproto::{
 use pd_client::BucketMeta;
 use raftstore::{
     coprocessor::RegionChangeEvent,
-    store::{Bucket, BucketRange, ReadProgress, SplitCheckTask, Transport, util},
+    store::{util, Bucket, BucketRange, ReadProgress, SplitCheckTask, Transport},
 };
 use slog::{error, info};
 
@@ -185,7 +185,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 }
 
-impl<EK, ER, T: Transport> PeerFsmDelegate<'_, EK, ER, T>
+impl<'a, EK, ER, T: Transport> PeerFsmDelegate<'a, EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,

@@ -15,11 +15,11 @@ use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::kvrpcpb::{self, Assertion, IsolationLevel};
 use thiserror::Error;
 use tikv_util::{
-    Either, metrics::CRITICAL_ERROR, panic_when_unexpected_key_or_data, set_panic_mark,
+    metrics::CRITICAL_ERROR, panic_when_unexpected_key_or_data, set_panic_mark, Either,
 };
 pub use txn_types::{
-    Key, Lock, LockType, Mutation, SHORT_VALUE_MAX_LEN, SharedLocks, TimeStamp, Value, Write,
-    WriteRef, WriteType,
+    Key, Lock, LockType, Mutation, SharedLocks, TimeStamp, Value, Write, WriteRef, WriteType,
+    SHORT_VALUE_MAX_LEN,
 };
 
 pub use self::{
@@ -28,7 +28,7 @@ pub use self::{
     },
     metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM},
     reader::*,
-    txn::{GcInfo, MAX_TXN_WRITE_SIZE, MvccTxn, ReleasedLock},
+    txn::{GcInfo, MvccTxn, ReleasedLock, MAX_TXN_WRITE_SIZE},
 };
 
 #[derive(Debug, Error)]

@@ -90,7 +90,7 @@ pub struct LogicalRowsIterator<'a> {
     idx: usize,
 }
 
-impl Iterator for LogicalRowsIterator<'_> {
+impl<'a> Iterator for LogicalRowsIterator<'a> {
     type Item = usize;
     fn next(&mut self) -> Option<Self::Item> {
         let result = if self.idx < self.logical_rows.len() {

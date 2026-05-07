@@ -2,9 +2,8 @@
 
 use std::{
     sync::{
-        Arc,
         atomic::{AtomicUsize, Ordering},
-        mpsc,
+        mpsc, Arc,
     },
     thread,
     time::Duration,
@@ -17,7 +16,7 @@ use kvproto::{metapb, pdpb};
 use pd_client::{Error as PdError, Feature, PdClient, PdConnector, RegionStat, RpcClient};
 use raftstore::store;
 use security::{SecurityConfig, SecurityManager};
-use test_pd::{Server as MockServer, mocker::*, util::*};
+use test_pd::{mocker::*, util::*, Server as MockServer};
 use tikv_util::config::ReadableDuration;
 use tokio::runtime::Builder;
 use txn_types::TimeStamp;

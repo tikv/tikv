@@ -2,7 +2,7 @@
 
 use chrono::Weekday;
 
-use super::{Time, weekmode::WeekMode};
+use super::{weekmode::WeekMode, Time};
 
 pub trait WeekdayExtension {
     fn name(&self) -> &'static str;

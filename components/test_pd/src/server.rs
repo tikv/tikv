@@ -2,21 +2,21 @@
 
 use std::{
     sync::{
-        Arc,
         atomic::{AtomicI64, Ordering},
+        Arc,
     },
     thread,
     time::Duration,
 };
 
 use fail::fail_point;
-use futures::{SinkExt, TryFutureExt, TryStreamExt, future};
+use futures::{future, SinkExt, TryFutureExt, TryStreamExt};
 use grpcio::{
     ClientStreamingSink, DuplexSink, EnvBuilder, RequestStream, RpcContext, RpcStatus,
     RpcStatusCode, Server as GrpcServer, ServerBuilder, UnarySink, WriteFlags,
 };
 use kvproto::{
-    meta_storagepb_grpc::{MetaStorage, create_meta_storage},
+    meta_storagepb_grpc::{create_meta_storage, MetaStorage},
     pdpb::*,
     resource_manager,
     resource_manager_grpc::create_resource_manager,

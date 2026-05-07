@@ -16,24 +16,23 @@ use kvproto::{
     pdpb,
     raft_serverpb::RaftMessage,
 };
-use raft::{RawNode, StateRole, eraftpb};
+use raft::{eraftpb, RawNode, StateRole};
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
     store::{
-        BucketStatsInfo, Config, EntryStorage, ForceLeaderState, PeerStat, ProposalQueue,
-        ReadDelegate, ReadIndexQueue, ReadProgress, TabletSnapManager, TransferLeaderState,
-        UnsafeRecoveryState, WriteTask,
         fsm::ApplyMetrics,
         metrics::RAFT_PEER_PENDING_DURATION,
         util::{Lease, RegionReadProgress},
+        BucketStatsInfo, Config, EntryStorage, ForceLeaderState, PeerStat, ProposalQueue,
+        ReadDelegate, ReadIndexQueue, ReadProgress, TabletSnapManager, TransferLeaderState,
+        UnsafeRecoveryState, WriteTask,
     },
 };
-use slog::{Logger, debug, info};
+use slog::{debug, info, Logger};
 use tikv_util::{slog_panic, time::duration_to_sec};
 
 use super::storage::Storage;
 use crate::{
-    Result,
     batch::StoreContext,
     fsm::ApplyScheduler,
     operation::{
@@ -42,6 +41,7 @@ use crate::{
         SplitPendingAppend, TxnContext,
     },
     router::{ApplyTask, CmdResChannel, PeerTick, QueryResChannel},
+    Result,
 };
 
 const REGION_READ_PROGRESS_CAP: usize = 128;

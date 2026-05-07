@@ -5,8 +5,8 @@ use resource_control::channel::Sender;
 use tikv_util::{time::Instant, warn};
 
 use crate::{
-    FsmTypes,
     fsm::{Fsm, FsmScheduler, Priority},
+    FsmTypes,
 };
 pub struct NormalScheduler<N: Fsm, C: Fsm> {
     pub(crate) sender: Sender<FsmTypes<N, C>>,

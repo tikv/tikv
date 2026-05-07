@@ -2,8 +2,8 @@
 
 use std::{
     sync::{
-        Arc,
         atomic::{AtomicUsize, Ordering},
+        Arc,
     },
     time::{Duration, Instant},
 };
@@ -17,15 +17,15 @@ use futures::{
 use grpcio::{DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::{
     cdcpb::{
-        ChangeData, ChangeDataEvent, ChangeDataRequest, ChangeDataRequest_oneof_request,
-        ChangeDataRequestKvApi,
+        ChangeData, ChangeDataEvent, ChangeDataRequest, ChangeDataRequestKvApi,
+        ChangeDataRequest_oneof_request,
     },
     kvrpcpb::ApiVersion,
 };
 use tikv_util::{error, info, memory::MemoryQuota, timer::GLOBAL_TIMER_HANDLE, warn, worker::*};
 
 use crate::{
-    channel::{CDC_CHANNLE_CAPACITY, Sink, channel},
+    channel::{channel, Sink, CDC_CHANNLE_CAPACITY},
     delegate::{Downstream, DownstreamId, DownstreamState, ObservedRange},
     endpoint::{Deregister, Task},
     metrics::CDC_ABORTED_CONNECTIONS,
@@ -644,13 +644,13 @@ async fn sleep_before_drain_change_event() {
 mod tests {
     use std::{sync::Arc, time::Duration};
 
-    use futures::{SinkExt, executor::block_on};
+    use futures::{executor::block_on, SinkExt};
     use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder, WriteFlags};
-    use kvproto::cdcpb::{ChangeDataClient, ResolvedTs, create_change_data};
+    use kvproto::cdcpb::{create_change_data, ChangeDataClient, ResolvedTs};
     use tikv_util::future::block_on_timeout;
 
     use super::*;
-    use crate::channel::{CdcEvent, recv_timeout};
+    use crate::channel::{recv_timeout, CdcEvent};
 
     fn new_rpc_suite(capacity: usize) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
         let memory_quota = Arc::new(MemoryQuota::new(capacity));

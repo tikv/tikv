@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::{CfNamesExt, errors::Result};
+use crate::{errors::Result, CfNamesExt};
 
 #[derive(Clone, Debug)]
 pub struct ManualCompactionOptions {

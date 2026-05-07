@@ -8,15 +8,15 @@ use std::{
     },
     fmt::{self, Display, Formatter},
     sync::{
-        Arc,
         atomic::{AtomicUsize, Ordering},
+        Arc,
     },
     time::Duration,
     u64,
 };
 
 use engine_traits::{
-    CF_LOCK, CF_RAFT, DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, WriteOptions,
+    DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, WriteOptions, CF_LOCK, CF_RAFT,
 };
 use fail::fail_point;
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
@@ -33,13 +33,14 @@ use super::metrics::*;
 use crate::{
     coprocessor::CoprocessorHost,
     store::{
-        ApplyOptions, CasualMessage, Config, SnapEntry, SnapKey, SnapManager, check_abort,
+        check_abort,
         peer_storage::{
             JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
             JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
         },
-        snap::{Error, Result, SNAPSHOT_CFS, plain_file_used},
+        snap::{plain_file_used, Error, Result, SNAPSHOT_CFS},
         transport::CasualRouter,
+        ApplyOptions, CasualMessage, Config, SnapEntry, SnapKey, SnapManager,
     },
 };
 
@@ -800,9 +801,8 @@ pub(crate) mod tests {
     use std::{
         io,
         sync::{
-            Arc,
             atomic::{AtomicBool, AtomicUsize},
-            mpsc,
+            mpsc, Arc,
         },
         thread,
         time::Duration,
@@ -810,8 +810,8 @@ pub(crate) mod tests {
 
     use engine_test::{ctor::CfOptions, kv::KvTestEngine};
     use engine_traits::{
-        CF_DEFAULT, CF_WRITE, CompactExt, FlowControlFactorsExt, KvEngine, MiscExt, Mutable,
-        Peekable, RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt,
+        CompactExt, FlowControlFactorsExt, KvEngine, MiscExt, Mutable, Peekable,
+        RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_WRITE,
     };
     use keys::data_key;
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftSnapshotData, RegionLocalState};
@@ -830,10 +830,10 @@ pub(crate) mod tests {
             ObserverContext,
         },
         store::{
-            CasualMessage, SnapKey, SnapManager,
             peer_storage::JOB_STATUS_PENDING,
             snap::tests::get_test_db_for_regions,
             worker::{RegionRunner, SnapGenRunner, SnapGenTask},
+            CasualMessage, SnapKey, SnapManager,
         },
     };
 

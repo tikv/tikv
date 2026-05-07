@@ -13,8 +13,8 @@ pub mod test_runner;
 
 pub use self::{
     batch::{
-        BatchRouter, BatchSystem, FsmTypes, HandleResult, HandlerBuilder, PollHandler, Poller,
-        PoolState, create_system,
+        create_system, BatchRouter, BatchSystem, FsmTypes, HandleResult, HandlerBuilder,
+        PollHandler, Poller, PoolState,
     },
     config::Config,
     fsm::{Fsm, FsmScheduler, Priority},

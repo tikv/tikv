@@ -5,8 +5,8 @@ use std::intrinsics::{likely, unlikely};
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
 
 use crate::{
-    ErrorInner, Result,
     buffer::{BufferReader, BufferWriter},
+    ErrorInner, Result,
 };
 
 pub const MAX_VARINT64_LENGTH: usize = 10;

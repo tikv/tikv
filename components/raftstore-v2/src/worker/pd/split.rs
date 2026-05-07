@@ -7,10 +7,10 @@ use kvproto::{
 };
 use pd_client::PdClient;
 use raftstore::store::SplitInfo;
-use slog::{Logger, info, warn};
-use yatp::{Remote, task::future::TaskCell};
+use slog::{info, warn, Logger};
+use yatp::{task::future::TaskCell, Remote};
 
-use super::{Runner, requests::*};
+use super::{requests::*, Runner};
 use crate::{batch::StoreRouter, router::CmdResChannel};
 
 fn new_batch_split_region_request(

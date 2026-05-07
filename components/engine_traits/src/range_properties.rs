@@ -5,7 +5,7 @@
 //! In RocksDB these are typically implemented with user collected properties,
 //! which might require the database to be constructed with specific options.
 
-use crate::{Range, errors::Result};
+use crate::{errors::Result, Range};
 
 pub trait RangePropertiesExt {
     /// Gets the number of keys in a range.

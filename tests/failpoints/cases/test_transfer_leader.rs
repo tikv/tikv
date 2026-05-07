@@ -2,8 +2,8 @@
 
 use std::{
     sync::{
-        Arc, Mutex,
         mpsc::{self, channel},
+        Arc, Mutex,
     },
     thread,
     time::Duration,
@@ -21,8 +21,8 @@ use test_raftstore::*;
 use test_raftstore_macro::test_case;
 use tikv::storage::Snapshot;
 use tikv_util::{
-    HandyRwLock,
     config::{ReadableDuration, ReadableSize},
+    HandyRwLock,
 };
 use txn_types::{Key, LastChange, PessimisticLock};
 

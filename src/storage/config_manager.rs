@@ -6,7 +6,7 @@ use std::{convert::TryInto, sync::Arc};
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{ALL_CFS, CF_DEFAULT};
-use file_system::{IoPriority, IoType, get_io_rate_limiter};
+use file_system::{get_io_rate_limiter, IoPriority, IoType};
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
 use strum::IntoEnumIterator;
 use tikv_kv::Engine;
@@ -17,8 +17,8 @@ use tikv_util::{
 
 use crate::{
     config::ConfigurableDb,
-    server::{CONFIG_ROCKSDB_GAUGE, ttl::TtlCheckerTask},
-    storage::{TxnScheduler, lock_manager::LockManager, txn::flow_controller::FlowController},
+    server::{ttl::TtlCheckerTask, CONFIG_ROCKSDB_GAUGE},
+    storage::{lock_manager::LockManager, txn::flow_controller::FlowController, TxnScheduler},
 };
 
 pub struct StorageConfigManger<E: Engine, K, L: LockManager> {

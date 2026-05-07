@@ -70,7 +70,7 @@ pub fn like<C: Collator, CS: Charset>(
 
 #[cfg(test)]
 mod tests {
-    use tidb_query_datatype::{Collation, FieldTypeTp, builder::FieldTypeBuilder};
+    use tidb_query_datatype::{builder::FieldTypeBuilder, Collation, FieldTypeTp};
     use tipb::ScalarFuncSig;
 
     use crate::test_util::RpnFnScalarEvaluator;

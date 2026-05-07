@@ -6,7 +6,7 @@ use engine_traits::RaftEngineReadOnly;
 use raftstore::store::RAFT_INIT_LOG_INDEX;
 use tikv_util::store::new_peer;
 
-use crate::cluster::{Cluster, split_helper::split_region_and_refresh_bucket};
+use crate::cluster::{split_helper::split_region_and_refresh_bucket, Cluster};
 
 /// Test refresh bucket.
 #[test]

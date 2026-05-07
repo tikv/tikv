@@ -1,11 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{Arc, mpsc::channel},
+    sync::{mpsc::channel, Arc},
     time::Duration,
 };
 
-use raftstore::coprocessor::{CoprocessorHost, region_info_accessor::MockRegionInfoProvider};
+use raftstore::coprocessor::{region_info_accessor::MockRegionInfoProvider, CoprocessorHost};
 use tikv::{
     config::{ConfigController, Module, TikvConfig},
     server::gc_worker::{GcConfig, GcTask, GcWorker},

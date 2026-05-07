@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use futures::{StreamExt, executor::block_on};
+use futures::{executor::block_on, StreamExt};
 use tikv_util::config::ReadableDuration;
 
 use crate::resource_metering::test_suite::TestSuite;

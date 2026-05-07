@@ -3,12 +3,12 @@
 use std::{sync::Arc, thread, time::Duration};
 
 use error_code::ErrorCodeExt;
-use futures::{StreamExt, executor::block_on};
+use futures::{executor::block_on, StreamExt};
 use grpcio::{EnvBuilder, Error as GrpcError, RpcStatus, RpcStatusCode};
 use kvproto::{metapb, pdpb};
 use pd_client::{Error as PdError, Feature, PdClientV2, PdConnector, RpcClientV2};
 use security::{SecurityConfig, SecurityManager};
-use test_pd::{Server as MockServer, mocker::*, util::*};
+use test_pd::{mocker::*, util::*, Server as MockServer};
 use tikv_util::{config::ReadableDuration, mpsc::future::WakePolicy, thd_name};
 use tokio::runtime::{Builder, Runtime};
 use txn_types::TimeStamp;

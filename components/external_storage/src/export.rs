@@ -11,14 +11,14 @@ use encryption::DataKeyManager;
 use futures_util::{future::LocalBoxFuture, stream::LocalBoxStream};
 use gcp::GcsStorage;
 use kvproto::brpb::{
-    AzureBlobStorage, Gcs, Noop, S3, StorageBackend, StorageBackend_oneof_backend as Backend,
+    AzureBlobStorage, Gcs, Noop, StorageBackend, StorageBackend_oneof_backend as Backend, S3,
 };
 use tikv_util::time::{Instant, Limiter};
 
 use crate::{
-    BackendConfig, ExternalData, ExternalStorage, HdfsStorage, LocalStorage, NoopStorage,
-    RestoreConfig, UnpinReader, compression_reader_dispatcher, encrypt_wrap_reader,
-    read_external_storage_into_file, record_storage_create, wrap_with_checksum_reader_if_needed,
+    compression_reader_dispatcher, encrypt_wrap_reader, read_external_storage_into_file,
+    record_storage_create, wrap_with_checksum_reader_if_needed, BackendConfig, ExternalData,
+    ExternalStorage, HdfsStorage, LocalStorage, NoopStorage, RestoreConfig, UnpinReader,
 };
 pub fn create_storage(
     storage_backend: &StorageBackend,

@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::PersistenceListener;
-use file_system::{IoType, get_io_type, set_io_type};
+use file_system::{get_io_type, set_io_type, IoType};
 use regex::Regex;
 use rocksdb::{
     CompactionJobInfo, DBBackgroundErrorReason, FlushJobInfo, IngestionInfo, MemTableInfo,
@@ -175,7 +175,10 @@ impl rocksdb::EventListener for RocksEventListener {
 // We assume that only the corruption sst file path is printed inside error.
 fn resolve_sst_filename_from_err(err: &str) -> Option<String> {
     let r = Regex::new(r"/\w*\.sst").unwrap();
-    let matches = r.captures(err)?;
+    let matches = match r.captures(err) {
+        None => return None,
+        Some(v) => v,
+    };
     let filename = matches.get(0).unwrap().as_str().to_owned();
     Some(filename)
 }
@@ -224,17 +227,17 @@ impl rocksdb::EventListener for RocksPersistenceListener {
 #[cfg(test)]
 mod tests {
     use std::sync::{
-        Arc, Mutex,
         mpsc::{self, Sender},
+        Arc, Mutex,
     };
 
     use engine_traits::{
-        ApplyProgress, CF_DEFAULT, DATA_CFS, FlushState, MiscExt, StateStorage, SyncMutable,
+        ApplyProgress, FlushState, MiscExt, StateStorage, SyncMutable, CF_DEFAULT, DATA_CFS,
     };
     use tempfile::Builder;
 
     use super::*;
-    use crate::{RocksCfOptions, RocksDbOptions, util};
+    use crate::{util, RocksCfOptions, RocksDbOptions};
 
     #[test]
     fn test_resolve_sst_filename() {
@@ -313,7 +316,7 @@ mod tests {
                         Ok(p) => p,
                         Err(_) => return false,
                     };
-                    p.path().extension().is_some_and(|ext| ext == "sst")
+                    p.path().extension().map_or(false, |ext| ext == "sst")
                 })
                 .count()
         };

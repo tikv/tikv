@@ -2,7 +2,7 @@
 
 use std::fmt::Debug;
 
-use crate::{CfNamesExt, SnapshotMiscExt, iterable::Iterable, peekable::Peekable};
+use crate::{iterable::Iterable, peekable::Peekable, CfNamesExt, SnapshotMiscExt};
 
 /// A consistent read-only view of the database.
 ///

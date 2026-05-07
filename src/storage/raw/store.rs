@@ -3,7 +3,7 @@
 use std::{marker::PhantomData, time::Duration};
 
 use api_version::{ApiV1, ApiV1Ttl, ApiV2, KvFormat};
-use engine_traits::{CfName, DATA_KEY_PREFIX_LEN, IterOptions};
+use engine_traits::{CfName, IterOptions, DATA_KEY_PREFIX_LEN};
 use kvproto::kvrpcpb::{ApiVersion, KeyRange};
 use tikv_util::time::Instant;
 use txn_types::{Key, KvPair};
@@ -13,8 +13,8 @@ use super::{encoded::RawEncodeSnapshot, raw_mvcc::RawMvccSnapshot};
 use crate::{
     coprocessor::checksum_crc64_xor,
     storage::{
-        Statistics,
         kv::{Cursor, Result, ScanMode, Snapshot},
+        Statistics,
     },
 };
 
@@ -173,10 +173,11 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
     ) -> Result<Option<Vec<u8>>> {
         // no scan_count for this kind of op.
         let key_len = key.as_encoded().len();
-        self.snapshot.get_cf(cf, key).inspect(|value| {
+        self.snapshot.get_cf(cf, key).map(|value| {
             stats.data.flow_stats.read_keys = 1;
             stats.data.flow_stats.read_bytes =
                 key_len + value.as_ref().map(|v| v.len()).unwrap_or(0);
+            value
         })
     }
 

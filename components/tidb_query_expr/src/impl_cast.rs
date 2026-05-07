@@ -12,15 +12,16 @@ use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::{
     codec::{
-        Error,
         collation::Encoding,
         convert::*,
         data_type::*,
         error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE},
         mysql::{
-            Time, binary_literal,
+            binary_literal,
             time::{MAX_YEAR, MIN_YEAR},
+            Time,
         },
+        Error,
     },
     expr::EvalContext,
     *,
@@ -28,7 +29,7 @@ use tidb_query_datatype::{
 use tipb::{Expr, FieldType};
 
 use crate::{
-    RpnExpressionNode, RpnFnCallExtra, RpnFnMeta, RpnStackNode, types::RpnExpressionBuilder,
+    types::RpnExpressionBuilder, RpnExpressionNode, RpnFnCallExtra, RpnFnMeta, RpnStackNode,
 };
 
 fn get_cast_fn_rpn_meta(
@@ -1147,7 +1148,7 @@ pub fn cast_json_as_duration(
         JsonType::Time => Ok(Some(v.get_duration()?)),
         JsonType::String => cast_bytes_like_as_duration(ctx, extra, v.unquote()?.as_bytes(), false),
         _ => {
-            ctx.handle_truncate_err(Error::truncated_wrong_val("TIME", v.to_string_value()))?;
+            ctx.handle_truncate_err(Error::truncated_wrong_val("TIME", v.to_string()))?;
             Ok(None)
         }
     }
@@ -1341,7 +1342,7 @@ pub fn cast_json_as_time(
         }
         JsonType::String => cast_bytes_like_as_time(ctx, extra, v.unquote()?.as_bytes()),
         _ => {
-            ctx.handle_truncate_err(Error::truncated_wrong_val("DURATION", v.to_string_value()))?;
+            ctx.handle_truncate_err(Error::truncated_wrong_val("DURATION", v.to_string()))?;
             Ok(None)
         }
     }
@@ -1619,7 +1620,6 @@ mod tests {
     };
 
     use tidb_query_datatype::{
-        Collation, FieldTypeFlag, FieldTypeTp, UNSPECIFIED_LENGTH,
         builder::FieldTypeBuilder,
         codec::{
             convert::produce_dec_with_specified_tp,
@@ -1629,18 +1629,19 @@ mod tests {
                 WARN_DATA_TRUNCATED,
             },
             mysql::{
-                Decimal, Duration, Json, MAX_FSP, MIN_FSP, RoundMode, Time, TimeType, Tz,
                 charset::*,
                 decimal::{max_decimal, max_or_min_dec},
+                Decimal, Duration, Json, RoundMode, Time, TimeType, Tz, MAX_FSP, MIN_FSP,
             },
         },
         expr::{EvalConfig, EvalContext, Flag},
+        Collation, FieldTypeFlag, FieldTypeTp, UNSPECIFIED_LENGTH,
     };
     use tikv_util::buffer_vec::BufferVec;
     use tipb::ScalarFuncSig;
 
     use super::Result;
-    use crate::{RpnFnCallExtra, impl_cast::*, types::test_util::RpnFnScalarEvaluator};
+    use crate::{impl_cast::*, types::test_util::RpnFnScalarEvaluator, RpnFnCallExtra};
 
     fn test_none_with_ctx_and_extra<F, Input, Ret>(func: F)
     where

@@ -2,7 +2,7 @@
 
 use engine_traits::{MvccProperties, Range, Result};
 
-use crate::{RangeProperties, RocksEngine, mvcc_properties::RocksMvccProperties, r2e, util};
+use crate::{mvcc_properties::RocksMvccProperties, r2e, util, RangeProperties, RocksEngine};
 
 #[repr(transparent)]
 pub struct UserCollectedProperties(rocksdb::UserCollectedProperties);

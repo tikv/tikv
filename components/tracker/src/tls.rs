@@ -9,7 +9,7 @@ use std::{
 
 use pin_project::pin_project;
 
-use crate::{GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN, Tracker, slab::TrackerToken};
+use crate::{slab::TrackerToken, Tracker, GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN};
 
 thread_local! {
     static TLS_TRACKER_TOKEN: Cell<TrackerToken> = const { Cell::new(INVALID_TRACKER_TOKEN) };

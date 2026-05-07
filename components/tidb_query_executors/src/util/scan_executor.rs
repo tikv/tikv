@@ -1,14 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use api_version::{KvFormat, keyspace::KvPairEntry};
+use api_version::{keyspace::KvPairEntry, KvFormat};
 use async_trait::async_trait;
 use kvproto::coprocessor::KeyRange;
 use tidb_query_common::{
-    Result,
     storage::{
-        IntervalRange, Range, Storage,
         scanner::{RangesScanner, RangesScannerOptions},
+        IntervalRange, Range, Storage,
     },
+    Result,
 };
 use tidb_query_datatype::{codec::batch::LazyBatchColumnVec, expr::EvalContext};
 use tipb::{ColumnInfo, FieldType};

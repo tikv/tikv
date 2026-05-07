@@ -42,8 +42,8 @@ pub enum CausalTsProviderImpl {
 
 pub mod tests {
     use std::sync::{
-        Arc,
         atomic::{AtomicU64, Ordering},
+        Arc,
     };
 
     use super::*;

@@ -103,7 +103,7 @@ impl<'a> SetRef<'a> {
     }
 }
 
-impl Display for SetRef<'_> {
+impl<'a> Display for SetRef<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut buf: Vec<u8> = Vec::new();
         if self.value > 0 {
@@ -124,21 +124,21 @@ impl Display for SetRef<'_> {
     }
 }
 
-impl Eq for SetRef<'_> {}
+impl<'a> Eq for SetRef<'a> {}
 
-impl PartialEq for SetRef<'_> {
+impl<'a> PartialEq for SetRef<'a> {
     fn eq(&self, other: &Self) -> bool {
         self.value == other.value
     }
 }
 
-impl Ord for SetRef<'_> {
+impl<'a> Ord for SetRef<'a> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.value.cmp(&other.value)
     }
 }
 
-impl PartialOrd for SetRef<'_> {
+impl<'a> PartialOrd for SetRef<'a> {
     fn partial_cmp(&self, right: &Self) -> Option<Ordering> {
         Some(self.cmp(right))
     }

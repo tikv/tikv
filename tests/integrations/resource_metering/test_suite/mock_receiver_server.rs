@@ -2,8 +2,8 @@
 
 use std::{
     sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
+        Arc,
     },
     thread::sleep,
     time::Duration,
@@ -16,7 +16,7 @@ use grpcio::{
     ServerBuilder,
 };
 use kvproto::resource_usage_agent::{
-    EmptyResponse, ResourceUsageAgent, ResourceUsageRecord, create_resource_usage_agent,
+    create_resource_usage_agent, EmptyResponse, ResourceUsageAgent, ResourceUsageRecord,
 };
 
 pub struct MockReceiverServer {

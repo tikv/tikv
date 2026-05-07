@@ -13,7 +13,7 @@ use std::{
 // Extention Traits
 use fs2::FileExt;
 
-use super::{IoOp, IoRateLimiter, get_io_rate_limiter, get_io_type};
+use super::{get_io_rate_limiter, get_io_type, IoOp, IoRateLimiter};
 
 /// A wrapper around `std::fs::File` with capability to track and regulate IO
 /// flow.
@@ -169,7 +169,7 @@ impl File {
     }
 
     pub fn lock_shared(&self) -> io::Result<()> {
-        fs2::FileExt::lock_shared(&self.inner)
+        self.inner.lock_shared()
     }
 
     pub fn lock_exclusive(&self) -> io::Result<()> {
@@ -177,7 +177,7 @@ impl File {
     }
 
     pub fn try_lock_shared(&self) -> io::Result<()> {
-        fs2::FileExt::try_lock_shared(&self.inner)
+        self.inner.try_lock_shared()
     }
 
     pub fn try_lock_exclusive(&self) -> io::Result<()> {
@@ -185,7 +185,7 @@ impl File {
     }
 
     pub fn unlock(&self) -> io::Result<()> {
-        fs2::FileExt::unlock(&self.inner)
+        self.inner.unlock()
     }
 }
 

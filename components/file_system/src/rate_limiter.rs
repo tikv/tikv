@@ -3,8 +3,8 @@
 use std::{
     str::FromStr,
     sync::{
-        Arc,
         atomic::{AtomicU32, AtomicUsize, Ordering},
+        Arc,
     },
     time::Duration,
 };
@@ -16,8 +16,8 @@ use strum::EnumCount;
 use tikv_util::time::Instant;
 
 use super::{
+    metrics::{tls_collect_rate_limiter_request_wait, RATE_LIMITER_MAX_BYTES_PER_SEC},
     IoOp, IoPriority, IoType,
-    metrics::{RATE_LIMITER_MAX_BYTES_PER_SEC, tls_collect_rate_limiter_request_wait},
 };
 
 const DEFAULT_REFILL_PERIOD: Duration = Duration::from_millis(50);
@@ -81,7 +81,7 @@ impl<'de> Deserialize<'de> for IoRateLimitMode {
     {
         use serde::de::{Error, Unexpected, Visitor};
         struct StrVistor;
-        impl Visitor<'_> for StrVistor {
+        impl<'de> Visitor<'de> for StrVistor {
             type Value = IoRateLimitMode;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

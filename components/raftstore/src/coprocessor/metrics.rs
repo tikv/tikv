@@ -2,7 +2,7 @@
 
 use lazy_static::lazy_static;
 use prometheus::{
-    Histogram, IntGaugeVec, exponential_buckets, register_histogram, register_int_gauge_vec,
+    exponential_buckets, register_histogram, register_int_gauge_vec, Histogram, IntGaugeVec,
 };
 
 lazy_static! {

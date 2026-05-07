@@ -2,7 +2,7 @@
 
 use rand::{self, Rng, RngCore};
 use tidb_query_datatype::{
-    codec::{Datum, datum, table},
+    codec::{datum, table, Datum},
     expr::EvalContext,
 };
 use txn_types::Key;

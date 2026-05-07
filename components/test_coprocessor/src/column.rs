@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tidb_query_datatype::{
-    codec::{Datum, datum},
+    codec::{datum, Datum},
     expr::EvalContext,
 };
 use tipb::{ColumnInfo, FieldType};

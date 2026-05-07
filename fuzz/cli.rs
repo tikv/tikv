@@ -17,10 +17,10 @@ use std::{
     process::{Command, Stdio},
 };
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use cargo_metadata::MetadataCommand;
 use lazy_static::lazy_static;
-use structopt::{StructOpt, clap::arg_enum};
+use structopt::{clap::arg_enum, StructOpt};
 
 lazy_static! {
     static ref WORKSPACE_ROOT: PathBuf = MetadataCommand::new()

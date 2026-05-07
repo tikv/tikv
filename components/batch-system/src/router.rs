@@ -2,13 +2,13 @@
 
 // #[PerformanceCriticalPath]
 use std::sync::{
-    Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},
+    Arc,
 };
 
 use crossbeam::channel::{SendError, TrySendError};
 use dashmap::DashMap;
-use tikv_util::{Either, debug, info, time::Instant};
+use tikv_util::{debug, info, time::Instant, Either};
 
 use crate::{
     fsm::{Fsm, FsmScheduler},

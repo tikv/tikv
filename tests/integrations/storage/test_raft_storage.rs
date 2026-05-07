@@ -1,24 +1,24 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{Arc, mpsc::channel},
+    sync::{mpsc::channel, Arc},
     thread,
     time::Duration,
 };
 
 use api_version::{ApiV1, KvFormat};
 use collections::HashMap;
-use error_code::{ErrorCodeExt, raftstore::STALE_COMMAND};
+use error_code::{raftstore::STALE_COMMAND, ErrorCodeExt};
 use kvproto::kvrpcpb::Context;
 use test_raftstore::*;
 use test_storage::*;
 use tikv::{
     server::gc_worker::{AutoGcConfig, GcConfig},
     storage::{
-        Error as StorageError, ErrorInner as StorageErrorInner,
         kv::{Engine, Error as KvError, ErrorInner as KvErrorInner},
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{Error as TxnError, ErrorInner as TxnErrorInner},
+        Error as StorageError, ErrorInner as StorageErrorInner,
     },
 };
 use tikv_util::HandyRwLock;

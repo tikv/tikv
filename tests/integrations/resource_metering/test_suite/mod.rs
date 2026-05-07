@@ -5,8 +5,8 @@ mod mock_receiver_server;
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use crossbeam::channel::{Receiver, Sender, unbounded};
-use futures::{FutureExt, channel::oneshot, select};
+use crossbeam::channel::{unbounded, Receiver, Sender};
+use futures::{channel::oneshot, select, FutureExt};
 use grpcio::{ChannelBuilder, ClientSStreamReceiver, Environment};
 use kvproto::{
     kvrpcpb::Context,
@@ -21,8 +21,8 @@ use test_util::alloc_port;
 use tikv::{
     config::{ConfigController, TikvConfig},
     storage::{
-        RocksEngine, StorageApiV1, TestEngineBuilder, TestStorageBuilderApiV1,
-        lock_manager::MockLockManager,
+        lock_manager::MockLockManager, RocksEngine, StorageApiV1, TestEngineBuilder,
+        TestStorageBuilderApiV1,
     },
 };
 use tokio::runtime::{self, Runtime};

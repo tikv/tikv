@@ -5,10 +5,10 @@
 //! This is the temporary (efficient) solution, it should be implemented as one
 //! type of coprocessor.
 
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::{atomic::Ordering, Arc};
 
 use crossbeam::atomic::AtomicCell;
-use engine_traits::{CF_LOCK, KvEngine, RaftEngine};
+use engine_traits::{KvEngine, RaftEngine, CF_LOCK};
 use kvproto::{
     kvrpcpb::{DiskFullOpt, ExtraOp},
     metapb::Region,
@@ -19,14 +19,14 @@ use raft::eraftpb;
 use raftstore::store::{
     LocksStatus, PeerPessimisticLocks, RaftCmdExtraOpts, TransferLeaderContext, TxnExt,
 };
-use slog::{Logger, error, info, warn};
+use slog::{error, info, warn, Logger};
 
 use crate::{
-    SimpleWriteEncoder,
     batch::StoreContext,
     raft::Peer,
     router::{PeerMsg, PeerTick},
     worker::pd,
+    SimpleWriteEncoder,
 };
 
 pub struct TxnContext {

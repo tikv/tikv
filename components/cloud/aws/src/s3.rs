@@ -7,41 +7,41 @@ use std::{
 };
 
 use async_trait::async_trait;
-use aws_config::{BehaviorVersion, Region, SdkConfig, sts::AssumeRoleProvider};
-use aws_credential_types::{Credentials, provider::ProvideCredentials};
+use aws_config::{sts::AssumeRoleProvider, BehaviorVersion, Region, SdkConfig};
+use aws_credential_types::{provider::ProvideCredentials, Credentials};
 use aws_sdk_s3::{
-    Client,
     config::{HttpClient, StalledStreamProtectionConfig},
     operation::get_object::GetObjectError,
     types::{CompletedMultipartUpload, CompletedPart},
+    Client,
 };
 use bytes::Bytes;
 use cloud::{
     blob::{
-        BlobConfig, BlobObject, BlobStorage, BucketConf, DeletableStorage, IterableStorage,
-        PutResource, StringNonEmpty, none_to_empty,
+        none_to_empty, BlobConfig, BlobObject, BlobStorage, BucketConf, DeletableStorage,
+        IterableStorage, PutResource, StringNonEmpty,
     },
     metrics::CLOUD_REQUEST_HISTOGRAM_VEC,
 };
 use fail::fail_point;
 use futures::{executor::block_on, stream::Stream};
 use futures_util::{
-    StreamExt,
     future::{FutureExt, LocalBoxFuture},
     io::{AsyncRead, AsyncReadExt},
     stream::TryStreamExt,
+    StreamExt,
 };
 pub use kvproto::brpb::S3 as InputConfig;
 use thiserror::Error;
 use tikv_util::{
     debug,
-    stream::{RetryError, error_stream},
+    stream::{error_stream, RetryError},
     time::Instant,
 };
 use tokio::time::{sleep, timeout};
 use tokio_util::io::ReaderStream;
 
-use crate::util::{self, SdkError, retry_and_count};
+use crate::util::{self, retry_and_count, SdkError};
 
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(900);
 pub const STORAGE_VENDOR_NAME_AWS: &str = "aws";

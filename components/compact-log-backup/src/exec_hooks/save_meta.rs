@@ -8,13 +8,13 @@ use futures::{future::TryFutureExt, io::Cursor};
 use kvproto::brpb;
 use tikv_util::{
     info,
-    stream::{JustRetry, retry},
+    stream::{retry, JustRetry},
     warn,
 };
 
 use super::CollectStatistic;
 use crate::{
-    compaction::{META_OUT_REL, SST_OUT_REL, meta::CompactionRunInfoBuilder},
+    compaction::{meta::CompactionRunInfoBuilder, META_OUT_REL, SST_OUT_REL},
     errors::Result,
     execute::hooking::{
         AfterFinishCtx, BeforeStartCtx, CId, ExecHooks, SkipReason, SubcompactionFinishCtx,

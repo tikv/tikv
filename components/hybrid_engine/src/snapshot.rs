@@ -6,8 +6,8 @@ use std::{
 };
 
 use engine_traits::{
-    CF_DEFAULT, CfNamesExt, IterOptions, Iterable, KvEngine, Peekable, ReadOptions,
-    RegionCacheEngine, Result, Snapshot, SnapshotMiscExt, is_data_cf,
+    is_data_cf, CfNamesExt, IterOptions, Iterable, KvEngine, Peekable, ReadOptions,
+    RegionCacheEngine, Result, Snapshot, SnapshotMiscExt, CF_DEFAULT,
 };
 use in_memory_engine::RegionCacheMemoryEngine;
 use raftstore::coprocessor::ObservedSnapshot;
@@ -161,10 +161,10 @@ where
 #[cfg(test)]
 mod tests {
     use engine_traits::{
-        CF_DEFAULT, CacheRegion, IterOptions, Iterable, Iterator, Mutable, WriteBatch,
-        WriteBatchExt,
+        CacheRegion, IterOptions, Iterable, Iterator, Mutable, WriteBatch, WriteBatchExt,
+        CF_DEFAULT,
     };
-    use in_memory_engine::{InMemoryEngineConfig, RegionCacheStatus, test_util::new_region};
+    use in_memory_engine::{test_util::new_region, InMemoryEngineConfig, RegionCacheStatus};
     use raftstore::coprocessor::WriteBatchWrapper;
 
     use crate::{

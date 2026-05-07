@@ -4,8 +4,8 @@ use std::{
     fmt::{self, Debug, Formatter},
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
     },
 };
 

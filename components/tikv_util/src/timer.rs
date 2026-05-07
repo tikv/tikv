@@ -3,7 +3,7 @@
 use std::{
     cmp::{Ord, Ordering, Reverse},
     collections::BinaryHeap,
-    sync::{Arc, Mutex, mpsc},
+    sync::{mpsc, Arc, Mutex},
     thread::Builder,
     time::Duration,
 };
@@ -12,14 +12,15 @@ use lazy_static::lazy_static;
 use time::Timespec;
 use tokio_executor::park::ParkThread;
 use tokio_timer::{
-    self, Delay,
+    self,
     clock::{Clock, Now},
     timer::Handle,
+    Delay,
 };
 
 use crate::{
     sys::thread::StdThreadBuildWrapper,
-    time::{Instant, monotonic_raw_now},
+    time::{monotonic_raw_now, Instant},
 };
 
 pub struct Timer<T> {

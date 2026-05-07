@@ -4,8 +4,8 @@
 use std::{
     future::Pending,
     sync::{
-        Arc,
         atomic::{AtomicU64, Ordering},
+        Arc,
     },
     task::Poll,
     time::Duration,
@@ -27,12 +27,12 @@ use kvproto::{
     metapb::Region,
 };
 use raftstore::store::{
-    SnapshotBrWaitApplySyncer,
     snapshot_backup::{
         AbortReason, PrepareDiskSnapObserver, SnapshotBrHandle, SnapshotBrWaitApplyRequest,
     },
+    SnapshotBrWaitApplySyncer,
 };
-use tikv_util::{Either, sys::thread::ThreadBuildWrapper, warn};
+use tikv_util::{sys::thread::ThreadBuildWrapper, warn, Either};
 use tokio::{
     runtime::{Handle, Runtime},
     sync::oneshot,

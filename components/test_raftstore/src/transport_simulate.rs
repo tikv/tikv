@@ -3,7 +3,7 @@
 use std::{
     marker::PhantomData,
     mem,
-    sync::{Arc, Mutex, RwLock, atomic::*, mpsc::Sender},
+    sync::{atomic::*, mpsc::Sender, Arc, Mutex, RwLock},
     thread, time,
     time::Duration,
     usize,
@@ -18,12 +18,12 @@ use kvproto::{
 };
 use raft::eraftpb::MessageType;
 use raftstore::{
-    DiscardReason, Error, Result as RaftStoreResult, Result,
     router::{LocalReadRouter, RaftStoreRouter, ReadContext},
     store::{
         Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter, RaftCommand,
         SignificantMsg, SignificantRouter, StoreMsg, StoreRouter, Transport,
     },
+    DiscardReason, Error, Result as RaftStoreResult, Result,
 };
 use tikv_util::{Either, HandyRwLock};
 
@@ -748,7 +748,7 @@ impl Filter for LeadingDuplicatedSnapshotFilter {
         let mut to_send = vec![];
         for msg in msgs.drain(..) {
             if msg.get_message().get_msg_type() == MessageType::MsgSnapshot && !stale {
-                if last_msg.as_ref().is_some_and(|l| l != &msg) {
+                if last_msg.as_ref().map_or(false, |l| l != &msg) {
                     to_send.push(last_msg.take().unwrap());
                     if self.together {
                         to_send.push(msg);

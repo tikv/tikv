@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use engine_traits::{self, IterMetricsCollector, MetricsExt, Result};
-use rocksdb::{DB, DBIterator, PerfContext};
+use rocksdb::{DBIterator, PerfContext, DB};
 
 use crate::r2e;
 

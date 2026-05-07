@@ -10,8 +10,8 @@ use std::{
     intrinsics::unlikely,
     pin::Pin,
     sync::{
-        Arc,
         atomic::Ordering::{Relaxed, SeqCst},
+        Arc,
     },
     task::{Context, Poll},
 };
@@ -20,19 +20,19 @@ pub use collector::Collector;
 pub use config::{Config, ConfigManager, ENABLE_NETWORK_IO_COLLECTION};
 pub use model::*;
 pub use recorder::{
-    CollectorGuard, CollectorId, CollectorRegHandle,
-    ConfigChangeNotifier as RecorderConfigChangeNotifier, CpuRecorder, Recorder, RecorderBuilder,
-    SummaryRecorder, init_recorder, record_logical_read_bytes, record_logical_write_bytes,
-    record_network_in_bytes, record_network_out_bytes, record_read_keys, record_write_keys,
+    init_recorder, record_logical_read_bytes, record_logical_write_bytes, record_network_in_bytes,
+    record_network_out_bytes, record_read_keys, record_write_keys, CollectorGuard, CollectorId,
+    CollectorRegHandle, ConfigChangeNotifier as RecorderConfigChangeNotifier, CpuRecorder,
+    Recorder, RecorderBuilder, SummaryRecorder,
 };
 use recorder::{LocalStorage, LocalStorageRef, STORAGE};
 pub use reporter::{
-    ConfigChangeNotifier as ReporterConfigChangeNotifier, Reporter, Task,
     data_sink::DataSink,
     data_sink_reg::DataSinkRegHandle,
     init_reporter,
     pubsub::PubSubService,
-    single_target::{AddressChangeNotifier, SingleTargetDataSink, init_single_target},
+    single_target::{init_single_target, AddressChangeNotifier, SingleTargetDataSink},
+    ConfigChangeNotifier as ReporterConfigChangeNotifier, Reporter, Task,
 };
 use tikv_util::{
     memory::HeapSize,

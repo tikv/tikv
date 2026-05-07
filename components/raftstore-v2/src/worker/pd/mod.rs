@@ -2,7 +2,7 @@
 
 use std::{
     fmt::{self, Display, Formatter},
-    sync::{Arc, atomic::AtomicBool},
+    sync::{atomic::AtomicBool, Arc},
 };
 
 use causal_ts::CausalTsProviderImpl;
@@ -13,19 +13,20 @@ use health_controller::types::{InspectFactor, LatencyInspector, RaftstoreDuratio
 use kvproto::{metapb, pdpb};
 use pd_client::{BucketStat, PdClient};
 use raftstore::store::{
-    AutoSplitController, Config, FlowStatsReporter, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
-    PdStatsMonitor, ReadStats, SplitInfo, SplitValidator, StoreStatsReporter, TabletSnapManager,
-    TxnExt, WriteStats, metrics::STORE_INSPECT_DURATION_HISTOGRAM, util::KeysInfoFormatter,
+    metrics::STORE_INSPECT_DURATION_HISTOGRAM, util::KeysInfoFormatter, AutoSplitController,
+    Config, FlowStatsReporter, PdStatsMonitor, ReadStats, SplitInfo, SplitValidator,
+    StoreStatsReporter, TabletSnapManager, TxnExt, WriteStats,
+    NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
 };
 use resource_metering::{Collector, CollectorRegHandle, RawRecords};
 use service::service_manager::GrpcServiceManager;
-use slog::{Logger, error, warn};
+use slog::{error, warn, Logger};
 use tikv_util::{
     config::VersionTrack,
     time::{Instant as TiInstant, UnixSecs},
     worker::{Runnable, Scheduler},
 };
-use yatp::{Remote, task::future::TaskCell};
+use yatp::{task::future::TaskCell, Remote};
 
 use crate::{
     batch::StoreRouter,

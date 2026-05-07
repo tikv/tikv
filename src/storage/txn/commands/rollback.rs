@@ -4,17 +4,18 @@
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
-    ProcessResult, Snapshot,
     kv::WriteData,
     lock_manager::LockManager,
     mvcc::{MvccTxn, SnapshotReader},
     txn::{
-        Result, cleanup,
+        cleanup,
         commands::{
             Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
             WriteCommand, WriteContext, WriteResult,
         },
+        Result,
     },
+    ProcessResult, Snapshot,
 };
 
 command! {
@@ -86,9 +87,9 @@ mod tests {
     use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
 
     use crate::storage::{
-        TestEngineBuilder,
         mvcc::tests::{must_get_rollback_protected, must_load_shared_lock, must_unlocked},
         txn::tests::*,
+        TestEngineBuilder,
     };
 
     #[test]

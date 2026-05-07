@@ -8,15 +8,15 @@ use std::{
 };
 
 use engine_traits::{
-    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, CfName, SstPartitioner, SstPartitionerContext,
-    SstPartitionerFactory, SstPartitionerRequest, SstPartitionerResult,
+    CfName, SstPartitioner, SstPartitionerContext, SstPartitionerFactory, SstPartitionerRequest,
+    SstPartitionerResult, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use keys::{data_end_key, origin_key};
 use lazy_static::lazy_static;
 use tikv_util::{time::Instant, warn};
 
 use super::metrics::*;
-use crate::{Error, Result, coprocessor::RegionInfoProvider};
+use crate::{coprocessor::RegionInfoProvider, Error, Result};
 
 const COMPACTION_GUARD_MAX_POS_SKIP: u32 = 10;
 
@@ -461,13 +461,13 @@ mod tests {
 
     use collections::HashMap;
     use engine_rocks::{
-        RocksCfOptions, RocksDbOptions, RocksEngine, RocksSstPartitionerFactory, RocksSstReader,
         raw::{BlockBasedOptions, DBCompressionType},
         util::new_engine_opt,
+        RocksCfOptions, RocksDbOptions, RocksEngine, RocksSstPartitionerFactory, RocksSstReader,
     };
     use engine_traits::{
-        CF_DEFAULT, CompactExt, IterOptions, Iterator, ManualCompactionOptions, MiscExt,
-        RefIterable, SstReader, SyncMutable,
+        CompactExt, IterOptions, Iterator, ManualCompactionOptions, MiscExt, RefIterable,
+        SstReader, SyncMutable, CF_DEFAULT,
     };
     use keys::DATA_PREFIX_KEY;
     use kvproto::metapb::Region;

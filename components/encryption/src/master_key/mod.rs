@@ -7,7 +7,7 @@ use kvproto::encryptionpb::{EncryptedContent, EncryptionMethod, MasterKey};
 use tikv_util::{box_err, error};
 use tokio::sync::RwLock;
 
-use crate::{Error, MasterKeyConfig, Result, manager::generate_data_key};
+use crate::{manager::generate_data_key, Error, MasterKeyConfig, Result};
 
 /// Provide API to encrypt/decrypt key dictionary content.
 ///
@@ -38,9 +38,9 @@ mod metadata;
 use self::metadata::*;
 
 mod kms;
-pub use self::kms::KmsBackend;
 #[cfg(any(test, feature = "testexport"))]
 pub use self::kms::fake;
+pub use self::kms::KmsBackend;
 
 #[derive(Default, Debug, Clone)]
 pub struct PlaintextBackend {}

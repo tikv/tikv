@@ -4,13 +4,13 @@ use std::{collections::BTreeMap, convert::TryInto, f64, str};
 
 use codec::{number::NumberCodec, prelude::*};
 
-use super::{Json, JsonRef, JsonType, constants::*};
+use super::{constants::*, Json, JsonRef, JsonType};
 use crate::{
-    FieldTypeTp,
     codec::{Error, Result},
+    FieldTypeTp,
 };
 
-impl JsonRef<'_> {
+impl<'a> JsonRef<'a> {
     fn encoded_len(&self) -> usize {
         match self.type_code {
             // Literal is encoded inline with value-entry, so nothing will be

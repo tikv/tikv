@@ -9,8 +9,8 @@ use kvproto::{
     kvrpcpb::Context,
 };
 use raftstore::store::{LocksStatus, PeerPessimisticLocks};
-use tikv_kv::{SEEK_BOUND, SnapshotExt};
-use tikv_util::{Either, time::Instant};
+use tikv_kv::{SnapshotExt, SEEK_BOUND};
+use tikv_util::{time::Instant, Either};
 use txn_types::{
     Key, LastChange, Lock, LockOrSharedLocks, OldValue, PessimisticLock, TimeStamp, TxnLockRef,
     Value, Write, WriteRef, WriteType,
@@ -21,9 +21,10 @@ use crate::storage::{
         Cursor, CursorBuilder, Error as KvError, ScanMode, Snapshot as EngineSnapshot, Statistics,
     },
     mvcc::{
-        Result, default_not_found_error,
-        metrics::{SCAN_LOCK_READ_TIME_VEC, ScanLockReadTimeSource},
+        default_not_found_error,
+        metrics::{ScanLockReadTimeSource, SCAN_LOCK_READ_TIME_VEC},
         reader::{OverlappedWrite, TxnCommitRecord},
+        Result,
     },
 };
 
@@ -478,7 +479,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
         //
         // When it switches to another key in prefix seek mode, creates a new cursor for
         // it because the current position of the cursor is seldom around `key`.
-        if self.scan_mode.is_none() && (self.current_key.as_ref() != Some(key)) {
+        if self.scan_mode.is_none() && self.current_key.as_ref().map_or(true, |k| k != key) {
             self.current_key = Some(key.clone());
             self.write_cursor.take();
         }
@@ -996,12 +997,12 @@ pub mod tests {
 
     use concurrency_manager::ConcurrencyManager;
     use engine_rocks::{
-        RocksCfOptions, RocksDbOptions, RocksEngine, RocksSnapshot,
-        properties::MvccPropertiesCollectorFactory,
+        properties::MvccPropertiesCollectorFactory, RocksCfOptions, RocksDbOptions, RocksEngine,
+        RocksSnapshot,
     };
     use engine_traits::{
-        ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, CompactExt, IterOptions,
-        ManualCompactionOptions, MiscExt, Mutable, SyncMutable, WriteBatch, WriteBatchExt,
+        CompactExt, IterOptions, ManualCompactionOptions, MiscExt, Mutable, SyncMutable,
+        WriteBatch, WriteBatchExt, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
     };
     use kvproto::{
         kvrpcpb::{AssertionLevel, Context, PrewriteRequestPessimisticAction::*},
@@ -1013,13 +1014,13 @@ pub mod tests {
 
     use super::*;
     use crate::storage::{
-        Engine, TestEngineBuilder,
         kv::Modify,
-        mvcc::{MvccReader, MvccTxn, tests::write},
+        mvcc::{tests::write, MvccReader, MvccTxn},
         txn::{
-            CommitKind, TransactionKind, TransactionProperties, acquire_pessimistic_lock, cleanup,
-            commit, gc, prewrite, sched_pool::set_tls_feature_gate,
+            acquire_pessimistic_lock, cleanup, commit, gc, prewrite,
+            sched_pool::set_tls_feature_gate, CommitKind, TransactionKind, TransactionProperties,
         },
+        Engine, TestEngineBuilder,
     };
 
     pub struct RegionEngine {

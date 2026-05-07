@@ -2,14 +2,14 @@
 
 use std::time::Duration;
 
-use futures::{StreamExt, executor::block_on};
+use futures::{executor::block_on, StreamExt};
 use raft::eraftpb::MessageType;
 use raftstore::store::{
-    PeerMsg, SignificantMsg, SnapshotBrWaitApplySyncer,
     snapshot_backup::{SnapshotBrWaitApplyRequest, SyncReport},
+    PeerMsg, SignificantMsg, SnapshotBrWaitApplySyncer,
 };
 use test_raftstore::*;
-use tikv_util::{HandyRwLock, future::block_on_timeout};
+use tikv_util::{future::block_on_timeout, HandyRwLock};
 use tokio::sync::oneshot;
 
 #[test]

@@ -107,10 +107,6 @@ ignore = [
     # raft-engine revision in this workspace still hard-pins serde = 1.0.228,
     # so this cannot be resolved with a lockfile-only update.
     "RUSTSEC-2026-0009",
-    # azure_core transitively depends on http-types/rand, which triggers
-    # RUSTSEC-2026-0097 (unsound with custom logger). Upstream dependency
-    # constraints prevent upgrading at the moment.
-    "RUSTSEC-2026-0097",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,

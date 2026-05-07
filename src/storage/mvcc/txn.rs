@@ -354,17 +354,17 @@ pub(crate) fn make_txn_error(
 #[cfg(test)]
 pub(crate) mod tests {
     use kvproto::kvrpcpb::{AssertionLevel, Context, PrewriteRequestPessimisticAction::*};
-    use txn_types::{LastChange, SHORT_VALUE_MAX_LEN, TimeStamp, WriteType};
+    use txn_types::{LastChange, TimeStamp, WriteType, SHORT_VALUE_MAX_LEN};
 
     use super::*;
     use crate::storage::{
-        SecondaryLocksStatus, TxnStatus,
         kv::{Engine, RocksEngine, ScanMode, TestEngineBuilder, WriteData},
-        mvcc::{Error, ErrorInner, Mutation, MvccReader, SnapshotReader, tests::*},
+        mvcc::{tests::*, Error, ErrorInner, Mutation, MvccReader, SnapshotReader},
         txn::{
-            CommitKind, TransactionKind, TransactionProperties, commands::*, commit, prewrite,
-            tests::*,
+            commands::*, commit, prewrite, tests::*, CommitKind, TransactionKind,
+            TransactionProperties,
         },
+        SecondaryLocksStatus, TxnStatus,
     };
 
     fn test_mvcc_txn_read_imp(k1: &[u8], k2: &[u8], v: &[u8]) {

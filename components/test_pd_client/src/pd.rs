@@ -7,8 +7,8 @@ use std::{
         Bound::{Excluded, Unbounded},
     },
     sync::{
-        Arc, RwLock,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        Arc, RwLock,
     },
     time::Duration,
 };
@@ -19,7 +19,7 @@ use futures::{
     channel::mpsc::{self, UnboundedReceiver, UnboundedSender},
     compat::Future01CompatExt,
     executor::block_on,
-    future::{BoxFuture, FutureExt, err, ok, ready},
+    future::{err, ok, ready, BoxFuture, FutureExt},
     stream,
     stream::StreamExt,
 };
@@ -40,13 +40,13 @@ use pd_client::{
 };
 use raft::eraftpb::ConfChangeType;
 use tikv_util::{
-    Either, HandyRwLock,
-    store::{QueryStats, check_key_in_region, find_peer, find_peer_by_id, is_learner, new_peer},
+    store::{check_key_in_region, find_peer, find_peer_by_id, is_learner, new_peer, QueryStats},
     time::{Instant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
+    Either, HandyRwLock,
 };
 use tokio_timer::timer::Handle;
-use txn_types::{TSO_PHYSICAL_SHIFT_BITS, TimeStamp};
+use txn_types::{TimeStamp, TSO_PHYSICAL_SHIFT_BITS};
 
 use super::*;
 
@@ -529,7 +529,7 @@ impl PdCluster {
         if self
             .stores
             .get(&store_id)
-            .is_none_or(|s| s.store.get_id() != 0)
+            .map_or(true, |s| s.store.get_id() != 0)
         {
             self.stores.insert(
                 store_id,
@@ -1087,10 +1087,10 @@ impl TestPdClient {
             };
             let add = add_peers
                 .iter()
-                .all(|peer| find_peer(&region, peer.get_store_id()) == Some(peer));
+                .all(|peer| find_peer(&region, peer.get_store_id()).map_or(false, |p| p == peer));
             let remove = remove_peers
                 .iter()
-                .all(|peer| find_peer(&region, peer.get_store_id()) != Some(peer));
+                .all(|peer| find_peer(&region, peer.get_store_id()).map_or(true, |p| p != peer));
             if add && remove {
                 return;
             }
@@ -1403,7 +1403,7 @@ impl TestPdClient {
             .rl()
             .leaders
             .get(&region_id)
-            .is_some_and(|p| *p == peer)
+            .map_or(false, |p| *p == peer)
     }
 
     // check whether region is split by split_key or not.

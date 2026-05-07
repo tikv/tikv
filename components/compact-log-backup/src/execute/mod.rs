@@ -18,7 +18,7 @@ use hooking::{
 use kvproto::brpb::StorageBackend;
 use tikv_util::config::ReadableSize;
 use tokio::runtime::Handle;
-use tracing::{Instrument, trace_span};
+use tracing::{trace_span, Instrument};
 use tracing_active_tree::{frame, root};
 use txn_types::TimeStamp;
 
@@ -31,11 +31,10 @@ use super::{
     storage::{LoadFromExt, StreamMetaStorage},
 };
 use crate::{
-    ErrorKind,
-    compaction::{SubcompactionResult, exec::SubcompactionExecArg},
+    compaction::{exec::SubcompactionExecArg, SubcompactionResult},
     errors::{Result, TraceResultExt},
     execute::hooking::SubcompactionSkippedCtx,
-    util,
+    util, ErrorKind,
 };
 
 const COMPACTION_V1_PREFIX: &str = "v1/compactions";

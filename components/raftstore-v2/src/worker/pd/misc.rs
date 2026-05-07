@@ -1,15 +1,15 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{Arc, atomic::Ordering},
+    sync::{atomic::Ordering, Arc},
     time::{Duration, Instant},
 };
 
 use causal_ts::CausalTsProvider;
 use engine_traits::{KvEngine, RaftEngine};
-use futures::{FutureExt, compat::Future01CompatExt};
+use futures::{compat::Future01CompatExt, FutureExt};
 use pd_client::PdClient;
-use raftstore::{Result, store::TxnExt};
+use raftstore::{store::TxnExt, Result};
 use slog::{info, warn};
 use tikv_util::{box_err, timer::GLOBAL_TIMER_HANDLE};
 

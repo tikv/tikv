@@ -5,7 +5,7 @@ use std::{path::PathBuf, str::FromStr, sync::Arc};
 use encryption::DataKeyManager;
 use kvproto::import_sstpb::SstMeta;
 
-use crate::{RefIterable, errors::Result};
+use crate::{errors::Result, RefIterable};
 
 #[derive(Clone, Debug)]
 pub struct SstMetaInfo {

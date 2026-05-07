@@ -6,8 +6,8 @@ use std::{
     borrow::Cow,
     ops::DerefMut,
     sync::{
-        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
     },
 };
 

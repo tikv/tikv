@@ -12,21 +12,21 @@ mod all {
     use core::panic;
     use std::{
         sync::{
-            Arc,
             atomic::{AtomicBool, Ordering},
+            Arc,
         },
         time::Duration,
     };
 
     use backup_stream::{
-        GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task,
         errors::Error,
         metadata::{
-            PauseStatus,
             keys::MetaKey,
             store::{Keys, MetaStore},
+            PauseStatus,
         },
         router::TaskSelector,
+        GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task,
     };
     use encryption::{FileConfig, MasterKeyConfig};
     use futures::executor::block_on;
@@ -34,17 +34,17 @@ mod all {
     use serde_json::Value;
     use tempfile::TempDir;
     use tikv_util::{
-        HandyRwLock, box_err,
+        box_err,
         config::{ReadableDuration, ReadableSize},
-        defer,
+        defer, HandyRwLock,
     };
     use txn_types::Key;
     use walkdir::WalkDir;
 
     use super::{
-        SuiteBuilder, make_record_key, make_split_key_at_record, mutation, run_async_test,
+        make_record_key, make_split_key_at_record, mutation, run_async_test, SuiteBuilder,
     };
-    use crate::{Suite, make_table_key};
+    use crate::{make_table_key, Suite};
 
     #[test]
     fn failed_register_task() {

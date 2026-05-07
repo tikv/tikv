@@ -9,13 +9,13 @@ use std::{
 use batch_system::Fsm;
 use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
-use futures::{FutureExt, compat::Future01CompatExt};
+use futures::{compat::Future01CompatExt, FutureExt};
 use keys::{data_end_key, data_key};
 use kvproto::metapb::Region;
 use raftstore::store::{
-    Config, ReadDelegate, RegionReadProgressRegistry, Transport, fsm::store::StoreRegionMeta,
+    fsm::store::StoreRegionMeta, Config, ReadDelegate, RegionReadProgressRegistry, Transport,
 };
-use slog::{Logger, info, o};
+use slog::{info, o, Logger};
 use tikv_util::{
     future::poll_future_notify,
     is_zero_duration,

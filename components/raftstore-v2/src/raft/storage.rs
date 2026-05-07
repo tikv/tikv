@@ -13,16 +13,16 @@ use kvproto::{
     raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState},
 };
 use raft::{
-    GetEntriesContext, INVALID_ID, RaftState,
     eraftpb::{ConfState, Entry, Snapshot},
+    GetEntriesContext, RaftState, INVALID_ID,
 };
-use raftstore::store::{EntryStorage, ReadTask, local_metrics::RaftMetrics, util};
-use slog::{Logger, o};
+use raftstore::store::{local_metrics::RaftMetrics, util, EntryStorage, ReadTask};
+use slog::{o, Logger};
 use tikv_util::{box_err, store::find_peer, worker::Scheduler};
 
 use crate::{
-    Result,
     operation::{ApplyTrace, GenSnapTask, SnapState, SplitInit},
+    Result,
 };
 
 /// A storage for raft.
@@ -337,8 +337,8 @@ impl<EK: KvEngine, ER: RaftEngine> raft::Storage for Storage<EK, ER> {
 mod tests {
     use std::{
         sync::{
+            mpsc::{sync_channel, Receiver, SyncSender},
             Arc,
-            mpsc::{Receiver, SyncSender, sync_channel},
         },
         time::Duration,
     };
@@ -348,8 +348,8 @@ mod tests {
         kv::{KvTestEngine, TestTabletFactory},
     };
     use engine_traits::{
-        DATA_CFS, FlushState, RaftEngine, RaftLogBatch, SstApplyState, TabletContext,
-        TabletRegistry,
+        FlushState, RaftEngine, RaftLogBatch, SstApplyState, TabletContext, TabletRegistry,
+        DATA_CFS,
     };
     use kvproto::{
         metapb::Region,
@@ -360,23 +360,23 @@ mod tests {
     use raftstore::{
         coprocessor::CoprocessorHost,
         store::{
-            AsyncReadNotifier, Config, FetchedLogs, GenSnapRes, RAFT_INIT_LOG_INDEX,
-            RAFT_INIT_LOG_TERM, ReadRunner, TabletSnapKey, TabletSnapManager, WriteTask,
-            util::new_empty_snapshot, write_to_db_for_test,
+            util::new_empty_snapshot, write_to_db_for_test, AsyncReadNotifier, Config, FetchedLogs,
+            GenSnapRes, ReadRunner, TabletSnapKey, TabletSnapManager, WriteTask,
+            RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
         },
     };
     use slog::o;
     use tempfile::TempDir;
     use tikv_util::{
         store::new_peer,
-        worker::{Worker, dummy_scheduler},
+        worker::{dummy_scheduler, Worker},
         yatp_pool::{DefaultTicker, YatpPoolBuilder},
     };
 
     use super::*;
     use crate::{
         fsm::ApplyResReporter,
-        operation::{CatchUpLogs, test_util::create_tmp_importer, write_initial_states},
+        operation::{test_util::create_tmp_importer, write_initial_states, CatchUpLogs},
         raft::Apply,
         router::ApplyRes,
     };

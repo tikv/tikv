@@ -4,8 +4,8 @@ use std::{
     fmt::{self, Debug, Display, Formatter},
     pin::Pin,
     sync::{
-        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
     },
     task::Poll,
     time::Duration,
@@ -14,29 +14,28 @@ use std::{
 use collections::HashMap;
 pub use engine_rocks::RocksSnapshot;
 use engine_rocks::{
-    RocksCfOptions, RocksDbOptions, RocksEngine as BaseRocksEngine, RocksEngineIterator, get_env,
+    get_env, RocksCfOptions, RocksDbOptions, RocksEngine as BaseRocksEngine, RocksEngineIterator,
 };
 use engine_traits::{
     CfName, Engines, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions,
 };
 use file_system::IoRateLimiter;
 use futures::{
-    Future, Stream,
     channel::{mpsc, oneshot},
-    stream,
+    stream, Future, Stream,
 };
 use kvproto::{kvrpcpb::Context, metapb, raft_cmdpb};
 use raftstore::{
-    SeekRegionCallback,
     coprocessor::{CoprocessorHost, RegionInfoProvider},
+    SeekRegionCallback,
 };
 use tempfile::{Builder, TempDir};
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 use txn_types::{Key, Value};
 
 use super::{
-    Callback, DummySnapshotExt, Engine, Error, ErrorInner, Iterator as EngineIterator, Modify,
-    Result, SnapContext, Snapshot, WriteData, write_modifies,
+    write_modifies, Callback, DummySnapshotExt, Engine, Error, ErrorInner,
+    Iterator as EngineIterator, Modify, Result, SnapContext, Snapshot, WriteData,
 };
 use crate::{FakeExtension, OnAppliedCb, RaftExtension, WriteEvent};
 
@@ -299,7 +298,7 @@ impl<RE: RaftExtension + 'static> Engine for RocksEngine<RE> {
         })();
         let mut res = Some(res);
         stream::poll_fn(move |cx| {
-            if res.as_ref().is_some_and(|r| r.is_err()) {
+            if res.as_ref().map_or(false, |r| r.is_err()) {
                 return Poll::Ready(res.take().map(WriteEvent::Finished));
             }
             // If it's none, it means an error is returned, it should not be polled again.
@@ -328,9 +327,7 @@ impl<RE: RaftExtension + 'static> Engine for RocksEngine<RE> {
     }
 
     type IMSnap = Self::Snap;
-    // TODO: revert this once https://github.com/rust-lang/rust/issues/140222 is fixed.
-    // type IMSnapshotRes = Self::SnapshotRes;
-    type IMSnapshotRes = impl Future<Output = Result<Self::Snap>> + Send;
+    type IMSnapshotRes = Self::SnapshotRes;
     fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
         self.async_snapshot(ctx)
     }

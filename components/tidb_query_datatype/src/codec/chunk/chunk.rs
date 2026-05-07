@@ -4,10 +4,10 @@ use codec::buffer::BufferWriter;
 use tipb::FieldType;
 
 use super::{
-    Result,
     column::{ChunkColumnEncoder, Column},
+    Result,
 };
-use crate::{FieldTypeAccessor, codec::Datum};
+use crate::{codec::Datum, FieldTypeAccessor};
 
 /// `Chunk` stores multiple rows of data.
 /// Values are appended in compact format and can be directly accessed without
@@ -166,17 +166,17 @@ impl<'a> Iterator for RowIterator<'a> {
 
 #[cfg(test)]
 mod tests {
-    use test::{Bencher, black_box};
+    use test::{black_box, Bencher};
 
     use super::*;
     use crate::{
-        FieldTypeTp,
         codec::{
             batch::LazyBatchColumn,
             datum::{Datum, DatumEncoder},
             mysql::*,
         },
         expr::EvalContext,
+        FieldTypeTp,
     };
 
     #[test]

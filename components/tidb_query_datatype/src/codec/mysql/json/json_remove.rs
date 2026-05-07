@@ -1,8 +1,8 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::{super::Result, Json, JsonRef, modifier::BinaryModifier, path_expr::PathExpression};
+use super::{super::Result, modifier::BinaryModifier, path_expr::PathExpression, Json, JsonRef};
 
-impl JsonRef<'_> {
+impl<'a> JsonRef<'a> {
     /// Removes elements from Json,
     /// All path expressions cannot contain * or ** wildcard.
     /// If any error occurs, the input won't be changed.

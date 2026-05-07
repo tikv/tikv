@@ -7,13 +7,13 @@ use std::{
 };
 
 use collections::HashMap;
-use file_system::{IoType, set_io_type};
+use file_system::{set_io_type, IoType};
 use kvproto::{kvrpcpb::CommandPri, pdpb::QueryKind};
 use pd_client::{Feature, FeatureGate};
 use prometheus::local::*;
 use raftstore::store::WriteStats;
 use resource_control::{
-    ControlledFuture, ResourceController, ResourceGroupManager, TaskMetadata, with_resource_limiter,
+    with_resource_limiter, ControlledFuture, ResourceController, ResourceGroupManager, TaskMetadata,
 };
 use tikv_util::{
     sys::SysQuota,
@@ -22,7 +22,7 @@ use tikv_util::{
 use yatp::queue::Extras;
 
 use crate::storage::{
-    kv::{Engine, FlowStatsReporter, Statistics, destroy_tls_engine, set_tls_engine},
+    kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter, Statistics},
     metrics::*,
     test_util::latest_feature_gate,
 };

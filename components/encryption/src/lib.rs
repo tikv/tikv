@@ -23,12 +23,12 @@ use std::{io::ErrorKind, path::Path};
 pub use self::{
     backup::backup_encryption::*,
     config::*,
-    crypter::{AesGcmCrypter, FileEncryptionInfo, Iv, verify_encryption_config},
+    crypter::{verify_encryption_config, AesGcmCrypter, FileEncryptionInfo, Iv},
     encrypted_file::EncryptedFile,
-    errors::{Error, Result, RetryCodedError, cloud_convert_error},
+    errors::{cloud_convert_error, Error, Result, RetryCodedError},
     file_dict_file::FileDictionaryFile,
     io::{
-        DecrypterReader, DecrypterWriter, EncrypterReader, EncrypterWriter, create_aes_ctr_crypter,
+        create_aes_ctr_crypter, DecrypterReader, DecrypterWriter, EncrypterReader, EncrypterWriter,
     },
     manager::{DataKeyImporter, DataKeyManager, DataKeyManagerArgs},
     master_key::{

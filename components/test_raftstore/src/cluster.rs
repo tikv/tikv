@@ -4,7 +4,7 @@ use std::{
     collections::hash_map::Entry as MapEntry,
     error::Error as StdError,
     result,
-    sync::{Arc, Mutex, RwLock, mpsc},
+    sync::{mpsc, Arc, Mutex, RwLock},
     thread,
     time::Duration,
 };
@@ -15,11 +15,11 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    CF_DEFAULT, CF_RAFT, CompactExt, Engines, Iterable, ManualCompactionOptions, MiscExt, Mutable,
-    Peekable, RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt,
+    CompactExt, Engines, Iterable, ManualCompactionOptions, MiscExt, Mutable, Peekable,
+    RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IoRateLimiter;
-use futures::{self, StreamExt, channel::oneshot, executor::block_on, future::BoxFuture};
+use futures::{self, channel::oneshot, executor::block_on, future::BoxFuture, StreamExt};
 use kvproto::{
     errorpb::Error as PbError,
     kvrpcpb::{ApiVersion, Context, DiskFullOpt},
@@ -34,26 +34,27 @@ use kvproto::{
 use pd_client::{BucketStat, PdClient};
 use raft::eraftpb::ConfChangeType;
 use raftstore::{
-    Error, Result,
     router::RaftStoreRouter,
     store::{
         fsm::{
-            ApplyRouter, RaftBatchSystem, RaftRouter, create_raft_batch_system,
-            store::{PENDING_MSG_CAP, StoreMeta},
+            create_raft_batch_system,
+            store::{StoreMeta, PENDING_MSG_CAP},
+            ApplyRouter, RaftBatchSystem, RaftRouter,
         },
         transport::CasualRouter,
         *,
     },
+    Error, Result,
 };
 use resource_control::ResourceGroupManager;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use tikv::{config::TikvConfig, server::Result as ServerResult};
 use tikv_util::{
-    HandyRwLock,
     thread_group::GroupProperties,
     time::{Instant, ThreadReadId},
     worker::LazyWorker,
+    HandyRwLock,
 };
 use txn_types::WriteBatchFlags;
 

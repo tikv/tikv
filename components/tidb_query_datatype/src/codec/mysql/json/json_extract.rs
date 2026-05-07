@@ -4,12 +4,12 @@ use collections::HashSet;
 
 use super::{
     super::Result,
-    Json, JsonRef, JsonType,
     path_expr::{PathExpression, PathLeg},
+    Json, JsonRef, JsonType,
 };
 use crate::codec::mysql::json::path_expr::{ArrayIndex, ArraySelection, KeySelection};
 
-impl JsonRef<'_> {
+impl<'a> JsonRef<'a> {
     /// `extract` receives several path expressions as arguments, matches them
     /// in j, and returns the target JSON matched any path expressions, which
     /// may be autowrapped as an array. If there is no any expression matched,
@@ -42,13 +42,13 @@ impl JsonRef<'_> {
 #[derive(Eq)]
 struct RefEqualJsonWrapper<'a>(JsonRef<'a>);
 
-impl PartialEq for RefEqualJsonWrapper<'_> {
+impl<'a> PartialEq for RefEqualJsonWrapper<'a> {
     fn eq(&self, other: &Self) -> bool {
         self.0.ref_eq(&other.0)
     }
 }
 
-impl std::hash::Hash for RefEqualJsonWrapper<'_> {
+impl<'a> std::hash::Hash for RefEqualJsonWrapper<'a> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.0.value.as_ptr().hash(state)
     }
@@ -200,8 +200,8 @@ mod tests {
 
     use super::{
         super::path_expr::{
-            PATH_EXPRESSION_CONTAINS_ASTERISK, PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
-            PathExpressionFlag,
+            PathExpressionFlag, PATH_EXPRESSION_CONTAINS_ASTERISK,
+            PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
         },
         *,
     };

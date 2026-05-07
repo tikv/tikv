@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::{ChunkRef, ChunkedVec, Json, JsonRef, JsonType, UnsafeRefInto, bit_vec::BitVec};
+use super::{bit_vec::BitVec, ChunkRef, ChunkedVec, Json, JsonRef, JsonType, UnsafeRefInto};
 use crate::impl_chunked_vec_common;
 
 /// A vector storing `Option<Json>` with a compact layout.
@@ -121,7 +121,7 @@ impl From<Vec<Option<Json>>> for ChunkedVecJson {
     }
 }
 
-impl UnsafeRefInto<&'static ChunkedVecJson> for &ChunkedVecJson {
+impl<'a> UnsafeRefInto<&'static ChunkedVecJson> for &'a ChunkedVecJson {
     unsafe fn unsafe_into(self) -> &'static ChunkedVecJson {
         std::mem::transmute(self)
     }

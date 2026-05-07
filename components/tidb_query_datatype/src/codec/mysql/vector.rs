@@ -102,7 +102,7 @@ pub struct VectorFloat32Ref<'a> {
     value: &'a [u8],
 }
 
-impl Ord for VectorFloat32Ref<'_> {
+impl<'a> Ord for VectorFloat32Ref<'a> {
     fn cmp(&self, other: &Self) -> Ordering {
         let la = self.len();
         let lb = other.len();
@@ -118,7 +118,7 @@ impl Ord for VectorFloat32Ref<'_> {
     }
 }
 
-impl PartialOrd for VectorFloat32Ref<'_> {
+impl<'a> PartialOrd for VectorFloat32Ref<'a> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
@@ -314,6 +314,12 @@ impl std::fmt::Display for VectorFloat32Ref<'_> {
 impl std::fmt::Debug for VectorFloat32Ref<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self)
+    }
+}
+
+impl ToString for VectorFloat32Ref<'_> {
+    fn to_string(&self) -> String {
+        format!("{}", self)
     }
 }
 

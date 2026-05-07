@@ -3,7 +3,7 @@
 use std::usize;
 
 use collections::HashMap;
-use test::{Bencher, black_box};
+use test::{black_box, Bencher};
 use tipb::ScalarFuncSig;
 
 fn get_scalar_args_with_match(sig: ScalarFuncSig) -> (usize, usize) {

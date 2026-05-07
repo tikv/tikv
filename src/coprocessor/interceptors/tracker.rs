@@ -39,7 +39,7 @@ where
     }
 }
 
-impl<F, E> Future for Tracker<'_, F, E>
+impl<'a, F, E> Future for Tracker<'a, F, E>
 where
     F: Future,
     E: Engine,

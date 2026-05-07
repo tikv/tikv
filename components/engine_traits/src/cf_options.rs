@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::{Result, db_options::TitanCfOptions, sst_partitioner::SstPartitionerFactory};
+use crate::{db_options::TitanCfOptions, sst_partitioner::SstPartitionerFactory, Result};
 
 /// Trait for engines with column family options
 pub trait CfOptionsExt {

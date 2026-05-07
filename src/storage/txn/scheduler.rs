@@ -27,8 +27,8 @@ use std::{
     marker::PhantomData,
     mem,
     sync::{
-        Arc,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        Arc,
     },
     time::Duration,
     u64,
@@ -39,7 +39,7 @@ use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use crossbeam::utils::CachePadded;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use futures::{FutureExt as _, StreamExt, compat::Future01CompatExt};
+use futures::{compat::Future01CompatExt, FutureExt as _, StreamExt};
 use kvproto::{
     kvrpcpb::{self, CommandPri, Context, DiskFullOpt},
     pdpb::QueryKind,
@@ -49,49 +49,51 @@ use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
 use resource_control::{ResourceController, ResourceGroupManager, TaskMetadata};
 use resource_metering::{
-    FutureExt, ResourceTagFactory, record_logical_read_bytes, record_logical_write_bytes,
-    record_network_in_bytes,
+    record_logical_read_bytes, record_logical_write_bytes, record_network_in_bytes, FutureExt,
+    ResourceTagFactory,
 };
-use smallvec::{SmallVec, smallvec};
+use smallvec::{smallvec, SmallVec};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};
 use tikv_util::{
     memory::MemoryQuota, quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE,
 };
-use tracker::{GLOBAL_TRACKERS, TrackerToken, TrackerTokenArray, set_tls_tracker_token};
+use tracker::{set_tls_tracker_token, TrackerToken, TrackerTokenArray, GLOBAL_TRACKERS};
 use txn_types::{LockInfoExt, TimeStamp};
 
 use super::task::Task;
 use crate::{
     server::lock_manager::waiter_manager,
     storage::{
-        DynamicConfigs, Error as StorageError, ErrorInner as StorageErrorInner,
-        PessimisticLockKeyResult, PessimisticLockResults,
         config::Config,
         errors::SharedError,
         get_causal_ts, get_priority_tag, get_raw_key_guard,
         kv::{
-            self, Engine, FlowStatsReporter, Result as EngineResult, SnapContext, Statistics,
-            with_tls_engine,
+            self, with_tls_engine, Engine, FlowStatsReporter, Result as EngineResult, SnapContext,
+            Statistics,
         },
         lock_manager::{
-            self, DiagnosticContext, LockManager, LockWaitToken,
+            self,
             lock_wait_context::{LockWaitContext, PessimisticLockKeyCallback},
             lock_waiting_queue::{DelayedNotifyAllFuture, LockWaitEntry, LockWaitQueues},
+            DiagnosticContext, LockManager, LockWaitToken,
         },
         metrics::*,
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, ReleasedLock},
         txn::{
-            Error, ErrorInner, ProcessResult, commands,
+            commands,
             commands::{
                 Command, RawExt, ReleasedLocks, ResponsePolicy, WriteContext, WriteResult,
                 WriteResultLockInfo,
             },
             flow_controller::FlowController,
             latch::{Latches, Lock},
-            sched_pool::{SchedPool, tls_collect_query, tls_collect_scan_details},
+            sched_pool::{tls_collect_query, tls_collect_scan_details, SchedPool},
             txn_status_cache::TxnStatusCache,
+            Error, ErrorInner, ProcessResult,
         },
         types::StorageCallback,
+        DynamicConfigs, Error as StorageError, ErrorInner as StorageErrorInner,
+        PessimisticLockKeyResult, PessimisticLockResults,
     },
 };
 
@@ -2257,16 +2259,15 @@ mod tests {
     };
     use raftstore::store::{LocksStatus, ReadStats, WriteStats};
     use tikv_util::{
-        Either,
         config::ReadableSize,
         future::{block_on_timeout, paired_future_callback},
         memory::HeapSize,
+        Either,
     };
     use txn_types::{Key, LockType, SharedLocks, TimeStamp};
 
     use super::*;
     use crate::storage::{
-        RocksEngine, SecondaryLocksStatus, TestEngineBuilder, TxnStatus,
         kv::{Error as KvError, ErrorInner as KvErrorInner},
         lock_manager::{MockLockManager, WaitTimeout},
         mvcc::{self, Mutation},
@@ -2277,6 +2278,7 @@ mod tests {
             flow_controller::{EngineFlowController, FlowController},
             latch::*,
         },
+        RocksEngine, SecondaryLocksStatus, TestEngineBuilder, TxnStatus,
     };
 
     #[derive(Clone)]

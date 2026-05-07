@@ -7,10 +7,10 @@ use tikv_util::{box_try, debug, info, warn};
 
 use super::{
     super::{
-        Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker, error::Result,
-        metrics::*,
+        error::Result, metrics::*, Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver,
+        SplitChecker,
     },
-    Host, calc_split_keys_count,
+    calc_split_keys_count, Host,
 };
 use crate::coprocessor::dispatcher::StoreHandle;
 
@@ -242,7 +242,7 @@ pub mod tests {
         kv::KvTestEngine,
     };
     use engine_traits::{
-        ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, CfName, LARGE_CFS, MiscExt, SyncMutable,
+        CfName, MiscExt, SyncMutable, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, LARGE_CFS,
     };
     use kvproto::{
         metapb::{Peer, Region},
@@ -255,7 +255,7 @@ pub mod tests {
     use super::{Checker, *};
     use crate::{
         coprocessor::{
-            Config, CoprocessorHost, ObserverContext, SplitChecker, dispatcher::SchedTask,
+            dispatcher::SchedTask, Config, CoprocessorHost, ObserverContext, SplitChecker,
         },
         store::{BucketRange, KeyEntry, SplitCheckRunner, SplitCheckTask},
     };
@@ -909,7 +909,7 @@ pub mod tests {
         );
 
         let mut big_value = Vec::with_capacity(256);
-        big_value.extend(std::iter::repeat_n(b'v', 256));
+        big_value.extend(iter::repeat(b'v').take(256));
         for i in 0..100 {
             let k = format!("key_{:03}", i).into_bytes();
             let k = keys::data_key(Key::from_raw(&k).as_encoded());
@@ -936,7 +936,7 @@ pub mod tests {
         let engine = engine_test::kv::new_engine_opt(path, db_opts, cfs_opts).unwrap();
 
         let mut big_value = Vec::with_capacity(256);
-        big_value.extend(std::iter::repeat_n(b'v', 256));
+        big_value.extend(iter::repeat(b'v').take(256));
 
         for i in 0..4 {
             let k = format!("key_{:03}", i).into_bytes();

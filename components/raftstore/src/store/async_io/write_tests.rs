@@ -3,7 +3,7 @@
 use std::{sync::mpsc, time::Duration};
 
 use collections::HashSet;
-use crossbeam::channel::{Receiver, Sender, unbounded};
+use crossbeam::channel::{unbounded, Receiver, Sender};
 use engine_test::{kv::KvTestEngine, new_temp_engine, raft::RaftTestEngine};
 use engine_traits::{Engines, Mutable, Peekable, RaftEngineReadOnly, WriteBatchExt};
 use kvproto::{
@@ -16,11 +16,11 @@ use tempfile::Builder;
 
 use super::*;
 use crate::{
-    Result,
     store::{
-        Config, Transport, WriteRouter, async_io::write_router::tests::TestContext,
-        local_metrics::RaftMetrics, peer_storage::tests::new_entry,
+        async_io::write_router::tests::TestContext, local_metrics::RaftMetrics,
+        peer_storage::tests::new_entry, Config, Transport, WriteRouter,
     },
+    Result,
 };
 type TestKvWriteBatch = <KvTestEngine as WriteBatchExt>::WriteBatch;
 type TestRaftLogBatch = <RaftTestEngine as RaftEngine>::LogBatch;

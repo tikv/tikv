@@ -4,28 +4,28 @@ use std::{
     convert::TryFrom,
     future::Future,
     sync::{
-        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
         mpsc::SyncSender,
+        Arc, Mutex,
     },
     time::Duration,
 };
 
-use file_system::{IoType, set_io_type};
+use file_system::{set_io_type, IoType};
 use futures::{
     channel::oneshot,
     future::{FutureExt, TryFutureExt},
 };
 use kvproto::{errorpb, kvrpcpb::CommandPri};
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
-use prometheus::{Histogram, IntCounter, IntGauge, core::Metric};
+use prometheus::{core::Metric, Histogram, IntCounter, IntGauge};
 use resource_control::{
-    ControlledFuture, ResourceController, ResourceLimiter, TaskPriority, with_resource_limiter,
+    with_resource_limiter, ControlledFuture, ResourceController, ResourceLimiter, TaskPriority,
 };
 use thiserror::Error;
 use tikv_util::{
     resource_control::TaskMetadata,
-    sys::{SysQuota, cpu_time::ProcessStat},
+    sys::{cpu_time::ProcessStat, SysQuota},
     time::Instant,
     worker::{Runnable, RunnableWithTimer, Scheduler, Worker},
     yatp_pool::{self, CleanupMethod, FuturePool, PoolTicker, YatpPoolBuilder},
@@ -37,8 +37,8 @@ use yatp::{
 
 use self::metrics::*;
 use crate::{
-    config::{UNIFIED_READPOOL_MIN_CONCURRENCY, UnifiedReadPoolConfig},
-    storage::kv::{Engine, FlowStatsReporter, destroy_tls_engine, set_tls_engine},
+    config::{UnifiedReadPoolConfig, UNIFIED_READPOOL_MIN_CONCURRENCY},
+    storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter},
 };
 
 // the duration to check auto-scale unified-thread-pool's thread

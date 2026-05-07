@@ -9,8 +9,8 @@ use std::{
 
 use async_trait::async_trait;
 use tokio::sync::{
-    Mutex,
     mpsc::{self, Sender},
+    Mutex,
 };
 use tokio_stream::StreamExt;
 
@@ -113,7 +113,7 @@ impl SlashEtc {
             .collect::<Vec<_>>();
         let kvs = mvccs
             .as_slice()
-            .chunk_by(|k1, k2| k1.0.0 == k2.0.0)
+            .group_by(|k1, k2| k1.0.0 == k2.0.0)
             .filter_map(|k| {
                 let (k, v) = k.last()?;
                 match v {

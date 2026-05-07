@@ -36,12 +36,12 @@ pub mod time;
 pub mod vector;
 
 pub use self::{
-    decimal::{Decimal, DecimalDecoder, DecimalEncoder, Res, RoundMode, dec_encoded_len},
+    decimal::{dec_encoded_len, Decimal, DecimalDecoder, DecimalEncoder, Res, RoundMode},
     duration::{Duration, DurationDecoder, DurationEncoder},
     enums::{Enum, EnumDecoder, EnumEncoder, EnumRef},
     json::{
-        Json, JsonDatumPayloadChunkEncoder, JsonDecoder, JsonEncoder, JsonType, ModifyType,
-        PathExpression, parse_json_path_expr,
+        parse_json_path_expr, Json, JsonDatumPayloadChunkEncoder, JsonDecoder, JsonEncoder,
+        JsonType, ModifyType, PathExpression,
     },
     set::{Set, SetRef},
     time::{Time, TimeDecoder, TimeEncoder, TimeType, Tz},

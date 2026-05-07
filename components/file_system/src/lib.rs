@@ -15,9 +15,9 @@ use std::cell::Cell;
 pub use std::{
     convert::TryFrom,
     fs::{
-        DirBuilder, DirEntry, FileType, Metadata, Permissions, ReadDir, canonicalize, create_dir,
-        create_dir_all, hard_link, metadata, read_dir, read_link, remove_dir, remove_dir_all,
-        remove_file, rename, set_permissions, symlink_metadata,
+        canonicalize, create_dir, create_dir_all, hard_link, metadata, read_dir, read_link,
+        remove_dir, remove_dir_all, remove_file, rename, set_permissions, symlink_metadata,
+        DirBuilder, DirEntry, FileType, Metadata, Permissions, ReadDir,
     },
 };
 use std::{
@@ -26,7 +26,7 @@ use std::{
     pin::Pin,
     str::FromStr,
     sync::{Arc, Mutex},
-    task::{Context, Poll, ready},
+    task::{ready, Context, Poll},
 };
 
 pub use file::{File, OpenOptions};
@@ -41,8 +41,8 @@ use openssl::{
     hash::{self, Hasher, MessageDigest},
 };
 pub use rate_limiter::{
-    IoBudgetAdjustor, IoRateLimitMode, IoRateLimiter, IoRateLimiterStatistics, get_io_rate_limiter,
-    set_io_rate_limiter,
+    get_io_rate_limiter, set_io_rate_limiter, IoBudgetAdjustor, IoRateLimitMode, IoRateLimiter,
+    IoRateLimiterStatistics,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use strum::{EnumCount, EnumIter};
@@ -326,7 +326,7 @@ impl<'de> Deserialize<'de> for IoPriority {
     {
         use serde::de::{Error, Unexpected, Visitor};
         struct StrVistor;
-        impl Visitor<'_> for StrVistor {
+        impl<'de> Visitor<'de> for StrVistor {
             type Value = IoPriority;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -622,7 +622,7 @@ pub fn reserve_space_for_recover<P: AsRef<Path>>(data_dir: P, file_size: u64) ->
 mod tests {
     use std::{io::Write, iter};
 
-    use rand::{Rng, distributions::Alphanumeric, thread_rng};
+    use rand::{distributions::Alphanumeric, thread_rng, Rng};
     use tempfile::{Builder, TempDir};
 
     use super::*;

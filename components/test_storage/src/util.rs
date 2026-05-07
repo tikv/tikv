@@ -2,7 +2,7 @@
 
 use api_version::KvFormat;
 use kvproto::kvrpcpb::Context;
-use test_raftstore::{Cluster, ServerCluster, SimulateEngine, new_server_cluster};
+use test_raftstore::{new_server_cluster, Cluster, ServerCluster, SimulateEngine};
 use tikv_util::HandyRwLock;
 
 use super::*;

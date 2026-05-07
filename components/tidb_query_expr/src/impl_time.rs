@@ -3,23 +3,24 @@
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::{
-    FieldTypeAccessor, FieldTypeFlag,
     codec::{
-        Error, Result as CodecResult,
         data_type::*,
         mysql::{
-            Duration, MAX_FSP, Time, TimeType, check_fsp,
+            check_fsp,
             duration::{
                 MAX_HOUR_PART, MAX_MINUTE_PART, MAX_NANOS, MAX_NANOS_PART, MAX_SECOND_PART,
                 NANOS_PER_SEC,
             },
             time::{
-                MONTH_NAMES, WeekdayExtension, extension::DateTimeExtension, interval::*,
-                weekmode::WeekMode,
+                extension::DateTimeExtension, interval::*, weekmode::WeekMode, WeekdayExtension,
+                MONTH_NAMES,
             },
+            Duration, Time, TimeType, MAX_FSP,
         },
+        Error, Result as CodecResult,
     },
     expr::{EvalContext, SqlMode},
+    FieldTypeAccessor, FieldTypeFlag,
 };
 use tipb::{Expr, ExprType};
 
@@ -952,7 +953,7 @@ pub trait AddSubDateConvertToTime {
     fn to_time(&self, ctx: &mut EvalContext, metadata: &AddSubDateMeta) -> CodecResult<Time>;
 }
 
-impl AddSubDateConvertToTime for BytesRef<'_> {
+impl<'a> AddSubDateConvertToTime for BytesRef<'a> {
     #[inline]
     fn to_time(&self, ctx: &mut EvalContext, metadata: &AddSubDateMeta) -> CodecResult<Time> {
         let input = std::str::from_utf8(self).map_err(Error::Encoding)?;
@@ -1522,21 +1523,21 @@ mod tests {
     use std::{str::FromStr, sync::Arc};
 
     use tidb_query_datatype::{
-        FieldTypeTp,
         builder::FieldTypeBuilder,
         codec::{
             batch::LazyBatchColumnVec,
             data_type::*,
             error::ERR_TRUNCATE_WRONG_VALUE,
-            mysql::{MAX_FSP, Time},
+            mysql::{Time, MAX_FSP},
         },
         expr::EvalConfig,
+        FieldTypeTp,
     };
     use tipb::{FieldType, ScalarFuncSig};
     use tipb_helper::ExprDefBuilder;
 
     use super::*;
-    use crate::{RpnExpressionBuilder, types::test_util::RpnFnScalarEvaluator};
+    use crate::{types::test_util::RpnFnScalarEvaluator, RpnExpressionBuilder};
 
     #[test]
     fn test_add_duration_and_duration() {

@@ -2,23 +2,22 @@
 
 use std::{
     sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc,
+        mpsc, Arc,
     },
     time::Duration,
 };
 
-use api_version::{KvFormat, test_kv_format_impl};
+use api_version::{test_kv_format_impl, KvFormat};
 use futures::{executor::block_on, sink::SinkExt};
 use grpcio::WriteFlags;
 use kvproto::{cdcpb::*, kvrpcpb::*, raft_serverpb::RaftMessage};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
-use tikv_util::{HandyRwLock, config::ReadableDuration};
+use tikv_util::{config::ReadableDuration, HandyRwLock};
 
-use crate::{TestSuite, TestSuiteBuilder, new_event_feed};
+use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
 
 #[test]
 fn test_observe_duplicate_cmd() {

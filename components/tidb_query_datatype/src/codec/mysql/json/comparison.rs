@@ -5,8 +5,7 @@ use std::{
     f64,
 };
 
-use super::{super::Result, ERR_CONVERT_FAILED, Json, JsonRef, JsonType, constants::*};
-use crate::codec::convert::ToStringValue;
+use super::{super::Result, constants::*, Json, JsonRef, JsonType, ERR_CONVERT_FAILED};
 
 fn compare<T: Ord>(x: T, y: T) -> Ordering {
     x.cmp(&y)
@@ -28,7 +27,7 @@ fn compare_f64_with_epsilon(x: f64, y: f64) -> Option<Ordering> {
     }
 }
 
-impl JsonRef<'_> {
+impl<'a> JsonRef<'a> {
     fn get_precedence(&self) -> i32 {
         match self.get_type() {
             JsonType::Object => PRECEDENCE_OBJECT,
@@ -58,26 +57,27 @@ impl JsonRef<'_> {
             _ => Err(invalid_type!(
                 "{} from {} to f64",
                 ERR_CONVERT_FAILED,
-                self.to_string_value()
+                self.to_string()
             )),
         }
     }
 }
 
-impl Eq for JsonRef<'_> {}
+impl<'a> Eq for JsonRef<'a> {}
 
-impl Ord for JsonRef<'_> {
+impl<'a> Ord for JsonRef<'a> {
     fn cmp(&self, right: &JsonRef<'_>) -> Ordering {
         self.partial_cmp(right).unwrap()
     }
 }
 
-impl PartialEq for JsonRef<'_> {
+impl<'a> PartialEq for JsonRef<'a> {
     fn eq(&self, right: &JsonRef<'_>) -> bool {
-        self.partial_cmp(right) == Some(Ordering::Equal)
+        self.partial_cmp(right)
+            .map_or(false, |r| r == Ordering::Equal)
     }
 }
-impl PartialOrd for JsonRef<'_> {
+impl<'a> PartialOrd for JsonRef<'a> {
     // See `CompareBinary` in TiDB `types/json/binary_functions.go`
     fn partial_cmp(&self, right: &JsonRef<'_>) -> Option<Ordering> {
         let precedence_diff = self.get_precedence() - right.get_precedence();

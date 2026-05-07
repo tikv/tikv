@@ -1,10 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
-use std::io::{Cursor, prelude::*};
+use std::io::{prelude::*, Cursor};
 
 use byteorder::ByteOrder;
 use bytes::{Buf, Bytes};
 
-use crate::{Either, codec::Result};
+use crate::{codec::Result, Either};
 
 // Note: maybe allow them to be different lifetime.
 // But not necessary for now, so keep it simple...?

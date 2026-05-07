@@ -21,21 +21,20 @@
 //! * null column ids: when flag == 1 (big), id is 4 bytes, otherwise 1 byte
 //! * non-null values offset: when big, offset is 4 bytes, otherwise 2 bytes
 
-use std::{i8, i16, i32, u8, u16, u32};
+use std::{i16, i32, i8, u16, u32, u8};
 
 use codec::prelude::*;
 use num_traits::Zero;
 use tipb::FieldType;
 
 use crate::{
-    FieldTypeAccessor, FieldTypeFlag, FieldTypeTp,
     codec::{
-        Error, Result,
-        convert::ToStringValue,
         data_type::ScalarValue,
-        mysql::{Duration, decimal::DecimalEncoder, json::JsonEncoder},
+        mysql::{decimal::DecimalEncoder, json::JsonEncoder, Duration},
+        Error, Result,
     },
     expr::EvalContext,
+    FieldTypeAccessor, FieldTypeFlag, FieldTypeTp,
 };
 
 const MAX_I8: i64 = i8::MAX as i64;
@@ -220,7 +219,7 @@ impl Column {
                         "invalid type: {:?}",
                         self.ft,
                     )))?
-                    .to_string_value();
+                    .to_string();
                 buf.write_u32_le(res.len() as u32)?;
                 buf.write_bytes(res.as_bytes())?;
             }
@@ -532,10 +531,10 @@ mod tests {
     use crate::{
         codec::{
             data_type::ScalarValue,
-            mysql::{Decimal, Duration, Json, Time, duration::NANOS_PER_SEC},
+            mysql::{duration::NANOS_PER_SEC, Decimal, Duration, Json, Time},
             row::v2::encoder_for_test::{
-                ChecksumHandler, Crc32RowChecksumHandler, get_non_null_columns,
-                prepare_cols_for_test,
+                get_non_null_columns, prepare_cols_for_test, ChecksumHandler,
+                Crc32RowChecksumHandler,
             },
         },
         expr::EvalContext,

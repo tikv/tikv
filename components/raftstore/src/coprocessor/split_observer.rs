@@ -8,7 +8,7 @@ use kvproto::{
 use tikv_util::{box_err, box_try, codec::bytes, warn};
 
 use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
-use crate::{Error, store::util};
+use crate::{store::util, Error};
 
 pub const NO_VALID_SPLIT_KEY: &str = "no valid key found for split.";
 
@@ -168,7 +168,7 @@ mod tests {
         raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest},
     };
     use tidb_query_datatype::{
-        codec::{Datum, datum, table},
+        codec::{datum, table, Datum},
         expr::EvalContext,
     };
     use tikv_util::codec::bytes::encode_bytes;

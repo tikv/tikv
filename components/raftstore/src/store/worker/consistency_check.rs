@@ -9,7 +9,7 @@ use tikv_util::{error, info, warn, worker::Runnable};
 
 use super::metrics::*;
 use crate::{
-    coprocessor::{CoprocessorHost, dispatcher::StoreHandle},
+    coprocessor::{dispatcher::StoreHandle, CoprocessorHost},
     store::metrics::*,
 };
 
@@ -117,16 +117,16 @@ mod tests {
     use std::{assert_matches::assert_matches, sync::mpsc, time::Duration};
 
     use byteorder::{BigEndian, WriteBytesExt};
-    use engine_test::kv::{KvTestEngine, new_engine};
-    use engine_traits::{ALL_CFS, KvEngine, SyncMutable};
+    use engine_test::kv::{new_engine, KvTestEngine};
+    use engine_traits::{KvEngine, SyncMutable, ALL_CFS};
     use kvproto::metapb::*;
     use tempfile::Builder;
     use tikv_util::worker::Runnable;
 
     use super::*;
     use crate::coprocessor::{
-        BoxConsistencyCheckObserver, ConsistencyCheckMethod, RawConsistencyCheckObserver,
-        dispatcher::SchedTask,
+        dispatcher::SchedTask, BoxConsistencyCheckObserver, ConsistencyCheckMethod,
+        RawConsistencyCheckObserver,
     };
 
     #[test]

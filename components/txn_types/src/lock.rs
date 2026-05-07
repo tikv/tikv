@@ -7,18 +7,18 @@ use byteorder::ReadBytesExt;
 use collections::HashMap;
 use kvproto::kvrpcpb::{IsolationLevel, LockInfo, Op, WriteConflictReason};
 use tikv_util::{
-    Either,
     codec::{
         bytes::{self, BytesEncoder},
-        number::{self, MAX_VAR_I64_LEN, MAX_VAR_U64_LEN, NumberEncoder},
+        number::{self, NumberEncoder, MAX_VAR_I64_LEN, MAX_VAR_U64_LEN},
     },
     memory::HeapSize,
+    Either,
 };
 
 use crate::{
-    Error, ErrorInner, LastChange, Result,
     timestamp::{TimeStamp, TsSet},
-    types::{Key, Mutation, SHORT_VALUE_PREFIX, Value},
+    types::{Key, Mutation, Value, SHORT_VALUE_PREFIX},
+    Error, ErrorInner, LastChange, Result,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1021,7 +1021,7 @@ pub enum TxnLockRef<'a> {
     Persisted(&'a Lock),
 }
 
-impl TxnLockRef<'_> {
+impl<'a> TxnLockRef<'a> {
     pub fn get_start_ts(&self) -> TimeStamp {
         match self {
             TxnLockRef::InMemory(pessimistic_lock) => pessimistic_lock.start_ts,

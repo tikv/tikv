@@ -2,7 +2,7 @@
 
 use std::{
     cmp,
-    sync::{Arc, atomic::Ordering},
+    sync::{atomic::Ordering, Arc},
 };
 
 use collections::{HashMap, HashSet};
@@ -11,16 +11,16 @@ use fail::fail_point;
 use health_controller::types::LatencyInspector;
 use kvproto::pdpb;
 use pd_client::{
-    PdClient,
     metrics::{
         REGION_READ_BYTES_HISTOGRAM, REGION_READ_KEYS_HISTOGRAM, REGION_WRITTEN_BYTES_HISTOGRAM,
         REGION_WRITTEN_KEYS_HISTOGRAM,
     },
+    PdClient,
 };
 use prometheus::local::LocalHistogram;
 use raftstore::store::{
-    UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle,
-    metrics::STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC,
+    metrics::STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC, UnsafeRecoveryExecutePlanSyncer,
+    UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle,
 };
 use slog::{error, info, warn};
 use tikv_util::{

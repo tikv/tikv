@@ -2,7 +2,7 @@
 
 #![feature(test)]
 
-use std::sync::{Arc, atomic::*};
+use std::sync::{atomic::*, Arc};
 
 use batch_system::{test_runner::*, *};
 use criterion::*;

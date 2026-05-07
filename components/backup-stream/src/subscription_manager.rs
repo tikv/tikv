@@ -17,23 +17,24 @@ use tikv_util::{
     box_err, debug, info, memory::MemoryQuota, sys::thread::ThreadBuildWrapper, time::Instant,
     warn, worker::Scheduler,
 };
-use tokio::sync::mpsc::{Receiver, Sender, WeakSender, channel, error::SendError};
+use tokio::sync::mpsc::{channel, error::SendError, Receiver, Sender, WeakSender};
 use tracing::instrument;
 use tracing_active_tree::root;
 use txn_types::TimeStamp;
 
 use crate::{
-    Task, annotate,
+    annotate,
     endpoint::{BackupStreamResolver, ObserveOp},
     errors::{Error, ReportableResult, Result},
     event_loader::InitialDataLoader,
     future,
-    metadata::{CheckpointProvider, MetadataClient, store::MetaStore},
+    metadata::{store::MetaStore, CheckpointProvider, MetadataClient},
     metrics,
     router::{Router, TaskSelector},
     subscription_track::{CheckpointType, Ref, RefMut, ResolveResult, SubscriptionTracer},
     try_send,
     utils::{self, FutureWaitGroup, Work},
+    Task,
 };
 
 type ScanPool = tokio::runtime::Runtime;
@@ -235,7 +236,7 @@ async fn scan_executor_loop(init: impl InitialScan, mut cmds: Receiver<ScanCmd>)
 /// spawn the executors to some runtime.
 #[cfg(test)]
 fn spawn_executors_to(
-    init: impl InitialScan + 'static,
+    init: impl InitialScan + Send + Sync + 'static,
     handle: &tokio::runtime::Handle,
 ) -> ScanPoolHandle {
     let (tx, rx) = tokio::sync::mpsc::channel(MESSAGE_BUFFER_SIZE);
@@ -246,7 +247,10 @@ fn spawn_executors_to(
 }
 
 /// spawn the executors in the scan pool.
-fn spawn_executors(init: impl InitialScan + 'static, number: usize) -> ScanPoolHandle {
+fn spawn_executors(
+    init: impl InitialScan + Send + Sync + 'static,
+    number: usize,
+) -> ScanPoolHandle {
     let (tx, rx) = tokio::sync::mpsc::channel(MESSAGE_BUFFER_SIZE);
     let pool = create_scan_pool(number);
     let handle = pool.handle().clone();
@@ -815,8 +819,8 @@ mod test {
     use std::{
         collections::HashMap,
         sync::{
-            Arc, Mutex,
             atomic::{AtomicBool, Ordering},
+            Arc, Mutex,
         },
         time::Duration,
     };
@@ -829,27 +833,27 @@ mod test {
         metapb::{Region, RegionEpoch},
     };
     use raftstore::{
-        RegionInfo,
         coprocessor::{ObserveHandle, RegionInfoCallback, RegionInfoProvider},
         router::{CdcRaftRouter, ServerRaftStoreRouter},
+        RegionInfo,
     };
     use tikv::{
         config::BackupStreamConfig,
-        storage::{Statistics, txn::txn_status_cache::TxnStatusCache},
+        storage::{txn::txn_status_cache::TxnStatusCache, Statistics},
     };
     use tikv_util::{box_err, info, memory::MemoryQuota, worker::dummy_scheduler};
     use tokio::{sync::mpsc::Sender, task::JoinHandle};
     use txn_types::TimeStamp;
 
-    use super::{InitialScan, RegionSubscriptionManager, spawn_executors_to};
+    use super::{spawn_executors_to, InitialScan, RegionSubscriptionManager};
     use crate::{
-        BackupStreamResolver, ObserveOp, Task,
         errors::Error,
-        metadata::{MetadataClient, StreamTask, store::SlashEtcStore},
+        metadata::{store::SlashEtcStore, MetadataClient, StreamTask},
         router::{Router, RouterInner},
         subscription_manager::{OOM_BACKOFF_BASE, OOM_BACKOFF_JITTER_SECS},
         subscription_track::{CheckpointType, SubscriptionTracer},
         utils::FutureWaitGroup,
+        BackupStreamResolver, ObserveOp, Task,
     };
 
     #[derive(Clone, Copy)]

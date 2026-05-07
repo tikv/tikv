@@ -7,8 +7,8 @@ use std::{
     path::{Path, PathBuf},
     result,
     sync::{
-        Arc, RwLock as SyncRwLock,
         atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering},
+        Arc, RwLock as SyncRwLock,
     },
     time::Duration,
 };
@@ -16,8 +16,8 @@ use std::{
 use dashmap::DashMap;
 use encryption::{BackupEncryptionManager, EncrypterReader, Iv, MultiMasterKeyBackend};
 use encryption_export::create_async_backend;
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE, CfName};
-use external_storage::{BackendConfig, ExternalStorage, HdfsConfig, UnpinReader, create_storage};
+use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use external_storage::{create_storage, BackendConfig, ExternalStorage, HdfsConfig, UnpinReader};
 use file_system::Sha256Reader;
 use futures::io::Cursor;
 use kvproto::{
@@ -36,13 +36,14 @@ use slog_global::debug;
 use tidb_query_datatype::codec::table::decode_table_id;
 use tikv::config::BackupStreamConfig;
 use tikv_util::{
-    Either, HandyRwLock, box_err,
+    box_err,
     codec::stream_event::EventEncoder,
     config::ReadableSize,
     error, info,
     time::{Instant, Limiter},
     warn,
     worker::Scheduler,
+    Either, HandyRwLock,
 };
 use tokio::{
     io::AsyncWriteExt,
@@ -102,7 +103,7 @@ pub enum TaskSelectorRef<'a> {
     All,
 }
 
-impl std::fmt::Debug for TaskSelectorRef<'_> {
+impl<'a> std::fmt::Debug for TaskSelectorRef<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ByName(name) => f.debug_tuple("ByName").field(name).finish(),
@@ -120,7 +121,7 @@ impl std::fmt::Debug for TaskSelectorRef<'_> {
     }
 }
 
-impl TaskSelectorRef<'_> {
+impl<'a> TaskSelectorRef<'a> {
     fn matches<'c, 'd>(
         self,
         task_name: &str,
@@ -1137,6 +1138,7 @@ impl StreamTaskHandler {
         )
         .await
         .into_iter()
+        .map(|r| r.map_err(Error::from))
         .fold(Ok(()), Result::and)?;
 
         let mut metadata = MetadataInfo::with_capacity(w.len() + wm.len());
@@ -1976,7 +1978,7 @@ mod tests {
     use async_compression::tokio::bufread::ZstdDecoder;
     use encryption::{DecrypterReader, FileConfig, MasterKeyConfig, MultiMasterKeyBackend};
     use external_storage::{BlobObject, ExternalData, NoopStorage};
-    use futures::{AsyncReadExt, future::LocalBoxFuture, stream::LocalBoxStream};
+    use futures::{future::LocalBoxFuture, stream::LocalBoxStream, AsyncReadExt};
     use kvproto::{
         brpb::{CipherInfo, Noop, StorageBackend, StreamBackupTaskInfo},
         encryptionpb::EncryptionMethod,
@@ -1990,7 +1992,7 @@ mod tests {
             stream_event::{EventIterator, Iterator},
         },
         config::ReadableDuration,
-        worker::{ReceiverWrapper, dummy_scheduler},
+        worker::{dummy_scheduler, ReceiverWrapper},
     };
     use tokio::{fs::File, io::BufReader};
     use txn_types::{Write, WriteType};

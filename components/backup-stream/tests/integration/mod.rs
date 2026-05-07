@@ -13,8 +13,8 @@ mod all {
     };
 
     use backup_stream::{
-        GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task, router::TaskSelector,
-        utils,
+        router::TaskSelector, utils, GetCheckpointResult, RegionCheckpointOperation, RegionSet,
+        Task,
     };
     use futures::{Stream, StreamExt};
     use kvproto::metapb::RegionEpoch;
@@ -27,7 +27,7 @@ mod all {
     use walkdir::WalkDir;
 
     use super::suite::{
-        SuiteBuilder, make_record_key, make_split_key_at_record, mutation, run_async_test,
+        make_record_key, make_split_key_at_record, mutation, run_async_test, SuiteBuilder,
     };
 
     #[test]

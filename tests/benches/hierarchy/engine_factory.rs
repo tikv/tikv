@@ -3,8 +3,8 @@
 use std::fmt;
 
 use tikv::storage::{
-    Engine, TestEngineBuilder,
     kv::{BTreeEngine, RocksEngine},
+    Engine, TestEngineBuilder,
 };
 
 pub trait EngineFactory<E: Engine>: Clone + Copy + fmt::Debug + 'static {

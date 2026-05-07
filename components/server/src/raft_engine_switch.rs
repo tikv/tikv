@@ -1,13 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::{
-    Arc,
     atomic::{AtomicUsize, Ordering},
+    Arc,
 };
 
-use crossbeam::channel::{Receiver, unbounded};
+use crossbeam::channel::{unbounded, Receiver};
 use engine_rocks::{self, RocksEngine};
-use engine_traits::{CF_DEFAULT, Iterable, Iterator, RaftEngine, RaftEngineReadOnly, RaftLogBatch};
+use engine_traits::{Iterable, Iterator, RaftEngine, RaftEngineReadOnly, RaftLogBatch, CF_DEFAULT};
 use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
 use raft::eraftpb::Entry;

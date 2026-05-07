@@ -1,23 +1,23 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{Arc, mpsc},
+    sync::{mpsc, Arc},
     thread,
     time::{Duration, Instant},
 };
 
-use api_version::{KvFormat, test_kv_format_impl};
+use api_version::{test_kv_format_impl, KvFormat};
 use causal_ts::CausalTsProvider;
-use cdc::{Delegate, OldValueCache, Task, Validate, recv_timeout};
+use cdc::{recv_timeout, Delegate, OldValueCache, Task, Validate};
 use futures::{executor::block_on, sink::SinkExt};
 use grpcio::{ChannelBuilder, Environment, WriteFlags};
 use kvproto::{cdcpb::*, kvrpcpb::*, tikvpb_grpc::TikvClient};
 use pd_client::PdClient;
 use test_raftstore::*;
-use tikv_util::{HandyRwLock, debug, worker::Scheduler};
+use tikv_util::{debug, worker::Scheduler, HandyRwLock};
 use txn_types::{Key, TimeStamp};
 
-use crate::{ClientReceiver, TestSuite, TestSuiteBuilder, new_event_feed, new_event_feed_v2};
+use crate::{new_event_feed, new_event_feed_v2, ClientReceiver, TestSuite, TestSuiteBuilder};
 
 #[test]
 fn test_cdc_double_scan_deregister() {

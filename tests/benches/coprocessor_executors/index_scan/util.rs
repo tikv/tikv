@@ -8,9 +8,9 @@ use futures::executor::block_on;
 use kvproto::coprocessor::KeyRange;
 use test_coprocessor::*;
 use tidb_query_datatype::expr::EvalConfig;
-use tidb_query_executors::{BatchIndexScanExecutor, interface::*};
+use tidb_query_executors::{interface::*, BatchIndexScanExecutor};
 use tikv::{
-    coprocessor::{RequestHandler, dag::TikvStorage},
+    coprocessor::{dag::TikvStorage, RequestHandler},
     storage::{RocksEngine, Statistics, Store as TxnStore},
 };
 use tipb::ColumnInfo;

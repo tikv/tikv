@@ -136,7 +136,7 @@ mod tests {
     use engine_traits::{CfNamesExt, CfOptionsExt, CompactExt, MiscExt, SyncMutable};
     use tempfile::Builder;
 
-    use crate::{RocksCfOptions, RocksDbOptions, util};
+    use crate::{util, RocksCfOptions, RocksDbOptions};
 
     #[test]
     fn test_compact_files_in_range() {

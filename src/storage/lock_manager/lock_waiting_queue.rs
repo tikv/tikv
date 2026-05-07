@@ -58,8 +58,8 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{
-        Arc,
         atomic::{AtomicU64, AtomicUsize, Ordering},
+        Arc,
     },
     time::{Duration, Instant},
 };
@@ -74,15 +74,15 @@ use tikv_util::{time::InstantExt, timer::GLOBAL_TIMER_HANDLE};
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
-    Error as StorageError, ErrorInner as StorageErrorInner,
     lock_manager::{
-        KeyLockWaitInfo, LockDigest, LockManager, LockWaitToken, UpdateWaitForEvent,
         lock_wait_context::{LockWaitContextSharedState, PessimisticLockKeyCallback},
+        KeyLockWaitInfo, LockDigest, LockManager, LockWaitToken, UpdateWaitForEvent,
     },
     metrics::*,
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     txn::{Error as TxnError, ErrorInner as TxnErrorInner},
     types::PessimisticLockParameters,
+    Error as StorageError, ErrorInner as StorageErrorInner,
 };
 
 /// Represents an `AcquirePessimisticLock` request that's waiting for a lock,
@@ -526,7 +526,7 @@ impl<L: LockManager> LockWaitQueues<L> {
             // recreated. Skip.
             if v.delayed_notify_all_state
                 .as_ref()
-                .is_none_or(|(id, ..)| *id != notify_id)
+                .map_or(true, |(id, ..)| *id != notify_id)
             {
                 return false;
             }
@@ -543,7 +543,7 @@ impl<L: LockManager> LockWaitQueues<L> {
             while let Some((_, front)) = v.queue.peek() {
                 if front
                     .legacy_wake_up_index
-                    .is_some_and(|idx| idx >= legacy_wake_up_index)
+                    .map_or(false, |idx| idx >= legacy_wake_up_index)
                 {
                     // This entry is added after the legacy-wakeup that issued the current
                     // delayed_notify_all operation. Keep it and other remaining items in the queue.
@@ -705,16 +705,16 @@ impl<L: LockManager> LockWaitQueues<L> {
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::mpsc::{Receiver, RecvTimeoutError, channel},
+        sync::mpsc::{channel, Receiver, RecvTimeoutError},
         time::Duration,
     };
 
     use super::*;
     use crate::storage::{
-        ErrorInner as StorageErrorInner, PessimisticLockKeyResult, StorageCallback,
         errors::SharedError,
-        lock_manager::{MockLockManager, WaitTimeout, lock_wait_context::LockWaitContext},
+        lock_manager::{lock_wait_context::LockWaitContext, MockLockManager, WaitTimeout},
         txn::ErrorInner as TxnErrorInner,
+        ErrorInner as StorageErrorInner, PessimisticLockKeyResult, StorageCallback,
     };
 
     struct TestLockWaitEntryHandle {

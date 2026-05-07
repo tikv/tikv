@@ -1,6 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
-    pin::{Pin, pin},
+    pin::{pin, Pin},
     sync::Arc,
 };
 
@@ -12,7 +12,7 @@ use kvproto::brpb;
 use prometheus::core::{Atomic, AtomicU64};
 use tikv_util::{
     codec::stream_event::{self, Iterator},
-    stream::{JustRetry, RetryExt, retry_all_ext},
+    stream::{retry_all_ext, JustRetry, RetryExt},
 };
 use txn_types::Key;
 
@@ -133,7 +133,7 @@ mod tests {
         compaction::{Input, Subcompaction},
         statistic::LoadStatistic,
         storage::{LogFile, MetaFile},
-        test_util::{KvGen, LogFileBuilder, TmpStorage, gen_adjacent_with_ts},
+        test_util::{gen_adjacent_with_ts, KvGen, LogFileBuilder, TmpStorage},
     };
 
     const NUM_FLUSH: usize = 2;

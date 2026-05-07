@@ -2,8 +2,8 @@
 
 use std::{
     sync::{
-        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Mutex,
     },
     time::Duration,
 };
@@ -14,11 +14,11 @@ use kvproto::{brpb::CheckAdminResponse, metapb::RegionEpoch, raft_cmdpb::AdminCm
 use tikv_util::{info, warn};
 use tokio::sync::oneshot;
 
-use super::{PeerMsg, RaftRouter, SignificantMsg, SignificantRouter, metrics};
+use super::{metrics, PeerMsg, RaftRouter, SignificantMsg, SignificantRouter};
 use crate::coprocessor::{
-    AdminObserver, BoxAdminObserver, BoxQueryObserver, Coprocessor, CoprocessorHost,
-    Error as CopError, QueryObserver, TransferLeaderCustomContext, TransferLeaderObserver,
-    dispatcher::BoxTransferLeaderObserver,
+    dispatcher::BoxTransferLeaderObserver, AdminObserver, BoxAdminObserver, BoxQueryObserver,
+    Coprocessor, CoprocessorHost, Error as CopError, QueryObserver, TransferLeaderCustomContext,
+    TransferLeaderObserver,
 };
 
 fn epoch_second_coarse() -> u64 {

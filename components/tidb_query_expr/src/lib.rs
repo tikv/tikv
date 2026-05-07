@@ -45,12 +45,12 @@ pub mod impl_vec;
 
 use tidb_query_common::Result;
 use tidb_query_datatype::{
-    Charset, Collation, FieldTypeAccessor, FieldTypeFlag,
     codec::{
         collation::{Charset as _, Collator},
         data_type::*,
     },
-    match_template_charset, match_template_collator, match_template_multiple_collators,
+    match_template_charset, match_template_collator, match_template_multiple_collators, Charset,
+    Collation, FieldTypeAccessor, FieldTypeFlag,
 };
 use tipb::{Expr, FieldType, ScalarFuncSig};
 

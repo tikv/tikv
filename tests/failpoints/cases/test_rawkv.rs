@@ -11,7 +11,7 @@ use kvproto::{
     tikvpb::TikvClient,
 };
 use test_raftstore::*;
-use tikv_util::{HandyRwLock, time::Instant};
+use tikv_util::{time::Instant, HandyRwLock};
 
 struct TestSuite {
     pub cluster: Cluster<ServerCluster>,

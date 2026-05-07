@@ -21,15 +21,14 @@ use std::{
 
 use collections::HashMap;
 use compact_log_backup::{
-    TraceResultExt,
     exec_hooks::{self as compact_log_hooks, skip_small_compaction::SkipSmallCompaction},
-    execute as compact_log,
+    execute as compact_log, TraceResultExt,
 };
 use crypto::fips;
 use encryption_export::{
-    DataKeyManager, DecrypterReader, Iv, create_backend, data_key_manager_from_config,
+    create_backend, data_key_manager_from_config, DataKeyManager, DecrypterReader, Iv,
 };
-use engine_rocks::{RocksEngine, get_env, util::new_engine_opt};
+use engine_rocks::{get_env, util::new_engine_opt, RocksEngine};
 use engine_traits::Peekable;
 use file_system::calc_crc32;
 use futures::{executor::block_on, future::try_join_all};
@@ -50,16 +49,16 @@ use raft_log_engine::ManagedFileSystem;
 use raftstore::store::util::build_key_range;
 use regex::Regex;
 use security::{SecurityConfig, SecurityManager};
-use structopt::{StructOpt, clap::ErrorKind};
+use structopt::{clap::ErrorKind, StructOpt};
 use tempfile::TempDir;
 use tikv::{
     config::TikvConfig,
-    server::{KvEngineFactoryBuilder, debug::BottommostLevelCompaction},
+    server::{debug::BottommostLevelCompaction, KvEngineFactoryBuilder},
     storage::config::EngineType,
 };
 use tikv_util::{
     escape,
-    logger::{Level, get_log_level},
+    logger::{get_log_level, Level},
     run_and_wait_child_process,
     sys::thread::StdThreadBuildWrapper,
     unescape, warn,

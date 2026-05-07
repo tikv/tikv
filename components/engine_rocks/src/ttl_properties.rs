@@ -7,7 +7,7 @@ use engine_traits::{Range, Result, TtlProperties, TtlPropertiesExt};
 use rocksdb::{DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory};
 use tikv_util::error;
 
-use crate::{RocksEngine, UserProperties, decode_properties::DecodeProperties};
+use crate::{decode_properties::DecodeProperties, RocksEngine, UserProperties};
 
 const PROP_MAX_EXPIRE_TS: &str = "tikv.max_expire_ts";
 const PROP_MIN_EXPIRE_TS: &str = "tikv.min_expire_ts";

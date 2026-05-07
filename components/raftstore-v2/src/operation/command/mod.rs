@@ -18,7 +18,7 @@
 
 use std::{
     mem,
-    sync::{Arc, atomic::Ordering},
+    sync::{atomic::Ordering, Arc},
     time::Duration,
 };
 
@@ -30,13 +30,12 @@ use kvproto::raft_cmdpb::{
 use raft::eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType};
 use raft_proto::ConfChangeI;
 use raftstore::{
-    Error, Result,
     coprocessor::ObserveLevel,
     store::{
-        Config, ProposalContext, Transport, WriteCallback, cmd_resp,
+        cmd_resp,
         fsm::{
-            Proposal,
             apply::{self, APPLY_WB_SHRINK_SIZE, SHRINK_PENDING_CMD_QUEUE_CAP},
+            Proposal,
         },
         local_metrics::RaftMetrics,
         metrics::{
@@ -44,14 +43,16 @@ use raftstore::{
         },
         msg::ErrorCallback,
         util::{self, check_flashback_state},
+        Config, ProposalContext, Transport, WriteCallback,
     },
+    Error, Result,
 };
 use slog::{debug, error, warn};
 use tikv_util::{
     box_err,
     log::SlogFormat,
     slog_panic,
-    time::{Instant, duration_to_sec, monotonic_raw_now},
+    time::{duration_to_sec, monotonic_raw_now, Instant},
 };
 
 use crate::{
@@ -66,9 +67,9 @@ mod control;
 mod write;
 
 pub use admin::{
-    AdminCmdResult, CatchUpLogs, CompactLogContext, MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX,
-    MergeContext, RequestHalfSplit, RequestSplit, SPLIT_PREFIX, SplitFlowControl, SplitInit,
-    SplitPendingAppend, merge_source_path, report_split_init_finish, temp_split_path,
+    merge_source_path, report_split_init_finish, temp_split_path, AdminCmdResult, CatchUpLogs,
+    CompactLogContext, MergeContext, RequestHalfSplit, RequestSplit, SplitFlowControl, SplitInit,
+    SplitPendingAppend, MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX, SPLIT_PREFIX,
 };
 pub use control::ProposalControl;
 use pd_client::{BucketMeta, BucketStat};

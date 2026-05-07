@@ -138,7 +138,7 @@ impl Histogram {
 
     // It merges every two neighbor buckets.
     fn merge_buckets(&mut self) {
-        let bucket_num = self.buckets_num.div_ceil(2);
+        let bucket_num = (self.buckets_num + 1) / 2;
         if self.buckets_num > 1 {
             let (left, right) = self.buckets.split_at_mut(1);
             mem::swap(&mut left[0].upper_bound, &mut right[0].upper_bound);
@@ -215,7 +215,7 @@ mod tests {
         assert_eq!(hist.ndv, 4);
 
         // push repeated item
-        for item in std::iter::repeat_n(3, 3).map(Datum::I64) {
+        for item in repeat(3).take(3).map(Datum::I64) {
             let bytes = datum::encode_value(&mut EvalContext::default(), &[item]).unwrap();
             hist.append(&bytes, false);
         }
@@ -226,7 +226,7 @@ mod tests {
         assert_eq!(hist.buckets.len(), 2);
         assert_eq!(hist.ndv, 4);
 
-        for item in std::iter::repeat_n(4, 4).map(Datum::I64) {
+        for item in repeat(4).take(4).map(Datum::I64) {
             let bytes = datum::encode_value(&mut EvalContext::default(), &[item]).unwrap();
             hist.append(&bytes, false);
         }

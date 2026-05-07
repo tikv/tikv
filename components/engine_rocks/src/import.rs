@@ -109,13 +109,13 @@ impl IngestExternalFileOptions for RocksIngestExternalFileOptions {
 #[cfg(test)]
 mod tests {
     use engine_traits::{
-        ALL_CFS, CF_DEFAULT, FlowControlFactorsExt, MiscExt, Mutable, SstWriter, SstWriterBuilder,
-        WriteBatch, WriteBatchExt,
+        FlowControlFactorsExt, MiscExt, Mutable, SstWriter, SstWriterBuilder, WriteBatch,
+        WriteBatchExt, ALL_CFS, CF_DEFAULT,
     };
     use tempfile::Builder;
 
     use super::*;
-    use crate::{RocksCfOptions, RocksDbOptions, RocksSstWriterBuilder, util::new_engine_opt};
+    use crate::{util::new_engine_opt, RocksCfOptions, RocksDbOptions, RocksSstWriterBuilder};
 
     #[test]
     fn test_ingest_multiple_file() {

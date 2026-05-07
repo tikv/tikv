@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::{super::Result, Json, JsonRef, modifier::BinaryModifier, path_expr::PathExpression};
+use super::{super::Result, modifier::BinaryModifier, path_expr::PathExpression, Json, JsonRef};
 
 /// `ModifyType` is for modify a JSON.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -13,7 +13,7 @@ pub enum ModifyType {
     Set,
 }
 
-impl JsonRef<'_> {
+impl<'a> JsonRef<'a> {
     /// Modifies a Json object by insert, replace or set.
     /// All path expressions cannot contain * or ** wildcard.
     /// If any error occurs, the input won't be changed.

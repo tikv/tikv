@@ -12,10 +12,10 @@ use kvproto::{
 use pd_client::PdClient;
 use raft::INVALID_ID;
 use raftstore::store::initial_region;
-use slog::{Logger, debug, error, info, warn};
+use slog::{debug, error, info, warn, Logger};
 use tikv_util::{box_err, box_try};
 
-use crate::{Result, operation::write_initial_states};
+use crate::{operation::write_initial_states, Result};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL: Duration = Duration::from_secs(3);

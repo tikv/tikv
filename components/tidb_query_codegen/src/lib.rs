@@ -20,7 +20,7 @@ mod rpn_function;
 
 use darling::FromDeriveInput;
 use proc_macro::TokenStream;
-use syn::{DeriveInput, parse_macro_input};
+use syn::{parse_macro_input, DeriveInput};
 
 /// The `AggrFunction` custom derive.
 #[proc_macro_derive(AggrFunction, attributes(aggr_function))]

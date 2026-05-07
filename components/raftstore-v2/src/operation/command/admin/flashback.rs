@@ -8,12 +8,12 @@ use kvproto::{
 };
 use protobuf::Message;
 use raftstore::{
-    Result,
     coprocessor::RegionChangeReason,
     store::{
-        LocksStatus,
         metrics::{PEER_ADMIN_CMD_COUNTER, PEER_IN_FLASHBACK_STATE},
+        LocksStatus,
     },
+    Result,
 };
 
 use super::AdminCmdResult;

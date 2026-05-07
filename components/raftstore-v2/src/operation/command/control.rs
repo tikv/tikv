@@ -4,16 +4,16 @@ use std::{collections::LinkedList, mem};
 
 use kvproto::{metapb, raft_cmdpb::AdminCmdType};
 use raftstore::{
-    Error,
     store::{
         cmd_resp,
         fsm::apply,
         msg::ErrorCallback,
         util::{
-            AdminCmdEpochState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
-            admin_cmd_epoch_lookup,
+            admin_cmd_epoch_lookup, AdminCmdEpochState, NORMAL_REQ_CHECK_CONF_VER,
+            NORMAL_REQ_CHECK_VER,
         },
     },
+    Error,
 };
 
 use crate::router::CmdResChannel;

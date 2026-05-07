@@ -15,8 +15,8 @@ use std::{
     fmt::Debug,
     pin::Pin,
     sync::{
-        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
     },
     time::{Duration, Instant as StdInstant},
     u64,
@@ -53,11 +53,11 @@ use tokio::sync::{broadcast, mpsc as tokio_mpsc};
 use txn_types::TimeStamp;
 
 use super::{
-    Config, Error, FeatureGate, REQUEST_TIMEOUT as REQUEST_TIMEOUT_SEC, RegionInfo, Result,
-    UnixSecs,
     client::{CLIENT_PREFIX, CQ_COUNT},
     metrics::*,
-    util::{PdConnector, TargetInfo, check_resp_header},
+    util::{check_resp_header, PdConnector, TargetInfo},
+    Config, Error, FeatureGate, RegionInfo, Result, UnixSecs,
+    REQUEST_TIMEOUT as REQUEST_TIMEOUT_SEC,
 };
 use crate::PdFuture;
 

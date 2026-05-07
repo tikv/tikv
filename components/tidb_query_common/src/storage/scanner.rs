@@ -6,7 +6,7 @@ use api_version::KvFormat;
 use tikv_util::time::Instant;
 use yatp::task::future::reschedule;
 
-use super::{OwnedKvPairEntry, Storage, range::*, ranges_iter::*};
+use super::{range::*, ranges_iter::*, OwnedKvPairEntry, Storage};
 use crate::error::StorageError;
 
 const KEY_BUFFER_CAPACITY: usize = 64;
@@ -302,11 +302,11 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
 
 #[cfg(test)]
 mod tests {
-    use api_version::{ApiV1, keyspace::KvPairEntry};
+    use api_version::{keyspace::KvPairEntry, ApiV1};
     use futures::executor::block_on;
 
     use super::*;
-    use crate::storage::{IntervalRange, PointRange, Range, test_fixture::FixtureStorage};
+    use crate::storage::{test_fixture::FixtureStorage, IntervalRange, PointRange, Range};
 
     fn create_storage() -> FixtureStorage {
         let data: &[(&'static [u8], &'static [u8])] = &[

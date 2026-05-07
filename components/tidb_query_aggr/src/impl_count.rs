@@ -3,7 +3,7 @@
 use tidb_query_codegen::AggrFunction;
 use tidb_query_common::Result;
 use tidb_query_datatype::{
-    FieldTypeFlag, FieldTypeTp, builder::FieldTypeBuilder, codec::data_type::*, expr::EvalContext,
+    builder::FieldTypeBuilder, codec::data_type::*, expr::EvalContext, FieldTypeFlag, FieldTypeTp,
 };
 use tidb_query_expr::RpnExpression;
 use tipb::{Expr, ExprType, FieldType};

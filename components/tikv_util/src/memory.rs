@@ -3,8 +3,8 @@
 use std::{
     mem,
     sync::{
-        Arc,
         atomic::{AtomicIsize, AtomicUsize, Ordering},
+        Arc,
     },
 };
 

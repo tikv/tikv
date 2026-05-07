@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::BTreeMap, f64, fmt, str, str::FromStr};
+use std::{collections::BTreeMap, f64, fmt, str, str::FromStr, string::ToString};
 
 use serde::{
     de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor},
@@ -9,7 +9,7 @@ use serde::{
 use serde_json::Serializer as JsonSerializer;
 
 use super::{Json, JsonRef, JsonType};
-use crate::codec::{Error, convert::ToStringValue};
+use crate::codec::Error;
 
 /// MySQL formatter follows the implementation in TiDB
 /// https://github.com/pingcap/tidb/blob/master/types/json/binary.go
@@ -57,10 +57,10 @@ impl MySqlFormatter {
     }
 }
 
-impl ToStringValue for JsonRef<'_> {
+impl<'a> ToString for JsonRef<'a> {
     /// This function is a simple combination and rewrite of serde_json's
     /// `to_writer_pretty`
-    fn to_string_value(&self) -> String {
+    fn to_string(&self) -> String {
         let mut writer = Vec::with_capacity(128);
         let mut ser = JsonSerializer::with_formatter(&mut writer, MySqlFormatter::new());
         self.serialize(&mut ser).unwrap();
@@ -71,7 +71,7 @@ impl ToStringValue for JsonRef<'_> {
     }
 }
 
-impl Serialize for JsonRef<'_> {
+impl<'a> Serialize for JsonRef<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -144,9 +144,9 @@ impl Serialize for JsonRef<'_> {
     }
 }
 
-impl ToStringValue for Json {
-    fn to_string_value(&self) -> String {
-        self.as_ref().to_string_value()
+impl ToString for Json {
+    fn to_string(&self) -> String {
+        self.as_ref().to_string()
     }
 }
 

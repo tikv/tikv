@@ -2,7 +2,7 @@
 
 use std::{
     cmp::Reverse,
-    collections::{BinaryHeap, binary_heap},
+    collections::{binary_heap, BinaryHeap},
     iter,
 };
 

@@ -3,8 +3,8 @@
 use std::{
     cell::UnsafeCell,
     sync::{
-        Arc,
         atomic::{AtomicU8, Ordering},
+        Arc,
     },
 };
 

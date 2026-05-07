@@ -1,12 +1,12 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
-    collections::{BTreeSet, HashMap, HashSet, VecDeque, hash_map::Entry},
+    collections::{hash_map::Entry, BTreeSet, HashMap, HashSet, VecDeque},
     future::Future,
     ops::{Deref, Not},
     path::Path,
     pin::Pin,
     sync::Arc,
-    task::{Context, Poll, ready},
+    task::{ready, Context, Poll},
 };
 
 use cloud::blob::read_to_end;
@@ -29,14 +29,14 @@ use tikv_util::{
 };
 use tokio::time::Instant;
 use tokio_stream::Stream;
-use tracing::{Span, span::Entered};
+use tracing::{span::Entered, Span};
 use tracing_active_tree::frame;
 
 use super::{
     errors::{Error, Result},
     statistic::LoadMetaStatistic,
 };
-use crate::{OtherErrExt, compaction::EpochHint, errors::ErrorKind, util};
+use crate::{compaction::EpochHint, errors::ErrorKind, util, OtherErrExt};
 
 pub const METADATA_PREFIX: &str = "v1/backupmeta";
 pub const DEFAULT_COMPACTION_OUT_PREFIX: &str = "v1/compaction_out";
@@ -210,13 +210,13 @@ pub struct LoadFromExt<'a> {
     pub prefetch_buffer_count: usize,
 }
 
-impl LoadFromExt<'_> {
+impl<'a> LoadFromExt<'a> {
     fn enter_load_span(&self) -> Option<Entered<'_>> {
         self.loading_content_span.as_ref().map(|span| span.enter())
     }
 }
 
-impl Default for LoadFromExt<'_> {
+impl<'a> Default for LoadFromExt<'a> {
     fn default() -> Self {
         Self {
             loading_content_span: None,
@@ -304,7 +304,7 @@ impl<F: Future> FusedFuture for Prefetch<F> {
     }
 }
 
-impl Stream for StreamMetaStorage<'_> {
+impl<'a> Stream for StreamMetaStorage<'a> {
     type Item = Result<MetaFile>;
 
     fn poll_next(
@@ -854,7 +854,7 @@ mod test {
     use super::{LoadFromExt, MetaFile, StreamMetaStorage};
     use crate::{
         storage::{LogFileId, MetaEditFilters, MigrationStorageWrapper},
-        test_util::{KvGen, LogFileBuilder, TmpStorage, gen_step},
+        test_util::{gen_step, KvGen, LogFileBuilder, TmpStorage},
     };
 
     async fn construct_storage(

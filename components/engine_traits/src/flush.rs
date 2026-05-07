@@ -15,8 +15,8 @@
 use std::{
     collections::LinkedList,
     sync::{
-        Arc, Mutex, RwLock,
         atomic::{AtomicU64, Ordering},
+        Arc, Mutex, RwLock,
     },
     time::Duration,
 };
@@ -25,7 +25,7 @@ use kvproto::import_sstpb::SstMeta;
 use slog_global::{info, warn};
 use tikv_util::{set_panic_mark, time::Instant};
 
-use crate::{DATA_CFS_LEN, RaftEngine, RaftLogBatch, data_cf_offset};
+use crate::{data_cf_offset, RaftEngine, RaftLogBatch, DATA_CFS_LEN};
 
 const HEAVY_WORKER_THRESHOLD: Duration = Duration::from_millis(25);
 

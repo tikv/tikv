@@ -15,9 +15,8 @@ use std::{
     convert::TryInto,
     result::Result,
     sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc,
+        mpsc, Arc,
     },
 };
 
@@ -25,10 +24,10 @@ use parking_lot::Mutex;
 use txn_types::Key;
 
 use crate::storage::{
-    Error as StorageError, PessimisticLockResults, ProcessResult, StorageCallback,
     errors::SharedError,
-    lock_manager::{LockManager, LockWaitToken, lock_waiting_queue::LockWaitQueues},
+    lock_manager::{lock_waiting_queue::LockWaitQueues, LockManager, LockWaitToken},
     types::PessimisticLockKeyResult,
+    Error as StorageError, PessimisticLockResults, ProcessResult, StorageCallback,
 };
 
 // The arguments are: (result, is_canceled_before_enqueueing).
@@ -328,17 +327,17 @@ impl<L: LockManager> LockWaitContext<L> {
 mod tests {
     use std::{
         default::Default,
-        sync::mpsc::{Receiver, channel},
+        sync::mpsc::{channel, Receiver},
         time::Duration,
     };
 
     use super::*;
     use crate::storage::{
-        ErrorInner as StorageErrorInner, Result as StorageResult,
-        lock_manager::{MockLockManager, lock_waiting_queue::LockWaitEntry},
+        lock_manager::{lock_waiting_queue::LockWaitEntry, MockLockManager},
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{Error as TxnError, ErrorInner as TxnErrorInner},
         types::PessimisticLockParameters,
+        ErrorInner as StorageErrorInner, Result as StorageResult,
     };
 
     fn create_storage_cb() -> (

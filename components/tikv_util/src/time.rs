@@ -7,8 +7,8 @@ use std::{
     cmp::Ordering,
     ops::{Add, AddAssign, Sub, SubAssign},
     sync::{
-        Once,
         mpsc::{self, Sender},
+        Once,
     },
     thread::{self, Builder, JoinHandle},
     time::{SystemTime, UNIX_EPOCH},
@@ -589,8 +589,8 @@ mod tests {
     use std::{
         ops::Sub,
         sync::{
-            Arc,
             atomic::{AtomicBool, Ordering},
+            Arc,
         },
         thread,
         time::{Duration, SystemTime},

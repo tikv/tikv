@@ -15,9 +15,9 @@ pub use self::{
     internal_message::{ApplyRes, SstApplyIndex},
     message::{PeerMsg, PeerTick, RaftRequest, StoreMsg, StoreTick},
     response_channel::{
-        AnyResChannel, AnyResSubscriber, BaseSubscriber, CmdResChannel, CmdResChannelBuilder,
-        CmdResEvent, CmdResStream, CmdResSubscriber, DebugInfoChannel, DebugInfoSubscriber,
-        QueryResChannel, QueryResult, ReadResponse, build_any_channel,
+        build_any_channel, AnyResChannel, AnyResSubscriber, BaseSubscriber, CmdResChannel,
+        CmdResChannelBuilder, CmdResEvent, CmdResStream, CmdResSubscriber, DebugInfoChannel,
+        DebugInfoSubscriber, QueryResChannel, QueryResult, ReadResponse,
     },
 };
 pub use super::operation::DiskSnapBackupHandle;

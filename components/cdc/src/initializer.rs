@@ -2,19 +2,18 @@
 use std::{
     collections::BTreeMap,
     sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
+        Arc,
     },
     time::Duration,
 };
 
 use api_version::ApiV2;
 use crossbeam::atomic::AtomicCell;
-use engine_rocks::{PROP_MAX_TS, ReadPerfContext, ReadPerfInstant};
+use engine_rocks::{ReadPerfContext, ReadPerfInstant, PROP_MAX_TS};
 use engine_traits::{
-    CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN, IterOptions, KvEngine, Range,
-    Snapshot as EngineSnapshot, TableProperties, TablePropertiesCollection,
-    UserCollectedProperties,
+    IterOptions, KvEngine, Range, Snapshot as EngineSnapshot, TableProperties,
+    TablePropertiesCollection, UserCollectedProperties, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN,
 };
 use fail::fail_point;
 use keys::{data_end_key, data_key};
@@ -32,35 +31,36 @@ use raftstore::{
     },
 };
 use tikv::storage::{
-    Statistics,
     kv::Snapshot,
     mvcc::{DeltaScanner, MvccReader, ScannerBuilder},
     raw::raw_mvcc::{RawMvccIterator, RawMvccSnapshot},
     txn::{TxnEntry, TxnEntryScanner},
+    Statistics,
 };
 use tikv_kv::{Iterator, ScanMode};
 use tikv_util::{
-    Either, box_err,
+    box_err,
     codec::number,
     debug, defer, error, info,
-    sys::inspector::{ThreadInspector, self_thread_inspector},
-    time::{Instant, Limiter, duration_to_sec},
+    sys::inspector::{self_thread_inspector, ThreadInspector},
+    time::{duration_to_sec, Instant, Limiter},
     warn,
     worker::Scheduler,
+    Either,
 };
 use tokio::sync::Semaphore;
 use txn_types::{Key, KvPair, LockType, OldValue, TimeStamp};
 
 use crate::{
-    Error, Result, Task,
     channel::CdcEvent,
     delegate::{
-        Delegate, DownstreamId, DownstreamState, MiniLock, ObservedRange, post_init_downstream,
+        post_init_downstream, Delegate, DownstreamId, DownstreamState, MiniLock, ObservedRange,
     },
     endpoint::Deregister,
     metrics::*,
-    old_value::{OldValueCursors, near_seek_old_value},
+    old_value::{near_seek_old_value, OldValueCursors},
     service::{ConnId, RequestId},
+    Error, Result, Task,
 };
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -642,18 +642,18 @@ mod tests {
         collections::BTreeMap,
         fmt::Display,
         sync::{
-            Arc,
             atomic::AtomicBool,
-            mpsc::{Receiver, RecvTimeoutError, Sender, channel, sync_channel},
+            mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, Sender},
+            Arc,
         },
         time::Duration,
     };
 
     use engine_rocks::{BlobRunMode, RocksEngine};
-    use engine_traits::{CF_WRITE, MiscExt};
-    use futures::{StreamExt, executor::block_on};
+    use engine_traits::{MiscExt, CF_WRITE};
+    use futures::{executor::block_on, StreamExt};
     use kvproto::{
-        cdcpb::{Event_oneof_event, EventLogType},
+        cdcpb::{EventLogType, Event_oneof_event},
         errorpb::Error as ErrorHeader,
     };
     use raftstore::{coprocessor::ObserveHandle, router::CdcRaftRouter};
@@ -661,12 +661,12 @@ mod tests {
     use tikv::{
         config::DbConfig,
         storage::{
-            TestEngineBuilder,
             kv::Engine,
             txn::tests::{
                 must_acquire_pessimistic_lock, must_commit, must_prewrite_delete,
                 must_prewrite_put, must_prewrite_put_with_txn_soucre,
             },
+            TestEngineBuilder,
         },
     };
     use tikv_util::{

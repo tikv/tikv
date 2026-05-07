@@ -4,9 +4,9 @@ use std::mem;
 
 use collections::HashSet;
 use engine_traits::{KvEngine, RaftEngine};
-use raft::{StateRole, Storage, eraftpb::MessageType};
+use raft::{eraftpb::MessageType, StateRole, Storage};
 use raftstore::store::{
-    ForceLeaderState, UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryState, util::LeaseState,
+    util::LeaseState, ForceLeaderState, UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryState,
 };
 use slog::{info, warn};
 use tikv_util::time::Instant as TiInstant;

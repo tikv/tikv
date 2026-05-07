@@ -5,8 +5,8 @@ use std::{
     collections::{BTreeMap, BinaryHeap},
     fmt,
     sync::{
-        Arc, Mutex as StdMutex,
         atomic::{AtomicBool, AtomicIsize, Ordering},
+        Arc, Mutex as StdMutex,
     },
     time::Duration,
 };
@@ -35,11 +35,11 @@ use raftstore::{
     router::CdcHandle,
     store::fsm::store::StoreRegionMeta,
 };
-use resolved_ts::{LeadershipResolver, resolve_by_raft};
+use resolved_ts::{resolve_by_raft, LeadershipResolver};
 use security::SecurityManager;
 use tikv::{
     config::{CdcConfig, ResolvedTsConfig},
-    storage::{Statistics, kv::LocalTablets},
+    storage::{kv::LocalTablets, Statistics},
 };
 use tikv_util::{
     debug, defer, error, impl_display_as_debug, info,
@@ -59,13 +59,13 @@ use tokio::{
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler};
 
 use crate::{
-    CdcObserver, Error,
     channel::{CdcEvent, SendError},
-    delegate::{Delegate, Downstream, DownstreamId, DownstreamState, MiniLock, on_init_downstream},
+    delegate::{on_init_downstream, Delegate, Downstream, DownstreamId, DownstreamState, MiniLock},
     initializer::Initializer,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
-    service::{Conn, ConnId, FeatureGate, RequestId, validate_kv_api},
+    service::{validate_kv_api, Conn, ConnId, FeatureGate, RequestId},
+    CdcObserver, Error,
 };
 
 const FEATURE_RESOLVED_TS_STORE: Feature = Feature::require(5, 0, 0);
@@ -1386,23 +1386,23 @@ mod tests {
     use raftstore::{
         errors::{DiscardReason, Error as RaftStoreError},
         router::{CdcRaftRouter, RaftStoreRouter},
-        store::{PeerMsg, ReadDelegate, fsm::StoreMeta, msg::CasualMessage},
+        store::{fsm::StoreMeta, msg::CasualMessage, PeerMsg, ReadDelegate},
     };
     use test_pd_client::TestPdClient;
     use test_raftstore::MockRaftStoreRouter;
     use tikv::{
         server::DEFAULT_CLUSTER_ID,
-        storage::{TestEngineBuilder, kv::Engine},
+        storage::{kv::Engine, TestEngineBuilder},
     };
     use tikv_util::{
         config::{ReadableDuration, ReadableSize},
-        worker::{ReceiverWrapper, dummy_scheduler},
+        worker::{dummy_scheduler, ReceiverWrapper},
     };
 
     use super::*;
     use crate::{
         channel,
-        delegate::{ObservedRange, post_init_downstream},
+        delegate::{post_init_downstream, ObservedRange},
         recv_timeout,
     };
 

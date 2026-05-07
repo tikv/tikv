@@ -2,7 +2,7 @@
 
 use tidb_query_common::Result;
 pub use tidb_query_datatype::codec::data_type::{
-    BATCH_MAX_SIZE, IDENTICAL_LOGICAL_ROWS, LogicalRows,
+    LogicalRows, BATCH_MAX_SIZE, IDENTICAL_LOGICAL_ROWS,
 };
 use tidb_query_datatype::{
     codec::{batch::LazyBatchColumnVec, data_type::*},
@@ -11,8 +11,8 @@ use tidb_query_datatype::{
 use tipb::FieldType;
 
 use super::{
-    RpnFnCallExtra,
     expr::{RpnExpression, RpnExpressionNode},
+    RpnFnCallExtra,
 };
 
 /// Represents a vector value node in the RPN stack.
@@ -35,7 +35,7 @@ pub enum RpnStackNodeVectorValue<'a> {
     },
 }
 
-impl RpnStackNodeVectorValue<'_> {
+impl<'a> RpnStackNodeVectorValue<'a> {
     /// Gets a reference to the inner physical vector value.
     pub fn as_ref(&self) -> &VectorValue {
         match self {
@@ -120,7 +120,7 @@ pub enum RpnStackNode<'a> {
     },
 }
 
-impl RpnStackNode<'_> {
+impl<'a> RpnStackNode<'a> {
     /// Gets the field type.
     #[inline]
     pub fn field_type(&self) -> &FieldType {
@@ -332,23 +332,23 @@ impl RpnExpression {
 mod tests {
     #![allow(clippy::float_cmp)]
 
-    use test::{Bencher, black_box};
+    use test::{black_box, Bencher};
     use tidb_query_codegen::rpn_fn;
     use tidb_query_common::Result;
     use tidb_query_datatype::{
-        EvalType, FieldTypeAccessor, FieldTypeTp,
         codec::{
             batch::LazyBatchColumn,
             data_type::*,
             datum::{Datum, DatumEncoder},
         },
         expr::EvalContext,
+        EvalType, FieldTypeAccessor, FieldTypeTp,
     };
     use tipb::FieldType;
     use tipb_helper::ExprDefBuilder;
 
     use super::*;
-    use crate::{RpnExpressionBuilder, RpnFnMeta, impl_arithmetic::*, impl_compare::*};
+    use crate::{impl_arithmetic::*, impl_compare::*, RpnExpressionBuilder, RpnFnMeta};
 
     /// Single constant node
     #[test]
@@ -1436,9 +1436,9 @@ mod benches {
     use tidb_query_codegen::rpn_fn;
     use tidb_query_common::Result;
     use tidb_query_datatype::{
-        EvalType, FieldTypeTp,
         codec::{batch::LazyBatchColumn, data_type::*},
         expr::EvalContext,
+        EvalType, FieldTypeTp,
     };
 
     use super::*;

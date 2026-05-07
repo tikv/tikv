@@ -10,8 +10,9 @@ use std::{
 use codec::number::NumberCodec;
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
-    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, CacheStats, PerfContextExt, PerfContextKind, PerfLevel,
-    RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait, Result,
+    CacheStats, PerfContextExt, PerfContextKind, PerfLevel, RaftEngine, RaftEngineDebug,
+    RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait, Result, CF_DEFAULT, CF_LOCK, CF_RAFT,
+    CF_WRITE,
 };
 use file_system::{IoOp, IoRateLimiter, IoType, WithIoType};
 use kvproto::{
@@ -23,8 +24,8 @@ use kvproto::{
 };
 use raft::eraftpb::Entry;
 use raft_engine::{
-    Command, Engine as RawRaftEngine, Error as RaftEngineError, LogBatch, MessageExt,
     env::{DefaultFileSystem, FileSystem, Handle, Permission, WriteExt},
+    Command, Engine as RawRaftEngine, Error as RaftEngineError, LogBatch, MessageExt,
 };
 pub use raft_engine::{Config as RaftEngineConfig, ReadableSize, RecoveryMode};
 use tikv_util::Either;

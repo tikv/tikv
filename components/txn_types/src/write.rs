@@ -3,13 +3,13 @@
 use std::mem::size_of;
 
 use codec::prelude::NumberDecoder;
-use tikv_util::codec::number::{self, MAX_VAR_U64_LEN, NumberEncoder};
+use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
 
 use crate::{
-    Error, ErrorInner, LastChange, Result,
     lock::LockType,
     timestamp::TimeStamp,
-    types::{SHORT_VALUE_PREFIX, Value},
+    types::{Value, SHORT_VALUE_PREFIX},
+    Error, ErrorInner, LastChange, Result,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]

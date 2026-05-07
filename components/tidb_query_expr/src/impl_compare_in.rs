@@ -10,12 +10,12 @@ use codec::prelude::NumberDecoder;
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::{Error, Result};
 use tidb_query_datatype::{
-    EvalType, FieldTypeAccessor, FieldTypeFlag,
     codec::{
         collation::*,
         data_type::*,
         mysql::{Decimal, EnumDecoder, MAX_FSP},
     },
+    EvalType, FieldTypeAccessor, FieldTypeFlag,
 };
 use tipb::{Expr, ExprType, FieldType};
 
@@ -399,18 +399,18 @@ pub fn compare_in_by_compare_json(args: &[Option<JsonRef>]) -> Result<Option<Int
 
 #[cfg(test)]
 mod tests {
-    use test::{Bencher, black_box};
+    use test::{black_box, Bencher};
     use tidb_query_datatype::{
-        Collation, FieldTypeTp,
         builder::FieldTypeBuilder,
         codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
         expr::EvalContext,
+        Collation, FieldTypeTp,
     };
     use tipb::{FieldType, ScalarFuncSig};
     use tipb_helper::ExprDefBuilder;
 
     use super::{super::map_expr_node_to_rpn_func, *};
-    use crate::{RpnExpressionBuilder, RpnExpressionNode, types::RpnFnMeta};
+    use crate::{types::RpnFnMeta, RpnExpressionBuilder, RpnExpressionNode};
 
     #[test]
     fn test_in_constant() {

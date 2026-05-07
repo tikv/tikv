@@ -2,20 +2,20 @@
 
 use std::{sync::*, time::Duration};
 
-use api_version::{KvFormat, test_kv_format_impl};
-use cdc::{Task, Validate, metrics::CDC_RESOLVED_TS_ADVANCE_METHOD};
+use api_version::{test_kv_format_impl, KvFormat};
+use cdc::{metrics::CDC_RESOLVED_TS_ADVANCE_METHOD, Task, Validate};
 use concurrency_manager::ConcurrencyManager;
-use futures::{SinkExt, executor::block_on};
+use futures::{executor::block_on, SinkExt};
 use grpcio::WriteFlags;
 use kvproto::{cdcpb::*, kvrpcpb::*};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use tikv::server::DEFAULT_CLUSTER_ID;
-use tikv_util::{HandyRwLock, config::ReadableDuration, debug, error};
+use tikv_util::{config::ReadableDuration, debug, error, HandyRwLock};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
-use crate::{TestSuite, TestSuiteBuilder, new_event_feed, new_event_feed_v2};
+use crate::{new_event_feed, new_event_feed_v2, TestSuite, TestSuiteBuilder};
 
 #[test]
 fn test_cdc_basic() {

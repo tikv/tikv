@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 
 use super::{super::Result, JsonRef, JsonType};
 
-impl JsonRef<'_> {
+impl<'a> JsonRef<'a> {
     /// `json_contains` is the implementation for JSON_CONTAINS in mysql
     /// <https://dev.mysql.com/doc/refman/5.7/en/json-search-functions.html#function_json-contains>
     /// See `ContainsBinaryJSON()` in TiDB `types/json_binary_functions.go`

@@ -19,19 +19,18 @@ use kvproto::{
 use raftstore::{
     router::CdcHandle,
     store::{
-        AsyncReadNotifier, Callback, FetchedLogs, GenSnapRes, RegionSnapshot,
+        fsm::ChangeObserver, AsyncReadNotifier, Callback, FetchedLogs, GenSnapRes, RegionSnapshot,
         UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
         UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle, UnsafeRecoveryWaitApplySyncer,
-        fsm::ChangeObserver,
     },
 };
 use slog::warn;
 use tikv_util::box_err;
 
 use super::{
-    PeerMsg, QueryResChannel, QueryResult, StoreMsg, build_any_channel, message::CaptureChange,
+    build_any_channel, message::CaptureChange, PeerMsg, QueryResChannel, QueryResult, StoreMsg,
 };
-use crate::{StoreMeta, batch::StoreRouter, operation::LocalReader};
+use crate::{batch::StoreRouter, operation::LocalReader, StoreMeta};
 
 impl<EK: KvEngine, ER: RaftEngine> AsyncReadNotifier for StoreRouter<EK, ER> {
     fn notify_logs_fetched(&self, region_id: u64, fetched_logs: FetchedLogs) {

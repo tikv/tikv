@@ -1,31 +1,32 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    ALL_CFS, CF_DEFAULT, KvEngine, Mutable, RaftEngine, data_cf_offset, name_to_cf,
+    data_cf_offset, name_to_cf, KvEngine, Mutable, RaftEngine, ALL_CFS, CF_DEFAULT,
 };
 use fail::fail_point;
 use futures::channel::oneshot;
 use kvproto::raft_cmdpb::RaftRequestHeader;
 use raftstore::{
-    Error, Result,
     store::{
-        RaftCmdExtraOpts, cmd_resp,
-        fsm::{MAX_PROPOSAL_SIZE_RATIO, apply},
+        cmd_resp,
+        fsm::{apply, MAX_PROPOSAL_SIZE_RATIO},
         metrics::PEER_WRITE_CMD_COUNTER,
         msg::ErrorCallback,
         util::{self},
+        RaftCmdExtraOpts,
     },
+    Error, Result,
 };
 use slog::{error, info};
 use tikv_util::{box_err, slog_panic, time::Instant};
 
 use crate::{
-    TabletTask,
     batch::StoreContext,
     fsm::ApplyResReporter,
     operation::SimpleWriteReqEncoder,
     raft::{Apply, Peer},
     router::{ApplyTask, CmdResChannel},
+    TabletTask,
 };
 
 mod ingest;
@@ -315,7 +316,7 @@ mod test {
         kv::{KvTestEngine, TestTabletFactory},
     };
     use engine_traits::{
-        CF_DEFAULT, DATA_CFS, FlushState, Peekable, SstApplyState, TabletContext, TabletRegistry,
+        FlushState, Peekable, SstApplyState, TabletContext, TabletRegistry, CF_DEFAULT, DATA_CFS,
     };
     use futures::executor::block_on;
     use kvproto::{
@@ -330,14 +331,14 @@ mod test {
     use tempfile::TempDir;
     use tikv_util::{
         store::new_peer,
-        worker::{Worker, dummy_scheduler},
+        worker::{dummy_scheduler, Worker},
         yatp_pool::{DefaultTicker, YatpPoolBuilder},
     };
 
     use crate::{
         operation::{
+            test_util::{create_tmp_importer, new_delete_range_entry, new_put_entry, MockReporter},
             CommittedEntries,
-            test_util::{MockReporter, create_tmp_importer, new_delete_range_entry, new_put_entry},
         },
         raft::Apply,
         worker::tablet,

@@ -6,14 +6,14 @@ use std::{
     fmt::{self, Debug, Display, Formatter},
     future::Future,
     sync::{
-        Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
     },
     time::{Duration, Instant},
 };
 
 use futures::{
-    channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded},
+    channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender},
     compat::{Future01CompatExt, Stream01CompatExt},
     executor::block_on,
     future::FutureExt,
@@ -549,8 +549,8 @@ mod tests {
 
     use std::{
         sync::{
-            Arc, Mutex,
             atomic::{self, AtomicU64},
+            Arc, Mutex,
         },
         time::Duration,
     };

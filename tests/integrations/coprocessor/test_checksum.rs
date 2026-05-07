@@ -2,7 +2,7 @@
 
 use std::u64;
 
-use api_version::{ApiV1, keyspace::KvPairEntry};
+use api_version::{keyspace::KvPairEntry, ApiV1};
 use futures::executor::block_on;
 use kvproto::{
     coprocessor::{KeyRange, Request},
@@ -11,8 +11,8 @@ use kvproto::{
 use protobuf::Message;
 use test_coprocessor::*;
 use tidb_query_common::storage::{
-    Range,
     scanner::{RangesScanner, RangesScannerOptions},
+    Range,
 };
 use tikv::{
     coprocessor::{dag::TikvStorage, *},

@@ -9,21 +9,21 @@ use std::{
 
 use collections::HashMap;
 use engine_traits::{
-    CfName, DATA_CFS, DeleteStrategy, KvEngine, ManualCompactionOptions, Range, TabletContext,
-    TabletRegistry, WriteOptions,
+    CfName, DeleteStrategy, KvEngine, ManualCompactionOptions, Range, TabletContext,
+    TabletRegistry, WriteOptions, DATA_CFS,
 };
 use fail::fail_point;
 use kvproto::{import_sstpb::SstMeta, metapb::Region};
 use raftstore::store::{TabletSnapKey, TabletSnapManager};
-use slog::{Logger, debug, error, info, warn};
+use slog::{debug, error, info, warn, Logger};
 use sst_importer::SstImporter;
 use tikv_util::{
-    Either,
     config::ReadableDuration,
     slog_panic,
     time::Instant,
     worker::{Runnable, RunnableWithTimer},
     yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
+    Either,
 };
 
 const DEFAULT_HIGH_PRI_POOL_SIZE: usize = 2;

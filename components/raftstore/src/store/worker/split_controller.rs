@@ -1,10 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp::{Ordering, min},
+    cmp::{min, Ordering},
     collections::{BinaryHeap, HashSet},
     slice::{Iter, IterMut},
-    sync::{Arc, mpsc::Receiver},
+    sync::{mpsc::Receiver, Arc},
     time::{Duration, SystemTime},
 };
 
@@ -21,7 +21,7 @@ use tikv_util::{
     config::Tracker,
     debug, info,
     metrics::ThreadInfoStatistics,
-    store::{QueryStats, is_read_query},
+    store::{is_read_query, QueryStats},
     time::Instant,
     warn,
 };
@@ -30,8 +30,8 @@ use crate::store::{
     metrics::*,
     util::build_key_range,
     worker::{
-        FlowStatistics, SplitConfig, SplitConfigManager, SplitValidator,
-        split_config::get_sample_num,
+        split_config::get_sample_num, FlowStatistics, SplitConfig, SplitConfigManager,
+        SplitValidator,
     },
 };
 

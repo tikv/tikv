@@ -3,21 +3,21 @@
 use std::{
     future::Future,
     sync::{
-        Arc,
         atomic::{AtomicU64, Ordering},
+        Arc,
     },
     time::{Duration, Instant},
 };
 
 use concurrency_manager::ConcurrencyManager;
-use futures::{StreamExt, executor::block_on};
+use futures::{executor::block_on, StreamExt};
 use kvproto::kvrpcpb::Context;
 use resource_control::ResourceGroupManager;
 use test_coprocessor::{DagSelect, Insert, ProductTable, Store};
 use tidb_query_datatype::codec::Datum;
 use tikv::{
     config::CoprReadPoolConfig,
-    coprocessor::{Endpoint, readpool_impl},
+    coprocessor::{readpool_impl, Endpoint},
     read_pool::ReadPool,
     storage::RocksEngine,
 };

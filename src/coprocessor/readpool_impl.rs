@@ -2,15 +2,15 @@
 
 use std::sync::{Arc, Mutex};
 
-use file_system::{IoType, set_io_type};
+use file_system::{set_io_type, IoType};
 use tikv_util::yatp_pool::{Config, DefaultTicker, FuturePool, PoolTicker, YatpPoolBuilder};
 
 use super::metrics::*;
 use crate::{
     config::CoprReadPoolConfig,
     storage::{
-        Engine, FlowStatsReporter,
         kv::{destroy_tls_engine, set_tls_engine},
+        Engine, FlowStatsReporter,
     },
 };
 

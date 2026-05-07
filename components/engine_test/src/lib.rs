@@ -381,12 +381,13 @@ pub mod ctor {
 
     mod rocks {
         use engine_rocks::{
-            RocksCfOptions, RocksDbOptions, RocksPersistenceListener, get_env,
+            get_env,
             properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory},
-            util::{RangeCompactionFilterFactory, new_engine_opt as rocks_new_engine_opt},
+            util::{new_engine_opt as rocks_new_engine_opt, RangeCompactionFilterFactory},
+            RocksCfOptions, RocksDbOptions, RocksPersistenceListener,
         };
         use engine_traits::{
-            CF_DEFAULT, CfOptions as _, PersistenceListener, Result, TabletContext,
+            CfOptions as _, PersistenceListener, Result, TabletContext, CF_DEFAULT,
         };
 
         use super::{

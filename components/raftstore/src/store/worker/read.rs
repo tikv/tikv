@@ -6,8 +6,8 @@ use std::{
     fmt::{self, Display, Formatter},
     ops::Deref,
     sync::{
-        Arc, Mutex,
         atomic::{self, AtomicU64, Ordering},
+        Arc, Mutex,
     },
 };
 
@@ -26,7 +26,7 @@ use tikv_util::{
     debug, error,
     lru::LruCache,
     store::find_peer_by_id,
-    time::{ThreadReadId, monotonic_raw_now},
+    time::{monotonic_raw_now, ThreadReadId},
 };
 use time::Timespec;
 use tracker::GLOBAL_TRACKERS;
@@ -34,16 +34,17 @@ use txn_types::{TimeStamp, WriteBatchFlags};
 
 use super::metrics::*;
 use crate::{
-    Error, Result,
     coprocessor::CoprocessorHost,
     errors::RAFTSTORE_IS_BUSY,
     router::ReadContext,
     store::{
-        Callback, CasualMessage, CasualRouter, Peer, ProposalRouter, RaftCommand, ReadCallback,
-        ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy, TxnExt, cmd_resp,
+        cmd_resp,
         fsm::store::StoreMeta,
         util::{self, LeaseState, RegionReadProgress, RemoteLease},
+        Callback, CasualMessage, CasualRouter, Peer, ProposalRouter, RaftCommand, ReadCallback,
+        ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy, TxnExt,
     },
+    Error, Result,
 };
 
 /// #[RaftstoreCommon]
@@ -1114,7 +1115,7 @@ where
                                 // local peer is a valid leader.
                                 let allow_fallback_leader_read = inspector
                                     .inspect(&req)
-                                    .is_ok_and(|r| r == RequestPolicy::ReadLocal);
+                                    .map_or(false, |r| r == RequestPolicy::ReadLocal);
                                 if !allow_fallback_leader_read {
                                     cb.set_result(ReadResponse {
                                         response: err_resp,
@@ -1248,7 +1249,7 @@ struct Inspector<'r> {
     delegate: &'r ReadDelegate,
 }
 
-impl RequestInspector for Inspector<'_> {
+impl<'r> RequestInspector for Inspector<'r> {
     fn has_applied_to_current_term(&mut self) -> bool {
         if self.delegate.applied_term == self.delegate.term {
             true
@@ -1285,7 +1286,7 @@ mod tests {
 
     use crossbeam::channel::TrySendError;
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
-    use engine_traits::{ALL_CFS, MiscExt, Peekable, SyncMutable};
+    use engine_traits::{MiscExt, Peekable, SyncMutable, ALL_CFS};
     use kvproto::{metapb::RegionEpoch, raft_cmdpb::*};
     use tempfile::{Builder, TempDir};
     use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
@@ -1293,7 +1294,7 @@ mod tests {
     use txn_types::WriteBatchFlags;
 
     use super::*;
-    use crate::store::{Callback, util::Lease};
+    use crate::store::{util::Lease, Callback};
 
     struct MockRouter {
         p_router: SyncSender<RaftCommand<KvTestSnapshot>>,

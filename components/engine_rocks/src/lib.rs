@@ -108,8 +108,8 @@ pub mod file_system;
 mod raft_engine;
 
 pub use rocksdb::{
-    PerfContext, PerfFlag, PerfFlags, PerfLevel, Statistics as RocksStatistics, set_perf_flags,
-    set_perf_level,
+    set_perf_flags, set_perf_level, PerfContext, PerfFlag, PerfFlags, PerfLevel,
+    Statistics as RocksStatistics,
 };
 
 pub mod flow_control_factors;

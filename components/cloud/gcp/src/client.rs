@@ -8,13 +8,13 @@ use std::{
     sync::Arc,
 };
 
-use hyper::{Body, Client, Request, Response, StatusCode, client::HttpConnector};
+use hyper::{client::HttpConnector, Body, Client, Request, Response, StatusCode};
 use hyper_tls::HttpsConnector;
 use serde::Deserialize;
 use tame_oauth::gcp::{
+    end_user::EndUserCredentialsInner, service_account::ServiceAccountProviderInner,
     EndUserCredentialsInfo, ServiceAccountInfo, TokenOrRequest, TokenProvider,
-    TokenProviderWrapper, TokenProviderWrapperInner, end_user::EndUserCredentialsInner,
-    service_account::ServiceAccountProviderInner,
+    TokenProviderWrapper, TokenProviderWrapperInner,
 };
 use tikv_util::stream::RetryError;
 

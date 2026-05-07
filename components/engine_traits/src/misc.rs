@@ -6,8 +6,8 @@
 //! FIXME: Things here need to be moved elsewhere.
 
 use crate::{
-    KvEngine, WriteBatchExt, WriteOptions, cf_names::CfNamesExt, errors::Result,
-    flow_control_factors::FlowControlFactorsExt, range::Range,
+    cf_names::CfNamesExt, errors::Result, flow_control_factors::FlowControlFactorsExt,
+    range::Range, KvEngine, WriteBatchExt, WriteOptions,
 };
 
 #[derive(Clone, Debug)]

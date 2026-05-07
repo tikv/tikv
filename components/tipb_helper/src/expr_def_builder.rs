@@ -2,8 +2,8 @@
 
 use codec::prelude::NumberEncoder;
 use tidb_query_datatype::{
-    FieldTypeAccessor, FieldTypeFlag, FieldTypeTp,
     codec::mysql::{Decimal, DecimalEncoder, Duration, TimeType},
+    FieldTypeAccessor, FieldTypeFlag, FieldTypeTp,
 };
 use tipb::{Expr, ExprType, FieldType, ScalarFuncSig};
 

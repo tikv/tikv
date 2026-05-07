@@ -324,11 +324,11 @@ mod tests {
 
     use engine_test::{
         ctor::{CfOptions, DbOptions},
-        kv::{KvTestEngine, new_engine, new_engine_opt},
+        kv::{new_engine, new_engine_opt, KvTestEngine},
     };
     use engine_traits::{
-        CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, CompactExt, MiscExt, Mutable, SyncMutable,
-        WriteBatch, WriteBatchExt,
+        CompactExt, MiscExt, Mutable, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK,
+        CF_RAFT, CF_WRITE,
     };
     use keys::data_key;
     use tempfile::Builder;

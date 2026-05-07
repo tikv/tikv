@@ -4,15 +4,14 @@ use std::{cmp::Ordering, convert::TryFrom, sync::Arc};
 
 use async_trait::async_trait;
 use tidb_query_aggr::*;
-use tidb_query_common::{Result, storage::IntervalRange};
+use tidb_query_common::{storage::IntervalRange, Result};
 use tidb_query_datatype::{
-    EvalType, FieldTypeAccessor,
     codec::{
         batch::{LazyBatchColumn, LazyBatchColumnVec},
         data_type::*,
     },
     expr::{EvalConfig, EvalContext},
-    match_template_evaltype,
+    match_template_evaltype, EvalType, FieldTypeAccessor,
 };
 use tidb_query_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode};
 use tipb::{Aggregation, Expr, FieldType};
@@ -472,11 +471,11 @@ fn update_current_states(
 mod tests {
     use futures::executor::block_on;
     use tidb_query_datatype::{
-        Collation, FieldTypeTp, builder::FieldTypeBuilder, expr::EvalWarnings,
+        builder::FieldTypeBuilder, expr::EvalWarnings, Collation, FieldTypeTp,
     };
     use tidb_query_expr::{
+        impl_arithmetic::{arithmetic_fn_meta, RealPlus},
         RpnExpressionBuilder,
-        impl_arithmetic::{RealPlus, arithmetic_fn_meta},
     };
     use tipb::ScalarFuncSig;
 

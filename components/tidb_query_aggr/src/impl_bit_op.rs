@@ -132,8 +132,8 @@ impl<T: BitOp> super::ConcreteAggrFunctionState for AggrFnStateBitOp<T> {
 #[cfg(test)]
 mod tests {
     use tidb_query_datatype::{
-        EvalType, FieldTypeAccessor, FieldTypeTp,
         codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
+        EvalType, FieldTypeAccessor, FieldTypeTp,
     };
     use tipb_helper::ExprDefBuilder;
 

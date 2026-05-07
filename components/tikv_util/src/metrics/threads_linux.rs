@@ -9,9 +9,9 @@ use std::{
 use collections::HashMap;
 use procinfo::pid;
 use prometheus::{
-    self, GaugeVec, IntGaugeVec, Opts,
+    self,
     core::{Collector, Desc},
-    proto,
+    proto, GaugeVec, IntGaugeVec, Opts,
 };
 
 use crate::{

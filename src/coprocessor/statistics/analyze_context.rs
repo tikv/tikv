@@ -2,13 +2,13 @@
 
 use std::{cmp::Reverse, collections::BinaryHeap, marker::PhantomData, sync::Arc};
 
-use api_version::{KvFormat, keyspace::KvPairEntry};
+use api_version::{keyspace::KvPairEntry, KvFormat};
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use tidb_query_common::storage::{
-    Range,
     scanner::{RangesScanner, RangesScannerOptions},
+    Range,
 };
 use tidb_query_datatype::codec::{datum::split_datum, table};
 use tidb_query_executors::interface::BatchExecutor;
@@ -19,12 +19,11 @@ use tipb::{self, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 use super::{cmsketch::CmSketch, fmsketch::FmSketch, histogram::Histogram};
 use crate::{
     coprocessor::{
-        MEMTRACE_ANALYZE,
         dag::TikvStorage,
         statistics::analyze::{
             AnalyzeIndexResult, AnalyzeMixedResult, RowSampleBuilder, SampleBuilder,
         },
-        *,
+        MEMTRACE_ANALYZE, *,
     },
     storage::{Snapshot, SnapshotStore, Statistics},
 };

@@ -7,8 +7,8 @@ use tipb::FieldType;
 
 use super::*;
 use crate::{
-    Collation, EvalType, FieldTypeAccessor, codec::collation::Collator, match_template_collator,
-    match_template_evaltype,
+    codec::collation::Collator, match_template_collator, match_template_evaltype, Collation,
+    EvalType, FieldTypeAccessor,
 };
 
 /// A scalar value container, a.k.a. datum, for all concrete eval types.
@@ -208,7 +208,7 @@ pub enum ScalarValueRef<'a> {
     VectorFloat32(Option<VectorFloat32Ref<'a>>),
 }
 
-impl ScalarValueRef<'_> {
+impl<'a> ScalarValueRef<'a> {
     #[inline]
     #[allow(clippy::clone_on_copy)]
     pub fn to_owned(self) -> ScalarValue {
@@ -500,14 +500,14 @@ impl<'a> ScalarValueRef<'a> {
     }
 }
 
-impl Ord for ScalarValueRef<'_> {
+impl<'a> Ord for ScalarValueRef<'a> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.partial_cmp(other)
             .expect("Cannot compare two ScalarValueRef in different type")
     }
 }
 
-impl PartialOrd for ScalarValueRef<'_> {
+impl<'a> PartialOrd for ScalarValueRef<'a> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match_template_evaltype! {
             TT, match (self, other) {
@@ -520,13 +520,13 @@ impl PartialOrd for ScalarValueRef<'_> {
     }
 }
 
-impl PartialEq<ScalarValue> for ScalarValueRef<'_> {
+impl<'a> PartialEq<ScalarValue> for ScalarValueRef<'a> {
     fn eq(&self, other: &ScalarValue) -> bool {
         self == &other.as_scalar_value_ref()
     }
 }
 
-impl PartialEq<ScalarValueRef<'_>> for ScalarValue {
+impl<'a> PartialEq<ScalarValueRef<'a>> for ScalarValue {
     fn eq(&self, other: &ScalarValueRef<'_>) -> bool {
         other == self
     }

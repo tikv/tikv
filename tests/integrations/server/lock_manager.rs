@@ -2,8 +2,9 @@
 
 use std::{
     sync::{
-        Arc, mpsc,
+        mpsc,
         mpsc::{RecvTimeoutError, TryRecvError},
+        Arc,
     },
     thread,
     time::Duration,
@@ -16,7 +17,7 @@ use kvproto::{
     tikvpb::TikvClient,
 };
 use test_raftstore::*;
-use tikv_util::{HandyRwLock, config::ReadableDuration};
+use tikv_util::{config::ReadableDuration, HandyRwLock};
 
 fn deadlock(client: &TikvClient, ctx: Context, key1: &[u8], ts: u64) -> bool {
     let key1 = key1.to_vec();

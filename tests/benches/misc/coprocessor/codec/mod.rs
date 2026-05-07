@@ -3,7 +3,7 @@
 mod mysql;
 
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
-use test::{Bencher, black_box};
+use test::{black_box, Bencher};
 use tidb_query_datatype::codec::table::*;
 
 #[bench]

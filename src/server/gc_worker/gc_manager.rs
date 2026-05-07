@@ -3,9 +3,8 @@
 use std::{
     cmp::Ordering,
     sync::{
-        Arc, Condvar, Mutex,
         atomic::{AtomicU64, Ordering as AtomicOrdering},
-        mpsc,
+        mpsc, Arc, Condvar, Mutex,
     },
     thread::{self, Builder as ThreadBuilder, JoinHandle},
     time::Duration,
@@ -19,10 +18,10 @@ use tikv_util::{store::find_peer, time::Instant, worker::Scheduler};
 use txn_types::{Key, TimeStamp};
 
 use super::{
-    Error, ErrorInner, Result,
     compaction_filter::is_compaction_filter_allowed,
     config::GcWorkerConfigManager,
-    gc_worker::{GcSafePointProvider, GcTask, schedule_gc},
+    gc_worker::{schedule_gc, GcSafePointProvider, GcTask},
+    Error, ErrorInner, Result,
 };
 use crate::{server::metrics::*, storage::Callback, tikv_util::sys::thread::StdThreadBuildWrapper};
 
@@ -676,7 +675,7 @@ mod tests {
     use std::{
         collections::BTreeMap,
         mem,
-        sync::mpsc::{Receiver, Sender, channel},
+        sync::mpsc::{channel, Receiver, Sender},
     };
 
     use engine_rocks::RocksEngine;

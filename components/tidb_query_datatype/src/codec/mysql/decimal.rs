@@ -3,12 +3,13 @@
 use std::{
     cmp,
     cmp::Ordering,
-    fmt,
+    fmt::{self, Display, Formatter},
     hash::{Hash, Hasher},
     intrinsics::copy_nonoverlapping,
     mem,
     ops::{Add, Deref, DerefMut, Div, Mul, Neg, Rem, Sub},
     str::{self, FromStr},
+    string::ToString,
 };
 
 use codec::prelude::*;
@@ -16,10 +17,10 @@ use tikv_util::escape;
 
 use crate::{
     codec::{
-        Error, Result, TEN_POW,
-        convert::{self, ConvertTo, ToStringValue},
+        convert::{self, ConvertTo},
         data_type::*,
         mysql::DEFAULT_DIV_FRAC_INCR,
+        Error, Result, TEN_POW,
     },
     expr::EvalContext,
 };
@@ -1774,7 +1775,7 @@ impl ConvertTo<f64> for Decimal {
     /// Port from TiDB's MyDecimal::ToFloat64.
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<f64> {
-        let r = self.to_string_value().parse::<f64>();
+        let r = self.to_string().parse::<f64>();
         debug_assert!(r.is_ok());
         Ok(r?)
     }
@@ -1875,7 +1876,7 @@ impl ConvertTo<Decimal> for Json {
     }
 }
 
-impl ConvertTo<Decimal> for JsonRef<'_> {
+impl<'a> ConvertTo<Decimal> for JsonRef<'a> {
     /// Port from TiDB's types.ConvertJSONToDecimal
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
@@ -1918,8 +1919,8 @@ impl FromStr for Decimal {
     }
 }
 
-impl ToStringValue for Decimal {
-    fn to_string_value(&self) -> String {
+impl ToString for Decimal {
+    fn to_string(&self) -> String {
         let (mut buf, word_start_idx, int_len, int_cnt, frac_cnt) = self.prepare_buf();
         if self.negative {
             buf.push(b'-');
@@ -1963,13 +1964,13 @@ impl ToStringValue for Decimal {
     }
 }
 
-impl fmt::Display for Decimal {
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Display for Decimal {
+    fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
         let mut dec = *self;
         dec = dec
             .round(self.result_frac_cnt as i8, RoundMode::HalfEven)
             .unwrap();
-        fmt.write_str(&dec.to_string_value())
+        fmt.write_str(&dec.to_string())
     }
 }
 
@@ -2333,7 +2334,7 @@ impl Ord for Decimal {
     }
 }
 
-impl<'a> Add<&'a Decimal> for &Decimal {
+impl<'a, 'b> Add<&'a Decimal> for &'b Decimal {
     type Output = Res<Decimal>;
 
     fn add(self, rhs: &'a Decimal) -> Res<Decimal> {
@@ -2348,7 +2349,7 @@ impl<'a> Add<&'a Decimal> for &Decimal {
     }
 }
 
-impl<'a> Sub<&'a Decimal> for &Decimal {
+impl<'a, 'b> Sub<&'a Decimal> for &'b Decimal {
     type Output = Res<Decimal>;
 
     fn sub(self, rhs: &'a Decimal) -> Res<Decimal> {
@@ -2363,7 +2364,7 @@ impl<'a> Sub<&'a Decimal> for &Decimal {
     }
 }
 
-impl<'a> Mul<&'a Decimal> for &Decimal {
+impl<'a, 'b> Mul<&'a Decimal> for &'b Decimal {
     type Output = Res<Decimal>;
 
     fn mul(self, rhs: &'a Decimal) -> Res<Decimal> {
@@ -2371,7 +2372,7 @@ impl<'a> Mul<&'a Decimal> for &Decimal {
     }
 }
 
-impl<'a> Div<&'a Decimal> for &Decimal {
+impl<'a, 'b> Div<&'a Decimal> for &'b Decimal {
     type Output = Option<Res<Decimal>>;
 
     fn div(self, rhs: &'a Decimal) -> Self::Output {
@@ -2388,7 +2389,7 @@ impl Rem for Decimal {
     }
 }
 
-impl<'a> Rem<&'a Decimal> for &Decimal {
+impl<'a, 'b> Rem<&'a Decimal> for &'b Decimal {
     type Output = Option<Res<Decimal>>;
     fn rem(self, rhs: &'a Decimal) -> Self::Output {
         let result_frac_cnt = cmp::max(self.result_frac_cnt, rhs.result_frac_cnt);

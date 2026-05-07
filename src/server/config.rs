@@ -8,11 +8,11 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_traits::{PerfLevel, perf_level_serde};
+use engine_traits::{perf_level_serde, PerfLevel};
 use grpcio::{CompressionAlgorithms, ResourceQuota};
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
-pub use raftstore::store::Config as RaftStoreConfig;
 use raftstore::store::config::DEFAULT_SNAP_MAX_BYTES_PER_SEC;
+pub use raftstore::store::Config as RaftStoreConfig;
 use regex::Regex;
 use tikv_util::{
     config::{self, ReadableDuration, ReadableSize, VersionTrack},
@@ -20,7 +20,7 @@ use tikv_util::{
     worker::Scheduler,
 };
 
-use super::{Result, snap::Task as SnapTask};
+use super::{snap::Task as SnapTask, Result};
 pub use crate::storage::config::Config as StorageConfig;
 
 pub const DEFAULT_CLUSTER_ID: u64 = 0;

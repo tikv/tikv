@@ -5,10 +5,9 @@ use std::{cmp::Ordering, convert::TryFrom};
 use tidb_query_codegen::AggrFunction;
 use tidb_query_common::Result;
 use tidb_query_datatype::{
-    Collation, EvalType, FieldTypeAccessor, FieldTypeFlag,
     codec::{collation::Collator, data_type::*},
     expr::EvalContext,
-    match_template_collator,
+    match_template_collator, Collation, EvalType, FieldTypeAccessor, FieldTypeFlag,
 };
 use tidb_query_expr::RpnExpression;
 use tipb::{Expr, ExprType, FieldType};
@@ -554,14 +553,14 @@ mod tests {
     use std::sync::Arc;
 
     use tidb_query_datatype::{
-        EvalType, FieldTypeAccessor, FieldTypeTp,
         codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
+        EvalType, FieldTypeAccessor, FieldTypeTp,
     };
     use tikv_util::buffer_vec::BufferVec;
     use tipb_helper::ExprDefBuilder;
 
     use super::*;
-    use crate::{AggrFunction, parser::AggrDefinitionParser};
+    use crate::{parser::AggrDefinitionParser, AggrFunction};
 
     #[test]
     fn test_max() {

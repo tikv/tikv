@@ -1,7 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::sync::{Arc, mpsc::SyncSender};
+use std::sync::{mpsc::SyncSender, Arc};
 
 use collections::HashSet;
 use health_controller::types::LatencyInspector;
@@ -14,10 +14,10 @@ use kvproto::{
     raft_serverpb::RaftMessage,
 };
 use raftstore::store::{
+    fsm::ChangeObserver, metrics::RaftEventDurationType, simple_write::SimpleWriteBinary,
     FetchedLogs, GenSnapRes, RaftCmdExtraOpts, TabletSnapKey, UnsafeRecoveryExecutePlanSyncer,
     UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
-    UnsafeRecoveryWaitApplySyncer, fsm::ChangeObserver, metrics::RaftEventDurationType,
-    simple_write::SimpleWriteBinary,
+    UnsafeRecoveryWaitApplySyncer,
 };
 use resource_control::ResourceMetered;
 use tikv_util::time::Instant;

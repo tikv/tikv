@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE, IterMetricsCollector};
+use engine_traits::{IterMetricsCollector, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ScanDetail, ScanDetailV2, ScanInfo};
 pub use raftstore::store::{FlowStatistics, FlowStatsReporter};
 

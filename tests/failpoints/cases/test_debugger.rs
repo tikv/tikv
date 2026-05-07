@@ -12,8 +12,8 @@ use raft_log_engine::RaftLogEngine;
 use test_raftstore::new_peer;
 use tikv::{
     config::TikvConfig,
-    server::{KvEngineFactoryBuilder, debug::Debugger, debug2::new_debugger},
-    storage::{TestEngineBuilder, txn::tests::must_prewrite_put},
+    server::{debug::Debugger, debug2::new_debugger, KvEngineFactoryBuilder},
+    storage::{txn::tests::must_prewrite_put, TestEngineBuilder},
 };
 
 const INITIAL_TABLET_INDEX: u64 = 5;

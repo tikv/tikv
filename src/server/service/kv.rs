@@ -4,8 +4,8 @@
 use std::{
     mem,
     sync::{
-        Arc,
         atomic::{AtomicU64, Ordering},
+        Arc,
     },
     time::Duration,
 };
@@ -27,25 +27,26 @@ use kvproto::{coprocessor::*, kvrpcpb::*, mpp::*, raft_serverpb::*, tikvpb::*};
 use protobuf::{Message, RepeatedField};
 use raft::eraftpb::MessageType;
 use raftstore::{
-    Error as RaftStoreError, Result as RaftStoreResult,
     store::{
-        CheckLeaderTask, get_memory_usage_entry_cache,
+        get_memory_usage_entry_cache,
         memory::{MEMTRACE_APPLYS, MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES},
         metrics::MESSAGE_RECV_BY_STORE,
+        CheckLeaderTask,
     },
+    Error as RaftStoreError, Result as RaftStoreResult,
 };
 use resource_control::ResourceGroupManager;
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::{RaftExtension, StageLatencyStats};
 use tikv_util::{
     future::{paired_future_callback, poll_future_notify},
-    mpsc::future::{BatchReceiver, Sender, WakePolicy, unbounded},
+    mpsc::future::{unbounded, BatchReceiver, Sender, WakePolicy},
     sys::memory_usage_reaches_high_water,
     time::Instant,
     worker::Scheduler,
 };
 use tracker::{
-    GLOBAL_TRACKERS, RequestInfo, RequestType, Tracker, set_tls_tracker_token, with_tls_tracker,
+    set_tls_tracker_token, with_tls_tracker, RequestInfo, RequestType, Tracker, GLOBAL_TRACKERS,
 };
 use txn_types::{self, Key};
 
@@ -54,11 +55,11 @@ use crate::{
     coprocessor::Endpoint,
     coprocessor_v2, forward_duplex, forward_unary, log_net_error,
     server::{
-        Error, MetadataSourceStoreId, Proxy, Result as ServerResult, gc_worker::GcWorker,
-        load_statistics::ThreadLoadPool, metrics::*, snap::Task as SnapTask,
+        gc_worker::GcWorker, load_statistics::ThreadLoadPool, metrics::*, snap::Task as SnapTask,
+        Error, MetadataSourceStoreId, Proxy, Result as ServerResult,
     },
     storage::{
-        self, SecondaryLocksStatus, Storage, TxnStatus,
+        self,
         errors::{
             extract_committed, extract_key_error, extract_key_errors, extract_kv_pairs,
             extract_region_error, extract_region_error_from_error, map_kv_pair_entries,
@@ -66,6 +67,7 @@ use crate::{
         },
         kv::Engine,
         lock_manager::LockManager,
+        SecondaryLocksStatus, Storage, TxnStatus,
     },
 };
 
@@ -1826,8 +1828,8 @@ fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat>(
     }
 }
 
-fn future_gc(_: GcRequest) -> impl Future<Output = ServerResult<GcResponse>> {
-    future::err(Error::Grpc(GrpcError::RpcFailure(RpcStatus::new(
+async fn future_gc(_: GcRequest) -> ServerResult<GcResponse> {
+    Err(Error::Grpc(GrpcError::RpcFailure(RpcStatus::new(
         RpcStatusCode::UNIMPLEMENTED,
     ))))
 }

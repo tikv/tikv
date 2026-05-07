@@ -3,9 +3,9 @@
 use std::{cell::RefCell, collections::HashMap, sync::Arc, time::Duration};
 
 use futures::{
-    FutureExt, SinkExt, StreamExt,
     channel::mpsc::{self as async_mpsc, Receiver, Sender},
     future::BoxFuture,
+    FutureExt, SinkExt, StreamExt,
 };
 use grpcio::{RpcStatus, RpcStatusCode, WriteFlags};
 use kvproto::{
@@ -20,13 +20,13 @@ use txn_types::TimeStamp;
 use uuid::Uuid;
 
 use crate::{
-    RegionCheckpointOperation, Task, annotate,
+    annotate,
     errors::{Error, Result},
     future,
-    metadata::{Checkpoint, CheckpointProvider, MetadataClient, store::MetaStore},
+    metadata::{store::MetaStore, Checkpoint, CheckpointProvider, MetadataClient},
     metrics,
     subscription_track::ResolveResult,
-    try_send,
+    try_send, RegionCheckpointOperation, Task,
 };
 
 /// A manager for maintaining the last flush ts.
@@ -611,7 +611,7 @@ pub mod tests {
         time::Duration,
     };
 
-    use futures::{Sink, future::ok};
+    use futures::{future::ok, Sink};
     use grpcio::{RpcStatus, RpcStatusCode};
     use kvproto::{logbackuppb::SubscribeFlushEventResponse, metapb::*};
     use pd_client::{PdClient, PdFuture};
@@ -619,8 +619,8 @@ pub mod tests {
 
     use super::{BasicFlushObserver, FlushObserver, RegionIdWithVersion};
     use crate::{
-        GetCheckpointResult,
         subscription_track::{CheckpointType, ResolveResult},
+        GetCheckpointResult,
     };
 
     fn region(id: u64, version: u64, conf_version: u64) -> Region {

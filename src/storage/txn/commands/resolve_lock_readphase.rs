@@ -5,13 +5,13 @@ use tikv_util::Either;
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
-    ScanMode, Snapshot, Statistics,
     mvcc::MvccReader,
     txn::{
-        ProcessResult, RESOLVE_LOCK_BATCH_SIZE, Result,
         commands::{Command, CommandExt, ReadCommand, ResolveLock, TypedCommand},
         sched_pool::tls_collect_keyread_histogram_vec,
+        ProcessResult, Result, RESOLVE_LOCK_BATCH_SIZE,
     },
+    ScanMode, Snapshot, Statistics,
 };
 
 command! {
@@ -120,7 +120,6 @@ mod tests {
 
     use super::*;
     use crate::storage::{
-        TestEngineBuilder,
         kv::Engine,
         lock_manager::MockLockManager,
         mvcc::tests::{must_load_shared_lock, must_unlocked, write},
@@ -129,6 +128,7 @@ mod tests {
             tests::*,
             txn_status_cache::TxnStatusCache,
         },
+        TestEngineBuilder,
     };
 
     fn run_resolve_lock_read_phase<E: Engine>(
