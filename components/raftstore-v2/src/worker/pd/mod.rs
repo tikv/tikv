@@ -527,7 +527,7 @@ mod requests {
             None => PeerMsg::admin_command(req).0,
         };
         if let Err(e) = router.send(region_id, msg) {
-            error!(
+            warn!(
                 logger,
                 "send request failed";
                 "region_id" => region_id, "cmd_type" => ?cmd_type, "err" => ?e,

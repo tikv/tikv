@@ -148,7 +148,10 @@ where
 
                 let msg = StoreMsg::GcSnapshotFinish;
                 if let Err(e) = StoreRouter::send(&self.router, msg) {
-                    error!(%e; "send StoreMsg::GcSnapshotFinish failed");
+                    warn!(
+                        "send StoreMsg::GcSnapshotFinish failed, are we shutting down?";
+                        "err" => ?e,
+                    );
                 }
             }
             Task::DeleteSnapshotFiles {
