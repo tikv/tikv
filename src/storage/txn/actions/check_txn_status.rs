@@ -5,11 +5,11 @@ use tikv_kv::SnapshotExt;
 use txn_types::{Key, Lock, SharedLocks, TimeStamp, Write, WriteType};
 
 use crate::storage::{
-    mvcc::{
-        metrics::MVCC_CHECK_TXN_STATUS_COUNTER_VEC, reader::OverlappedWrite, ErrorInner, LockType,
-        MvccTxn, ReleasedLock, Result, SnapshotReader, TxnCommitRecord,
-    },
     Snapshot, TxnStatus,
+    mvcc::{
+        ErrorInner, LockType, MvccTxn, ReleasedLock, Result, SnapshotReader, TxnCommitRecord,
+        metrics::MVCC_CHECK_TXN_STATUS_COUNTER_VEC, reader::OverlappedWrite,
+    },
 };
 
 // The returned `TxnStatus` is Some(..) if the transaction status is already

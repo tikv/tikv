@@ -4,14 +4,15 @@ use tikv_util::buffer_vec::BufferVec;
 use tipb::FieldType;
 
 use crate::{
+    EvalType, FieldTypeAccessor,
     codec::{
+        Result,
         chunk::{ChunkColumnEncoder, Column},
         data_type::{ChunkedVec, LogicalRows, VectorValue},
         datum_codec::RawDatumDecoder,
-        Result,
     },
     expr::EvalContext,
-    match_template_evaltype, EvalType, FieldTypeAccessor,
+    match_template_evaltype,
 };
 
 /// A container stores an array of datums, which can be either raw (not
@@ -412,8 +413,8 @@ mod benches {
     #[bench]
     fn bench_lazy_batch_column_clone_decoded(b: &mut test::Bencher) {
         use crate::{
-            codec::datum::{Datum, DatumEncoder},
             FieldTypeTp,
+            codec::datum::{Datum, DatumEncoder},
         };
 
         let mut column = LazyBatchColumn::raw_with_capacity(1000);
@@ -445,8 +446,8 @@ mod benches {
     #[bench]
     fn bench_lazy_batch_column_clone_and_decode(b: &mut test::Bencher) {
         use crate::{
-            codec::datum::{Datum, DatumEncoder},
             FieldTypeTp,
+            codec::datum::{Datum, DatumEncoder},
         };
 
         let mut ctx = EvalContext::default();
@@ -482,8 +483,8 @@ mod benches {
     #[bench]
     fn bench_lazy_batch_column_clone_and_decode_decoded(b: &mut test::Bencher) {
         use crate::{
-            codec::datum::{Datum, DatumEncoder},
             FieldTypeTp,
+            codec::datum::{Datum, DatumEncoder},
         };
 
         let mut column = LazyBatchColumn::raw_with_capacity(1000);

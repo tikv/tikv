@@ -378,11 +378,7 @@ impl<E: Engine> Tracker<E> {
         let region_id = self.req_ctx.context.get_region_id();
         let start_key = Key::from_raw(&self.req_ctx.lower_bound);
         let end_key = Key::from_raw(&self.req_ctx.upper_bound);
-        let reverse_scan = if let Some(reverse_scan) = self.req_ctx.is_desc_scan {
-            reverse_scan
-        } else {
-            false
-        };
+        let reverse_scan = self.req_ctx.is_desc_scan.unwrap_or_default();
 
         // only collect metrics for select and index, exclude transient read flow such
         // like analyze and checksum.
@@ -539,7 +535,7 @@ mod tests {
     use pd_client::BucketMeta;
     use tikv_kv::RocksEngine;
 
-    use super::{PerfLevel, ReqTag, TimeStamp, Tracker, TLS_COP_METRICS};
+    use super::{PerfLevel, ReqTag, TLS_COP_METRICS, TimeStamp, Tracker};
     use crate::{coprocessor::ReqContextInner, storage::Statistics};
 
     #[test]

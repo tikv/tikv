@@ -210,7 +210,7 @@ mod tests {
     use std::{collections::BTreeMap, sync::Arc};
 
     use engine_rocks::util;
-    use engine_traits::{CompactExt, ManualCompactionOptions, SyncMutable, CF_DEFAULT};
+    use engine_traits::{CF_DEFAULT, CompactExt, ManualCompactionOptions, SyncMutable};
     use kvproto::metapb::{Peer, Region};
     use tempfile::Builder;
 

@@ -4,8 +4,8 @@ use std::{fmt::Display, io};
 use async_trait::async_trait;
 use cloud::{
     blob::{
-        none_to_empty, read_to_end, BlobConfig, BlobObject, BlobStorage, BucketConf,
-        DeletableStorage, IterableStorage, PutResource, StringNonEmpty,
+        BlobConfig, BlobObject, BlobStorage, BucketConf, DeletableStorage, IterableStorage,
+        PutResource, StringNonEmpty, none_to_empty, read_to_end,
     },
     metrics,
 };
@@ -24,12 +24,12 @@ use tame_gcs::{
 };
 use tame_oauth::gcp::ServiceAccountInfo;
 use tikv_util::{
-    stream::{error_stream, AsyncReadAsSyncStreamOfBytes},
+    stream::{AsyncReadAsSyncStreamOfBytes, error_stream},
     time::Instant,
 };
 
 use crate::{
-    client::{status_code_error, GcpClient, RequestError},
+    client::{GcpClient, RequestError, status_code_error},
     utils::{self, retry},
 };
 
@@ -415,7 +415,7 @@ struct GcsPrefixIter<'cli> {
     finished: bool,
 }
 
-impl<'cli> GcsPrefixIter<'cli> {
+impl GcsPrefixIter<'_> {
     async fn one_page(&mut self) -> io::Result<Option<Vec<BlobObject>>> {
         if self.finished {
             return Ok(None);

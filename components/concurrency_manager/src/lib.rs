@@ -21,8 +21,8 @@ use std::{
     fmt::Display,
     mem::MaybeUninit,
     sync::{
-        atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -31,7 +31,7 @@ use crossbeam::atomic::AtomicCell;
 use lazy_static::lazy_static;
 use mockall::automock;
 use pd_client::{PdClient, PdFuture};
-use prometheus::{register_int_gauge, IntGauge};
+use prometheus::{IntGauge, register_int_gauge};
 use thiserror::Error;
 use tikv_util::{error, future::block_on_timeout, time::Instant, warn};
 use txn_types::{Key, Lock, TimeStamp};
@@ -557,7 +557,7 @@ pub trait IntoErrorSource: sealed::Sealed {
 }
 
 // &str impl
-impl<'a> sealed::Sealed for &'a str {}
+impl sealed::Sealed for &str {}
 impl<'a> IntoErrorSource for &'a str {
     type Output = &'a str;
     fn into_error_source(self) -> Self::Output {

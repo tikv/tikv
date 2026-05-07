@@ -79,7 +79,7 @@ impl ErrorCodeExt for Error {
     }
 }
 
-impl<'a> ErrorCodeExt for &'a Error {
+impl ErrorCodeExt for &Error {
     fn error_code(&self) -> error_code::ErrorCode {
         Error::error_code(*self)
     }

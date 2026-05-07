@@ -83,24 +83,24 @@ use std::{
     str,
 };
 
-use codec::number::{NumberCodec, F64_SIZE, I64_SIZE};
+use codec::number::{F64_SIZE, I64_SIZE, NumberCodec};
 use constants::{JSON_LITERAL_FALSE, JSON_LITERAL_NIL, JSON_LITERAL_TRUE};
 use tikv_util::is_even;
 
 pub use self::{
     jcodec::{JsonDatumPayloadChunkEncoder, JsonDecoder, JsonEncoder},
     json_modify::ModifyType,
-    path_expr::{parse_json_path_expr, PathExpression},
+    path_expr::{PathExpression, parse_json_path_expr},
 };
-use super::super::{datum::Datum, Error, Result};
+use super::super::{Error, Result, datum::Datum};
 use crate::{
+    FieldTypeTp,
     codec::{
-        convert::ConvertTo,
+        convert::{ConvertTo, ToStringValue},
         data_type::{BytesRef, Decimal, Real},
         mysql::{Duration, Time, TimeType},
     },
     expr::EvalContext,
-    FieldTypeTp,
 };
 
 const ERR_CONVERT_FAILED: &str = "Can not covert from ";
@@ -492,7 +492,7 @@ impl ConvertTo<f64> for Json {
     }
 }
 
-impl<'a> ConvertTo<f64> for JsonRef<'a> {
+impl ConvertTo<f64> for JsonRef<'_> {
     ///  Keep compatible with TiDB's `ConvertJSONToFloat` function.
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
@@ -505,7 +505,7 @@ impl<'a> ConvertTo<f64> for JsonRef<'a> {
                 .map_or(0f64, |x| if x { 1f64 } else { 0f64 }),
             JsonType::String => self.get_str_bytes()?.convert(ctx)?,
             _ => ctx
-                .handle_truncate_err(Error::truncated_wrong_val("Float", self.to_string()))
+                .handle_truncate_err(Error::truncated_wrong_val("Float", self.to_string_value()))
                 .map(|_| 0f64)?,
         };
         Ok(d)

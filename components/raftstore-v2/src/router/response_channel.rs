@@ -19,19 +19,19 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
     task::{Context, Poll},
 };
 
-use futures::{task::AtomicWaker, FutureExt, Stream};
+use futures::{FutureExt, Stream, task::AtomicWaker};
 use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, raft_cmdpb::RaftCmdResponse};
 use raftstore::store::{
-    local_metrics::TimeTracker, msg::ErrorCallback, region_meta::RegionMeta, ReadCallback,
-    WriteCallback,
+    ReadCallback, WriteCallback, local_metrics::TimeTracker, msg::ErrorCallback,
+    region_meta::RegionMeta,
 };
-use tracker::{get_tls_tracker_token, TrackerToken};
+use tracker::{TrackerToken, get_tls_tracker_token};
 
 union Tracker {
     read: TrackerToken,
@@ -152,7 +152,7 @@ fn check_bit(e: u64, fired_bit: u64) -> Option<bool> {
     None
 }
 
-impl<'a, Res> Future for WaitEvent<'a, Res> {
+impl<Res> Future for WaitEvent<'_, Res> {
     type Output = bool;
 
     #[inline]
@@ -186,7 +186,7 @@ struct WaitResult<'a, Res> {
     sub: &'a BaseSubscriber<Res>,
 }
 
-impl<'a, Res> Future for WaitResult<'a, Res> {
+impl<Res> Future for WaitResult<'_, Res> {
     type Output = Option<Res>;
 
     #[inline]
@@ -729,7 +729,7 @@ pub use flush_channel::{FlushChannel, FlushSubscriber};
 mod tests {
     use std::assert_matches::assert_matches;
 
-    use futures::{executor::block_on, StreamExt};
+    use futures::{StreamExt, executor::block_on};
 
     use super::*;
 

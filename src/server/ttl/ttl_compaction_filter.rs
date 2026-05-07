@@ -4,11 +4,11 @@ use std::{ffi::CString, marker::PhantomData};
 
 use api_version::{KeyMode, KvFormat, RawValue};
 use engine_rocks::{
+    RocksTtlProperties,
     raw::{
         CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
         CompactionFilterFactory, CompactionFilterValueType, DBTableFileCreationReason,
     },
-    RocksTtlProperties,
 };
 use engine_traits::raw_ttl::ttl_current_ts;
 use prometheus::*;

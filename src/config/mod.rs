@@ -22,9 +22,13 @@ use std::{
 
 use api_version::ApiV1Ttl;
 use causal_ts::Config as CausalTsConfig;
-pub use configurable::{loop_registry, ConfigRes, ConfigurableDb};
+pub use configurable::{ConfigRes, ConfigurableDb, loop_registry};
 use encryption_export::DataKeyManager;
 use engine_rocks::{
+    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE, RaftDbLogger,
+    RangePropertiesCollectorFactory, RawMvccPropertiesCollectorFactory, RocksCfOptions,
+    RocksDbOptions, RocksEngine, RocksEventListener, RocksStatistics, RocksTitanDbOptions,
+    RocksdbLogger, TtlPropertiesCollectorFactory,
     config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel as RocksLogLevel},
     get_env,
     properties::MvccPropertiesCollectorFactory,
@@ -37,14 +41,10 @@ use engine_rocks::{
         FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
         RangeCompactionFilterFactory, StackingCompactionFilterFactory,
     },
-    RaftDbLogger, RangePropertiesCollectorFactory, RawMvccPropertiesCollectorFactory,
-    RocksCfOptions, RocksDbOptions, RocksEngine, RocksEventListener, RocksStatistics,
-    RocksTitanDbOptions, RocksdbLogger, TtlPropertiesCollectorFactory,
-    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{
-    CfOptions as _, DbOptions as _, MiscExt, TitanCfOptions as _, CF_DEFAULT, CF_LOCK, CF_RAFT,
-    CF_WRITE,
+    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, CfOptions as _, DbOptions as _, MiscExt,
+    TitanCfOptions as _,
 };
 use file_system::IoRateLimiter;
 use in_memory_engine::InMemoryEngineConfig;
@@ -66,14 +66,14 @@ use resource_control::config::Config as ResourceControlConfig;
 use resource_metering::Config as ResourceMeteringConfig;
 use security::SecurityConfig;
 use serde::{
-    de::{Error as DError, Unexpected},
     Deserialize, Deserializer, Serialize, Serializer,
+    de::{Error as DError, Unexpected},
 };
-use serde_json::{to_value, Map, Value};
+use serde_json::{Map, Value, to_value};
 use tikv_util::{
     config::{
-        self, LogFormat, RaftDataStateMachine, ReadableDuration, ReadableSchedule, ReadableSize,
-        TomlWriter, MIB,
+        self, LogFormat, MIB, RaftDataStateMachine, ReadableDuration, ReadableSchedule,
+        ReadableSize, TomlWriter,
     },
     logger::{get_level_by_string, get_string_by_level, set_log_level},
     sys::SysQuota,
@@ -85,12 +85,12 @@ use crate::{
     coprocessor_v2::Config as CoprocessorV2Config,
     import::Config as ImportConfig,
     server::{
+        CONFIG_ROCKSDB_GAUGE, Config as ServerConfig,
         gc_worker::{GcConfig, RawCompactionFilterFactory, WriteCompactionFilterFactory},
         lock_manager::Config as PessimisticTxnConfig,
         ttl::TtlCompactionFilterFactory,
-        Config as ServerConfig, CONFIG_ROCKSDB_GAUGE,
     },
-    storage::config::{Config as StorageConfig, EngineType, DEFAULT_DATA_DIR},
+    storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, EngineType},
 };
 
 pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
@@ -292,7 +292,7 @@ fn get_background_job_limits_impl(
     // Scale flush threads proportionally to cpu cores. Also make sure the number of
     // flush threads doesn't exceed total jobs.
     let max_background_flushes = cmp::min(
-        (max_background_jobs + 3) / 4,
+        max_background_jobs.div_ceil(4),
         defaults.max_background_flushes,
     );
 
@@ -301,7 +301,7 @@ fn get_background_job_limits_impl(
     // v2: decrease the compaction threads to make the qps more stable.
     let max_compactions = match engine_type {
         EngineType::RaftKv => max_background_jobs - max_background_flushes,
-        EngineType::RaftKv2 => (max_background_jobs + 3) / 4,
+        EngineType::RaftKv2 => max_background_jobs.div_ceil(4),
     };
     let max_sub_compactions: u32 = (max_compactions - 1).clamp(1, defaults.max_sub_compactions);
     max_background_jobs = max_background_flushes + max_compactions;
@@ -2120,7 +2120,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         self.cfg.update(change.clone())?;
         let change_str = format!("{:?}", change);
         let mut change: Vec<(String, ConfigValue)> = change.into_iter().collect();
-        let cf_config = change.extract_if(|(name, _)| name.ends_with("cf"));
+        let cf_config = change.extract_if(.., |(name, _)| name.ends_with("cf"));
         for (cf_name, cf_change) in cf_config {
             if let ConfigValue::Module(mut cf_change) = cf_change {
                 // defaultcf -> default
@@ -2154,7 +2154,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(rate_bytes_config) = change
-            .extract_if(|(name, _)| name == "rate_bytes_per_sec")
+            .extract_if(.., |(name, _)| name == "rate_bytes_per_sec")
             .next()
         {
             let rate_bytes_per_sec: ReadableSize = rate_bytes_config.1.into();
@@ -2163,7 +2163,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(rate_bytes_config) = change
-            .extract_if(|(name, _)| name == "rate_limiter_auto_tuned")
+            .extract_if(.., |(name, _)| name == "rate_limiter_auto_tuned")
             .next()
         {
             let rate_limiter_auto_tuned: bool = rate_bytes_config.1.into();
@@ -2172,7 +2172,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(size) = change
-            .extract_if(|(name, _)| name == "write_buffer_limit")
+            .extract_if(.., |(name, _)| name == "write_buffer_limit")
             .next()
         {
             let size: ReadableSize = size.1.into();
@@ -2180,14 +2180,14 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(f) = change
-            .extract_if(|(name, _)| name == "write_buffer_flush_oldest_first")
+            .extract_if(.., |(name, _)| name == "write_buffer_flush_oldest_first")
             .next()
         {
             self.db.set_flush_oldest_first(f.1.into())?;
         }
 
         if let Some(background_jobs_config) = change
-            .extract_if(|(name, _)| name == "max_background_jobs")
+            .extract_if(.., |(name, _)| name == "max_background_jobs")
             .next()
         {
             let max_background_jobs: i32 = background_jobs_config.1.into();
@@ -2195,7 +2195,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(background_subcompactions_config) = change
-            .extract_if(|(name, _)| name == "max_sub_compactions")
+            .extract_if(.., |(name, _)| name == "max_sub_compactions")
             .next()
         {
             let max_subcompactions: u32 = background_subcompactions_config.1.into();
@@ -2204,7 +2204,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(background_flushes_config) = change
-            .extract_if(|(name, _)| name == "max_background_flushes")
+            .extract_if(.., |(name, _)| name == "max_background_flushes")
             .next()
         {
             let max_background_flushes: i32 = background_flushes_config.1.into();
@@ -4416,27 +4416,27 @@ impl TikvConfig {
             .raftdb
             .defaultcf
             .format_version
-            .map_or(false, |v| v > 5)
+            .is_some_and(|v| v > 5)
             || last_cfg
                 .rocksdb
                 .defaultcf
                 .format_version
-                .map_or(false, |v| v > 5)
+                .is_some_and(|v| v > 5)
             || last_cfg
                 .rocksdb
                 .writecf
                 .format_version
-                .map_or(false, |v| v > 5)
+                .is_some_and(|v| v > 5)
             || last_cfg
                 .rocksdb
                 .lockcf
                 .format_version
-                .map_or(false, |v| v > 5)
+                .is_some_and(|v| v > 5)
             || last_cfg
                 .rocksdb
                 .raftcf
                 .format_version
-                .map_or(false, |v| v > 5)
+                .is_some_and(|v| v > 5)
         {
             return Err("format_version larger than 5 is unsupported".into());
         }
@@ -4591,9 +4591,8 @@ pub fn persist_config(config: &TikvConfig) -> Result<(), String> {
     let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
     let tmp_cfg_path = store_path.join(TMP_CONFIG_FILE);
 
-    let same_as_last_cfg = fs::read_to_string(&last_cfg_path).map_or(false, |last_cfg| {
-        toml::to_string(&config).unwrap() == last_cfg
-    });
+    let same_as_last_cfg = fs::read_to_string(&last_cfg_path)
+        .is_ok_and(|last_cfg| toml::to_string(&config).unwrap() == last_cfg);
     if same_as_last_cfg {
         return Ok(());
     }
@@ -5060,7 +5059,7 @@ impl ConfigController {
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::{mpsc::channel, Arc},
+        sync::{Arc, mpsc::channel},
         time::Duration,
     };
 
@@ -5089,21 +5088,21 @@ mod tests {
     use test_util::assert_eq_debug;
     use tikv_kv::RocksEngine as RocksDBEngine;
     use tikv_util::{
-        config::{VersionTrack, GIB},
+        config::{GIB, VersionTrack},
         logger::get_log_level,
         quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
         sys::SysQuota,
-        worker::{dummy_scheduler, ReceiverWrapper},
+        worker::{ReceiverWrapper, dummy_scheduler},
     };
 
     use super::*;
     use crate::{
         server::{config::ServerConfigManager, ttl::TtlCheckerTask},
         storage::{
+            Storage, TestStorageBuilder,
             config_manager::StorageConfigManger,
             lock_manager::MockLockManager,
             txn::flow_controller::{EngineFlowController, FlowController},
-            Storage, TestStorageBuilder,
         },
     };
 

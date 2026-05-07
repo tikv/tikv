@@ -7,8 +7,8 @@ use std::{
     collections::VecDeque,
     mem,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
     u64, usize,
@@ -23,7 +23,7 @@ use codec::{
 use collections::{HashMap, HashSet};
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
 use engine_traits::{
-    Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions, CF_LOCK,
+    CF_LOCK, Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions,
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
@@ -48,48 +48,46 @@ use parking_lot::RwLockUpgradableReadGuard;
 use pd_client::{Feature, INVALID_ID};
 use protobuf::Message;
 use raft::{
-    self,
+    self, GetEntriesContext, INVALID_INDEX, LightReady, NO_LIMIT, ProgressState, RawNode, Ready,
+    SnapshotStatus, StateRole,
     eraftpb::{self, Entry, EntryType, MessageType},
-    GetEntriesContext, LightReady, ProgressState, RawNode, Ready, SnapshotStatus, StateRole,
-    INVALID_INDEX, NO_LIMIT,
 };
 use rand::seq::SliceRandom;
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
-    box_err, box_try,
+    Either, box_err, box_try,
     codec::number::decode_u64,
     debug, error, info,
     store::{find_peer_by_id, is_learner},
     sys::disk::DiskUsage,
-    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, InstantExt},
+    time::{Instant as TiInstant, InstantExt, duration_to_sec, monotonic_raw_now},
     warn,
     worker::Scheduler,
-    Either,
 };
 use time::{Duration as TimeDuration, Timespec};
-use tracker::{TrackerTokenArray, GLOBAL_TRACKERS};
+use tracker::{GLOBAL_TRACKERS, TrackerTokenArray};
 use txn_types::{TimeStamp, WriteBatchFlags};
 use uuid::Uuid;
 
 use super::{
-    cmd_resp,
+    DestroyPeerJob, LocalReadContext, cmd_resp,
     local_metrics::{IoType, RaftMetrics},
     metrics::*,
     peer_storage::{
-        write_peer_state, CheckApplyingSnapStatus, HandleReadyResult, PeerStorage,
-        RAFT_INIT_LOG_TERM,
+        CheckApplyingSnapStatus, HandleReadyResult, PeerStorage, RAFT_INIT_LOG_TERM,
+        write_peer_state,
     },
     read_queue::{ReadIndexQueue, ReadIndexRequest},
     transport::Transport,
     util::{
-        self, check_req_region_epoch, is_initial_msg, AdminCmdEpochState, ChangePeerI,
-        ConfChangeKind, Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
+        self, AdminCmdEpochState, ChangePeerI, ConfChangeKind, Lease, LeaseState,
+        NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER, check_req_region_epoch, is_initial_msg,
     },
     worker::BucketStatsInfo,
-    DestroyPeerJob, LocalReadContext,
 };
 use crate::{
+    Error, Result,
     coprocessor::{
         CoprocessorHost, RegionChangeEvent, RegionChangeReason, RoleChange,
         TransferLeaderCustomContext,
@@ -97,29 +95,28 @@ use crate::{
     errors::RAFTSTORE_IS_BUSY,
     router::{RaftStoreRouter, ReadContext},
     store::{
+        Callback, Config, GlobalReplicationState, PdTask, PeerMsg, RAFT_INIT_LOG_INDEX,
+        ReadCallback, ReadIndexContext, ReadResponse, TxnExt, WriteCallback,
         async_io::{read::ReadTask, write::WriteMsg, write_router::WriteRouter},
         entry_storage::CacheWarmupState,
         fsm::{
+            Apply, ApplyMetrics, ApplyTask, Proposal,
             apply::{self, CatchUpLogs},
             store::PollContext,
-            Apply, ApplyMetrics, ApplyTask, Proposal,
         },
         hibernate_state::GroupState,
-        memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES},
+        memory::{MEMTRACE_RAFT_ENTRIES, needs_evict_entry_cache},
         msg::{CampaignType, CasualMessage, ErrorCallback, RaftCommand},
         peer_storage::HandleSnapshotResult,
         snapshot_backup::{AbortReason, SnapshotBrState},
         txn_ext::LocksStatus,
         unsafe_recovery::{ForceLeaderState, UnsafeRecoveryState},
-        util::{admin_cmd_epoch_lookup, RegionReadProgress},
+        util::{RegionReadProgress, admin_cmd_epoch_lookup},
         worker::{
             HeartbeatTask, RaftlogGcTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask,
             SplitCheckTask,
         },
-        Callback, Config, GlobalReplicationState, PdTask, PeerMsg, ReadCallback, ReadIndexContext,
-        ReadResponse, TxnExt, WriteCallback, RAFT_INIT_LOG_INDEX,
     },
-    Error, Result,
 };
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
@@ -1828,7 +1825,7 @@ where
     pub fn should_destroy_after_apply_snapshot(&self) -> bool {
         self.apply_snap_ctx
             .as_ref()
-            .map_or(false, |ctx| ctx.destroy_peer_after_apply)
+            .is_some_and(|ctx| ctx.destroy_peer_after_apply)
     }
 
     /// Returns `true` if the raft group has replicated a snapshot but not
@@ -2803,7 +2800,7 @@ where
             None => return,
         };
         let cancel_by_unreachable_store =
-            unreachable_store_id.map_or(false, |s| to_peer.get_store_id() == s);
+            unreachable_store_id.is_some_and(|s| to_peer.get_store_id() == s);
         let cancel_by_peer_not_found = find_peer_by_id(self.region(), to_peer.get_id()).is_none();
         if cancel_by_unreachable_store || cancel_by_peer_not_found {
             self.get_store().cancel_generating_snap(None);
@@ -4155,7 +4152,7 @@ where
     pub fn pre_read_index(&self) -> Result<()> {
         fail_point!(
             "before_propose_readindex",
-            |s| if s.map_or(true, |s| s.parse().unwrap_or(true)) {
+            |s| if s.is_none_or(|s| s.parse().unwrap_or(true)) {
                 Ok(())
             } else {
                 Err(box_err!(
@@ -6084,17 +6081,17 @@ where
             None => return false,
         };
         let max_lease = ctx.cfg.raft_store_max_leader_lease();
-        let has_overlapped_reads = self.pending_reads.back().map_or(false, |read| {
+        let has_overlapped_reads = self.pending_reads.back().is_some_and(|read| {
             // If there is any read index whose lease can cover till next heartbeat
             // then we don't need to propose a new one
             read.propose_time + max_lease > renew_bound
         });
-        let has_overlapped_writes = self.proposals.back().map_or(false, |proposal| {
+        let has_overlapped_writes = self.proposals.back().is_some_and(|proposal| {
             // If there is any write whose lease can cover till next heartbeat
             // then we don't need to propose a new one
             proposal
                 .propose_time
-                .map_or(false, |propose_time| propose_time + max_lease > renew_bound)
+                .is_some_and(|propose_time| propose_time + max_lease > renew_bound)
         });
         !has_overlapped_reads && !has_overlapped_writes
     }
@@ -6264,7 +6261,7 @@ struct PollContextReader<'a, EK, ER> {
     engines: &'a Engines<EK, ER>,
 }
 
-impl<'a, EK, ER> ReadExecutor for PollContextReader<'a, EK, ER>
+impl<EK, ER> ReadExecutor for PollContextReader<'_, EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,

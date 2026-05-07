@@ -13,11 +13,11 @@ use protobuf::ProtobufEnum as _;
 use raft::StateRole;
 use raftstore::{
     coprocessor::{
-        dispatcher::{BoxDestroyPeerObserver, BoxTransferLeaderObserver},
         AdminObserver, ApplyCtxInfo, ApplySnapshotObserver, BoxAdminObserver,
         BoxApplySnapshotObserver, BoxQueryObserver, BoxRoleObserver, Cmd, Coprocessor,
         CoprocessorHost, DestroyPeerObserver, ObserverContext, QueryObserver, RegionState,
         RoleObserver, TransferLeaderCustomContext, TransferLeaderObserver,
+        dispatcher::{BoxDestroyPeerObserver, BoxTransferLeaderObserver},
     },
     store::TransferLeaderContext,
 };

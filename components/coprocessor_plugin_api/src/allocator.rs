@@ -23,6 +23,12 @@ pub struct HostAllocator {
     dealloc_fn: Atomic<Option<DeallocFn>>,
 }
 
+impl Default for HostAllocator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HostAllocator {
     /// Creates a new [`HostAllocator`].
     ///

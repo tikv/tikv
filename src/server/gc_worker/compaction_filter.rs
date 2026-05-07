@@ -6,18 +6,18 @@ use std::{
     mem,
     result::Result,
     sync::{
-        atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
 
 use engine_rocks::{
+    RocksEngine, RocksMvccProperties, RocksWriteBatchVec,
     raw::{
         CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
         CompactionFilterFactory, CompactionFilterValueType,
     },
-    RocksEngine, RocksMvccProperties, RocksWriteBatchVec,
 };
 use engine_traits::{KvEngine, MiscExt, MvccProperties, WriteBatch, WriteOptions};
 use file_system::{IoType, WithIoType};
@@ -25,9 +25,9 @@ use pd_client::{Feature, FeatureGate};
 use prometheus::{local::*, *};
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::{
+    Either,
     time::Instant,
     worker::{ScheduleError, Scheduler},
-    Either,
 };
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
@@ -243,10 +243,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             "ratio_threshold" => ratio_threshold,
         );
 
-        if db
-            .as_ref()
-            .map_or(false, RocksEngine::is_stalled_or_stopped)
-        {
+        if db.as_ref().is_some_and(RocksEngine::is_stalled_or_stopped) {
             debug!("skip gc in compaction filter because the DB is stalled");
             return None;
         }
@@ -862,22 +859,22 @@ pub fn check_need_gc(
         }
     }
 
-    (needs_gc >= ((table_props.len() + 1) / 2)) || check_props(&sum_props).0
+    (needs_gc >= table_props.len().div_ceil(2)) || check_props(&sum_props).0
 }
 
 #[allow(dead_code)] // Some interfaces are not used with different compile options.
 #[cfg(any(test, feature = "failpoints"))]
 pub mod test_utils {
     use engine_rocks::{
+        RocksEngine,
         raw::{CompactOptions, CompactionOptions},
         util::get_cf_handle,
-        RocksEngine,
     };
-    use engine_traits::{SyncMutable, CF_DEFAULT, CF_WRITE};
+    use engine_traits::{CF_DEFAULT, CF_WRITE, SyncMutable};
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use tikv_util::{
         config::VersionTrack,
-        worker::{dummy_scheduler, ReceiverWrapper},
+        worker::{ReceiverWrapper, dummy_scheduler},
     };
 
     use super::*;
@@ -915,7 +912,7 @@ pub mod test_utils {
         pub(super) callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
     }
 
-    impl<'a> TestGcRunner<'a> {
+    impl TestGcRunner<'_> {
         pub fn new(safe_point: u64) -> Self {
             let (gc_scheduler, gc_receiver) = dummy_scheduler();
 
@@ -932,7 +929,7 @@ pub mod test_utils {
         }
     }
 
-    impl<'a> TestGcRunner<'a> {
+    impl TestGcRunner<'_> {
         pub fn safe_point(&mut self, sp: u64) -> &mut Self {
             self.safe_point = sp;
             self
@@ -1043,7 +1040,7 @@ pub mod test_utils {
 
 #[cfg(test)]
 pub mod tests {
-    use engine_traits::{DeleteStrategy, MiscExt, Peekable, Range, SyncMutable, CF_WRITE};
+    use engine_traits::{CF_WRITE, DeleteStrategy, MiscExt, Peekable, Range, SyncMutable};
 
     use super::{test_utils::*, *};
     use crate::{

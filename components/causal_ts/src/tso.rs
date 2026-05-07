@@ -25,8 +25,8 @@ use std::{
     collections::BTreeMap,
     error, result,
     sync::{
-        atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering},
     },
 };
 
@@ -47,9 +47,9 @@ use tokio::sync::{
 use txn_types::TimeStamp;
 
 use crate::{
+    CausalTsProvider,
     errors::{Error, Result},
     metrics::*,
-    CausalTsProvider,
 };
 
 /// Renew on every 100ms, to adjust batch size rapidly enough.
@@ -423,11 +423,10 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
             Ok(ts) => {
                 tso_batch_list
                     .push(new_batch_size, ts, need_flush)
-                    .map_err(|e| {
+                    .inspect_err(|e| {
                         if need_flush {
                             tso_batch_list.flush();
                         }
-                        e
                     })?;
                 debug!("BatchTsoProvider::renew_tso_batch";
                     "tso_batch_list.remain" => tso_batch_list.remain(), "ts" => ?ts);

@@ -5,18 +5,18 @@ use std::{borrow::Cow, fmt::Display};
 use tipb::FieldType;
 
 use super::{
-    mysql::{charset::MULTI_BYTES_CHARSETS, RoundMode, DEFAULT_FSP},
     Error, Result,
+    mysql::{DEFAULT_FSP, RoundMode, charset::MULTI_BYTES_CHARSETS},
 };
 // use crate::{self, FieldTypeTp, UNSPECIFIED_LENGTH};
 use crate::{
+    Collation, FieldTypeAccessor, FieldTypeTp, UNSPECIFIED_LENGTH,
     codec::{
         data_type::*,
         error::ERR_DATA_OUT_OF_RANGE,
-        mysql::{decimal::max_or_min_dec, Res},
+        mysql::{Res, decimal::max_or_min_dec},
     },
     expr::{EvalContext, Flag},
-    Collation, FieldTypeAccessor, FieldTypeTp, UNSPECIFIED_LENGTH,
 };
 
 /// A trait for converting a value to an `Int`.
@@ -25,6 +25,16 @@ pub trait ToInt {
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64>;
     /// Converts the given value to an `u64`
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64>;
+}
+
+pub trait ToStringValue {
+    fn to_string_value(&self) -> String;
+}
+
+impl<T: ToString> ToStringValue for T {
+    default fn to_string_value(&self) -> String {
+        self.to_string()
+    }
 }
 
 /// A trait for converting a value to `T`
@@ -78,26 +88,26 @@ where
 
 impl<T> ConvertTo<String> for T
 where
-    T: ToString + EvaluableRet,
+    T: ToStringValue + EvaluableRet,
 {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<String> {
         // FIXME: There is an additional step `ProduceStrWithSpecifiedTp` in TiDB.
-        Ok(self.to_string())
+        Ok(self.to_string_value())
     }
 }
 
 impl<T> ConvertTo<Bytes> for T
 where
-    T: ToString + EvaluableRet,
+    T: ToStringValue + EvaluableRet,
 {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Bytes> {
-        Ok(self.to_string().into_bytes())
+        Ok(self.to_string_value().into_bytes())
     }
 }
 
-impl<'a> ConvertTo<Real> for JsonRef<'a> {
+impl ConvertTo<Real> for JsonRef<'_> {
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Real> {
         let val = self.convert(ctx)?;
@@ -106,25 +116,25 @@ impl<'a> ConvertTo<Real> for JsonRef<'a> {
     }
 }
 
-impl<'a> ConvertTo<String> for JsonRef<'a> {
+impl ConvertTo<String> for JsonRef<'_> {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<String> {
         // FIXME: There is an additional step `ProduceStrWithSpecifiedTp` in TiDB.
-        Ok(self.to_string())
+        Ok(self.to_string_value())
     }
 }
 
-impl<'a> ConvertTo<Bytes> for JsonRef<'a> {
+impl ConvertTo<Bytes> for JsonRef<'_> {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Bytes> {
-        Ok(self.to_string().into_bytes())
+        Ok(self.to_string_value().into_bytes())
     }
 }
 
-impl<'a> ConvertTo<Bytes> for EnumRef<'a> {
+impl ConvertTo<Bytes> for EnumRef<'_> {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Bytes> {
-        Ok(self.to_string().into_bytes())
+        Ok(self.to_string_value().into_bytes())
     }
 }
 
@@ -500,7 +510,7 @@ impl ToInt for Json {
     }
 }
 
-impl<'a> ToInt for JsonRef<'a> {
+impl ToInt for JsonRef<'_> {
     // Port from TiDB's types.ConvertJSONToInt
     #[inline]
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
@@ -516,7 +526,10 @@ impl<'a> ToInt for JsonRef<'a> {
             JsonType::Double => self.get_double().to_int(ctx, tp),
             JsonType::String => self.get_str_bytes()?.to_int(ctx, tp),
             _ => Ok(ctx
-                .handle_truncate_err(Error::truncated_wrong_val("Integer", self.to_string()))
+                .handle_truncate_err(Error::truncated_wrong_val(
+                    "Integer",
+                    self.to_string_value(),
+                ))
                 .map(|_| 0)?),
         }?;
         val.to_int(ctx, tp)
@@ -532,7 +545,10 @@ impl<'a> ToInt for JsonRef<'a> {
             JsonType::Double => self.get_double().to_uint(ctx, tp),
             JsonType::String => self.get_str_bytes()?.to_uint(ctx, tp),
             _ => Ok(ctx
-                .handle_truncate_err(Error::truncated_wrong_val("Integer", self.to_string()))
+                .handle_truncate_err(Error::truncated_wrong_val(
+                    "Integer",
+                    self.to_string_value(),
+                ))
                 .map(|_| 0)?),
         }?;
         val.to_uint(ctx, tp)
@@ -1138,15 +1154,15 @@ mod tests {
 
     use super::*;
     use crate::{
+        Collation, FieldTypeFlag,
         codec::{
             error::{
                 ERR_DATA_OUT_OF_RANGE, ERR_M_BIGGER_THAN_D, ERR_TRUNCATE_WRONG_VALUE,
                 WARN_DATA_TRUNCATED,
             },
-            mysql::{charset, Res, UNSPECIFIED_FSP},
+            mysql::{Res, UNSPECIFIED_FSP, charset},
         },
         expr::{EvalConfig, EvalContext, Flag},
-        Collation, FieldTypeFlag,
     };
 
     #[test]
