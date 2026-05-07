@@ -4,7 +4,7 @@ use std::{error::Error, io::Write};
 
 use engine_rocks::RocksEngine;
 use engine_traits::{
-    CachedTablet, CfOptions, CfOptionsExt, DbOptions, DbOptionsExt, TabletRegistry, CF_DEFAULT,
+    CF_DEFAULT, CachedTablet, CfOptions, CfOptionsExt, DbOptions, DbOptionsExt, TabletRegistry,
 };
 
 pub type ConfigRes = Result<(), Box<dyn Error>>;

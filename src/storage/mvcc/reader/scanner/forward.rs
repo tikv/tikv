@@ -12,10 +12,10 @@ use txn_types::{
 
 use super::ScannerConfig;
 use crate::storage::{
+    Cursor, Snapshot, Statistics,
     kv::SEEK_BOUND,
     mvcc::{ErrorInner::WriteConflict, NewerTsCheckState, Result},
     txn::{Result as TxnResult, TxnEntry, TxnEntryScanner},
-    Cursor, Snapshot, Statistics,
 };
 
 /// Defines the behavior of the scanner.
@@ -912,12 +912,12 @@ pub mod test_util {
 
     use super::*;
     use crate::storage::{
+        Engine,
         mvcc::Write,
         txn::tests::{
             must_cleanup_with_gc_fence, must_commit, must_prewrite_delete, must_prewrite_lock,
             must_prewrite_put,
         },
-        Engine,
     };
 
     pub struct EntryBuilder {
@@ -1172,10 +1172,10 @@ mod latest_kv_tests {
 
     use super::{super::ScannerBuilder, test_util::prepare_test_data_for_check_gc_fence, *};
     use crate::storage::{
+        Scanner,
         kv::{Engine, Modify, TestEngineBuilder},
         mvcc::tests::write,
         txn::tests::*,
-        Scanner,
     };
 
     /// Check whether everything works as usual when `ForwardKvScanner::get()`
@@ -1737,12 +1737,12 @@ mod latest_entry_tests {
 
     use super::{super::ScannerBuilder, test_util::*, *};
     use crate::storage::{
+        Engine, Modify, TestEngineBuilder,
         mvcc::tests::write,
         txn::{
-            tests::{must_commit, must_prewrite_delete, must_prewrite_put},
             EntryBatch,
+            tests::{must_commit, must_prewrite_delete, must_prewrite_put},
         },
-        Engine, Modify, TestEngineBuilder,
     };
 
     /// Check whether everything works as usual when `EntryScanner::get()` goes
@@ -2173,10 +2173,10 @@ mod latest_entry_tests {
 mod delta_entry_tests {
     use engine_traits::{CF_LOCK, CF_WRITE};
     use kvproto::kvrpcpb::{Context, PrewriteRequestPessimisticAction::*};
-    use txn_types::{is_short_value, SHORT_VALUE_MAX_LEN};
+    use txn_types::{SHORT_VALUE_MAX_LEN, is_short_value};
 
     use super::{super::ScannerBuilder, test_util::*, *};
-    use crate::storage::{mvcc::tests::write, txn::tests::*, Engine, Modify, TestEngineBuilder};
+    use crate::storage::{Engine, Modify, TestEngineBuilder, mvcc::tests::write, txn::tests::*};
 
     /// Check whether everything works as usual when `Delta::get()` goes out of
     /// bound.

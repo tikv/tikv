@@ -20,7 +20,7 @@ pub struct TaskMetadata<'a> {
     metadata: Cow<'a, [u8]>,
 }
 
-impl<'a> TaskMetadata<'a> {
+impl TaskMetadata<'_> {
     pub fn deep_clone(&self) -> TaskMetadata<'static> {
         TaskMetadata {
             metadata: Cow::Owned(self.metadata.to_vec()),

@@ -91,9 +91,9 @@
 //! A solution to the above is to have the implementation wrap
 //! each value in a lock. However, this has some repercussions:
 //! * The map would no longer be lock-free, inhibiting scalability
-//! and allowing for deadlocks.
+//!   and allowing for deadlocks.
 //! * If a user of the map doesn't need mutable access, then they pay
-//! the price of locks without actually needing them.
+//!   the price of locks without actually needing them.
 //!
 //! Instead, the approach taken by this crate gives more control to the user.
 //! If mutable access is needed, then you can use interior mutability,
@@ -150,7 +150,7 @@
 //! Crossbeam [does not currently provide a concurrent unordered map](https://github.com/crossbeam-rs/rfcs/issues/32).
 //! That said, here are some other crates which may suit you:
 //! * [`DashMap`](https://docs.rs/dashmap) implements a novel concurrent hash map
-//! with good performance characteristics.
+//!   with good performance characteristics.
 //! * [`flurry`](https://docs.rs/flurry) is a Rust port of Java's `ConcurrentHashMap`.
 //!
 //! [`insert`]: SkipMap::insert
@@ -260,6 +260,7 @@ pub use crate::{map::SkipMap, set::SkipSet};
 
 // Prevent cargo machete warnings.
 mod seal {
+    #[allow(dead_code)]
     pub trait Sealed {}
     impl Sealed for crossbeam_skiplist_offical::SkipList<(), ()> {}
 }

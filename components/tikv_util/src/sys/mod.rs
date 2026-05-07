@@ -239,7 +239,7 @@ pub fn cache_line_size(level: usize) -> Option<u64> {
 #[cfg(target_os = "linux")]
 pub fn path_in_diff_mount_point(path1: impl AsRef<Path>, path2: impl AsRef<Path>) -> bool {
     let (path1, path2) = (path1.as_ref(), path2.as_ref());
-    let empty_path = |p: &Path| p.to_str().map_or(false, |s| s.is_empty());
+    let empty_path = |p: &Path| p.to_str().is_some_and(|s| s.is_empty());
     if empty_path(path1) || empty_path(path2) {
         return false;
     }

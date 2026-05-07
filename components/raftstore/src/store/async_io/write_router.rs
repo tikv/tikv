@@ -7,8 +7,8 @@ use std::{
     mem,
     ops::Index,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -123,7 +123,7 @@ where
         ctx: &mut C,
         persisted_number: u64,
     ) {
-        if self.last_unpersisted.map_or(true, |n| n > persisted_number) {
+        if self.last_unpersisted.is_none_or(|n| n > persisted_number) {
             return;
         }
         // The peer must be destroyed after all previous write tasks have been finished.
@@ -354,7 +354,7 @@ pub(crate) mod tests {
     use std::thread;
 
     use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
-    use resource_control::channel::{bounded, Receiver};
+    use resource_control::channel::{Receiver, bounded};
     use tikv_util::config::ReadableDuration;
 
     use super::*;

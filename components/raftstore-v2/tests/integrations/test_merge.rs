@@ -7,7 +7,7 @@ use kvproto::metapb::{Peer, Region};
 use raftstore::store::RAFT_INIT_LOG_INDEX;
 use tikv_util::store::new_peer;
 
-use crate::cluster::{merge_helper::merge_region, split_helper::split_region, Cluster, TestRouter};
+use crate::cluster::{Cluster, TestRouter, merge_helper::merge_region, split_helper::split_region};
 
 #[test]
 fn test_merge() {

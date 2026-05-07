@@ -5,7 +5,7 @@ use std::{fs::File, time::Duration};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
 use external_storage::{create_storage, make_local_backend};
 use file_system::calc_crc32_bytes;
-use futures::{executor::block_on, AsyncReadExt, StreamExt};
+use futures::{AsyncReadExt, StreamExt, executor::block_on};
 use kvproto::{
     import_sstpb::*,
     kvrpcpb::*,
