@@ -152,6 +152,7 @@ where
         right_derive: bool,
         share_source_region_size: bool,
         callback: Callback<EK::Snapshot>,
+        split_reason: pdpb::SplitReason,
     },
     AskBatchSplit {
         region: metapb::Region,
@@ -1230,9 +1231,11 @@ where
         share_source_region_size: bool,
         callback: Callback<EK::Snapshot>,
         task: String,
+        split_reason: pdpb::SplitReason,
     ) {
         let router = self.router.clone();
         let resp = self.pd_client.ask_split(region.clone());
+        let is_load_split = split_reason == pdpb::SplitReason::Load;
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
@@ -1253,7 +1256,12 @@ where
                     );
                     let region_id = region.get_id();
                     let epoch = region.take_region_epoch();
-                    send_admin_request(
+                    let callback = if is_load_split {
+                        Self::load_base_split_callback(callback)
+                    } else {
+                        callback
+                    };
+                    if !send_admin_request(
                         &router,
                         region_id,
                         epoch,
@@ -1261,13 +1269,19 @@ where
                         req,
                         callback,
                         Default::default(),
-                    );
+                    ) && is_load_split
+                    {
+                        LOAD_BASE_SPLIT_EVENT.split_failed.inc();
+                    }
                 }
                 Err(e) => {
                     warn!("failed to ask split";
                     "region_id" => region.get_id(),
                     "err" => ?e,
                     "task"=>task);
+                    if is_load_split {
+                        LOAD_BASE_SPLIT_EVENT.split_failed.inc();
+                    }
                 }
             }
         };
@@ -1355,6 +1369,7 @@ where
                         right_derive,
                         share_source_region_size,
                         callback,
+                        split_reason: reason,
                     };
                     if let Err(ScheduleError::Stopped(t)) = scheduler.schedule(task) {
                         error!(
@@ -1363,7 +1378,14 @@ where
                             "peer_id" =>  peer_id
                         );
                         match t {
-                            Task::AskSplit { callback, .. } => {
+                            Task::AskSplit {
+                                callback,
+                                split_reason,
+                                ..
+                            } => {
+                                if split_reason == pdpb::SplitReason::Load {
+                                    LOAD_BASE_SPLIT_EVENT.split_failed.inc();
+                                }
                                 callback.invoke_with_response(new_error(box_err!(
                                     "failed to split: Stopped"
                                 )));
@@ -1378,6 +1400,9 @@ where
                         "region_id" => region.get_id(),
                         "err" => ?e,
                     );
+                    if is_load_split {
+                        LOAD_BASE_SPLIT_EVENT.split_failed.inc();
+                    }
                 }
             }
         };
@@ -2458,6 +2483,7 @@ where
                 right_derive,
                 share_source_region_size,
                 callback,
+                split_reason,
             } => self.handle_ask_split(
                 region,
                 split_key,
@@ -2466,6 +2492,7 @@ where
                 share_source_region_size,
                 callback,
                 String::from("ask_split"),
+                split_reason,
             ),
             Task::AskBatchSplit {
                 region,

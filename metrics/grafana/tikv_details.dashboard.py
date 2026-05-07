@@ -2832,11 +2832,13 @@ def RaftAdmin() -> RowPanel:
             graph_panel(
                 title="Observed region CPU for load-base split",
                 description=(
-                    "Per-region CPU observed when load-base split evaluates hot "
-                    "regions. Unit follows other CPU panels: 100% means one CPU "
-                    "core. This is decision input, not the final split result. "
-                    "Use additional_groupby=instance only when drilling into a "
-                    "specific TiKV; keep it as none for large clusters."
+                    "Per-region CPU observed before load-fit filtering when "
+                    "load-base split evaluates regions. Unit follows other CPU "
+                    "panels: 100% means one CPU core. This is pre-load-fit "
+                    "decision input; use the tail distribution to tune split "
+                    "thresholds. Use additional_groupby=instance only when "
+                    "drilling into a specific TiKV; keep it as none for large "
+                    "clusters."
                 ),
                 yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
                 targets=[
@@ -2884,10 +2886,12 @@ def RaftAdmin() -> RowPanel:
             graph_panel_histogram_quantiles(
                 title="Observed region QPS for load-base split",
                 description=(
-                    "Per-region QPS observed when load-base split evaluates hot "
-                    "regions. This is decision input, not the final split "
-                    "result. Use additional_groupby=instance only when drilling "
-                    "into a specific TiKV; keep it as none for large clusters."
+                    "Per-region QPS observed before load-fit filtering when "
+                    "load-base split evaluates regions. This is pre-load-fit "
+                    "decision input; use the tail distribution to tune split "
+                    "thresholds. Use additional_groupby=instance only when "
+                    "drilling into a specific TiKV; keep it as none for large "
+                    "clusters."
                 ),
                 yaxes=yaxes(left_format=UNITS.REQUESTS_PER_SEC),
                 metric="tikv_load_base_split_region_load",
@@ -2898,11 +2902,12 @@ def RaftAdmin() -> RowPanel:
             graph_panel_histogram_quantiles(
                 title="Observed region read bytes for load-base split",
                 description=(
-                    "Per-region read bytes observed when load-base split "
-                    "evaluates hot regions. Unit: KiB. This is decision input, "
-                    "not the final split result. Use additional_groupby=instance "
-                    "only when drilling into a specific TiKV; keep it as none "
-                    "for large clusters."
+                    "Per-region read bytes observed before load-fit filtering "
+                    "when load-base split evaluates regions. Unit: KiB. This is "
+                    "pre-load-fit decision input; use the tail distribution to "
+                    "tune split thresholds. Use additional_groupby=instance only "
+                    "when drilling into a specific TiKV; keep it as none for "
+                    "large clusters."
                 ),
                 yaxes=yaxes(left_format=UNITS.KIBI_BYTES),
                 metric="tikv_load_base_split_region_load",

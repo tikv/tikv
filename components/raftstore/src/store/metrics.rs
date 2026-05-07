@@ -843,7 +843,7 @@ lazy_static! {
 
     pub static ref LOAD_BASE_SPLIT_REGION_LOAD_VEC: HistogramVec = register_histogram_vec!(
         "tikv_load_base_split_region_load",
-        "Histogram of region load observed when load base split evaluates hot regions on this TiKV. The type label is cpu_millicores, qps, or bytes_kib.",
+        "Histogram of region load observed before load-fit filtering when load base split evaluates regions on this TiKV. The type label is cpu_millicores, qps, or bytes_kib.",
         &["type"],
         exponential_buckets(1.0, 2.0, 28).unwrap()
     ).unwrap();
