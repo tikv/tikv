@@ -576,7 +576,13 @@ impl Default for Config {
             enable_v2_compatible_learner: false,
             unsafe_disable_check_quorum: false,
             min_pending_apply_region_count: 10,
+<<<<<<< HEAD
             skip_manual_compaction_in_clean_up_worker: false,
+=======
+            check_then_compact_force_bottommost_level: true,
+            check_then_compact_top_n: 20,
+            compaction_filter_enabled: true,
+>>>>>>> 81055e47dc (GC: Estimate compaction effectiveness based on stats and GC safe point (#18670))
         }
     }
 }

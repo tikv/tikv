@@ -11,8 +11,13 @@ use std::{
     mem,
     ops::{Deref, DerefMut},
     sync::{
+<<<<<<< HEAD
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
+=======
+        Arc, Mutex, Weak,
+        atomic::{AtomicU64, Ordering},
+>>>>>>> 81055e47dc (GC: Estimate compaction effectiveness based on stats and GC safe point (#18670))
     },
     time::{Duration, Instant, SystemTime},
     u64,
@@ -612,7 +617,11 @@ where
     pub sync_write_worker: Option<WriteWorker<EK, ER, RaftRouter<EK, ER>, T>>,
     pub pending_latency_inspect: Vec<LatencyInspector>,
 
+<<<<<<< HEAD
     pub safe_point: Arc<AtomicU64>,
+=======
+    pub gc_safe_point: Arc<AtomicU64>,
+>>>>>>> 81055e47dc (GC: Estimate compaction effectiveness based on stats and GC safe point (#18670))
 
     pub process_stat: Option<ProcessStat>,
 }
@@ -1284,7 +1293,11 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     feature_gate: FeatureGate,
     write_senders: WriteSenders<EK, ER>,
     node_start_time: Timespec, // monotonic_raw_now
+<<<<<<< HEAD
     safe_point: Arc<AtomicU64>,
+=======
+    gc_safe_point: Arc<AtomicU64>,
+>>>>>>> 81055e47dc (GC: Estimate compaction effectiveness based on stats and GC safe point (#18670))
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
@@ -1544,7 +1557,11 @@ where
             write_senders: self.write_senders.clone(),
             sync_write_worker,
             pending_latency_inspect: vec![],
+<<<<<<< HEAD
             safe_point: self.safe_point.clone(),
+=======
+            gc_safe_point: self.gc_safe_point.clone(),
+>>>>>>> 81055e47dc (GC: Estimate compaction effectiveness based on stats and GC safe point (#18670))
             process_stat: None,
         };
         ctx.update_ticks_timeout();
@@ -1599,7 +1616,11 @@ where
             feature_gate: self.feature_gate.clone(),
             write_senders: self.write_senders.clone(),
             node_start_time: self.node_start_time,
+<<<<<<< HEAD
             safe_point: self.safe_point.clone(),
+=======
+            gc_safe_point: self.gc_safe_point.clone(),
+>>>>>>> 81055e47dc (GC: Estimate compaction effectiveness based on stats and GC safe point (#18670))
         }
     }
 }
@@ -1675,7 +1696,11 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         mut disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
+<<<<<<< HEAD
         safe_point: Arc<AtomicU64>,
+=======
+        gc_safe_point: Arc<AtomicU64>,
+>>>>>>> 81055e47dc (GC: Estimate compaction effectiveness based on stats and GC safe point (#18670))
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1806,7 +1831,11 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             feature_gate: pd_client.feature_gate().clone(),
             write_senders: self.store_writers.senders(),
             node_start_time: self.node_start_time,
+<<<<<<< HEAD
             safe_point,
+=======
+            gc_safe_point,
+>>>>>>> 81055e47dc (GC: Estimate compaction effectiveness based on stats and GC safe point (#18670))
         };
         let region_peers = builder.init()?;
         self.start_system::<T, C>(
@@ -2668,6 +2697,73 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
     fn on_compact_check_tick(&mut self) {
         self.register_compact_check_tick();
+<<<<<<< HEAD
+=======
+        if let Some(token) = &self.fsm.check_then_compact_running_indicator {
+            if token.upgrade().is_some() {
+                info!(
+                    "compact check is running, skip compact check";
+                    "store_id" => self.fsm.store.id,
+                );
+                return;
+            }
+        }
+        if self.ctx.cleanup_scheduler.is_busy() {
+            debug!(
+                "compact worker is busy, skip compact check";
+                "store_id" => self.fsm.store.id,
+            );
+            return;
+        }
+
+        let gc_safe_point = self.ctx.gc_safe_point.load(Ordering::Relaxed);
+
+        let meta = self.ctx.store_meta.lock().unwrap();
+        if meta.region_ranges.is_empty() {
+            debug!(
+            "there is no range need to check";
+            "store_id" => self.fsm.store.id
+            );
+            return;
+        }
+        let mut all_ranges = Vec::with_capacity(meta.region_ranges.len() + 2);
+        all_ranges.push(keys::DATA_MIN_KEY.to_vec());
+        all_ranges.extend(meta.region_ranges.keys().cloned());
+        all_ranges.push(keys::DATA_MAX_KEY.to_vec());
+        let cf_names = vec![CF_WRITE.to_owned(), CF_DEFAULT.to_owned()];
+        let finished = Arc::new(());
+        self.fsm.check_then_compact_running_indicator = Some(Arc::downgrade(&finished));
+        if let Err(e) = self.ctx.cleanup_scheduler.schedule(CleanupTask::Compact(
+            CompactTask::CheckThenCompactTopN {
+                cf_names,
+                ranges: all_ranges,
+                compact_threshold: CompactThreshold::new(
+                    self.ctx.cfg.region_compact_min_tombstones,
+                    self.ctx.cfg.region_compact_tombstones_percent,
+                    self.ctx.cfg.region_compact_min_redundant_rows,
+                    self.ctx.cfg.region_compact_redundant_rows_percent(),
+                ),
+                compaction_filter_enabled: self.ctx.cfg.compaction_filter_enabled,
+                bottommost_level_force: self.ctx.cfg.check_then_compact_force_bottommost_level,
+                top_n: self.ctx.cfg.check_then_compact_top_n as usize,
+                gc_safe_point,
+                finished,
+            },
+        )) {
+            error!(
+                "schedule space check task failed";
+                "store_id" => self.fsm.store.id,
+                "err" => ?e,
+            );
+        }
+    }
+
+    // TODO: remove this function after the check and compact is fully migrated to
+    // check then compact
+    #[allow(dead_code)]
+    fn on_check_and_compact_tick(&mut self) {
+        self.register_compact_check_tick();
+>>>>>>> 81055e47dc (GC: Estimate compaction effectiveness based on stats and GC safe point (#18670))
         if self.ctx.cleanup_scheduler.is_busy() {
             debug!(
                 "compact worker is busy, check space redundancy next time";

@@ -2,7 +2,11 @@
 
 use std::{
     iter::FromIterator,
+<<<<<<< HEAD
     sync::{atomic::AtomicU64, mpsc, Arc, Mutex},
+=======
+    sync::{Arc, Mutex, atomic::AtomicU64, mpsc},
+>>>>>>> 81055e47dc (GC: Estimate compaction effectiveness based on stats and GC safe point (#18670))
     time::Duration,
 };
 

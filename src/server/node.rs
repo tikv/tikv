@@ -1,7 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+<<<<<<< HEAD:src/server/node.rs
     sync::{atomic::AtomicU64, Arc, Mutex},
+=======
+    sync::{Arc, Mutex, atomic::AtomicU64},
+>>>>>>> 81055e47dc (GC: Estimate compaction effectiveness based on stats and GC safe point (#18670)):src/server/raft_server.rs
     thread,
     time::Duration,
 };
@@ -175,7 +179,11 @@ where
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
+<<<<<<< HEAD:src/server/node.rs
         safe_point: Arc<AtomicU64>,
+=======
+        gc_safe_point: Arc<AtomicU64>,
+>>>>>>> 81055e47dc (GC: Estimate compaction effectiveness based on stats and GC safe point (#18670)):src/server/raft_server.rs
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -215,7 +223,11 @@ where
             causal_ts_provider,
             disk_check_runner,
             grpc_service_mgr,
+<<<<<<< HEAD:src/server/node.rs
             safe_point,
+=======
+            gc_safe_point,
+>>>>>>> 81055e47dc (GC: Estimate compaction effectiveness based on stats and GC safe point (#18670)):src/server/raft_server.rs
         )?;
 
         Ok(())
@@ -465,7 +477,11 @@ where
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
+<<<<<<< HEAD:src/server/node.rs
         safe_point: Arc<AtomicU64>,
+=======
+        gc_safe_point: Arc<AtomicU64>,
+>>>>>>> 81055e47dc (GC: Estimate compaction effectiveness based on stats and GC safe point (#18670)):src/server/raft_server.rs
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -501,7 +517,11 @@ where
             causal_ts_provider,
             disk_check_runner,
             grpc_service_mgr,
+<<<<<<< HEAD:src/server/node.rs
             safe_point,
+=======
+            gc_safe_point,
+>>>>>>> 81055e47dc (GC: Estimate compaction effectiveness based on stats and GC safe point (#18670)):src/server/raft_server.rs
         )?;
         Ok(())
     }
