@@ -528,7 +528,7 @@ mod tests {
     use tikv_util::time::Limiter;
 
     use super::*;
-    use crate::store::snap::{tests::*, SNAPSHOT_CFS, SST_FILE_SUFFIX};
+    use crate::store::snap::{SNAPSHOT_CFS, SST_FILE_SUFFIX, tests::*};
 
     struct TestStaleDetector;
     impl StaleDetector for TestStaleDetector {

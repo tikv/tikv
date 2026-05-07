@@ -11,26 +11,26 @@ use kvproto::kvrpcpb::{
 };
 use tikv_util::Either;
 use txn_types::{
-    is_short_value, Key, LastChange, Mutation, MutationType, OldValue, SharedLocks, TimeStamp,
-    Value, Write, WriteType,
+    Key, LastChange, Mutation, MutationType, OldValue, SharedLocks, TimeStamp, Value, Write,
+    WriteType, is_short_value,
 };
 
 use crate::storage::{
+    Snapshot,
     mvcc::{
+        Error, ErrorInner, Lock, LockType, MvccTxn, PessimisticLockNotFoundReason, Result,
+        SnapshotReader,
         metrics::{
             MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC,
             MVCC_PREWRITE_ASSERTION_PERF_COUNTER_VEC,
         },
-        Error, ErrorInner, Lock, LockType, MvccTxn, PessimisticLockNotFoundReason, Result,
-        SnapshotReader,
     },
     txn::{
+        LockInfo,
         actions::{check_data_constraint::check_data_constraint, common::next_last_change_info},
         sched_pool::tls_can_enable,
         scheduler::LAST_CHANGE_TS,
-        LockInfo,
     },
-    Snapshot,
 };
 
 /// Prewrite a single mutation by creating and storing a lock and value.
@@ -1052,6 +1052,7 @@ pub mod tests {
     use txn_types::{OldValue, PessimisticLock, TsSet};
 
     use super::*;
+    use crate::storage::{Engine, mvcc::tests::*};
     #[cfg(test)]
     use crate::storage::{
         kv::RocksSnapshot,
@@ -1060,7 +1061,6 @@ pub mod tests {
             commands::prewrite::fallback_1pc_locks, tests::*,
         },
     };
-    use crate::storage::{mvcc::tests::*, Engine};
 
     fn optimistic_txn_props(primary: &[u8], start_ts: TimeStamp) -> TransactionProperties<'_> {
         TransactionProperties {

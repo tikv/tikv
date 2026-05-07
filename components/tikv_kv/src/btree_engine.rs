@@ -14,10 +14,10 @@ use std::{
 use collections::HashMap;
 use engine_panic::PanicEngine;
 use engine_traits::{
-    CfName, IterMetricsCollector, IterOptions, MetricsExt, ReadOptions, CF_DEFAULT, CF_LOCK,
-    CF_WRITE,
+    CF_DEFAULT, CF_LOCK, CF_WRITE, CfName, IterMetricsCollector, IterOptions, MetricsExt,
+    ReadOptions,
 };
-use futures::{future, stream, Future, Stream};
+use futures::{Future, Stream, future, stream};
 use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
 
@@ -331,7 +331,7 @@ pub mod tests {
     use engine_traits::IterOptions;
 
     use super::{
-        super::{tests::*, CfStatistics, TEST_ENGINE_CFS},
+        super::{CfStatistics, TEST_ENGINE_CFS, tests::*},
         *,
     };
     use crate::{Cursor, ScanMode};

@@ -22,9 +22,13 @@ use std::{
 
 use api_version::ApiV1Ttl;
 use causal_ts::Config as CausalTsConfig;
-pub use configurable::{loop_registry, ConfigRes, ConfigurableDb};
+pub use configurable::{ConfigRes, ConfigurableDb, loop_registry};
 use encryption_export::DataKeyManager;
 use engine_rocks::{
+    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE, RaftDbLogger,
+    RangePropertiesCollectorFactory, RawMvccPropertiesCollectorFactory, RocksCfOptions,
+    RocksDbOptions, RocksEngine, RocksEventListener, RocksStatistics, RocksTitanDbOptions,
+    RocksdbLogger, TtlPropertiesCollectorFactory,
     config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel as RocksLogLevel},
     get_env,
     properties::MvccPropertiesCollectorFactory,
@@ -37,14 +41,10 @@ use engine_rocks::{
         FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
         RangeCompactionFilterFactory, StackingCompactionFilterFactory,
     },
-    RaftDbLogger, RangePropertiesCollectorFactory, RawMvccPropertiesCollectorFactory,
-    RocksCfOptions, RocksDbOptions, RocksEngine, RocksEventListener, RocksStatistics,
-    RocksTitanDbOptions, RocksdbLogger, TtlPropertiesCollectorFactory,
-    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{
-    CfOptions as _, DbOptions as _, MiscExt, TitanCfOptions as _, CF_DEFAULT, CF_LOCK, CF_RAFT,
-    CF_WRITE,
+    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, CfOptions as _, DbOptions as _, MiscExt,
+    TitanCfOptions as _,
 };
 use file_system::IoRateLimiter;
 use in_memory_engine::InMemoryEngineConfig;
@@ -66,14 +66,14 @@ use resource_control::config::Config as ResourceControlConfig;
 use resource_metering::Config as ResourceMeteringConfig;
 use security::SecurityConfig;
 use serde::{
-    de::{Error as DError, Unexpected},
     Deserialize, Deserializer, Serialize, Serializer,
+    de::{Error as DError, Unexpected},
 };
-use serde_json::{to_value, Map, Value};
+use serde_json::{Map, Value, to_value};
 use tikv_util::{
     config::{
-        self, LogFormat, RaftDataStateMachine, ReadableDuration, ReadableSchedule, ReadableSize,
-        TomlWriter, MIB,
+        self, LogFormat, MIB, RaftDataStateMachine, ReadableDuration, ReadableSchedule,
+        ReadableSize, TomlWriter,
     },
     logger::{get_level_by_string, get_string_by_level, set_log_level},
     sys::SysQuota,
@@ -85,12 +85,12 @@ use crate::{
     coprocessor_v2::Config as CoprocessorV2Config,
     import::Config as ImportConfig,
     server::{
+        CONFIG_ROCKSDB_GAUGE, Config as ServerConfig,
         gc_worker::{GcConfig, RawCompactionFilterFactory, WriteCompactionFilterFactory},
         lock_manager::Config as PessimisticTxnConfig,
         ttl::TtlCompactionFilterFactory,
-        Config as ServerConfig, CONFIG_ROCKSDB_GAUGE,
     },
-    storage::config::{Config as StorageConfig, EngineType, DEFAULT_DATA_DIR},
+    storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, EngineType},
 };
 
 pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
@@ -5060,7 +5060,7 @@ impl ConfigController {
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::{mpsc::channel, Arc},
+        sync::{Arc, mpsc::channel},
         time::Duration,
     };
 
@@ -5089,21 +5089,21 @@ mod tests {
     use test_util::assert_eq_debug;
     use tikv_kv::RocksEngine as RocksDBEngine;
     use tikv_util::{
-        config::{VersionTrack, GIB},
+        config::{GIB, VersionTrack},
         logger::get_log_level,
         quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
         sys::SysQuota,
-        worker::{dummy_scheduler, ReceiverWrapper},
+        worker::{ReceiverWrapper, dummy_scheduler},
     };
 
     use super::*;
     use crate::{
         server::{config::ServerConfigManager, ttl::TtlCheckerTask},
         storage::{
+            Storage, TestStorageBuilder,
             config_manager::StorageConfigManger,
             lock_manager::MockLockManager,
             txn::flow_controller::{EngineFlowController, FlowController},
-            Storage, TestStorageBuilder,
         },
     };
 

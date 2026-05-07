@@ -7,7 +7,7 @@ use std::{
     },
     fmt::{Display, Formatter, Result as FmtResult},
     num::NonZeroUsize,
-    sync::{mpsc, Arc, Mutex, RwLock},
+    sync::{Arc, Mutex, RwLock, mpsc},
     time::Duration,
 };
 
@@ -23,9 +23,9 @@ use tikv_util::{
 };
 
 use super::{
-    dispatcher::BoxRegionHeartbeatObserver, metrics::*, BoxRegionChangeObserver, BoxRoleObserver,
-    Coprocessor, CoprocessorHost, ObserverContext, RegionChangeEvent, RegionChangeObserver,
-    RegionHeartbeatObserver, Result, RoleChange, RoleObserver,
+    BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
+    RegionChangeEvent, RegionChangeObserver, RegionHeartbeatObserver, Result, RoleChange,
+    RoleObserver, dispatcher::BoxRegionHeartbeatObserver, metrics::*,
 };
 
 // TODO(SpadeA): this 100 may be adjusted by observing more workloads.

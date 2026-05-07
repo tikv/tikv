@@ -9,8 +9,8 @@ use std::{
 
 use async_trait::async_trait;
 use tokio::sync::{
-    mpsc::{self, Sender},
     Mutex,
+    mpsc::{self, Sender},
 };
 use tokio_stream::StreamExt;
 

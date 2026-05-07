@@ -4,7 +4,7 @@
 use std::{
     num::NonZeroU64,
     ops::Deref,
-    sync::{atomic, Arc, Mutex},
+    sync::{Arc, Mutex, atomic},
 };
 
 use batch_system::Router;
@@ -16,25 +16,24 @@ use kvproto::{
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse},
 };
 use raftstore::{
+    Result,
     errors::RAFTSTORE_IS_BUSY,
     store::{
-        cmd_resp,
+        LocalReaderCore, ReadDelegate, ReadExecutorProvider, RegionSnapshot, cmd_resp,
         util::LeaseState,
         worker_metrics::{self, TLS_LOCAL_READ_METRICS},
-        LocalReaderCore, ReadDelegate, ReadExecutorProvider, RegionSnapshot,
     },
-    Result,
 };
-use slog::{debug, Logger};
-use tikv_util::{box_err, codec::number::decode_u64, time::monotonic_raw_now, Either};
+use slog::{Logger, debug};
+use tikv_util::{Either, box_err, codec::number::decode_u64, time::monotonic_raw_now};
 use time::Timespec;
-use tracker::{get_tls_tracker_token, GLOBAL_TRACKERS};
+use tracker::{GLOBAL_TRACKERS, get_tls_tracker_token};
 use txn_types::WriteBatchFlags;
 
 use crate::{
+    StoreRouter,
     fsm::StoreMeta,
     router::{PeerMsg, QueryResult},
-    StoreRouter,
 };
 
 pub trait MsgRouter: Clone + Send + 'static {
@@ -662,13 +661,13 @@ mod tests {
         ctor::{CfOptions, DbOptions},
         kv::{KvTestEngine, TestTabletFactory},
     };
-    use engine_traits::{MiscExt, SyncMutable, TabletContext, TabletRegistry, DATA_CFS};
+    use engine_traits::{DATA_CFS, MiscExt, SyncMutable, TabletContext, TabletRegistry};
     use futures::executor::block_on;
     use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, raft_cmdpb::*};
     use pd_client::BucketMeta;
     use raftstore::store::{
-        util::Lease, worker_metrics::TLS_LOCAL_READ_METRICS, ReadCallback, ReadProgress,
-        RegionReadProgress, TrackVer, TxnExt,
+        ReadCallback, ReadProgress, RegionReadProgress, TrackVer, TxnExt, util::Lease,
+        worker_metrics::TLS_LOCAL_READ_METRICS,
     };
     use slog::o;
     use tempfile::Builder;

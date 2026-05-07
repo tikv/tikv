@@ -41,8 +41,8 @@ use std::{
     collections::HashSet,
     ops::Deref,
     sync::{
-        atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -359,7 +359,7 @@ impl<T: Clone> RollingRetriever<T> {
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::mpsc::{sync_channel, RecvTimeoutError},
+        sync::mpsc::{RecvTimeoutError, sync_channel},
         time::Duration,
     };
 

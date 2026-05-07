@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use tikv_util::buffer_vec::BufferVec;
 
-use super::{bit_vec::BitVec, ChunkRef, ChunkedVec, Set, SetRef, UnsafeRefInto};
+use super::{ChunkRef, ChunkedVec, Set, SetRef, UnsafeRefInto, bit_vec::BitVec};
 use crate::impl_chunked_vec_common;
 
 /// `ChunkedVecSet` stores set in a compact way.

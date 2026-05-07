@@ -366,12 +366,12 @@ mod tests {
 
     use super::{
         super::encoder_for_test::{Column, RowEncoder},
-        read_le_bytes, RowSlice,
+        RowSlice, read_le_bytes,
     };
     use crate::{
+        FieldTypeTp,
         codec::data_type::{Duration, ScalarValue},
         expr::EvalContext,
-        FieldTypeTp,
     };
 
     #[test]

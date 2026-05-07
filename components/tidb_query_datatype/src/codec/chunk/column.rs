@@ -9,14 +9,16 @@ use tipb::FieldType;
 
 use super::{Error, Result};
 use crate::{
+    EvalType, FieldTypeFlag, FieldTypeTp,
     codec::{
+        Datum,
         data_type::{ChunkRef, VectorFloat32Ref, VectorValue},
         datum,
         datum_codec::DatumPayloadDecoder,
         mysql::{
             decimal::{
-                Decimal, DecimalDatumPayloadChunkEncoder, DecimalDecoder, DecimalEncoder,
-                DECIMAL_STRUCT_SIZE,
+                DECIMAL_STRUCT_SIZE, Decimal, DecimalDatumPayloadChunkEncoder, DecimalDecoder,
+                DecimalEncoder,
             },
             duration::{
                 Duration, DurationDatumPayloadChunkEncoder, DurationDecoder, DurationEncoder,
@@ -29,11 +31,9 @@ use crate::{
                 VectorFloat32Encoder,
             },
         },
-        Datum,
     },
     expr::EvalContext,
     prelude::*,
-    EvalType, FieldTypeFlag, FieldTypeTp,
 };
 
 /// `Column` stores the same column data of multi rows in one chunk.

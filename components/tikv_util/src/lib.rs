@@ -22,16 +22,16 @@ use std::{
     ops::{Deref, DerefMut},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, RwLock, RwLockReadGuard, RwLockWriteGuard,
+        atomic::{AtomicBool, Ordering},
     },
     thread,
     time::Duration,
 };
 
 use nix::{
-    sys::wait::{wait, WaitStatus},
-    unistd::{fork, ForkResult},
+    sys::wait::{WaitStatus, wait},
+    unistd::{ForkResult, fork},
 };
 
 use crate::sys::thread::StdThreadBuildWrapper;

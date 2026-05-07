@@ -11,8 +11,8 @@ use std::{
 };
 
 use collections::HashSet;
-use engine_traits::{KvEngine, RaftEngine, CF_LOCK};
-use futures::{future::BoxFuture, Future, Stream, StreamExt, TryFutureExt};
+use engine_traits::{CF_LOCK, KvEngine, RaftEngine};
+use futures::{Future, Stream, StreamExt, TryFutureExt, future::BoxFuture};
 use kvproto::{
     kvrpcpb::Context,
     raft_cmdpb::{AdminCmdType, CmdType, RaftCmdRequest, Request},
@@ -20,21 +20,21 @@ use kvproto::{
 pub use node::NodeV2;
 pub use raft_extension::Extension;
 use raftstore::{
-    store::{
-        cmd_resp, msg::ErrorCallback, util::encode_start_ts_into_flag_data, RaftCmdExtraOpts,
-        RegionSnapshot,
-    },
     Error,
+    store::{
+        RaftCmdExtraOpts, RegionSnapshot, cmd_resp, msg::ErrorCallback,
+        util::encode_start_ts_into_flag_data,
+    },
 };
 use raftstore_v2::{
-    router::{
-        message::SimpleWrite, CmdResChannelBuilder, CmdResEvent, CmdResStream, PeerMsg, RaftRouter,
-    },
     SimpleWriteBinary, SimpleWriteEncoder,
+    router::{
+        CmdResChannelBuilder, CmdResEvent, CmdResStream, PeerMsg, RaftRouter, message::SimpleWrite,
+    },
 };
 use tikv_kv::{Modify, WriteEvent};
 use tikv_util::time::Instant;
-use tracker::{get_tls_tracker_token, GLOBAL_TRACKERS};
+use tracker::{GLOBAL_TRACKERS, get_tls_tracker_token};
 use txn_types::{TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
 use super::{

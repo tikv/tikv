@@ -10,6 +10,6 @@ pub mod test_util;
 pub use self::{
     expr::{RpnExpression, RpnExpressionNode},
     expr_builder::RpnExpressionBuilder,
-    expr_eval::{RpnStackNode, BATCH_MAX_SIZE},
+    expr_eval::{BATCH_MAX_SIZE, RpnStackNode},
     function::{RpnFnCallExtra, RpnFnMeta},
 };
