@@ -47735,6 +47735,358 @@
             "align": false,
             "alignLevel": 0
           }
+<<<<<<< HEAD
+=======
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Time spent on auto compaction operations by type",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 49
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 416,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [
+            {
+              "alias": "/^count/",
+              "bars": false,
+              "dashLength": 1,
+              "dashes": true,
+              "fill": 2,
+              "fillBelowTo": null,
+              "lines": true,
+              "spaceLength": 1,
+              "transform": "negative-Y",
+              "yaxis": 2,
+              "zindex": -3
+            },
+            {
+              "alias": "/^avg/",
+              "bars": false,
+              "fill": 7,
+              "fillBelowTo": null,
+              "lines": true,
+              "yaxis": 1,
+              "zindex": 0
+            }
+          ],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_auto_compaction_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, le, $additional_groupby) \n    \n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "99.99%-{{type}} {{$additional_groupby}}",
+              "metric": "",
+              "query": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_auto_compaction_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, le, $additional_groupby) \n    \n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_auto_compaction_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, le, $additional_groupby) \n    \n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "99%-{{type}} {{$additional_groupby}}",
+              "metric": "",
+              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_auto_compaction_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, le, $additional_groupby) \n    \n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "(sum(rate(\n    tikv_auto_compaction_duration_seconds_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, $additional_groupby)  / sum(rate(\n    tikv_auto_compaction_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, $additional_groupby) )",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "avg-{{type}} {{$additional_groupby}}",
+              "metric": "",
+              "query": "(sum(rate(\n    tikv_auto_compaction_duration_seconds_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, $additional_groupby)  / sum(rate(\n    tikv_auto_compaction_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, $additional_groupby) )",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_auto_compaction_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, $additional_groupby) ",
+              "format": "time_series",
+              "hide": true,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "count-{{type}} {{$additional_groupby}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_auto_compaction_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, $additional_groupby) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Auto Compaction Duration",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "s",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Number of regions meeting compaction threshold and pending candidates",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 49
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 417,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum((\n    tikv_auto_compaction_regions_meet_threshold\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "regions meet threshold",
+              "metric": "",
+              "query": "sum((\n    tikv_auto_compaction_regions_meet_threshold\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum((\n    tikv_auto_compaction_pending_candidates\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "pending candidates",
+              "metric": "",
+              "query": "sum((\n    tikv_auto_compaction_pending_candidates\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Auto Compaction Regions Status",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
         }
       ],
       "repeat": null,
@@ -47771,7 +48123,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 337,
+=======
+      "id": 418,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -47810,7 +48166,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 338,
+=======
+          "id": 419,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -47958,7 +48318,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 339,
+=======
+          "id": 420,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -48091,7 +48455,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 340,
+=======
+          "id": 421,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -48292,7 +48660,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 341,
+=======
+          "id": 422,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -48440,7 +48812,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 342,
+=======
+          "id": 423,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -48641,7 +49017,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 343,
+=======
+          "id": 424,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -48774,7 +49154,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 344,
+=======
+          "id": 425,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -48907,7 +49291,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 345,
+=======
+          "id": 426,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49040,7 +49428,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 346,
+=======
+          "id": 427,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49173,7 +49565,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 347,
+=======
+          "id": 428,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49313,7 +49709,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 348,
+=======
+          "id": 429,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -49410,7 +49810,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 349,
+=======
+          "id": 430,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49614,7 +50018,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 350,
+=======
+      "id": 431,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -49653,7 +50061,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 351,
+=======
+          "id": 432,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49786,7 +50198,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 352,
+=======
+          "id": 433,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49919,7 +50335,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 353,
+=======
+          "id": 434,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50052,7 +50472,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 354,
+=======
+          "id": 435,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50188,7 +50612,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 355,
+=======
+      "id": 436,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -50227,7 +50655,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 356,
+=======
+          "id": 437,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50360,7 +50792,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 357,
+=======
+          "id": 438,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50493,7 +50929,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 358,
+=======
+          "id": 439,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50641,7 +51081,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 359,
+=======
+          "id": 440,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50774,7 +51218,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 360,
+=======
+          "id": 441,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50907,7 +51355,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 361,
+=======
+          "id": 442,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51040,7 +51492,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 362,
+=======
+          "id": 443,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51176,7 +51632,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 363,
+=======
+      "id": 444,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -51215,7 +51675,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 364,
+=======
+          "id": 445,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51348,7 +51812,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 365,
+=======
+          "id": 446,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51481,7 +51949,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 366,
+=======
+          "id": 447,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51614,7 +52086,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 367,
+=======
+          "id": 448,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51747,7 +52223,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 368,
+=======
+          "id": 449,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51880,7 +52360,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 369,
+=======
+          "id": 450,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52016,7 +52500,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 370,
+=======
+      "id": 451,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -52055,7 +52543,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 371,
+=======
+          "id": 452,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52188,7 +52680,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 372,
+=======
+          "id": 453,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52321,7 +52817,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 373,
+=======
+          "id": 454,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52454,7 +52954,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 374,
+=======
+          "id": 455,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52617,7 +53121,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 375,
+=======
+          "id": 456,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52750,7 +53258,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 376,
+=======
+          "id": 457,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52883,7 +53395,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 377,
+=======
+          "id": 458,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53031,7 +53547,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 378,
+=======
+          "id": 459,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53146,6 +53666,142 @@
             "align": false,
             "alignLevel": 0
           }
+<<<<<<< HEAD
+=======
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The number of snapshots waiting to be applied",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 24,
+            "x": 0,
+            "y": 28
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 460,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "((\n    tikv_raftstore_snapshot_pending_applies\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}",
+              "metric": "",
+              "query": "((\n    tikv_raftstore_snapshot_pending_applies\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Snapshot pending applies",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
         }
       ],
       "repeat": null,
@@ -53182,7 +53838,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 379,
+=======
+      "id": 461,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -53221,7 +53881,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 380,
+=======
+          "id": 462,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53354,7 +54018,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 381,
+=======
+          "id": 463,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53487,7 +54155,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 382,
+=======
+          "id": 464,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53620,7 +54292,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 383,
+=======
+          "id": 465,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53753,7 +54429,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 384,
+=======
+          "id": 466,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53886,7 +54566,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 385,
+=======
+          "id": 467,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54019,7 +54703,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 386,
+=======
+          "id": 468,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54152,7 +54840,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 387,
+=======
+          "id": 469,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54285,7 +54977,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 388,
+=======
+          "id": 470,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54425,7 +55121,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 389,
+=======
+          "id": 471,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -54522,7 +55222,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 390,
+=======
+          "id": 472,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54655,7 +55359,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 391,
+=======
+          "id": 473,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54803,7 +55511,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 392,
+=======
+          "id": 474,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54951,7 +55663,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 393,
+=======
+          "id": 475,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55091,7 +55807,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 394,
+=======
+          "id": 476,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -55188,7 +55908,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 395,
+=======
+          "id": 477,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55321,7 +56045,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 396,
+=======
+          "id": 478,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55457,7 +56185,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 397,
+=======
+      "id": 479,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -55496,7 +56228,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 398,
+=======
+          "id": 480,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55629,7 +56365,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 399,
+=======
+          "id": 481,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55792,7 +56532,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 400,
+=======
+          "id": 482,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55940,7 +56684,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 401,
+=======
+          "id": 483,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56073,7 +56821,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 402,
+=======
+          "id": 484,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56213,7 +56965,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 403,
+=======
+          "id": 485,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -56317,7 +57073,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 404,
+=======
+          "id": 486,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -56421,7 +57181,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 405,
+=======
+          "id": 487,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -56518,7 +57282,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 406,
+=======
+          "id": 488,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56658,7 +57426,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 407,
+=======
+          "id": 489,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -56762,7 +57534,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 408,
+=======
+          "id": 490,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -56866,7 +57642,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 409,
+=======
+          "id": 491,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -56963,7 +57743,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 410,
+=======
+          "id": 492,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57096,7 +57880,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 411,
+=======
+          "id": 493,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57229,7 +58017,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 412,
+=======
+          "id": 494,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57369,7 +58161,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 413,
+=======
+          "id": 495,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -57466,7 +58262,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 414,
+=======
+          "id": 496,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57602,7 +58402,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 415,
+=======
+      "id": 497,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -57641,7 +58445,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 416,
+=======
+          "id": 498,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57804,7 +58612,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 417,
+=======
+          "id": 499,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57937,7 +58749,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 418,
+=======
+          "id": 500,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -58077,7 +58893,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 419,
+=======
+          "id": 501,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -58181,7 +59001,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 420,
+=======
+          "id": 502,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -58278,7 +59102,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 421,
+=======
+          "id": 503,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -58433,7 +59261,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 422,
+=======
+          "id": 504,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -58537,7 +59369,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 423,
+=======
+          "id": 505,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -58641,7 +59477,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 424,
+=======
+          "id": 506,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -58738,7 +59578,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 425,
+=======
+          "id": 507,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -58908,7 +59752,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 426,
+=======
+          "id": 508,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -59005,7 +59853,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 427,
+=======
+          "id": 509,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59206,7 +60058,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 428,
+=======
+          "id": 510,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59407,7 +60263,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 429,
+=======
+          "id": 511,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59540,7 +60400,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 430,
+=======
+          "id": 512,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59703,7 +60567,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 431,
+=======
+          "id": 513,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59836,7 +60704,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 432,
+=======
+          "id": 514,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59969,7 +60841,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 433,
+=======
+          "id": 515,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60170,7 +61046,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 434,
+=======
+          "id": 516,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60303,7 +61183,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 435,
+=======
+          "id": 517,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60443,7 +61327,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 436,
+=======
+          "id": 518,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -60547,7 +61435,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 437,
+=======
+          "id": 519,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -60651,7 +61543,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 438,
+=======
+          "id": 520,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -60755,7 +61651,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 439,
+=======
+          "id": 521,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -60859,7 +61759,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 440,
+=======
+          "id": 522,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -60963,7 +61867,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 441,
+=======
+          "id": 523,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -61067,7 +61975,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 442,
+=======
+          "id": 524,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -61164,7 +62076,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 443,
+=======
+          "id": 525,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61312,7 +62228,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 444,
+=======
+          "id": 526,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61445,7 +62365,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 445,
+=======
+          "id": 527,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61578,7 +62502,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 446,
+=======
+          "id": 528,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61726,7 +62654,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 447,
+=======
+          "id": 529,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61862,7 +62794,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 448,
+=======
+      "id": 530,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -61913,7 +62849,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 449,
+=======
+          "id": 531,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -62009,7 +62949,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 450,
+=======
+          "id": 532,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -62084,7 +63028,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 451,
+=======
+          "id": 533,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -62159,7 +63107,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 452,
+=======
+          "id": 534,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -62234,7 +63186,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 453,
+=======
+          "id": 535,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -62309,7 +63265,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 454,
+=======
+          "id": 536,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -62384,7 +63344,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 455,
+=======
+          "id": 537,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -62459,7 +63423,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 456,
+=======
+          "id": 538,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -62538,7 +63506,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 457,
+=======
+          "id": 539,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62671,7 +63643,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 458,
+=======
+          "id": 540,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62804,7 +63780,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 459,
+=======
+          "id": 541,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62937,7 +63917,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 460,
+=======
+          "id": 542,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63070,7 +64054,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 461,
+=======
+          "id": 543,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63203,7 +64191,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 462,
+=======
+          "id": 544,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63351,7 +64343,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 463,
+=======
+          "id": 545,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63484,7 +64480,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 464,
+=======
+          "id": 546,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63617,7 +64617,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 465,
+=======
+          "id": 547,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63783,7 +64787,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 466,
+=======
+          "id": 548,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -63887,7 +64895,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 467,
+=======
+          "id": 549,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -63991,7 +65003,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 468,
+=======
+          "id": 550,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -64095,7 +65111,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 469,
+=======
+          "id": 551,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -64199,7 +65219,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 470,
+=======
+          "id": 552,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -64303,7 +65327,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 471,
+=======
+          "id": 553,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -64407,7 +65435,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 472,
+=======
+          "id": 554,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -64511,7 +65543,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 473,
+=======
+          "id": 555,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -64608,7 +65644,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 474,
+=======
+          "id": 556,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64741,7 +65781,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 475,
+=======
+          "id": 557,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64874,7 +65918,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 476,
+=======
+          "id": 558,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65007,7 +66055,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 477,
+=======
+          "id": 559,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65140,7 +66192,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 478,
+=======
+          "id": 560,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65273,7 +66329,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 479,
+=======
+          "id": 561,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65379,6 +66439,142 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
+<<<<<<< HEAD
+=======
+          "description": "The task status of initial scanning.",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 8,
+            "x": 8,
+            "y": 70
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 562,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum((\n    tikv_log_backup_pending_initial_scan\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (stage) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{stage}}",
+              "metric": "",
+              "query": "sum((\n    tikv_log_backup_pending_initial_scan\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (stage) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Initial Scanning Task Status",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "description": "",
           "editable": true,
           "error": false,
@@ -65406,7 +66602,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 480,
+=======
+          "id": 563,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65546,7 +66746,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 481,
+=======
+          "id": 564,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -65650,7 +66854,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 482,
+=======
+          "id": 565,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "legend": {
             "show": false
@@ -65747,7 +66955,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 483,
+=======
+          "id": 566,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65880,7 +67092,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 484,
+=======
+          "id": 567,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66013,7 +67229,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 485,
+=======
+          "id": 568,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66146,7 +67366,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 486,
+=======
+          "id": 569,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66279,7 +67503,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 487,
+=======
+          "id": 570,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66412,7 +67640,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 488,
+=======
+          "id": 571,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66548,7 +67780,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 489,
+=======
+      "id": 572,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -66587,7 +67823,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 490,
+=======
+          "id": 573,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66735,7 +67975,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 491,
+=======
+          "id": 574,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66868,7 +68112,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 492,
+=======
+          "id": 575,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67001,7 +68249,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 493,
+=======
+          "id": 576,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67137,7 +68389,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 494,
+=======
+      "id": 577,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -67176,7 +68432,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 495,
+=======
+          "id": 578,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67309,7 +68569,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 496,
+=======
+          "id": 579,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67442,7 +68706,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 497,
+=======
+          "id": 580,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67575,7 +68843,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 498,
+=======
+          "id": 581,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67708,7 +68980,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 499,
+=======
+          "id": 582,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67841,7 +69117,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 500,
+=======
+          "id": 583,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67977,7 +69257,319 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 501,
+=======
+      "id": 584,
+      "interval": null,
+      "links": [],
+      "maxDataPoints": 100,
+      "maxPerRow": null,
+      "minSpan": null,
+      "panels": [
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": null,
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 585,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_resource_control_background_task_wait_duration\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, resource_group) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}-{{resource_group}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_resource_control_background_task_wait_duration\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, resource_group) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Background Task Total Wait Duration",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "\u00b5s",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The memory usage of the resource control module.",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 0
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 586,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum((\n    tikv_resource_control_priority_quota_limit\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance, priority) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}-{{priority}}",
+              "metric": "",
+              "query": "sum((\n    tikv_resource_control_priority_quota_limit\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance, priority) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Priority Quota Limit",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "\u00b5s",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        }
+      ],
+      "repeat": null,
+      "repeatDirection": null,
+      "span": null,
+      "targets": [],
+      "timeFrom": null,
+      "timeShift": null,
+      "title": "Resource Control",
+      "transformations": [],
+      "transparent": false,
+      "type": "row"
+    },
+    {
+      "cacheTimeout": null,
+      "collapsed": true,
+      "datasource": null,
+      "description": null,
+      "editable": true,
+      "error": false,
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": []
+          }
+        }
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "height": null,
+      "hideTimeOverride": false,
+      "id": 587,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -68016,7 +69608,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 502,
+=======
+          "id": 588,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68217,7 +69813,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 503,
+=======
+          "id": 589,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68353,7 +69953,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 504,
+=======
+      "id": 590,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -68392,7 +69996,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 505,
+=======
+          "id": 591,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68525,7 +70133,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 506,
+=======
+          "id": 592,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68658,7 +70270,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 507,
+=======
+          "id": 593,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68791,7 +70407,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 508,
+=======
+          "id": 594,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68924,7 +70544,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 509,
+=======
+          "id": 595,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69072,7 +70696,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 510,
+=======
+          "id": 596,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69276,7 +70904,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 511,
+=======
+      "id": 597,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -69315,7 +70947,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 512,
+=======
+          "id": 598,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69448,7 +71084,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 513,
+=======
+          "id": 599,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69581,7 +71221,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 514,
+=======
+          "id": 600,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69714,7 +71358,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 515,
+=======
+          "id": 601,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69847,7 +71495,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 516,
+=======
+          "id": 602,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -70044,7 +71696,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 517,
+=======
+          "id": 603,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -70102,6 +71758,519 @@
       "transformations": [],
       "transparent": false,
       "type": "row"
+<<<<<<< HEAD
+=======
+    },
+    {
+      "cacheTimeout": null,
+      "collapsed": true,
+      "datasource": null,
+      "description": null,
+      "editable": true,
+      "error": false,
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": []
+          }
+        }
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "height": null,
+      "hideTimeOverride": false,
+      "id": 604,
+      "interval": null,
+      "links": [],
+      "maxDataPoints": 100,
+      "maxPerRow": null,
+      "minSpan": null,
+      "panels": [
+        {
+          "cacheTimeout": null,
+          "color": {
+            "mode": "thresholds"
+          },
+          "columns": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "TiKV RocksDB DB Configuration",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": "auto",
+                "displayMode": "auto",
+                "filterable": false
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Field"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Option"
+                  },
+                  {
+                    "id": "custom.align",
+                    "value": null
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Last (not null)"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Value"
+                  }
+                ]
+              }
+            ]
+          },
+          "fontSize": "100%",
+          "gridPos": {
+            "h": 7,
+            "w": 24,
+            "x": 0,
+            "y": 0
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 605,
+          "interval": null,
+          "links": [],
+          "mappings": [],
+          "maxDataPoints": 100,
+          "maxPerRow": null,
+          "minSpan": null,
+          "options": {
+            "showHeader": true
+          },
+          "repeat": null,
+          "repeatDirection": null,
+          "span": 6,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "((\n    tikv_config_rocksdb_db\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "format": "table",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "",
+              "metric": "",
+              "query": "((\n    tikv_config_rocksdb_db\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "timeFrom": "1s",
+          "timeShift": null,
+          "title": "RocksDB DB Config",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true,
+                  "__name__": true,
+                  "job": true
+                },
+                "indexByName": {},
+                "renameByName": {
+                  "Time": "",
+                  "Value #A": "Value",
+                  "job": "",
+                  "name": "Option"
+                }
+              }
+            }
+          ],
+          "transparent": false,
+          "type": "table"
+        },
+        {
+          "cacheTimeout": null,
+          "color": {
+            "mode": "thresholds"
+          },
+          "columns": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "TiKV RocksDB CF Configuration",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": "auto",
+                "displayMode": "auto",
+                "filterable": false
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Field"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Option"
+                  },
+                  {
+                    "id": "custom.align",
+                    "value": null
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Last (not null)"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Value"
+                  }
+                ]
+              }
+            ]
+          },
+          "fontSize": "100%",
+          "gridPos": {
+            "h": 7,
+            "w": 24,
+            "x": 0,
+            "y": 7
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 606,
+          "interval": null,
+          "links": [],
+          "mappings": [],
+          "maxDataPoints": 100,
+          "maxPerRow": null,
+          "minSpan": null,
+          "options": {
+            "showHeader": true
+          },
+          "repeat": null,
+          "repeatDirection": null,
+          "span": 6,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "((\n    tikv_config_rocksdb_cf\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))   or (tikv_config_rocksdb unless tikv_config_rocksdb_cf)",
+              "format": "table",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": null,
+              "metric": "",
+              "query": "((\n    tikv_config_rocksdb_cf\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))   or (tikv_config_rocksdb unless tikv_config_rocksdb_cf)",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "timeFrom": "1s",
+          "timeShift": null,
+          "title": "RocksDB CF Config",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true,
+                  "__name__": true,
+                  "job": true
+                },
+                "indexByName": {},
+                "renameByName": {
+                  "Time": "",
+                  "Value #A": "Value",
+                  "job": "",
+                  "name": "Option"
+                }
+              }
+            }
+          ],
+          "transparent": false,
+          "type": "table"
+        },
+        {
+          "cacheTimeout": null,
+          "color": {
+            "mode": "thresholds"
+          },
+          "columns": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "TiKV Flow Control Configuration",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": "auto",
+                "displayMode": "auto",
+                "filterable": false
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Field"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Option"
+                  },
+                  {
+                    "id": "custom.align",
+                    "value": null
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Last (not null)"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Value"
+                  }
+                ]
+              }
+            ]
+          },
+          "fontSize": "100%",
+          "gridPos": {
+            "h": 7,
+            "w": 24,
+            "x": 0,
+            "y": 14
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 607,
+          "interval": null,
+          "links": [],
+          "mappings": [],
+          "maxDataPoints": 100,
+          "maxPerRow": null,
+          "minSpan": null,
+          "options": {
+            "showHeader": true
+          },
+          "repeat": null,
+          "repeatDirection": null,
+          "span": 6,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "((\n    tikv_config_flow_control\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "format": "table",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": null,
+              "metric": "",
+              "query": "((\n    tikv_config_flow_control\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "timeFrom": "1s",
+          "timeShift": null,
+          "title": "Flow Control Config",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true,
+                  "__name__": true,
+                  "job": true
+                },
+                "indexByName": {},
+                "renameByName": {
+                  "Time": "",
+                  "Value #A": "Value",
+                  "job": "",
+                  "name": "Option"
+                }
+              }
+            }
+          ],
+          "transparent": false,
+          "type": "table"
+        },
+        {
+          "cacheTimeout": null,
+          "color": {
+            "mode": "thresholds"
+          },
+          "columns": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "TiKV Raftstore Configuration",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": "auto",
+                "displayMode": "auto",
+                "filterable": false
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Field"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Option"
+                  },
+                  {
+                    "id": "custom.align",
+                    "value": null
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Last (not null)"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Value"
+                  }
+                ]
+              }
+            ]
+          },
+          "fontSize": "100%",
+          "gridPos": {
+            "h": 7,
+            "w": 24,
+            "x": 0,
+            "y": 21
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 608,
+          "interval": null,
+          "links": [],
+          "mappings": [],
+          "maxDataPoints": 100,
+          "maxPerRow": null,
+          "minSpan": null,
+          "options": {
+            "showHeader": true
+          },
+          "repeat": null,
+          "repeatDirection": null,
+          "span": 6,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "((\n    tikv_config_raftstore\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "format": "table",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": null,
+              "metric": "",
+              "query": "((\n    tikv_config_raftstore\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "timeFrom": "1s",
+          "timeShift": null,
+          "title": "Raftstore Config",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true,
+                  "__name__": true,
+                  "job": true
+                },
+                "indexByName": {},
+                "renameByName": {
+                  "Time": "",
+                  "Value #A": "Value",
+                  "job": "",
+                  "name": "Option"
+                }
+              }
+            }
+          ],
+          "transparent": false,
+          "type": "table"
+        }
+      ],
+      "repeat": null,
+      "repeatDirection": null,
+      "span": null,
+      "targets": [],
+      "timeFrom": null,
+      "timeShift": null,
+      "title": "Config",
+      "transformations": [],
+      "transparent": false,
+      "type": "row"
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
     }
   ],
   "refresh": "1m",

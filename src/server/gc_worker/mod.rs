@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 pub mod compaction_filter;
+mod compaction_runner;
 mod config;
 mod gc_manager;
 mod gc_worker;
@@ -8,9 +9,15 @@ pub mod rawkv_compaction_filter;
 
 // TODO: Use separated error type for GcWorker instead.
 #[cfg(any(test, feature = "failpoints"))]
+<<<<<<< HEAD
 pub use compaction_filter::test_utils::{gc_by_compact, TestGcRunner};
 pub use compaction_filter::WriteCompactionFilterFactory;
 pub use config::{GcConfig, GcWorkerConfigManager, DEFAULT_GC_BATCH_KEYS};
+=======
+pub use compaction_filter::test_utils::{TestGcRunner, gc_by_compact};
+pub use compaction_runner::{CompactionCandidate, CompactionRunner, CompactionRunnerHandle};
+pub use config::{AutoCompactionConfig, DEFAULT_GC_BATCH_KEYS, GcConfig, GcWorkerConfigManager};
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
 use engine_traits::MvccProperties;
 pub use gc_manager::AutoGcConfig;
 #[cfg(any(test, feature = "testexport"))]

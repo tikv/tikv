@@ -3626,6 +3626,42 @@ def GC() -> RowPanel:
             ),
         ]
     )
+<<<<<<< HEAD
+=======
+    # Auto Compaction panels
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Auto Compaction Duration",
+                description="Time spent on auto compaction operations by type",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_auto_compaction_duration_seconds",
+                by_labels=["type"],
+                hide_count=True,
+            ),
+            graph_panel(
+                title="Auto Compaction Regions Status",
+                description="Number of regions meeting compaction threshold and pending candidates",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_auto_compaction_regions_meet_threshold",
+                        ),
+                        legend_format="regions meet threshold",
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_auto_compaction_pending_candidates",
+                        ),
+                        legend_format="pending candidates",
+                    ),
+                ],
+            ),
+        ]
+    )
+
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
     return layout.row_panel
 
 

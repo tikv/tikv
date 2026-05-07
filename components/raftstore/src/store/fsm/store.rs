@@ -11,6 +11,10 @@ use std::{
     mem,
     ops::{Deref, DerefMut},
     sync::{
+<<<<<<< HEAD
+=======
+        Arc, Mutex,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
     },
@@ -27,8 +31,13 @@ use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
+<<<<<<< HEAD
     CompactedEvent, DeleteStrategy, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine,
     RaftLogBatch, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+=======
+    CF_LOCK, CF_RAFT, DeleteStrategy, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine,
+    RaftLogBatch, Range, WriteBatch, WriteOptions,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
 };
 use fail::fail_point;
 use file_system::{IoType, WithIoType};
@@ -82,6 +91,12 @@ use crate::{
     bytes_capacity,
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
     store::{
+<<<<<<< HEAD
+=======
+        Callback, CasualMessage, FullCompactController, GlobalReplicationState,
+        InspectedRaftMessage, MergeResultKind, PdTask, PeerMsg, PeerTick, RaftCommand,
+        SignificantMsg, SnapManager, StoreMsg, StoreTick,
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
         async_io::{
             read::{ReadRunner, ReadTask},
             write::{StoreWriters, StoreWritersContext, Worker as WriteWorker, WriteMsg},
@@ -119,8 +134,6 @@ use crate::{
     },
     Error, Result,
 };
-
-type Key = Vec<u8>;
 
 pub const PENDING_MSG_CAP: usize = 100;
 pub const ENTRY_CACHE_EVICT_TICK_DURATION: Duration = Duration::from_secs(1);
@@ -744,7 +757,6 @@ where
 struct Store {
     // store id, before start the id is 0.
     id: u64,
-    last_compact_checked_key: Key,
     stopped: bool,
     start_time: Option<Timespec>,
     consistency_check_time: HashMap<u64, Instant>,
@@ -773,7 +785,6 @@ where
         let fsm = Box::new(StoreFsm {
             store: Store {
                 id: 0,
-                last_compact_checked_key: keys::DATA_MIN_KEY.to_vec(),
                 stopped: false,
                 start_time: None,
                 consistency_check_time: HashMap::default(),
@@ -811,7 +822,10 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             StoreTick::PdStoreHeartbeat => self.on_pd_store_heartbeat_tick(),
             StoreTick::SnapGc => self.on_snap_mgr_gc(),
             StoreTick::CompactLockCf => self.on_compact_lock_cf(),
-            StoreTick::CompactCheck => self.on_compact_check_tick(),
+            StoreTick::CompactCheck => {
+                // Disabled: replaced by GC worker auto compaction
+                debug!("CompactCheck tick disabled, using GC worker auto compaction instead");
+            }
             StoreTick::PeriodicFullCompact => self.on_full_compact_tick(),
             StoreTick::LoadMetricsWindow => self.on_load_metrics_window_tick(),
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
@@ -942,7 +956,6 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         self.fsm.store.id = store.get_id();
         self.fsm.store.start_time = Some(time::get_time());
         self.register_cleanup_import_sst_tick();
-        self.register_compact_check_tick();
         self.register_full_compact_tick();
         self.register_load_metrics_window_tick();
         self.register_pd_store_heartbeat_tick();
@@ -2659,6 +2672,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
     }
 
+<<<<<<< HEAD
     fn register_compact_check_tick(&self) {
         self.ctx.schedule_store_tick(
             StoreTick::CompactCheck,
@@ -2754,6 +2768,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
     }
 
+=======
+>>>>>>> ed504baa35 (GC: Move gc compaction to gc worker module (#18724))
     fn report_min_resolved_ts(&self) {
         let read_progress = {
             let meta = self.ctx.store_meta.lock().unwrap();
