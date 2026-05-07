@@ -18,10 +18,12 @@ mod all {
     };
 
     use backup_stream::{
+        errors::Error,
         metadata::{
             keys::MetaKey,
             store::{Keys, MetaStore},
         },
+        router::TaskSelector,
         GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task,
     };
     use encryption::{FileConfig, MasterKeyConfig};
@@ -30,8 +32,9 @@ mod all {
     use raftstore::coprocessor::ObserveHandle;
     use tempfile::TempDir;
     use tikv_util::{
+        box_err,
         config::{ReadableDuration, ReadableSize},
-        defer,
+        defer, HandyRwLock,
     };
     use txn_types::Key;
     use walkdir::WalkDir;
@@ -484,5 +487,55 @@ mod all {
         suite.sync();
         // Make sure our suite doesn't panic.
         suite.sync();
+    }
+
+    #[test]
+    fn fatal_error() {
+        let mut suite = SuiteBuilder::new_named("fatal_error").nodes(3).build();
+        suite.must_register_task(1, "test_fatal_error");
+        suite.sync();
+        run_async_test(suite.write_records(0, 1, 1));
+        suite.force_flush_files("test_fatal_error");
+        suite.wait_for_flush();
+        run_async_test(suite.advance_global_checkpoint("test_fatal_error")).unwrap();
+        fail::cfg("log-backup-upload-error", "1*return(not my fault)->off").unwrap();
+        let (victim, endpoint) = suite.endpoints.iter().next().unwrap();
+        endpoint
+            .scheduler()
+            .schedule(Task::FatalError(
+                TaskSelector::ByName("test_fatal_error".to_owned()),
+                Box::new(Error::Other(box_err!("everything is alright"))),
+            ))
+            .unwrap();
+        suite.sync();
+        fail::remove("log-backup-upload-error");
+        // Wait retry...
+        std::thread::sleep(Duration::from_secs(6));
+        suite.sync();
+        let err = run_async_test(
+            suite
+                .get_meta_cli()
+                .get_last_error_of("test_fatal_error", *victim),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(err.error_code, error_code::backup_stream::OTHER.code);
+        assert!(err.error_message.contains("everything is alright"));
+        assert_eq!(err.store_id, *victim);
+        let paused =
+            run_async_test(suite.get_meta_cli().check_task_paused("test_fatal_error")).unwrap();
+        assert!(paused);
+        let safepoints = suite.cluster.pd_client.gc_safepoints.rl();
+        let checkpoint = suite.global_checkpoint();
+
+        assert!(
+            safepoints.iter().any(|sp| {
+                sp.service.contains(&format!("{}", victim))
+                    && sp.ttl >= Duration::from_secs(60 * 60 * 24)
+                    && sp.safepoint.into_inner() == checkpoint - 1
+            }),
+            "{:?}",
+            safepoints
+        );
     }
 }
