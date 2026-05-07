@@ -41,6 +41,8 @@ impl CompactExt for RocksEngine {
         if option.bottommost_level_force {
             compact_opts.set_bottommost_level_compaction(DBBottommostLevelCompaction::Force);
         }
+        compact_opts
+            .set_check_range_overlap_on_bottom_level(option.check_range_overlap_on_bottom_level);
         db.compact_range_cf_opt(handle, &compact_opts, start_key, end_key);
         Ok(())
     }
