@@ -67,10 +67,7 @@ impl UnifiedSlowScore {
         // The second factor is for KvDB Disk I/O.
         unified_slow_score
             .factors
-            .push(SlowScore::new_with_extra_config(
-                cfg.inspect_kvdb_interval,
-                0.6,
-            ));
+            .push(SlowScore::new(cfg.inspect_kvdb_interval));
         unified_slow_score
     }
 
