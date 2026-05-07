@@ -1358,7 +1358,7 @@ mod tests {
 
     #[ignore = "s3 test env is unavailable"]
     #[tokio::test]
-    #[cfg(FALSE)]
+    #[cfg(any())]
     // FIXME: enable this (or move this to an integration test) if we've got a
     // reliable way to test s3 (aws test_util requires custom logic to verify the
     // body stream which itself can have bug)
