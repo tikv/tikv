@@ -283,6 +283,7 @@ impl BgWorkManager {
     pub fn start_bg_hint_service(&self, range_hint_service: PdRangeHintService) {
         let core = self.core.clone();
         let region_info_provider = self.region_info_provider.clone();
+        let delete_region_scheduler = self.delete_region_scheduler.clone();
         range_hint_service.start(
             self.worker.remote(),
             move |range: &CacheRegion, is_add: bool| {
@@ -292,7 +293,18 @@ impl BgWorkManager {
                         .regions_map()
                         .write()
                         .remove_manual_load_range(range.clone());
-                    region_manager.evict_region(range, EvictReason::Manual, None);
+                    let deletable_regions =
+                        region_manager.evict_region(range, EvictReason::Manual, None);
+                    if !deletable_regions.is_empty()
+                        && let Err(e) = delete_region_scheduler
+                            .schedule_force(BackgroundTask::DeleteRegions(deletable_regions))
+                    {
+                        error!(
+                            "ime schedule delete regions failed";
+                            "err" => ?e,
+                        );
+                        assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+                    }
                     return;
                 }
 
@@ -1762,7 +1774,10 @@ pub mod tests {
         memory_controller::MemoryController,
         region_label::{
             region_label_meta_client,
-            tests::{add_region_label_rule, new_region_label_rule, new_test_server_and_client},
+            tests::{
+                add_region_label_rule, delete_region_label_rule, new_region_label_rule,
+                new_test_server_and_client,
+            },
         },
         region_manager::RegionState::*,
         test_util::{new_region, put_data, put_data_with_overwrite},
@@ -2968,7 +2983,7 @@ pub mod tests {
             &hex::encode(format!("k{:08}", 0).into_bytes()),
             &hex::encode(format!("k{:08}", 20).into_bytes()),
         );
-        add_region_label_rule(meta_client, cluster_id, &label_rule);
+        add_region_label_rule(meta_client.clone(), cluster_id, &label_rule);
 
         // Wait for the watch to fire.
         test_util::eventually(
@@ -2996,7 +3011,9 @@ pub mod tests {
                 regions_map.region_meta(1).unwrap().get_state() == RegionState::Active
             },
         );
-        let _ = engine.snapshot(cache_region, u64::MAX, u64::MAX).unwrap();
+        let _ = engine
+            .snapshot(cache_region.clone(), u64::MAX, u64::MAX)
+            .unwrap();
 
         let skiplist_engine = engine.core.engine();
         let write = skiplist_engine.cf_handle(CF_WRITE);
@@ -3017,6 +3034,37 @@ pub mod tests {
             );
         }
         for i in 15..=20 {
+            let key = construct_key(i, 1);
+            let key = data_key(&key);
+            let key = encode_seek_key(&key, u64::MAX);
+            assert!(!key_exist(&write, &key, guard));
+            assert!(!key_exist(&default, &key, guard));
+        }
+
+        engine
+            .core
+            .region_manager()
+            .clear_regions_in_being_written(&[cache_region.clone()]);
+        delete_region_label_rule(meta_client, cluster_id, "cache/0");
+
+        // Wait for the watch to fire and the delete-range worker to finish eviction.
+        test_util::eventually(
+            Duration::from_millis(50),
+            Duration::from_millis(1000),
+            || {
+                engine
+                    .core
+                    .region_manager()
+                    .regions_map
+                    .read()
+                    .region_meta(region.get_id())
+                    .is_none()
+            },
+        );
+        engine.snapshot(cache_region, 10, 10).unwrap_err();
+
+        let guard = &epoch::pin();
+        for i in 10..15 {
             let key = construct_key(i, 1);
             let key = data_key(&key);
             let key = encode_seek_key(&key, u64::MAX);
