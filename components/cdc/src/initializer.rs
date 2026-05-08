@@ -83,6 +83,60 @@ pub(crate) enum Scanner<S: Snapshot> {
     RawKvScanner(RawMvccIterator<<S as Snapshot>::Iter>),
 }
 
+fn resolve_seek_write_batch<S: Snapshot>(
+    entries: &mut [Option<KvEntry>],
+    unresolved_slots: &mut [usize],
+    cursors: &mut OldValueCursors<S>,
+    stats: &mut Statistics,
+) -> Result<usize> {
+    if unresolved_slots.is_empty() {
+        return Ok(0);
+    }
+
+    let seek_write_key: fn(&[Option<KvEntry>], usize) -> &[u8] =
+        |entries: &[Option<KvEntry>], slot: usize| -> &[u8] {
+            let Some(KvEntry::TxnEntry(entry)) = &entries[slot] else {
+                unreachable!("slot {slot} must point to a TxnEntry");
+            };
+            let OldValue::SeekWrite(key) = entry.old_value() else {
+                unreachable!("slot {slot} must point to OldValue::SeekWrite");
+            };
+            key.as_encoded()
+        };
+
+    unresolved_slots.sort_unstable_by(|lhs, rhs| {
+        seek_write_key(entries, *lhs).cmp(seek_write_key(entries, *rhs))
+    });
+
+    let mut extra_emit_bytes = 0;
+    for &slot in unresolved_slots.iter() {
+        let Some(KvEntry::TxnEntry(entry)) = &mut entries[slot] else {
+            debug_assert!(false, "slot {slot} must point to a TxnEntry");
+            unreachable!("slot {slot} must point to a TxnEntry");
+        };
+        let old_value = entry.old_value_mut();
+        debug_assert!(matches!(old_value, OldValue::SeekWrite(_)));
+        let OldValue::SeekWrite(key) = old_value else {
+            unreachable!("slot {slot} must point to OldValue::SeekWrite");
+        };
+
+        match near_seek_old_value(
+            key,
+            &mut cursors.write,
+            Either::<&S, _>::Right(&mut cursors.default),
+            stats,
+        )? {
+            Some(value) => {
+                extra_emit_bytes += value.len();
+                *old_value = OldValue::value(value);
+            }
+            None => *old_value = OldValue::None,
+        }
+    }
+
+    Ok(extra_emit_bytes)
+}
+
 pub(crate) struct Initializer<E> {
     pub(crate) region_id: u64,
     pub(crate) conn_id: ConnId,
@@ -419,30 +473,13 @@ impl<E: KvEngine> Initializer<E> {
     fn do_scan<S: Snapshot>(
         &self,
         scanner: &mut Scanner<S>,
-        mut old_value_cursors: Option<&mut OldValueCursors<S>>,
+        old_value_cursors: Option<&mut OldValueCursors<S>>,
         entries: &mut Vec<Option<KvEntry>>,
     ) -> Result<ScanStat> {
-        let mut read_old_value = |v: &mut OldValue, stats: &mut Statistics| -> Result<()> {
-            let Some(cursors) = old_value_cursors.as_mut() else {
-                return Ok(());
-            };
-            if let OldValue::SeekWrite(ref key) = v {
-                match near_seek_old_value(
-                    key,
-                    &mut cursors.write,
-                    Either::<&S, _>::Right(&mut cursors.default),
-                    stats,
-                )? {
-                    Some(x) => *v = OldValue::value(x),
-                    None => *v = OldValue::None,
-                }
-            }
-            Ok(())
-        };
-
         // This code block shouldn't be switched to other threads.
         let mut total_bytes = 0;
         let mut total_size = 0;
+        let mut unresolved_slots = Vec::with_capacity(entries.capacity());
         let perf_instant = ReadPerfInstant::new();
         let inspector = self_thread_inspector().ok();
         let old_io_stat = inspector.as_ref().and_then(|x| x.io_stat().unwrap_or(None));
@@ -451,9 +488,13 @@ impl<E: KvEngine> Initializer<E> {
             total_size += 1;
             match scanner {
                 Scanner::TxnKvScanner(scanner) => match scanner.next_entry()? {
-                    Some(mut entry) => {
-                        read_old_value(entry.old_value(), &mut stats)?;
+                    Some(entry) => {
                         total_bytes += entry.size();
+                        if old_value_cursors.is_some()
+                            && matches!(entry.old_value(), OldValue::SeekWrite(_))
+                        {
+                            unresolved_slots.push(entries.len());
+                        }
                         entries.push(Some(KvEntry::TxnEntry(entry)));
                     }
                     None => {
@@ -477,6 +518,15 @@ impl<E: KvEngine> Initializer<E> {
                     }
                 }
             }
+        }
+        if let Some(cursors) = old_value_cursors {
+            // `max_scan_batch_bytes` is enforced during phase A collection only.
+            // Resolving `SeekWrite` may add old value bytes afterwards, so the
+            // final batch size is a soft bound for those extra bytes.
+            total_bytes +=
+                resolve_seek_write_batch(entries, &mut unresolved_slots, cursors, &mut stats)?;
+        } else {
+            debug_assert!(unresolved_slots.is_empty());
         }
         flush_oldvalue_stats(&stats, TAG_INCREMENTAL_SCAN);
         let new_io_stat = inspector.as_ref().and_then(|x| x.io_stat().unwrap_or(None));
@@ -962,10 +1012,67 @@ mod tests {
         test_initializer_txn_source_filter(txn_source, true);
     }
 
+    fn build_seekwrite_entries(keys: &[Vec<u8>], seek_ts: u64) -> Vec<Option<KvEntry>> {
+        keys.iter()
+            .map(|key| {
+                Some(KvEntry::TxnEntry(TxnEntry::Commit {
+                    default: (vec![], vec![]),
+                    write: (vec![], vec![]),
+                    old_value: OldValue::seek_write(key, seek_ts),
+                }))
+            })
+            .collect()
+    }
+
+    fn assert_entries_are_resolved(entries: &[Option<KvEntry>]) {
+        for entry in entries.iter().flatten() {
+            let KvEntry::TxnEntry(entry) = entry else {
+                continue;
+            };
+            assert!(
+                !matches!(entry.old_value(), OldValue::SeekWrite(_)),
+                "initializer must resolve SeekWrite before entries leave do_scan: {:?}",
+                entry
+            );
+        }
+    }
+
+    fn resolve_seekwrite_slots_in_order<S: Snapshot>(
+        entries: &mut [Option<KvEntry>],
+        slots: &[usize],
+        cursors: &mut OldValueCursors<S>,
+        stats: &mut Statistics,
+    ) -> usize {
+        let mut extra_emit_bytes = 0;
+        for &slot in slots {
+            let Some(KvEntry::TxnEntry(entry)) = &mut entries[slot] else {
+                panic!("slot {} must point to a TxnEntry", slot);
+            };
+            let OldValue::SeekWrite(key) = entry.old_value() else {
+                panic!("slot {} must point to OldValue::SeekWrite", slot);
+            };
+            let value = near_seek_old_value(
+                key,
+                &mut cursors.write,
+                Either::<&S, _>::Right(&mut cursors.default),
+                stats,
+            )
+            .unwrap();
+            match value {
+                Some(value) => {
+                    extra_emit_bytes += value.len();
+                    *entry.old_value_mut() = OldValue::value(value);
+                }
+                None => *entry.old_value_mut() = OldValue::None,
+            }
+        }
+        extra_emit_bytes
+    }
+
     // Test `hint_min_ts` works fine with `ExtraOp::ReadOldValue`.
     // Whether `DeltaScanner` emits correct old values or not is already tested by
     // another case `test_old_value_with_hint_min_ts`, so here we only care about
-    // handling `OldValue::SeekWrite` with `OldValueReader`.
+    // handling `OldValue::SeekWrite` with `OldValueReader` inside initializer.
     #[test]
     fn test_incremental_scanner_with_hint_min_ts() {
         let mut engine = TestEngineBuilder::new().build_without_cache().unwrap();
@@ -1044,6 +1151,112 @@ mod tests {
             .flush_cf(CF_WRITE, false)
             .unwrap();
         check_handling_old_value_seek_write(&mut engine, v_suffix); // For TxnEntry::Commit.
+    }
+
+    #[test]
+    fn test_resolve_seekwrite_batch_sorts_by_encoded_key() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let value = |suffix: usize| -> Vec<u8> {
+            let mut value = vec![b'v'; 1024];
+            value.extend_from_slice(suffix.to_string().as_bytes());
+            value
+        };
+
+        let mut keys = Vec::new();
+        for i in 0..32 {
+            let key = format!("zkey-{i:0>3}").into_bytes();
+            must_prewrite_put(&mut engine, &key, &value(i), &key, 100);
+            must_commit(&mut engine, &key, 100, 110);
+            must_prewrite_put(&mut engine, &key, &value(i + 100), &key, 200);
+            must_commit(&mut engine, &key, 200, 210);
+            keys.push(key);
+        }
+
+        let reversed_keys: Vec<_> = keys.into_iter().rev().collect();
+        let slots: Vec<_> = (0..reversed_keys.len()).collect();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+
+        let mut baseline_entries = build_seekwrite_entries(&reversed_keys, 150);
+        let mut baseline_cursors = OldValueCursors::new(&snapshot);
+        let mut baseline_stats = Statistics::default();
+        let baseline_bytes = resolve_seekwrite_slots_in_order(
+            &mut baseline_entries,
+            &slots,
+            &mut baseline_cursors,
+            &mut baseline_stats,
+        );
+
+        let mut optimized_entries = build_seekwrite_entries(&reversed_keys, 150);
+        let mut optimized_cursors = OldValueCursors::new(&snapshot);
+        let mut optimized_stats = Statistics::default();
+        let mut unresolved_slots = slots.clone();
+        let optimized_bytes = resolve_seek_write_batch(
+            &mut optimized_entries,
+            &mut unresolved_slots,
+            &mut optimized_cursors,
+            &mut optimized_stats,
+        )
+        .unwrap();
+
+        assert_entries_are_resolved(&optimized_entries);
+        assert!(baseline_stats.write.prev > 0);
+        assert!(optimized_stats.write.prev < baseline_stats.write.prev);
+        assert!(optimized_stats.write.next > 0);
+        assert_eq!(baseline_bytes, optimized_bytes);
+    }
+
+    #[test]
+    fn test_do_scan_emit_includes_resolved_old_value_bytes() {
+        let mut engine = TestEngineBuilder::new().build_without_cache().unwrap();
+        let long_value = vec![b'v'; 1024];
+
+        must_prewrite_put(&mut engine, b"zkey", &long_value, b"zkey", 100);
+        must_commit(&mut engine, b"zkey", 100, 110);
+        engine
+            .kv_engine()
+            .unwrap()
+            .flush_cf(CF_WRITE, true)
+            .unwrap();
+        must_prewrite_delete(&mut engine, b"zkey", b"zkey", 200);
+
+        let (_worker, _pool, initializer, _rx, _drain) = mock_initializer(
+            usize::MAX,
+            usize::MAX,
+            16,
+            engine.kv_engine(),
+            ChangeDataRequestKvApi::TiDb,
+            false,
+        );
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut old_value_cursors = OldValueCursors::new(&snapshot);
+        let scanner = ScannerBuilder::new(snapshot, TimeStamp::max())
+            .fill_cache(false)
+            .range(None, None)
+            .hint_min_ts(Some(150.into()))
+            .build_delta_scanner(150.into(), TxnExtraOp::ReadOldValue)
+            .unwrap();
+        let mut scanner = Scanner::TxnKvScanner(scanner);
+        let mut entries = Vec::new();
+
+        let delta = initializer
+            .do_scan(&mut scanner, Some(&mut old_value_cursors), &mut entries)
+            .unwrap();
+
+        assert_entries_are_resolved(&entries);
+        let mut resolved_old_value_bytes = 0;
+        let mut base_emit = 0;
+        for entry in entries.iter().flatten() {
+            let KvEntry::TxnEntry(entry) = entry else {
+                continue;
+            };
+            let old_value_bytes = entry.old_value().value_size();
+            resolved_old_value_bytes += old_value_bytes;
+            base_emit += entry.size() - old_value_bytes;
+        }
+
+        assert!(resolved_old_value_bytes > 0);
+        assert_eq!(delta.emit, base_emit + resolved_old_value_bytes);
     }
 
     #[test]

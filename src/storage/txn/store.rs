@@ -190,7 +190,14 @@ pub enum TxnEntry {
 }
 
 impl TxnEntry {
-    pub fn old_value(&mut self) -> &mut OldValue {
+    pub fn old_value(&self) -> &OldValue {
+        match self {
+            TxnEntry::Prewrite { old_value, .. } => old_value,
+            TxnEntry::Commit { old_value, .. } => old_value,
+        }
+    }
+
+    pub fn old_value_mut(&mut self) -> &mut OldValue {
         match self {
             TxnEntry::Prewrite {
                 ref mut old_value, ..
