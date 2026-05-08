@@ -667,8 +667,9 @@ pub enum Cmd {
         #[structopt(
             long = "until",
             help(
-                "until when we need to include files into the compaction.\
-                files contains any record within the [--from, --until) will be selected."
+                "optional upper timestamp bound for selecting files into the compaction. \
+                Files containing any record within [--from, --until) will be selected. \
+                If omitted, compact-log-backup reads the bound from checkpoint state."
             )
         )]
         until_ts: Option<u64>,

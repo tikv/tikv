@@ -17,7 +17,9 @@ use crate::{
 enum CheckpointSource {
     #[default]
     Storage,
-    ReplicationStatus { sub_prefix: String },
+    ReplicationStatus {
+        sub_prefix: String,
+    },
 }
 
 #[derive(Default)]

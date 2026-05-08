@@ -391,13 +391,13 @@ fn checked_get_range(name: &Chars, content: &Bytes, offset: u64, length: u64) ->
     let end = usize::try_from(offset.checked_add(length).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("log file {name} length {offset} + {length} is too large"),
+            format!("log file {name} offset {offset} + length {length} overflows"),
         )
     })?)
     .map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("log file {name} length {offset} + {length} is too large"),
+            format!("log file {name} offset {offset} + length {length} is too large"),
         )
     })?;
     if end > content.len() {
