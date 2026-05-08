@@ -305,7 +305,7 @@ impl PhysicalFileCache {
     ) -> io::Result<Option<(Bytes, u64)>> {
         let mut physical_bytes_in = 0;
         loop {
-            match self.cache_decision(&name, offset, length)? {
+            match self.cache_decision(name, offset, length)? {
                 CacheDecision::Ready(content) => return Ok(Some((content, physical_bytes_in))),
                 CacheDecision::Wait(notified) => notified.await,
                 CacheDecision::Bypass => return Ok(None),
@@ -315,7 +315,7 @@ impl PhysicalFileCache {
                 } => {
                     let guard = DownloadGuard::new(self, name.clone(), notify);
                     let download_res = self
-                        .download_physical_file(storage.as_ref(), &name, physical_size)
+                        .download_physical_file(storage.as_ref(), name, physical_size)
                         .await;
                     match download_res {
                         Ok((content, read_size)) => {

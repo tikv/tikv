@@ -46,6 +46,34 @@ use crate::{
 
 const COMPACTION_V1_PREFIX: &str = "v1/compactions";
 
+pub fn create_storage_with_gcp_v2(
+    storage_backend: &StorageBackend,
+    gcp_v2_enable: bool,
+) -> Result<Arc<dyn ExternalStorage>> {
+    let backend_config = BackendConfig {
+        gcp_v2_enable,
+        ..Default::default()
+    };
+    let storage = external_storage::create_storage(storage_backend, backend_config)?;
+    Ok(Arc::from(storage))
+}
+
+pub async fn load_until_ts_from_checkpoint(
+    storage: &dyn ExternalStorage,
+    replication_status_sub_prefix: Option<&str>,
+) -> Result<u64> {
+    if let Some(sub_prefix) = replication_status_sub_prefix {
+        crate::exec_hooks::consistency::load_replication_status_checkpoint(storage, sub_prefix)
+            .await
+    } else {
+        crate::exec_hooks::consistency::load_storage_checkpoint(storage)
+            .await?
+            .ok_or_else(|| {
+                ErrorKind::Other("Cannot load checkpoint from external storage".to_owned()).into()
+            })
+    }
+}
+
 /// Sharding configuration for `compact-log-backup`.
 ///
 /// Sharding is defined as: `hash(store_id.to_le_bytes()) % total == index - 1`,
@@ -403,14 +431,14 @@ impl Execution {
         let cid = CId(*next_id);
         let skip = Cell::new(None);
         let cx = SubcompactionStartCtx {
-            subc: &c,
+            subc: c,
             load_stat_diff: &lstat,
             collect_compaction_stat_diff: &cstat,
             skip: &skip,
         };
         hooks.before_a_subcompaction_start(cid, cx);
         if let Some(reason) = skip.get() {
-            let skipped_cx = SubcompactionSkippedCtx { subc: &c, reason };
+            let skipped_cx = SubcompactionSkippedCtx { subc: c, reason };
             hooks.on_subcompaction_skipped(skipped_cx).await;
             return None;
         }
@@ -611,7 +639,8 @@ impl Execution {
         Result::Ok(())
     }
 
-    pub fn run(mut self, mut hooks: impl ExecHooks) -> Result<()> {
+    #[cfg(test)]
+    pub fn run(self, hooks: impl ExecHooks) -> Result<()> {
         let storage =
             external_storage::create_storage(&self.external_storage, self.backend_config.clone())?;
         let storage: Arc<dyn ExternalStorage> = Arc::from(storage);
@@ -619,7 +648,14 @@ impl Execution {
             .enable_all()
             .build()
             .unwrap();
+        runtime.block_on(self.run_with_storage_async(storage, hooks))
+    }
 
+    pub async fn run_with_storage_async(
+        mut self,
+        storage: Arc<dyn ExternalStorage>,
+        mut hooks: impl ExecHooks,
+    ) -> Result<()> {
         let mut cx = ExecuteCtx {
             storage: &storage,
             hooks: &mut hooks,
@@ -644,7 +680,7 @@ impl Execution {
             res
         };
 
-        runtime.block_on(root!(guarded))
+        root!(guarded).await
     }
 
     async fn on_compaction_finish(
