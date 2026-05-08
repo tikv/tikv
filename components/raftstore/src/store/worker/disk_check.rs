@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use crossbeam::channel::{bounded, Receiver, Sender};
+use crossbeam::channel::{Receiver, Sender, bounded};
 use health_controller::types::LatencyInspector;
 use tikv_util::{
     time::Instant,

@@ -6,8 +6,8 @@ use serde::de::IgnoredAny;
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::{
-    codec::{data_type::*, mysql::json::*},
     EvalType,
+    codec::{data_type::*, mysql::json::*},
 };
 
 #[rpn_fn]

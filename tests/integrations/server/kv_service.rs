@@ -12,10 +12,10 @@ use std::{
 use api_version::{ApiV1, ApiV1Ttl, ApiV2, KvFormat};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{
-    MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, RaftLogBatch, SyncMutable, CF_DEFAULT,
-    CF_LOCK, CF_RAFT, CF_WRITE,
+    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, MiscExt, Peekable, RaftEngine, RaftEngineReadOnly,
+    RaftLogBatch, SyncMutable,
 };
-use futures::{executor::block_on, future, SinkExt, StreamExt, TryStreamExt};
+use futures::{SinkExt, StreamExt, TryStreamExt, executor::block_on, future};
 use grpcio::*;
 use grpcio_health::{proto::HealthCheckRequest, *};
 use kvproto::{
@@ -30,7 +30,7 @@ use pd_client::PdClient;
 use raft::eraftpb;
 use raftstore::{
     coprocessor::CoprocessorHost,
-    store::{fsm::store::StoreMeta, AutoSplitController, DiskCheckRunner, SnapManager},
+    store::{AutoSplitController, DiskCheckRunner, SnapManager, fsm::store::StoreMeta},
 };
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
@@ -49,9 +49,9 @@ use tikv::{
     storage::{config::EngineType, txn::FLASHBACK_BATCH_SIZE},
 };
 use tikv_util::{
-    config::ReadableSize,
-    worker::{dummy_scheduler, LazyWorker},
     HandyRwLock,
+    config::ReadableSize,
+    worker::{LazyWorker, dummy_scheduler},
 };
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
@@ -2349,7 +2349,7 @@ fn test_get_lock_wait_info_api() {
         // The lock should be in waiting state here.
         let req = GetLockWaitInfoRequest::default();
         let resp = client.get_lock_wait_info(&req).unwrap();
-        if resp.entries.len() != 0 {
+        if !resp.entries.is_empty() {
             entries = Some(resp.entries.to_vec());
             break;
         }

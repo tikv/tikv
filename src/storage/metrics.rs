@@ -7,10 +7,11 @@ use std::{cell::RefCell, mem, sync::Arc};
 use collections::HashMap;
 use engine_traits::{PerfContext, PerfContextExt, PerfContextKind, PerfLevel};
 use kvproto::{kvrpcpb::KeyRange, metapb, pdpb::QueryKind};
+use lazy_static::lazy_static;
 use pd_client::{BucketMeta, RegionWriteCfCopDetail};
 use prometheus::*;
 use prometheus_static_metric::*;
-use raftstore::store::{util::build_key_range, ReadStats};
+use raftstore::store::{ReadStats, util::build_key_range};
 use tikv_kv::Engine;
 use tracker::get_tls_tracker_token;
 

@@ -16,8 +16,8 @@
 use std::{
     path::PathBuf,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
 };
 
@@ -25,11 +25,11 @@ use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, RaftCmdRequest};
 use protobuf::Message;
 use raftstore::{
-    store::{
-        fsm::new_admin_request, metrics::REGION_MAX_LOG_LAG, needs_evict_entry_cache, Transport,
-        WriteTask, RAFT_INIT_LOG_INDEX,
-    },
     Result,
+    store::{
+        RAFT_INIT_LOG_INDEX, Transport, WriteTask, fsm::new_admin_request,
+        metrics::REGION_MAX_LOG_LAG, needs_evict_entry_cache,
+    },
 };
 use slog::{debug, error, info};
 use tikv_util::{box_err, log::SlogFormat};
@@ -105,7 +105,7 @@ impl CompactLogContext {
     }
 }
 
-impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
+impl<EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'_, EK, ER, T> {
     pub fn on_compact_log_tick(&mut self, force: bool) {
         // Might read raft logs.
         debug_assert!(self.fsm.peer().serving());
