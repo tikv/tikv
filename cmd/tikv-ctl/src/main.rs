@@ -408,6 +408,7 @@ fn main() {
             minimal_compaction_size,
             prefetch_running_count,
             prefetch_buffer_count,
+            physical_file_cache_capacity,
             gcp_v2_enable,
         } => {
             let maybe_external_storage = base64::decode(storage_base64)
@@ -438,6 +439,7 @@ fn main() {
                 until_ts,
                 prefetch_running_count,
                 prefetch_buffer_count,
+                physical_file_cache_capacity: physical_file_cache_capacity.0,
                 compression,
                 compression_level,
             };
