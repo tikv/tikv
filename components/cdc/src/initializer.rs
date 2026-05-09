@@ -111,7 +111,6 @@ fn resolve_seek_write_batch<S: Snapshot>(
     let mut extra_emit_bytes = 0;
     for &slot in unresolved_slots.iter() {
         let Some(KvEntry::TxnEntry(entry)) = &mut entries[slot] else {
-            debug_assert!(false, "slot {slot} must point to a TxnEntry");
             unreachable!("slot {slot} must point to a TxnEntry");
         };
         let old_value = entry.old_value_mut();
