@@ -2147,6 +2147,7 @@ mod tests {
             None,
             GrpcServiceManager::dummy(),
             None,
+            ForcePartitionRangeManager::default(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
