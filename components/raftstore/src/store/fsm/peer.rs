@@ -412,6 +412,8 @@ where
         self.hibernate_state.reset(state);
         if state == GroupState::Idle {
             self.peer.raft_group.raft.maybe_free_inflight_buffers();
+            // release the unstable entry buffer to save memory.
+            self.peer.raft_group.raft.r.raft_log.unstable.release_entry_buffer();
         }
     }
 
