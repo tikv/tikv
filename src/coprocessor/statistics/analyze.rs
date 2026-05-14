@@ -3,9 +3,11 @@
 use std::{cmp::Reverse, collections::BinaryHeap, hash::Hasher, mem, sync::Arc};
 
 use api_version::KvFormat;
+use collections::HashSet;
 use kvproto::coprocessor::KeyRange;
-use mur3::Hasher128;
+use mur3::{Hasher128, murmurhash3_x64_128};
 use rand::{Rng, rngs::StdRng};
+use tidb_query_common::execute_stats::ExecuteStats;
 use tidb_query_datatype::{
     FieldTypeAccessor,
     codec::{
@@ -40,6 +42,8 @@ pub(crate) struct RowSampleBuilder<S: Snapshot, F: KvFormat> {
     max_sample_size: usize,
     max_fm_sketch_size: usize,
     sample_rate: f64,
+    // Whether to build per-row singleton sketches (only needed when ndv_rate < 1).
+    build_singletons: bool,
     columns_info: Vec<tipb::ColumnInfo>,
     column_groups: Vec<tipb::AnalyzeColumnGroup>,
     quota_limiter: Arc<QuotaLimiter>,
@@ -59,8 +63,18 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
         if columns_info.is_empty() {
             return Err(box_err!("empty columns_info"));
         }
+        let max_sample_size = req.get_sample_size() as usize;
+        let sample_rate = req.get_sample_rate();
+        // `ndv_rate` controls row-level Bernoulli sampling while building the
+        // FM/singleton sketches. When it is unset (0), keep every row (1.0).
+        let ndv_rate = req.get_ndv_rate();
+        let ndv_rate = if ndv_rate > 0.0 { ndv_rate } else { 1.0 };
+        // Singleton sketches only feed the GEE f1 estimate under NDV sub-sampling.
+        // At full rate (ndv_rate >= 1) the FM sketch is already an exact NDV, so
+        // skip building them to avoid wasted CPU, memory, and serialized bytes.
+        let build_singletons = ndv_rate < 1.0;
         let common_handle_ids = req.take_primary_column_ids();
-        let table_scanner = BatchTableScanExecutor::new(
+        let mut table_scanner = BatchTableScanExecutor::new(
             storage,
             Arc::new(EvalConfig::default()),
             columns_info.clone(),
@@ -70,12 +84,14 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             false, // Streaming mode is not supported in Analyze request, always false here
             req.take_primary_prefix_column_ids(),
         )?;
+        table_scanner.set_row_sample_rate(ndv_rate);
         Ok(Self {
             data: table_scanner,
             accumulated_storage_stats: Statistics::default(),
-            max_sample_size: req.get_sample_size() as usize,
+            max_sample_size,
             max_fm_sketch_size: req.get_sketch_size() as usize,
-            sample_rate: req.get_sample_rate(),
+            sample_rate,
+            build_singletons,
             columns_info,
             column_groups: req.take_column_groups().into(),
             quota_limiter,
@@ -89,12 +105,14 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                 self.max_sample_size,
                 self.max_fm_sketch_size,
                 self.columns_info.len() + self.column_groups.len(),
+                self.build_singletons,
             ));
         }
         Box::new(BernoulliRowSampleCollector::new(
             self.sample_rate,
             self.max_fm_sketch_size,
             self.columns_info.len() + self.column_groups.len(),
+            self.build_singletons,
         ))
     }
 
@@ -158,6 +176,10 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                     .inc();
                 let _guard = sample.observe_cpu();
                 is_drained = result.is_drained?.stop();
+                let mut exec_stats = ExecuteStats::new(0);
+                self.data.collect_exec_stats(&mut exec_stats);
+                collector.mut_base().count +=
+                    exec_stats.scanned_rows_per_range.into_iter().sum::<usize>() as u64;
 
                 let columns_slice = result.physical_columns.as_slice();
                 let mut column_vals: Vec<Vec<u8>> = vec![vec![]; self.columns_info.len()];
@@ -191,7 +213,7 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                         }
                         read_size += column_vals[i].len();
                     }
-                    collector.mut_base().count += 1;
+                    collector.mut_base().sketch_sample_count += 1;
                     collector.collect_column_group(
                         &column_vals,
                         &collation_key_vals,
@@ -217,6 +239,10 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                     .inc_by(quota_delay.as_micros() as u64);
             }
         }
+        // NDV sub-sampling only tallies null_count/total_sizes for rows that
+        // passed the rate check. Rescale them back to per-population estimates
+        // before the single-column-group copy below picks them up.
+        collector.mut_base().rescale_null_count_and_total_sizes();
         for i in 0..self.column_groups.len() {
             let offsets = self.column_groups[i].get_column_offsets();
             if offsets.len() != 1 {
@@ -230,6 +256,10 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             let col_group_pos = self.columns_info.len() + i;
             collector.mut_base().fm_sketches[col_group_pos] =
                 collector.mut_base().fm_sketches[col_pos].clone();
+            if collector.mut_base().build_singletons {
+                collector.mut_base().singleton_sketches[col_group_pos] =
+                    collector.mut_base().singleton_sketches[col_pos].clone();
+            }
             collector.mut_base().null_count[col_group_pos] =
                 collector.mut_base().null_count[col_pos];
             collector.mut_base().total_sizes[col_group_pos] =
@@ -267,10 +297,60 @@ trait RowSampleCollector: Send {
 }
 
 #[derive(Clone)]
+struct SingletonSketch {
+    mask: u64,
+    once: HashSet<u64>,
+    multi: HashSet<u64>,
+}
+
+impl SingletonSketch {
+    fn new() -> SingletonSketch {
+        SingletonSketch {
+            mask: 0,
+            once: HashSet::with_capacity_and_hasher(0, Default::default()),
+            multi: HashSet::with_capacity_and_hasher(0, Default::default()),
+        }
+    }
+
+    fn insert(&mut self, bytes: &[u8]) {
+        let hash = murmurhash3_x64_128(bytes, 0).0;
+        self.insert_hash_value(hash);
+    }
+
+    fn insert_hash_value(&mut self, hash_val: u64) {
+        if (hash_val & self.mask) != 0 {
+            return;
+        }
+        if self.multi.contains(&hash_val) {
+            return;
+        }
+        if self.once.remove(&hash_val) {
+            self.multi.insert(hash_val);
+        } else {
+            self.once.insert(hash_val);
+        }
+    }
+
+    fn into_proto(self, max_fm_sketch_size: usize) -> tipb::FmSketch {
+        let mut fm_sketch = FmSketch::new(max_fm_sketch_size);
+        for hash in self.once {
+            fm_sketch.insert_hash_value(hash);
+        }
+        fm_sketch.into()
+    }
+}
+
+#[derive(Clone)]
 struct BaseRowSampleCollector {
     null_count: Vec<i64>,
     count: u64,
+    sketch_sample_count: u64,
+    max_fm_sketch_size: usize,
     fm_sketches: Vec<FmSketch>,
+    singleton_sketches: Vec<SingletonSketch>,
+    // When false, singleton sketches are left empty and not serialized; only the
+    // GEE f1 estimate under NDV sub-sampling needs them.
+    build_singletons: bool,
     rng: StdRng,
     total_sizes: Vec<i64>,
     memory_usage: usize,
@@ -282,7 +362,11 @@ impl Default for BaseRowSampleCollector {
         BaseRowSampleCollector {
             null_count: vec![],
             count: 0,
+            sketch_sample_count: 0,
+            max_fm_sketch_size: 0,
             fm_sketches: vec![],
+            singleton_sketches: vec![],
+            build_singletons: false,
             rng: StdRng::from_entropy(),
             total_sizes: vec![],
             memory_usage: 0,
@@ -291,12 +375,36 @@ impl Default for BaseRowSampleCollector {
     }
 }
 
+/// Scales `sampled` (accumulated over `sample_count` rows) into an estimate
+/// over `total_row_count` rows using round-half-up integer division. Returns
+/// 0 when `sampled` or `sample_count` is non-positive. A `u128` intermediate
+/// avoids overflow in `sampled * total_row_count` for large tables.
+fn rescale_sampled_value(sampled: i64, total_row_count: u64, sample_count: u64) -> i64 {
+    if sampled <= 0 || sample_count == 0 {
+        return 0;
+    }
+    let sampled = sampled as u128;
+    let total_row_count = total_row_count as u128;
+    let sample_count = sample_count as u128;
+    // Round-half-up integer division: floor(a*b/c + 1/2).
+    let scaled = (sampled * total_row_count + sample_count / 2) / sample_count;
+    scaled.min(i64::MAX as u128) as i64
+}
+
 impl BaseRowSampleCollector {
-    fn new(max_fm_sketch_size: usize, col_and_group_len: usize) -> BaseRowSampleCollector {
+    fn new(
+        max_fm_sketch_size: usize,
+        col_and_group_len: usize,
+        build_singletons: bool,
+    ) -> BaseRowSampleCollector {
         BaseRowSampleCollector {
             null_count: vec![0; col_and_group_len],
             count: 0,
+            sketch_sample_count: 0,
+            max_fm_sketch_size,
             fm_sketches: vec![FmSketch::new(max_fm_sketch_size); col_and_group_len],
+            singleton_sketches: vec![SingletonSketch::new(); col_and_group_len],
+            build_singletons,
             rng: StdRng::from_entropy(),
             total_sizes: vec![0; col_and_group_len],
             memory_usage: 0,
@@ -336,7 +444,11 @@ impl BaseRowSampleCollector {
                     hasher.write(&columns_val[*j as usize]);
                 }
             }
-            self.fm_sketches[col_len + i].insert_hash_value(hasher.finish());
+            let hash = hasher.finish();
+            self.fm_sketches[col_len + i].insert_hash_value(hash);
+            if self.build_singletons {
+                self.singleton_sketches[col_len + i].insert_hash_value(hash);
+            }
         }
     }
 
@@ -353,10 +465,49 @@ impl BaseRowSampleCollector {
             }
             if columns_info[i].as_accessor().is_string_like() {
                 self.fm_sketches[i].insert(&collation_keys_val[i]);
+                if self.build_singletons {
+                    self.singleton_sketches[i].insert(&collation_keys_val[i]);
+                }
             } else {
                 self.fm_sketches[i].insert(&columns_val[i]);
+                if self.build_singletons {
+                    self.singleton_sketches[i].insert(&columns_val[i]);
+                }
             }
             self.total_sizes[i] += columns_val[i].len() as i64 - 1;
+        }
+    }
+
+    /// Converts per-column null counts and total sizes gathered from the NDV
+    /// sub-sample into estimates over the full row population. `count` is the
+    /// exact scanned row count (reported via `scanned_rows_per_range`) and is
+    /// only read here as the scaling divisor — it is never modified. No-op
+    /// when no sub-sampling occurred (`sketch_sample_count == 0` or every
+    /// scanned row was sampled).
+    fn rescale_null_count_and_total_sizes(&mut self) {
+        let sample_count = self.sketch_sample_count;
+        let total_row_count = self.count;
+        // sample_count > total_row_count would scale stats *down* and corrupt
+        // them — that's an invariant violation, not a real input.
+        debug_assert!(
+            total_row_count >= sample_count,
+            "total_row_count ({}) must be >= sample_count ({})",
+            total_row_count,
+            sample_count,
+        );
+        // No sub-sampling: values are already exact.
+        if sample_count == 0 {
+            return;
+        }
+        // Scaling factor is 1.0; nothing to do.
+        if total_row_count == sample_count {
+            return;
+        }
+        for nc in &mut self.null_count {
+            *nc = rescale_sampled_value(*nc, total_row_count, sample_count);
+        }
+        for ts in &mut self.total_sizes {
+            *ts = rescale_sampled_value(*ts, total_row_count, sample_count);
         }
     }
 
@@ -368,6 +519,16 @@ impl BaseRowSampleCollector {
             .map(|fm_sketch| fm_sketch.into())
             .collect();
         proto_collector.set_fm_sketch(pb_fm_sketches);
+        // Only serialize singleton sketches when they were built (NDV sub-sampling);
+        // otherwise leave the field empty so TiDB skips the GEE f1 path.
+        if self.build_singletons {
+            let pb_singleton_sketches = mem::take(&mut self.singleton_sketches)
+                .into_iter()
+                .map(|fm_sketch| fm_sketch.into_proto(self.max_fm_sketch_size))
+                .collect();
+            proto_collector.set_singleton_sketch(pb_singleton_sketches);
+        }
+        proto_collector.set_sketch_sample_count(self.sketch_sample_count as i64);
         proto_collector.set_total_size(self.total_sizes.clone());
     }
 
@@ -397,9 +558,14 @@ impl BernoulliRowSampleCollector {
         sample_rate: f64,
         max_fm_sketch_size: usize,
         col_and_group_len: usize,
+        build_singletons: bool,
     ) -> BernoulliRowSampleCollector {
         BernoulliRowSampleCollector {
-            base: BaseRowSampleCollector::new(max_fm_sketch_size, col_and_group_len),
+            base: BaseRowSampleCollector::new(
+                max_fm_sketch_size,
+                col_and_group_len,
+                build_singletons,
+            ),
             samples: Vec::new(),
             sample_rate,
         }
@@ -484,9 +650,14 @@ impl ReservoirRowSampleCollector {
         max_sample_size: usize,
         max_fm_sketch_size: usize,
         col_and_group_len: usize,
+        build_singletons: bool,
     ) -> ReservoirRowSampleCollector {
         ReservoirRowSampleCollector {
-            base: BaseRowSampleCollector::new(max_fm_sketch_size, col_and_group_len),
+            base: BaseRowSampleCollector::new(
+                max_fm_sketch_size,
+                col_and_group_len,
+                build_singletons,
+            ),
             samples: BinaryHeap::new(),
             max_sample_size,
         }
@@ -956,6 +1127,65 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_singleton_sketch_proto_respects_max_size() {
+        let max_fm_sketch_size = 8;
+        let mut sketch = SingletonSketch::new();
+        for i in 0..(max_fm_sketch_size * 4) {
+            sketch.insert_hash_value((i as u64) * 11400714819323198485);
+        }
+
+        let proto = sketch.into_proto(max_fm_sketch_size);
+        assert!(proto.get_hashset().len() <= max_fm_sketch_size);
+    }
+
+    #[test]
+    fn test_rescale_sampled_value() {
+        // Non-positive inputs short-circuit to 0.
+        assert_eq!(rescale_sampled_value(0, 100, 10), 0);
+        assert_eq!(rescale_sampled_value(-3, 100, 10), 0);
+        assert_eq!(rescale_sampled_value(5, 100, 0), 0);
+        // Exact scaling: 3 out of 10 sampled rows ⇒ 30 out of 100.
+        assert_eq!(rescale_sampled_value(3, 100, 10), 30);
+        // Round-half-up: (2*7 + 5/2) / 5 = 16/5 = 3 (vs truncated 2).
+        assert_eq!(rescale_sampled_value(2, 7, 5), 3);
+        // sample_count == total_row_count is normally short-circuited by the
+        // caller, but the helper still returns the input unchanged.
+        assert_eq!(rescale_sampled_value(5, 5, 5), 5);
+    }
+
+    #[test]
+    fn test_rescale_null_count_and_total_sizes() {
+        let mut base = BaseRowSampleCollector::new(8, 2, true);
+        base.count = 100;
+        base.sketch_sample_count = 10;
+        base.null_count = vec![2, 0];
+        base.total_sizes = vec![50, 30];
+        base.rescale_null_count_and_total_sizes();
+        // Scaling factor 10x.
+        assert_eq!(base.null_count, vec![20, 0]);
+        assert_eq!(base.total_sizes, vec![500, 300]);
+
+        // sketch_sample_count == 0 ⇒ no-op (values exact already).
+        let mut base = BaseRowSampleCollector::new(8, 1, true);
+        base.count = 100;
+        base.null_count = vec![7];
+        base.total_sizes = vec![42];
+        base.rescale_null_count_and_total_sizes();
+        assert_eq!(base.null_count, vec![7]);
+        assert_eq!(base.total_sizes, vec![42]);
+
+        // sketch_sample_count == count ⇒ no-op (scale factor 1.0).
+        let mut base = BaseRowSampleCollector::new(8, 1, true);
+        base.count = 50;
+        base.sketch_sample_count = 50;
+        base.null_count = vec![3];
+        base.total_sizes = vec![17];
+        base.rescale_null_count_and_total_sizes();
+        assert_eq!(base.null_count, vec![3]);
+        assert_eq!(base.total_sizes, vec![17]);
+    }
+
+    #[test]
     fn test_sample_collector() {
         let max_sample_size = 3;
         let max_fm_sketch_size = 10;
@@ -992,7 +1222,7 @@ mod tests {
             nums.push(datum::encode_value(&mut ctx, &[Datum::I64(i as i64)]).unwrap());
         }
         for loop_i in 0..loop_cnt {
-            let mut collector = ReservoirRowSampleCollector::new(sample_num, 1000, 1);
+            let mut collector = ReservoirRowSampleCollector::new(sample_num, 1000, 1, true);
             for row in &nums {
                 collector.sampling(std::slice::from_ref(row));
             }
@@ -1040,7 +1270,7 @@ mod tests {
         }
         for loop_i in 0..loop_cnt {
             let mut collector =
-                BernoulliRowSampleCollector::new(sample_num as f64 / row_num as f64, 1000, 1);
+                BernoulliRowSampleCollector::new(sample_num as f64 / row_num as f64, 1000, 1, true);
             for row in &nums {
                 collector.sampling(std::slice::from_ref(row));
             }
@@ -1085,7 +1315,7 @@ mod tests {
         }
         {
             // Test for ReservoirRowSampleCollector
-            let mut collector = ReservoirRowSampleCollector::new(sample_num, 1000, 1);
+            let mut collector = ReservoirRowSampleCollector::new(sample_num, 1000, 1, true);
             for row in &nums {
                 collector.sampling(std::slice::from_ref(row));
             }
@@ -1094,12 +1324,30 @@ mod tests {
         {
             // Test for BernoulliRowSampleCollector
             let mut collector =
-                BernoulliRowSampleCollector::new(sample_num as f64 / row_num as f64, 1000, 1);
+                BernoulliRowSampleCollector::new(sample_num as f64 / row_num as f64, 1000, 1, true);
             for row in &nums {
                 collector.sampling(std::slice::from_ref(row));
             }
             assert_eq!(collector.samples.len(), 0);
         }
+    }
+
+    #[test]
+    fn test_build_singletons_gate() {
+        // ndv_rate >= 1 maps to build_singletons = false: fill_proto must leave
+        // the singleton_sketch field empty so the work and bytes are saved.
+        let mut base = BaseRowSampleCollector::new(1000, 1, false);
+        base.singleton_sketches[0].insert(b"x");
+        let mut proto = tipb::RowSampleCollector::default();
+        base.fill_proto(&mut proto);
+        assert!(proto.get_singleton_sketch().is_empty());
+
+        // ndv_rate < 1 maps to build_singletons = true: sketches are emitted.
+        let mut base = BaseRowSampleCollector::new(1000, 1, true);
+        base.singleton_sketches[0].insert(b"x");
+        let mut proto = tipb::RowSampleCollector::default();
+        base.fill_proto(&mut proto);
+        assert_eq!(proto.get_singleton_sketch().len(), 1);
     }
 }
 
@@ -1167,7 +1415,7 @@ mod benches {
 
     #[bench]
     fn bench_collect_column(b: &mut test::Bencher) {
-        let mut collector = BaseRowSampleCollector::new(10000, 4);
+        let mut collector = BaseRowSampleCollector::new(10000, 4, true);
         let (column_vals, collation_key_vals, columns_info, _) = prepare_arguments();
         b.iter(|| {
             collector.collect_column(&column_vals, &collation_key_vals, &columns_info);
@@ -1176,7 +1424,7 @@ mod benches {
 
     #[bench]
     fn bench_collect_column_group(b: &mut test::Bencher) {
-        let mut collector = BaseRowSampleCollector::new(10000, 4);
+        let mut collector = BaseRowSampleCollector::new(10000, 4, true);
         let (column_vals, collation_key_vals, columns_info, column_groups) = prepare_arguments();
         b.iter(|| {
             collector.collect_column_group(
