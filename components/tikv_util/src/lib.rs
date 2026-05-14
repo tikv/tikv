@@ -13,6 +13,7 @@ extern crate test;
 use std::{
     cmp,
     collections::{
+        hash_map::Entry,
         vec_deque::{Iter, VecDeque},
     },
     convert::AsRef,
@@ -27,7 +28,6 @@ use std::{
     thread,
     time::Duration,
 };
-use std::collections::hash_map::Entry;
 
 use nix::{
     sys::wait::{WaitStatus, wait},

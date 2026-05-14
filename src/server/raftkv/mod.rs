@@ -41,7 +41,7 @@ use raft::{
 pub use raft_extension::RaftRouterWrap;
 use raftstore::{
     coprocessor::{
-        dispatcher::BoxReadIndexObserver, Coprocessor, CoprocessorHost, ReadIndexObserver,
+        Coprocessor, CoprocessorHost, ReadIndexObserver, dispatcher::BoxReadIndexObserver,
     },
     errors::Error as RaftServerError,
     router::{LocalReadRouter, RaftStoreRouter, ReadContext},

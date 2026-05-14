@@ -95,7 +95,6 @@ pub use self::{
         REGION_CPU_OVERLOAD_THRESHOLD_RATIO, ReadDelegate, ReadExecutor, ReadExecutorProvider,
         ReadProgress, ReadStats, RefreshConfigTask, RegionTask, SnapGenTask, SplitCheckRunner,
         SplitCheckTask, SplitConfig, SplitConfigManager, SplitInfo, StoreMetaDelegate,
-        StoreStatsReporter, TrackVer, WriteStats, WriterContoller,
-        metrics as worker_metrics,
+        StoreStatsReporter, TrackVer, WriteStats, WriterContoller, metrics as worker_metrics,
     },
 };
