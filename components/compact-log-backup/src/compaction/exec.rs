@@ -259,6 +259,7 @@ where
     ) -> Result<impl Iterator<Item = Vec<Record>>> {
         let mut eext = ExecuteAllExt::default();
         eext.max_concurrency = ext.max_load_concurrency;
+        let _cache_refs = self.source.cache_input_refs(&c.inputs);
 
         let items = super::util::execute_all_ext(
             c.inputs

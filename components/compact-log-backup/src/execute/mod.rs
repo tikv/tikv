@@ -37,7 +37,7 @@ use super::{
 };
 use crate::{
     ErrorKind,
-    cache::PhysicalFileCache,
+    cache::{PhysicalFileCache, PhysicalFileCacheRefGuard},
     compaction::{SubcompactionResult, exec::SubcompactionExecArg},
     errors::{Result, TraceResultExt},
     execute::hooking::SubcompactionSkippedCtx,
@@ -249,6 +249,38 @@ where
     }
 }
 
+trait TakeStreamingSubcompactionStatistic {
+    fn take_collect_statistic(&mut self) -> CollectSubcompactionStatistic;
+
+    fn take_load_meta_statistic(&mut self) -> LoadMetaStatistic;
+}
+
+impl<S> TakeStreamingSubcompactionStatistic for CollectSubcompaction<S>
+where
+    S: Stream<Item = Result<LogFile>> + TakeLoadMetaStatistic,
+{
+    fn take_collect_statistic(&mut self) -> CollectSubcompactionStatistic {
+        self.take_statistic()
+    }
+
+    fn take_load_meta_statistic(&mut self) -> LoadMetaStatistic {
+        self.get_mut().take_load_meta_statistic()
+    }
+}
+
+impl<S> TakeStreamingSubcompactionStatistic for Pin<&mut CollectCachedSubcompaction<S>>
+where
+    S: Stream<Item = Result<PhysicalLogFile>> + TakeLoadMetaStatistic + Unpin,
+{
+    fn take_collect_statistic(&mut self) -> CollectSubcompactionStatistic {
+        self.as_mut().take_statistic()
+    }
+
+    fn take_load_meta_statistic(&mut self) -> LoadMetaStatistic {
+        self.as_mut().get_inner_mut().take_load_meta_statistic()
+    }
+}
+
 impl ExecutionConfig {
     /// Create a suitable (but not forced) prefix for the artifices of the
     /// compaction.
@@ -427,6 +459,7 @@ impl Execution {
         c: &Subcompaction,
         cstat: CollectSubcompactionStatistic,
         lstat: LoadMetaStatistic,
+        physical_file_cache: Option<&Arc<PhysicalFileCache>>,
     ) -> Option<CId> {
         let cid = CId(*next_id);
         let skip = Cell::new(None);
@@ -438,6 +471,8 @@ impl Execution {
         };
         hooks.before_a_subcompaction_start(cid, cx);
         if let Some(reason) = skip.get() {
+            let _cache_refs = physical_file_cache
+                .map(|cache| PhysicalFileCacheRefGuard::new(Arc::clone(cache), &c.inputs));
             let skipped_cx = SubcompactionSkippedCtx { subc: c, reason };
             hooks.on_subcompaction_skipped(skipped_cx).await;
             return None;
@@ -448,79 +483,29 @@ impl Execution {
 
     async fn run_streaming_subcompactions<S>(
         &self,
-        compact_stream: &mut CollectSubcompaction<S>,
+        compact_stream: &mut S,
+        physical_file_cache: Option<Arc<PhysicalFileCache>>,
         storage: &Arc<dyn ExternalStorage>,
         hooks: &mut impl ExecHooks,
         pending: &mut Vec<CompactJoin>,
     ) -> Result<()>
     where
-        S: Stream<Item = Result<LogFile>> + TakeLoadMetaStatistic + Unpin,
+        S: Stream<Item = Result<Subcompaction>> + TakeStreamingSubcompactionStatistic + Unpin,
     {
         let mut id = 0;
         while let Some(c) = compact_stream.next().await {
-            let cstat = compact_stream.take_statistic();
-            let lstat = compact_stream.get_mut().take_load_meta_statistic();
+            let cstat = compact_stream.take_collect_statistic();
+            let lstat = compact_stream.take_load_meta_statistic();
             let c = c?;
             if let Some(cid) = self
-                .prepare_subcompaction(&mut id, hooks, &c, cstat, lstat)
-                .await
-            {
-                self.push_subcompaction(pending, storage, hooks, c, cid, None)
-                    .await?;
-            }
-        }
-        Ok(())
-    }
-
-    async fn run_streaming_cached_subcompactions<S>(
-        &self,
-        mut compact_stream: Pin<&mut CollectCachedSubcompaction<S>>,
-        physical_file_cache: Arc<PhysicalFileCache>,
-        storage: &Arc<dyn ExternalStorage>,
-        hooks: &mut impl ExecHooks,
-        pending: &mut Vec<CompactJoin>,
-    ) -> Result<()>
-    where
-        S: Stream<Item = Result<PhysicalLogFile>> + TakeLoadMetaStatistic + Unpin,
-    {
-        let mut id = 0;
-        loop {
-            let Some(c) = (if pending.is_empty() {
-                compact_stream.as_mut().next().await
-            } else {
-                let mut stream = compact_stream.as_mut();
-                let next_compaction = stream.next();
-                let finished_compaction = frame!("wait_for_compaction"; util::select_vec(pending));
-                tokio::pin!(next_compaction);
-                tokio::pin!(finished_compaction);
-                // If a pending compaction finishes first, drop `next_compaction`
-                // and then run the finish hook outside the select race.
-                // `wait_one_compaction` itself must not be selected here: after
-                // removing a completed join from `pending`, it awaits the finish
-                // hook, and cancelling it at that point would lose the result.
-                // Therefore `CollectCachedSubcompaction::poll_next` must be
-                // cancellation-safe and keep deferred files, cache waiters, and
-                // ready compactions in the stream state before returning Pending.
-                tokio::select! {
-                    c = &mut next_compaction => c,
-                    join = &mut finished_compaction => {
-                        let (cres, cid) = Self::unpack_compaction_join(join)?;
-                        self.on_compaction_finish(cid, &cres, storage.as_ref(), hooks).await?;
-                        continue;
-                    }
-                }
-            }) else {
-                break;
-            };
-
-            let cstat = compact_stream.as_mut().take_statistic();
-            let lstat = compact_stream
-                .as_mut()
-                .get_inner_mut()
-                .take_load_meta_statistic();
-            let c = c?;
-            if let Some(cid) = self
-                .prepare_subcompaction(&mut id, hooks, &c, cstat, lstat)
+                .prepare_subcompaction(
+                    &mut id,
+                    hooks,
+                    &c,
+                    cstat,
+                    lstat,
+                    physical_file_cache.as_ref(),
+                )
                 .await
             {
                 self.push_subcompaction(
@@ -529,13 +514,9 @@ impl Execution {
                     hooks,
                     c,
                     cid,
-                    Some(Arc::clone(&physical_file_cache)),
+                    physical_file_cache.clone(),
                 )
                 .await?;
-            } else {
-                for input in c.inputs {
-                    physical_file_cache.drop_input_ref(&input);
-                }
             }
         }
         Ok(())
@@ -601,9 +582,10 @@ impl Execution {
                 Arc::clone(&physical_file_cache),
             );
             tokio::pin!(compact_stream);
-            self.run_streaming_cached_subcompactions(
-                compact_stream.as_mut(),
-                physical_file_cache,
+            let mut compact_stream = compact_stream.as_mut();
+            self.run_streaming_subcompactions(
+                &mut compact_stream,
+                Some(physical_file_cache),
                 &storage,
                 *hooks,
                 &mut pending,
@@ -615,8 +597,14 @@ impl Execution {
                 Err(err) => stream::once(futures::future::err(err)).right_stream(),
             });
             let mut compact_stream = CollectSubcompaction::new(stream, collect_cfg);
-            self.run_streaming_subcompactions(&mut compact_stream, &storage, *hooks, &mut pending)
-                .await
+            self.run_streaming_subcompactions(
+                &mut compact_stream,
+                None,
+                &storage,
+                *hooks,
+                &mut pending,
+            )
+            .await
         };
 
         if let Err(err) = schedule_res {

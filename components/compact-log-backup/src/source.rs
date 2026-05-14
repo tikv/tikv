@@ -17,7 +17,11 @@ use tikv_util::{
 use txn_types::Key;
 
 use super::{statistic::LoadStatistic, util::Cooperate};
-use crate::{cache::PhysicalFileCache, compaction::Input, errors::Result};
+use crate::{
+    cache::{PhysicalFileCache, PhysicalFileCacheRefGuard},
+    compaction::Input,
+    errors::Result,
+};
 
 /// The manager of fetching log files from remote for compacting.
 #[derive(Clone)]
@@ -35,6 +39,12 @@ impl Source {
             inner,
             physical_file_cache,
         }
+    }
+
+    pub(crate) fn cache_input_refs(&self, inputs: &[Input]) -> Option<PhysicalFileCacheRefGuard> {
+        self.physical_file_cache
+            .as_ref()
+            .map(|cache| PhysicalFileCacheRefGuard::new(Arc::clone(cache), inputs))
     }
 }
 
@@ -60,7 +70,7 @@ impl Record {
 impl Source {
     /// Load the content of an input.
     #[tracing::instrument(skip_all)]
-    pub async fn load_remote(
+    pub(crate) async fn load_remote(
         &self,
         input: Input,
         stat: &mut Option<&mut LoadStatistic>,
@@ -84,7 +94,6 @@ impl Source {
                         let (content, _) =
                             load_compressed(compression, Cursor::new(content), file_real_size)
                                 .await?;
-                        cache.drop_physical_file_ref(&id.name);
                         return std::io::Result::Ok((content, physical_bytes_in));
                     }
                 }
@@ -101,9 +110,8 @@ impl Source {
         Ok(content)
     }
 
-    /// Load key value pairs from remote.
     #[tracing::instrument(skip_all, fields(id=?input.id))]
-    pub async fn load(
+    pub(crate) async fn load(
         &self,
         input: Input,
         mut stat: Option<&mut LoadStatistic>,
@@ -158,11 +166,16 @@ fn decompress(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use protobuf::Chars;
+
     use super::Source;
     use crate::{
+        cache::{PhysicalFileCache, PhysicalFileCacheRefGuard, RegisterPhysicalFileResult},
         compaction::{Input, Subcompaction},
         statistic::LoadStatistic,
-        storage::{LogFile, MetaFile},
+        storage::{LogFile, LogFileId, MetaFile},
         test_util::{KvGen, LogFileBuilder, TmpStorage, gen_adjacent_with_ts},
     };
 
@@ -202,6 +215,44 @@ mod tests {
 
     fn as_input(l: &LogFile) -> Input {
         Subcompaction::singleton(l.clone()).inputs.pop().unwrap()
+    }
+
+    fn input_of_physical_file(name: &Chars) -> Input {
+        Input {
+            id: LogFileId {
+                name: name.clone(),
+                offset: 0,
+                length: 0,
+            },
+            file_real_size: 0,
+            compression: kvproto::brpb::CompressionType::Zstd,
+            crc64xor: 0,
+            key_value_size: 0,
+            num_of_entries: 0,
+        }
+    }
+
+    #[test]
+    fn test_cached_input_refs_releases_remaining_refs_on_drop() {
+        let cache = Arc::new(PhysicalFileCache::new(10));
+        let name = Chars::from("physical.log");
+        assert!(matches!(
+            cache.register_physical_file(&name, 10, 2),
+            RegisterPhysicalFileResult::Registered
+        ));
+
+        let input = input_of_physical_file(&name);
+        let refs = PhysicalFileCacheRefGuard::new(Arc::clone(&cache), &[input.clone(), input]);
+        assert!(matches!(
+            cache.register_physical_file(&Chars::from("another.log"), 10, 1),
+            RegisterPhysicalFileResult::Full(_)
+        ));
+
+        drop(refs);
+        assert!(matches!(
+            cache.register_physical_file(&Chars::from("another.log"), 10, 1),
+            RegisterPhysicalFileResult::Registered
+        ));
     }
 
     #[tokio::test]

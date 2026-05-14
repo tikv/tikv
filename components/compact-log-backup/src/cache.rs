@@ -42,7 +42,6 @@ pub enum RegisterPhysicalFileResult {
 
 struct CacheEntry {
     remaining_refs: usize,
-    round: u64,
     physical_size: u64,
     content: Option<Bytes>,
     loading: bool,
@@ -50,10 +49,9 @@ struct CacheEntry {
 }
 
 impl CacheEntry {
-    fn new(physical_size: u64, round: u64) -> Self {
+    fn new(physical_size: u64) -> Self {
         Self {
             remaining_refs: 0,
-            round,
             physical_size,
             content: None,
             loading: false,
@@ -78,13 +76,6 @@ struct CacheShard {
     entries: HashMap<Chars, CacheEntry>,
 }
 
-#[derive(Default)]
-struct CacheRoundState {
-    current_round: u64,
-    last_round_left_files: usize,
-    current_round_left_files: usize,
-}
-
 /// A bounded cache for raw physical log files.
 ///
 /// The cache reserves capacity when a physical file is registered, then stores
@@ -96,11 +87,29 @@ pub struct PhysicalFileCache {
     capacity: u64,
     reserved_bytes: StdAtomicU64,
     capacity_notify: Arc<tokio::sync::Notify>,
-    /// Tracks cache windows split by forced compaction. A new forced
-    /// compaction is allowed only after every physical file from the previous
-    /// forced window has released its cache ref.
-    round_state: Mutex<CacheRoundState>,
     shards: Box<[Mutex<CacheShard>]>,
+}
+
+pub(crate) struct PhysicalFileCacheRefGuard {
+    cache: Arc<PhysicalFileCache>,
+    file_names: Vec<Chars>,
+}
+
+impl PhysicalFileCacheRefGuard {
+    pub(crate) fn new(cache: Arc<PhysicalFileCache>, inputs: &[Input]) -> Self {
+        Self {
+            cache,
+            file_names: inputs.iter().map(|input| input.id.name.clone()).collect(),
+        }
+    }
+}
+
+impl Drop for PhysicalFileCacheRefGuard {
+    fn drop(&mut self) {
+        for name in self.file_names.drain(..) {
+            self.cache.drop_physical_file_ref(&name);
+        }
+    }
 }
 
 /// Cleans up an in-flight physical-file download if the future is dropped.
@@ -147,7 +156,6 @@ impl PhysicalFileCache {
             capacity,
             reserved_bytes: StdAtomicU64::new(0),
             capacity_notify: Arc::new(tokio::sync::Notify::new()),
-            round_state: Mutex::new(CacheRoundState::default()),
             shards: (0..PHYSICAL_FILE_CACHE_SHARDS)
                 .map(|_| Mutex::new(CacheShard::default()))
                 .collect(),
@@ -202,46 +210,13 @@ impl PhysicalFileCache {
         }
     }
 
-    fn register_current_round_file(&self) -> u64 {
-        let mut state = self.round_state.lock();
-        let round = state.current_round;
-        state.current_round_left_files += 1;
-        round
-    }
-
-    fn release_round_file(&self, round: u64) {
-        let mut state = self.round_state.lock();
-        if round == state.current_round {
-            assert!(state.current_round_left_files > 0);
-            state.current_round_left_files -= 1;
-        } else {
-            assert!(state.last_round_left_files > 0);
-            state.last_round_left_files -= 1;
-        }
-    }
-
-    pub(crate) fn can_force_compaction(&self) -> bool {
-        self.round_state.lock().last_round_left_files == 0
-    }
-
-    pub(crate) fn advance_round_after_force_compaction(&self) {
-        let mut state = self.round_state.lock();
-        assert_eq!(state.last_round_left_files, 0);
-        state.current_round += 1;
-        state.last_round_left_files = state.current_round_left_files;
-        state.current_round_left_files = 0;
-    }
-
     pub fn register_physical_file(
         &self,
         file_name: &Chars,
         file_size: u64,
         ref_count: usize,
     ) -> RegisterPhysicalFileResult {
-        if ref_count == 0 {
-            return RegisterPhysicalFileResult::Registered;
-        }
-        if file_size > self.capacity {
+        if ref_count == 0 || file_size > self.capacity {
             return RegisterPhysicalFileResult::Bypass;
         }
         let mut shard = self.shard(file_name).lock();
@@ -257,17 +232,12 @@ impl PhysicalFileCache {
                 if self.try_reserve(file_size).is_none() {
                     return RegisterPhysicalFileResult::Full(wait);
                 }
-                let round = self.register_current_round_file();
-                entry.insert(CacheEntry::new(file_size, round))
+                entry.insert(CacheEntry::new(file_size))
             }
         };
         entry.physical_size = file_size;
         entry.add_ref(ref_count);
         RegisterPhysicalFileResult::Registered
-    }
-
-    pub fn drop_input_ref(&self, input: &Input) {
-        self.drop_physical_file_ref(&input.id.name);
     }
 
     /// Marks one registered logical file in this physical file as consumed.
@@ -278,20 +248,17 @@ impl PhysicalFileCache {
     /// physical allocation alive.
     pub(crate) fn drop_physical_file_ref(&self, file_name: &Chars) {
         let mut release_size = None;
-        let mut release_round = None;
         {
             let mut shard = self.shard(file_name).lock();
             if let Entry::Occupied(mut entry) = shard.entries.entry(file_name.clone()) {
                 let item = entry.get_mut();
                 if item.drop_ref() {
                     release_size = Some(item.physical_size);
-                    release_round = Some(item.round);
                     entry.remove();
                 }
             }
         }
-        if let (Some(physical_size), Some(round)) = (release_size, release_round) {
-            self.release_round_file(round);
+        if let Some(physical_size) = release_size {
             self.release_reserved(physical_size);
         }
     }
