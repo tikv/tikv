@@ -12,7 +12,7 @@ use tidb_query_datatype::{
 };
 use tipb::{Expr, ExprType, FieldType, ScalarFuncSig};
 
-use crate::{types::function::RpnFnMeta, RpnExpressionBuilder};
+use crate::{RpnExpressionBuilder, types::function::RpnFnMeta};
 
 /// Helper utility to evaluate RPN function over scalar inputs.
 ///
@@ -116,11 +116,7 @@ impl RpnFnScalarEvaluator {
         ret_field_type: impl Into<FieldType>,
         sig: ScalarFuncSig,
     ) -> (Result<ScalarValue>, EvalContext) {
-        let mut context = match self.context {
-            Some(ctx) => ctx,
-            None => EvalContext::default(),
-        };
-
+        let mut context = self.context.unwrap_or_default();
         // Children expr descriptors are needed to map the signature into the actual
         // function impl.
         let children_ed: Vec<_> = self

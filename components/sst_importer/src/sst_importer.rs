@@ -12,17 +12,17 @@ use std::{
 };
 
 use collections::HashSet;
-use dashmap::{mapref::entry::Entry, DashMap};
+use dashmap::{DashMap, mapref::entry::Entry};
 use encryption::{DataKeyManager, FileEncryptionInfo, MultiMasterKeyBackend};
 use encryption_export::create_async_backend;
 use engine_traits::{
-    name_to_cf, util::check_key_in_range, CfName, IterOptions, Iterator, KvEngine, RefIterable,
-    SstCompressionType, SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT,
-    CF_WRITE,
+    CF_DEFAULT, CF_WRITE, CfName, IterOptions, Iterator, KvEngine, RefIterable, SstCompressionType,
+    SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder, name_to_cf,
+    util::check_key_in_range,
 };
 use external_storage::{
-    compression_reader_dispatcher, encrypt_wrap_reader, wrap_with_checksum_reader_if_needed,
-    ExternalStorage, RestoreConfig,
+    ExternalStorage, RestoreConfig, compression_reader_dispatcher, encrypt_wrap_reader,
+    wrap_with_checksum_reader_if_needed,
 };
 use file_system::{IoType, OpenOptions};
 use kvproto::{
@@ -33,28 +33,32 @@ use kvproto::{
     metapb::Region,
 };
 use tikv_util::{
+    Either, HandyRwLock,
     codec::{
         bytes::{decode_bytes_in_place, encode_bytes},
         stream_event::{EventEncoder, EventIterator, Iterator as EIterator},
     },
+    debug, defer, error,
     future::RescheduleChecker,
+    info,
     memory::{MemoryQuota, OwnedAllocated},
     resizable_threadpool::DeamonRuntimeHandle,
-    sys::{thread::ThreadBuildWrapper, SysQuota},
+    sys::{SysQuota, thread::ThreadBuildWrapper},
     time::{Instant, Limiter},
-    Either, HandyRwLock,
+    warn,
 };
 use tokio::{runtime::Runtime, sync::OnceCell};
 use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
+    Config, ConfigManager as ImportConfigManager, Error, Result,
     caching::cache_map::{CacheMap, ShareOwned},
     import_file::{ImportDir, ImportFile},
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     import_mode2::{HashRange, ImportModeSwitcherV2},
     metrics::*,
     sst_writer::{RawSstWriter, TxnSstWriter},
-    util, Config, ConfigManager as ImportConfigManager, Error, Result,
+    util,
 };
 
 pub struct LoadedFile {
@@ -110,10 +114,10 @@ pub enum CacheKvFile {
 /// returns an error on an invalid internal state.
 /// pass the error back to the client side for further debugging.
 fn error(message: impl std::fmt::Display) -> Error {
-    Error::Io(io::Error::new(
-        ErrorKind::Other,
-        format!("internal error in TiKV: {}", message),
-    ))
+    Error::Io(io::Error::other(format!(
+        "internal error in TiKV: {}",
+        message
+    )))
 }
 
 impl CacheKvFile {
@@ -1735,18 +1739,17 @@ mod tests {
         io::{self, Cursor},
         ops::Sub,
         sync::{
-            atomic::{AtomicUsize, Ordering},
             Mutex,
+            atomic::{AtomicUsize, Ordering},
         },
-        usize,
     };
 
     use async_compression::tokio::write::ZstdEncoder;
     use encryption::{EncrypterWriter, Iv};
     use engine_rocks::get_env;
     use engine_traits::{
-        collect, Error as TraitError, ExternalSstFileInfo, Iterable, Iterator, RefIterable,
-        SstCompressionType::Zstd, SstReader, SstWriter, CF_DEFAULT, DATA_CFS,
+        CF_DEFAULT, DATA_CFS, Error as TraitError, ExternalSstFileInfo, Iterable, Iterator,
+        RefIterable, SstCompressionType::Zstd, SstReader, SstWriter, collect,
     };
     use external_storage::read_external_storage_info_buff;
     use file_system::Sha256Reader;
@@ -2313,7 +2316,7 @@ mod tests {
 
     #[test]
     fn test_read_external_storage_into_file_timed_out() {
-        use futures_util::stream::{pending, TryStreamExt};
+        use futures_util::stream::{TryStreamExt, pending};
 
         let mut input = pending::<io::Result<&[u8]>>().into_async_read();
         let mut output = Vec::new();
@@ -2400,7 +2403,7 @@ mod tests {
 
     #[test]
     fn test_read_external_storage_info_buff_timed_out() {
-        use futures_util::stream::{pending, TryStreamExt};
+        use futures_util::stream::{TryStreamExt, pending};
 
         let mut input = pending::<io::Result<&[u8]>>().into_async_read();
         let err = block_on_external_io(read_external_storage_info_buff(

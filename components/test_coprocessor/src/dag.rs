@@ -5,7 +5,7 @@ use kvproto::{
     kvrpcpb::Context,
 };
 use protobuf::Message;
-use tidb_query_datatype::codec::{datum, Datum};
+use tidb_query_datatype::codec::{Datum, datum};
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv_util::codec::number::NumberEncoder;
 use tipb::{

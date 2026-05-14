@@ -6,10 +6,10 @@ use codec::number::NumberCodec;
 
 use super::{
     super::Result,
+    Json, JsonRef, JsonType,
     constants::*,
     json_extract::extract_json,
     path_expr::{PathExpression, PathLeg},
-    Json, JsonRef, JsonType,
 };
 use crate::codec::mysql::json::path_expr::{ArraySelection, KeySelection};
 
@@ -30,7 +30,7 @@ pub struct BinaryModifier<'a> {
 
 impl<'a> BinaryModifier<'a> {
     /// Creates a new `BinaryModifier` from a `JsonRef`
-    pub fn new(old: JsonRef<'a>) -> BinaryModifier<'_> {
+    pub fn new(old: JsonRef<'a>) -> BinaryModifier<'a> {
         Self {
             // The initial offset is 0 by `as_ref()` call
             old,
@@ -219,7 +219,7 @@ impl<'a> BinaryModifier<'a> {
     // Returns the old JSON's `JsonType` if the old is untouched or
     // returns the new appended JSON's `JsonType` if the old has been modified
     fn rebuild_to(&mut self, buf: &mut Vec<u8>) -> Result<JsonType> {
-        if self.to_be_modified_ptr == self.old.as_ptr() {
+        if ptr::eq(self.to_be_modified_ptr, self.old.as_ptr()) {
             // Replace the old directly
             self.to_be_modified_ptr = ptr::null();
             buf.extend_from_slice(&self.new_value.as_ref().unwrap().value);

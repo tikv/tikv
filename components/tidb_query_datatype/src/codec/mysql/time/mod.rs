@@ -21,14 +21,14 @@ use tipb::FieldType;
 
 pub use self::{extension::*, tz::Tz, weekmode::WeekMode};
 use crate::{
+    FieldTypeAccessor, FieldTypeTp,
     codec::{
+        Error, Result, TEN_POW,
         convert::ConvertTo,
         data_type::Real,
-        mysql::{check_fsp, duration::SECS_PER_DAY, Decimal, Duration, Res, DEFAULT_FSP, MAX_FSP},
-        Error, Result, TEN_POW,
+        mysql::{DEFAULT_FSP, Decimal, Duration, MAX_FSP, Res, check_fsp, duration::SECS_PER_DAY},
     },
     expr::{EvalContext, Flag, SqlMode},
-    FieldTypeAccessor, FieldTypeTp,
 };
 
 const MIN_TIMESTAMP: i64 = 0;
@@ -2195,7 +2195,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        codec::mysql::{duration::*, MAX_FSP, UNSPECIFIED_FSP},
+        codec::mysql::{MAX_FSP, UNSPECIFIED_FSP, duration::*},
         expr::EvalConfig,
     };
 

@@ -2,31 +2,31 @@
 
 use std::sync::Arc;
 
+use DecodeHandleStrategy::*;
 use api_version::{ApiV1, KvFormat};
 use async_trait::async_trait;
 use codec::{number::NumberCodec, prelude::NumberDecoder};
 use itertools::izip;
 use kvproto::coprocessor::KeyRange;
 use tidb_query_common::{
-    storage::{IntervalRange, Storage},
     Result,
+    storage::{IntervalRange, Storage},
 };
 use tidb_query_datatype::{
+    EvalType, FieldTypeAccessor,
     codec::{
+        Datum,
         batch::{LazyBatchColumn, LazyBatchColumnVec},
         collation::collator::PADDING_SPACE,
         datum,
         datum::DatumDecoder,
-        row::v2::{decode_v2_u64, RowSlice, V1CompatibleEncoder},
+        row::v2::{RowSlice, V1CompatibleEncoder, decode_v2_u64},
         table,
-        table::{check_index_key, INDEX_VALUE_VERSION_FLAG, MAX_OLD_ENCODED_VALUE_LEN},
-        Datum,
+        table::{INDEX_VALUE_VERSION_FLAG, MAX_OLD_ENCODED_VALUE_LEN, check_index_key},
     },
     expr::{EvalConfig, EvalContext},
-    EvalType, FieldTypeAccessor,
 };
 use tipb::{ColumnInfo, FieldType, IndexScan};
-use DecodeHandleStrategy::*;
 
 use super::util::scan_executor::*;
 use crate::interface::*;
@@ -93,7 +93,7 @@ impl<S: Storage, F: KvFormat> BatchIndexScanExecutor<S, F> {
             });
         let is_int_handle = columns_info
             .get(columns_info.len() - 1 - pid_column_cnt - physical_table_id_column_cnt)
-            .map_or(false, |ci| ci.get_pk_handle());
+            .is_some_and(|ci| ci.get_pk_handle());
         let is_common_handle = primary_column_ids_len > 0;
         let (decode_handle_strategy, handle_column_cnt) = match (is_int_handle, is_common_handle) {
             (false, false) => (NoDecode, 0),
@@ -557,7 +557,7 @@ impl IndexScanExecutorImpl {
                 truncate_str
                     .iter()
                     .cloned()
-                    .chain(std::iter::repeat(PADDING_SPACE as _).take(space_num as _))
+                    .chain(std::iter::repeat_n(PADDING_SPACE as _, space_num as _))
                     .collect::<Vec<_>>()
             } else {
                 let original_data = row
@@ -850,7 +850,7 @@ impl IndexScanExecutorImpl {
     fn split_common_handle(value: &[u8]) -> Result<(&[u8], &[u8])> {
         if value
             .first()
-            .map_or(false, |c| *c == table::INDEX_VALUE_COMMON_HANDLE_FLAG)
+            .is_some_and(|c| *c == table::INDEX_VALUE_COMMON_HANDLE_FLAG)
         {
             let handle_len = (&value[1..]).read_u16().map_err(|_| {
                 other_err!(
@@ -872,7 +872,7 @@ impl IndexScanExecutorImpl {
     fn split_partition_id(value: &[u8]) -> Result<(&[u8], &[u8])> {
         if value
             .first()
-            .map_or(false, |c| *c == table::INDEX_VALUE_PARTITION_ID_FLAG)
+            .is_some_and(|c| *c == table::INDEX_VALUE_PARTITION_ID_FLAG)
         {
             if value.len() < 9 {
                 return Err(other_err!(
@@ -891,7 +891,7 @@ impl IndexScanExecutorImpl {
         Ok(
             if value
                 .first()
-                .map_or(false, |c| *c == table::INDEX_VALUE_RESTORED_DATA_FLAG)
+                .is_some_and(|c| *c == table::INDEX_VALUE_RESTORED_DATA_FLAG)
             {
                 (value, &value[value.len()..])
             } else {
@@ -910,14 +910,15 @@ mod tests {
     use kvproto::coprocessor::KeyRange;
     use tidb_query_common::{storage::test_fixture::FixtureStorage, util::convert_to_prefix_next};
     use tidb_query_datatype::{
+        Collation, FieldTypeAccessor, FieldTypeTp,
         codec::{
+            Datum,
             data_type::*,
             datum,
             row::v2::encoder_for_test::{Column, RowEncoder},
-            table, Datum,
+            table,
         },
         expr::EvalConfig,
-        Collation, FieldTypeAccessor, FieldTypeTp,
     };
     use tipb::ColumnInfo;
 

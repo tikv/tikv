@@ -15,8 +15,9 @@ use std::{
     convert::TryInto,
     result::Result,
     sync::{
+        Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc, Arc,
+        mpsc,
     },
 };
 
@@ -24,10 +25,10 @@ use parking_lot::Mutex;
 use txn_types::Key;
 
 use crate::storage::{
-    errors::SharedError,
-    lock_manager::{lock_waiting_queue::LockWaitQueues, LockManager, LockWaitToken},
-    types::PessimisticLockKeyResult,
     Error as StorageError, PessimisticLockResults, ProcessResult, StorageCallback,
+    errors::SharedError,
+    lock_manager::{LockManager, LockWaitToken, lock_waiting_queue::LockWaitQueues},
+    types::PessimisticLockKeyResult,
 };
 
 // The arguments are: (result, is_canceled_before_enqueueing).
@@ -73,23 +74,22 @@ pub struct LockWaitContextSharedState {
     /// try to cancel the request. Therefore it leads to such a corner case:
     ///
     /// 1. (scheduler) A request enters lock waiting state, so an entry is
-    ///   pushed to the `LockWaitQueues`, and a    message is sent to
-    ///   `LockManager`.
-    /// 2. (scheduler) After a while the entry is popped out and resumed
-    ///   from the `LockWaitQueues`.
-    /// 3. (scheduler) The request resumes execution but still finds lock
-    ///   on the key.
+    ///    pushed to the `LockWaitQueues`, and a message is sent to
+    ///    `LockManager`.
+    /// 2. (scheduler) After a while the entry is popped out and resumed from
+    ///    the `LockWaitQueues`.
+    /// 3. (scheduler) The request resumes execution but still finds lock on the
+    ///    key.
     ///     * This is possible to be caused by delayed-waking up or encountering
     ///       error when writing a lock-releasing command to the engine.
-    /// 4. (lock_manager) At the same time, `LockManager` tries to cancel
-    ///   the request due to timeout. But when    calling `finish_request`,
-    ///   the entry cannot be found from the `LockWaitQueues`. So it
-    ///   believes that the entry is already popped out and resumed and does
-    ///   nothing.
+    /// 4. (lock_manager) At the same time, `LockManager` tries to cancel the
+    ///    request due to timeout. But when calling `finish_request`, the entry
+    ///    cannot be found from the `LockWaitQueues`. So it believes that the
+    ///    entry is already popped out and resumed and does nothing.
     /// 5. (scheduler) An entry is pushed to the `LockWaitQueues` due to
-    ///   encountering lock at step 3. 6. Then the request becomes unable to
-    ///   be canceled by timeout or other possible errors. In worst cases,
-    ///   the request may stuck in TiKV forever.
+    ///    encountering lock at step 3. 6. Then the request becomes unable to be
+    ///    canceled by timeout or other possible errors. In worst cases, the
+    ///    request may stuck in TiKV forever.
     ///
     /// To solve this problem, a `is_canceled` flag should be set when
     /// `LockManager` tries to cancel it, before accessing the
@@ -327,17 +327,17 @@ impl<L: LockManager> LockWaitContext<L> {
 mod tests {
     use std::{
         default::Default,
-        sync::mpsc::{channel, Receiver},
+        sync::mpsc::{Receiver, channel},
         time::Duration,
     };
 
     use super::*;
     use crate::storage::{
-        lock_manager::{lock_waiting_queue::LockWaitEntry, MockLockManager},
+        ErrorInner as StorageErrorInner, Result as StorageResult,
+        lock_manager::{MockLockManager, lock_waiting_queue::LockWaitEntry},
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{Error as TxnError, ErrorInner as TxnErrorInner},
         types::PessimisticLockParameters,
-        ErrorInner as StorageErrorInner, Result as StorageResult,
     };
 
     fn create_storage_cb() -> (

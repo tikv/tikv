@@ -1,8 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{borrow::ToOwned, str, string::ToString, sync::LazyLock, u64};
+use std::{borrow::ToOwned, str, string::ToString, sync::LazyLock};
 
-use clap::{crate_authors, AppSettings};
+use clap::{AppSettings, crate_authors};
 use engine_traits::CF_DEFAULT;
 use structopt::StructOpt;
 

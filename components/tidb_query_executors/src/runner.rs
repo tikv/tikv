@@ -8,18 +8,18 @@ use itertools::Itertools;
 use kvproto::coprocessor::KeyRange;
 use protobuf::Message;
 use tidb_query_common::{
+    Result,
     execute_stats::ExecSummary,
     metrics::*,
     storage::{IntervalRange, Storage},
-    Result,
 };
 use tidb_query_datatype::{
-    expr::{EvalConfig, EvalContext, EvalWarnings},
     EvalType, FieldTypeAccessor,
+    expr::{EvalConfig, EvalContext, EvalWarnings},
 };
 use tikv_util::{
     deadline::Deadline,
-    metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC},
+    metrics::{NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC, ThrottleType},
     quota_limiter::QuotaLimiter,
 };
 use tipb::{

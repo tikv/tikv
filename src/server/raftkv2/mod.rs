@@ -11,8 +11,8 @@ use std::{
 };
 
 use collections::HashSet;
-use engine_traits::{KvEngine, RaftEngine, CF_LOCK};
-use futures::{future::BoxFuture, Future, Stream, StreamExt, TryFutureExt};
+use engine_traits::{CF_LOCK, KvEngine, RaftEngine};
+use futures::{Future, Stream, StreamExt, TryFutureExt, future::BoxFuture};
 use kvproto::{
     kvrpcpb::Context,
     raft_cmdpb::{AdminCmdType, CmdType, RaftCmdRequest, Request},
@@ -20,21 +20,21 @@ use kvproto::{
 pub use node::NodeV2;
 pub use raft_extension::Extension;
 use raftstore::{
-    store::{
-        cmd_resp, msg::ErrorCallback, util::encode_start_ts_into_flag_data, RaftCmdExtraOpts,
-        RegionSnapshot,
-    },
     Error,
+    store::{
+        RaftCmdExtraOpts, RegionSnapshot, cmd_resp, msg::ErrorCallback,
+        util::encode_start_ts_into_flag_data,
+    },
 };
 use raftstore_v2::{
-    router::{
-        message::SimpleWrite, CmdResChannelBuilder, CmdResEvent, CmdResStream, PeerMsg, RaftRouter,
-    },
     SimpleWriteBinary, SimpleWriteEncoder,
+    router::{
+        CmdResChannelBuilder, CmdResEvent, CmdResStream, PeerMsg, RaftRouter, message::SimpleWrite,
+    },
 };
 use tikv_kv::{Modify, WriteEvent};
 use tikv_util::time::Instant;
-use tracker::{get_tls_tracker_token, GLOBAL_TRACKERS};
+use tracker::{GLOBAL_TRACKERS, get_tls_tracker_token};
 use txn_types::{TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
 use super::{
@@ -172,7 +172,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
     fn async_snapshot(&mut self, mut ctx: tikv_kv::SnapContext<'_>) -> Self::SnapshotRes {
         let mut req = Request::default();
         req.set_cmd_type(CmdType::Snap);
-        if !ctx.key_ranges.is_empty() && ctx.start_ts.map_or(false, |ts| !ts.is_zero()) {
+        if !ctx.key_ranges.is_empty() && ctx.start_ts.is_some_and(|ts| !ts.is_zero()) {
             req.mut_read_index()
                 .set_start_ts(ctx.start_ts.as_ref().unwrap().into_inner());
             req.mut_read_index()
@@ -183,7 +183,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
 
         let mut header = new_request_header(ctx.pb_ctx);
         let mut flags = 0;
-        let need_encoded_start_ts = ctx.start_ts.map_or(true, |ts| !ts.is_zero());
+        let need_encoded_start_ts = ctx.start_ts.is_none_or(|ts| !ts.is_zero());
         if ctx.pb_ctx.get_stale_read() && need_encoded_start_ts {
             flags |= WriteBatchFlags::STALE_READ.bits();
         }
@@ -256,7 +256,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
                     if resp
                         .get_responses()
                         .first()
-                        .map_or(false, |r| r.get_read_index().has_locked())
+                        .is_some_and(|r| r.get_read_index().has_locked())
                     {
                         let locked = resp.mut_responses()[0].mut_read_index().take_locked();
                         Err(tikv_kv::Error::from(tikv_kv::ErrorInner::KeyIsLocked(
@@ -276,7 +276,9 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
     }
 
     type IMSnap = Self::Snap;
-    type IMSnapshotRes = Self::SnapshotRes;
+    // TODO: revert this once https://github.com/rust-lang/rust/issues/140222 is fixed.
+    // type IMSnapshotRes = Self::SnapshotRes;
+    type IMSnapshotRes = impl Future<Output = tikv_kv::Result<Self::Snap>> + Send;
     fn async_in_memory_snapshot(&mut self, ctx: tikv_kv::SnapContext<'_>) -> Self::IMSnapshotRes {
         self.async_snapshot(ctx)
     }
@@ -299,7 +301,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
             // If rid is None, all regions report error.
             fail_point!("raftkv_early_error_report", |rid| -> bool {
                 rid.and_then(|rid| rid.parse().ok())
-                    .map_or(true, |rid: u64| rid == region_id)
+                    .is_none_or(|rid: u64| rid == region_id)
             });
             false
         })();

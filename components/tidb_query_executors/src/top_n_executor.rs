@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_common::{Result, storage::IntervalRange};
 use tidb_query_datatype::{
     codec::{batch::LazyBatchColumnVec, data_type::*},
     expr::{EvalConfig, EvalContext, EvalWarnings},
@@ -38,8 +38,8 @@ pub struct BatchTopNExecutor<Src: BatchExecutor> {
     /// 1. `BatchTopNExecutor` is valid (i.e. not dropped).
     ///
     /// 2. The referenced `LazyBatchColumnVec` of the element must be valid,
-    /// which only happens when at least one of the row is in the `heap`.
-    /// Note that rows may be swapped out from    `heap` at any time.
+    ///    which only happens when at least one of the row is in the `heap`.
+    ///    Note that rows may be swapped out from    `heap` at any time.
     ///
     /// This field is placed before `order_exprs` and `src` because it relies on
     /// data in those fields and we want this field to be dropped first.
@@ -335,7 +335,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
 mod tests {
     use futures::executor::block_on;
     use tidb_query_datatype::{
-        builder::FieldTypeBuilder, expr::EvalWarnings, Collation, FieldTypeFlag, FieldTypeTp,
+        Collation, FieldTypeFlag, FieldTypeTp, builder::FieldTypeBuilder, expr::EvalWarnings,
     };
     use tidb_query_expr::RpnExpressionBuilder;
 
@@ -636,7 +636,7 @@ mod tests {
     #[test]
     fn test_integration_3() {
         use tidb_query_expr::{
-            impl_arithmetic::{arithmetic_fn_meta, IntIntPlus},
+            impl_arithmetic::{IntIntPlus, arithmetic_fn_meta},
             impl_op::is_null_fn_meta,
         };
 

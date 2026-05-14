@@ -7,14 +7,14 @@ use engine_traits::KvEngine;
 use fail::fail_point;
 use kvproto::metapb::{Peer, Region};
 use raft::StateRole;
-use raftstore::{coprocessor::*, store::RegionSnapshot, Error as RaftStoreError};
+use raftstore::{Error as RaftStoreError, coprocessor::*, store::RegionSnapshot};
 use tikv::storage::Statistics;
 use tikv_util::{error, memory::MemoryQuota, warn, worker::Scheduler};
 
 use crate::{
+    Error as CdcError,
     endpoint::{Deregister, Task},
     old_value::{self, OldValueCache},
-    Error as CdcError,
 };
 
 /// An Observer for CDC.
