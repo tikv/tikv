@@ -1195,6 +1195,25 @@ impl<T: Simulator> Cluster<T> {
         status_resp.take_region_detail()
     }
 
+    pub fn unstable_entries_stat(&self, region_id: u64, store_id: u64) -> (usize, usize, usize) {
+        let router = self.sim.rl().get_router(store_id).unwrap();
+        let (tx, rx) = mpsc::channel();
+        CasualRouter::send(
+            &router,
+            region_id,
+            CasualMessage::AccessPeer(Box::new(move |meta| {
+                tx.send((
+                    meta.raft_status.unstable_entries_len,
+                    meta.raft_status.unstable_entries_capacity,
+                    meta.raft_status.unstable_entries_size,
+                ))
+                .unwrap();
+            })),
+        )
+        .unwrap();
+        rx.recv_timeout(Duration::from_secs(5)).unwrap()
+    }
+
     pub fn truncated_state(&self, region_id: u64, store_id: u64) -> RaftTruncatedState {
         self.apply_state(region_id, store_id).take_truncated_state()
     }
