@@ -235,8 +235,8 @@ mod tests {
     use tikv_util::config::VersionTrack;
 
     use crate::store::{
-        worker::split_config::{get_sample_num, DEFAULT_SAMPLE_NUM},
         SplitConfig, SplitConfigManager,
+        worker::split_config::{DEFAULT_SAMPLE_NUM, get_sample_num},
     };
 
     #[test]

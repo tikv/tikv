@@ -10,7 +10,7 @@ pub use tidb_query_common::execute_stats::{
     ExecSummaryCollector, ExecuteStats, WithSummaryCollector,
 };
 use tidb_query_common::{
-    execute_stats::ExecSummaryCollectorEnabled, storage::IntervalRange, Result,
+    Result, execute_stats::ExecSummaryCollectorEnabled, storage::IntervalRange,
 };
 use tidb_query_datatype::{codec::batch::LazyBatchColumnVec, expr::EvalWarnings};
 use tipb::FieldType;

@@ -97,7 +97,7 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
     fn data_size(&self) -> usize {
         let mut size = 0;
         for w in &self.wbs[..=self.index] {
-            size += w.as_bytes().len();
+            size += w.len();
         }
         size
     }

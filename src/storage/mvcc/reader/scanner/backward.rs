@@ -9,7 +9,7 @@ use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
 use super::ScannerConfig;
 use crate::storage::{
-    kv::{Cursor, Snapshot, Statistics, SEEK_BOUND},
+    kv::{Cursor, SEEK_BOUND, Snapshot, Statistics},
     mvcc::{Error, ErrorInner::WriteConflict, NewerTsCheckState, Result},
     need_check_locks,
 };
@@ -492,17 +492,17 @@ mod tests {
     use kvproto::kvrpcpb::Context;
 
     use super::{
-        super::{test_util::prepare_test_data_for_check_gc_fence, ScannerBuilder},
+        super::{ScannerBuilder, test_util::prepare_test_data_for_check_gc_fence},
         *,
     };
     use crate::storage::{
+        Scanner,
         kv::{Engine, Modify, TestEngineBuilder},
         mvcc::tests::write,
         txn::tests::{
             must_acquire_pessimistic_lock, must_commit, must_gc, must_prewrite_delete,
             must_prewrite_lock, must_prewrite_put, must_rollback,
         },
-        Scanner,
     };
 
     #[test]

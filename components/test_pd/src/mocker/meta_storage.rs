@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use futures::{executor::block_on, SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt, executor::block_on};
 use grpcio::{RpcStatus, RpcStatusCode};
 use kvproto::meta_storagepb as mpb;
 
@@ -123,16 +123,6 @@ impl PdMocker for MetaStorage {
                 let mut resp = mpb::WatchResponse::default();
                 resp.set_events(vec![event].into());
                 sink.send((resp, Default::default())).await.unwrap();
-
-                #[cfg(feature = "failpoints")]
-                {
-                    use futures::executor::block_on;
-                    let cli_clone = cli.clone();
-                    fail_point!("watch_meta_storage_return", |_| {
-                        block_on(async move { cli_clone.lock().await.clear_subs() });
-                        watcher.close();
-                    });
-                }
             }
         });
         true

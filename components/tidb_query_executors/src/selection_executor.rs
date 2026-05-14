@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_common::{Result, storage::IntervalRange};
 use tidb_query_datatype::{
     codec::data_type::*,
     expr::{EvalConfig, EvalContext},
@@ -217,7 +217,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
 mod tests {
     use futures::executor::block_on;
     use tidb_query_codegen::rpn_fn;
-    use tidb_query_datatype::{codec::batch::LazyBatchColumnVec, expr::EvalWarnings, FieldTypeTp};
+    use tidb_query_datatype::{FieldTypeTp, codec::batch::LazyBatchColumnVec, expr::EvalWarnings};
 
     use super::*;
     use crate::util::mock_executor::MockExecutor;

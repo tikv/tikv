@@ -1,8 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::{bit_vec::BitVec, ChunkRef, ChunkedVec, Enum, EnumRef, UnsafeRefInto};
+use super::{ChunkRef, ChunkedVec, Enum, EnumRef, UnsafeRefInto, bit_vec::BitVec};
 use crate::{
-    codec::data_type::{retain_lifetime_transmute, ChunkedVecBytes, ChunkedVecSized, Int},
+    codec::data_type::{ChunkedVecBytes, ChunkedVecSized, Int, retain_lifetime_transmute},
     impl_chunked_vec_common,
 };
 
@@ -150,7 +150,7 @@ impl From<Vec<Option<Enum>>> for ChunkedVecEnum {
     }
 }
 
-impl<'a> UnsafeRefInto<&'static ChunkedVecEnum> for &'a ChunkedVecEnum {
+impl UnsafeRefInto<&'static ChunkedVecEnum> for &ChunkedVecEnum {
     unsafe fn unsafe_into(self) -> &'static ChunkedVecEnum {
         std::mem::transmute(self)
     }

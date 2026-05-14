@@ -4,17 +4,17 @@
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
+    ProcessResult, Snapshot, TxnStatus,
     kv::WriteData,
     lock_manager::LockManager,
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader},
     txn::{
+        Result,
         commands::{
             Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
             WriteCommand, WriteContext, WriteResult,
         },
-        Result,
     },
-    ProcessResult, Snapshot, TxnStatus,
 };
 
 command! {
@@ -137,6 +137,7 @@ pub mod tests {
 
     use super::*;
     use crate::storage::{
+        Engine,
         kv::TestEngineBuilder,
         lock_manager::MockLockManager,
         mvcc::tests::*,
@@ -144,7 +145,6 @@ pub mod tests {
             commands::WriteCommand, scheduler::DEFAULT_EXECUTION_DURATION_LIMIT, tests::*,
             txn_status_cache::TxnStatusCache,
         },
-        Engine,
     };
 
     pub fn must_success<E: Engine>(

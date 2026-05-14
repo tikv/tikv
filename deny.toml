@@ -101,6 +101,14 @@ ignore = [
     # RUSTSEC-2026-0002 (Stacked Borrows UB). Upstream dependency
     # constraints prevent upgrading at the moment.
     "RUSTSEC-2026-0002",
+    # aws-sdk-* transitively depends on time 0.3.36, which triggers
+    # RUSTSEC-2026-0009 (DoS via stack exhaustion). Upstream dependency
+    # constraints prevent upgrading at the moment.
+    "RUSTSEC-2026-0009",
+    # azure_core transitively depends on http-types/rand, which triggers
+    # RUSTSEC-2026-0097 (unsound with custom logger). Upstream dependency
+    # constraints prevent upgrading at the moment.
+    "RUSTSEC-2026-0097",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,

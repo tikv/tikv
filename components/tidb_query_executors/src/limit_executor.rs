@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use async_trait::async_trait;
-use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_common::{Result, storage::IntervalRange};
 use tipb::FieldType;
 
 use crate::interface::*;
@@ -78,9 +78,9 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
 mod tests {
     use futures::executor::block_on;
     use tidb_query_datatype::{
+        FieldTypeTp,
         codec::{batch::LazyBatchColumnVec, data_type::VectorValue},
         expr::EvalWarnings,
-        FieldTypeTp,
     };
 
     use super::*;
