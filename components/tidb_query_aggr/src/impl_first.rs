@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 
 use tidb_query_codegen::AggrFunction;
 use tidb_query_common::Result;
-use tidb_query_datatype::{codec::data_type::*, expr::EvalContext, EvalType};
+use tidb_query_datatype::{EvalType, codec::data_type::*, expr::EvalContext};
 use tidb_query_expr::RpnExpression;
 use tipb::{Expr, ExprType, FieldType};
 
@@ -297,6 +297,7 @@ mod tests {
         let mut state = function.create_state();
         let mut result = [VectorValue::with_capacity(0, EvalType::Int)];
 
+        #[allow(clippy::zero_repeat_side_effects)]
         update_vector!(
             state,
             &mut ctx,

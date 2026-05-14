@@ -5,7 +5,6 @@ use std::{
     },
     sync::{Arc, Mutex},
 };
-
 /// A structure used to manage range-based latch with mutual exclusion.
 ///
 /// Currently used to ensure mutual exclusion between compaction filter and
@@ -73,11 +72,7 @@ impl RangeLatch {
     ///
     /// Deadlocks cannot occur in the current scenario, as each caller thread
     /// holds at most one lock at a time.
-    pub fn acquire<'a>(
-        self: &'a Arc<Self>,
-        start_key: Vec<u8>,
-        end_key: Vec<u8>,
-    ) -> RangeLatchGuard<'a> {
+    pub fn acquire(self: &Arc<Self>, start_key: Vec<u8>, end_key: Vec<u8>) -> RangeLatchGuard<'_> {
         loop {
             let mut range_latches = self.range_latches.lock().unwrap();
 
@@ -104,6 +99,7 @@ impl RangeLatch {
                 // Safety: `_mutex_guard` is declared before `handle` in `KeyHandleGuard`.
                 // So the mutex guard will be released earlier than the `Arc<KeyHandle>`.
                 // Then we can make sure the mutex guard doesn't point to released memory.
+                #[allow(clippy::missing_transmute_annotations)]
                 let mutex_guard = unsafe { std::mem::transmute(mutex_guard) };
 
                 return RangeLatchGuard {
@@ -136,7 +132,7 @@ pub struct RangeLatchGuard<'a> {
     handle: &'a RangeLatch,
 }
 
-impl<'a> Drop for RangeLatchGuard<'a> {
+impl Drop for RangeLatchGuard<'_> {
     fn drop(&mut self) {
         let mut range_latches = self.handle.range_latches.lock().unwrap();
         range_latches.remove(&self.start_key);
@@ -148,8 +144,8 @@ mod tests {
     use std::{
         collections::HashSet,
         sync::{
-            atomic::{AtomicBool, Ordering},
             Arc,
+            atomic::{AtomicBool, Ordering},
         },
         thread,
         time::Duration,

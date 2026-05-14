@@ -187,7 +187,7 @@ where
 mod tests {
     use std::time::Duration;
 
-    use engine_traits::{RaftEngine, RaftLogBatch, ALL_CFS};
+    use engine_traits::{ALL_CFS, RaftEngine, RaftLogBatch};
     use raft::eraftpb::Entry;
     use tempfile::Builder;
 

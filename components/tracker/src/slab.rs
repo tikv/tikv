@@ -7,7 +7,7 @@ use lazy_static::lazy_static;
 use parking_lot::Mutex;
 use slab::Slab;
 
-use crate::{metrics::*, Tracker};
+use crate::{Tracker, metrics::*};
 
 const SLAB_SHARD_BITS: u32 = 6;
 const SLAB_SHARD_COUNT: usize = 1 << SLAB_SHARD_BITS; // 64
@@ -189,7 +189,7 @@ impl Default for TrackerToken {
 }
 
 pub struct TrackerTokenArray<'a>(&'a [TrackerToken]);
-impl<'a> slog::Value for TrackerTokenArray<'a> {
+impl slog::Value for TrackerTokenArray<'_> {
     fn serialize(
         &self,
         _record: &slog::Record<'_>,

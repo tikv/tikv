@@ -9,8 +9,8 @@ pub mod priority_queue;
 
 use std::{
     sync::{
-        atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering},
     },
     time::Duration,
 };

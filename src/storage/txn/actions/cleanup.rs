@@ -2,14 +2,14 @@
 
 // #[PerformanceCriticalPath]
 use crate::storage::{
+    Snapshot, TxnStatus,
     mvcc::{
-        metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
         ErrorInner, Key, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader, TimeStamp,
+        metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
     },
     txn::actions::check_txn_status::{
-        check_txn_status_missing_lock, rollback_lock, MissingLockAction,
+        MissingLockAction, check_txn_status_missing_lock, rollback_lock,
     },
-    Snapshot, TxnStatus,
 };
 
 /// Cleanup the lock if it's TTL has expired, comparing with `current_ts`. If
@@ -85,23 +85,23 @@ pub mod tests {
     use txn_types::TimeStamp;
 
     use super::*;
+    use crate::storage::{
+        Engine,
+        mvcc::{
+            Error as MvccError, WriteType,
+            tests::{must_have_write, must_not_have_write, write},
+        },
+        txn::tests::{must_commit, must_prewrite_put},
+    };
     #[cfg(test)]
     use crate::storage::{
+        TestEngineBuilder,
         mvcc::tests::{
             must_get_rollback_protected, must_get_rollback_ts, must_locked, must_unlocked,
             must_written,
         },
         txn::commands::txn_heart_beat,
         txn::tests::{must_acquire_pessimistic_lock, must_pessimistic_prewrite_put},
-        TestEngineBuilder,
-    };
-    use crate::storage::{
-        mvcc::{
-            tests::{must_have_write, must_not_have_write, write},
-            Error as MvccError, WriteType,
-        },
-        txn::tests::{must_commit, must_prewrite_put},
-        Engine,
     };
 
     pub fn must_succeed<E: Engine>(

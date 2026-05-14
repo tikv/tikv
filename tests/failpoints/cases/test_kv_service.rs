@@ -2,7 +2,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use engine_traits::{Peekable, CF_LOCK};
+use engine_traits::{CF_LOCK, Peekable};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     kvrpcpb::{PrewriteRequestPessimisticAction::SkipPessimisticCheck, *},
@@ -14,7 +14,7 @@ use test_raftstore::{
     must_new_cluster_mul, new_server_cluster, try_kv_prewrite_with, try_kv_prewrite_with_impl,
 };
 use test_raftstore_macro::test_case;
-use tikv_util::{config::ReadableDuration, store::new_peer, HandyRwLock};
+use tikv_util::{HandyRwLock, config::ReadableDuration, store::new_peer};
 use txn_types::Key;
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]

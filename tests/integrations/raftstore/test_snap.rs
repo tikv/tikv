@@ -4,9 +4,9 @@ use std::{
     fs,
     path::PathBuf,
     sync::{
+        Arc, Mutex, RwLock,
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Sender},
-        Arc, Mutex, RwLock,
     },
     time::Duration,
 };
@@ -23,9 +23,9 @@ use kvproto::{
 use protobuf::Message as M1;
 use raft::eraftpb::{Message, MessageType, Snapshot};
 use raftstore::{
+    Result,
     coprocessor::{ApplySnapshotObserver, BoxApplySnapshotObserver, Coprocessor, CoprocessorHost},
     store::{snap::TABLET_SNAPSHOT_VERSION, *},
-    Result,
 };
 use rand::Rng;
 use security::SecurityManager;
@@ -34,9 +34,9 @@ use test_raftstore_macro::test_case;
 use test_raftstore_v2::WrapFactory;
 use tikv::server::{snap::send_snap, tablet_snap::send_snap as send_snap_v2};
 use tikv_util::{
+    HandyRwLock,
     config::*,
     time::{Instant, Limiter, UnixSecs},
-    HandyRwLock,
 };
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>, max_snapshot_file_size: u64) {

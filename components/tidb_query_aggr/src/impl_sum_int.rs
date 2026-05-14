@@ -3,9 +3,9 @@
 use tidb_query_codegen::AggrFunction;
 use tidb_query_common::Result;
 use tidb_query_datatype::{
-    codec::{data_type::*, Error},
-    expr::EvalContext,
     EvalType, FieldTypeAccessor, FieldTypeTp,
+    codec::{Error, data_type::*},
+    expr::EvalContext,
 };
 use tidb_query_expr::RpnExpression;
 use tipb::{Expr, ExprType, FieldType};
@@ -205,9 +205,9 @@ impl super::ConcreteAggrFunctionState for AggrFnStateSumIntUnsigned {
 #[cfg(test)]
 mod tests {
     use tidb_query_datatype::{
+        EvalType, FieldTypeFlag,
         builder::FieldTypeBuilder,
         codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
-        EvalType, FieldTypeFlag,
     };
     use tipb_helper::ExprDefBuilder;
 

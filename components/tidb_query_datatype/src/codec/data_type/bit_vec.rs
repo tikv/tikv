@@ -106,7 +106,7 @@ impl<'a> BitAndIterator<'a> {
     }
 }
 
-impl<'a> Iterator for BitAndIterator<'a> {
+impl Iterator for BitAndIterator<'_> {
     type Item = bool;
 
     fn next(&mut self) -> Option<Self::Item> {

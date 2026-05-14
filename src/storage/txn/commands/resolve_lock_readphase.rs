@@ -5,13 +5,13 @@ use collections::HashMap;
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
+    ScanMode, Snapshot, Statistics,
     mvcc::MvccReader,
     txn::{
+        ProcessResult, RESOLVE_LOCK_BATCH_SIZE, Result,
         commands::{Command, CommandExt, ReadCommand, ResolveLock, TypedCommand},
         sched_pool::tls_collect_keyread_histogram_vec,
-        ProcessResult, Result, RESOLVE_LOCK_BATCH_SIZE,
     },
-    ScanMode, Snapshot, Statistics,
 };
 
 command! {

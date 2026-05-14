@@ -3,7 +3,7 @@
 use std::{
     error,
     fmt::{self, Debug, Display},
-    io::{Error as IoError, ErrorKind},
+    io::Error as IoError,
     result,
 };
 
@@ -59,7 +59,7 @@ impl From<Error> for IoError {
     fn from(err: Error) -> IoError {
         match err {
             Error::Io(e) => e,
-            other => IoError::new(ErrorKind::Other, format!("{}", other)),
+            other => IoError::other(format!("{}", other)),
         }
     }
 }

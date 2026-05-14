@@ -3,7 +3,7 @@
 use std::{
     fmt::{self, Display, Formatter},
     fs::{self, DirEntry, File, OpenOptions},
-    io::{self, Error, ErrorKind, Write},
+    io::{self, Error, Write},
     path::{Path, PathBuf},
 };
 
@@ -17,12 +17,9 @@ use crate::{
 /// Opens log file with append mode. Creates a new log file if it doesn't exist.
 fn open_log_file(path: impl AsRef<Path>) -> io::Result<File> {
     let path = path.as_ref();
-    let parent = path.parent().ok_or_else(|| {
-        Error::new(
-            ErrorKind::Other,
-            "Unable to get parent directory of log file",
-        )
-    })?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| Error::other("Unable to get parent directory of log file"))?;
     if !parent.is_dir() {
         fs::create_dir_all(parent)?
     }
@@ -300,7 +297,7 @@ impl Runnable for Runner {
 
 #[cfg(test)]
 mod tests {
-    use std::{ffi::OsStr, ops::Add, time::Duration};
+    use std::{ffi::OsStr, io::ErrorKind, ops::Add, time::Duration};
 
     use tempfile::TempDir;
 

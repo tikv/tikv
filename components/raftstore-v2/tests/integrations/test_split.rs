@@ -2,12 +2,12 @@
 
 use std::time::Duration;
 
-use engine_traits::{Peekable, RaftEngineReadOnly, CF_RAFT};
+use engine_traits::{CF_RAFT, Peekable, RaftEngineReadOnly};
 use raftstore::store::{INIT_EPOCH_VER, RAFT_INIT_LOG_INDEX};
 use tikv_util::store::new_peer;
 use txn_types::{Key, TimeStamp};
 
-use crate::cluster::{split_helper::split_region, Cluster};
+use crate::cluster::{Cluster, split_helper::split_region};
 
 #[test]
 fn test_split() {

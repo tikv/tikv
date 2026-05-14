@@ -2,18 +2,18 @@
 
 use std::time::Duration;
 
-use engine_traits::{MiscExt, CF_DEFAULT};
+use engine_traits::{CF_DEFAULT, MiscExt};
 use futures::executor::block_on;
 use kvproto::raft_cmdpb::{RaftCmdRequest, StatusCmdType};
 use pd_client::PdClient;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore_v2::{
-    router::{PeerMsg, PeerTick, StoreMsg, StoreTick},
     SimpleWriteEncoder,
+    router::{PeerMsg, PeerTick, StoreMsg, StoreTick},
 };
 use tikv_util::{config::ReadableSize, store::new_peer};
 
-use crate::cluster::{v2_default_config, Cluster};
+use crate::cluster::{Cluster, v2_default_config};
 
 #[test]
 fn test_region_heartbeat() {
@@ -210,8 +210,6 @@ fn test_report_buckets() {
             router.send(region_id, msg).unwrap();
             let _resp = block_on(sub.result()).unwrap();
         }
-        ((suffix.as_bytes().len() + 10) * repeat)
-            .try_into()
-            .unwrap()
+        ((suffix.len() + 10) * repeat) as u64
     }
 }

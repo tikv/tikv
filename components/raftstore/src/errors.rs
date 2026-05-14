@@ -9,7 +9,7 @@ use protobuf::ProtobufError;
 use thiserror::Error;
 use tikv_util::{
     codec,
-    deadline::{set_deadline_exceeded_busy_error, DeadlineError},
+    deadline::{DeadlineError, set_deadline_exceeded_busy_error},
 };
 
 use super::{coprocessor::Error as CopError, store::SnapError};

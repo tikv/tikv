@@ -2,9 +2,8 @@
 
 // #[PerformanceCriticalPath]
 use std::{
-    collections::{hash_map::DefaultHasher, VecDeque},
+    collections::{VecDeque, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
-    usize,
 };
 
 use crossbeam::utils::CachePadded;

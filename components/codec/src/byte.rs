@@ -3,9 +3,9 @@
 use std::{intrinsics::unlikely, io::Read};
 
 use crate::{
+    ErrorInner, Result,
     buffer::BufferReader,
     number::{self, NumberCodec, NumberDecoder, NumberEncoder},
-    ErrorInner, Result,
 };
 
 const MEMCMP_GROUP_SIZE: usize = 8;
@@ -1374,6 +1374,9 @@ mod benches {
             }
 
             if desc {
+                // SEE: https://github.com/rust-lang/rust-clippy/issues/14685
+                // We can remove this after upgrading to a newer toolchain.
+                #[allow(clippy::manual_slice_fill)]
                 for k in &mut key {
                     *k = !*k;
                 }

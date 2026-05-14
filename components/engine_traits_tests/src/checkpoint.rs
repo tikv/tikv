@@ -10,7 +10,7 @@ use engine_test::{
     kv::KvTestEngine,
 };
 use engine_traits::{
-    Checkpointable, Checkpointer, KvEngine, Peekable, SyncMutable, ALL_CFS, CF_DEFAULT,
+    ALL_CFS, CF_DEFAULT, Checkpointable, Checkpointer, KvEngine, Peekable, SyncMutable,
 };
 
 use super::tempdir;

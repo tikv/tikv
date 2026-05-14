@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use engine_rocks::RocksSnapshot;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
-use test::{black_box, Bencher};
+use test::{Bencher, black_box};
 use test_storage::SyncTestStorageBuilder;
 use tidb_query_datatype::codec::table;
 use tikv::storage::{Engine, SnapshotStore, Statistics, Store};

@@ -2,10 +2,10 @@
 
 use std::{path::Path, time::Duration};
 
-use engine_traits::{DbOptionsExt, MiscExt, Peekable, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS, DbOptionsExt, MiscExt, Peekable};
 use futures::executor::block_on;
 use raftstore::store::RAFT_INIT_LOG_INDEX;
-use raftstore_v2::{router::PeerMsg, SimpleWriteEncoder};
+use raftstore_v2::{SimpleWriteEncoder, router::PeerMsg};
 
 use crate::cluster::Cluster;
 
@@ -21,7 +21,7 @@ fn count_file(path: &Path, pat: impl Fn(&Path) -> bool) -> usize {
 
 fn count_sst(path: &Path) -> usize {
     count_file(path, |path| {
-        path.extension().map_or(false, |ext| ext == "sst")
+        path.extension().is_some_and(|ext| ext == "sst")
     })
 }
 

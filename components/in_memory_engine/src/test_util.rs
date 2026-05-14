@@ -4,14 +4,14 @@ use std::sync::Arc;
 
 use crossbeam::epoch;
 use engine_rocks::RocksEngine;
-use engine_traits::{SyncMutable, CF_WRITE};
+use engine_traits::{CF_WRITE, SyncMutable};
 use keys::data_key;
 use kvproto::metapb::{Peer, Region};
 use txn_types::{Key, TimeStamp, Write, WriteType};
 
 use crate::{
     engine::SkiplistHandle,
-    keys::{encode_key, InternalBytes, ValueType},
+    keys::{InternalBytes, ValueType, encode_key},
     memory_controller::MemoryController,
     write_batch::RegionCacheWriteBatchEntry,
 };

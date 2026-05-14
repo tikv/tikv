@@ -6,7 +6,9 @@ use std::{
 };
 
 use online_config::{self, OnlineConfig};
-use tikv_util::{config::ReadableDuration, resizable_threadpool::ResizableRuntime, HandyRwLock};
+use tikv_util::{
+    HandyRwLock, config::ReadableDuration, info, resizable_threadpool::ResizableRuntime, warn,
+};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]

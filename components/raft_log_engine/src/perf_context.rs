@@ -1,7 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use raft_engine::get_perf_context;
-use tracker::{TrackerToken, GLOBAL_TRACKERS};
+use tracker::{GLOBAL_TRACKERS, TrackerToken};
 
 #[derive(Debug)]
 pub struct RaftEnginePerfContext;

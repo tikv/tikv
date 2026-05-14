@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_rocks::{raw::CompactOptions, RocksEngine};
-use engine_traits::{MiscExt, Peekable, SyncMutable, CF_DEFAULT, CF_LOCK};
+use engine_rocks::{RocksEngine, raw::CompactOptions};
+use engine_traits::{CF_DEFAULT, CF_LOCK, MiscExt, Peekable, SyncMutable};
 use test_raftstore::*;
 
 fn init_db_with_sst_files(db: &RocksEngine, level: i32, n: u8) {

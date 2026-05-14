@@ -6,19 +6,19 @@ use resource_metering::record_network_out_bytes;
 use txn_types::{Key, Lock, WriteType};
 
 use crate::storage::{
+    ProcessResult, Snapshot,
     kv::WriteData,
     lock_manager::LockManager,
     mvcc::{MvccTxn, OverlappedWrite, ReleasedLock, SnapshotReader, TimeStamp, TxnCommitRecord},
     txn::{
+        Result,
         actions::check_txn_status::{collapse_prev_rollback, make_rollback},
         commands::{
             Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
             WriteCommand, WriteContext, WriteResult,
         },
-        Result,
     },
     types::SecondaryLocksStatus,
-    ProcessResult, Snapshot,
 };
 
 command! {
@@ -253,6 +253,7 @@ pub mod tests {
 
     use super::*;
     use crate::storage::{
+        Engine,
         kv::TestEngineBuilder,
         lock_manager::MockLockManager,
         mvcc::tests::*,
@@ -260,7 +261,6 @@ pub mod tests {
             commands::WriteCommand, scheduler::DEFAULT_EXECUTION_DURATION_LIMIT, tests::*,
             txn_status_cache::TxnStatusCache,
         },
-        Engine,
     };
 
     pub fn must_success<E: Engine>(

@@ -3,8 +3,8 @@
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore_v2::{
-    router::{DebugInfoChannel, PeerMsg, StoreMsg},
     StoreRouter,
+    router::{DebugInfoChannel, PeerMsg, StoreMsg},
 };
 
 #[derive(Clone)]

@@ -3,8 +3,10 @@
 //! This crate provides aggregate functions for batch executors.
 
 #![allow(incomplete_features)]
+#![allow(clippy::macro_metavars_in_unsafe)]
 #![feature(proc_macro_hygiene)]
 #![feature(specialization)]
+#![feature(stmt_expr_attributes)]
 
 #[macro_use(box_try)]
 extern crate tikv_util;
@@ -36,13 +38,13 @@ pub use self::parser::{AggrDefinitionParser, AllAggrDefinitionParser};
 /// incremental update model:
 ///
 /// - Each aggregate function associates a state structure, storing partially
-/// computed aggregate results.
+///   computed aggregate results.
 ///
 /// - The caller calls `update()` or `update_vector()` for each row to update
-/// the state.
+///   the state.
 ///
 /// - The caller finally calls `push_result()` to aggregate a summary value and
-/// push it into the given data container.
+///   push it into the given data container.
 ///
 /// This trait can be auto derived by using `tidb_query_codegen::AggrFunction`.
 pub trait AggrFunction: std::fmt::Debug + Send + 'static {
@@ -130,6 +132,7 @@ macro_rules! update_vector {
 }
 
 #[macro_export]
+#[allow(clippy::macro_metavars_in_unsafe)]
 macro_rules! update_repeat {
     ($state:expr, $ctx:expr, $value:expr, $repeat_times:expr) => {
         unsafe { $state.update_repeat_unsafe($ctx, $value.unsafe_into(), $repeat_times) }
@@ -139,7 +142,10 @@ macro_rules! update_repeat {
 #[macro_export]
 macro_rules! update {
     ($state:expr, $ctx:expr, $value:expr) => {
-        unsafe { $state.update_unsafe($ctx, $value.unsafe_into()) }
+        #[allow(clippy::macro_metavars_in_unsafe)]
+        unsafe {
+            $state.update_unsafe($ctx, $value.unsafe_into())
+        }
     };
 }
 

@@ -17,11 +17,13 @@
 //! `ApplyTrace::maybe_advance_admin_flushed`.
 //!
 //! The correctness of raft cf index relies on the fact that:
+//!
 //! - apply is sequential, so if any apply index is updated to apply trace, all
 //!   modification events before that must be processed.
 //! - admin commands that marked by raft cf index must flush all data before
 //!   being executed. Note this contraint is not just for recovery, but also
 //!   necessary to guarantee safety of operations like split init or log gc.
+//!
 //! So data of logs before raft cf index must be applied and flushed to disk.
 //!
 //! All apply related states are associated with an apply index. During
@@ -31,13 +33,13 @@ use std::{
     cmp,
     collections::VecDeque,
     path::Path,
-    sync::{atomic::Ordering, mpsc::SyncSender, Mutex},
+    sync::{Mutex, atomic::Ordering, mpsc::SyncSender},
 };
 
 use encryption_export::DataKeyManager;
 use engine_traits::{
-    data_cf_offset, offset_to_cf, ApplyProgress, KvEngine, RaftEngine, RaftLogBatch,
-    TabletRegistry, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DATA_CFS, DATA_CFS_LEN,
+    ALL_CFS, ApplyProgress, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DATA_CFS, DATA_CFS_LEN,
+    KvEngine, RaftEngine, RaftLogBatch, TabletRegistry, data_cf_offset, offset_to_cf,
 };
 use fail::fail_point;
 use kvproto::{
@@ -45,12 +47,13 @@ use kvproto::{
     raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState},
 };
 use raftstore::store::{
-    util, ReadTask, TabletSnapManager, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+    RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM, ReadTask, TabletSnapManager, WriteTask, util,
 };
-use slog::{info, trace, warn, Logger};
+use slog::{Logger, info, trace, warn};
 use tikv_util::{box_err, slog_panic, worker::Scheduler};
 
 use crate::{
+    Result, StoreRouter,
     batch::StoreContext,
     operation::{
         command::temp_split_path,
@@ -59,7 +62,6 @@ use crate::{
     raft::{Peer, Storage},
     router::{PeerMsg, SstApplyIndex},
     worker::tablet,
-    Result, StoreRouter,
 };
 
 /// Write states for the given region. The region is supposed to have all its

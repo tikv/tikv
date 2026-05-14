@@ -1,8 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{atomic::*, Arc, Mutex};
+use std::sync::{Arc, Mutex, atomic::*};
 
-use futures::{channel::mpsc, FutureExt, SinkExt, StreamExt, TryFutureExt};
+use futures::{FutureExt, SinkExt, StreamExt, TryFutureExt, channel::mpsc};
 use futures_util::stream::AbortHandle;
 use grpcio::{self, *};
 use kvproto::brpb::*;
@@ -139,10 +139,10 @@ where
     /// Generally there will be some steps for the client to do:
     /// 1. Establish a `prepare_snapshot_backup` connection.
     /// 2. Send a initial `UpdateLease`. And we should update the lease
-    /// periodically.
+    ///    periodically.
     /// 3. Send `WaitApply` to each leader peer in this store.
     /// 4. Once `WaitApply` for all regions have done, we can take disk
-    /// snapshot.
+    ///    snapshot.
     /// 5. Once all snapshots have been taken, send `Finalize` to stop.
     fn prepare_snapshot_backup(
         &mut self,
@@ -180,7 +180,7 @@ mod tests {
 
     use external_storage::make_local_backend;
     use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
-    use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
+    use tikv_util::worker::{ReceiverWrapper, dummy_scheduler};
     use txn_types::TimeStamp;
 
     use super::*;

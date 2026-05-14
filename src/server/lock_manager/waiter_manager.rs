@@ -6,8 +6,8 @@ use std::{
     pin::Pin,
     rc::Rc,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     time::Instant,
 };
@@ -21,7 +21,7 @@ use futures::{
 use kvproto::{deadlock::WaitForEntry, metapb::RegionEpoch};
 use tikv_util::{
     config::ReadableDuration,
-    time::{duration_to_sec, InstantExt},
+    time::{InstantExt, duration_to_sec},
     timer::GLOBAL_TIMER_HANDLE,
     worker::{FutureRunnable, FutureScheduler, Stopped},
 };
@@ -30,13 +30,13 @@ use tracker::GLOBAL_TRACKERS;
 
 use super::{config::Config, deadlock::Scheduler as DetectorScheduler, metrics::*};
 use crate::storage::{
+    Error as StorageError, ErrorInner as StorageErrorInner,
     lock_manager::{
         CancellationCallback, DiagnosticContext, KeyLockWaitInfo, LockDigest, LockWaitToken,
         UpdateWaitForEvent, WaitTimeout,
     },
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, TimeStamp},
     txn::Error as TxnError,
-    Error as StorageError, ErrorInner as StorageErrorInner,
 };
 
 struct DelayInner {

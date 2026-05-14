@@ -2,7 +2,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use engine_traits::{Mutable, Result, WriteBatch, WriteOptions, CF_DEFAULT};
+use engine_traits::{CF_DEFAULT, Mutable, Result, WriteBatch, WriteOptions};
 use kvproto::metapb;
 
 pub trait WriteBatchObserver: Send {

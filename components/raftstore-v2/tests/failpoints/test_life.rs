@@ -6,10 +6,10 @@ use engine_traits::CF_DEFAULT;
 use futures::executor::block_on;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::prelude::MessageType;
-use raftstore_v2::{router::PeerMsg, SimpleWriteEncoder};
+use raftstore_v2::{SimpleWriteEncoder, router::PeerMsg};
 use tikv_util::store::new_peer;
 
-use crate::cluster::{life_helper::assert_peer_not_exist, Cluster};
+use crate::cluster::{Cluster, life_helper::assert_peer_not_exist};
 
 /// Test if a peer can be destroyed when it's applying entries
 #[test]

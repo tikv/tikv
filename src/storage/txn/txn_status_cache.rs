@@ -54,28 +54,28 @@
 //! Unfortunately, the solution is still imperfect. As it's already known, it
 //! may still be problematic due to the following reasons:
 //!
-//! 1. We don't have mechanism to refuse requests that have
-//! past more than [CACHE_ITEMS_REQUIRED_KEEP_TIME] since they were sent.
+//! 1. We don't have mechanism to refuse requests that have past more than
+//!    [CACHE_ITEMS_REQUIRED_KEEP_TIME] since they were sent.
 //! 2. To prevent the cache from consuming too much more memory than expected,
-//! we have a limit to the capacity (though the limit is very large), and it's
-//! configurable (so the cache can be disabled, see how the `capacity` parameter
-//! of function [TxnStatusCache::new] is used) as a way to escape from potential
-//! faults.
+//!    we have a limit to the capacity (though the limit is very large), and
+//!    it's configurable (so the cache can be disabled, see how the `capacity`
+//!    parameter of function [TxnStatusCache::new] is used) as a way to escape
+//!    from potential faults.
 //! 3. The cache can't be synced across different TiKV instances.
 //!
 //! The third case above needs detailed explanation to be clarified. This is
 //! an example of the problem:
 //!
 //! 1. Client try to send prewrite request to TiKV A, who has the leader of the
-//! region containing a index key. The request is not received by TiKV and the
-//! client retries.
-//! 2. The leader is transferred to TiKV B, and the retries prewrite request
-//! is sent to it and processed successfully.
+//!    region containing a index key. The request is not received by TiKV and
+//!    the client retries.
+//! 2. The leader is transferred to TiKV B, and the retries prewrite request is
+//!    sent to it and processed successfully.
 //! 3. The transaction is committed on TiKV B, not being known by TiKV A.
 //! 4. The leader transferred back to TiKV A.
-//! 5. The original request arrives to TiKV A and being executed. As the
-//! status of the transaction is not in the cache in TiKV A, the prewrite
-//! request will be handled in normal way, skipping constraint checks.
+//! 5. The original request arrives to TiKV A and being executed. As the status
+//!    of the transaction is not in the cache in TiKV A, the prewrite request
+//!    will be handled in normal way, skipping constraint checks.
 //!
 //! As of the time when this module is written, the above remaining cases have
 //! not yet been handled, considering the extremely low possibility to happen
@@ -90,7 +90,7 @@
 //! ### For read data locked by large transactions more efficiently
 //!
 //! * Note: the `TxnStatusCache` is designed prepared for this usage, but not
-//! used yet for now.
+//!   used yet for now.
 //!
 //! Consider the case that a very-large transaction locked a lot of keys after
 //! prewriting, while many simple reads and writes executes frequently, thus
@@ -132,7 +132,7 @@
 //! evicting information about transactions of the other type.
 use std::{
     cmp::max,
-    sync::{atomic::AtomicU64, Arc},
+    sync::{Arc, atomic::AtomicU64},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -605,13 +605,13 @@ impl TxnStatusCache {
 mod tests {
     use std::{
         sync::{
-            atomic::{AtomicU64, Ordering},
             Arc,
+            atomic::{AtomicU64, Ordering},
         },
         time::{Duration, Instant, SystemTime},
     };
 
-    use rand::{prelude::SliceRandom, Rng};
+    use rand::{Rng, prelude::SliceRandom};
 
     use super::*;
 

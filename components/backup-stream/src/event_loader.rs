@@ -2,18 +2,18 @@
 
 use std::{marker::PhantomData, sync::Arc, time::Duration};
 
-use engine_traits::{KvEngine, CF_DEFAULT, CF_WRITE};
+use engine_traits::{CF_DEFAULT, CF_WRITE, KvEngine};
 use kvproto::{kvrpcpb::ExtraOp, metapb::Region, raft_cmdpb::CmdType};
 use raftstore::{
     coprocessor::ObserveHandle,
     router::CdcHandle,
-    store::{fsm::ChangeObserver, Callback},
+    store::{Callback, fsm::ChangeObserver},
 };
 use tikv::storage::{
+    Snapshot, Statistics,
     kv::StatisticsSummary,
     mvcc::{DeltaScanner, ScannerBuilder},
     txn::{TxnEntry, TxnEntryScanner},
-    Snapshot, Statistics,
 };
 use tikv_util::{
     box_err,
@@ -27,12 +27,12 @@ use tracing_active_tree::frame;
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::{
-    annotate, debug,
+    Task, annotate, debug,
     errors::{ContextualResultExt, Error, Result},
     metrics,
     router::{ApplyEvent, ApplyEvents, Router},
     subscription_track::{Ref, RefMut, SubscriptionTracer, TwoPhaseResolver},
-    utils, Task,
+    utils,
 };
 
 const MAX_GET_SNAPSHOT_RETRY: usize = 5;
@@ -484,8 +484,8 @@ mod tests {
     use futures::executor::block_on;
     use kvproto::metapb::*;
     use tikv::storage::{
-        txn::{tests::*, txn_status_cache::TxnStatusCache},
         TestEngineBuilder,
+        txn::{tests::*, txn_status_cache::TxnStatusCache},
     };
     use tikv_kv::SnapContext;
     use tikv_util::memory::{MemoryQuota, OwnedAllocated};

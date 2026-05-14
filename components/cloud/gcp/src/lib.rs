@@ -16,9 +16,9 @@ pub mod utils {
     use std::{future::Future, io};
 
     use cloud::metrics;
-    use hyper::{body::Bytes, Body};
+    use hyper::{Body, body::Bytes};
     use tame_gcs::ApiResponse;
-    use tikv_util::stream::{retry_ext, RetryError, RetryExt};
+    use tikv_util::stream::{RetryError, RetryExt, retry_ext};
     pub async fn retry<G, T, F, E>(action: G, name: &'static str) -> Result<T, E>
     where
         G: FnMut() -> F,

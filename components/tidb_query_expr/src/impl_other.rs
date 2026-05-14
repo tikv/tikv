@@ -12,8 +12,6 @@ pub fn bit_count(arg: &Int) -> Result<Option<Int>> {
 
 #[cfg(test)]
 mod tests {
-    use std::i64;
-
     use tipb::ScalarFuncSig;
 
     use crate::test_util::RpnFnScalarEvaluator;

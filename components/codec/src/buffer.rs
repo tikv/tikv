@@ -65,7 +65,7 @@ impl<T: AsRef<[u8]>> BufferReader for std::io::Cursor<T> {
     }
 }
 
-impl<'a> BufferReader for &'a [u8] {
+impl BufferReader for &[u8] {
     #[inline]
     fn bytes(&self) -> &[u8] {
         self
@@ -86,7 +86,7 @@ impl<'a> BufferReader for &'a [u8] {
     }
 }
 
-impl<'a, T: BufferReader + ?Sized> BufferReader for &'a mut T {
+impl<T: BufferReader + ?Sized> BufferReader for &mut T {
     #[inline]
     fn bytes(&self) -> &[u8] {
         (**self).bytes()
@@ -204,7 +204,7 @@ impl<T: AsMut<[u8]>> BufferWriter for std::io::Cursor<T> {
     }
 }
 
-impl<'a> BufferWriter for &'a mut [u8] {
+impl BufferWriter for &mut [u8] {
     #[inline]
     unsafe fn bytes_mut(&mut self, _size: usize) -> &mut [u8] {
         self
@@ -252,7 +252,7 @@ impl BufferWriter for Vec<u8> {
     }
 }
 
-impl<'a, T: BufferWriter + ?Sized> BufferWriter for &'a mut T {
+impl<T: BufferWriter + ?Sized> BufferWriter for &mut T {
     #[inline]
     unsafe fn bytes_mut(&mut self, size: usize) -> &mut [u8] {
         (**self).bytes_mut(size)
@@ -635,7 +635,7 @@ mod tests {
             // Re-allocate the vector space and ensure that the address is changed.
             vec.reserve(::std::cmp::max(payload_len * 3, 32));
 
-            if vec_ptr == vec.as_ptr() {
+            if std::ptr::eq(vec_ptr, vec.as_ptr()) {
                 in_place_reallocs += 1;
             }
 

@@ -19,8 +19,9 @@ use kvproto::diagnosticspb::{
     Diagnostics, SearchLogRequest, SearchLogRequestTarget, SearchLogResponse, ServerInfoRequest,
     ServerInfoResponse, ServerInfoType,
 };
+use lazy_static::lazy_static;
 use tikv_util::{
-    sys::{ioload, SystemExt},
+    sys::{SystemExt, ioload},
     timer::GLOBAL_TIMER_HANDLE,
 };
 use tokio::runtime::Handle;

@@ -3,11 +3,10 @@
 use std::{
     fmt::{self, Display, Formatter},
     sync::{
+        Arc,
         atomic::{AtomicBool, Ordering},
         mpsc::SyncSender,
-        Arc,
     },
-    u64,
 };
 
 use collections::HashMap;
@@ -25,7 +24,7 @@ use tikv_util::{
 };
 
 use super::metrics::*;
-use crate::store::{self, snap::Result, transport::CasualRouter, CasualMessage, SnapManager};
+use crate::store::{self, CasualMessage, SnapManager, snap::Result, transport::CasualRouter};
 
 pub const SNAP_GENERATOR_MAX_POOL_SIZE: usize = 16;
 
@@ -221,7 +220,7 @@ where
                     if let Some(is_tiflash) = self.tiflash_stores.get(&to_store_id) {
                         allow_multi_files_snapshot = !is_tiflash;
                     } else {
-                        let is_tiflash = self.pd_client.as_ref().map_or(false, |pd_client| {
+                        let is_tiflash = self.pd_client.as_ref().is_some_and(|pd_client| {
                             if let Ok(s) = pd_client.get_store(to_store_id) {
                                 return s.get_labels().iter().any(|label| {
                                     label.get_key().to_lowercase() == ENGINE

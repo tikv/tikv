@@ -3,11 +3,11 @@
 use std::{ops::Deref, sync::Arc};
 
 use async_trait::async_trait;
-use azure_core::{auth::TokenCredential, new_http_client, Error as AzureError};
+use azure_core::{Error as AzureError, auth::TokenCredential, new_http_client};
 use azure_identity::{
     AutoRefreshingTokenCredential, ClientSecretCredential, TokenCredentialOptions,
 };
-use azure_security_keyvault::{prelude::*, KeyClient};
+use azure_security_keyvault::{KeyClient, prelude::*};
 use cloud::{
     error::{Error as CloudError, KmsError, OtherError, Result},
     kms::{Config, CryptographyType, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey},

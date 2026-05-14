@@ -10,11 +10,11 @@ use std::{
 use async_trait::async_trait;
 use collections::{HashMap, HashMapEntry};
 use tidb_query_aggr::*;
-use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_common::{Result, storage::IntervalRange};
 use tidb_query_datatype::{
+    EvalType, FieldTypeAccessor,
     codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
     expr::{EvalConfig, EvalContext},
-    EvalType, FieldTypeAccessor,
 };
 use tidb_query_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode};
 use tipb::{Aggregation, Expr, FieldType};
@@ -514,10 +514,10 @@ impl Eq for GroupKeyRefUnsafe {}
 #[cfg(test)]
 mod tests {
     use futures::executor::block_on;
-    use tidb_query_datatype::{codec::data_type::*, FieldTypeTp};
+    use tidb_query_datatype::{FieldTypeTp, codec::data_type::*};
     use tidb_query_expr::{
-        impl_arithmetic::{arithmetic_fn_meta, RealPlus},
         RpnExpressionBuilder,
+        impl_arithmetic::{RealPlus, arithmetic_fn_meta},
     };
     use tipb::ScalarFuncSig;
 

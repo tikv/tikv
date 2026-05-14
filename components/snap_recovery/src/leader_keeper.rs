@@ -12,7 +12,7 @@ use futures::compat::Future01CompatExt;
 use raftstore::{
     errors::{Error, Result},
     store::{
-        msg::CampaignType, Callback, CasualMessage, CasualRouter, SignificantMsg, SignificantRouter,
+        Callback, CasualMessage, CasualRouter, SignificantMsg, SignificantRouter, msg::CampaignType,
     },
 };
 use tikv_util::{future::paired_future_callback, timer::GLOBAL_TIMER_HANDLE};
@@ -152,7 +152,7 @@ mod test {
         leaders: RefCell<HashSet<u64>>,
     }
 
-    impl<'a, EK, Router> LeaderKeeper<'a, EK, Router> {
+    impl<EK, Router> LeaderKeeper<'_, EK, Router> {
         fn mut_router(&mut self) -> &mut Router {
             &mut self.router
         }

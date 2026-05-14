@@ -141,7 +141,7 @@ mod test {
     use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
     use kvproto::raft_cmdpb::*;
     use tikv::storage::kv::TestEngineBuilder;
-    use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
+    use tikv_util::worker::{ReceiverWrapper, dummy_scheduler};
 
     use super::*;
 

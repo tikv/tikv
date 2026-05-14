@@ -6,19 +6,19 @@ use std::{
     convert::TryInto,
     marker::PhantomData,
     sync::{
-        atomic::{AtomicU64, Ordering as AtomicOrdering},
         Arc,
+        atomic::{AtomicU64, Ordering as AtomicOrdering},
     },
 };
 
 use engine_traits::{
-    IterOptions, Iterable, Iterator as EngineIterator, KvEngine, Peekable, CF_DEFAULT, CF_LOCK,
-    CF_RAFT, CF_WRITE,
+    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, IterOptions, Iterable, Iterator as EngineIterator,
+    KvEngine, Peekable,
 };
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use raftstore::{
-    coprocessor::{ConsistencyCheckMethod, ConsistencyCheckObserver, Coprocessor},
     Result,
+    coprocessor::{ConsistencyCheckMethod, ConsistencyCheckObserver, Coprocessor},
 };
 use tikv_util::keybuilder::KeyBuilder;
 use txn_types::Key;

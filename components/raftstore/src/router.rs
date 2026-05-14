@@ -15,13 +15,13 @@ use slog_global::warn;
 use tikv_util::time::ThreadReadId;
 
 use crate::{
+    DiscardReason, Error as RaftStoreError, Result as RaftStoreResult,
     store::{
-        fsm::{ChangeObserver, RaftRouter},
-        transport::{CasualRouter, ProposalRouter, SignificantRouter},
         Callback, CasualMessage, LocalReader, PeerMsg, RaftCmdExtraOpts, RaftCommand,
         SignificantMsg, StoreMsg, StoreRouter,
+        fsm::{ChangeObserver, RaftRouter},
+        transport::{CasualRouter, ProposalRouter, SignificantRouter},
     },
-    DiscardReason, Error as RaftStoreError, Result as RaftStoreResult,
 };
 /// Routes messages to the raftstore.
 pub trait RaftStoreRouter<EK>:
