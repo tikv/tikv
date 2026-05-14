@@ -27,7 +27,7 @@ impl Debug for RocksPinSlice {
     }
 }
 
-impl<'a> PartialEq<&'a [u8]> for RocksPinSlice {
+impl PartialEq<&[u8]> for RocksPinSlice {
     #[inline]
     fn eq(&self, rhs: &&[u8]) -> bool {
         **rhs == **self

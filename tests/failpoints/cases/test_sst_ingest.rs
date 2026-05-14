@@ -2,8 +2,8 @@
 
 use std::{
     sync::{
-        mpsc::{sync_channel, Receiver, RecvTimeoutError},
         Arc,
+        mpsc::{Receiver, RecvTimeoutError, sync_channel},
     },
     thread,
     thread::JoinHandle,

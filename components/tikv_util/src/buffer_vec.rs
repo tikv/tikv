@@ -321,7 +321,7 @@ impl<'a> WithConcatExtend<'a> {
     }
 }
 
-impl<'a> Extend<u8> for WithConcatExtend<'a> {
+impl Extend<u8> for WithConcatExtend<'_> {
     fn extend<I>(&mut self, iter: I)
     where
         I: IntoIterator<Item = u8>,
@@ -330,7 +330,7 @@ impl<'a> Extend<u8> for WithConcatExtend<'a> {
     }
 }
 
-impl<'a, 'b> Extend<&'a u8> for WithConcatExtend<'b> {
+impl<'a> Extend<&'a u8> for WithConcatExtend<'_> {
     fn extend<I>(&mut self, iter: I)
     where
         I: IntoIterator<Item = &'a u8>,
@@ -339,7 +339,7 @@ impl<'a, 'b> Extend<&'a u8> for WithConcatExtend<'b> {
     }
 }
 
-impl<'a> BufferWriter for WithConcatExtend<'a> {
+impl BufferWriter for WithConcatExtend<'_> {
     unsafe fn bytes_mut(&mut self, size: usize) -> &mut [u8] {
         self.0.data.bytes_mut(size)
     }
@@ -409,7 +409,7 @@ impl<'a> Iterator for Iter<'a> {
     }
 }
 
-impl<'a> ExactSizeIterator for Iter<'a> {}
+impl ExactSizeIterator for Iter<'_> {}
 
 #[cfg(test)]
 mod tests {

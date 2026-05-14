@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crossbeam_skiplist::{map::Entry, SkipMap};
+use crossbeam_skiplist::{SkipMap, map::Entry};
 
 // CAPACITY is the cache capacity. When it is exceeded, GC will be triggered.
 // If each Region is counted as 128 MiB, the total size needed to fully exhaust
@@ -135,7 +135,7 @@ impl Default for SplitValidator {
 #[cfg(test)]
 mod tests {
     use rand::Rng;
-    use test::{black_box, Bencher};
+    use test::{Bencher, black_box};
 
     use super::*;
     #[test]

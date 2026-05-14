@@ -704,7 +704,7 @@ mod tests {
         ];
 
         for (i, case) in cases.into_iter().enumerate() {
-            let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
+            let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
             let mut resolver = Resolver::new_for_test(1, memory_quota);
             for e in case.clone() {
                 match e {
@@ -754,7 +754,7 @@ mod tests {
 
     #[test]
     fn test_untrack_lock_shrink_ratio() {
-        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
+        let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
         let mut resolver = Resolver::new_for_test(1, memory_quota);
         let mut key = vec![0; 16];
         let mut ts = TimeStamp::default();
@@ -809,7 +809,7 @@ mod tests {
 
     #[test]
     fn test_idempotent_track_and_untrack_lock() {
-        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
+        let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
         let mut resolver = Resolver::new_for_test(1, memory_quota);
         let mut key = vec![0; 16];
 
@@ -883,7 +883,7 @@ mod tests {
 
     #[test]
     fn test_large_txn_tracking() {
-        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
+        let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
         let txn_status_cache = Arc::new(TxnStatusCache::new(100));
         let mut resolver = Resolver::new(1, memory_quota, txn_status_cache.clone());
         let key1: Vec<u8> = vec![1, 2, 3, 4];
@@ -933,7 +933,7 @@ mod tests {
         // A later commit_ts must be strictly larger than resolved-ts. Equality is not
         // allowed. The case may not happen in real implementation, but we want
         // to ensure the correctness and robustness of every submodule.
-        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
+        let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
         let txn_status_cache = Arc::new(TxnStatusCache::new(100));
         let mut resolver = Resolver::new(1, memory_quota, txn_status_cache.clone());
         let key: Vec<u8> = vec![1, 2, 3, 4];

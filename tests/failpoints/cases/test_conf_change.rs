@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{atomic::AtomicBool, mpsc, Arc},
+    sync::{Arc, atomic::AtomicBool, mpsc},
     thread,
     time::Duration,
 };
@@ -12,7 +12,7 @@ use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use tikv_util::{config::ReadableDuration, HandyRwLock};
+use tikv_util::{HandyRwLock, config::ReadableDuration};
 
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]

@@ -8,30 +8,29 @@ use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
     sync::{
+        Arc,
         atomic::{AtomicU32, Ordering},
-        mpsc, Arc,
+        mpsc,
     },
     time::Duration,
-    u64,
 };
 
-use encryption_export::{data_key_manager_from_config, DataKeyManager};
+use encryption_export::{DataKeyManager, data_key_manager_from_config};
 use engine_rocks::{
-    flush_engine_statistics,
+    FlowInfo, RocksEngine, RocksStatistics, flush_engine_statistics,
     raw::{Cache, Env},
-    FlowInfo, RocksEngine, RocksStatistics,
 };
 use engine_traits::{
-    data_cf_offset, CachedTablet, CfOptions, CfOptionsExt, FlowControlFactorsExt, KvEngine,
-    RaftEngine, RegionCacheEngine, StatisticsReporter, TabletRegistry, CF_DEFAULT, DATA_CFS,
+    CF_DEFAULT, CachedTablet, CfOptions, CfOptionsExt, DATA_CFS, FlowControlFactorsExt, KvEngine,
+    RaftEngine, RegionCacheEngine, StatisticsReporter, TabletRegistry, data_cf_offset,
 };
 use error_code::ErrorCodeExt;
-use file_system::{get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, File, IoBudgetAdjustor};
+use file_system::{BytesFetcher, File, IoBudgetAdjustor, get_io_rate_limiter, set_io_rate_limiter};
 use grpcio::Environment;
 use hybrid_engine::HybridEngine;
 use in_memory_engine::{
-    flush_in_memory_engine_statistics, InMemoryEngineContext, InMemoryEngineStatistics,
-    RegionCacheMemoryEngine,
+    InMemoryEngineContext, InMemoryEngineStatistics, RegionCacheMemoryEngine,
+    flush_in_memory_engine_statistics,
 };
 use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
@@ -40,15 +39,15 @@ use security::SecurityManager;
 use tikv::{
     config::{ConfigController, DbConfigManger, DbType, TikvConfig},
     server::{
-        gc_worker::compaction_filter::GC_CONTEXT, status_server::StatusServer, DEFAULT_CLUSTER_ID,
+        DEFAULT_CLUSTER_ID, gc_worker::compaction_filter::GC_CONTEXT, status_server::StatusServer,
     },
 };
 use tikv_util::{
-    config::{ensure_dir_exist, RaftDataStateMachine},
+    config::{RaftDataStateMachine, ensure_dir_exist},
     math::MovingAvgU32,
     metrics::INSTANCE_BACKEND_CPU_QUOTA,
     quota_limiter::QuotaLimiter,
-    sys::{cpu_time::ProcessStat, disk, path_in_diff_mount_point, SysQuota},
+    sys::{SysQuota, cpu_time::ProcessStat, disk, path_in_diff_mount_point},
     time::Instant,
     worker::{LazyWorker, Worker},
 };
@@ -646,7 +645,7 @@ impl EnginesResourceInfo {
         );
     }
 
-    #[cfg(any(test, feature = "testexport"))]
+    #[cfg(test)]
     pub fn latest_normalized_pending_bytes(&self) -> u32 {
         self.latest_normalized_pending_bytes.load(Ordering::Relaxed)
     }
@@ -1021,7 +1020,7 @@ impl DiskUsageChecker {
                             // If the auxiliary directory of raft engine is not separated from
                             // kv engine, returns u64::MAX to indicate that the disk space of
                             // the raft engine should not be checked.
-                            (std::u64::MAX, std::u64::MAX)
+                            (u64::MAX, u64::MAX)
                         } else if self.separated_raft_auxiliary_and_kvdb_mount_path {
                             // If the auxiliary directory of raft engine is separated from kv
                             // engine and the main directory of

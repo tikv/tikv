@@ -4,13 +4,13 @@ use std::{borrow::Cow, fmt, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use crossbeam::{
-    channel::{bounded, tick, Sender},
+    channel::{Sender, bounded, tick},
     epoch, select,
 };
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{
-    CacheRegion, EvictReason, IterOptions, Iterable, Iterator, MiscExt, OnEvictFinishedCallback,
-    RangeHintService, SnapshotMiscExt, CF_DEFAULT, CF_WRITE, DATA_CFS,
+    CF_DEFAULT, CF_WRITE, CacheRegion, DATA_CFS, EvictReason, IterOptions, Iterable, Iterator,
+    MiscExt, OnEvictFinishedCallback, RangeHintService, SnapshotMiscExt,
 };
 use fail::fail_point;
 use keys::{origin_end_key, origin_key};
@@ -33,11 +33,12 @@ use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 use yatp::Remote;
 
 use crate::{
+    InMemoryEngineConfig, RegionCacheMemoryEngine,
     cross_check::CrossChecker,
     engine::{RegionCacheMemoryEngineCore, SkiplistHandle},
     keys::{
-        decode_key, encode_key, encode_key_for_boundary_with_mvcc, encoding_for_filter,
-        InternalBytes, InternalKey, ValueType,
+        InternalBytes, InternalKey, ValueType, decode_key, encode_key,
+        encode_key_for_boundary_with_mvcc, encoding_for_filter,
     },
     memory_controller::{MemoryController, MemoryUsage},
     metrics::{
@@ -50,9 +51,8 @@ use crate::{
         LabelRule, RegionLabelChangedCallback, RegionLabelRulesManager, RegionLabelServiceBuilder,
     },
     region_manager::{CacheRegionMeta, RegionState},
-    region_stats::{RegionStatsManager, DEFAULT_EVICT_MIN_DURATION},
+    region_stats::{DEFAULT_EVICT_MIN_DURATION, RegionStatsManager},
     write_batch::RegionCacheWriteBatchEntry,
-    InMemoryEngineConfig, RegionCacheMemoryEngine,
 };
 
 // 5 seconds should be long enough for getting a TSO from PD.
@@ -1077,9 +1077,7 @@ impl Runnable for BackgroundRunner {
                         Some(t.unwrap().parse::<u64>().unwrap())
                     });
 
-                    let Some(ref rocks_engine) = self.rocks_engine else {
-                        return None;
-                    };
+                    let rocks_engine = self.rocks_engine.as_ref()?;
                     let latest_seqno = rocks_engine.get_latest_sequence_number();
                     Some(
                         rocks_engine
@@ -1727,8 +1725,8 @@ impl Filter {
 pub mod tests {
     use std::{
         sync::{
-            mpsc::{channel, Sender},
             Arc, Mutex,
+            mpsc::{Sender, channel},
         },
         time::Duration,
     };
@@ -1736,11 +1734,11 @@ pub mod tests {
     use crossbeam::epoch;
     use engine_rocks::util::new_engine;
     use engine_traits::{
-        CacheRegion, IterOptions, Iterable, Iterator, RegionCacheEngine, RegionCacheEngineExt,
-        RegionEvent, SyncMutable, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+        CF_DEFAULT, CF_LOCK, CF_WRITE, CacheRegion, DATA_CFS, IterOptions, Iterable, Iterator,
+        RegionCacheEngine, RegionCacheEngineExt, RegionEvent, SyncMutable,
     };
     use futures::future::ready;
-    use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
+    use keys::{DATA_MAX_KEY, DATA_MIN_KEY, data_key};
     use kvproto::metapb::Region;
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use pd_client::PdClient;
@@ -1753,12 +1751,13 @@ pub mod tests {
 
     use super::*;
     use crate::{
+        InMemoryEngineConfig, InMemoryEngineContext, RegionCacheMemoryEngine,
         background::BackgroundRunner,
         config::InMemoryEngineConfigManager,
         engine::{SkiplistEngine, SkiplistHandle},
         keys::{
-            construct_key, construct_region_key, construct_value, encode_key, encode_seek_key,
-            encoding_for_filter, InternalBytes, ValueType,
+            InternalBytes, ValueType, construct_key, construct_region_key, construct_value,
+            encode_key, encode_seek_key, encoding_for_filter,
         },
         memory_controller::MemoryController,
         region_label::{
@@ -1768,7 +1767,6 @@ pub mod tests {
         region_manager::RegionState::*,
         test_util::{new_region, put_data, put_data_with_overwrite},
         write_batch::RegionCacheWriteBatchEntry,
-        InMemoryEngineConfig, InMemoryEngineContext, RegionCacheMemoryEngine,
     };
 
     fn delete_data(

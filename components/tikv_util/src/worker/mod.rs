@@ -16,13 +16,13 @@ mod metrics;
 mod pool;
 
 pub use pool::{
-    dummy_scheduler, Builder, LazyWorker, ReceiverWrapper, Runnable, RunnableWithTimer,
-    ScheduleError, Scheduler, Worker,
+    Builder, LazyWorker, ReceiverWrapper, Runnable, RunnableWithTimer, ScheduleError, Scheduler,
+    Worker, dummy_scheduler,
 };
 
 pub use self::future::{
-    dummy_scheduler as dummy_future_scheduler, Runnable as FutureRunnable,
-    Scheduler as FutureScheduler, Stopped, Worker as FutureWorker,
+    Runnable as FutureRunnable, Scheduler as FutureScheduler, Stopped, Worker as FutureWorker,
+    dummy_scheduler as dummy_future_scheduler,
 };
 
 #[cfg(test)]

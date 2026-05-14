@@ -4,8 +4,8 @@ use std::{
     cell::Cell,
     hash::Hash,
     sync::{
-        atomic::{AtomicU32, AtomicU64, Ordering::Relaxed},
         Arc,
+        atomic::{AtomicU32, AtomicU64, Ordering::Relaxed},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
