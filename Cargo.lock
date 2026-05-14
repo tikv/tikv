@@ -3765,7 +3765,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-8.5#3586c08f7d29d6ee9eed2a5aa9d33ad24012a6d2"
+source = "git+https://github.com/leavrth/kvproto?branch=add_batch_download_latest_mvcc_rpc_function_8.5#8ce467678bf2c052ab389c2abaff0b45f3883808"
 dependencies = [
  "bytes",
  "futures 0.3.15",
