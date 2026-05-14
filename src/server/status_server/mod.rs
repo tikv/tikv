@@ -1361,7 +1361,7 @@ mod tests {
     use hyper_openssl::HttpsConnector;
     use online_config::OnlineConfig;
     use openssl::ssl::{SslConnector, SslFiletype, SslMethod};
-    use raftstore::store::region_meta::RegionMeta;
+    use raftstore::store::{region_meta::RegionMeta, ForcePartitionRangeManager};
     use security::SecurityConfig;
     use service::service_manager::GrpcServiceManager;
     use test_util::new_security_cfg;
