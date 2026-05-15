@@ -76,6 +76,42 @@ impl Deref for Subcompaction {
     }
 }
 
+impl Subcompaction {
+    fn merge(&mut self, other: Subcompaction) {
+        let Subcompaction {
+            inputs,
+            size,
+            subc_key,
+            input_max_ts,
+            input_min_ts,
+            compact_from_ts,
+            compact_to_ts,
+            min_key,
+            max_key,
+            epoch_hints,
+        } = other;
+
+        debug_assert_eq!(self.subc_key, subc_key);
+        debug_assert_eq!(self.compact_from_ts, compact_from_ts);
+        debug_assert_eq!(self.compact_to_ts, compact_to_ts);
+
+        self.inputs.extend(inputs);
+        self.size += size;
+        self.input_min_ts = self.input_min_ts.min(input_min_ts);
+        self.input_max_ts = self.input_max_ts.max(input_max_ts);
+        if self.min_key > min_key {
+            self.min_key = min_key;
+        }
+        if self.max_key < max_key {
+            self.max_key = max_key;
+        }
+
+        let mut merged_hints: HashSet<_> = self.epoch_hints.drain(..).collect();
+        merged_hints.extend(epoch_hints);
+        self.epoch_hints = merged_hints.into_iter().collect();
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SubcompactionResult {
     /// The origin subcompaction.

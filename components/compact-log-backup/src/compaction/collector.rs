@@ -66,6 +66,56 @@ struct ReadySubcompaction {
     update_stat_on_yield: bool,
 }
 
+fn sort_ready_compactions(mut compactions: Vec<Subcompaction>) -> Vec<Subcompaction> {
+    compactions.sort_by(|lhs, rhs| {
+        rhs.inputs
+            .len()
+            .cmp(&lhs.inputs.len())
+            .then_with(|| rhs.size.cmp(&lhs.size))
+            .then_with(|| lhs.region_id.cmp(&rhs.region_id))
+            .then_with(|| lhs.cf.cmp(rhs.cf))
+            .then_with(|| (lhs.ty as i32).cmp(&(rhs.ty as i32)))
+            .then_with(|| lhs.is_meta.cmp(&rhs.is_meta))
+            .then_with(|| lhs.table_id.cmp(&rhs.table_id))
+    });
+    compactions
+}
+
+fn enqueue_ready_compactions(
+    ready_compactions: &mut VecDeque<ReadySubcompaction>,
+    compactions: Vec<Subcompaction>,
+) {
+    ready_compactions.extend(
+        sort_ready_compactions(compactions)
+            .into_iter()
+            .map(|compaction| ReadySubcompaction {
+                compaction,
+                update_stat_on_yield: true,
+            }),
+    );
+}
+
+fn pop_ready_compaction(
+    ready_compactions: &mut VecDeque<ReadySubcompaction>,
+    collector: &mut SubcompactionCollector,
+) -> Option<Subcompaction> {
+    let mut ready = ready_compactions.pop_front()?;
+    if let Some(pending) = collector
+        .take_pending_subcompaction_by_key(ready.compaction.subc_key, ready.compaction.size)
+    {
+        let pending_size = pending.size;
+        ready.compaction.merge(pending);
+        if !ready.update_stat_on_yield {
+            collector.stat.bytes_out += pending_size;
+        }
+    }
+    if ready.update_stat_on_yield {
+        collector.stat.bytes_out += ready.compaction.size;
+        collector.stat.compactions_out += 1;
+    }
+    Some(ready.compaction)
+}
+
 impl<S: Stream<Item = Result<PhysicalLogFile>>> CollectCachedSubcompaction<S> {
     /// Get delta of statistic between last call to this.
     pub fn take_statistic(self: Pin<&mut Self>) -> CollectSubcompactionStatistic {
@@ -212,12 +262,19 @@ impl SubcompactionCollector {
         })
     }
 
-    /// Force create one undersized subcompaction from the current pending
-    /// unformed subcompactions.
-    fn take_one_pending_subcompaction(&mut self) -> Option<Subcompaction> {
-        let item = { self.items.extract_if(|_, _| true).next() };
-        let (key, item) = item?;
-        Some(item.form(&key, &self.cfg))
+    fn take_pending_subcompaction_by_key(
+        &mut self,
+        key: SubcompactionCollectKey,
+        base_size: u64,
+    ) -> Option<Subcompaction> {
+        if self
+            .items
+            .get(&key)
+            .is_none_or(|c| base_size + c.size > self.cfg.subcompaction_size_threshold)
+        {
+            return None;
+        }
+        self.items.remove(&key).map(|c| c.form(&key, &self.cfg))
     }
 }
 
@@ -268,12 +325,22 @@ impl<S: Stream<Item = Result<PhysicalLogFile>>> Stream for CollectCachedSubcompa
     ) -> std::task::Poll<Option<Self::Item>> {
         let mut this = self.project();
         loop {
-            if let Some(ready) = this.ready_compactions.pop_front() {
-                if ready.update_stat_on_yield {
-                    this.collector.stat.bytes_out += ready.compaction.size;
-                    this.collector.stat.compactions_out += 1;
+            if !this.ready_compactions.is_empty() {
+                if let Some(wait) = this.cache_wait.as_mut().as_pin_mut() {
+                    match wait.poll(cx) {
+                        Poll::Ready(()) => this.cache_wait.set(None),
+                        Poll::Pending => {
+                            return pop_ready_compaction(this.ready_compactions, this.collector)
+                                .map(Ok)
+                                .into();
+                        }
+                    }
                 }
-                return Poll::Ready(Some(Ok(ready.compaction)));
+                if this.deferred_file.is_none() {
+                    return pop_ready_compaction(this.ready_compactions, this.collector)
+                        .map(Ok)
+                        .into();
+                }
             }
             if let Some(wait) = this.cache_wait.as_mut().as_pin_mut() {
                 ready!(wait.poll(cx));
@@ -286,12 +353,8 @@ impl<S: Stream<Item = Result<PhysicalLogFile>>> Stream for CollectCachedSubcompa
             };
             match item {
                 None => {
-                    for compaction in this.collector.take_pending_subcompactions() {
-                        this.ready_compactions.push_back(ReadySubcompaction {
-                            compaction,
-                            update_stat_on_yield: true,
-                        });
-                    }
+                    let pending = this.collector.take_pending_subcompactions().collect();
+                    enqueue_ready_compactions(this.ready_compactions, pending);
                     if this.ready_compactions.is_empty() {
                         return Poll::Ready(None);
                     }
@@ -319,15 +382,9 @@ impl<S: Stream<Item = Result<PhysicalLogFile>>> Stream for CollectCachedSubcompa
                         RegisterPhysicalFileResult::Bypass => {}
                         RegisterPhysicalFileResult::Full(wait) => {
                             *this.deferred_file = Some(physical_file);
-                            match this.collector.take_one_pending_subcompaction() {
-                                Some(compaction) => {
-                                    this.ready_compactions.push_back(ReadySubcompaction {
-                                        compaction,
-                                        update_stat_on_yield: true,
-                                    });
-                                }
-                                None => this.cache_wait.set(Some(wait)),
-                            }
+                            let pending = this.collector.take_pending_subcompactions().collect();
+                            enqueue_ready_compactions(this.ready_compactions, pending);
+                            this.cache_wait.set(Some(wait));
                             continue;
                         }
                     }
@@ -457,7 +514,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_collect_cached_subcompaction_forces_one_pending_when_cache_is_full() {
+    async fn test_collect_cached_subcompaction_drains_pending_when_cache_is_full() {
         let r = SubcompactionCollectKey::of_region;
         let items = vec![
             PhysicalLogFile {
@@ -617,6 +674,118 @@ mod test {
 
         let third = collector.as_mut().next().await.unwrap().unwrap();
         assert_eq!((third.size, third.region_id), (40, 3));
+    }
+
+    #[tokio::test]
+    async fn test_collect_cached_subcompaction_merges_matching_pending_before_yielding_ready() {
+        let r = SubcompactionCollectKey::of_region;
+        let items = vec![
+            PhysicalLogFile {
+                name: Chars::from("001"),
+                size: 40,
+                files: vec![log_file("001", 50, r(1))],
+            },
+            PhysicalLogFile {
+                name: Chars::from("002"),
+                size: 40,
+                files: vec![log_file("002", 40, r(2))],
+            },
+            PhysicalLogFile {
+                name: Chars::from("003"),
+                size: 40,
+                files: vec![log_file("003", 30, r(2))],
+            },
+        ];
+        let physical_file_cache = Arc::new(PhysicalFileCache::new(100));
+        let collector = CollectCachedSubcompaction::new(
+            stream::iter(items).map(Result::Ok),
+            CollectSubcompactionConfig {
+                compact_shift_from_ts: 0,
+                compact_from_ts: 0,
+                compact_to_ts: u64::MAX,
+                subcompaction_size_threshold: u64::MAX,
+            },
+            Arc::clone(&physical_file_cache),
+        );
+        tokio::pin!(collector);
+
+        let first = collector.as_mut().next().await.unwrap().unwrap();
+        assert_eq!((first.size, first.region_id), (50, 1));
+
+        drop(PhysicalFileCacheRefGuard::new(
+            Arc::clone(&physical_file_cache),
+            &first.inputs,
+        ));
+
+        let second = collector.as_mut().next().await.unwrap().unwrap();
+        assert_eq!((second.size, second.region_id), (70, 2));
+        assert_eq!(second.inputs.len(), 2);
+        assert!(collector.as_mut().next().await.is_none());
+
+        let stat = collector.as_mut().take_statistic();
+        assert_eq!(stat.files_in, 3);
+        assert_eq!(stat.bytes_in, 120);
+        assert_eq!(stat.bytes_out, 120);
+        assert_eq!(stat.compactions_out, 2);
+        assert_eq!(stat.files_filtered_out, 0);
+    }
+
+    #[tokio::test]
+    async fn test_collect_cached_subcompaction_does_not_merge_over_threshold_pending() {
+        let r = SubcompactionCollectKey::of_region;
+        let items = vec![
+            PhysicalLogFile {
+                name: Chars::from("001"),
+                size: 40,
+                files: vec![log_file("001", 60, r(1))],
+            },
+            PhysicalLogFile {
+                name: Chars::from("002"),
+                size: 40,
+                files: vec![log_file("002", 40, r(2))],
+            },
+            PhysicalLogFile {
+                name: Chars::from("003"),
+                size: 40,
+                files: vec![log_file("003", 70, r(2))],
+            },
+        ];
+        let physical_file_cache = Arc::new(PhysicalFileCache::new(100));
+        let collector = CollectCachedSubcompaction::new(
+            stream::iter(items).map(Result::Ok),
+            CollectSubcompactionConfig {
+                compact_shift_from_ts: 0,
+                compact_from_ts: 0,
+                compact_to_ts: u64::MAX,
+                subcompaction_size_threshold: 100,
+            },
+            Arc::clone(&physical_file_cache),
+        );
+        tokio::pin!(collector);
+
+        let first = collector.as_mut().next().await.unwrap().unwrap();
+        assert_eq!((first.size, first.region_id), (60, 1));
+
+        drop(PhysicalFileCacheRefGuard::new(
+            Arc::clone(&physical_file_cache),
+            &first.inputs,
+        ));
+
+        let second = collector.as_mut().next().await.unwrap().unwrap();
+        assert_eq!((second.size, second.region_id), (40, 2));
+        assert_eq!(second.inputs.len(), 1);
+
+        let third = collector.as_mut().next().await.unwrap().unwrap();
+        assert_eq!((third.size, third.region_id), (70, 2));
+        assert_eq!(third.inputs.len(), 1);
+        assert!(collector.as_mut().next().await.is_none());
+
+        let stat = collector.as_mut().take_statistic();
+        assert_eq!(stat.files_in, 3);
+        assert_eq!(stat.bytes_in, 170);
+        assert_eq!(stat.bytes_out, 170);
+        assert_eq!(stat.compactions_out, 3);
+        assert_eq!(stat.files_filtered_out, 0);
     }
 
     #[tokio::test]
