@@ -403,6 +403,15 @@ where
         self.hibernate_state.reset(state);
         if state == GroupState::Idle {
             self.peer.raft_group.raft.maybe_free_inflight_buffers();
+            // For hibernated regions, proactively release the empty unstable
+            // entry buffer to save memory.
+            self.peer
+                .raft_group
+                .raft
+                .r
+                .raft_log
+                .unstable
+                .release_entry_buffer();
         }
     }
 
@@ -1249,14 +1258,22 @@ where
                 if store.is_applying_snapshot() {
                     local_state.set_state(PeerState::Applying);
                 }
-                cb(RegionMeta::new(
+                let mut meta = RegionMeta::new(
                     &local_state,
                     store.apply_state(),
                     self.fsm.hibernate_state.group_state(),
                     peer.raft_group.status(),
                     peer.raft_group.raft.raft_log.last_index(),
                     peer.raft_group.raft.raft_log.persisted,
-                ))
+                );
+                #[cfg(any(test, feature = "testexport"))]
+                {
+                    let unstable = &peer.raft_group.raft.raft_log.unstable;
+                    meta.raft_status.unstable_entries_len = unstable.entries.len();
+                    meta.raft_status.unstable_entries_capacity = unstable.entries.capacity();
+                    meta.raft_status.unstable_entries_size = unstable.entries_size;
+                }
+                cb(meta)
             }
             CasualMessage::QueryRegionLeaderResp { region, leader } => {
                 // the leader already updated
