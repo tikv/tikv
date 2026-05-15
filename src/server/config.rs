@@ -505,8 +505,7 @@ impl Config {
                 "server.inspect-network-interval can't be less than 10ms and not zero."
             ));
         }
-<<<<<<< HEAD
-=======
+
         if self.graceful_shutdown_timeout.0.as_secs() == 0 {
             warn!("graceful shutdown timeout is disabled");
         }
@@ -521,7 +520,7 @@ impl Config {
                 "server.raft-client-queue-size must be greater than or equal to server.grpc-raft-conn-num"
             ));
         }
->>>>>>> 4e5932165a (server: reduce raft_client's message queue capacity when there are more the 1 connection per store (#19543))
+
         Ok(())
     }
 
