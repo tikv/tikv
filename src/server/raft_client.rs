@@ -1024,9 +1024,11 @@ where
                 .connections
                 .entry((store_id, conn_id))
                 .or_insert_with(|| {
-                    let queue = Arc::new(Queue::with_capacity(
-                        self.builder.cfg.value().raft_client_queue_size,
-                    ));
+                    let queue_capacity = {
+                        let cfg = self.builder.cfg.value();
+                        cfg.raft_client_queue_size / cfg.grpc_raft_conn_num
+                    };
+                    let queue = Arc::new(Queue::with_capacity(queue_capacity));
                     if need_pause {
                         queue.set_conn_state(ConnState::Paused);
                     }
