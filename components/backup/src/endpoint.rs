@@ -251,6 +251,9 @@ async fn save_backup_file_worker<EK: KvEngine>(
                 msg.files.save(&storage),
                 msg.resource_limiter.clone(),
                 false,
+                false,
+                None,
+                0,
             )
             .await
             {
@@ -1073,6 +1076,9 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                             ),
                             resource_limiter.clone(),
                             false,
+                            false,
+                            None,
+                            0,
                         )
                         .await
                     };
