@@ -102,7 +102,7 @@ pub struct MultiMasterKeyBackend {
 
 #[derive(Default, Debug)]
 struct MultiMasterKeyBackendInner {
-    backends: Option<Vec<Box<dyn AsyncBackend>>>,
+    backends: Option<Arc<Vec<Box<dyn AsyncBackend>>>>,
     pub(crate) configs: Option<Vec<MasterKeyConfig>>,
 }
 impl MultiMasterKeyBackend {
@@ -156,25 +156,30 @@ impl MultiMasterKeyBackend {
 
         let mut write_guard = self.inner.write().await;
         if write_guard.configs.as_ref() != Some(&master_keys_configs) {
-            write_guard.backends = Some(create_master_key_backends(
+            write_guard.backends = Some(Arc::new(create_master_key_backends(
                 &master_keys_configs,
                 create_backend_fn,
-            )?);
+            )?));
             write_guard.configs = Some(master_keys_configs);
         }
         Ok(())
     }
 
     pub async fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptedContent> {
-        let read_guard = self.inner.read().await;
-        if read_guard.backends.is_none() {
-            return Err(log_and_error(
-                "internal error: multi master key backend not initialized when encrypting",
-            ));
-        }
+        let backends = {
+            let read_guard = self.inner.read().await;
+            match read_guard.backends.as_ref() {
+                Some(b) => Arc::clone(b),
+                None => {
+                    return Err(log_and_error(
+                        "internal error: multi master key backend not initialized when encrypting",
+                    ));
+                }
+            }
+        };
         let mut errors = Vec::new();
 
-        for master_key_backend in read_guard.backends.as_ref().unwrap() {
+        for master_key_backend in backends.iter() {
             match master_key_backend.encrypt_async(plaintext).await {
                 Ok(res) => return Ok(res),
                 Err(e) => errors.push(format!("Backend failed to encrypt with error: {}", e)),
@@ -185,15 +190,20 @@ impl MultiMasterKeyBackend {
         Err(log_and_error(&combined_error))
     }
     pub async fn decrypt(&self, ciphertext: &EncryptedContent) -> Result<Vec<u8>> {
-        let read_guard = self.inner.read().await;
-        if read_guard.backends.is_none() {
-            return Err(log_and_error(
-                "internal error: multi master key backend not initialized when decrypting",
-            ));
-        }
+        let backends = {
+            let read_guard = self.inner.read().await;
+            match read_guard.backends.as_ref() {
+                Some(b) => Arc::clone(b),
+                None => {
+                    return Err(log_and_error(
+                        "internal error: multi master key backend not initialized when decrypting",
+                    ));
+                }
+            }
+        };
         let mut errors = Vec::new();
 
-        for master_key_backend in read_guard.backends.as_ref().unwrap() {
+        for master_key_backend in backends.iter() {
             match master_key_backend.decrypt_async(ciphertext).await {
                 Ok(res) => return Ok(res),
                 Err(e) => errors.push(format!("Backend failed to decrypt with error: {}", e)),
@@ -448,7 +458,7 @@ pub mod tests {
         ];
 
         inner.configs = Some(configs);
-        inner.backends = Some(backends);
+        inner.backends = Some(Arc::new(backends));
 
         let backend = MultiMasterKeyBackend {
             inner: Arc::new(RwLock::new(inner)),

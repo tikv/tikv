@@ -934,7 +934,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         if let Err(e) = self.snap_scheduler.schedule(task) {
             let err_msg = format!("{}", e);
             let sink = match e.into_inner() {
-                SnapTask::Recv { sink, .. } => sink,
+                SnapTask::RecvTablet { sink, .. } => sink,
                 _ => unreachable!(),
             };
             let status = RpcStatus::with_message(RpcStatusCode::RESOURCE_EXHAUSTED, err_msg);

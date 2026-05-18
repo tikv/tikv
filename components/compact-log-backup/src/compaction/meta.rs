@@ -14,6 +14,7 @@ use super::{
     collector::CollectSubcompactionConfig,
 };
 use crate::{
+    ShardConfig,
     errors::Result,
     storage::{
         LoadFromExt, LogFile, LogFileId, MetaFile, MigrationStorageWrapper, PhysicalLogFile,
@@ -85,6 +86,7 @@ impl Subcompaction {
         out.set_table_id(self.table_id);
         out.set_region_id(self.region_id);
         out.set_cf(self.cf.to_owned());
+        out.set_ty(self.ty);
         out.set_size(self.size);
         out.set_input_min_ts(self.input_min_ts);
         out.set_input_max_ts(self.input_max_ts);
@@ -128,6 +130,7 @@ impl Subcompaction {
         c.form(
             &key,
             &CollectSubcompactionConfig {
+                compact_shift_from_ts: 0,
                 compact_from_ts: 0,
                 compact_to_ts: u64::MAX,
                 subcompaction_size_threshold: 0,
@@ -261,8 +264,12 @@ impl CompactionRunInfoBuilder {
         &mut self.compaction
     }
 
-    pub async fn write_migration(&self, s: Arc<dyn ExternalStorage>) -> Result<()> {
-        let migration = self.migration_of(self.find_expiring_files(s.clone()).await?);
+    pub async fn write_migration(
+        &self,
+        s: Arc<dyn ExternalStorage>,
+        shard: Option<ShardConfig>,
+    ) -> Result<()> {
+        let migration = self.migration_of(self.find_expiring_files(s.clone(), shard).await?);
         let wrapped_storage = MigrationStorageWrapper::new(s.as_ref());
         wrapped_storage.write(migration.into()).await?;
         Ok(())
@@ -290,8 +297,10 @@ impl CompactionRunInfoBuilder {
     async fn find_expiring_files(
         &self,
         s: Arc<dyn ExternalStorage>,
+        shard: Option<ShardConfig>,
     ) -> Result<Vec<ExpiringFilesOfMeta>> {
-        let ext = LoadFromExt::default();
+        let mut ext = LoadFromExt::default();
+        ext.shard = shard;
         let mut storage = StreamMetaStorage::load_from_ext(&s, ext).await?;
 
         let mut result = vec![];
@@ -387,7 +396,7 @@ mod test {
 
     impl CompactionRunInfoBuilder {
         async fn mig(&self, s: Arc<dyn ExternalStorage>) -> crate::Result<brpb::Migration> {
-            Ok(self.migration_of(self.find_expiring_files(s).await?))
+            Ok(self.migration_of(self.find_expiring_files(s, None).await?))
         }
     }
 

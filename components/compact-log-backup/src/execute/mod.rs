@@ -4,7 +4,7 @@ pub mod hooking;
 #[cfg(test)]
 mod test;
 
-use std::{borrow::Cow, cell::Cell, path::Path, sync::Arc};
+use std::{borrow::Cow, cell::Cell, path::Path, str::FromStr, sync::Arc};
 
 use chrono::Utc;
 use engine_rocks::RocksEngine;
@@ -17,8 +17,11 @@ use hooking::{
 };
 use kvproto::brpb::StorageBackend;
 use tikv_util::config::ReadableSize;
-use tokio::runtime::Handle;
-use tracing::{Instrument, trace_span};
+use tokio::{
+    runtime::Handle,
+    task::{JoinError, JoinHandle},
+};
+use tracing::trace_span;
 use tracing_active_tree::{frame, root};
 
 use self::hooking::AbortedCtx;
@@ -27,7 +30,7 @@ use super::{
         collector::{CollectSubcompaction, CollectSubcompactionConfig},
         exec::{SubcompactExt, SubcompactionExec},
     },
-    storage::{LoadFromExt, StreamMetaStorage},
+    storage::{CountObjectsExt, LoadFromExt, StreamMetaStorage},
 };
 use crate::{
     ErrorKind,
@@ -39,6 +42,89 @@ use crate::{
 
 const COMPACTION_V1_PREFIX: &str = "v1/compactions";
 
+/// Sharding configuration for `compact-log-backup`.
+///
+/// Sharding is defined as: `hash(store_id.to_le_bytes()) % total == index - 1`,
+/// where `index` is 1-based.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShardConfig {
+    /// Shard index (1-based).
+    pub index: u64,
+    /// Total shards (must be > 0).
+    pub total: u64,
+}
+
+#[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
+pub enum ShardConfigError {
+    #[error("TOTAL must be > 0")]
+    TotalIsZero,
+    #[error("INDEX must be within [1, {total}]")]
+    IndexOutOfRange { index: u64, total: u64 },
+}
+
+impl ShardConfig {
+    pub fn new(index: u64, total: u64) -> std::result::Result<Self, ShardConfigError> {
+        if total == 0 {
+            return Err(ShardConfigError::TotalIsZero);
+        }
+        if index == 0 || index > total {
+            return Err(ShardConfigError::IndexOutOfRange { index, total });
+        }
+        Ok(Self { index, total })
+    }
+
+    fn shard_mod(&self, v: u64) -> bool {
+        (v % self.total) == (self.index - 1)
+    }
+
+    fn hash64(bytes: &[u8]) -> u64 {
+        let mut hasher = crc64fast::Digest::new();
+        hasher.write(bytes);
+        hasher.sum64()
+    }
+
+    pub fn contains_store_id(&self, store_id: u64) -> bool {
+        self.shard_mod(Self::hash64(&store_id.to_le_bytes()))
+    }
+
+    pub fn suffix(&self) -> String {
+        format!("shard{}_of{}", self.index, self.total)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ShardConfigParseError {
+    #[error("expected format INDEX/TOTAL (e.g. 1/3)")]
+    InvalidFormat,
+    #[error("cannot parse INDEX as u64: {0}")]
+    InvalidIndex(#[source] std::num::ParseIntError),
+    #[error("cannot parse TOTAL as u64: {0}")]
+    InvalidTotal(#[source] std::num::ParseIntError),
+    #[error(transparent)]
+    InvalidShardConfig(#[from] ShardConfigError),
+}
+
+pub fn parse_shard_config(s: &str) -> std::result::Result<ShardConfig, ShardConfigParseError> {
+    let (index, total) = s
+        .split_once('/')
+        .ok_or(ShardConfigParseError::InvalidFormat)?;
+    let index = index
+        .parse::<u64>()
+        .map_err(ShardConfigParseError::InvalidIndex)?;
+    let total = total
+        .parse::<u64>()
+        .map_err(ShardConfigParseError::InvalidTotal)?;
+    Ok(ShardConfig::new(index, total)?)
+}
+
+impl FromStr for ShardConfig {
+    type Err = ShardConfigParseError;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        parse_shard_config(s)
+    }
+}
+
 /// The config for an execution of a compaction.
 ///
 /// This structure itself fully defines what work the compaction need to do.
@@ -46,10 +132,18 @@ const COMPACTION_V1_PREFIX: &str = "v1/compactions";
 /// should be the same. (But some of them may be filtered out later.)
 #[derive(Debug)]
 pub struct ExecutionConfig {
-    /// Filter out files doesn't contain any record with TS great or equal than
-    /// this.
+    /// Optional sharding configuration. When set, only inputs belonging to
+    /// this shard will be compacted.
+    pub shard: Option<ShardConfig>,
+    /// Lower bound for selecting default CF files. Defaults to `from_ts`.
+    pub shift_ts: u64,
+    /// Whether to calculate `shift_ts` from backup metadata names before
+    /// collecting subcompactions.
+    pub calculate_shift_ts: bool,
+    /// Filter out write CF files don't have any record with TS less than this.
     pub from_ts: u64,
-    /// Filter out files doesn't contain any record with TS less than this.
+    /// Filter out write CF files don't have any record with TS great or equal
+    /// than this.
     pub until_ts: u64,
     /// The max count of running prefetch tasks.
     pub prefetch_running_count: u64,
@@ -69,13 +163,20 @@ impl slog::KV for ExecutionConfig {
         _record: &slog::Record<'_>,
         serializer: &mut dyn slog::Serializer,
     ) -> slog::Result {
+        serializer.emit_u64("shift_ts", self.shift_ts)?;
+        serializer.emit_bool("calculate_shift_ts", self.calculate_shift_ts)?;
         serializer.emit_u64("from_ts", self.from_ts)?;
         serializer.emit_u64("until_ts", self.until_ts)?;
+        if let Some(shard) = self.shard {
+            serializer.emit_u64("shard.index", shard.index)?;
+            serializer.emit_u64("shard.total", shard.total)?;
+        }
         let date = |pts| {
             chrono::DateTime::<Utc>::from_timestamp_millis(pts as i64)
                 .map(|dt| dt.to_string())
                 .unwrap_or_else(|| format!("invalid_ts({pts})"))
         };
+        serializer.emit_arguments("shift_date", &format_args!("{}", date(self.shift_ts)))?;
         serializer.emit_arguments("from_date", &format_args!("{}", date(self.from_ts)))?;
         serializer.emit_arguments("until_date", &format_args!("{}", date(self.until_ts)))?;
         serializer.emit_arguments("compression", &format_args!("{:?}", self.compression))?;
@@ -96,16 +197,26 @@ impl ExecutionConfig {
     pub fn recommended_prefix(&self, name: &str) -> String {
         let mut hasher = crc64fast::Digest::new();
         hasher.write(name.as_bytes());
+        if let Some(shard) = self.shard {
+            hasher.write(&shard.index.to_le_bytes());
+            hasher.write(&shard.total.to_le_bytes());
+        }
         hasher.write(&self.from_ts.to_le_bytes());
         hasher.write(&self.until_ts.to_le_bytes());
+        hasher.write(&[self.calculate_shift_ts as u8]);
         hasher.write(&util::compression_type_to_u8(self.compression).to_le_bytes());
         hasher.write(&self.compression_level.unwrap_or(0).to_le_bytes());
 
+        let shard_suffix = self
+            .shard
+            .map(|s| format!("_{}", s.suffix()))
+            .unwrap_or_default();
         format!(
-            "{}/{}_{}",
+            "{}/{}_{}{}",
             COMPACTION_V1_PREFIX,
             name,
-            util::aligned_u64(hasher.sum64())
+            util::aligned_u64(hasher.sum64()),
+            shard_suffix
         )
     }
 }
@@ -136,6 +247,24 @@ struct ExecuteCtx<'a, H: ExecHooks> {
 }
 
 impl Execution {
+    async fn abort_and_drain<T>(pending: &mut Vec<JoinHandle<T>>) {
+        for join in pending.iter() {
+            join.abort();
+        }
+        while let Some(join) = pending.pop() {
+            let _ = join.await;
+        }
+    }
+
+    fn unpack_compaction_join<T>(join_res: std::result::Result<Result<T>, JoinError>) -> Result<T> {
+        match join_res {
+            Ok(res) => res,
+            Err(join_err) => {
+                Err(ErrorKind::Other(format!("subcompaction task join error: {join_err}")).into())
+            }
+        }
+    }
+
     pub fn gen_name(&self) -> String {
         let compaction_name = Path::new(&self.out_prefix)
             .file_name()
@@ -151,13 +280,8 @@ impl Execution {
         )
     }
 
-    async fn run_prepared(&self, cx: &mut ExecuteCtx<'_, impl ExecHooks>) -> Result<()> {
+    async fn run_prepared(&mut self, cx: &mut ExecuteCtx<'_, impl ExecHooks>) -> Result<()> {
         let mut ext = LoadFromExt::default();
-        let next_compaction = trace_span!("next_compaction");
-        ext.loading_content_span = Some(trace_span!(
-            parent: next_compaction.clone(),
-            "load_meta_file_names"
-        ));
         ext.prefetch_running_count = self.cfg.prefetch_running_count as usize;
         ext.prefetch_buffer_count = self.cfg.prefetch_buffer_count as usize;
 
@@ -166,23 +290,41 @@ impl Execution {
             ref mut hooks,
             ..
         } = cx;
+        let metadata_scan = StreamMetaStorage::count_objects(
+            storage.as_ref(),
+            CountObjectsExt {
+                calculate_shift_ts: self.cfg.calculate_shift_ts,
+                from_ts: self.cfg.from_ts,
+                until_ts: self.cfg.until_ts,
+            },
+        )
+        .await?;
+        self.cfg.shift_ts = metadata_scan.shift_ts;
 
         let cx = BeforeStartCtx {
             storage: storage.as_ref(),
             async_rt: &tokio::runtime::Handle::current(),
             this: self,
+            meta_count: metadata_scan.count,
         };
         hooks.before_execution_started(cx).await?;
 
+        // Avoid setting an explicit parent here: this span may be dropped while
+        // the parent span is not currently entered (e.g. early-abort paths),
+        // which can violate invariants of `tracing-active-tree`.
+        ext.loading_content_span = Some(trace_span!("load_meta_file_names"));
+        ext.shard = self.cfg.shard;
+
         let storage = Arc::clone(storage);
         let meta = StreamMetaStorage::load_from_ext(&storage, ext).await?;
-        let stream = meta.flat_map(|file| match file {
+        let stream = meta.flat_map(move |file| match file {
             Ok(file) => stream::iter(file.into_logs()).map(Ok).left_stream(),
             Err(err) => stream::once(futures::future::err(err)).right_stream(),
         });
         let mut compact_stream = CollectSubcompaction::new(
             stream,
             CollectSubcompactionConfig {
+                compact_shift_from_ts: self.cfg.shift_ts,
                 compact_from_ts: self.cfg.from_ts,
                 compact_to_ts: self.cfg.until_ts,
                 subcompaction_size_threshold: ReadableSize::mb(128).0,
@@ -190,16 +332,19 @@ impl Execution {
         );
         let mut pending = Vec::new();
         let mut id = 0;
+        let mut first_err: Option<crate::Error> = None;
 
-        while let Some(c) = compact_stream
-            .next()
-            .instrument(next_compaction.clone())
-            .await
-        {
+        while let Some(c) = compact_stream.next().await {
             let cstat = compact_stream.take_statistic();
             let lstat = compact_stream.get_mut().get_mut().take_statistic();
 
-            let c = c?;
+            let c = match c {
+                Ok(c) => c,
+                Err(err) => {
+                    first_err = Some(err);
+                    break;
+                }
+            };
             let cid = CId(id);
             let skip = Cell::new(None);
             let cx = SubcompactionStartCtx {
@@ -239,20 +384,50 @@ impl Execution {
 
             if pending.len() >= self.max_concurrent_subcompaction as _ {
                 let join = util::select_vec(&mut pending);
-                let (cres, cid) = frame!("wait_for_compaction"; join).await.unwrap()?;
-                self.on_compaction_finish(cid, &cres, storage.as_ref(), *hooks)
-                    .await?;
+                let (cres, cid) =
+                    match Self::unpack_compaction_join(frame!("wait_for_compaction"; join).await) {
+                        Ok(v) => v,
+                        Err(err) => {
+                            first_err = Some(err);
+                            break;
+                        }
+                    };
+                if let Err(err) = self
+                    .on_compaction_finish(cid, &cres, storage.as_ref(), *hooks)
+                    .await
+                {
+                    first_err = Some(err);
+                    break;
+                }
             }
         }
-        drop(next_compaction);
+        // Close spans created while loading metadata as early as possible.
+        drop(compact_stream);
 
-        for join in pending {
-            let (cres, cid) = frame!("final_wait"; join).await.unwrap()?;
-            self.on_compaction_finish(cid, &cres, storage.as_ref(), *hooks)
-                .await?;
+        if let Some(err) = first_err {
+            Self::abort_and_drain(&mut pending).await;
+            return Err(err);
+        }
+
+        while let Some(join) = pending.pop() {
+            let (cres, cid) = match Self::unpack_compaction_join(frame!("final_wait"; join).await) {
+                Ok(v) => v,
+                Err(err) => {
+                    Self::abort_and_drain(&mut pending).await;
+                    return Err(err);
+                }
+            };
+            if let Err(err) = self
+                .on_compaction_finish(cid, &cres, storage.as_ref(), *hooks)
+                .await
+            {
+                Self::abort_and_drain(&mut pending).await;
+                return Err(err);
+            }
         }
         let cx = AfterFinishCtx {
             async_rt: &Handle::current(),
+            this: self,
             storage: &storage,
         };
         hooks.after_execution_finished(cx).await?;
@@ -260,7 +435,7 @@ impl Execution {
         Result::Ok(())
     }
 
-    pub fn run(self, mut hooks: impl ExecHooks) -> Result<()> {
+    pub fn run(mut self, mut hooks: impl ExecHooks) -> Result<()> {
         let storage =
             external_storage::create_storage(&self.external_storage, self.backend_config.clone())?;
         let storage: Arc<dyn ExternalStorage> = Arc::from(storage);
@@ -293,7 +468,7 @@ impl Execution {
             res
         };
 
-        runtime.block_on(frame!(guarded))
+        runtime.block_on(root!(guarded))
     }
 
     async fn on_compaction_finish(

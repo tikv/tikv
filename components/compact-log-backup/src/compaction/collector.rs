@@ -1,6 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{collections::HashMap, task::ready};
 
+use engine_traits::{CF_DEFAULT, CfName};
 use tokio_stream::Stream;
 
 use super::{SubcompactionCollectKey, UnformedSubcompaction};
@@ -36,6 +37,10 @@ impl<S: Stream<Item = Result<LogFile>>> CollectSubcompaction<S> {
 }
 
 pub struct CollectSubcompactionConfig {
+    /// Lower bound of timestamps for default CF.
+    /// Files doesn't contain any record with a timestamp greater than or equal
+    /// to this will be filtered out.
+    pub compact_shift_from_ts: u64,
     /// Lower bound of timestamps.
     /// Files donesn't contain any record with a timestamp greater than or equal
     /// to this will be filtered out.
@@ -71,18 +76,24 @@ struct SubcompactionCollector {
 }
 
 impl SubcompactionCollector {
+    fn lower_bound_of(&self, cf: CfName) -> u64 {
+        if cf == CF_DEFAULT {
+            self.cfg.compact_shift_from_ts
+        } else {
+            self.cfg.compact_from_ts
+        }
+    }
+
     /// Adding a new log file input to the collector.
     fn add_new_file(&mut self, file: LogFile) -> Option<Subcompaction> {
         use std::collections::hash_map::Entry;
         let key = SubcompactionCollectKey::by_file(&file);
+        let compact_from_ts = self.lower_bound_of(file.cf);
 
         // Skip out-of-range files and schema meta files.
         // Meta files need to have a simpler format so other BR client can easily open
         // and rewrite it. (Perhaps we can also compact them.)
-        if file.is_meta
-            || file.max_ts < self.cfg.compact_from_ts
-            || file.min_ts > self.cfg.compact_to_ts
-        {
+        if file.is_meta || file.max_ts < compact_from_ts || file.min_ts > self.cfg.compact_to_ts {
             self.stat.files_filtered_out += 1;
             return None;
         }
@@ -164,7 +175,7 @@ mod test {
     use std::sync::Arc;
 
     use bytes::Bytes;
-    use engine_traits::CF_WRITE;
+    use engine_traits::{CF_DEFAULT, CF_WRITE};
     use futures::stream::{self, StreamExt, TryStreamExt};
     use kvproto::brpb;
     use protobuf::Chars;
@@ -238,6 +249,7 @@ mod test {
         let mut collector = CollectSubcompaction::new(
             stream::iter(items).map(Result::Ok),
             CollectSubcompactionConfig {
+                compact_shift_from_ts: 0,
                 compact_from_ts: 0,
                 compact_to_ts: u64::MAX,
                 subcompaction_size_threshold: 128,
@@ -274,6 +286,7 @@ mod test {
         let collector = CollectSubcompaction::new(
             stream::iter(items),
             CollectSubcompactionConfig {
+                compact_shift_from_ts: 0,
                 compact_from_ts: 0,
                 compact_to_ts: u64::MAX,
                 subcompaction_size_threshold: 128,
@@ -310,6 +323,7 @@ mod test {
         let mut collector = CollectSubcompaction::new(
             stream::iter(items.iter().cloned().map(Ok)),
             CollectSubcompactionConfig {
+                compact_shift_from_ts: 50,
                 compact_from_ts: 50,
                 compact_to_ts: 200,
                 subcompaction_size_threshold: 128,
@@ -362,6 +376,7 @@ mod test {
         let mut collector = CollectSubcompaction::new(
             stream::iter(files.iter().cloned().map(Ok)),
             CollectSubcompactionConfig {
+                compact_shift_from_ts: 0,
                 compact_from_ts: 0,
                 compact_to_ts: u64::MAX,
                 subcompaction_size_threshold: 128,
@@ -396,6 +411,40 @@ mod test {
     }
 
     #[tokio::test]
+    async fn test_default_cf_uses_shift_lower_bound() {
+        let base = SubcompactionCollectKey::of_region(1);
+        let mut write_key = base;
+        write_key.cf = CF_WRITE;
+
+        let files = vec![
+            // This default file is below `compact_from_ts` but above
+            // `compact_shift_from_ts`, so it should be retained.
+            with_ts(log_file("default", 10, base), 50, 60),
+            // This write file is below `compact_from_ts`, so it should be filtered.
+            with_ts(log_file("write", 10, write_key), 50, 60),
+        ];
+        let mut collector = CollectSubcompaction::new(
+            stream::iter(files.into_iter().map(Ok)),
+            CollectSubcompactionConfig {
+                compact_shift_from_ts: 50,
+                compact_from_ts: 100,
+                compact_to_ts: 200,
+                subcompaction_size_threshold: 0,
+            },
+        );
+
+        let res = (&mut collector)
+            .map_ok(|v| (v.size, v.cf))
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        assert_eq!(res, vec![(10, CF_DEFAULT)]);
+        let stat = collector.take_statistic();
+        assert_eq!(stat.files_in, 1);
+        assert_eq!(stat.files_filtered_out, 1);
+    }
+
+    #[tokio::test]
     async fn test_region_boundary() {
         let r = SubcompactionCollectKey::of_region;
         let e = |v, cv| Epoch {
@@ -425,6 +474,7 @@ mod test {
             let collector = CollectSubcompaction::new(
                 stream::iter(input.files.iter().cloned().map(Ok)),
                 CollectSubcompactionConfig {
+                    compact_shift_from_ts: 0,
                     compact_from_ts: 0,
                     compact_to_ts: u64::MAX,
                     subcompaction_size_threshold: 128,
