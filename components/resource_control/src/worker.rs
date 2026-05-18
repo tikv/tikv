@@ -14,7 +14,6 @@ use file_system::{IoBytes, IoType, fetch_io_bytes};
 use prometheus::Histogram;
 use strum::EnumCount;
 use tikv_util::{
-    debug,
     resource_control::{DEFAULT_RESOURCE_GROUP_NAME, TaskPriority},
     sys::{SysQuota, cpu_time::ProcessStat},
     time::Instant,
@@ -28,7 +27,7 @@ use crate::{
     resource_limiter::{GroupStatistics, ResourceLimiter, ResourceType},
 };
 
-pub const BACKGROUND_LIMIT_ADJUST_DURATION: Duration = Duration::from_secs(10);
+pub const QUOTA_ADJUST_DURATION: Duration = Duration::from_secs(10);
 
 const MICROS_PER_SEC: f64 = 1_000_000.0;
 // the minimal schedule wait duration due to the overhead of queue.
@@ -157,6 +156,33 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         }
         self.last_adjust_time = now;
 
+        // Fetch CPU stats once so background and foreground use a consistent
+        // snapshot and we avoid double-reading /proc/stat.
+        let cpu_stats = match self
+            .resource_quota_getter
+            .get_current_stats(ResourceType::Cpu)
+        {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("get process total cpu failed; skip adjustment."; "err" => ?e);
+                return;
+            }
+        };
+        let cpu_util = if cpu_stats.total_quota > f64::EPSILON {
+            cpu_stats.current_used / cpu_stats.total_quota * 100.0
+        } else {
+            0.0
+        };
+
+        self.background_adjust_quota(dur_secs, &cpu_stats);
+        self.foreground_adjust_quota(cpu_util);
+    }
+
+    fn foreground_adjust_quota(&mut self, cpu_util: f64) {
+        self.resource_ctl.online_adjust_resource_quota(cpu_util);
+    }
+
+    fn background_adjust_quota(&mut self, dur_secs: f64, cpu_stats: &ResourceUsageStats) {
         let mut bg_util_limit = self
             .resource_ctl
             .get_resource_group(DEFAULT_RESOURCE_GROUP_NAME)
@@ -166,23 +192,19 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         if bg_util_limit == 0 {
             bg_util_limit = 100;
         }
-        let bg_resource_threshold = self
-            .resource_ctl
-            .get_config()
-            .value()
-            .bg_resource_threshold
-            .clamp(1.0, 99.0);
-        // Cap utilization limit to bg_resource_threshold. Background
-        // tasks should never consume more than this fraction of total resources.
-        // When CPU utilization exceeds the threshold, the headroom goes negative
-        // and the background rate limit is reduced.
-        bg_util_limit = bg_util_limit.min(bg_resource_threshold as u64);
-
-        BACKGROUND_TASK_RESOURCE_UTILIZATION_VEC
-            .with_label_values(&["limit"])
-            .set(bg_util_limit as i64);
+        let (bg_scale_start, fg_cpu_throttle_threshold) = {
+            let config = self.resource_ctl.get_config().value();
+            let start = config.bg_cpu_throttle_threshold.clamp(1.0, 99.0);
+            let end = config.fg_cpu_throttle_threshold.clamp(start, 99.0);
+            (start, end)
+        };
+        // Cap utilization limit to fg_cpu_throttle_threshold. Background tasks should
+        // never consume more than this fraction of total resources. Scale-down
+        // begins at bg_scale_start and reaches min_floor at fg_cpu_throttle_threshold.
+        bg_util_limit = bg_util_limit.min(fg_cpu_throttle_threshold as u64);
 
         if !self.resource_ctl.has_background_groups() {
+            self.resource_ctl.set_bg_cpu_at_floor(true);
             self.prev_had_background = false;
             return;
         }
@@ -200,34 +222,48 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             self.prev_had_background = true;
         }
 
-        self.do_adjust(
+        self.background_adjust_resource_quota(
             ResourceType::Cpu,
             dur_secs,
             bg_util_limit,
-            bg_resource_threshold,
+            bg_scale_start,
+            fg_cpu_throttle_threshold,
+            Some(cpu_stats),
         );
-        self.do_adjust(
+        self.background_adjust_resource_quota(
             ResourceType::Io,
             dur_secs,
             bg_util_limit,
-            bg_resource_threshold,
+            bg_scale_start,
+            fg_cpu_throttle_threshold,
+            None,
         );
         self.adjust_write_io_by_compaction_pressure();
     }
 
-    fn do_adjust(
+    fn background_adjust_resource_quota(
         &mut self,
         resource_type: ResourceType,
         dur_secs: f64,
         utilization_limit: u64,
-        bg_resource_threshold: f64,
+        bg_scale_start: f64,
+        fg_cpu_throttle_threshold: f64,
+        // Pre-fetched stats for CPU (avoids a second /proc/stat read); None for
+        // IO, which always fetches fresh bytes-transferred counters.
+        prefetched_stats: Option<&ResourceUsageStats>,
     ) {
-        let resource_stats = match self.resource_quota_getter.get_current_stats(resource_type) {
-            Ok(r) => r,
-            Err(e) => {
-                warn!("get resource statistics info failed, skip adjust"; "type" => ?resource_type, "err" => ?e);
-                return;
-            }
+        let fetched;
+        let resource_stats = if let Some(s) = prefetched_stats {
+            s
+        } else {
+            fetched = match self.resource_quota_getter.get_current_stats(resource_type) {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!("get resource statistics info failed, skip adjust"; "type" => ?resource_type, "err" => ?e);
+                    return;
+                }
+            };
+            &fetched
         };
         // if total resource quota is unlimited, set background limit to unlimited.
         if resource_stats.total_quota <= f64::EPSILON {
@@ -273,16 +309,20 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         .min(target);
 
         let mut new_budget = target;
-        if resource_util > bg_resource_threshold {
-            // System is overloaded. Linearly scale budget from target down to
-            // min_floor as utilization goes from threshold (70%) to 100%.
-            let pressure =
-                (resource_util - bg_resource_threshold) / (100.0 - bg_resource_threshold);
+        if resource_util > bg_scale_start {
+            // Linearly scale budget from target down to min_floor as utilization
+            // goes from bg_scale_start to fg_cpu_throttle_threshold.
+            let range = (fg_cpu_throttle_threshold - bg_scale_start).max(1.0);
+            let pressure = ((resource_util - bg_scale_start) / range).clamp(0.0, 1.0);
             new_budget = target * (1.0 - pressure) + min_floor * pressure;
+            // Only tighten: never increase the limit in the throttle branch.
+            if new_budget > current_limit {
+                new_budget = current_limit;
+            }
         } else if current_limit > target {
             // Background limit exceeds its allowed share; reset to target.
             new_budget = target;
-        } else if current_limit < 0.9 * target && resource_util < 0.9 * bg_resource_threshold {
+        } else if current_limit < 0.9 * target && resource_util < 0.9 * bg_scale_start {
             // System is idle; increase limit incrementally from current limit.
             new_budget = current_limit * 1.1;
         }
@@ -294,6 +334,13 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         BACKGROUND_QUOTA_LIMIT_VEC
             .with_label_values(&[resource_type.as_str()])
             .set(new_budget as i64);
+
+        // Update the "background at floor" flag so foreground throttling
+        // only kicks in after background has been fully squeezed.
+        if resource_type == ResourceType::Cpu {
+            let at_floor = new_budget <= min_floor && background_consumed <= new_budget;
+            self.resource_ctl.set_bg_cpu_at_floor(at_floor);
+        }
     }
 
     /// Adjust the write-only IO limiter based on compaction pressure.
@@ -481,10 +528,6 @@ impl<R: ResourceStatsProvider> PriorityLimiterAdjustWorker<R> {
             limits[i - 1] = limit;
             expect_cpu_time_total -= level_expected[i];
         }
-        debug!("adjsut cpu limiter by priority"; "cpu_quota" => process_cpu_stats.total_quota,
-            "process_cpu" => process_cpu_stats.current_used, "expected_cpu" => ?level_expected,
-            "cpu_costs" => ?cpu_duration, "limits" => ?limits,
-            "limit_cpu_total" => expect_pool_cpu_total, "pool_cpu_cost" => real_cpu_total);
     }
 }
 
@@ -694,9 +737,10 @@ mod tests {
             check(limiter.get_limiter(ResourceType::Io).get_rate_limit(), io);
         }
 
-        // util_limit configured at 80% but capped to 70%.
+        // util_limit configured at 80% but capped to fg_cpu_throttle_threshold=70%.
         // CPU target = 8 * 0.7 = 5.6 cores, IO target = 10000 * 0.7 = 7000
         // CPU min_floor = 1 core, IO min_floor = 1000
+        // bg_scale_start=60%, fg_cpu_throttle_threshold=70% (scale range: 60→70).
 
         // No load: initial infinity → treated as target → budget = target.
         reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
@@ -708,48 +752,43 @@ mod tests {
         worker.adjust_quota();
         check_limiter_rates(&limiter, 5.6, 7000.0);
 
-        // Under target (50% CPU): resource_util < 70%, current == target,
+        // Under target (50% CPU): resource_util < 60%, current == target,
         // so none of the branches fire → budget = target.
         reset_quota(&mut worker, 4.0, 2000.0, Duration::from_secs(1));
         worker.adjust_quota();
         check_limiter_rates(&limiter, 5.6, 7000.0);
 
-        // Above 70% (80% CPU, 80% IO): resource_util > 70 branch fires.
-        // Budget linearly interpolates from target to min_floor.
-        // CPU: pressure = (80-70)/(100-70) = 1/3. budget = 5.6*(1-1/3) + 1.0*(1/3) ≈
-        // 4.067 IO: pressure = (80-70)/(100-70) = 1/3. budget = 7000*(2/3) +
-        // 1000*(1/3) ≈ 5000
+        // 80% CPU, 80% IO: resource_util > 60% (bg_scale_start).
+        // pressure = (80-60)/(70-60) = 2.0 clamped to 1.0 → min_floor.
+        // CPU: budget = min_floor = 1.0. IO: budget = min_floor = 1000.
         reset_quota(&mut worker, 6.4, 8000.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter_rates(&limiter, 4.067, 5000.0);
+        check_limiter_rates(&limiter, 1.0, 1000.0);
 
-        // 100% CPU, 95% IO: heavier pressure.
-        // CPU: pressure = (100-70)/30 = 1.0. budget = 5.6*0 + 1.0*1.0 = 1.0 (min_floor)
-        // IO: pressure = (95-70)/30 = 25/30 = 5/6. budget = 7000*(1/6) + 1000*(5/6) ≈
-        // 2000
+        // 100% CPU, 95% IO: pressure still clamped 1.0 → min_floor.
         reset_quota(&mut worker, 8.0, 9500.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter_rates(&limiter, 1.0, 2000.0);
+        check_limiter_rates(&limiter, 1.0, 1000.0);
 
         // Still at 100% CPU, 95% IO: same result (deterministic, no decay).
         reset_quota(&mut worker, 8.0, 9500.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter_rates(&limiter, 1.0, 2000.0);
+        check_limiter_rates(&limiter, 1.0, 1000.0);
 
-        // 85% CPU, 80% IO: moderate pressure.
-        // CPU: pressure = (85-70)/30 = 0.5. budget = 5.6*0.5 + 1.0*0.5 = 3.3
-        // IO: pressure = (80-70)/30 = 1/3. budget = 7000*(2/3) + 1000*(1/3) = 5000
-        reset_quota(&mut worker, 6.8, 8000.0, Duration::from_secs(1));
+        // 65% CPU, 65% IO: in the scale range (60-70%).
+        // CPU: pressure = 0.5, computed = 3.3. But current_limit=1.0 (min_floor)
+        // and 3.3 > 1.0 → only-tighten clamps to 1.0.
+        // IO: same logic → stays 1000.
+        reset_quota(&mut worker, 5.2, 6500.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter_rates(&limiter, 3.3, 5000.0);
+        check_limiter_rates(&limiter, 1.0, 1000.0);
 
-        // Load drops (50% CPU, 20% IO): resource_util < 63%, current < 0.9*target
-        // → incremental increase: budget = current * 1.1
-        // CPU: 3.3 * 1.1 = 3.63
-        // IO: 5000 * 1.1 = 5500
+        // Load drops (50% CPU, 20% IO): resource_util < 54% (0.9*60%), current <
+        // 0.9*target → incremental increase: budget = current * 1.1
+        // CPU: 1.0 * 1.1 = 1.1. IO: 1000 * 1.1 = 1100
         reset_quota(&mut worker, 4.0, 2000.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter_rates(&limiter, 3.63, 5500.0);
+        check_limiter_rates(&limiter, 1.1, 1100.0);
 
         // Adding a second background group does not change the limiter —
         // all background groups share the single global bg_limiter.
@@ -761,19 +800,19 @@ mod tests {
         // Both groups return the same shared limiter.
         assert!(Arc::ptr_eq(&limiter, &bg_limiter2));
 
-        // No load: current at 3.63M < 0.9*target (5.04M) and util < 63% → incremental.
-        // budget = 3.63 * 1.1 = 3.993
-        // IO: 5500 * 1.1 = 6050
+        // No load: current at 1.1M < 0.9*target (5.04M) and util < 63% → incremental.
+        // budget = 1.1 * 1.1 = 1.21
+        // IO: 1100 * 1.1 = 1210
         reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter_rates(&limiter, 3.993, 6050.0);
+        check_limiter_rates(&limiter, 1.21, 1210.0);
 
-        // Over 70% (100% CPU, 95% IO): budget scales down.
+        // Over 70% (100% CPU, 95% IO): budget scales down to min_floor.
         // CPU: pressure = 1.0. budget = min_floor = 1.0
-        // IO: pressure = 25/30 = 5/6. budget = 7000*(1/6) + 1000*(5/6) = 2000
+        // IO: pressure = (95-60)/(70-60) = 3.5 clamped 1.0. budget = min_floor = 1000.
         reset_quota(&mut worker, 8.0, 9500.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter_rates(&limiter, 1.0, 2000.0);
+        check_limiter_rates(&limiter, 1.0, 1000.0);
     }
 
     #[test]
@@ -787,7 +826,8 @@ mod tests {
         }
 
         // 1 background group with no explicit utilization limit.
-        // bg_util_limit defaults to 100, capped to 70 by bg_resource_threshold.
+        // bg_util_limit defaults to 100, capped to 70 by fg_cpu_throttle_threshold.
+        // bg_scale_start=60%, fg_cpu_throttle_threshold=70%.
         let bg = new_background_resource_group_ru("bg_worker".into(), 5000, 8, vec!["br".into()]);
         resource_ctl.add_resource_group(bg);
         let limiter = resource_ctl
@@ -838,9 +878,9 @@ mod tests {
             7000.0,
         );
 
-        // --- Saturate CPU (100%, 80% IO) → budget scales down from target ---
-        // CPU: pressure = (100-70)/30 = 1.0. budget = min_floor = 1.0
-        // IO: pressure = (80-70)/30 = 1/3. budget = 7000*(2/3) + 1000*(1/3) = 5000
+        // --- Saturate CPU (100%, 80% IO) → budget scales to min_floor ---
+        // CPU: pressure = (100-60)/(70-60) = 4.0 clamped 1.0 → min_floor = 1.0
+        // IO: pressure = (80-60)/(70-60) = 2.0 clamped 1.0 → min_floor = 1000
         reset_quota(&mut worker, 8.0, 8000.0, Duration::from_secs(1));
         worker.adjust_quota();
         check(
@@ -849,13 +889,13 @@ mod tests {
         );
         check(
             limiter.get_limiter(ResourceType::Io).get_rate_limit(),
-            5000.0,
+            1000.0,
         );
 
         // --- Unsaturate CPU (25%) → budget recovers incrementally ---
-        // CPU: resource_util = 25% < 63, current 1.0M < 5.04M → budget = 1.0 * 1.1 =
-        // 1.1 IO: resource_util = 20% < 63, current 5000 < 6300 → budget = 5000
-        // * 1.1 = 5500
+        // CPU: resource_util = 25% < 54% (0.9*60%), current 1.0M < 5.04M → 1.0 * 1.1 =
+        // 1.1 IO: resource_util = 20% < 54%, current 1000 < 6300 → 1000 * 1.1 =
+        // 1100
         reset_quota(&mut worker, 2.0, 2000.0, Duration::from_secs(1));
         worker.adjust_quota();
         check(
@@ -864,21 +904,22 @@ mod tests {
         );
         check(
             limiter.get_limiter(ResourceType::Io).get_rate_limit(),
-            5500.0,
+            1100.0,
         );
 
-        // --- 85% CPU, 80% IO: moderate pressure ---
-        // CPU: pressure = (85-70)/30 = 0.5. budget = 5.6*0.5 + 1.0*0.5 = 3.3
-        // IO: pressure = (80-70)/30 = 1/3. budget = 7000*(2/3) + 1000*(1/3) = 5000
-        reset_quota(&mut worker, 6.8, 8000.0, Duration::from_secs(1));
+        // --- 65% CPU, 65% IO: in scale range (60-70%) ---
+        // CPU: pressure = 0.5, computed = 3.3M. current_limit=1.1M < 3.3M → only
+        // tighten → stays 1.1M. IO: computed = 4000, current=1100 < 4000 →
+        // stays 1100.
+        reset_quota(&mut worker, 5.2, 6500.0, Duration::from_secs(1));
         worker.adjust_quota();
         check(
             limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
-            3.3 * MICROS_PER_SEC,
+            1.1 * MICROS_PER_SEC,
         );
         check(
             limiter.get_limiter(ResourceType::Io).get_rate_limit(),
-            5000.0,
+            1100.0,
         );
     }
 
@@ -1045,6 +1086,85 @@ mod tests {
         worker.last_adjust_time = Instant::now_coarse() - Duration::from_millis(500);
         worker.adjust();
         check_limiter(f64::INFINITY, 3.2, 3.2);
+    }
+
+    /// Verifies background load-shedding:
+    ///
+    /// - 0–60% CPU   : background full
+    /// - 60–70% CPU  : background linearly throttled to min_floor
+    /// - >70% CPU    : background at min_floor
+    #[test]
+    fn test_tiered_load_shedding() {
+        let resource_ctl = Arc::new(ResourceGroupManager::default());
+
+        let bg = new_background_resource_group_ru("bg".into(), 1000, 8, vec!["br".into()]);
+        resource_ctl.add_resource_group(bg);
+        let bg_limiter = resource_ctl
+            .get_background_resource_limiter("bg", "br")
+            .unwrap();
+
+        let compaction_pending_bytes_ratio = Arc::new(AtomicU32::new(0));
+        let mut bg_worker = GroupQuotaAdjustWorker::with_quota_getter(
+            resource_ctl.clone(),
+            TestResourceStatsProvider::new(8.0, 10000.0),
+            compaction_pending_bytes_ratio,
+        );
+
+        const BG_TARGET: f64 = 5.6;
+        const BG_FLOOR: f64 = 1.0;
+
+        #[track_caller]
+        fn approx(val: f64, expected: f64) {
+            assert!(
+                (val.is_infinite() && expected.is_infinite())
+                    || (expected * 0.99 < val && val < expected * 1.01),
+                "actual: {val}, expected: {expected}"
+            );
+        }
+
+        macro_rules! tick {
+            ($cpu:expr) => {{
+                bg_worker.resource_quota_getter.cpu_used = $cpu;
+                bg_worker.last_adjust_time = Instant::now_coarse() - Duration::from_secs(10);
+                bg_worker.adjust_quota();
+            }};
+        }
+
+        // 50% CPU — below bg_scale_start (60%): bg=full.
+        tick!(4.0);
+        approx(
+            bg_limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
+            BG_TARGET * MICROS_PER_SEC,
+        );
+
+        // 65% CPU — mid bg range: pressure = 0.5.
+        tick!(5.2);
+        approx(
+            bg_limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
+            3.3 * MICROS_PER_SEC,
+        );
+
+        // 70% CPU — bg fully throttled.
+        tick!(5.6);
+        approx(
+            bg_limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
+            BG_FLOOR * MICROS_PER_SEC,
+        );
+
+        // 80% CPU — still at min_floor.
+        tick!(6.4);
+        approx(
+            bg_limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
+            BG_FLOOR * MICROS_PER_SEC,
+        );
+
+        // Recovery: CPU drops to 50%.
+        tick!(4.0);
+        let bg_rate = bg_limiter.get_limiter(ResourceType::Cpu).get_rate_limit();
+        assert!(
+            bg_rate > BG_FLOOR * MICROS_PER_SEC && bg_rate < BG_TARGET * MICROS_PER_SEC,
+            "bg should be recovering, got {bg_rate}"
+        );
     }
 
     #[test]
@@ -1279,15 +1399,17 @@ mod tests {
         worker.last_adjust_time = Instant::now_coarse() - Duration::from_secs(1);
         worker.adjust_quota();
 
-        // CPU: pressure = 1.0 → budget = min_floor = 1.0 core.
-        // IO: pressure = (95-70)/30 = 5/6 → budget = 7000/6 + 1000*5/6 ≈ 2000.
+        // CPU: resource_util=100%, bg_scale_start=60%, fg_cpu_throttle_threshold=70%.
+        // pressure = (100-60)/(70-60) = 4.0 clamped to 1.0 → min_floor = 1.0 core.
+        // IO: resource_util=95%, pressure = (95-60)/(70-60) = 3.5 clamped to 1.0 →
+        // min_floor = 1000.
         check(
             limiter_a.get_limiter(ResourceType::Cpu).get_rate_limit(),
             1.0 * MICROS_PER_SEC,
         );
         check(
             limiter_a.get_limiter(ResourceType::Io).get_rate_limit(),
-            2000.0,
+            1000.0,
         );
     }
 }
