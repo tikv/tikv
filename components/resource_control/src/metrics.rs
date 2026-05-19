@@ -6,7 +6,7 @@ use prometheus::*;
 lazy_static! {
     pub static ref BACKGROUND_QUOTA_LIMIT_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_resource_control_background_quota_limiter",
-        "The quota limiter for all background tasks (aggregated across all background resource groups) per resource type",
+        "The quota limiter for all background tasks per resource type",
         &["type"]
     )
     .unwrap();
@@ -47,4 +47,71 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+
+    pub static ref TWO_PHASE_THROTTLED_REQUESTS: IntCounterVec = register_int_counter_vec!(
+        "tikv_resource_control_two_phase_throttled_requests_total",
+        "Total requests assigned to phase 1 (RU rate above 15-min baseline) per resource group",
+        &["resource_group"]
+    )
+    .unwrap();
+
+    pub static ref GROUP_RU_HISTORICAL_RATE: GaugeVec = register_gauge_vec!(
+        "tikv_resource_control_group_ru_historical_rate",
+        "Historical CPU utilization % per resource group (sliding window average)",
+        &["resource_group"]
+    )
+    .unwrap();
+
+    pub static ref GROUP_RU_CURRENT_RATE: GaugeVec = register_gauge_vec!(
+        "tikv_resource_control_group_ru_current_rate",
+        "Current CPU utilization % per resource group (latest bucket)",
+        &["resource_group"]
+    )
+    .unwrap();
+
+    pub static ref GROUP_QUOTA_LIMIT_VEC: GaugeVec = register_gauge_vec!(
+        "tikv_resource_control_group_quota_limit",
+        "Current rate limit per resource group per resource type (CPU as utilization %, 0 means unlimited)",
+        &["resource_group", "type"]
+    )
+    .unwrap();
+
+    pub static ref ADMISSION_CURRENTLY_DELAYED: IntGauge = register_int_gauge!(
+        "tikv_resource_control_admission_currently_delayed",
+        "Current number of requests sitting in admission control delay"
+    )
+    .unwrap();
+
+    pub static ref ADMISSION_DELAYED_REQUESTS: IntCounterVec = register_int_counter_vec!(
+        "tikv_resource_control_admission_delayed_requests_total",
+        "Total requests delayed by admission control per resource group",
+        &["resource_group"]
+    )
+    .unwrap();
+    pub static ref ADMISSION_REJECTED_REQUESTS: IntCounterVec = register_int_counter_vec!(
+        "tikv_resource_control_admission_rejected_requests_total",
+        "Total requests rejected by admission control per resource group",
+        &["resource_group"]
+    )
+    .unwrap();
+    pub static ref ADMISSION_DELAY_DURATION: HistogramVec = register_histogram_vec!(
+        "tikv_resource_control_admission_delay_duration_seconds",
+        "Histogram of delay duration imposed by admission control",
+        &["resource_group"],
+        exponential_buckets(1e-4, 2.0, 20).unwrap() // 100us ~ 52s
+    )
+    .unwrap();
+}
+
+pub fn deregister_metrics(name: &str) {
+    _ = TWO_PHASE_THROTTLED_REQUESTS.remove_label_values(&[name]);
+    _ = GROUP_QUOTA_LIMIT_VEC.remove_label_values(&[name, "cpu"]);
+    _ = GROUP_RU_HISTORICAL_RATE.remove_label_values(&[name]);
+    _ = GROUP_RU_CURRENT_RATE.remove_label_values(&[name]);
+    _ = ADMISSION_DELAYED_REQUESTS.remove_label_values(&[name]);
+    _ = ADMISSION_REJECTED_REQUESTS.remove_label_values(&[name]);
+    _ = ADMISSION_DELAY_DURATION.remove_label_values(&[name]);
+    _ = ADMISSION_DELAYED_REQUESTS.remove_label_values(&["background"]);
+    _ = ADMISSION_REJECTED_REQUESTS.remove_label_values(&["background"]);
+    _ = ADMISSION_DELAY_DURATION.remove_label_values(&["background"]);
 }

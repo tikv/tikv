@@ -251,6 +251,9 @@ struct TxnSchedulerInner<L: LockManager> {
     // all tasks are executed in this pool
     sched_worker_pool: SchedPool,
 
+    // resource group manager for Tier-1 high-priority throttle on writes.
+    resource_manager: Option<Arc<ResourceGroupManager>>,
+
     // used to control write flow
     running_write_bytes: CachePadded<AtomicUsize>,
 
@@ -465,6 +468,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 resource_ctl,
                 resource_manager.clone(),
             ),
+            resource_manager: resource_manager.clone(),
             control_mutex: Arc::new(tokio::sync::Mutex::new(false)),
             lock_mgr,
             concurrency_manager,
@@ -522,6 +526,56 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         });
     }
 
+    /// Returns true if admission control consumed the command (reject or
+    /// delay); the caller should return without further processing.
+    fn apply_admission_control(
+        &self,
+        cmd: &Command,
+    ) -> Option<resource_control::AdmissionDecision> {
+        let rm = self.inner.resource_manager.as_ref()?;
+        let rc_ctx = cmd.resource_control_ctx();
+        let rg = rc_ctx.get_resource_group_name();
+        let request_source = cmd.ctx().request_source.clone();
+        let limiter =
+            rm.get_resource_limiter(rg, &request_source, rc_ctx.get_override_priority())?;
+        Some(rm.admission_decision(false, &limiter))
+    }
+
+    /// Spawns an async task on the sched pool that sleeps for `delay` then
+    /// calls `schedule_command`. The latch is acquired only after the sleep so
+    /// the delay does not block concurrent writers with overlapping keys.
+    fn schedule_after_admission_delay(
+        &self,
+        cmd: Command,
+        callback: StorageCallback,
+        delay: Duration,
+    ) {
+        let tag = cmd.tag();
+        let sched = self.clone();
+        let cb = SchedulerTaskCallback::NormalRequestCallback(callback);
+        let metadata = TaskMetadata::from_ctx(cmd.resource_control_ctx());
+        let priority = cmd.priority();
+        let write_bytes = cmd.write_bytes() as u64;
+        let request_source = cmd.ctx().request_source.clone();
+        let mem_quota = self.inner.memory_quota.clone();
+        let rm = self.inner.resource_manager.as_ref().unwrap().clone();
+        let execution = async move {
+            let mut guard = rm.delay_slot_guard();
+            futures_timer::Delay::new(delay).await;
+            guard.release();
+            let cid = sched.inner.gen_id();
+            if let Ok(task) = Task::allocate(cid, cmd, mem_quota) {
+                sched.schedule_command(task, cb, None);
+            } else {
+                Self::fail_with_busy(tag, cb);
+            }
+        };
+        self.inner
+            .sched_worker_pool
+            .spawn(&request_source, metadata, priority, execution, write_bytes)
+            .unwrap();
+    }
+
     pub(in crate::storage) fn run_cmd(&self, cmd: Command, callback: StorageCallback) {
         let tag = cmd.tag();
         // write flow control
@@ -532,6 +586,19 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         if cmd.need_flow_control() && self.inner.too_busy(cmd.ctx().region_id) {
             Self::fail_with_busy(tag, callback.into());
             return;
+        }
+        // Admission control before latch acquisition so a delayed command does
+        // not block concurrent writers sharing the same keys.
+        match self.apply_admission_control(&cmd) {
+            Some(resource_control::AdmissionDecision::Reject) => {
+                Self::fail_with_busy(tag, callback.into());
+                return;
+            }
+            Some(resource_control::AdmissionDecision::Delay(delay)) => {
+                self.schedule_after_admission_delay(cmd, callback, delay);
+                return;
+            }
+            _ => {}
         }
         let cid = self.inner.gen_id();
         if let Ok(task) = Task::allocate(cid, cmd, self.inner.memory_quota.clone()) {
@@ -662,6 +729,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 TaskMetadata::from_ctx(cmd.resource_control_ctx()),
                 cmd.priority(),
                 execution,
+                cmd.write_bytes() as u64,
             )
             .unwrap();
     }
@@ -681,9 +749,15 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 // when many queuing tasks fail successively.
                 let this = self.clone();
                 self.get_sched_pool()
-                    .spawn(&request_source, metadata, pri, async move {
-                        this.finish_with_err(cid, err, None);
-                    })
+                    .spawn(
+                        &request_source,
+                        metadata,
+                        pri,
+                        async move {
+                            this.finish_with_err(cid, err, None);
+                        },
+                        0,
+                    )
                     .unwrap();
             }
         }
@@ -722,7 +796,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let sched = self.clone();
         let metadata = TaskMetadata::from_ctx(task.cmd().resource_control_ctx());
         let request_source = task.cmd().ctx().request_source.clone();
+        let request_source_for_spawn = request_source.clone();
         let priority = task.cmd().priority();
+        let write_bytes = task.cmd().write_bytes();
         let future_tracker =
             TlsFutureTracker::new(task.tracker_token(), task.cmd().tag(), task.cid());
         let execution = async move {
@@ -730,7 +806,6 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             if sched.check_task_deadline_exceeded(&task, None) {
                 return;
             }
-
             let tag = task.cmd().tag();
             SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();
 
@@ -807,7 +882,13 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         });
         SCHED_TXN_RUNNING_COMMANDS.inc();
         self.get_sched_pool()
-            .spawn(&request_source, metadata, priority, execution)
+            .spawn(
+                &request_source_for_spawn,
+                metadata,
+                priority,
+                execution,
+                write_bytes as u64,
+            )
             .unwrap();
     }
 
@@ -1143,9 +1224,15 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         } else {
             let lock_wait_queues = self.inner.lock_wait_queues.clone();
             self.get_sched_pool()
-                .spawn(request_source, metadata, CommandPri::High, async move {
-                    lock_wait_queues.update_lock_wait(new_acquired_locks);
-                })
+                .spawn(
+                    request_source,
+                    metadata,
+                    CommandPri::High,
+                    async move {
+                        lock_wait_queues.update_lock_wait(new_acquired_locks);
+                    },
+                    0,
+                )
                 .unwrap();
         }
     }
@@ -1163,40 +1250,52 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let metadata1 = metadata.deep_clone();
         let rsource = request_source.to_string();
         self.get_sched_pool()
-            .spawn(request_source, metadata, CommandPri::High, async move {
-                for (lock_info, released_lock) in legacy_wake_up_list {
-                    let cb = lock_info.key_cb.unwrap().into_inner();
-                    let e = StorageError::from(Error::from(MvccError::from(
-                        MvccErrorInner::WriteConflict {
-                            start_ts: lock_info.parameters.start_ts,
-                            conflict_start_ts: released_lock.start_ts,
-                            conflict_commit_ts: released_lock.commit_ts,
-                            key: released_lock.key.into_raw().unwrap(),
-                            primary: lock_info.parameters.primary,
-                            reason: kvrpcpb::WriteConflictReason::PessimisticRetry,
-                        },
-                    )));
-                    cb(Err(e.into()), false);
-                }
+            .spawn(
+                request_source,
+                metadata,
+                CommandPri::High,
+                async move {
+                    for (lock_info, released_lock) in legacy_wake_up_list {
+                        let cb = lock_info.key_cb.unwrap().into_inner();
+                        let e = StorageError::from(Error::from(MvccError::from(
+                            MvccErrorInner::WriteConflict {
+                                start_ts: lock_info.parameters.start_ts,
+                                conflict_start_ts: released_lock.start_ts,
+                                conflict_commit_ts: released_lock.commit_ts,
+                                key: released_lock.key.into_raw().unwrap(),
+                                primary: lock_info.parameters.primary,
+                                reason: kvrpcpb::WriteConflictReason::PessimisticRetry,
+                            },
+                        )));
+                        cb(Err(e.into()), false);
+                    }
 
-                for f in delayed_wake_up_futures {
-                    let self2 = self1.clone();
-                    let metadata2 = metadata1.clone();
-                    self1
-                        .get_sched_pool()
-                        .spawn(&rsource, metadata2, CommandPri::High, async move {
-                            let res = f.await;
-                            if let Some(resumable_lock_wait_entry) = res {
-                                self2.schedule_awakened_pessimistic_locks(
-                                    None,
-                                    None,
-                                    smallvec![resumable_lock_wait_entry],
-                                );
-                            }
-                        })
-                        .unwrap();
-                }
-            })
+                    for f in delayed_wake_up_futures {
+                        let self2 = self1.clone();
+                        let metadata2 = metadata1.clone();
+                        self1
+                            .get_sched_pool()
+                            .spawn(
+                                &rsource,
+                                metadata2,
+                                CommandPri::High,
+                                async move {
+                                    let res = f.await;
+                                    if let Some(resumable_lock_wait_entry) = res {
+                                        self2.schedule_awakened_pessimistic_locks(
+                                            None,
+                                            None,
+                                            smallvec![resumable_lock_wait_entry],
+                                        );
+                                    }
+                                },
+                                0,
+                            )
+                            .unwrap();
+                    }
+                },
+                0,
+            )
             .unwrap();
     }
 
