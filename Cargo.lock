@@ -3690,8 +3690,9 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=feature/release-8.5-materialized-view#7b87da5fadd5bcbeeb6e6cb7ca90710274f1bf39"
+source = "git+https://github.com/pingcap/kvproto.git?branch=feature/release-8.5-materialized-view#f4a9633871f65738280c290174093e14342dd5ca"
 dependencies = [
+ "bytes",
  "futures 0.3.15",
  "grpcio",
  "protobuf 2.8.0",
@@ -5257,6 +5258,7 @@ dependencies = [
  "concurrency_manager",
  "crc32fast",
  "crossbeam",
+ "crossbeam-skiplist 0.1.3",
  "derivative",
  "encryption",
  "encryption_export",

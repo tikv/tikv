@@ -718,6 +718,7 @@ impl PdClient for RpcClient {
         &self,
         region: metapb::Region,
         count: usize,
+        reason: pdpb::SplitReason,
     ) -> PdFuture<pdpb::AskBatchSplitResponse> {
         let timer = Instant::now();
 
@@ -725,6 +726,7 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_region(region);
         req.set_split_count(count as u32);
+        req.set_reason(reason);
 
         let executor = move |client: &Client, req: pdpb::AskBatchSplitRequest| {
             let handler = {
