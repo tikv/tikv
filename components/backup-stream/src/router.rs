@@ -1370,7 +1370,7 @@ impl StreamTaskHandler {
         )?;
 
         // push merged file into metadata
-        metadata.push(merged_file_info);
+        metadata.push(merged_file_info, is_meta);
         Ok(())
     }
 
@@ -1772,6 +1772,8 @@ pub struct MetadataInfo {
     pub min_ts: Option<u64>,
     pub max_ts: Option<u64>,
     pub store_id: u64,
+
+    has_meta_files: bool,
 }
 
 impl MetadataInfo {
@@ -1782,6 +1784,7 @@ impl MetadataInfo {
             min_ts: None,
             max_ts: None,
             store_id: 0,
+            has_meta_files: false,
         }
     }
 
@@ -1789,7 +1792,11 @@ impl MetadataInfo {
         self.store_id = store_id;
     }
 
-    fn push(&mut self, file: DataFileGroup) {
+    fn make_flags(&self) -> u64 {
+        self.has_meta_files.then_some(1).unwrap_or(0)
+    }
+
+    fn push(&mut self, file: DataFileGroup, is_meta: bool) {
         let rts = file.min_resolved_ts;
         self.min_resolved_ts = self.min_resolved_ts.map_or(Some(rts), |r| Some(r.min(rts)));
         self.min_ts = self
@@ -1799,6 +1806,7 @@ impl MetadataInfo {
             .max_ts
             .map_or(Some(file.max_ts), |ts| Some(ts.max(file.max_ts)));
         self.file_groups.push(file);
+        self.has_meta_files = self.has_meta_files || is_meta;
     }
 
     fn marshal_to(self) -> Result<Vec<u8>> {
@@ -1821,7 +1829,7 @@ impl MetadataInfo {
             "flush_ts must be positive (monotonically assigned by Endpoint)"
         );
         format!(
-            "v1/backupmeta/{:016X}{:016X}-{}{:016X}{}{:016X}{}{:016X}.meta",
+            "v1/backupmeta/{:016X}{:016X}-{}{:016X}{}{:016X}{}{:016X}{}{:016X}.meta",
             flush_ts,
             self.store_id,
             utils::BACKUP_META_MIN_BEGIN_TS_PREFIX,
@@ -1830,6 +1838,8 @@ impl MetadataInfo {
             self.min_ts.unwrap_or_default(),
             utils::BACKUP_META_MAX_TS_PREFIX,
             self.max_ts.unwrap_or_default(),
+            utils::BACKUP_META_FLAG_PREFIX,
+            self.make_flags()
         )
     }
 }

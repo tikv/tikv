@@ -78,6 +78,7 @@ pub fn redact(key: &impl AsRef<[u8]>) -> log_wrappers::Value<'_> {
 pub const BACKUP_META_MIN_BEGIN_TS_PREFIX: char = 'd';
 pub const BACKUP_META_MIN_TS_PREFIX: char = 'l';
 pub const BACKUP_META_MAX_TS_PREFIX: char = 'u';
+pub const BACKUP_META_FLAG_PREFIX: char = 'p';
 
 #[derive(Debug, Clone, Copy)]
 pub struct ParsedBackupMetaFileName {
@@ -86,6 +87,7 @@ pub struct ParsedBackupMetaFileName {
     pub min_begin_ts: u64,
     pub min_ts: u64,
     pub max_ts: u64,
+    pub flags: Option<u64>,
 }
 
 pub fn parse_backupmeta_filename(
@@ -151,6 +153,9 @@ pub fn parse_backupmeta_filename(
     let min_begin_ts = get_val(BACKUP_META_MIN_BEGIN_TS_PREFIX)?;
     let min_ts = get_val(BACKUP_META_MIN_TS_PREFIX)?;
     let max_ts = get_val(BACKUP_META_MAX_TS_PREFIX)?;
+    let flags = tagged_values
+        .get(&BACKUP_META_FLAG_PREFIX)
+        .copied();
 
     Ok(ParsedBackupMetaFileName {
         flush_ts: parse_hex_u64(name, &prefix[..16], "flush_ts")?,
@@ -158,6 +163,7 @@ pub fn parse_backupmeta_filename(
         min_begin_ts,
         min_ts,
         max_ts,
+        flags,
     })
 }
 
@@ -910,8 +916,9 @@ mod test {
     use tokio::io::{AsyncWriteExt, BufReader};
 
     use crate::utils::{
-        BACKUP_META_MAX_TS_PREFIX, BACKUP_META_MIN_BEGIN_TS_PREFIX, BACKUP_META_MIN_TS_PREFIX,
-        FutureWaitGroup, SegmentMap, is_in_range, parse_backupmeta_filename,
+        BACKUP_META_FLAG_PREFIX, BACKUP_META_MAX_TS_PREFIX, BACKUP_META_MIN_BEGIN_TS_PREFIX,
+        BACKUP_META_MIN_TS_PREFIX, FutureWaitGroup, SegmentMap, is_in_range,
+        parse_backupmeta_filename,
     };
 
     #[test]
@@ -998,6 +1005,33 @@ mod test {
         assert_eq!(parsed.min_begin_ts, 0x2);
         assert_eq!(parsed.min_ts, 0x3);
         assert_eq!(parsed.max_ts, 0x4);
+        assert_eq!(parsed.flags, None);
+    }
+
+    #[test]
+    fn test_parse_backupmeta_filename_parses_flags() {
+        let name = format!(
+            "000000000000000A000000000000000B-{}0000000000000002{}0000000000000003{}0000000000000004{}0000000000000001",
+            BACKUP_META_MIN_BEGIN_TS_PREFIX,
+            BACKUP_META_MIN_TS_PREFIX,
+            BACKUP_META_MAX_TS_PREFIX,
+            BACKUP_META_FLAG_PREFIX
+        );
+        let parsed = parse_backupmeta_filename(&name).unwrap();
+        assert_eq!(parsed.flags, Some(1));
+    }
+
+    #[test]
+    fn test_parse_backupmeta_filename_parses_empty_flags() {
+        let name = format!(
+            "000000000000000A000000000000000B-{}0000000000000002{}0000000000000003{}0000000000000004{}0000000000000000",
+            BACKUP_META_MIN_BEGIN_TS_PREFIX,
+            BACKUP_META_MIN_TS_PREFIX,
+            BACKUP_META_MAX_TS_PREFIX,
+            BACKUP_META_FLAG_PREFIX
+        );
+        let parsed = parse_backupmeta_filename(&name).unwrap();
+        assert_eq!(parsed.flags, Some(0));
     }
 
     #[test]
