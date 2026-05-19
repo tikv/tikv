@@ -144,18 +144,19 @@ pub fn parse_backupmeta_filename(
         }
         pos += TAG_VALUE_LEN;
     }
-    let get_val = |tag| {
+    let get_val_opt = |tag| {
         tagged_values
             .get(&tag)
             .copied()
+    };
+    let get_val = |tag| {
+        get_val_opt(tag)
             .ok_or_else(|| format!("missing '{}' in backupmeta suffix: {name}", tag))
     };
     let min_begin_ts = get_val(BACKUP_META_MIN_BEGIN_TS_PREFIX)?;
     let min_ts = get_val(BACKUP_META_MIN_TS_PREFIX)?;
     let max_ts = get_val(BACKUP_META_MAX_TS_PREFIX)?;
-    let flags = tagged_values
-        .get(&BACKUP_META_FLAG_PREFIX)
-        .copied();
+    let flags = get_val_opt(BACKUP_META_FLAG_PREFIX);
 
     Ok(ParsedBackupMetaFileName {
         flush_ts: parse_hex_u64(name, &prefix[..16], "flush_ts")?,

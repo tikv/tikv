@@ -1793,7 +1793,7 @@ impl MetadataInfo {
     }
 
     fn make_flags(&self) -> u64 {
-        self.has_meta_files.then_some(1).unwrap_or(0)
+        if self.has_meta_files { 1 } else { 0 }
     }
 
     fn push(&mut self, file: DataFileGroup, is_meta: bool) {
