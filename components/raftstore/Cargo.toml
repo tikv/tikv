@@ -31,6 +31,7 @@ collections = { workspace = true }
 concurrency_manager = { workspace = true }
 crc32fast = "1.2"
 crossbeam = { workspace = true }
+crossbeam-skiplist = { workspace = true }
 derivative = "2"
 encryption = { workspace = true }
 engine_rocks = { workspace = true, optional = true }
