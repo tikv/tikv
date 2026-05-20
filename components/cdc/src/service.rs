@@ -487,15 +487,15 @@ impl Service {
         let scheduler = self.scheduler.clone();
         ctx.spawn(async move {
             tokio::select! {
+                _ = recv_cancel_token.cancelled() => {
+                    warn!("cdc receive cancelled"; "downstream" => peer, "conn_id" => ?conn_id);
+                }
                 result = recv_req => {
                     if let Err(e) = result {
                         warn!("cdc receive failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
                     } else {
                         info!("cdc receive closed"; "downstream" => peer, "conn_id" => ?conn_id);
                     }
-                }
-                _ = recv_cancel_token.cancelled() => {
-                    warn!("cdc receive cancelled"; "downstream" => peer, "conn_id" => ?conn_id);
                 }
             }
 
