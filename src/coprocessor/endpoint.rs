@@ -272,6 +272,14 @@ impl<E: Engine> Endpoint<E> {
                         0 => None,
                         i => Some(i),
                     };
+                    // max_keys_read = 0 means unlimited (disabled); any positive value
+                    // is a per-task row budget for early termination.  This is independent
+                    // of paging_size — both can be set simultaneously and whichever
+                    // threshold is reached first stops the scan.
+                    let max_keys_read = match req.get_max_keys_read() {
+                        0 => None,
+                        i => Some(i),
+                    };
 
                     let extra_store_accessor =
                         ExtraSnapStoreAccessor::<E>::new(req_ctx.clone(), concurrency_manager);
@@ -285,6 +293,7 @@ impl<E: Engine> Endpoint<E> {
                         is_streaming,
                         req.get_is_cache_enabled(),
                         paging_size,
+                        max_keys_read,
                         quota_limiter,
                     )
                     .data_version(data_version)

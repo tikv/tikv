@@ -267,6 +267,11 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> BatchExecutor for ScanExecuto
     }
 
     #[inline]
+    fn peek_scanned_rows_sum(&self) -> usize {
+        self.scanner.peek_scanned_rows_sum()
+    }
+
+    #[inline]
     fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
         self.scanner.collect_storage_stats(dest);
     }
