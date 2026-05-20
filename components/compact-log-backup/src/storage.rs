@@ -189,7 +189,9 @@ pub struct LogFileId {
 /// Parse the store ID from a backup-stream metadata path.
 ///
 /// Format:
-/// `v1/backupmeta/{flush_ts}{store_id}-d{min_begin_ts}l{min_ts}u{max_ts}.meta`
+/// `v1/backupmeta/
+/// {flush_ts}{store_id}-d{min_begin_ts}l{min_ts}u{max_ts}p{flags}.meta`
+#[cfg(test)]
 fn parse_store_id_from_backupmeta_path(path: &str) -> Option<u64> {
     parse_backupmeta_path(path).ok().map(|v| v.store_id)
 }
@@ -249,13 +251,12 @@ fn parse_backupmeta_path(path: &str) -> std::io::Result<ParsedBackupMetaName> {
                 format!("backup metadata path is not valid utf8: {path}"),
             )
         })?;
-    let parsed = backup_stream::utils::parse_backupmeta_filename(stem)
-        .map_err(|err| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("cannot parse backup metadata path {path}: {err}"),
-            )
-        })?;
+    let parsed = backup_stream::utils::parse_backupmeta_filename(stem).map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("cannot parse backup metadata path {path}: {err}"),
+        )
+    })?;
     Ok(ParsedBackupMetaName {
         store_id: parsed.store_id,
         min_begin_ts_in_default_cf: parsed.min_begin_ts,
