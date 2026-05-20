@@ -657,6 +657,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let collect_exec_summary = req.get_collect_execution_summaries();
         let mut config = EvalConfig::from_request(&req)?;
         config.paging_size = paging_size;
+        config.max_keys_read = max_keys_read;
         let config = Arc::new(config);
         let intermediate_output_descriptors = req.take_intermediate_output_channels();
         let out_most_executor = build_executors::<_, F>(
@@ -834,7 +835,11 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             // When max_keys_read is active, peek at accumulated scanned rows without
             // draining scanner state, so collect_exec_stats can still be called once
             // at the end of the loop.
-            // TODO: IndexLookUp plans don't populate it https://github.com/tikv/tikv/blob/030d7b4b4dc3211304cab22aa20cf4c566a68217/components/tidb_query_executors/src/index_lookup_executor.rs#L549
+            //
+            // For IndexLookUp pushdown, the buffered index-then-table-fetch
+            // pipeline would make this counter under-report. We dodge that by
+            // disabling IndexLookUp pushdown when max_keys_read is set
+            // (see BatchIndexLookUpExecutor::new force_no_index_lookup guard).
             if self.max_keys_read.is_some() {
                 scanned_keys_total = self.out_most_executor.peek_scanned_rows_sum() as u64;
             }
