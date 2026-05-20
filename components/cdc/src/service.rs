@@ -479,13 +479,23 @@ impl Service {
             Ok::<(), String>(())
         };
 
+        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+        let mut recv_cancel_rx = cancel_rx.clone();
+
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
         ctx.spawn(async move {
-            if let Err(e) = recv_req.await {
-                warn!("cdc receive failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
-            } else {
-                info!("cdc receive closed"; "downstream" => peer, "conn_id" => ?conn_id);
+            tokio::select! {
+                result = recv_req => {
+                    if let Err(e) = result {
+                        warn!("cdc receive failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
+                    } else {
+                        info!("cdc receive closed"; "downstream" => peer, "conn_id" => ?conn_id);
+                    }
+                }
+                _ = recv_cancel_rx.changed() => {
+                    warn!("cdc receive cancelled"; "downstream" => peer, "conn_id" => ?conn_id);
+                }
             }
 
             let deregister = Deregister::Conn(conn_id);
@@ -500,7 +510,7 @@ impl Service {
         let peer_for_watchdog = ctx.peer().to_string();
 
         let peer = ctx.peer();
-        let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        let mut send_cancel_rx = cancel_rx.clone();
 
         // Create cancelCh for eventDrain.forward exit signal
         let (forward_exit_tx, forward_exit_rx) = tokio::sync::oneshot::channel::<()>();
@@ -509,7 +519,7 @@ impl Service {
             #[cfg(feature = "failpoints")]
             sleep_before_drain_change_event().await;
             tokio::select! {
-                _ = &mut cancel_rx => {
+                _ = send_cancel_rx.changed() => {
                     warn!("cdc send cancelled"; "downstream" => peer, "conn_id" => ?conn_id);
                     let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, "connection cancelled".to_string());
                     let _ = sink.fail(status).await;
@@ -552,7 +562,7 @@ impl Service {
         last_flush_time: Arc<AtomicCell<Instant>>,
         peer: String,
         conn_id: ConnId,
-        cancel_tx: tokio::sync::oneshot::Sender<()>,
+        cancel_tx: tokio::sync::watch::Sender<bool>,
         mut forward_exit_rx: tokio::sync::oneshot::Receiver<()>,
         memory_quota: Arc<MemoryQuota>,
     ) {
@@ -610,8 +620,7 @@ impl Service {
                                 "seconds_since_last_flush" => elapsed.as_secs(),
                                 "downstream" => peer_clone.clone(),
                                 "conn_id" => ?conn_id);
-                            // Cancel the gRPC connection
-                            let _ = cancel_tx.send(());
+                            let _ = cancel_tx.send(true);
                             break;
                         }
                     }
@@ -684,6 +693,40 @@ mod tests {
         let channel = ChannelBuilder::new(env).connect(&addr);
         let client = ChangeDataClient::new(channel);
         (server, client, rx)
+    }
+
+    #[test]
+    fn test_connection_watchdog_cancels_send_and_receive() {
+        let pool = Arc::new(Builder::new("cdc-watchdog-test").thread_count(1).create());
+        let last_flush_time = Arc::new(AtomicCell::new(
+            Instant::now() - Duration::from_secs(CDC_IDLE_DEREGISTER_THRESHOLD_SECS + 1),
+        ));
+        let memory_quota = Arc::new(MemoryQuota::new(1));
+        memory_quota.alloc_force(1);
+
+        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+        let mut send_cancel_rx = cancel_rx.clone();
+        let mut recv_cancel_rx = cancel_rx.clone();
+        let (_forward_exit_tx, forward_exit_rx) = tokio::sync::oneshot::channel::<()>();
+
+        Service::start_connection_watchdog(
+            pool.clone(),
+            last_flush_time,
+            "127.0.0.1:0".to_owned(),
+            ConnId::new(),
+            cancel_tx,
+            forward_exit_rx,
+            memory_quota,
+        );
+
+        let timeout = Duration::from_secs(CDC_WATCHDOG_CHECK_INTERVAL_SECS + 3);
+        block_on_timeout(async { send_cancel_rx.changed().await }, timeout)
+            .expect("watchdog should cancel send")
+            .expect("send cancel channel should be open");
+        block_on_timeout(async { recv_cancel_rx.changed().await }, timeout)
+            .expect("watchdog should cancel receive")
+            .expect("receive cancel channel should be open");
+        pool.stop();
     }
 
     #[test]
