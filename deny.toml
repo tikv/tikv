@@ -7,19 +7,20 @@ deny = [
     # Hash functions
     # We allow md5 for AWS S3 object lock feature which requires
     # computting object's md5.
-    { name = "md5", wrappers = ["aws"] },
+    { name = "md5", wrappers = ["aws", "google-cloud-storage"] },
     { name = "md-5", wrappers = ["aws-smithy-checksums"]},
     # time 0.2 pulls sha1 through stdweb's proc-macro on wasm-only targets.
     { name = "sha1", wrappers = ["aws-smithy-checksums", "stdweb-internal-macros"]},
     { name = "sha-1" },
-    # We allow sha2 for oauth2 and aws rust sdk crate, because it does use sha2 in TiKV use case.
-    { name = "sha2", wrappers = ["oauth2", "aws-sigv4", "aws-smithy-checksums", "aws-sdk-s3"] },
+    { name = "sha2", wrappers = ["oauth2", "aws-sigv4", "aws-smithy-checksums", "aws-sdk-s3", "google-cloud-storage"] },
     { name = "sha3" },
     # Symmetric encryption
     { name = "aes" },
     { name = "aes-gcm" },
     { name = "aes-gcm-siv" },
     { name = "chacha20poly1305" },
+    # google-cloud-gax pulls rand 0.10, which currently reaches chacha20.
+    { name = "chacha20", wrappers = ["rand"] },
     # Asymmetric encryption
     { name = "elliptic-curves" },
     { name = "rsa" },
@@ -30,8 +31,9 @@ deny = [
     # Message authentication codes
     { name = "hmac", wrappers = ["aws-sigv4", "aws-sdk-s3"]},
     # We prefer the system native TLS or OpenSSL.
-    { name = "rustls" },
-    { name = "ring" },
+    # gcp_v2 enables rustls only to install and require the aws-lc-rs FIPS provider at runtime.
+    { name = "rustls", wrappers = ["gcp_v2", "google-cloud-auth", "reqwest", "tokio-rustls", "hyper-rustls"] },
+    { name = "ring", wrappers = ["rustls", "rustls-webpki"] },
     # Ban trait crates from RustCrypto.
     { name = "aead" },
     { name = "cipher" },
@@ -86,6 +88,17 @@ ignore = [
     # replace FxHash. Currently, this package is stable and there are no known
     # exploitable vulnerabilities affecting our use case.
     "RUSTSEC-2025-0057",
+    # Ignore RUSTSEC-2026-0009 temporarily. This advisory comes from the
+    # transitive cloud SDK dependency chain pulling in time 0.3.47. The fixed
+    # time release requires serde 1.0.220 through serde_core, but the current
+    # raft-engine revision in this workspace still hard-pins serde = 1.0.228,
+    # so this cannot be resolved with a lockfile-only update.
+    "RUSTSEC-2026-0009",
+    # Ignore RUSTSEC-2026-0097 (unsound issue in rand with a custom logger using
+    # rand::rng()). The vulnerability requires a custom logger that calls
+    # rand::rng() / thread_rng() during logging, which TiKV does not do.
+    # TODO: Upgrade rand to >=0.9.3 or >=0.10.1 when possible.
+    "RUSTSEC-2026-0097",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,
@@ -106,6 +119,11 @@ exceptions = [
     { name = "slog-json", allow = ["MPL-2.0"] },
     { name = "smartstring", allow = ["MPL-2.0"] },
     { name = "inferno", allow = ["CDDL-1.0"] },
+    # rustls FIPS support pulls aws-lc-fips-sys, which is dual/triple licensed and
+    # includes the OpenSSL license in its SPDX expression.
+    { name = "aws-lc-fips-sys", allow = ["OpenSSL"] },
+    # reqwest/hyper-rustls bundle Mozilla root certificates through webpki-roots.
+    { name = "webpki-roots", allow = ["CDLA-Permissive-2.0"] },
 ]
 
 [sources]

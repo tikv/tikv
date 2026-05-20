@@ -232,6 +232,8 @@ impl Samples {
             LOAD_BASE_SPLIT_SAMPLE_VEC
                 .with_label_values(&["balance_score"])
                 .observe(balance_score);
+            let contained_score = sample.contained as f64 / evaluated_key_num;
+            let final_score = balance_score + contained_score;
             if balance_score >= split_balance_score {
                 LOAD_BASE_SPLIT_EVENT.no_balance_key.inc();
                 continue;
@@ -240,7 +242,6 @@ impl Samples {
             // The contained score is the ratio of a sample key that are contained in the
             // requested key. The larger the contained score, the more RPCs the
             // cluster will receive after this splitting.
-            let contained_score = sample.contained as f64 / evaluated_key_num;
             LOAD_BASE_SPLIT_SAMPLE_VEC
                 .with_label_values(&["contained_score"])
                 .observe(contained_score);
@@ -252,7 +253,6 @@ impl Samples {
             // We try to find a split key that has the smallest balance score and the
             // smallest contained score to make the splitting keep the load
             // balanced while not increasing too many RPCs.
-            let final_score = balance_score + contained_score;
             if final_score < best_score {
                 best_index = index as i32;
                 best_score = final_score;
@@ -797,6 +797,11 @@ impl AutoSplitController {
 
         // Start to record the read stats info.
         let mut split_infos = vec![];
+        let region_cpu_histogram =
+            LOAD_BASE_SPLIT_REGION_LOAD_VEC.with_label_values(&["cpu_millicores"]);
+        let region_qps_histogram = LOAD_BASE_SPLIT_REGION_LOAD_VEC.with_label_values(&["qps"]);
+        let region_bytes_histogram =
+            LOAD_BASE_SPLIT_REGION_LOAD_VEC.with_label_values(&["bytes_kib"]);
         for (region_id, region_infos) in region_infos_map {
             if split_validator.is_disabled(region_id) {
                 continue;
@@ -807,10 +812,15 @@ impl AutoSplitController {
             let byte = region_infos
                 .iter()
                 .fold(0, |flow, region_info| flow + region_info.flow.read_bytes);
-            let (cpu_usage, hottest_key_range) = region_cpu_map
-                .get(&region_id)
-                .map(|(cpu_usage, key_range)| (*cpu_usage, key_range.clone()))
-                .unwrap_or((0.0, None));
+            region_qps_histogram.observe(qps as f64);
+            region_bytes_histogram.observe(byte as f64 / 1024.0);
+            let (cpu_usage, hottest_key_range) =
+                if let Some((cpu_usage, key_range)) = region_cpu_map.get(&region_id) {
+                    region_cpu_histogram.observe(cpu_usage * 1000.0);
+                    (*cpu_usage, key_range.clone())
+                } else {
+                    (0.0, None)
+                };
             let is_region_busy = self.is_region_busy(unified_read_pool_thread_usage, cpu_usage);
             debug!("load base split params";
                 "region_id" => region_id,
@@ -878,9 +888,19 @@ impl AutoSplitController {
                     ));
                     LOAD_BASE_SPLIT_EVENT.ready_to_split.inc();
                     self.recorders.remove(&region_id);
-                } else if is_unified_read_pool_busy && is_region_busy {
-                    LOAD_BASE_SPLIT_EVENT.cpu_load_fit.inc();
-                    top_cpu_usage.push(region_id);
+                } else {
+                    LOAD_BASE_SPLIT_EVENT.normal_key_failed.inc();
+                    if !is_unified_read_pool_busy {
+                        LOAD_BASE_SPLIT_EVENT.cpu_fallback_unified_not_busy.inc();
+                    } else if !is_region_busy {
+                        LOAD_BASE_SPLIT_EVENT.cpu_fallback_region_not_busy.inc();
+                    } else {
+                        LOAD_BASE_SPLIT_EVENT.cpu_load_fit.inc();
+                        if is_grpc_poll_busy {
+                            LOAD_BASE_SPLIT_EVENT.cpu_fallback_grpc_busy.inc();
+                        }
+                        top_cpu_usage.push(region_id);
+                    }
                 }
             } else {
                 LOAD_BASE_SPLIT_EVENT.not_ready_to_split.inc();
@@ -1428,6 +1448,7 @@ mod tests {
                     network_out_bytes: 0,
                     logical_read_bytes: 0,
                     logical_write_bytes: 0,
+                    ..Default::default()
                 },
             );
         }
@@ -1908,6 +1929,7 @@ mod tests {
                     network_out_bytes: 0,
                     logical_read_bytes: 0,
                     logical_write_bytes: 0,
+                    ..Default::default()
                 },
             );
             // ["c", "d"] with (test_case.1)ms CPU time.
@@ -1921,6 +1943,7 @@ mod tests {
                     network_out_bytes: 0,
                     logical_read_bytes: 0,
                     logical_write_bytes: 0,
+                    ..Default::default()
                 },
             );
             // Multiple key ranges with (test_case.2)ms CPU time.
@@ -1934,6 +1957,7 @@ mod tests {
                     network_out_bytes: 0,
                     logical_read_bytes: 0,
                     logical_write_bytes: 0,
+                    ..Default::default()
                 },
             );
             // Empty key range with (test_case.3)ms CPU time.
@@ -1947,6 +1971,7 @@ mod tests {
                     network_out_bytes: 0,
                     logical_read_bytes: 0,
                     logical_write_bytes: 0,
+                    ..Default::default()
                 },
             );
 
