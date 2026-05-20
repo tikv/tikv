@@ -223,8 +223,8 @@ where
             || config.max_keys_read.is_some()
             || table_task_iter_builder.is_none()
         {
-            /// We did not support index lookup when paging or max_keys_read is
-            /// enabled due to bufferring challenges.
+            // We did not support index lookup when paging or max_keys_read is
+            // enabled due to buffering challenges.
             // TODO: support paging and max_keys_read
             // some times we do not have table_task_iter_builder, such as
             // - CommonHandle
