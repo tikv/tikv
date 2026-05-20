@@ -1469,6 +1469,7 @@ dependencies = [
  "tikv_kv",
  "tikv_util",
  "tokio",
+ "tokio-util",
  "txn_types",
 ]
 

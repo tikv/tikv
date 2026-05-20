@@ -62,6 +62,7 @@ tikv = { workspace = true }
 tikv_kv = { workspace = true }
 tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 txn_types = { workspace = true }
 
 [dev-dependencies]

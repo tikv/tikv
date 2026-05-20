@@ -24,6 +24,7 @@ use kvproto::{
     kvrpcpb::ApiVersion,
 };
 use tikv_util::{error, info, memory::MemoryQuota, timer::GLOBAL_TIMER_HANDLE, warn, worker::*};
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     channel::{CDC_CHANNLE_CAPACITY, Sink, channel},
@@ -479,8 +480,8 @@ impl Service {
             Ok::<(), String>(())
         };
 
-        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-        let mut recv_cancel_rx = cancel_rx.clone();
+        let cancel_token = CancellationToken::new();
+        let recv_cancel_token = cancel_token.clone();
 
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
@@ -493,7 +494,7 @@ impl Service {
                         info!("cdc receive closed"; "downstream" => peer, "conn_id" => ?conn_id);
                     }
                 }
-                _ = recv_cancel_rx.changed() => {
+                _ = recv_cancel_token.cancelled() => {
                     warn!("cdc receive cancelled"; "downstream" => peer, "conn_id" => ?conn_id);
                 }
             }
@@ -510,7 +511,7 @@ impl Service {
         let peer_for_watchdog = ctx.peer().to_string();
 
         let peer = ctx.peer();
-        let mut send_cancel_rx = cancel_rx.clone();
+        let send_cancel_token = cancel_token.clone();
 
         // Create cancelCh for eventDrain.forward exit signal
         let (forward_exit_tx, forward_exit_rx) = tokio::sync::oneshot::channel::<()>();
@@ -519,7 +520,7 @@ impl Service {
             #[cfg(feature = "failpoints")]
             sleep_before_drain_change_event().await;
             tokio::select! {
-                _ = send_cancel_rx.changed() => {
+                _ = send_cancel_token.cancelled() => {
                     warn!("cdc send cancelled"; "downstream" => peer, "conn_id" => ?conn_id);
                     let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, "connection cancelled".to_string());
                     let _ = sink.fail(status).await;
@@ -546,7 +547,7 @@ impl Service {
             last_flush_time_for_watchdog.clone(),
             peer_for_watchdog.clone(),
             conn_id,
-            cancel_tx,
+            cancel_token,
             forward_exit_rx,
             self.memory_quota.clone(),
         );
@@ -562,7 +563,7 @@ impl Service {
         last_flush_time: Arc<AtomicCell<Instant>>,
         peer: String,
         conn_id: ConnId,
-        cancel_tx: tokio::sync::watch::Sender<bool>,
+        cancel_token: CancellationToken,
         mut forward_exit_rx: tokio::sync::oneshot::Receiver<()>,
         memory_quota: Arc<MemoryQuota>,
     ) {
@@ -610,17 +611,30 @@ impl Service {
                             }
                         };
 
-                        // Check if last flush was more than the deregister threshold
+                        let memory_quota_abort_threshold_reached =
+                            memory_quota.used_ratio() >= CDC_MEMORY_QUOTA_ABORT_THRESHOLD;
+
+                        #[cfg(feature = "failpoints")]
+                        let memory_quota_abort_threshold_reached = {
+                            let should_ignore_memory_quota = || {
+                                fail::fail_point!("cdc_watchdog_ignore_memory_quota", |_| true);
+                                false
+                            };
+                            memory_quota_abort_threshold_reached || should_ignore_memory_quota()
+                        };
+
+                        // Check if last flush was more than the deregister threshold.
                         // To prevent the case that the connection idle since there are a lot of
                         // incremental scan tasks queueing so won't send events, also check on the
-                        // memory usage, if the memory quota is almost used up, we abort the connection.
+                        // memory usage. If the memory quota is almost used up, we abort the
+                        // connection. The failpoint can skip the memory check for manual testing.
                         if elapsed > Duration::from_secs(_idle_threshold)
-                            && memory_quota.used_ratio() >= CDC_MEMORY_QUOTA_ABORT_THRESHOLD {
+                            && memory_quota_abort_threshold_reached {
                             error!("cdc connection idle for too long, aborting connection";
                                 "seconds_since_last_flush" => elapsed.as_secs(),
                                 "downstream" => peer_clone.clone(),
                                 "conn_id" => ?conn_id);
-                            let _ = cancel_tx.send(true);
+                            cancel_token.cancel();
                             break;
                         }
                     }
@@ -704,9 +718,9 @@ mod tests {
         let memory_quota = Arc::new(MemoryQuota::new(1));
         memory_quota.alloc_force(1);
 
-        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-        let mut send_cancel_rx = cancel_rx.clone();
-        let mut recv_cancel_rx = cancel_rx.clone();
+        let cancel_token = CancellationToken::new();
+        let send_cancel_token = cancel_token.clone();
+        let recv_cancel_token = cancel_token.clone();
         let (_forward_exit_tx, forward_exit_rx) = tokio::sync::oneshot::channel::<()>();
 
         Service::start_connection_watchdog(
@@ -714,18 +728,16 @@ mod tests {
             last_flush_time,
             "127.0.0.1:0".to_owned(),
             ConnId::new(),
-            cancel_tx,
+            cancel_token,
             forward_exit_rx,
             memory_quota,
         );
 
         let timeout = Duration::from_secs(CDC_WATCHDOG_CHECK_INTERVAL_SECS + 3);
-        block_on_timeout(async { send_cancel_rx.changed().await }, timeout)
-            .expect("watchdog should cancel send")
-            .expect("send cancel channel should be open");
-        block_on_timeout(async { recv_cancel_rx.changed().await }, timeout)
-            .expect("watchdog should cancel receive")
-            .expect("receive cancel channel should be open");
+        block_on_timeout(send_cancel_token.cancelled(), timeout)
+            .expect("watchdog should cancel send");
+        block_on_timeout(recv_cancel_token.cancelled(), timeout)
+            .expect("watchdog should cancel receive");
         pool.stop();
     }
 
