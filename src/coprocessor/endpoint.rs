@@ -272,6 +272,10 @@ impl<E: Engine> Endpoint<E> {
                         0 => None,
                         i => Some(i),
                     };
+                    let paging_size_bytes = match req.get_paging_size_bytes() {
+                        0 => None,
+                        i => Some(i),
+                    };
 
                     let extra_store_accessor =
                         ExtraSnapStoreAccessor::<E>::new(req_ctx.clone(), concurrency_manager);
@@ -285,6 +289,7 @@ impl<E: Engine> Endpoint<E> {
                         is_streaming,
                         req.get_is_cache_enabled(),
                         paging_size,
+                        paging_size_bytes,
                         quota_limiter,
                     )
                     .data_version(data_version)
