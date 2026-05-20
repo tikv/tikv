@@ -828,7 +828,6 @@ where
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
         let raft_store = Arc::new(VersionTrack::new(self.core.config.raft_store.clone()));
         let health_controller = HealthController::new();
-
         let node = self.node.as_ref().unwrap();
 
         // Create coprocessor endpoint.

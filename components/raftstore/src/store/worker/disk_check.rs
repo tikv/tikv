@@ -2,7 +2,6 @@
 
 use std::{
     fmt::{self, Display, Formatter},
-    io::Write,
     path::PathBuf,
     time::Duration,
 };
@@ -10,10 +9,11 @@ use std::{
 use crossbeam::channel::{Receiver, Sender, bounded};
 use health_controller::types::LatencyInspector;
 use tikv_util::{
-    time::Instant,
     warn,
     worker::{Runnable, Worker},
 };
+
+use crate::store::disk_probe::ProbeRunner;
 
 #[derive(Debug)]
 pub enum Task {
@@ -36,7 +36,7 @@ impl Display for Task {
 /// The inspector writes a file to the disk and measures the time it takes to
 /// complete the write operation.
 pub struct Runner {
-    target: PathBuf,
+    probe: ProbeRunner,
     notifier: Sender<Task>,
     receiver: Receiver<Task>,
     bg_worker: Option<Worker>,
@@ -56,7 +56,7 @@ impl Runner {
         // `capacity` for the disk check worker.
         let (notifier, receiver) = bounded(3);
         Self {
-            target,
+            probe: ProbeRunner::new(target, Self::DISK_IO_LATENCY_INSPECT_FLUSH_STR),
             notifier,
             receiver,
             bg_worker: None,
@@ -81,19 +81,20 @@ impl Runner {
     }
 
     fn inspect(&self) -> Option<Duration> {
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&self.target)
-            .ok()?;
-
-        let start = Instant::now();
-        // Ignore the error
-        file.write_all(Self::DISK_IO_LATENCY_INSPECT_FLUSH_STR)
-            .ok()?;
-        file.sync_all().ok()?;
-        Some(start.saturating_elapsed())
+        // `disk_check` is request-driven, so we do not need the "only one probe
+        // in flight" guard here. Still, we keep the state consistent for
+        // observability / future reuse.
+        self.probe.try_start_probe();
+        match self.probe.probe_once() {
+            Ok(duration) => {
+                self.probe.finish_probe_success();
+                Some(duration)
+            }
+            Err(_) => {
+                self.probe.finish_probe_failure();
+                None
+            }
+        }
     }
 
     fn execute(&self) {
@@ -132,7 +133,7 @@ impl Runnable for Runner {
 
 impl Drop for Runner {
     fn drop(&mut self) {
-        if let Err(e) = std::fs::remove_file(&self.target) {
+        if let Err(e) = std::fs::remove_file(self.probe.path()) {
             warn!("remove disk latency inspector file failed"; "err" => ?e);
         }
     }
