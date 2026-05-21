@@ -104,6 +104,14 @@ impl<I: Iterator> Cursor<I> {
         }
 
         if !self.valid()? || self.key(statistics) != upper.as_slice() {
+            // This cache is tied to both the missing range and the iterator
+            // position: [lower, upper) is known to be empty only while the
+            // cursor still points at `upper`, the first key >= the original
+            // seek target. If another seek/next/prev has invalidated the
+            // iterator or moved it away from `upper`, the cache is out of sync
+            // with the current iterator state. Reusing it could incorrectly
+            // skip the normal seek path and break seek's "first key >= target"
+            // contract.
             self.missing_range_cache = None;
             return Ok(false);
         }
