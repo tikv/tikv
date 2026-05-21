@@ -1173,12 +1173,6 @@ mod tests {
                 _ => {}
             }
         }
-        println!(
-            "scheduler_insert_locks_miss old_value_write_prev={} old_value_write_hit_missing_range={} old_value_write_cache_missing_range={} insert_prewrite_count={insert_prewrite_count} tail_prewrite_count={tail_prewrite_count}",
-            old_value_stats.write.prev,
-            old_value_stats.write.hit_missing_range,
-            old_value_stats.write.cache_missing_range,
-        );
 
         assert_eq!(insert_prewrite_count, INSERT_LOCK_COUNT);
         assert_eq!(tail_prewrite_count, 1);
