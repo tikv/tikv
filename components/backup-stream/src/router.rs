@@ -1347,6 +1347,9 @@ impl StreamTaskHandler {
 
         match ret {
             Ok(_) => {
+                crate::metrics::UPLOAD_FILE_SIZE
+                    .with_label_values(&["log"])
+                    .inc_by(stat_length as _);
                 debug!(
                     "backup stream flush success";
                     "storage_file" => ?filepath,
@@ -1451,6 +1454,9 @@ impl StreamTaskHandler {
                 )
                 .await
                 .context(format_args!("flush meta {:?}", meta_path))?;
+            crate::metrics::UPLOAD_FILE_SIZE
+                .with_label_values(&["metadata"])
+                .inc_by(buflen as _);
             meta_files.push(meta_path);
         }
         Ok(meta_files)
