@@ -12,7 +12,7 @@ use std::{
 
 use health_controller::HealthController;
 use prometheus::{IntCounterVec, register_int_counter_vec};
-use tikv_util::{config::VersionTrack, logger, warn, worker::Worker};
+use tikv_util::{config::VersionTrack, error, logger, warn, worker::Worker};
 
 use super::{Config, metrics::STORE_INSPECT_DURATION_HISTOGRAM};
 use crate::store::disk_probe::ProbeRunner;
@@ -45,10 +45,69 @@ fn record_probe_duration(metric_label: &str, duration: Duration) {
         .observe(duration.as_secs_f64());
 }
 
-fn probe_once(probe: &ProbeRunner) -> std::io::Result<Duration> {
-    probe.probe_once()
+fn spawn_probe_loop(
+    worker: &Worker,
+    stop: Arc<AtomicBool>,
+    disk: &'static str,
+    metric_label: &'static str,
+    probe: ProbeRunner,
+) {
+    // The probe loop is intentionally simple: it only tries to start a probe,
+    // then performs a blocking `write + sync_all`, and reports success/failure.
+    //
+    // If the disk is hung, this task can block indefinitely. That is why the
+    // checker below must run on an independent worker thread: otherwise the
+    // checker could be starved by the probe it supervises.
+    worker.spawn_interval_task(PROBE_INTERVAL, move || {
+        if stop.load(Ordering::Acquire) {
+            return;
+        }
+        if !probe.try_start_probe() {
+            return;
+        }
+
+        match probe.probe_once() {
+            Ok(duration) => {
+                if duration >= ANOMALY_THRESHOLD {
+                    warn!(
+                        "fail-fast probe slow";
+                        "disk" => disk,
+                        "path" => %probe.path().display(),
+                        "elapsed" => ?duration,
+                    );
+                }
+                record_probe_duration(metric_label, duration);
+                probe.finish_probe_success();
+                DISK_PROBE_SUCCESS.with_label_values(&[disk]).inc();
+            }
+            Err(e) => {
+                warn!(
+                    "fail-fast probe failed";
+                    "disk" => disk,
+                    "path" => %probe.path().display(),
+                    "err" => ?e,
+                );
+                probe.finish_probe_failure();
+                DISK_PROBE_FAILURE.with_label_values(&[disk]).inc();
+            }
+        }
+    });
 }
 
+/// A best-effort "fail-fast" monitor for cases where TiKV can become
+/// effectively unavailable without crashing.
+///
+/// In some failure modes, TiKV may remain alive and even keep Raft leadership,
+/// but it is no longer able to make forward progress or provide service (a
+/// "zombie" state). In such cases, keeping the process running can prolong
+/// unavailability and hide the real failure from external orchestration.
+///
+/// This monitor chooses to fail fast (exit the process) when it detects such a
+/// condition. Today it covers disk hang detection via a blocking `write +
+/// sync_all` probe on both raft and kv disks. The checker runs on an
+/// independent worker thread so it can still trigger even if the probe thread
+/// is stuck. The scope is expected to expand to cover more zombie-like failure
+/// modes in the future.
 pub struct FailFastMonitor {
     stop: Arc<AtomicBool>,
     raft_probe: ProbeRunner,
@@ -68,80 +127,20 @@ impl FailFastMonitor {
         let raft_probe =
             ProbeRunner::new(raft_probe_dir.join(RAFT_PROBE_FILENAME), RAFT_PROBE_PAYLOAD);
         let kv_probe = ProbeRunner::new(kv_probe_dir.join(KV_PROBE_FILENAME), KV_PROBE_PAYLOAD);
-
-        let make_probe_task = |disk: &'static str,
-                               metric_label: &'static str,
-                               probe: ProbeRunner,
-                               stop: Arc<AtomicBool>| {
-            move || {
-                if stop.load(Ordering::Acquire) {
-                    return;
-                }
-                if !probe.try_start_probe() {
-                    if let Some(elapsed) = probe.current_probe_elapsed() {
-                        if elapsed >= ANOMALY_THRESHOLD {
-                            warn!(
-                                "fail-fast probe still in flight";
-                                "disk" => disk,
-                                "path" => %probe.path().display(),
-                                "elapsed" => ?elapsed,
-                            );
-                        }
-                    }
-                    return;
-                }
-
-                match probe_once(&probe) {
-                    Ok(duration) => {
-                        if duration >= ANOMALY_THRESHOLD {
-                            warn!(
-                                "fail-fast probe slow";
-                                "disk" => disk,
-                                "path" => %probe.path().display(),
-                                "elapsed" => ?duration,
-                            );
-                        }
-                        record_probe_duration(metric_label, duration);
-                        probe.finish_probe_success();
-                        DISK_PROBE_SUCCESS.with_label_values(&[disk]).inc();
-                    }
-                    Err(e) => {
-                        warn!(
-                            "fail-fast probe failed";
-                            "disk" => disk,
-                            "path" => %probe.path().display(),
-                            "err" => ?e,
-                        );
-                        record_probe_duration(metric_label, Duration::ZERO);
-                        probe.finish_probe_failure();
-                        DISK_PROBE_FAILURE.with_label_values(&[disk]).inc();
-                    }
-                }
-            }
-        };
-
-        {
-            let stop_for_probe = stop.clone();
-            let raft_probe_for_probe = raft_probe.clone();
-            probe_worker.spawn_interval_task(
-                PROBE_INTERVAL,
-                make_probe_task(
-                    "raft",
-                    "raft-disk-probe",
-                    raft_probe_for_probe,
-                    stop_for_probe,
-                ),
-            );
-        }
-
-        {
-            let stop_for_probe = stop.clone();
-            let kv_probe_for_probe = kv_probe.clone();
-            probe_worker.spawn_interval_task(
-                PROBE_INTERVAL,
-                make_probe_task("kv", "kv-disk-probe", kv_probe_for_probe, stop_for_probe),
-            );
-        }
+        spawn_probe_loop(
+            &probe_worker,
+            stop.clone(),
+            "raft",
+            "raft-disk-probe",
+            raft_probe.clone(),
+        );
+        spawn_probe_loop(
+            &probe_worker,
+            stop.clone(),
+            "kv",
+            "kv-disk-probe",
+            kv_probe.clone(),
+        );
 
         let stop_for_check = stop.clone();
         let raft_probe_for_check = raft_probe.clone();
@@ -151,29 +150,59 @@ impl FailFastMonitor {
                 return;
             }
 
+            // An in-flight probe means the previous `write + sync_all` has not
+            // returned yet, which is a strong signal of disk unresponsiveness.
+            // We log this early (>= 1s) for observability even if it's below
+            // the configured fail-fast timeout.
+            if let Some(elapsed) = raft_probe_for_check.current_probe_elapsed() {
+                if elapsed >= ANOMALY_THRESHOLD {
+                    warn!(
+                        "fail-fast probe: disk still not responsive after elapsed";
+                        "disk" => "raft",
+                        "path" => %raft_probe_for_check.path().display(),
+                        "elapsed" => ?elapsed,
+                    );
+                }
+            }
+            if let Some(elapsed) = kv_probe_for_check.current_probe_elapsed() {
+                if elapsed >= ANOMALY_THRESHOLD {
+                    warn!(
+                        "fail-fast probe: disk still not responsive after elapsed";
+                        "disk" => "kv",
+                        "path" => %kv_probe_for_check.path().display(),
+                        "elapsed" => ?elapsed,
+                    );
+                }
+            }
+
             let timeout = cfg.value().disk_hang_timeout;
             let Some(timeout) = timeout else { return };
             if timeout.0.is_zero() {
                 return;
             }
 
+            // Gate on slow score to avoid exiting due to transient IO jitter.
+            // When the store is healthy, a slow/overlapped probe is more likely
+            // to be benign (e.g. short fs stalls). When slow score is high, we
+            // treat a stuck probe as a stronger indication of a real hang.
             let slow_score_ok =
                 health_controller.get_raftstore_slow_score() > SLOW_SCORE_GATE_THRESHOLD;
             if !slow_score_ok {
                 return;
             }
 
-            let raft_time_since_success = raft_probe_for_check.time_since_last_success();
-            let kv_time_since_success = kv_probe_for_check.time_since_last_success();
-            if raft_time_since_success >= timeout.0 || kv_time_since_success >= timeout.0 {
-                let raft_elapsed = raft_probe_for_check.current_probe_elapsed();
-                let kv_elapsed = kv_probe_for_check.current_probe_elapsed();
-                warn!(
-                    "fail-fast disk probe has not made progress for the configured timeout";
+            let raft_elapsed = raft_probe_for_check.current_probe_elapsed();
+            let kv_elapsed = kv_probe_for_check.current_probe_elapsed();
+            if raft_elapsed.is_some_and(|d| d >= timeout.0) || kv_elapsed.is_some_and(|d| d >= timeout.0)
+            {
+                // We intentionally hard-exit here. Continuing to serve on a
+                // hung disk can cause prolonged unavailability and data loss
+                // risks (e.g. stuck raft/kv writes). We first flip is_serving
+                // to false to stop new traffic, then exit.
+                error!(
+                    "fail-fast: disk probe timed out, shutting down to avoid serving on an unhealthy disk";
                     "timeout" => ?timeout.0,
-                    "raft_time_since_success" => ?raft_time_since_success,
                     "raft_current_probe_elapsed" => ?raft_elapsed,
-                    "kv_time_since_success" => ?kv_time_since_success,
                     "kv_current_probe_elapsed" => ?kv_elapsed,
                 );
                 health_controller.set_is_serving(false);
@@ -189,9 +218,7 @@ impl FailFastMonitor {
         }
     }
 
-    pub fn start(&mut self) {}
-
-    pub fn stop(&mut self) {
+    pub fn stop(&self) {
         self.stop.store(true, Ordering::Release);
         self.cleanup_probe_file();
     }
@@ -223,12 +250,12 @@ mod tests {
     fn test_probe_once() {
         let dir = tempdir().unwrap();
         let raft_probe = ProbeRunner::new(dir.path().join(RAFT_PROBE_FILENAME), RAFT_PROBE_PAYLOAD);
-        let duration = probe_once(&raft_probe).unwrap();
+        let duration = raft_probe.probe_once().unwrap();
         assert!(duration > Duration::ZERO);
         assert!(raft_probe.path().exists());
 
         let kv_probe = ProbeRunner::new(dir.path().join(KV_PROBE_FILENAME), KV_PROBE_PAYLOAD);
-        let duration = probe_once(&kv_probe).unwrap();
+        let duration = kv_probe.probe_once().unwrap();
         assert!(duration > Duration::ZERO);
         assert!(kv_probe.path().exists());
     }

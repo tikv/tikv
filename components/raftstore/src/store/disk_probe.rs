@@ -16,6 +16,11 @@ use tikv_util::time::Instant;
 /// It is intentionally minimal because it is used by multiple subsystems:
 /// - KV disk latency inspection (`disk_check`)
 /// - Raft disk hang fail-fast (`fail_fast`)
+///
+/// Note that this probe is intentionally *blocking*: if the underlying disk or
+/// filesystem is hung, `sync_all()` can block indefinitely. Upper layers rely
+/// on this behavior to detect "no forward progress" via an independent checker
+/// thread.
 pub(crate) fn write_sync_once(path: &Path, payload: &[u8]) -> std::io::Result<Duration> {
     let start = Instant::now();
     let mut file = OpenOptions::new()
@@ -30,14 +35,12 @@ pub(crate) fn write_sync_once(path: &Path, payload: &[u8]) -> std::io::Result<Du
 
 #[derive(Debug)]
 struct ProbeState {
-    last_success_at: Instant,
     current_probe_started_at: Option<Instant>,
 }
 
 impl ProbeState {
     fn new() -> Self {
         Self {
-            last_success_at: Instant::now(),
             current_probe_started_at: None,
         }
     }
@@ -55,7 +58,6 @@ impl ProbeState {
     }
 
     fn finish_probe_success(&mut self) {
-        self.last_success_at = Instant::now();
         self.current_probe_started_at = None;
     }
 
@@ -63,13 +65,11 @@ impl ProbeState {
         self.current_probe_started_at = None;
     }
 
+    // Tracks whether a probe is in flight and how long it has been blocked.
+    // This is the minimum state needed for hang detection.
     fn current_probe_elapsed(&self) -> Option<Duration> {
         self.current_probe_started_at
             .map(|start| start.saturating_elapsed())
-    }
-
-    fn time_since_last_success(&self) -> Duration {
-        self.last_success_at.saturating_elapsed()
     }
 }
 
@@ -112,10 +112,6 @@ impl ProbeRunner {
     pub(crate) fn current_probe_elapsed(&self) -> Option<Duration> {
         self.state.lock().current_probe_elapsed()
     }
-
-    pub(crate) fn time_since_last_success(&self) -> Duration {
-        self.state.lock().time_since_last_success()
-    }
 }
 
 #[cfg(test)]
@@ -150,6 +146,5 @@ mod tests {
         assert!(runner.current_probe_elapsed().is_some());
         runner.finish_probe_success();
         assert!(runner.current_probe_elapsed().is_none());
-        assert!(runner.time_since_last_success() <= Duration::from_secs(1));
     }
 }

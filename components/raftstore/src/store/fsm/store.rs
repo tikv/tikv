@@ -1855,7 +1855,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .background_worker
             .start("disk-check-worker", disk_check_runner);
 
-        let mut fail_fast_monitor = crate::store::FailFastMonitor::new(
+        let fail_fast_monitor = crate::store::FailFastMonitor::new(
             cfg.clone(),
             health_controller.clone(),
             PathBuf::from(engines.raft.get_engine_path().to_string()),
@@ -1863,7 +1863,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             workers.fail_fast_probe_worker.clone(),
             workers.fail_fast_check_worker.clone(),
         );
-        fail_fast_monitor.start();
         workers.on_stop_hooks.push(Box::new(move || {
             fail_fast_monitor.stop();
         }));
