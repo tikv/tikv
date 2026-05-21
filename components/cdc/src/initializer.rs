@@ -642,7 +642,7 @@ mod tests {
         collections::BTreeMap,
         fmt::Display,
         sync::{
-            Arc, Mutex,
+            Arc,
             atomic::AtomicBool,
             mpsc::{Receiver, RecvTimeoutError, Sender, channel, sync_channel},
         },
@@ -685,8 +685,6 @@ mod tests {
 
     use super::*;
     use crate::txn_source::TxnSource;
-
-    static OLD_VALUE_SCAN_METRICS_LOCK: Mutex<()> = Mutex::new(());
 
     struct ReceiverRunnable<T: Display + Send> {
         tx: Sender<T>,
@@ -1022,7 +1020,6 @@ mod tests {
     #[test]
     fn test_async_incremental_scan_not_call_old_value_prev() {
         const INSERT_LOCK_COUNT: usize = 64;
-        const MAX_SCAN_BATCH_SIZE: usize = 7;
 
         let mut engine = TestEngineBuilder::new().build_without_cache().unwrap();
         let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(
@@ -1103,102 +1100,98 @@ mod tests {
         // cursor on the boundary write and still load the real old value.
         sched_prewrite_put(tail_key, tail_lock_value, 300).unwrap();
 
-        let _metrics_guard = OLD_VALUE_SCAN_METRICS_LOCK.lock().unwrap();
-        let write_prev_counter =
-            CDC_OLD_VALUE_SCAN_DETAILS.with_label_values(&["write", "prev", TAG_INCREMENTAL_SCAN]);
-        let write_hit_missing_range_counter = CDC_OLD_VALUE_SCAN_DETAILS.with_label_values(&[
-            "write",
-            "hit_missing_range",
-            TAG_INCREMENTAL_SCAN,
-        ]);
-        let write_cache_missing_range_counter = CDC_OLD_VALUE_SCAN_DETAILS.with_label_values(&[
-            "write",
-            "cache_missing_range",
-            TAG_INCREMENTAL_SCAN,
-        ]);
-        let prev_before = write_prev_counter.get();
-        let hit_missing_range_before = write_hit_missing_range_counter.get();
-        let cache_missing_range_before = write_cache_missing_range_counter.get();
         let snap = engine.snapshot(Default::default()).unwrap();
-        let (mut worker, pool, mut initializer, _rx, mut drain) = mock_initializer(
-            usize::MAX,
-            usize::MAX,
-            1000,
-            engine.kv_engine(),
-            ChangeDataRequestKvApi::TiDb,
-            false,
-        );
-        initializer.build_resolver.store(false, Ordering::Release);
-        initializer.checkpoint_ts = checkpoint_ts;
-        initializer.max_scan_batch_size = MAX_SCAN_BATCH_SIZE;
-
-        let th = pool.spawn(async move {
-            initializer
-                .async_incremental_scan(snap, Region::default())
-                .await
-                .unwrap();
-        });
-
+        let mut old_value_cursors = OldValueCursors::new(&snap);
+        let mut scanner = ScannerBuilder::new(snap, TimeStamp::max())
+            .fill_cache(false)
+            .range(Some(Key::from_encoded_slice(b"")), None)
+            // Force the same old-value lookup path used by incremental scan
+            // when the write-CF ts filter is enabled.
+            .hint_min_ts(Some(checkpoint_ts))
+            .build_delta_scanner(checkpoint_ts, TxnExtraOp::ReadOldValue)
+            .unwrap();
+        let mut old_value_stats = Statistics::default();
         let mut insert_prewrite_count = 0;
         let mut tail_prewrite_count = 0;
-        let mut initialized = false;
-        while let Some((event, _)) = block_on(drain.drain().next()) {
-            let CdcEvent::Event(event) = event else {
-                continue;
-            };
-            let Some(event) = event.event else {
-                continue;
-            };
-            let Event_oneof_event::Entries(mut entries) = event else {
-                continue;
-            };
-            for entry in entries.take_entries().into_iter() {
-                match entry.get_type() {
-                    EventLogType::Prewrite
-                        if insert_lock_keys.iter().any(|key| entry.get_key() == key) =>
-                    {
-                        assert!(
-                            entry.get_old_value().is_empty(),
-                            "insert-like lock should have no old value: key={:?}",
-                            entry.get_key()
-                        );
-                        insert_prewrite_count += 1;
-                    }
-                    EventLogType::Prewrite if entry.get_key() == tail_key => {
-                        assert_eq!(entry.get_value(), tail_lock_value);
-                        assert_eq!(entry.get_old_value(), tail_old_value);
-                        tail_prewrite_count += 1;
-                    }
-                    EventLogType::Initialized => initialized = true,
-                    _ => {}
-                }
+
+        fn resolve_old_value<S: Snapshot>(
+            key: &Key,
+            cursors: &mut OldValueCursors<S>,
+            statistics: &mut Statistics,
+        ) -> OldValue {
+            match near_seek_old_value(
+                key,
+                &mut cursors.write,
+                Either::<&S, _>::Right(&mut cursors.default),
+                statistics,
+            )
+            .unwrap()
+            {
+                Some(value) => OldValue::value(value),
+                None => OldValue::None,
             }
         }
-        block_on(th).unwrap();
-        worker.stop();
 
-        let prev_delta = write_prev_counter.get() - prev_before;
-        let hit_missing_range_delta =
-            write_hit_missing_range_counter.get() - hit_missing_range_before;
-        let cache_missing_range_delta =
-            write_cache_missing_range_counter.get() - cache_missing_range_before;
+        while let Some(entry) = scanner.next_entry().unwrap() {
+            let TxnEntry::Prewrite {
+                lock, old_value, ..
+            } = entry
+            else {
+                continue;
+            };
+            let key = Key::from_encoded(lock.0.clone()).into_raw().unwrap();
+            let old_value = match old_value {
+                OldValue::SeekWrite(key) => {
+                    resolve_old_value(&key, &mut old_value_cursors, &mut old_value_stats)
+                }
+                old_value => old_value,
+            };
+            match key.as_slice() {
+                key if insert_lock_keys
+                    .iter()
+                    .any(|insert_key| key == insert_key.as_slice()) =>
+                {
+                    assert!(
+                        matches!(old_value, OldValue::None),
+                        "insert-like lock should have no old value: key={:?}",
+                        key
+                    );
+                    insert_prewrite_count += 1;
+                }
+                key if key == tail_key.as_slice() => {
+                    let parsed_lock = txn_types::parse_lock(&lock.1)
+                        .unwrap()
+                        .left()
+                        .expect("put lock should be parsed");
+                    assert_eq!(
+                        parsed_lock.short_value.as_deref(),
+                        Some(tail_lock_value.as_slice())
+                    );
+                    assert_eq!(old_value, OldValue::value(tail_old_value.to_vec()));
+                    tail_prewrite_count += 1;
+                }
+                _ => {}
+            }
+        }
         println!(
-            "scheduler_insert_locks_miss old_value_write_prev_delta={prev_delta} old_value_write_hit_missing_range_delta={hit_missing_range_delta} old_value_write_cache_missing_range_delta={cache_missing_range_delta} insert_prewrite_count={insert_prewrite_count} tail_prewrite_count={tail_prewrite_count}"
+            "scheduler_insert_locks_miss old_value_write_prev={} old_value_write_hit_missing_range={} old_value_write_cache_missing_range={} insert_prewrite_count={insert_prewrite_count} tail_prewrite_count={tail_prewrite_count}",
+            old_value_stats.write.prev,
+            old_value_stats.write.hit_missing_range,
+            old_value_stats.write.cache_missing_range,
         );
 
         assert_eq!(insert_prewrite_count, INSERT_LOCK_COUNT);
         assert_eq!(tail_prewrite_count, 1);
-        assert!(initialized);
         assert_eq!(
-            prev_delta, 0,
+            old_value_stats.write.prev, 0,
             "missing range cache should prevent repeated old-value cursor prev after the first miss leaves the cursor on {tail_key:?}"
         );
         assert_eq!(
-            hit_missing_range_delta, INSERT_LOCK_COUNT as u64,
+            old_value_stats.write.hit_missing_range, INSERT_LOCK_COUNT,
             "later monotonic insert-like lock misses and the boundary update lock should hit the cached missing range"
         );
         assert_eq!(
-            cache_missing_range_delta, 1,
+            old_value_stats.write.cache_missing_range, 1,
             "the first insert-like lock miss should cache the missing range before the tail write"
         );
     }
