@@ -1018,7 +1018,7 @@ mod tests {
     }
 
     #[test]
-    fn test_async_incremental_scan_not_call_old_value_prev() {
+    fn test_old_value_missing_range_cache_avoids_prev() {
         const INSERT_LOCK_COUNT: usize = 64;
 
         let mut engine = TestEngineBuilder::new().build_without_cache().unwrap();
