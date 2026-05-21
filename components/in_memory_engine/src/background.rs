@@ -3043,7 +3043,7 @@ pub mod tests {
         engine
             .core
             .region_manager()
-            .clear_regions_in_being_written(&[cache_region.clone()]);
+            .clear_regions_in_being_written(std::slice::from_ref(&cache_region));
         delete_region_label_rule(meta_client, cluster_id, "cache/0");
 
         // Wait for the watch to fire and the delete-range worker to finish eviction.
