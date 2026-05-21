@@ -383,6 +383,10 @@ impl CheckpointManager {
         GetCheckpointResult::ok(checkpoint.region.clone(), checkpoint.checkpoint)
     }
 
+    pub fn checkpoint_count(&self) -> usize {
+        self.checkpoint_ts.len()
+    }
+
     /// get all checkpoints stored.
     pub fn get_all(&self) -> Vec<LastFlushTsOfRegion> {
         self.checkpoint_ts.values().cloned().collect()
