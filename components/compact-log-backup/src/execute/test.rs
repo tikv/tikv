@@ -539,8 +539,9 @@ async fn test_store_id_path_validation_only_runs_in_shard_mode() {
     assert!(
         err.kind
             .to_string()
-            .contains("cannot parse store id from backup metadata path")
+            .contains("cannot parse backup metadata path")
     );
+    assert!(err.kind.to_string().contains(meta_path));
 }
 
 #[tokio::test]
