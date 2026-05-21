@@ -849,6 +849,68 @@ mod tests {
                 },
             },
             Case {
+                name: "cached missing range includes its lower bound",
+                steps: &[
+                    Step {
+                        op: Op::NearSeek,
+                        key: b"a4",
+                        found: true,
+                        current: Some((b"a5", b"v5")),
+                    },
+                    Step {
+                        op: Op::Seek,
+                        key: b"a4",
+                        found: true,
+                        current: Some((b"a5", b"v5")),
+                    },
+                ],
+                stats_without_missing_range: ExpectedStats {
+                    hit_missing_range: 0,
+                    cache_missing_range: 0,
+                    seek: 2,
+                    prev: 0,
+                    next: 0,
+                },
+                stats_with_missing_range: ExpectedStats {
+                    hit_missing_range: 1,
+                    cache_missing_range: 1,
+                    seek: 1,
+                    prev: 0,
+                    next: 0,
+                },
+            },
+            Case {
+                name: "key below cached missing range lower does not hit",
+                steps: &[
+                    Step {
+                        op: Op::NearSeek,
+                        key: b"a4",
+                        found: true,
+                        current: Some((b"a5", b"v5")),
+                    },
+                    Step {
+                        op: Op::NearSeek,
+                        key: b"a3x",
+                        found: true,
+                        current: Some((b"a5", b"v5")),
+                    },
+                ],
+                stats_without_missing_range: ExpectedStats {
+                    hit_missing_range: 0,
+                    cache_missing_range: 0,
+                    seek: 1,
+                    prev: 1,
+                    next: 1,
+                },
+                stats_with_missing_range: ExpectedStats {
+                    hit_missing_range: 0,
+                    cache_missing_range: 2,
+                    seek: 1,
+                    prev: 1,
+                    next: 1,
+                },
+            },
+            Case {
                 name: "missing range does not hide its upper bound key",
                 steps: &[
                     Step {
@@ -880,6 +942,37 @@ mod tests {
                 },
             },
             Case {
+                name: "key above cached missing range upper does not hit",
+                steps: &[
+                    Step {
+                        op: Op::NearSeek,
+                        key: b"a4",
+                        found: true,
+                        current: Some((b"a5", b"v5")),
+                    },
+                    Step {
+                        op: Op::NearSeek,
+                        key: b"a5x",
+                        found: false,
+                        current: None,
+                    },
+                ],
+                stats_without_missing_range: ExpectedStats {
+                    hit_missing_range: 0,
+                    cache_missing_range: 0,
+                    seek: 1,
+                    prev: 0,
+                    next: 1,
+                },
+                stats_with_missing_range: ExpectedStats {
+                    hit_missing_range: 0,
+                    cache_missing_range: 1,
+                    seek: 1,
+                    prev: 0,
+                    next: 1,
+                },
+            },
+            Case {
                 name: "range end miss is still handled by max_key",
                 steps: &[
                     Step {
@@ -908,6 +1001,43 @@ mod tests {
                     seek: 1,
                     prev: 0,
                     next: 0,
+                },
+            },
+            Case {
+                name: "invalid cursor clears stale missing range",
+                steps: &[
+                    Step {
+                        op: Op::NearSeek,
+                        key: b"a4",
+                        found: true,
+                        current: Some((b"a5", b"v5")),
+                    },
+                    Step {
+                        op: Op::NearSeek,
+                        key: b"a6",
+                        found: false,
+                        current: None,
+                    },
+                    Step {
+                        op: Op::NearSeek,
+                        key: b"a4x",
+                        found: true,
+                        current: Some((b"a5", b"v5")),
+                    },
+                ],
+                stats_without_missing_range: ExpectedStats {
+                    hit_missing_range: 0,
+                    cache_missing_range: 0,
+                    seek: 2,
+                    prev: 0,
+                    next: 1,
+                },
+                stats_with_missing_range: ExpectedStats {
+                    hit_missing_range: 0,
+                    cache_missing_range: 2,
+                    seek: 2,
+                    prev: 0,
+                    next: 1,
                 },
             },
             Case {
