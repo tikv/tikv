@@ -12,11 +12,7 @@ use std::{
 
 use health_controller::HealthController;
 use prometheus::{IntCounterVec, register_int_counter_vec};
-use tikv_util::{
-    config::VersionTrack,
-    logger, warn,
-    worker::{Builder as WorkerBuilder, Worker},
-};
+use tikv_util::{config::VersionTrack, logger, warn, worker::Worker};
 
 use super::{Config, metrics::STORE_INSPECT_DURATION_HISTOGRAM};
 use crate::store::disk_probe::ProbeRunner;
@@ -57,10 +53,6 @@ pub struct FailFastMonitor {
     stop: Arc<AtomicBool>,
     raft_probe: ProbeRunner,
     kv_probe: ProbeRunner,
-    #[allow(dead_code)]
-    probe_worker: Worker,
-    #[allow(dead_code)]
-    check_worker: Worker,
 }
 
 impl FailFastMonitor {
@@ -69,18 +61,13 @@ impl FailFastMonitor {
         health_controller: HealthController,
         raft_probe_dir: PathBuf,
         kv_probe_dir: PathBuf,
+        probe_worker: Worker,
+        check_worker: Worker,
     ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let raft_probe =
             ProbeRunner::new(raft_probe_dir.join(RAFT_PROBE_FILENAME), RAFT_PROBE_PAYLOAD);
         let kv_probe = ProbeRunner::new(kv_probe_dir.join(KV_PROBE_FILENAME), KV_PROBE_PAYLOAD);
-
-        let probe_worker = WorkerBuilder::new("fail-fast-probe")
-            .thread_count(1)
-            .create();
-        let check_worker = WorkerBuilder::new("fail-fast-check")
-            .thread_count(1)
-            .create();
 
         let make_probe_task = |disk: &'static str,
                                metric_label: &'static str,
@@ -176,11 +163,19 @@ impl FailFastMonitor {
                 return;
             }
 
-            let raft_elapsed = raft_probe_for_check.current_probe_elapsed();
-            let kv_elapsed = kv_probe_for_check.current_probe_elapsed();
-            if raft_elapsed.is_some_and(|d| d >= timeout.0)
-                || kv_elapsed.is_some_and(|d| d >= timeout.0)
-            {
+            let raft_time_since_success = raft_probe_for_check.time_since_last_success();
+            let kv_time_since_success = kv_probe_for_check.time_since_last_success();
+            if raft_time_since_success >= timeout.0 || kv_time_since_success >= timeout.0 {
+                let raft_elapsed = raft_probe_for_check.current_probe_elapsed();
+                let kv_elapsed = kv_probe_for_check.current_probe_elapsed();
+                warn!(
+                    "fail-fast disk probe has not made progress for the configured timeout";
+                    "timeout" => ?timeout.0,
+                    "raft_time_since_success" => ?raft_time_since_success,
+                    "raft_current_probe_elapsed" => ?raft_elapsed,
+                    "kv_time_since_success" => ?kv_time_since_success,
+                    "kv_current_probe_elapsed" => ?kv_elapsed,
+                );
                 health_controller.set_is_serving(false);
                 eprintln!("disk hung for configured timeout");
                 logger::exit_process_gracefully(1);
@@ -191,8 +186,6 @@ impl FailFastMonitor {
             stop,
             raft_probe,
             kv_probe,
-            probe_worker,
-            check_worker,
         }
     }
 

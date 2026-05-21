@@ -1631,6 +1631,8 @@ where
 struct Workers<EK: KvEngine> {
     pd_worker: LazyWorker<PdTask<EK>>,
     background_worker: Worker,
+    fail_fast_probe_worker: Worker,
+    fail_fast_check_worker: Worker,
 
     // Both of cleanup tasks and region tasks get their own workers, instead of reusing
     // background_workers. This is because the underlying compact_range call is a
@@ -1748,6 +1750,12 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let mut workers = Workers {
             pd_worker,
             background_worker,
+            fail_fast_probe_worker: WorkerBuilder::new("fail-fast-probe")
+                .thread_count(1)
+                .create(),
+            fail_fast_check_worker: WorkerBuilder::new("fail-fast-check")
+                .thread_count(1)
+                .create(),
             cleanup_worker: Worker::new(CLEANUP_WORKER_THREAD),
             snap_gen_worker,
             region_worker: Worker::new(REGION_WORKER_THREAD),
@@ -1852,6 +1860,8 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             health_controller.clone(),
             PathBuf::from(engines.raft.get_engine_path().to_string()),
             PathBuf::from(engines.kv.path().to_string()),
+            workers.fail_fast_probe_worker.clone(),
+            workers.fail_fast_check_worker.clone(),
         );
         fail_fast_monitor.start();
         workers.on_stop_hooks.push(Box::new(move || {
@@ -2055,6 +2065,8 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         workers.cleanup_worker.stop();
         workers.region_worker.stop();
         workers.background_worker.stop();
+        workers.fail_fast_probe_worker.stop();
+        workers.fail_fast_check_worker.stop();
         if let Some(w) = workers.purge_worker {
             w.stop();
         }
