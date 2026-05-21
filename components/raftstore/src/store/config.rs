@@ -104,9 +104,13 @@ pub struct Config {
     pub raft_log_reserve_max_ticks: usize,
     // Old logs in Raft engine needs to be purged peridically.
     pub raft_engine_purge_interval: ReadableDuration,
-    /// If set, TiKV exits when the Raft disk probe makes no successful progress
-    /// for this long.
-    pub raft_disk_hang_timeout: Option<ReadableDuration>,
+    /// If set, TiKV exits when a disk probe makes no successful progress for
+    /// this long.
+    ///
+    /// This applies to both raft and kv disks (depending on whether they are
+    /// deployed on different mount points).
+    #[serde(alias = "raft-disk-hang-timeout")]
+    pub disk_hang_timeout: Option<ReadableDuration>,
     #[doc(hidden)]
     #[online_config(hidden)]
     pub max_manual_flush_rate: f64,
@@ -549,7 +553,7 @@ impl Default for Config {
             follower_read_max_log_gap: 100,
             raft_log_reserve_max_ticks: 6,
             raft_engine_purge_interval: ReadableDuration::secs(10),
-            raft_disk_hang_timeout: None,
+            disk_hang_timeout: None,
             max_manual_flush_rate: 3.0,
             raft_entry_cache_life_time: ReadableDuration::secs(30),
             raft_reject_transfer_leader_duration: ReadableDuration::secs(3),

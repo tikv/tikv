@@ -11,43 +11,41 @@ use std::{
 };
 
 use health_controller::HealthController;
-use prometheus::{IntCounter, IntGauge, register_int_counter, register_int_gauge};
-use tikv_util::{config::VersionTrack, logger, warn, worker::Worker};
+use prometheus::{IntCounterVec, register_int_counter_vec};
+use tikv_util::{
+    config::VersionTrack,
+    logger, warn,
+    worker::{Builder as WorkerBuilder, Worker},
+};
 
 use super::{Config, metrics::STORE_INSPECT_DURATION_HISTOGRAM};
 use crate::store::disk_probe::ProbeRunner;
 
 const PROBE_INTERVAL: Duration = Duration::from_secs(1);
-const PROBE_FILENAME: &str = ".raft_disk_fail_fast_probe.tmp";
-const PROBE_PAYLOAD: &[u8] = b"tikv raft disk fail fast probe";
+const ANOMALY_THRESHOLD: Duration = Duration::from_secs(1);
+
+const RAFT_PROBE_FILENAME: &str = ".raft_disk_fail_fast_probe.tmp";
+const RAFT_PROBE_PAYLOAD: &[u8] = b"tikv raft disk fail fast probe";
+const KV_PROBE_FILENAME: &str = ".kv_disk_fail_fast_probe.tmp";
+const KV_PROBE_PAYLOAD: &[u8] = b"tikv kv disk fail fast probe";
 const SLOW_SCORE_GATE_THRESHOLD: f64 = 95.0;
 
 lazy_static::lazy_static! {
-    pub static ref RAFT_DISK_PROBE_SUCCESS: IntCounter = register_int_counter!(
-        "tikv_raftstore_raft_disk_probe_success_total",
-        "Total successful raft disk fail-fast probes"
+    pub static ref DISK_PROBE_SUCCESS: IntCounterVec = register_int_counter_vec!(
+        "tikv_raftstore_disk_probe_success_total",
+        "Total successful disk fail-fast probes",
+        &["disk"]
     ).unwrap();
-    pub static ref RAFT_DISK_PROBE_FAILURE: IntCounter = register_int_counter!(
-        "tikv_raftstore_raft_disk_probe_failure_total",
-        "Total failed raft disk fail-fast probes"
-    ).unwrap();
-    pub static ref RAFT_DISK_PROBE_TIME_SINCE_LAST_SUCCESS_SECONDS: IntGauge = register_int_gauge!(
-        "tikv_raftstore_raft_disk_probe_time_since_last_success_seconds",
-        "Seconds since last successful raft disk fail-fast probe"
-    ).unwrap();
-    pub static ref RAFT_DISK_PROBE_CURRENT_PROBE_ELAPSED_SECONDS: IntGauge = register_int_gauge!(
-        "tikv_raftstore_raft_disk_probe_current_probe_elapsed_seconds",
-        "Elapsed seconds of the current raft disk fail-fast probe"
-    ).unwrap();
-    pub static ref FAIL_FAST_TRIGGER_TOTAL: IntCounter = register_int_counter!(
-        "tikv_fail_fast_trigger_total",
-        "Total fail-fast exits triggered by raft disk hang"
+    pub static ref DISK_PROBE_FAILURE: IntCounterVec = register_int_counter_vec!(
+        "tikv_raftstore_disk_probe_failure_total",
+        "Total failed disk fail-fast probes",
+        &["disk"]
     ).unwrap();
 }
 
-fn record_probe_duration(duration: Duration) {
+fn record_probe_duration(metric_label: &str, duration: Duration) {
     STORE_INSPECT_DURATION_HISTOGRAM
-        .with_label_values(&["raft-disk-probe"])
+        .with_label_values(&[metric_label])
         .observe(duration.as_secs_f64());
 }
 
@@ -57,85 +55,145 @@ fn probe_once(probe: &ProbeRunner) -> std::io::Result<Duration> {
 
 pub struct FailFastMonitor {
     stop: Arc<AtomicBool>,
-    probe: ProbeRunner,
+    raft_probe: ProbeRunner,
+    kv_probe: ProbeRunner,
+    #[allow(dead_code)]
+    probe_worker: Worker,
+    #[allow(dead_code)]
+    check_worker: Worker,
 }
 
 impl FailFastMonitor {
     pub fn new(
         cfg: Arc<VersionTrack<Config>>,
         health_controller: HealthController,
-        probe_dir: PathBuf,
-        background_worker: Worker,
+        raft_probe_dir: PathBuf,
+        kv_probe_dir: PathBuf,
     ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
-        let probe = ProbeRunner::new(probe_dir.join(PROBE_FILENAME), PROBE_PAYLOAD);
+        let raft_probe =
+            ProbeRunner::new(raft_probe_dir.join(RAFT_PROBE_FILENAME), RAFT_PROBE_PAYLOAD);
+        let kv_probe = ProbeRunner::new(kv_probe_dir.join(KV_PROBE_FILENAME), KV_PROBE_PAYLOAD);
 
-        let stop_for_probe = stop.clone();
-        let probe_for_probe = probe.clone();
-        background_worker.spawn_interval_task(PROBE_INTERVAL, move || {
-            if stop_for_probe.load(Ordering::Acquire) {
-                return;
-            }
-            if !probe_for_probe.try_start_probe() {
-                return;
-            }
-            match probe_once(&probe_for_probe) {
-                Ok(duration) => {
-                    record_probe_duration(duration);
-                    probe_for_probe.finish_probe_success();
-                    RAFT_DISK_PROBE_SUCCESS.inc();
+        let probe_worker = WorkerBuilder::new("fail-fast-probe")
+            .thread_count(1)
+            .create();
+        let check_worker = WorkerBuilder::new("fail-fast-check")
+            .thread_count(1)
+            .create();
+
+        let make_probe_task = |disk: &'static str,
+                               metric_label: &'static str,
+                               probe: ProbeRunner,
+                               stop: Arc<AtomicBool>| {
+            move || {
+                if stop.load(Ordering::Acquire) {
+                    return;
                 }
-                Err(e) => {
-                    warn!("fail-fast probe failed"; "err" => ?e, "path" => %probe_for_probe.path().display());
-                    record_probe_duration(Duration::ZERO);
-                    probe_for_probe.finish_probe_failure();
-                    RAFT_DISK_PROBE_FAILURE.inc();
+                if !probe.try_start_probe() {
+                    if let Some(elapsed) = probe.current_probe_elapsed() {
+                        if elapsed >= ANOMALY_THRESHOLD {
+                            warn!(
+                                "fail-fast probe still in flight";
+                                "disk" => disk,
+                                "path" => %probe.path().display(),
+                                "elapsed" => ?elapsed,
+                            );
+                        }
+                    }
+                    return;
+                }
+
+                match probe_once(&probe) {
+                    Ok(duration) => {
+                        if duration >= ANOMALY_THRESHOLD {
+                            warn!(
+                                "fail-fast probe slow";
+                                "disk" => disk,
+                                "path" => %probe.path().display(),
+                                "elapsed" => ?duration,
+                            );
+                        }
+                        record_probe_duration(metric_label, duration);
+                        probe.finish_probe_success();
+                        DISK_PROBE_SUCCESS.with_label_values(&[disk]).inc();
+                    }
+                    Err(e) => {
+                        warn!(
+                            "fail-fast probe failed";
+                            "disk" => disk,
+                            "path" => %probe.path().display(),
+                            "err" => ?e,
+                        );
+                        record_probe_duration(metric_label, Duration::ZERO);
+                        probe.finish_probe_failure();
+                        DISK_PROBE_FAILURE.with_label_values(&[disk]).inc();
+                    }
                 }
             }
-        });
+        };
+
+        {
+            let stop_for_probe = stop.clone();
+            let raft_probe_for_probe = raft_probe.clone();
+            probe_worker.spawn_interval_task(
+                PROBE_INTERVAL,
+                make_probe_task(
+                    "raft",
+                    "raft-disk-probe",
+                    raft_probe_for_probe,
+                    stop_for_probe,
+                ),
+            );
+        }
+
+        {
+            let stop_for_probe = stop.clone();
+            let kv_probe_for_probe = kv_probe.clone();
+            probe_worker.spawn_interval_task(
+                PROBE_INTERVAL,
+                make_probe_task("kv", "kv-disk-probe", kv_probe_for_probe, stop_for_probe),
+            );
+        }
 
         let stop_for_check = stop.clone();
-        let probe_for_check = probe.clone();
-        background_worker.spawn_interval_task(PROBE_INTERVAL, move || {
+        let raft_probe_for_check = raft_probe.clone();
+        let kv_probe_for_check = kv_probe.clone();
+        check_worker.spawn_interval_task(PROBE_INTERVAL, move || {
             if stop_for_check.load(Ordering::Acquire) {
                 return;
             }
 
-            let timeout = cfg.value().raft_disk_hang_timeout;
-            let Some(timeout) = timeout else {
-                RAFT_DISK_PROBE_CURRENT_PROBE_ELAPSED_SECONDS.set(0);
-                RAFT_DISK_PROBE_TIME_SINCE_LAST_SUCCESS_SECONDS.set(0);
-                return;
-            };
+            let timeout = cfg.value().disk_hang_timeout;
+            let Some(timeout) = timeout else { return };
             if timeout.0.is_zero() {
-                RAFT_DISK_PROBE_CURRENT_PROBE_ELAPSED_SECONDS.set(0);
-                RAFT_DISK_PROBE_TIME_SINCE_LAST_SUCCESS_SECONDS.set(0);
                 return;
             }
 
-            let current_probe_elapsed = probe_for_check.current_probe_elapsed();
-            let time_since_last_success = probe_for_check.time_since_last_success();
-            RAFT_DISK_PROBE_CURRENT_PROBE_ELAPSED_SECONDS.set(
-                current_probe_elapsed
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0),
-            );
-            RAFT_DISK_PROBE_TIME_SINCE_LAST_SUCCESS_SECONDS
-                .set(time_since_last_success.as_secs() as i64);
+            let slow_score_ok =
+                health_controller.get_raftstore_slow_score() > SLOW_SCORE_GATE_THRESHOLD;
+            if !slow_score_ok {
+                return;
+            }
 
-            if let Some(current_probe_elapsed) = current_probe_elapsed {
-                if current_probe_elapsed >= timeout.0
-                    && health_controller.get_raftstore_slow_score() > SLOW_SCORE_GATE_THRESHOLD
-                {
-                    FAIL_FAST_TRIGGER_TOTAL.inc();
-                    health_controller.set_is_serving(false);
-                    eprintln!("raft disk hung for configured timeout");
-                    logger::exit_process_gracefully(1);
-                }
+            let raft_elapsed = raft_probe_for_check.current_probe_elapsed();
+            let kv_elapsed = kv_probe_for_check.current_probe_elapsed();
+            if raft_elapsed.is_some_and(|d| d >= timeout.0)
+                || kv_elapsed.is_some_and(|d| d >= timeout.0)
+            {
+                health_controller.set_is_serving(false);
+                eprintln!("disk hung for configured timeout");
+                logger::exit_process_gracefully(1);
             }
         });
 
-        Self { stop, probe }
+        Self {
+            stop,
+            raft_probe,
+            kv_probe,
+            probe_worker,
+            check_worker,
+        }
     }
 
     pub fn start(&mut self) {}
@@ -146,9 +204,11 @@ impl FailFastMonitor {
     }
 
     fn cleanup_probe_file(&self) {
-        if let Err(e) = fs::remove_file(self.probe.path()) {
-            if e.kind() != std::io::ErrorKind::NotFound {
-                warn!("failed to remove fail-fast probe file"; "err" => ?e, "path" => %self.probe.path().display());
+        for path in [self.raft_probe.path(), self.kv_probe.path()] {
+            if let Err(e) = fs::remove_file(path) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    warn!("failed to remove fail-fast probe file"; "err" => ?e, "path" => %path.display());
+                }
             }
         }
     }
@@ -169,9 +229,14 @@ mod tests {
     #[test]
     fn test_probe_once() {
         let dir = tempdir().unwrap();
-        let probe = ProbeRunner::new(dir.path().join(PROBE_FILENAME), PROBE_PAYLOAD);
-        let duration = probe_once(&probe).unwrap();
+        let raft_probe = ProbeRunner::new(dir.path().join(RAFT_PROBE_FILENAME), RAFT_PROBE_PAYLOAD);
+        let duration = probe_once(&raft_probe).unwrap();
         assert!(duration > Duration::ZERO);
-        assert!(probe.path().exists());
+        assert!(raft_probe.path().exists());
+
+        let kv_probe = ProbeRunner::new(dir.path().join(KV_PROBE_FILENAME), KV_PROBE_PAYLOAD);
+        let duration = probe_once(&kv_probe).unwrap();
+        assert!(duration > Duration::ZERO);
+        assert!(kv_probe.path().exists());
     }
 }

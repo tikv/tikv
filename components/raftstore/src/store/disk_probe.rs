@@ -68,6 +68,7 @@ impl ProbeState {
             .map(|start| start.saturating_elapsed())
     }
 
+    #[allow(dead_code)]
     fn time_since_last_success(&self) -> Duration {
         self.last_success_at.saturating_elapsed()
     }
@@ -113,6 +114,7 @@ impl ProbeRunner {
         self.state.lock().current_probe_elapsed()
     }
 
+    #[allow(dead_code)]
     pub(crate) fn time_since_last_success(&self) -> Duration {
         self.state.lock().time_since_last_success()
     }

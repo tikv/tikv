@@ -1851,7 +1851,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             cfg.clone(),
             health_controller.clone(),
             PathBuf::from(engines.raft.get_engine_path().to_string()),
-            workers.background_worker.clone(),
+            PathBuf::from(engines.kv.path().to_string()),
         );
         fail_fast_monitor.start();
         workers.on_stop_hooks.push(Box::new(move || {
