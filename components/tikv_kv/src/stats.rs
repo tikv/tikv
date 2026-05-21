@@ -21,6 +21,8 @@ const STAT_SEEK_TOMBSTONE: &str = "seek_tombstone";
 const STAT_SEEK_FOR_PREV_TOMBSTONE: &str = "seek_for_prev_tombstone";
 /// Statistics of raw value tombstone by RawKV TTL expired or logical deleted.
 const STAT_RAW_VALUE_TOMBSTONE: &str = "raw_value_tombstone";
+const STAT_HIT_MISSING_RANGE: &str = "hit_missing_range";
+const STAT_CACHE_MISSING_RANGE: &str = "cache_missing_range";
 
 thread_local! {
     pub static RAW_VALUE_TOMBSTONE : RefCell<usize> = const{ RefCell::new(0)};
@@ -111,9 +113,11 @@ pub struct CfStatistics {
     pub seek_tombstone: usize,
     pub seek_for_prev_tombstone: usize,
     pub raw_value_tombstone: usize,
+    pub hit_missing_range: usize,
+    pub cache_missing_range: usize,
 }
 
-const STATS_COUNT: usize = 12;
+const STATS_COUNT: usize = 14;
 
 impl CfStatistics {
     #[inline]
@@ -135,6 +139,8 @@ impl CfStatistics {
             (STAT_SEEK_TOMBSTONE, self.seek_tombstone),
             (STAT_SEEK_FOR_PREV_TOMBSTONE, self.seek_for_prev_tombstone),
             (STAT_RAW_VALUE_TOMBSTONE, self.raw_value_tombstone),
+            (STAT_HIT_MISSING_RANGE, self.hit_missing_range),
+            (STAT_CACHE_MISSING_RANGE, self.cache_missing_range),
         ]
     }
 
@@ -155,6 +161,8 @@ impl CfStatistics {
                 self.seek_for_prev_tombstone,
             ),
             (GcKeysDetail::raw_value_tombstone, self.raw_value_tombstone),
+            (GcKeysDetail::hit_missing_range, self.hit_missing_range),
+            (GcKeysDetail::cache_missing_range, self.cache_missing_range),
         ]
     }
 
@@ -177,6 +185,12 @@ impl CfStatistics {
         self.raw_value_tombstone = self
             .raw_value_tombstone
             .saturating_add(other.raw_value_tombstone);
+        self.hit_missing_range = self
+            .hit_missing_range
+            .saturating_add(other.hit_missing_range);
+        self.cache_missing_range = self
+            .cache_missing_range
+            .saturating_add(other.cache_missing_range);
     }
 
     /// Deprecated

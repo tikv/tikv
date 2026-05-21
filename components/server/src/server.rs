@@ -638,6 +638,7 @@ where
                 pd_sender.clone(),
                 engines.engine.clone(),
                 resource_ctl,
+                self.resource_manager.clone(),
                 CleanupMethod::Remote(self.core.background_worker.remote()),
                 true,
             ))

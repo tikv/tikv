@@ -6,9 +6,9 @@ use std::{
     collections::HashSet,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
     },
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use collections::HashMap;
@@ -27,7 +27,12 @@ use tikv_util::{
 };
 use yatp::queue::priority::TaskPriorityProvider;
 
-use crate::{config::Config, resource_limiter::ResourceLimiter};
+use crate::{
+    config::Config,
+    metrics,
+    metrics::{TWO_PHASE_THROTTLED_REQUESTS, deregister_metrics},
+    resource_limiter::{ResourceLimiter, ResourceType},
+};
 
 // a read task cost at least 50us.
 const DEFAULT_PRIORITY_PER_READ_TASK: u64 = 50;
@@ -51,9 +56,259 @@ const HIGH_PRIORITY: u32 = 16;
 // virtual time overflow.
 const RESET_VT_THRESHOLD: u64 = (u64::MAX >> 4) / 2;
 
+/// Duration of each bucket in the RuTracker ring buffer.
+const RU_BUCKET_SECS: u64 = 30;
+
+/// Sliding-window RU consumption tracker for both Tier-1 admission control
+/// and two-phase scheduling phase decisions.
+///
+/// Tracks actual CPU µs consumed (via `consume_penalty`) across reads and
+/// writes in a configurable ring buffer of 30-second buckets. Window size is
+/// set from `historical_usage_window_mins` (× 2 buckets per minute). Using real
+/// RU rather than virtual
+/// time avoids weight-skewing: a high-weight group accumulates VT faster
+/// without necessarily consuming more CPU.
+pub struct RuTracker {
+    /// Ring buffer of completed 30-second bucket totals (oldest at `head`).
+    buckets: Vec<u64>,
+    /// RU accumulated in the currently-open (incomplete) bucket.
+    /// Atomic so that `record_ru_consumption` can add without taking the Mutex.
+    current_bucket: AtomicU64,
+    /// Unix seconds at which the current bucket started.
+    bucket_start_secs: u64,
+    /// Index of the oldest completed bucket.
+    head: usize,
+    /// Number of completed buckets (≤ buckets.len()).
+    completed: usize,
+    /// Cached historical rate (RU/s), updated by `online_adjust_resource_quota`
+    /// every ~10s.
+    cached_historical_rate: f64,
+    /// Consecutive ramp-up epochs where new_limit >= 2x hist. Must reach
+    /// MIN_RAMP_UP_EPOCHS before the limit is fully lifted to INFINITY.
+    ramp_up_epochs: u32,
+}
+
+impl RuTracker {
+    /// Create a new tracker with `num_buckets` 30-second slots.
+    pub fn new(now_secs: u64, num_buckets: usize) -> Self {
+        let num_buckets = num_buckets.max(2); // need at least 2 to warm up
+        Self {
+            buckets: vec![0u64; num_buckets],
+            current_bucket: AtomicU64::new(0),
+            bucket_start_secs: now_secs,
+            head: 0,
+            completed: 0,
+            cached_historical_rate: 0.0,
+            ramp_up_epochs: 0,
+        }
+    }
+
+    pub fn now_secs() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    }
+
+    #[inline]
+    fn num_buckets(&self) -> usize {
+        self.buckets.len()
+    }
+
+    /// Record `ru` in the current bucket (lock-free atomic add).
+    pub fn record(&self, ru: u64) {
+        self.current_bucket.fetch_add(ru, Ordering::Relaxed);
+    }
+
+    /// Advance to `now_secs` and record `ru`. Used by tests and callers
+    /// that hold exclusive access.
+    #[cfg(test)]
+    pub fn is_warmed_up(&self) -> bool {
+        self.completed >= 2
+    }
+
+    #[cfg(test)]
+    pub fn record_at(&mut self, ru: u64, now_secs: u64) {
+        self.advance(now_secs);
+        self.current_bucket.fetch_add(ru, Ordering::Relaxed);
+    }
+
+    fn advance(&mut self, now_secs: u64) {
+        let n = self.num_buckets();
+        let elapsed = now_secs.saturating_sub(self.bucket_start_secs);
+        let buckets_to_advance = (elapsed / RU_BUCKET_SECS) as usize;
+        if buckets_to_advance == 0 {
+            return;
+        }
+        if buckets_to_advance >= n {
+            // Gap larger than the window: everything aged out.
+            self.buckets.iter_mut().for_each(|b| *b = 0);
+            self.head = 0;
+            self.completed = 0;
+            self.current_bucket.store(0, Ordering::Relaxed);
+        } else {
+            // Commit the current bucket to the ring, then zero the rest.
+            let write_pos = (self.head + self.completed) % n;
+            self.buckets[write_pos] = self.current_bucket.swap(0, Ordering::Relaxed);
+            if self.completed < n {
+                self.completed += 1;
+            } else {
+                self.head = (self.head + 1) % n;
+            }
+            // Zero out the remaining (buckets_to_advance - 1) slots.
+            for _ in 1..buckets_to_advance {
+                let slot = (self.head + self.completed) % n;
+                self.buckets[slot] = 0;
+                if self.completed < n {
+                    self.completed += 1;
+                } else {
+                    self.head = (self.head + 1) % n;
+                }
+            }
+        }
+        self.bucket_start_secs += buckets_to_advance as u64 * RU_BUCKET_SECS;
+    }
+
+    /// RU/s rate estimated from the current partial bucket and the most recent
+    /// completed bucket. Using both avoids stale readings — the last completed
+    /// bucket alone can be up to 60s old at the end of the current 30s window.
+    ///
+    /// rate = (current_bucket + last_completed) / (elapsed_in_current + 30s)
+    pub fn current_rate(&self, now_secs: u64) -> f64 {
+        let elapsed = now_secs
+            .saturating_sub(self.bucket_start_secs)
+            .min(RU_BUCKET_SECS) as f64;
+        let last_completed = if self.completed > 0 {
+            let newest_slot = (self.head + self.completed - 1) % self.num_buckets();
+            self.buckets[newest_slot]
+        } else {
+            0
+        };
+        let window = elapsed + RU_BUCKET_SECS as f64;
+        (self.current_bucket.load(Ordering::Relaxed) + last_completed) as f64 / window
+    }
+
+    /// Average RU/s rate over all completed buckets (long-term baseline).
+    /// Average RU/s baseline. If the system has been up longer than the full
+    /// historical window, always divide by the full window (not just completed
+    /// buckets). This means a tracker that just started (e.g. spike with no
+    /// prior traffic) has historical=0 and any traffic is immediately detected
+    /// as over baseline, rather than letting new traffic inflate its own
+    /// baseline.
+    pub fn historical_rate(&self, system_start_secs: u64, now_secs: u64) -> f64 {
+        let window_secs = self.num_buckets() as u64 * RU_BUCKET_SECS;
+        let system_uptime = now_secs.saturating_sub(system_start_secs);
+        if system_uptime >= window_secs {
+            // System older than window — use full window as denominator.
+            // Missing buckets count as zero, diluting any fresh traffic.
+            if self.completed == 0 {
+                return 0.0;
+            }
+            let total: u64 = self.buckets.iter().take(self.completed).sum();
+            total as f64 / (self.num_buckets() as f64 * RU_BUCKET_SECS as f64)
+        } else {
+            if self.completed == 0 {
+                return 0.0;
+            }
+            let total: u64 = self.buckets.iter().take(self.completed).sum();
+            // Divide by elapsed system uptime (not just filled buckets) so the
+            // historical rate ramps up smoothly rather than jumping immediately
+            // to the full rate after the first bucket completes.
+            let denom = (system_uptime as f64).max(RU_BUCKET_SECS as f64);
+            total as f64 / denom
+        }
+    }
+
+    /// Returns true if no RU has been recorded: all completed buckets and the
+    /// current bucket are zero. Used to garbage-collect stale ru_trackers
+    /// entries.
+    pub fn is_idle(&self) -> bool {
+        self.current_bucket.load(Ordering::Relaxed) == 0 && self.buckets.iter().all(|&b| b == 0)
+    }
+
+    /// Refresh the cached historical rate. Called periodically from
+    /// `online_adjust_resource_quota` (~every 10s) so the inline hot path
+    /// avoids iterating all buckets.
+    pub fn refresh_cached_historical_rate(&mut self, system_start_secs: u64, now_secs: u64) {
+        self.cached_historical_rate = self.historical_rate(system_start_secs, now_secs);
+    }
+}
+
+/// Encodes a two-phase scheduling priority.
+///
+/// Bit position of the phase bit within the 64-bit encoded priority.
+/// Format: `[4-bit group_priority | 1-bit phase | 59-bit tag]`
+const PRIORITY_TAG_BITS: u32 = 59;
+
+/// Whether a task is within or over its historical RU baseline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PriorityPhase {
+    /// Within baseline — given scheduling preference over phase-1 tasks.
+    WithinBaseline = 0,
+    /// Over baseline — deprioritised relative to within-baseline tasks.
+    OverBaseline = 1,
+}
+
+/// Format: `[4-bit group_priority | 1-bit phase | 59-bit tag]`
+///
+/// Phase 0 (within baseline) always sorts before phase 1 (over baseline)
+/// within the same group priority tier. Using only 1 bit for phase leaves
+/// 59 bits for the VT tag, matching `RESET_VT_THRESHOLD` (`2^59`).
+fn encode_two_phase_priority(group_priority: u32, phase: PriorityPhase, tag: u64) -> u64 {
+    assert!((1..=16).contains(&group_priority));
+    let tag = tag & ((1u64 << PRIORITY_TAG_BITS) - 1);
+    let phase_bit = (phase as u64) << PRIORITY_TAG_BITS;
+    (!((group_priority - 1) as u64) << 60) | phase_bit | tag
+}
+
+/// Returns true if the encoded priority value represents a phase-1 task.
+#[inline]
+fn is_phase1(priority: u64) -> bool {
+    (priority >> PRIORITY_TAG_BITS) & 1 == 1
+}
 pub enum ResourceConsumeType {
     CpuTime(Duration),
     IoBytes(u64),
+}
+
+/// Result of the Tier-1 admission control check for a single request.
+#[derive(Debug, PartialEq)]
+pub enum AdmissionDecision {
+    /// No throttling needed; let the request proceed immediately.
+    Allow,
+    /// Delay the request by the given duration. The caller **must** call
+    /// [`ResourceGroupManager::release_delay_slot`] once the delay is over
+    /// (or the delayed future is dropped/cancelled).
+    Delay(Duration),
+    /// Reject the request outright (SchedTooBusy). Returned when the number
+    /// of concurrently delayed requests exceeds `admission_max_delayed_count`.
+    Reject,
+}
+
+/// RAII guard that releases an admission-control delay slot on drop.
+/// Ensures the `delayed_req_count` counter is decremented even if the
+/// future is cancelled during the sleep.
+pub struct DelaySlotGuard {
+    mgr: Option<Arc<ResourceGroupManager>>,
+}
+
+impl DelaySlotGuard {
+    fn new(mgr: Arc<ResourceGroupManager>) -> Self {
+        Self { mgr: Some(mgr) }
+    }
+
+    /// Explicitly release the slot and disarm the guard so Drop is a no-op.
+    pub fn release(&mut self) {
+        if let Some(mgr) = self.mgr.take() {
+            mgr.release_delay_slot();
+        }
+    }
+}
+
+impl Drop for DelaySlotGuard {
+    fn drop(&mut self) {
+        self.release();
+    }
 }
 
 /// ResourceGroupManager manages the metadata of each resource group.
@@ -69,6 +324,23 @@ pub struct ResourceGroupManager {
     has_background: AtomicBool,
     // lastest config.
     config: Arc<VersionTrack<Config>>,
+    // Per-group RU consumption trackers for Tier-1 high-priority throttling.
+    // Per-group sliding-window tracker and token-bucket limiter.
+    // Rate on the limiter is set to `fraction × historical_rate` each tick.
+    // The Arc allows handing out limiter references to LimitedFuture wrappers
+    // in the read/write pools without copying the limiter state.
+    ru_trackers: DashMap<String, Mutex<(RuTracker, Arc<ResourceLimiter>)>>,
+    // Number of requests currently held in the admission-control delay phase.
+    delayed_req_count: AtomicI64,
+    // Unix seconds when this manager was created. Used to determine whether
+    // the system has been up long enough that new trackers should be treated
+    // as if they missed the entire historical window (baseline = 0).
+    start_secs: u64,
+    // True when background CPU budget is at the minimum floor (1 core) AND
+    // background consumption is within that floor. Foreground throttling
+    // only engages when this flag is set, ensuring background is fully
+    // squeezed before foreground traffic is touched.
+    bg_cpu_at_floor: AtomicBool,
 }
 
 impl Default for ResourceGroupManager {
@@ -99,10 +371,14 @@ impl ResourceGroupManager {
             resource_groups: Default::default(),
             group_count: AtomicU64::new(0),
             registry: Default::default(),
+            delayed_req_count: AtomicI64::new(0),
             priority_limiters,
             bg_limiter,
             has_background: AtomicBool::new(false),
             config: Arc::new(VersionTrack::new(config)),
+            ru_trackers: Default::default(),
+            start_secs: RuTracker::now_secs(),
+            bg_cpu_at_floor: AtomicBool::new(false),
         };
 
         // init the default resource group by default.
@@ -210,6 +486,7 @@ impl ResourceGroupManager {
         if self.resource_groups.remove(&group_name).is_some() {
             info!("remove resource group"; "name"=> name);
             self.group_count.fetch_sub(1, Ordering::Relaxed);
+            deregister_metrics(&group_name);
         }
         self.update_has_background();
     }
@@ -255,7 +532,7 @@ impl ResourceGroupManager {
     }
 
     pub fn derive_controller(&self, name: String, is_read: bool) -> Arc<ResourceController> {
-        let controller = Arc::new(ResourceController::new(name, is_read));
+        let controller = Arc::new(ResourceController::new(name, is_read, self.config.clone()));
         self.registry.write().push(controller.clone());
         for g in &self.resource_groups {
             let ru_quota = Self::get_ru_setting(&g.value().group, controller.is_read);
@@ -266,8 +543,36 @@ impl ResourceGroupManager {
     }
 
     pub fn advance_min_virtual_time(&self) {
+        // Push RU-based phase state into every controller before updating VT,
+        // so get_priority() sees fresh is_over_baseline flags this tick.
+        if self.config.value().enable_fair_scheduling {
+            self.update_group_phases();
+        }
         for controller in self.registry.read().iter() {
             controller.update_min_virtual_time();
+        }
+    }
+
+    /// Iterates all tracked groups and pushes `is_over_baseline` into each
+    /// registered `ResourceController`.  Called every ~1 second from
+    /// `advance_min_virtual_time` when `enable_fair_scheduling` is on.
+    fn update_group_phases(&self) {
+        let now_secs = RuTracker::now_secs();
+        for entry in &self.ru_trackers {
+            let group_bytes = entry.key().as_bytes();
+            let mut guard = entry.value().lock().unwrap();
+            // Roll the ring buffer forward so phase classification uses
+            // up-to-date bucket boundaries, not stale partial data.
+            guard.0.advance(now_secs);
+            let over = guard
+                .1
+                .get_limiter(ResourceType::Cpu)
+                .get_rate_limit()
+                .is_finite();
+            drop(guard);
+            for controller in self.registry.read().iter() {
+                controller.set_group_phase(group_bytes, over);
+            }
         }
     }
 
@@ -288,51 +593,347 @@ impl ResourceGroupManager {
                 ResourceConsumeType::IoBytes(ctx.get_penalty().write_bytes as u64),
             );
         }
+        // RU tracking for foreground admission control is handled by
+        // LimitedFuture (measure-only mode) which calls record_ru_consumption
+        // with actual CPU measured per poll.
     }
 
-    // only enable priority quota limiter when there is at least 1 user-defined
-    // resource group.
-    #[inline]
-    fn enable_priority_limiter(&self) -> bool {
-        // TODO: reenable it once when we fix https://github.com/tikv/tikv/issues/18939
-        // self.get_group_count() > 1
-        false
+    /// Record `ru` units consumed by `group` into the sliding-window tracker
+    /// and consume tokens from the group's rate limiter.
+    pub fn record_ru_consumption(&self, group: &str, ru: u64) {
+        let now = RuTracker::now_secs();
+        // 2 buckets per minute (30s each) to match RU_BUCKET_SECS.
+        let num_buckets = (self.config.value().historical_usage_window_mins.max(2) as usize) * 2;
+        let entry = self.ru_trackers.entry(group.to_owned()).or_insert_with(|| {
+            Mutex::new((
+                RuTracker::new(now, num_buckets),
+                Arc::new(ResourceLimiter::new(
+                    group.to_owned(),
+                    f64::INFINITY,
+                    f64::INFINITY,
+                    0,
+                    false,
+                )),
+            ))
+        });
+        // Lock-free: only atomically adds to current_bucket.
+        // advance() is called separately by online_adjust_resource_quota under the
+        // lock.
+        entry.lock().unwrap().0.record(ru);
     }
 
-    // Always return the background resource limiter if any;
-    // Only return the foregroup limiter when priority is enabled.
+    /// Called by `PriorityLimiterAdjustWorker` every ~1 second with the
+    /// latest process-level CPU utilisation percentage.
+    ///
+    /// Throttle-down: linearly reduces the allowed fraction of historical rate
+    /// for groups that are over their baseline. At `fg_cpu_throttle_threshold`
+    /// (70%) fraction = 1.0 (no throttle), at 90% CPU fraction = 0.8
+    /// (target). Called by the background adjust worker after computing the
+    /// new background CPU budget. `at_floor` should be true when the budget
+    /// has been clamped to the minimum floor AND background consumption
+    /// is within that floor.
+    pub fn set_bg_cpu_at_floor(&self, at_floor: bool) {
+        self.bg_cpu_at_floor.store(at_floor, Ordering::Relaxed);
+    }
+
+    /// Returns true when background CPU is fully throttled (at floor)
+    /// and its consumption is within the floor budget.
+    pub fn is_bg_cpu_at_floor(&self) -> bool {
+        self.bg_cpu_at_floor.load(Ordering::Relaxed)
+    }
+
+    /// Returns true when all foreground groups have unlimited (infinite)
+    /// CPU rate limits, i.e. foreground has fully ramped up.
+    pub fn is_foreground_fully_ramped_up(&self) -> bool {
+        for entry in &self.ru_trackers {
+            let guard = entry.lock().unwrap();
+            if guard
+                .1
+                .get_limiter(ResourceType::Cpu)
+                .get_rate_limit()
+                .is_finite()
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Only groups whose current rate exceeds their historical rate are
+    /// limited.
+    ///
+    /// Ramp-up: when CPU drops below threshold, recover ×1.1/tick until
+    /// NO_LIMIT is restored.
+    pub fn online_adjust_resource_quota(&self, pct: f64) {
+        const TARGET_CPU: f64 = 90.0;
+        const RAMP_FACTOR: f64 = 1.2;
+        const MIN_RAMP_UP_EPOCHS: u32 = 2;
+
+        let throttle_threshold = self.config.value().fg_cpu_throttle_threshold;
+        let leeway_threshold = throttle_threshold * 0.9;
+        let burst_factor = 1.0 + self.config.value().baseline_burst_pct / 100.0;
+        let now = RuTracker::now_secs();
+
+        // Advance all trackers to `now` and refresh cached historical rates
+        // up front so update_group_phases and the throttling logic below
+        // always see fresh baseline data.
+        for entry in &self.ru_trackers {
+            let mut guard = entry.lock().unwrap();
+            guard.0.advance(now);
+            guard.0.refresh_cached_historical_rate(self.start_secs, now);
+            let name = guard.1.name();
+
+            metrics::GROUP_RU_HISTORICAL_RATE
+                .with_label_values(&[name])
+                .set((guard.0.cached_historical_rate / 1_000_000.0) * 100.0);
+            metrics::GROUP_RU_CURRENT_RATE
+                .with_label_values(&[name])
+                .set((guard.0.current_rate(now) / 1_000_000.0) * 100.0);
+        }
+
+        if pct > throttle_threshold && self.is_bg_cpu_at_floor() {
+            // Linearly scale limit from current rate (at threshold) down to
+            // historical rate (at TARGET_CPU).
+            // pressure: 0.0 at threshold → 1.0 at TARGET_CPU.
+            let pressure =
+                ((pct - throttle_threshold) / (TARGET_CPU - throttle_threshold)).clamp(0.0, 1.0);
+
+            for entry in &self.ru_trackers {
+                let mut guard = entry.lock().unwrap();
+                let hist = guard.0.cached_historical_rate;
+                let current = guard.0.current_rate(now);
+                let burst_target = hist * burst_factor;
+                if hist > 0.0 && current > burst_target {
+                    // rate slides from current (pressure=0) to burst_target (pressure=1).
+                    let rate = current + (burst_target - current) * pressure;
+                    let current_limit = guard.1.get_limiter(ResourceType::Cpu).get_rate_limit();
+                    // Only tighten the limit — never loosen in the throttle branch.
+                    // Ramp-up is the only path that increases limits.
+                    if current_limit.is_infinite() || rate < current_limit {
+                        guard.0.ramp_up_epochs = 0;
+                        guard
+                            .1
+                            .get_limiter(ResourceType::Cpu)
+                            .set_rate_limit(rate.max(1.0));
+                    }
+                }
+            }
+        } else if pct < leeway_threshold {
+            // CPU below start threshold — ramp up by RAMP_FACTOR each tick.
+            // Only lift to INFINITY after MIN_RAMP_UP_EPOCHS consecutive epochs
+            // where the limit has grown past 2x hist, to avoid premature release.
+            for entry in &self.ru_trackers {
+                let mut guard = entry.lock().unwrap();
+                let current_limit = guard.1.get_limiter(ResourceType::Cpu).get_rate_limit();
+                if current_limit.is_finite() {
+                    let hist = guard.0.cached_historical_rate;
+                    let new_limit = current_limit * RAMP_FACTOR;
+                    if hist <= 0.0 || new_limit >= 2.0 * hist {
+                        guard.0.ramp_up_epochs += 1;
+                        if guard.0.ramp_up_epochs >= MIN_RAMP_UP_EPOCHS {
+                            guard.0.ramp_up_epochs = 0;
+                            guard
+                                .1
+                                .get_limiter(ResourceType::Cpu)
+                                .set_rate_limit(f64::INFINITY);
+                        }
+                    } else {
+                        guard.0.ramp_up_epochs = 0;
+                        guard
+                            .1
+                            .get_limiter(ResourceType::Cpu)
+                            .set_rate_limit(new_limit);
+                    }
+                }
+            }
+        }
+
+        // Emit current rate limit per resource group.
+        for entry in &self.ru_trackers {
+            let guard = entry.lock().unwrap();
+            let limit = guard.1.get_limiter(ResourceType::Cpu).get_rate_limit();
+            let val = if limit.is_finite() {
+                (limit / 1_000_000.0) * 100.0
+            } else {
+                0.0
+            };
+            metrics::GROUP_QUOTA_LIMIT_VEC
+                .with_label_values(&[guard.1.name(), "cpu"])
+                .set(val);
+        }
+
+        // Evict idle ru_trackers entries to prevent unbounded growth from
+        // removed or renamed groups. Advance first so stale partial buckets
+        // are flushed before the idle check.
+        self.ru_trackers.retain(|_, entry| {
+            let inner = entry.get_mut().unwrap();
+            inner.0.advance(now);
+            !inner.0.is_idle()
+        });
+    }
+
+    /// Returns the token-bucket debt delay for `group`, or `None` if no
+    /// throttling is active.
+    ///
+    /// Conditions for a non-zero delay (all must hold):
+    ///   1. `enable_read_admission_control` / `enable_write_admission_control`
+    ///      on
+    ///   2. Rate-limit is active (not NO_LIMIT sentinel)
+    ///   3. Tracker has warmed up (≥2 completed 1-min buckets)
+    ///   4. Token-bucket has accumulated debt (group exceeded its allowed rate)
+    pub fn compute_admission_delay(
+        &self,
+        resource_limiter: &ResourceLimiter,
+        is_read: bool,
+    ) -> Option<Duration> {
+        // Always consume tokens so the token-bucket debt stays accurate
+        // for scheduling decisions. Only return the delay when admission
+        // control is enabled (or for background limiters, always).
+        let delay = resource_limiter.admission_delay(is_read);
+        if !resource_limiter.is_background() {
+            let config = self.config.value();
+            let ac_enabled = if is_read {
+                config.enable_read_admission_control
+            } else {
+                config.enable_write_admission_control
+            };
+            if !ac_enabled {
+                return None;
+            }
+        }
+        if delay.is_zero() { None } else { Some(delay) }
+    }
+
+    /// Unified admission-control decision for a request from `group`.
+    ///
+    /// Combines token-bucket rate-limiter debt (`resource_limiter`) with
+    /// RU-baseline overage delay into a single pre-pool sleep duration.
+    /// Covers background, low-priority, and resource-group throttling for
+    /// both reads (`is_read=true`) and writes (`is_read=false`).
+    ///
+    /// Returns:
+    /// - [`AdmissionDecision::Allow`] — no throttling needed.
+    /// - [`AdmissionDecision::Delay(d)`] — caller should sleep `d` then
+    ///   proceed, and **must** call [`release_delay_slot`] afterwards.
+    /// - [`AdmissionDecision::Reject`] — too many requests are already delayed;
+    ///   reject immediately.
+    pub fn admission_decision(
+        &self,
+        is_read: bool,
+        resource_limiter: &ResourceLimiter,
+    ) -> AdmissionDecision {
+        let group = resource_limiter.name();
+        let delay = self
+            .compute_admission_delay(resource_limiter, is_read)
+            .unwrap_or(std::time::Duration::ZERO);
+        if delay.is_zero() {
+            return AdmissionDecision::Allow;
+        }
+        let metric_label = if resource_limiter.is_background() {
+            "background"
+        } else {
+            group
+        };
+        let max = self.config.value().admission_max_delayed_count;
+        let prev = self.delayed_req_count.fetch_add(1, Ordering::Relaxed);
+        metrics::ADMISSION_CURRENTLY_DELAYED.set(prev + 1);
+        if max > 0 && prev >= max as i64 {
+            self.delayed_req_count.fetch_sub(1, Ordering::Relaxed);
+            metrics::ADMISSION_CURRENTLY_DELAYED.set(prev);
+            crate::metrics::ADMISSION_REJECTED_REQUESTS
+                .with_label_values(&[metric_label])
+                .inc();
+            return AdmissionDecision::Reject;
+        }
+        crate::metrics::ADMISSION_DELAYED_REQUESTS
+            .with_label_values(&[metric_label])
+            .inc();
+        crate::metrics::ADMISSION_DELAY_DURATION
+            .with_label_values(&[metric_label])
+            .observe(delay.as_secs_f64());
+        AdmissionDecision::Delay(delay)
+    }
+
+    /// Release a delay slot acquired by [`admission_decision`] returning
+    /// [`AdmissionDecision::Delay`]. Must be called exactly once per `Delay`
+    /// decision, whether the request completes normally or is cancelled.
+    pub fn release_delay_slot(&self) {
+        let prev = self.delayed_req_count.fetch_sub(1, Ordering::Relaxed);
+        metrics::ADMISSION_CURRENTLY_DELAYED.set(prev - 1);
+    }
+
+    /// Returns an RAII guard that calls [`release_delay_slot`] on drop.
+    /// Use this to ensure the slot is released even if the future is
+    /// cancelled during the admission-control sleep.
+    pub fn delay_slot_guard(self: &Arc<Self>) -> DelaySlotGuard {
+        DelaySlotGuard::new(Arc::clone(self))
+    }
+
+    /// Returns the per-group admission-control limiter for `group`, creating
+    /// the entry if it does not yet exist. Used by `with_resource_limiter`
+    /// (measure-only mode) in the read/write pools so `LimitedFuture` can
+    /// build token-bucket debt for pre-pool `admission_decision`.
+    pub fn get_foreground_group_limiter(&self, group: &str) -> Arc<ResourceLimiter> {
+        let now = RuTracker::now_secs();
+        // 2 buckets per minute (30s each) to match RU_BUCKET_SECS.
+        let num_buckets = (self.config.value().historical_usage_window_mins.max(2) as usize) * 2;
+        self.ru_trackers
+            .entry(group.to_owned())
+            .or_insert_with(|| {
+                Mutex::new((
+                    RuTracker::new(now, num_buckets),
+                    Arc::new(ResourceLimiter::new(
+                        group.to_owned(),
+                        f64::INFINITY,
+                        f64::INFINITY,
+                        0,
+                        false,
+                    )),
+                ))
+            })
+            .lock()
+            .unwrap()
+            .1
+            .clone()
+    }
+
+    /// Returns the appropriate `ResourceLimiter` for `with_resource_limiter`:
+    /// - Background tasks → background limiter
+    /// - Foreground tasks (any priority) → per-group limiter from `ru_trackers`
     pub fn get_resource_limiter(
         &self,
         rg: &str,
         request_source: &str,
-        override_priority: u64,
+        _override_priority: u64,
     ) -> Option<Arc<ResourceLimiter>> {
-        let (limiter, group_priority) =
-            self.get_background_resource_limiter_with_priority(rg, request_source);
+        let (limiter, _) = self.get_background_resource_limiter_with_priority(rg, request_source);
         if limiter.is_some() {
             return limiter;
         }
-
-        // if there is only 1 resource group, priority quota limiter is useless so just
-        // return None for better performance.
-        if !self.enable_priority_limiter() {
+        if self.get_group_count() <= 1 {
             return None;
         }
-
-        // request priority has higher priority, 0 means priority is not set.
-        let mut task_priority = override_priority as u32;
-        if task_priority == 0 {
-            task_priority = group_priority;
-        }
-        Some(self.priority_limiters[TaskPriority::from(task_priority) as usize].clone())
+        // Only create a foreground limiter for known groups; unknown or removed
+        // groups fall back to "default" to avoid leaking ru_trackers entries.
+        let group_name = if self.resource_groups.contains_key(rg) {
+            rg
+        } else {
+            DEFAULT_RESOURCE_GROUP_NAME
+        };
+        Some(self.get_foreground_group_limiter(group_name))
     }
 
     // return a ResourceLimiter for background tasks only.
+    // Returns None if request_source does not match a configured background job
+    // type.
     pub fn get_background_resource_limiter(
         &self,
         rg: &str,
         request_source: &str,
     ) -> Option<Arc<ResourceLimiter>> {
+        if request_source.is_empty() {
+            return None;
+        }
         self.get_background_resource_limiter_with_priority(rg, request_source)
             .0
     }
@@ -462,6 +1063,8 @@ pub struct ResourceController {
     customized: AtomicBool,
     // whether any resource group has background settings configured
     has_background: AtomicBool,
+    // Shared config. Read on the hot path to check enable_fair_scheduling.
+    config: Arc<VersionTrack<Config>>,
 }
 
 // we are ensure to visit the `last_rest_vt_time` by only 1 thread so it's
@@ -470,7 +1073,7 @@ unsafe impl Send for ResourceController {}
 unsafe impl Sync for ResourceController {}
 
 impl ResourceController {
-    fn new(name: String, is_read: bool) -> Self {
+    fn new(name: String, is_read: bool, config: Arc<VersionTrack<Config>>) -> Self {
         Self {
             name,
             is_read,
@@ -480,11 +1083,16 @@ impl ResourceController {
             last_rest_vt_time: Cell::new(Instant::now_coarse()),
             customized: AtomicBool::new(false),
             has_background: AtomicBool::new(false),
+            config,
         }
     }
 
     pub fn new_for_test(name: String, is_read: bool) -> Self {
-        let controller = Self::new(name, is_read);
+        let controller = Self::new(
+            name,
+            is_read,
+            Arc::new(VersionTrack::new(Config::default())),
+        );
         // add the "default" resource group.
         controller.add_resource_group(
             DEFAULT_RESOURCE_GROUP_NAME.as_bytes().to_owned(),
@@ -541,6 +1149,9 @@ impl ResourceController {
             weight,
             virtual_time: AtomicU64::new(self.last_min_vt.load(Ordering::Acquire)),
             vt_delta_for_get,
+            // New groups start in phase 0; ResourceGroupManager updates this
+            // each second once the RuTracker has enough history.
+            is_over_baseline: AtomicBool::new(false),
         };
 
         // maybe update existed group
@@ -610,6 +1221,17 @@ impl ResourceController {
         self.resource_group(name).consume(resource)
     }
 
+    /// Updates the two-phase `is_over_baseline` flag for a single group.
+    /// Called each second by `ResourceGroupManager::update_group_phases`.
+    pub fn set_group_phase(&self, group: &[u8], over_baseline: bool) {
+        let consumptions = self.resource_consumptions.read();
+        if let Some(tracker) = consumptions.get(group) {
+            tracker
+                .is_over_baseline
+                .store(over_baseline, Ordering::Relaxed);
+        }
+    }
+
     pub fn update_min_virtual_time(&self) {
         let start = Instant::now_coarse();
         let mut min_vt = u64::MAX;
@@ -662,7 +1284,8 @@ impl ResourceController {
 
     pub fn get_priority(&self, name: &[u8], pri: CommandPri) -> u64 {
         let level = Self::command_pri_to_level(pri);
-        self.resource_group(name).get_priority(level, None, true)
+        self.resource_group(name)
+            .get_priority(level, None, true, self.is_two_phase_enabled())
     }
 
     /// Returns the priority for the given task metadata without incrementing
@@ -675,7 +1298,14 @@ impl ResourceController {
         } else {
             Some(metadata.override_priority())
         };
-        group.get_priority(level, override_priority, false)
+        group.get_priority(level, override_priority, false, self.is_two_phase_enabled())
+    }
+
+    /// Returns true when fair two-phase scheduling is active (read controller
+    /// with enable_fair_scheduling enabled).
+    #[inline]
+    fn is_two_phase_enabled(&self) -> bool {
+        self.is_read && self.config.value().enable_fair_scheduling
     }
 
     fn command_pri_to_level(pri: CommandPri) -> usize {
@@ -690,7 +1320,7 @@ impl ResourceController {
 impl TaskPriorityProvider for ResourceController {
     fn priority_of(&self, extras: &yatp::queue::Extras) -> u64 {
         let metadata = TaskMetadata::from(extras.metadata());
-        self.resource_group(metadata.group_name()).get_priority(
+        let p = self.resource_group(metadata.group_name()).get_priority(
             extras.current_level() as usize,
             if metadata.override_priority() == 0 {
                 None
@@ -698,7 +1328,16 @@ impl TaskPriorityProvider for ResourceController {
                 Some(metadata.override_priority())
             },
             true,
-        )
+            self.is_two_phase_enabled(),
+        );
+        if is_phase1(p)
+            && let Ok(name) = std::str::from_utf8(metadata.group_name())
+        {
+            TWO_PHASE_THROTTLED_REQUESTS
+                .with_label_values(&[name])
+                .inc();
+        }
+        p
     }
 }
 
@@ -719,24 +1358,47 @@ struct GroupPriorityTracker {
     virtual_time: AtomicU64,
     // the constant delta value for each `get_priority` call,
     vt_delta_for_get: u64,
+    // Two-phase scheduling: true when this group's current-minute RU rate
+    // exceeds its historical baseline (set by ResourceGroupManager each second).
+    // Phase 1 tasks are deprioritised relative to phase-0 (within-baseline) tasks.
+    is_over_baseline: AtomicBool,
 }
 
 impl GroupPriorityTracker {
     /// Computes the scheduling priority for a task at the given level.
+    ///
     /// When `advance_vt` is true, atomically increments the virtual time
     /// (used when actually scheduling a task). When false, reads virtual
     /// time without advancing it (used for priority comparison only).
-    fn get_priority(&self, level: usize, override_priority: Option<u32>, advance_vt: bool) -> u64 {
+    ///
+    /// When `two_phase` is true and `is_over_baseline` is set, the task is
+    /// placed in phase 1 (deprioritised); otherwise it runs in phase 0.
+    /// `is_over_baseline` is updated each second by `ResourceGroupManager`
+    /// from real CPU µs tracked across reads and writes via `consume_penalty`.
+    fn get_priority(
+        &self,
+        level: usize,
+        override_priority: Option<u32>,
+        advance_vt: bool,
+        two_phase: bool,
+    ) -> u64 {
         let task_extra_priority = TASK_EXTRA_FACTOR_BY_LEVEL[level] * 1000 * self.weight;
-        let vt = (if advance_vt && self.vt_delta_for_get > 0 {
-            self.virtual_time
-                .fetch_add(self.vt_delta_for_get, Ordering::Relaxed)
-                + self.vt_delta_for_get
-        } else {
-            self.virtual_time.load(Ordering::Relaxed) + self.vt_delta_for_get
-        }) + task_extra_priority;
         let priority = override_priority.unwrap_or(self.group_priority);
-        concat_priority_vt(priority, vt)
+        let vt_delta = self.vt_delta_for_get;
+
+        let vt = if advance_vt && vt_delta > 0 {
+            self.virtual_time.fetch_add(vt_delta, Ordering::Relaxed) + vt_delta
+        } else {
+            self.virtual_time.load(Ordering::Relaxed) + vt_delta
+        } + task_extra_priority;
+
+        if two_phase && self.is_over_baseline.load(Ordering::Relaxed) {
+            encode_two_phase_priority(priority, PriorityPhase::OverBaseline, vt)
+        } else if two_phase {
+            encode_two_phase_priority(priority, PriorityPhase::WithinBaseline, vt)
+        } else {
+            concat_priority_vt(priority, vt)
+        }
     }
 
     #[inline]
@@ -767,6 +1429,7 @@ impl GroupPriorityTracker {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use file_system::IoBytes;
     use yatp::queue::Extras;
 
     use super::*;
@@ -1249,6 +1912,150 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn test_encode_two_phase_priority_ordering() {
+        // Phase 0 (reservation) must sort before phase 1 (weight) for the
+        // same group_priority and a larger tag value.
+        let phase0 =
+            encode_two_phase_priority(MEDIUM_PRIORITY, PriorityPhase::WithinBaseline, 9999);
+        let phase1 = encode_two_phase_priority(MEDIUM_PRIORITY, PriorityPhase::OverBaseline, 1);
+        assert!(
+            phase0 < phase1,
+            "phase 0 must be higher priority than phase 1"
+        );
+
+        // Within phase 0, lower tag = higher priority.
+        let p0_low = encode_two_phase_priority(MEDIUM_PRIORITY, PriorityPhase::WithinBaseline, 100);
+        let p0_high =
+            encode_two_phase_priority(MEDIUM_PRIORITY, PriorityPhase::WithinBaseline, 200);
+        assert!(p0_low < p0_high);
+
+        // group_priority still dominates across phases.
+        let high_phase1 =
+            encode_two_phase_priority(HIGH_PRIORITY, PriorityPhase::OverBaseline, u64::MAX >> 8);
+        let low_phase0 = encode_two_phase_priority(LOW_PRIORITY, PriorityPhase::WithinBaseline, 0);
+        assert!(high_phase1 < low_phase0);
+    }
+
+    #[test]
+    fn test_two_phase_scheduling_ru_based() {
+        // Two-phase scheduling driven by real RU (CPU µs) from ResourceGroupManager.
+        let mut cfg = Config::default();
+        cfg.enable_fair_scheduling = true;
+        let mgr = ResourceGroupManager::new(cfg);
+
+        let steady = new_resource_group_ru("steady".into(), 1000, MEDIUM_PRIORITY);
+        let spike = new_resource_group_ru("spike".into(), 1000, MEDIUM_PRIORITY);
+        mgr.add_resource_group(steady);
+        mgr.add_resource_group(spike);
+
+        let ctl = mgr.derive_controller("read".into(), true);
+
+        // Warm up steady's RuTracker: 2 completed 30s buckets with consistent rate.
+        let t0 = RuTracker::now_secs();
+        {
+            let e = mgr
+                .ru_trackers
+                .entry("steady".to_owned())
+                .or_insert_with(|| {
+                    Mutex::new((
+                        RuTracker::new(t0, 30),
+                        Arc::new(ResourceLimiter::new(
+                            "".into(),
+                            f64::INFINITY,
+                            f64::INFINITY,
+                            0,
+                            false,
+                        )),
+                    ))
+                });
+            let mut tr = e.lock().unwrap();
+            tr.0.record_at(6000, t0 + 15);
+            tr.0.record_at(0, t0 + 30); // close bucket 0: 6000 µs
+            tr.0.record_at(6000, t0 + 45);
+            tr.0.record_at(0, t0 + 60); // close bucket 1: 6000 µs → stable baseline
+        }
+        // "spike" has no tracker → is_over_baseline stays false (no history).
+
+        // Push phases into controller.
+        mgr.advance_min_virtual_time();
+
+        // steady: both buckets equal → current_rate == historical_rate → NOT over
+        // baseline. spike: no tracker → also not over baseline.
+        // Neither should be in phase 1 at steady state.
+        {
+            let groups = ctl.resource_consumptions.read();
+            let steady_over = groups
+                .get(b"steady".as_ref())
+                .unwrap()
+                .is_over_baseline
+                .load(Ordering::Relaxed);
+            let spike_over = groups
+                .get(b"spike".as_ref())
+                .unwrap()
+                .is_over_baseline
+                .load(Ordering::Relaxed);
+            assert!(!steady_over, "steady at baseline should be phase 0");
+            assert!(!spike_over, "spike with no history should be phase 0");
+        }
+
+        // Now simulate a spike for "spike": current bucket >> historical.
+        {
+            let e = mgr
+                .ru_trackers
+                .entry("spike".to_owned())
+                .or_insert_with(|| {
+                    Mutex::new((
+                        RuTracker::new(t0, 30),
+                        Arc::new(ResourceLimiter::new(
+                            "".into(),
+                            f64::INFINITY,
+                            f64::INFINITY,
+                            0,
+                            false,
+                        )),
+                    ))
+                });
+            let mut tr = e.lock().unwrap();
+            tr.0.record_at(3000, t0 + 30);
+            tr.0.record_at(0, t0 + 60); // close bucket [t0+30,t0+60): 3000µs baseline
+            tr.0.record_at(12000, t0 + 90); // current open bucket: 12000µs spike (left open)
+        }
+        // Trigger a CPU utilization tick to refresh cached_historical_rate
+        // on all trackers. Set bg_cpu_at_floor so the throttle branch fires
+        // and limits groups that are over baseline.
+        mgr.set_bg_cpu_at_floor(true);
+        mgr.online_adjust_resource_quota(75.0);
+        mgr.advance_min_virtual_time();
+
+        {
+            let groups = ctl.resource_consumptions.read();
+            let spike_over = groups
+                .get(b"spike".as_ref())
+                .unwrap()
+                .is_over_baseline
+                .load(Ordering::Relaxed);
+            assert!(spike_over, "spike bucket1 > bucket0 → should be phase 1");
+        }
+
+        // Phase ordering: steady (phase 0) must sort before spike (phase 1).
+        let groups = ctl.resource_consumptions.read();
+        let steady_pri = groups
+            .get(b"steady".as_ref())
+            .unwrap()
+            .get_priority(1, None, false, true);
+        let spike_pri = groups
+            .get(b"spike".as_ref())
+            .unwrap()
+            .get_priority(1, None, false, true);
+        assert!(!is_phase1(steady_pri), "steady should be phase 0");
+        assert!(is_phase1(spike_pri), "spike should be phase 1");
+        assert!(
+            steady_pri < spike_pri,
+            "phase 0 must schedule before phase 1"
+        );
+    }
+
+    #[test]
     fn test_get_resource_limiter() {
         let mgr = ResourceGroupManager::default();
 
@@ -1266,9 +2073,14 @@ pub(crate) mod tests {
             .clone()
             .unwrap();
 
+        // Only 1 group (default): foreground always returns None.
         assert!(mgr.get_resource_limiter("default", "query", 0).is_none());
         assert!(
             mgr.get_resource_limiter("default", "query", HIGH_PRIORITY as u64)
+                .is_none()
+        );
+        assert!(
+            mgr.get_resource_limiter("default", "query", LOW_PRIORITY as u64)
                 .is_none()
         );
 
@@ -1315,9 +2127,177 @@ pub(crate) mod tests {
             &default_limiter
         ));
 
+        // Background path still takes priority for "stats" source.
         assert!(Arc::ptr_eq(
             &mgr.get_resource_limiter("test1", "stats", 0).unwrap(),
             &default_limiter
         ));
+
+        // Multiple groups: all foreground priorities get the per-group limiter.
+        // The same limiter is returned regardless of priority level.
+        let fg_limiter = mgr
+            .get_resource_limiter("test1", "query", LOW_PRIORITY as u64)
+            .unwrap();
+        assert!(Arc::ptr_eq(
+            &mgr.get_resource_limiter("test1", "query", HIGH_PRIORITY as u64)
+                .unwrap(),
+            &fg_limiter,
+        ));
+        assert!(Arc::ptr_eq(
+            &mgr.get_resource_limiter("test1", "query", 0).unwrap(),
+            &fg_limiter,
+        ));
+    }
+
+    #[test]
+    fn test_ru_tracker() {
+        let t0: u64 = 1_000_000;
+
+        const BUCKETS: usize = 15;
+        let mut tracker = RuTracker::new(t0, BUCKETS);
+        assert!(!tracker.is_warmed_up());
+        // No data at all: current_rate = (0 + 0) / (0 + 60) = 0.
+        assert_eq!(tracker.current_rate(t0), 0.0);
+        assert_eq!(tracker.historical_rate(t0, t0), 0.0);
+
+        // Record 6000 RU in the first 30s bucket.
+        tracker.record_at(6000, t0 + 15);
+
+        // Advance past the first bucket boundary (30s) — completes bucket 0.
+        tracker.record_at(0, t0 + 30);
+        assert_eq!(tracker.completed, 1);
+        // At t0+30: current_bucket=0, elapsed=0, last_completed=6000
+        // rate = (0 + 6000) / (0 + 30) = 200 RU/s
+        assert!((tracker.current_rate(t0 + 30) - 200.0).abs() < 0.01);
+        assert!(!tracker.is_warmed_up()); // needs ≥2 buckets
+
+        // Advance another 30s with 3000 RU — completes bucket 1.
+        tracker.record_at(3000, t0 + 45);
+        tracker.record_at(0, t0 + 60);
+        assert_eq!(tracker.completed, 2);
+        assert!(tracker.is_warmed_up());
+        // At t0+60: current_bucket=0, elapsed=0, last_completed=3000
+        // rate = (0 + 3000) / (0 + 30) = 100 RU/s
+        assert!((tracker.current_rate(t0 + 60) - 100.0).abs() < 0.01);
+        // At t0+75 (15s into next bucket, no new RU): current_bucket=0, elapsed=15
+        // rate = (0 + 3000) / (15 + 30) = 66.67 RU/s
+        assert!((tracker.current_rate(t0 + 75) - 66.67).abs() < 0.1);
+        // historical_rate = (6000+3000) / (2*30) = 150 RU/s
+        assert!((tracker.historical_rate(t0, t0 + 60) - 150.0).abs() < 0.01);
+
+        // Ring buffer: advance 20 more minutes (fully evicts all data).
+        let t_far = t0 + 60 * 20;
+        tracker.record_at(0, t_far);
+        // Gap exceeds window → ring reset, no completed buckets.
+        assert_eq!(tracker.completed, 0);
+        assert_eq!(tracker.current_bucket.load(Ordering::Relaxed), 0);
+
+        // Re-populate after the big gap and fill the entire ring.
+        for i in 1..=BUCKETS {
+            tracker.record_at(100, t_far + (i as u64) * RU_BUCKET_SECS);
+        }
+        assert_eq!(tracker.completed, BUCKETS);
+    }
+
+    #[test]
+    fn test_admission_decision() {
+        let mut cfg = Config::default();
+        cfg.enable_read_admission_control = true;
+        cfg.admission_max_delayed_count = 10; // low limit to test rejection path
+        let mgr = ResourceGroupManager::new(cfg);
+        // Add a second group so the code path is active.
+        mgr.add_resource_group(new_resource_group_ru("spike".into(), 1000, HIGH_PRIORITY));
+        let spike_limiter = mgr.get_foreground_group_limiter("spike");
+
+        // Seed initial RU so the tracker is not idle (prevents eviction by
+        // online_adjust_resource_quota's retain call).
+        let t0 = RuTracker::now_secs();
+        mgr.record_ru_consumption("spike", 1);
+
+        // CPU below threshold → Allow (stays NO_LIMIT, no throttling).
+        mgr.online_adjust_resource_quota(50.0); // below 80%
+        assert_eq!(
+            mgr.admission_decision(true, &spike_limiter),
+            AdmissionDecision::Allow
+        );
+
+        // CPU above threshold but no warmed-up tracker data → stays NO_LIMIT → Allow.
+        mgr.online_adjust_resource_quota(90.0);
+        assert_eq!(
+            mgr.admission_decision(true, &spike_limiter),
+            AdmissionDecision::Allow
+        );
+
+        // Warm up the tracker: 2 completed buckets. Set up BEFORE calling
+        // online_adjust_resource_quota so historical_rate() is non-zero when the
+        // limiter rate is configured.
+        {
+            let entry = mgr.ru_trackers.get("spike").unwrap();
+            let mut guard = entry.lock().unwrap();
+            guard.0.record_at(6000, t0 + 30);
+            guard.0.record_at(0, t0 + 60); // close bucket 0: 6000 RU (baseline)
+            guard.0.record_at(12000, t0 + 90); // open bucket: 12000 RU spike (left open)
+            // historical ≈ 6000/30 = 200 RU/s (only completed buckets), current
+            // ≈ 400
+        }
+        // Now set CPU — first throttle entry: initializes fraction from spike ratio,
+        // then sets absolute rate = historical × fraction per group.
+        // bg_cpu_at_floor must be true for the throttle branch to fire.
+        mgr.set_bg_cpu_at_floor(true);
+        mgr.online_adjust_resource_quota(90.0);
+        // Consume a burst well above the rate to build token-bucket debt.
+        {
+            let entry = mgr.ru_trackers.get("spike").unwrap();
+            let guard = entry.lock().unwrap();
+            // 10_000 µs consumed against ~133 RU/s rate → several seconds of debt.
+            guard.1.consume(
+                Duration::from_micros(10_000),
+                IoBytes::default(),
+                false,
+                true,
+            );
+        }
+        // Debt is non-zero → Delay.
+        assert!(matches!(
+            mgr.admission_decision(true, &spike_limiter),
+            AdmissionDecision::Delay(_)
+        ));
+        // One slot acquired above; release it.
+        mgr.release_delay_slot();
+
+        // Exhaust the delay slots: acquire 10 (the configured max).
+        for _ in 0..10 {
+            assert!(matches!(
+                mgr.admission_decision(true, &spike_limiter),
+                AdmissionDecision::Delay(_)
+            ));
+        }
+        // 11th request: over the limit → Reject.
+        assert_eq!(
+            mgr.admission_decision(true, &spike_limiter),
+            AdmissionDecision::Reject
+        );
+        // Release all slots.
+        for _ in 0..10 {
+            mgr.release_delay_slot();
+        }
+
+        // Drop CPU into leeway zone (72-80%): multiplier holds, still delays.
+        mgr.online_adjust_resource_quota(75.0);
+        assert!(matches!(
+            mgr.admission_decision(true, &spike_limiter),
+            AdmissionDecision::Delay(_)
+        ));
+
+        // Drop CPU below leeway_start (72%): fraction ramps up ×1.1/tick.
+        // After enough ticks it reaches 5× → NO_LIMIT → rates set to infinity
+        // → token bucket debt clears → Allow.
+        for _ in 0..60 {
+            mgr.online_adjust_resource_quota(50.0);
+        }
+        assert_eq!(
+            mgr.admission_decision(true, &spike_limiter),
+            AdmissionDecision::Allow
+        );
     }
 }

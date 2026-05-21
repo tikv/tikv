@@ -117,6 +117,7 @@ impl PriorityQueue {
         metadata: TaskMetadata<'_>,
         priority_level: CommandPri,
         f: impl futures::Future<Output = ()> + Send + 'static,
+        write_bytes: u64,
     ) -> Result<(), Full> {
         let fixed_level = match priority_level {
             CommandPri::High => Some(0),
@@ -126,18 +127,22 @@ impl PriorityQueue {
         // TODO: maybe use a better way to generate task_id
         let task_id = rand::random::<u64>();
         let group_name = metadata.group_name().to_owned();
-        let resource_limiter = self.resource_mgr.get_resource_limiter(
-            unsafe { std::str::from_utf8_unchecked(&group_name) },
-            request_source,
-            metadata.override_priority() as u64,
-        );
+        let override_priority = metadata.override_priority() as u64;
         let mut extras = Extras::new_multilevel(task_id, fixed_level);
         extras.set_metadata(metadata.to_vec());
+        let resource_limiter = self.resource_mgr.get_resource_limiter(
+            std::str::from_utf8(&group_name).unwrap_or_default(),
+            request_source,
+            override_priority,
+        );
         self.worker_pool.spawn_with_extras(
             with_resource_limiter(
                 ControlledFuture::new(f, self.resource_ctl.clone(), group_name),
                 resource_limiter,
-                false,
+                true, // skip compaction pressure for foreground jobs
+                true, // measure-only: build debt, never sleep inside pool
+                Some(self.resource_mgr.clone()),
+                write_bytes,
             ),
             extras,
         )
@@ -229,6 +234,7 @@ impl SchedPool {
         metadata: TaskMetadata<'_>,
         priority_level: CommandPri,
         f: impl futures::Future<Output = ()> + Send + 'static,
+        write_bytes: u64,
     ) -> Result<(), Full> {
         match self.queue_type {
             QueueType::Vanilla => self.vanilla.spawn(priority_level, f),
@@ -240,6 +246,7 @@ impl SchedPool {
                         metadata,
                         priority_level,
                         f,
+                        write_bytes,
                     )
                 } else {
                     fail_point!("single_queue_pool_task");

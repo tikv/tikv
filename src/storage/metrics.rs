@@ -218,6 +218,8 @@ make_auto_flush_static_metric! {
         seek_tombstone,
         seek_for_prev_tombstone,
         raw_value_tombstone,
+        hit_missing_range,
+        cache_missing_range,
     }
 
     pub label_enum CheckMemLockResult {
@@ -312,6 +314,8 @@ impl From<ServerGcKeysDetail> for GcKeysDetail {
             ServerGcKeysDetail::seek_tombstone => GcKeysDetail::seek_tombstone,
             ServerGcKeysDetail::seek_for_prev_tombstone => GcKeysDetail::seek_for_prev_tombstone,
             ServerGcKeysDetail::raw_value_tombstone => GcKeysDetail::raw_value_tombstone,
+            ServerGcKeysDetail::hit_missing_range => GcKeysDetail::hit_missing_range,
+            ServerGcKeysDetail::cache_missing_range => GcKeysDetail::cache_missing_range,
         }
     }
 }

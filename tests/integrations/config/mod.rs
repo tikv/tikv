@@ -918,10 +918,17 @@ fn test_serde_custom_tikv_config() {
     value.resource_control = ResourceControlConfig {
         enabled: false,
         priority_ctl_strategy: PriorityCtlStrategy::Aggressive,
-        bg_resource_threshold: 70.0,
+        bg_cpu_throttle_threshold: 60.0,
+        fg_cpu_throttle_threshold: 70.0,
         bg_compaction_pressure_threshold: 70.0,
         bg_write_io_ceiling: ReadableSize::gb(100),
         bg_write_io_floor: ReadableSize::mb(10),
+        enable_fair_scheduling: false,
+        enable_read_admission_control: false,
+        enable_write_admission_control: false,
+        historical_usage_window_mins: 15,
+        baseline_burst_pct: 20.0,
+        admission_max_delayed_count: 10_000,
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");
