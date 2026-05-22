@@ -14,6 +14,7 @@ use std::{
 use collections::HashMap;
 use kvproto::resource_usage_agent::ResourceUsageRecord;
 use tikv_util::{
+    info,
     time::Duration,
     warn,
     worker::{Builder as WorkerBuilder, LazyWorker, Runnable, RunnableWithTimer, Scheduler},
@@ -163,7 +164,7 @@ impl Reporter {
             return;
         }
 
-        warn!("upload region record");
+        info!("upload region record");
         // Whether endpoint exists or not, records should be taken in order to reset.
         let region_records = std::mem::take(&mut self.region_records);
         let report_data: Arc<Vec<ResourceUsageRecord>> = Arc::new(region_records.into());

@@ -54,7 +54,7 @@ impl ResourceMeteringPubSub for PubSubService {
         // The reporter calls `tx.try_send` roughly every minute. If the the gRPC
         // stream sender does not send data out over the network in time, it discards
         // the incoming records to prevent memory overflow.
-        let (tx, mut rx) = channel(1);
+        let (tx, mut rx) = channel(2);
 
         let data_sink = DataSinkImpl { tx };
         let handle = self.data_sink_reg_handle.register(Box::new(data_sink));
