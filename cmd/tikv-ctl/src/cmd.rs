@@ -667,11 +667,21 @@ pub enum Cmd {
         #[structopt(
             long = "until",
             help(
-                "until when we need to include files into the compaction.\
-                files contains any record within the [--from, --until) will be selected."
+                "optional upper timestamp bound for selecting files into the compaction. \
+                Files containing any record within [--from, --until) will be selected. \
+                If omitted, compact-log-backup reads the bound from checkpoint state."
             )
         )]
-        until_ts: u64,
+        until_ts: Option<u64>,
+        #[structopt(
+            long = "replication-status-sub-prefix",
+            help(
+                "subdirectory in external storage that contains resume-state.json. \
+                When --until is not specified, compact-log-backup reads \
+                last_checkpoint from this file as the until timestamp."
+            )
+        )]
+        replication_status_sub_prefix: Option<String>,
         #[structopt(
             long = "cal-shift-ts",
             help(
@@ -742,6 +752,16 @@ pub enum Cmd {
             help("specify the maximum count of spawning tasks to download a metadata")
         )]
         prefetch_buffer_count: u64,
+
+        #[structopt(
+            long,
+            default_value = "0",
+            help(
+                "specify memory reserved for caching physical log files, such as 64G. \
+                Zero disables the cache."
+            )
+        )]
+        physical_file_cache_capacity: ReadableSize,
 
         #[structopt(
             long = "gcp-v2-enable",
@@ -995,6 +1015,36 @@ mod tests {
 
         match opt.cmd.unwrap() {
             Cmd::CompactLogBackup { cal_shift_ts, .. } => assert!(cal_shift_ts),
+            cmd => panic!("unexpected command: {:?}", std::mem::discriminant(&cmd)),
+        }
+    }
+
+    #[test]
+    fn compact_log_backup_replication_status_sub_prefix_allows_omitting_until() {
+        let opt = Opt::from_iter_safe([
+            "tikv-ctl",
+            "compact-log-backup",
+            "--from",
+            "1",
+            "--storage-base64",
+            "AA==",
+            "--replication-status-sub-prefix",
+            "replication/status",
+        ])
+        .unwrap();
+
+        match opt.cmd.unwrap() {
+            Cmd::CompactLogBackup {
+                until_ts,
+                replication_status_sub_prefix,
+                ..
+            } => {
+                assert_eq!(until_ts, None);
+                assert_eq!(
+                    replication_status_sub_prefix.as_deref(),
+                    Some("replication/status")
+                );
+            }
             cmd => panic!("unexpected command: {:?}", std::mem::discriminant(&cmd)),
         }
     }

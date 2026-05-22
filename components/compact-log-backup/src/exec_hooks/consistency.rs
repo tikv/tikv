@@ -6,7 +6,7 @@ use futures::{io::AsyncReadExt, stream::TryStreamExt};
 use tikv_util::warn;
 
 use crate::{
-    ErrorKind, TraceResultExt,
+    ErrorKind, OtherErrExt, TraceResultExt,
     errors::Result,
     execute::hooking::{AbortedCtx, AfterFinishCtx, BeforeStartCtx, ExecHooks},
     storage::LOCK_PREFIX,
@@ -14,11 +14,51 @@ use crate::{
 };
 
 #[derive(Default)]
-pub struct StorageConsistencyGuard {
-    lock: Option<RemoteLock>,
+enum CheckpointSource {
+    #[default]
+    Storage,
+    ReplicationStatus {
+        sub_prefix: String,
+    },
 }
 
-async fn load_storage_checkpoint(storage: &dyn ExternalStorage) -> Result<Option<u64>> {
+#[derive(Default)]
+pub struct StorageConsistencyGuard {
+    lock: Option<RemoteLock>,
+    checkpoint_source: CheckpointSource,
+    skip_checkpoint_check: bool,
+}
+
+impl StorageConsistencyGuard {
+    pub fn with_replication_status_sub_prefix(sub_prefix: String) -> Self {
+        Self {
+            lock: None,
+            checkpoint_source: CheckpointSource::ReplicationStatus { sub_prefix },
+            skip_checkpoint_check: false,
+        }
+    }
+
+    pub fn without_checkpoint_check() -> Self {
+        Self {
+            lock: None,
+            checkpoint_source: CheckpointSource::Storage,
+            skip_checkpoint_check: true,
+        }
+    }
+
+    async fn load_checkpoint(&self, storage: &dyn ExternalStorage) -> Result<Option<u64>> {
+        match &self.checkpoint_source {
+            CheckpointSource::Storage => load_storage_checkpoint(storage).await,
+            CheckpointSource::ReplicationStatus { sub_prefix } => {
+                load_replication_status_checkpoint(storage, sub_prefix)
+                    .await
+                    .map(Some)
+            }
+        }
+    }
+}
+
+pub async fn load_storage_checkpoint(storage: &dyn ExternalStorage) -> Result<Option<u64>> {
     let path = "v1/global_checkpoint/";
     storage
         .iter_prefix(path)
@@ -48,34 +88,73 @@ async fn load_storage_checkpoint(storage: &dyn ExternalStorage) -> Result<Option
         .await
 }
 
+pub async fn load_replication_status_checkpoint(
+    storage: &dyn ExternalStorage,
+    sub_prefix: &str,
+) -> Result<u64> {
+    let sub_prefix_trimmed = sub_prefix.trim_matches('/');
+    let path = if sub_prefix_trimmed.is_empty() {
+        "resume-state.json".to_owned()
+    } else {
+        format!("{}/resume-state.json", sub_prefix_trimmed)
+    };
+    let mut content = Vec::new();
+    storage
+        .read(&path)
+        .read_to_end(&mut content)
+        .await
+        .adapt_err()
+        .annotate(format!(
+            "failed to read replication status checkpoint {path}"
+        ))?;
+    let value: serde_json::Value = serde_json::from_slice(&content)
+        .map_err(|err| ErrorKind::Other(format!("failed to parse {path}: {err}")))?;
+    match value.get("last_checkpoint") {
+        Some(value) => {
+            if let Some(ts) = value.as_u64() {
+                return Ok(ts);
+            }
+            Err(ErrorKind::Other(format!(
+                "`last_checkpoint` in {path} must be a u64"
+            )))?
+        }
+        None => Err(ErrorKind::Other(format!(
+            "`last_checkpoint` is missing in {path}"
+        )))?,
+    }
+}
+
 impl ExecHooks for StorageConsistencyGuard {
     async fn before_execution_started(&mut self, cx: BeforeStartCtx<'_>) -> Result<()> {
         use external_storage::locking::LockExt;
 
-        let cp = load_storage_checkpoint(cx.storage)
-            .await
-            .annotate("failed to load storage checkpoint")?;
-        match cp {
-            Some(cp) => {
-                if cx.this.cfg.until_ts > cp {
-                    let err_msg = format!(
-                        "The `--until`({}) is greater than the checkpoint({}). We cannot compact unstable content for now.",
-                        cx.this.cfg.until_ts, cp
-                    );
+        if !self.skip_checkpoint_check {
+            let cp = self
+                .load_checkpoint(cx.storage)
+                .await
+                .annotate("failed to load checkpoint")?;
+            match cp {
+                Some(cp) => {
+                    if cx.this.cfg.until_ts > cp {
+                        let err_msg = format!(
+                            "The `--until`({}) is greater than the checkpoint({}). We cannot compact unstable content for now.",
+                            cx.this.cfg.until_ts, cp
+                        );
 
-                    // We use `?` instead of return here to keep the stack frame in the error.
-                    // Or if we use `.into()` the frame attached will be the default implementation
-                    // of `Into`...
-                    Err(ErrorKind::Other(err_msg))?;
+                        // We use `?` instead of return here to keep the stack frame in the error.
+                        // Or if we use `.into()` the frame attached will be the default
+                        // implementation of `Into`...
+                        Err(ErrorKind::Other(err_msg))?;
+                    }
                 }
-            }
-            None => {
-                let url = storage_url(cx.storage);
-                warn!("No checkpoint loaded, maybe wrong storage used?"; "url" => %url);
-                Err(ErrorKind::Other(format!(
-                    "Cannot load checkpoint from {}",
-                    url
-                )))?;
+                None => {
+                    let url = storage_url(cx.storage);
+                    warn!("No checkpoint loaded, maybe wrong storage used?"; "url" => %url);
+                    Err(ErrorKind::Other(format!(
+                        "Cannot load checkpoint from {}",
+                        url
+                    )))?;
+                }
             }
         }
 

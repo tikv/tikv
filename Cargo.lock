@@ -1686,6 +1686,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log_wrappers",
+ "parking_lot 0.12.1",
  "pin-project",
  "pprof 0.13.0",
  "prometheus",
