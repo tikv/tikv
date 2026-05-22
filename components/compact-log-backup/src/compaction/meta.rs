@@ -1,9 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
-use std::{
-    collections::{BTreeSet, HashMap},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
+use bytes::Bytes;
 use external_storage::ExternalStorage;
 use futures::stream::TryStreamExt;
 use kvproto::brpb::{self, DeleteSpansOfFile};
@@ -148,18 +146,33 @@ impl LogFileId {
     }
 }
 
-#[derive(Eq, PartialEq, Debug)]
-struct SortByOffset(LogFileId);
-
-impl PartialOrd for SortByOffset {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.0.offset.partial_cmp(&other.0.offset)
-    }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct SortByOffset {
+    offset: u64,
+    length: u64,
 }
 
-impl Ord for SortByOffset {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.0.offset.cmp(&other.0.offset)
+impl SortByOffset {
+    fn new(id: &LogFileId) -> Self {
+        Self {
+            offset: id.offset,
+            length: id.length,
+        }
+    }
+
+    fn offset(&self) -> u64 {
+        self.offset
+    }
+
+    fn length(&self) -> u64 {
+        self.length
+    }
+
+    fn span(&self) -> brpb::Span {
+        let mut span = brpb::Span::default();
+        span.set_offset(self.offset);
+        span.set_length(self.length);
+        span
     }
 }
 
@@ -168,7 +181,7 @@ impl Ord for SortByOffset {
 /// Finally, it calculates which files can be deleted.
 #[derive(Debug)]
 pub struct CompactionRunInfoBuilder {
-    files: HashMap<Chars, BTreeSet<SortByOffset>>,
+    files: HashMap<Bytes, Vec<SortByOffset>>,
     compaction: brpb::LogFileCompaction,
 }
 
@@ -243,13 +256,14 @@ impl CompactionRunInfoBuilder {
 
     pub fn add_origin_subcompaction(&mut self, c: &Subcompaction) {
         for file in &c.inputs {
-            if !self.files.contains_key(&file.id.name) {
-                self.files.insert(file.id.name.clone(), Default::default());
+            if let Some(spans) = self.files.get_mut(file.id.name.as_bytes()) {
+                spans.push(SortByOffset::new(&file.id));
+            } else {
+                let mut spans = Vec::with_capacity(16);
+                spans.push(SortByOffset::new(&file.id));
+                self.files
+                    .insert(Bytes::copy_from_slice(file.id.name.as_bytes()), spans);
             }
-            self.files
-                .get_mut(&file.id.name)
-                .unwrap()
-                .insert(SortByOffset(file.id.clone()));
         }
         self.compaction.artifacts_hash ^= c.crc64();
         self.compaction.input_min_ts = self.compaction.input_min_ts.min(c.input_min_ts);
@@ -265,10 +279,11 @@ impl CompactionRunInfoBuilder {
     }
 
     pub async fn write_migration(
-        &self,
+        &mut self,
         s: Arc<dyn ExternalStorage>,
         shard: Option<ShardConfig>,
     ) -> Result<()> {
+        self.normalize_spans();
         let migration = self.migration_of(self.find_expiring_files(s.clone(), shard).await?);
         let wrapped_storage = MigrationStorageWrapper::new(s.as_ref());
         wrapped_storage.write(migration.into()).await?;
@@ -314,15 +329,15 @@ impl CompactionRunInfoBuilder {
     }
 
     fn full_covers(&self, file: &PhysicalLogFile) -> bool {
-        match self.files.get(&file.name) {
+        match self.files.get(file.name.as_bytes()) {
             None => false,
             Some(spans) => {
                 let mut cur_offset = 0;
                 for span in spans {
-                    if span.0.offset != cur_offset {
+                    if span.offset() != cur_offset {
                         return false;
                     }
-                    cur_offset += span.0.length
+                    cur_offset += span.length()
                 }
                 assert!(
                     cur_offset <= file.size,
@@ -336,6 +351,13 @@ impl CompactionRunInfoBuilder {
         }
     }
 
+    fn normalize_spans(&mut self) {
+        for spans in self.files.values_mut() {
+            spans.sort_unstable();
+            spans.dedup();
+        }
+    }
+
     fn expiring(&self, file: &MetaFile) -> ExpiringFilesOfMeta {
         let mut result = ExpiringFilesOfMeta::of(&file.name);
         let mut all_full_covers = true;
@@ -345,13 +367,13 @@ impl CompactionRunInfoBuilder {
             if full_covers {
                 result.logs.push(p.name.clone());
             } else {
-                if let Some(vs) = self.files.get(&p.name) {
+                if let Some(vs) = self.files.get(p.name.as_bytes()) {
                     let segs = result
                         .spans_of_file
                         .entry(p.name.clone())
                         .or_insert_with(|| (vec![], p.size));
                     for f in vs {
-                        segs.0.push(f.0.span());
+                        segs.0.push(f.span());
                     }
                 }
                 all_full_covers = false;
@@ -395,7 +417,8 @@ mod test {
     };
 
     impl CompactionRunInfoBuilder {
-        async fn mig(&self, s: Arc<dyn ExternalStorage>) -> crate::Result<brpb::Migration> {
+        async fn mig(&mut self, s: Arc<dyn ExternalStorage>) -> crate::Result<brpb::Migration> {
+            self.normalize_spans();
             Ok(self.migration_of(self.find_expiring_files(s, None).await?))
         }
     }
