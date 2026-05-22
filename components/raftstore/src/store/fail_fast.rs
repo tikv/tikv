@@ -7,14 +7,18 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
-    thread,
     time::Duration,
 };
 
 use health_controller::HealthController;
 use prometheus::{HistogramVec, exponential_buckets, register_histogram_vec};
 use tikv_util::{
-    config::VersionTrack, error, logger, sys::thread::StdThreadBuildWrapper, warn, worker::Worker,
+    config::VersionTrack,
+    error, logger,
+    sys::thread::StdThreadBuildWrapper,
+    time::{monotonic_raw_now, timespec_to_ns},
+    warn,
+    worker::Worker,
 };
 
 use super::Config;
@@ -96,22 +100,22 @@ fn spawn_probe_thread(
     stop: Arc<AtomicBool>,
     raft_probe: ProbeRunner,
     kv_probe: Option<ProbeRunner>,
-) {
+) -> std::io::Result<()> {
     // The blocking `write + sync_all` probe can hang indefinitely on an
     // unresponsive disk. Run it on a dedicated OS thread that is not joined
     // during shutdown, so manual stop/restart is not blocked by a stuck probe.
-    let result = thread::Builder::new()
+    std::thread::Builder::new()
         .name("fail-fast-probe".to_owned())
         .spawn_wrapper(move || {
             while !stop.load(Ordering::Acquire) {
                 // Avoid issuing any IO when fail-fast is disabled. Otherwise the
                 // default config (None) still creates background fsync traffic.
                 let Some(timeout) = cfg.value().disk_hang_timeout else {
-                    thread::sleep(PROBE_INTERVAL);
+                    std::thread::sleep(PROBE_INTERVAL);
                     continue;
                 };
                 if timeout.0.is_zero() {
-                    thread::sleep(PROBE_INTERVAL);
+                    std::thread::sleep(PROBE_INTERVAL);
                     continue;
                 }
 
@@ -124,12 +128,10 @@ fn spawn_probe_thread(
                     }
                 }
 
-                thread::sleep(PROBE_INTERVAL);
+                std::thread::sleep(PROBE_INTERVAL);
             }
-        });
-    if let Err(e) = result {
-        warn!("failed to spawn fail-fast probe thread"; "err" => ?e);
-    }
+        })?;
+    Ok(())
 }
 
 /// A best-effort "fail-fast" monitor for cases where TiKV can become
@@ -159,8 +161,8 @@ impl FailFastMonitor {
         raft_probe_dir: PathBuf,
         kv_probe_dir: Option<PathBuf>,
         check_worker: Worker,
-        last_raft_append_success_at_secs: Arc<AtomicU64>,
-    ) -> Self {
+        last_raft_append_success_at_millis: Arc<AtomicU64>,
+    ) -> std::io::Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let raft_probe =
             ProbeRunner::new(raft_probe_dir.join(RAFT_PROBE_FILENAME), RAFT_PROBE_PAYLOAD);
@@ -172,7 +174,7 @@ impl FailFastMonitor {
             stop.clone(),
             raft_probe.clone(),
             kv_probe.clone(),
-        );
+        )?;
 
         let stop_for_check = stop.clone();
         let raft_probe_for_check = raft_probe.clone();
@@ -200,7 +202,7 @@ impl FailFastMonitor {
                 .as_ref()
                 .and_then(|probe| probe.current_probe_elapsed());
             let raft_last_append_success_elapsed =
-                last_raft_append_success_elapsed(&last_raft_append_success_at_secs);
+                last_raft_append_success_elapsed(&last_raft_append_success_at_millis);
             let raft_recent_append_progress = raft_last_append_success_elapsed
                 .is_some_and(|elapsed| elapsed < timeout.0);
             let raft_should_fail_fast =
@@ -238,11 +240,11 @@ impl FailFastMonitor {
             logger::exit_process_gracefully(1);
         });
 
-        Self {
+        Ok(Self {
             stop,
             raft_probe,
             kv_probe,
-        }
+        })
     }
 
     pub fn stop(&self) {
@@ -287,17 +289,14 @@ fn should_fail_fast_on_repeated_failures(probe: &ProbeRunner, timeout: Duration)
 // This is a coarse store-level signal that raft log append is still making
 // forward progress, used only to veto fail-fast on a single slow raft probe.
 fn last_raft_append_success_elapsed(
-    last_raft_append_success_at_secs: &AtomicU64,
+    last_raft_append_success_at_millis: &AtomicU64,
 ) -> Option<Duration> {
-    let last = last_raft_append_success_at_secs.load(Ordering::Relaxed);
+    let last = last_raft_append_success_at_millis.load(Ordering::Relaxed);
     if last == 0 {
         return None;
     }
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .and_then(|now| now.as_secs().checked_sub(last))
-        .map(Duration::from_secs)
+    let now = timespec_to_ns(monotonic_raw_now()) / 1_000_000;
+    Some(Duration::from_millis(now.saturating_sub(last)))
 }
 
 impl Drop for FailFastMonitor {

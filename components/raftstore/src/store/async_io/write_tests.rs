@@ -202,6 +202,7 @@ struct TestWorker {
     worker: Worker<KvTestEngine, RaftTestEngine, TestNotifier, TestTransport>,
     msg_rx: Receiver<RaftMessage>,
     notify_rx: Receiver<(u64, (u64, u64))>,
+    last_raft_append_success_at_millis: Arc<AtomicU64>,
 }
 
 impl TestWorker {
@@ -211,6 +212,7 @@ impl TestWorker {
         let trans = TestTransport { tx: msg_tx };
         let (notify_tx, notify_rx) = unbounded();
         let notifier = TestNotifier { tx: notify_tx };
+        let last_raft_append_success_at_millis = Arc::new(AtomicU64::new(0));
         Self {
             worker: Worker::new(
                 1,
@@ -221,10 +223,11 @@ impl TestWorker {
                 notifier,
                 trans,
                 &Arc::new(VersionTrack::new(cfg.clone())),
-                Arc::new(AtomicU64::new(0)),
+                last_raft_append_success_at_millis.clone(),
             ),
             msg_rx,
             notify_rx,
+            last_raft_append_success_at_millis,
         }
     }
 }
@@ -234,6 +237,7 @@ struct TestWriters {
     msg_rx: Receiver<RaftMessage>,
     notify_rx: Receiver<(u64, (u64, u64))>,
     ctx: TestContext,
+    last_raft_append_success_at_millis: Arc<AtomicU64>,
 }
 
 impl TestWriters {
@@ -251,6 +255,7 @@ impl TestWriters {
                 .as_ref()
                 .map(|m| m.derive_controller("test".into(), false)),
         );
+        let last_raft_append_success_at_millis = Arc::new(AtomicU64::new(0));
         writers
             .spawn(
                 1,
@@ -259,7 +264,7 @@ impl TestWriters {
                 &notifier,
                 &trans,
                 &Arc::new(VersionTrack::new(cfg.clone())),
-                Arc::new(AtomicU64::new(0)),
+                last_raft_append_success_at_millis.clone(),
             )
             .unwrap();
         Self {
@@ -271,6 +276,7 @@ impl TestWriters {
                 senders: writers.senders(),
             },
             writers,
+            last_raft_append_success_at_millis,
         }
     }
 
@@ -654,6 +660,10 @@ fn test_worker() {
     );
 
     must_have_same_count_msg(5, &t.msg_rx);
+    assert_ne!(
+        t.last_raft_append_success_at_millis.load(Ordering::Relaxed),
+        0
+    );
 }
 
 #[test]
@@ -760,6 +770,10 @@ fn test_worker_split_raft_wb() {
                 ..Default::default()
             })
         );
+        assert_ne!(
+            t.last_raft_append_success_at_millis.load(Ordering::Relaxed),
+            0
+        );
     };
 
     let mut first_region = 1;
@@ -858,6 +872,10 @@ fn test_basic_flow() {
     );
 
     must_have_same_count_msg(6, &t.msg_rx);
+    assert_ne!(
+        t.last_raft_append_success_at_millis.load(Ordering::Relaxed),
+        0
+    );
     t.writers.shutdown();
 }
 

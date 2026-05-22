@@ -1304,7 +1304,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     write_senders: WriteSenders<EK, ER>,
     node_start_time: Timespec, // monotonic_raw_now
     gc_safe_point: Arc<AtomicU64>,
-    last_raft_append_success_at_secs: Arc<AtomicU64>,
+    last_raft_append_success_at_millis: Arc<AtomicU64>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
@@ -1511,7 +1511,7 @@ where
                 self.router.clone(),
                 self.trans.clone(),
                 &self.cfg,
-                self.last_raft_append_success_at_secs.clone(),
+                self.last_raft_append_success_at_millis.clone(),
             ))
         } else {
             None
@@ -1626,7 +1626,7 @@ where
             write_senders: self.write_senders.clone(),
             node_start_time: self.node_start_time,
             gc_safe_point: self.gc_safe_point.clone(),
-            last_raft_append_success_at_secs: self.last_raft_append_success_at_secs.clone(),
+            last_raft_append_success_at_millis: self.last_raft_append_success_at_millis.clone(),
         }
     }
 }
@@ -1745,7 +1745,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             None
         };
         let bgworker_remote = background_worker.remote();
-        let last_raft_append_success_at_secs = Arc::new(AtomicU64::new(0));
+        let last_raft_append_success_at_millis = Arc::new(AtomicU64::new(0));
         let snap_gen_worker = WorkerBuilder::new(SNAP_GENERATOR_THREAD)
             .thread_count(cfg.value().snap_generator_pool_size)
             .thread_count_limits(1, SNAP_GENERATOR_MAX_POOL_SIZE)
@@ -1860,11 +1860,11 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let fail_fast_monitor = crate::store::FailFastMonitor::new(
             cfg.clone(),
             health_controller.clone(),
-            PathBuf::from(engines.raft.get_engine_path().to_string()),
-            separated_raft_mount_path.then(|| PathBuf::from(engines.kv.path().to_string())),
+            PathBuf::from(engines.raft.get_engine_path()),
+            separated_raft_mount_path.then(|| PathBuf::from(engines.kv.path())),
             workers.fail_fast_check_worker.clone(),
-            last_raft_append_success_at_secs.clone(),
-        );
+            last_raft_append_success_at_millis.clone(),
+        )?;
         workers.on_stop_hooks.push(Box::new(move || {
             fail_fast_monitor.stop();
         }));
@@ -1876,7 +1876,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             &self.router,
             &trans,
             &cfg,
-            last_raft_append_success_at_secs.clone(),
+            last_raft_append_success_at_millis.clone(),
         )?;
 
         let mut builder = RaftPollerBuilder {
@@ -1904,7 +1904,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             pending_create_peers: Arc::new(Mutex::new(HashMap::default())),
             feature_gate: pd_client.feature_gate().clone(),
             write_senders: self.store_writers.senders(),
-            last_raft_append_success_at_secs,
+            last_raft_append_success_at_millis,
             node_start_time: self.node_start_time,
             gc_safe_point,
         };
@@ -2006,8 +2006,8 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 kv_engine: Some(raft_builder.engines.kv.clone()),
                 transfer: raft_builder.trans.clone(),
                 cfg: raft_builder.cfg.clone(),
-                last_raft_append_success_at_secs: raft_builder
-                    .last_raft_append_success_at_secs
+                last_raft_append_success_at_millis: raft_builder
+                    .last_raft_append_success_at_millis
                     .clone(),
             },
             self.store_writers.clone(),

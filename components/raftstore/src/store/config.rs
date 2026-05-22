@@ -22,6 +22,8 @@ use time::Duration as TimeDuration;
 use super::worker::{RaftStoreBatchComponent, RefreshConfigTask};
 use crate::{Result, coprocessor::config::RAFTSTORE_V2_SPLIT_SIZE};
 
+const DISK_HANG_TIMEOUT_MIN: ReadableDuration = ReadableDuration::secs(1);
+
 lazy_static! {
     pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec!(
         "tikv_config_raftstore",
@@ -883,6 +885,15 @@ impl Config {
             return Err(box_err!("raftstore.merge-check-tick-interval can't be 0."));
         }
 
+        if let Some(timeout) = self.disk_hang_timeout {
+            if timeout < DISK_HANG_TIMEOUT_MIN {
+                return Err(box_err!(
+                    "raftstore.disk-hang-timeout must be at least {} ms",
+                    DISK_HANG_TIMEOUT_MIN.as_millis()
+                ));
+            }
+        }
+
         let stale_state_check = self.peer_stale_state_check_interval.as_millis();
         if stale_state_check < election_timeout * 2 {
             return Err(box_err!(
@@ -1574,6 +1585,18 @@ mod tests {
         cfg.optimize_for(false);
         cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
+
+        cfg = Config::new();
+        cfg.disk_hang_timeout = Some(ReadableDuration::millis(999));
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap_err();
+
+        cfg = Config::new();
+        cfg.disk_hang_timeout = Some(ReadableDuration::secs(1));
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap();
 
         cfg = Config::new();
         cfg.raft_base_tick_interval = ReadableDuration::secs(1);
