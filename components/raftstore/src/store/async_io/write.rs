@@ -1180,6 +1180,10 @@ where
             self.perf_context.report_metrics(&trackers);
             write_raft_time = duration_to_sec(now.saturating_elapsed());
             STORE_WRITE_RAFTDB_DURATION_HISTOGRAM.observe(write_raft_time);
+            // Record the last confirmed raft-log append progress on a monotonic
+            // raw clock. Fail-fast reads this timestamp later to answer a very
+            // specific question: "even if the dedicated disk probe is slow, are
+            // real raft appends still succeeding recently?"
             self.last_raft_append_success_at_millis.store(
                 timespec_to_ns(monotonic_raw_now()) / 1_000_000,
                 Ordering::Relaxed,

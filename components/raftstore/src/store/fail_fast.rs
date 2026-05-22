@@ -201,10 +201,16 @@ impl FailFastMonitor {
             let kv_elapsed = kv_probe_for_check
                 .as_ref()
                 .and_then(|probe| probe.current_probe_elapsed());
+            // Raft has one extra anti-false-positive guard: do not fail fast on
+            // a single slow probe if normal raft-log appends have still made
+            // progress within the same timeout window.
             let raft_last_append_success_elapsed =
                 last_raft_append_success_elapsed(&last_raft_append_success_at_millis);
             let raft_recent_append_progress = raft_last_append_success_elapsed
                 .is_some_and(|elapsed| elapsed < timeout.0);
+            // Fail-fast is armed by either:
+            // 1. the current probe staying in flight for >= timeout, or
+            // 2. repeated probe failures for >= timeout after a prior success.
             let raft_should_fail_fast =
                 should_fail_fast_for_raft_probe(&raft_probe_for_check, timeout.0, raft_recent_append_progress);
             let kv_should_fail_fast = kv_elapsed.is_some_and(|elapsed| elapsed >= timeout.0)
@@ -269,15 +275,18 @@ fn should_fail_fast_for_raft_probe(
     timeout: Duration,
     has_recent_append_progress: bool,
 ) -> bool {
+    // For raft, a slow probe alone is not enough if real raft appends are
+    // still succeeding recently. That treats actual raft progress as a veto on
+    // top of the generic probe-timeout rule.
     probe
         .current_probe_elapsed()
         .is_some_and(|elapsed| elapsed >= timeout && !has_recent_append_progress)
         || should_fail_fast_on_repeated_failures(probe, timeout)
 }
 
-// This catches disks that keep failing quickly instead of hanging in-flight.
-// We only arm it after a prior success, so obvious startup/configuration
-// mistakes do not immediately turn into fail-fast exits.
+// This catches the "not one forever-stuck probe, but no successful probe for a
+// full timeout window" case. We only arm it after a prior success so obvious
+// startup/configuration mistakes do not immediately turn into fail-fast exits.
 fn should_fail_fast_on_repeated_failures(probe: &ProbeRunner, timeout: Duration) -> bool {
     probe.current_probe_elapsed().is_none()
         && probe.failure_count_since_last_success() > 0
@@ -286,8 +295,11 @@ fn should_fail_fast_on_repeated_failures(probe: &ProbeRunner, timeout: Duration)
             .is_some_and(|elapsed| elapsed >= timeout)
 }
 
-// This is a coarse store-level signal that raft log append is still making
-// forward progress, used only to veto fail-fast on a single slow raft probe.
+// Returns how long it has been since the last successful raft-log append,
+// using the same monotonic raw clock as the write thread.
+//
+// This is intentionally only a coarse veto signal for the raft probe path; kv
+// fail-fast currently relies only on the probe state itself.
 fn last_raft_append_success_elapsed(
     last_raft_append_success_at_millis: &AtomicU64,
 ) -> Option<Duration> {
