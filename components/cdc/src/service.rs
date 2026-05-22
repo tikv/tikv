@@ -5,16 +5,12 @@ use std::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use collections::{HashMap, HashMapEntry};
 use crossbeam::atomic::AtomicCell;
-use futures::{
-    SinkExt,
-    compat::Stream01CompatExt,
-    stream::{StreamExt, TryStreamExt},
-};
+use futures::{SinkExt, stream::TryStreamExt};
 use grpcio::{DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::{
     cdcpb::{
@@ -23,23 +19,17 @@ use kvproto::{
     },
     kvrpcpb::ApiVersion,
 };
-use tikv_util::{error, info, memory::MemoryQuota, timer::GLOBAL_TIMER_HANDLE, warn, worker::*};
-use tokio_util::sync::CancellationToken;
+use tikv_util::{error, info, memory::MemoryQuota, warn, worker::*};
 
 use crate::{
     channel::{CDC_CHANNLE_CAPACITY, Sink, channel},
     delegate::{Downstream, DownstreamId, DownstreamState, ObservedRange},
     endpoint::{Deregister, Task},
     metrics::CDC_ABORTED_CONNECTIONS,
+    watchdog,
 };
 
 static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
-
-// CDC connection monitoring constants in seconds
-const CDC_WATCHDOG_CHECK_INTERVAL_SECS: u64 = 2;
-const CDC_IDLE_WARNING_THRESHOLD_SECS: u64 = 60;
-const CDC_IDLE_DEREGISTER_THRESHOLD_SECS: u64 = 60 * 20; // 20 minutes
-const CDC_MEMORY_QUOTA_ABORT_THRESHOLD: f64 = 0.999;
 
 pub fn validate_kv_api(kv_api: ChangeDataRequestKvApi, api_version: ApiVersion) -> bool {
     kv_api == ChangeDataRequestKvApi::TiDb
@@ -480,14 +470,13 @@ impl Service {
             Ok::<(), String>(())
         };
 
-        let cancel_token = CancellationToken::new();
-        let recv_cancel_token = cancel_token.clone();
+        let (cancel_sinks, recv_cancel_rx, send_cancel_rx) = watchdog::cancel_channels();
 
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
         ctx.spawn(async move {
             tokio::select! {
-                _ = recv_cancel_token.cancelled() => {
+                _ = watchdog::wait_cancel(recv_cancel_rx) => {
                     warn!("cdc receive cancelled"; "downstream" => peer, "conn_id" => ?conn_id);
                 }
                 result = recv_req => {
@@ -511,7 +500,6 @@ impl Service {
         let peer_for_watchdog = ctx.peer().to_string();
 
         let peer = ctx.peer();
-        let send_cancel_token = cancel_token.clone();
 
         // Create cancelCh for eventDrain.forward exit signal
         let (forward_exit_tx, forward_exit_rx) = tokio::sync::oneshot::channel::<()>();
@@ -520,7 +508,7 @@ impl Service {
             #[cfg(feature = "failpoints")]
             sleep_before_drain_change_event().await;
             tokio::select! {
-                _ = send_cancel_token.cancelled() => {
+                _ = watchdog::wait_cancel(send_cancel_rx) => {
                     warn!("cdc send cancelled"; "downstream" => peer, "conn_id" => ?conn_id);
                     let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, "connection cancelled".to_string());
                     let _ = sink.fail(status).await;
@@ -542,105 +530,15 @@ impl Service {
         });
 
         // Start watchdog to monitor connection activity
-        Self::start_connection_watchdog(
+        watchdog::start(
             self.pool.clone(),
             last_flush_time_for_watchdog.clone(),
             peer_for_watchdog.clone(),
             conn_id,
-            cancel_token,
+            cancel_sinks,
             forward_exit_rx,
             self.memory_quota.clone(),
         );
-    }
-
-    /// Start a watchdog to monitor CDC connection activity.
-    ///
-    /// This function creates a background task that periodically checks if the
-    /// connection has been idle for too long and takes appropriate action
-    /// (warning or aborting).
-    fn start_connection_watchdog(
-        pool: Arc<Worker>,
-        last_flush_time: Arc<AtomicCell<Instant>>,
-        peer: String,
-        conn_id: ConnId,
-        cancel_token: CancellationToken,
-        mut forward_exit_rx: tokio::sync::oneshot::Receiver<()>,
-        memory_quota: Arc<MemoryQuota>,
-    ) {
-        let last_flush_time_clone = last_flush_time.clone();
-        let peer_clone = peer.clone();
-
-        // Create a custom interval task that can be stopped
-        let _ = pool.pool().spawn(async move {
-            let mut interval = GLOBAL_TIMER_HANDLE
-                .interval(
-                    Instant::now(),
-                    Duration::from_secs(CDC_WATCHDOG_CHECK_INTERVAL_SECS),
-                )
-                .compat();
-
-            loop {
-                tokio::select! {
-                    _ = &mut forward_exit_rx => {
-                        info!("cdc connection forward exit signal received, stopping watchdog");
-                        break;
-                    }
-                    _ = interval.next() => {
-                        let elapsed = last_flush_time_clone.load().elapsed();
-
-                        // Check if last flush was more than the warning threshold
-                        if elapsed > Duration::from_secs(CDC_IDLE_WARNING_THRESHOLD_SECS) {
-                            warn!("cdc connection idle too long";
-                                "seconds_since_last_flush" => elapsed.as_secs(),
-                                "downstream" => peer_clone.clone(),
-                                "conn_id" => ?conn_id);
-                        }
-
-                        let _idle_threshold = CDC_IDLE_DEREGISTER_THRESHOLD_SECS;
-
-                        #[cfg(feature = "failpoints")]
-                        let _idle_threshold = {
-                            let should_adjust = || {
-                                fail::fail_point!("cdc_idle_deregister_threshold", |_| true);
-                                false
-                            };
-                            if should_adjust() {
-                                5
-                            } else {
-                                CDC_IDLE_DEREGISTER_THRESHOLD_SECS
-                            }
-                        };
-
-                        let memory_quota_abort_threshold_reached =
-                            memory_quota.used_ratio() >= CDC_MEMORY_QUOTA_ABORT_THRESHOLD;
-
-                        #[cfg(feature = "failpoints")]
-                        let memory_quota_abort_threshold_reached = {
-                            let should_ignore_memory_quota = || {
-                                fail::fail_point!("cdc_watchdog_ignore_memory_quota", |_| true);
-                                false
-                            };
-                            memory_quota_abort_threshold_reached || should_ignore_memory_quota()
-                        };
-
-                        // Check if last flush was more than the deregister threshold.
-                        // To prevent the case that the connection idle since there are a lot of
-                        // incremental scan tasks queueing so won't send events, also check on the
-                        // memory usage. If the memory quota is almost used up, we abort the
-                        // connection. The failpoint can skip the memory check for manual testing.
-                        if elapsed > Duration::from_secs(_idle_threshold)
-                            && memory_quota_abort_threshold_reached {
-                            error!("cdc connection idle for too long, aborting connection";
-                                "seconds_since_last_flush" => elapsed.as_secs(),
-                                "downstream" => peer_clone.clone(),
-                                "conn_id" => ?conn_id);
-                            cancel_token.cancel();
-                            break;
-                        }
-                    }
-                }
-            }
-        });
     }
 }
 
@@ -707,38 +605,6 @@ mod tests {
         let channel = ChannelBuilder::new(env).connect(&addr);
         let client = ChangeDataClient::new(channel);
         (server, client, rx)
-    }
-
-    #[test]
-    fn test_connection_watchdog_cancels_send_and_receive() {
-        let pool = Arc::new(Builder::new("cdc-watchdog-test").thread_count(1).create());
-        let last_flush_time = Arc::new(AtomicCell::new(
-            Instant::now() - Duration::from_secs(CDC_IDLE_DEREGISTER_THRESHOLD_SECS + 1),
-        ));
-        let memory_quota = Arc::new(MemoryQuota::new(1));
-        memory_quota.alloc_force(1);
-
-        let cancel_token = CancellationToken::new();
-        let send_cancel_token = cancel_token.clone();
-        let recv_cancel_token = cancel_token.clone();
-        let (_forward_exit_tx, forward_exit_rx) = tokio::sync::oneshot::channel::<()>();
-
-        Service::start_connection_watchdog(
-            pool.clone(),
-            last_flush_time,
-            "127.0.0.1:0".to_owned(),
-            ConnId::new(),
-            cancel_token,
-            forward_exit_rx,
-            memory_quota,
-        );
-
-        let timeout = Duration::from_secs(CDC_WATCHDOG_CHECK_INTERVAL_SECS + 3);
-        block_on_timeout(send_cancel_token.cancelled(), timeout)
-            .expect("watchdog should cancel send");
-        block_on_timeout(recv_cancel_token.cancelled(), timeout)
-            .expect("watchdog should cancel receive");
-        pool.stop();
     }
 
     #[test]

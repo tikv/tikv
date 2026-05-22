@@ -753,8 +753,8 @@ fn test_cdc_watchdog_idle_timeout() {
     let region = suite.cluster.get_region(b"");
 
     // Enable failpoints to control the watchdog behavior:
-    // - cdc_idle_deregister_threshold makes the threshold 5 seconds instead of 20
-    //   minutes.
+    // - cdc_idle_deregister_threshold makes the threshold 5 seconds and the
+    //   watchdog check interval 1 second instead of minutes.
     // - cdc_sleep_after_sink_flush makes the sink sleep after each flush.
     // - cdc_watchdog_ignore_memory_quota skips the memory-quota check so the test
     //   can deterministically trigger watchdog cancellation.
