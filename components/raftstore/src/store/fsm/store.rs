@@ -1855,11 +1855,13 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .background_worker
             .start("disk-check-worker", disk_check_runner);
 
+        let separated_raft_mount_path =
+            sys_util::path_in_diff_mount_point(&engines.kv.path(), &engines.raft.get_engine_path());
         let fail_fast_monitor = crate::store::FailFastMonitor::new(
             cfg.clone(),
             health_controller.clone(),
             PathBuf::from(engines.raft.get_engine_path().to_string()),
-            PathBuf::from(engines.kv.path().to_string()),
+            separated_raft_mount_path.then(|| PathBuf::from(engines.kv.path().to_string())),
             workers.fail_fast_probe_worker.clone(),
             workers.fail_fast_check_worker.clone(),
         );

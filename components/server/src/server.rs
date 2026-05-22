@@ -939,7 +939,6 @@ where
             self.core.background_worker.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
-
         cfg_controller.register(
             tikv::config::Module::Server,
             Box::new(ServerConfigManager::new(
@@ -1153,6 +1152,7 @@ where
             ));
             self.core.to_stop.push(ttl_checker);
         }
+
         // Start CDC.
         let cdc_endpoint = cdc::Endpoint::new(
             self.core.config.server.cluster_id,

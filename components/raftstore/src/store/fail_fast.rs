@@ -47,6 +47,7 @@ fn record_probe_duration(metric_label: &str, duration: Duration) {
 
 fn spawn_probe_loop(
     worker: &Worker,
+    cfg: Arc<VersionTrack<Config>>,
     stop: Arc<AtomicBool>,
     disk: &'static str,
     metric_label: &'static str,
@@ -60,6 +61,15 @@ fn spawn_probe_loop(
     // checker could be starved by the probe it supervises.
     worker.spawn_interval_task(PROBE_INTERVAL, move || {
         if stop.load(Ordering::Acquire) {
+            return;
+        }
+        // Avoid issuing any IO when fail-fast is disabled. Otherwise the default
+        // config (None) still creates background fsync traffic, and a stuck probe
+        // would also make graceful shutdown harder without an exit path.
+        let Some(timeout) = cfg.value().disk_hang_timeout else {
+            return;
+        };
+        if timeout.0.is_zero() {
             return;
         }
         if !probe.try_start_probe() {
@@ -111,7 +121,7 @@ fn spawn_probe_loop(
 pub struct FailFastMonitor {
     stop: Arc<AtomicBool>,
     raft_probe: ProbeRunner,
-    kv_probe: ProbeRunner,
+    kv_probe: Option<ProbeRunner>,
 }
 
 impl FailFastMonitor {
@@ -119,28 +129,34 @@ impl FailFastMonitor {
         cfg: Arc<VersionTrack<Config>>,
         health_controller: HealthController,
         raft_probe_dir: PathBuf,
-        kv_probe_dir: PathBuf,
+        kv_probe_dir: Option<PathBuf>,
         probe_worker: Worker,
         check_worker: Worker,
     ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let raft_probe =
             ProbeRunner::new(raft_probe_dir.join(RAFT_PROBE_FILENAME), RAFT_PROBE_PAYLOAD);
-        let kv_probe = ProbeRunner::new(kv_probe_dir.join(KV_PROBE_FILENAME), KV_PROBE_PAYLOAD);
+        let kv_probe =
+            kv_probe_dir.map(|dir| ProbeRunner::new(dir.join(KV_PROBE_FILENAME), KV_PROBE_PAYLOAD));
+
         spawn_probe_loop(
             &probe_worker,
+            cfg.clone(),
             stop.clone(),
             "raft",
             "raft-disk-probe",
             raft_probe.clone(),
         );
-        spawn_probe_loop(
-            &probe_worker,
-            stop.clone(),
-            "kv",
-            "kv-disk-probe",
-            kv_probe.clone(),
-        );
+        if let Some(kv_probe) = kv_probe.as_ref() {
+            spawn_probe_loop(
+                &probe_worker,
+                cfg.clone(),
+                stop.clone(),
+                "kv",
+                "kv-disk-probe",
+                kv_probe.clone(),
+            );
+        }
 
         let stop_for_check = stop.clone();
         let raft_probe_for_check = raft_probe.clone();
@@ -164,14 +180,16 @@ impl FailFastMonitor {
                     );
                 }
             }
-            if let Some(elapsed) = kv_probe_for_check.current_probe_elapsed() {
-                if elapsed >= ANOMALY_THRESHOLD {
-                    warn!(
-                        "fail-fast probe: disk still not responsive after elapsed";
-                        "disk" => "kv",
-                        "path" => %kv_probe_for_check.path().display(),
-                        "elapsed" => ?elapsed,
-                    );
+            if let Some(kv_probe_for_check) = kv_probe_for_check.as_ref() {
+                if let Some(elapsed) = kv_probe_for_check.current_probe_elapsed() {
+                    if elapsed >= ANOMALY_THRESHOLD {
+                        warn!(
+                            "fail-fast probe: disk still not responsive after elapsed";
+                            "disk" => "kv",
+                            "path" => %kv_probe_for_check.path().display(),
+                            "elapsed" => ?elapsed,
+                        );
+                    }
                 }
             }
 
@@ -192,8 +210,11 @@ impl FailFastMonitor {
             }
 
             let raft_elapsed = raft_probe_for_check.current_probe_elapsed();
-            let kv_elapsed = kv_probe_for_check.current_probe_elapsed();
-            if raft_elapsed.is_some_and(|d| d >= timeout.0) || kv_elapsed.is_some_and(|d| d >= timeout.0)
+            let kv_elapsed = kv_probe_for_check
+                .as_ref()
+                .and_then(|probe| probe.current_probe_elapsed());
+            if raft_elapsed.is_some_and(|d| d >= timeout.0)
+                || kv_elapsed.is_some_and(|d| d >= timeout.0)
             {
                 // We intentionally hard-exit here. Continuing to serve on a
                 // hung disk can cause prolonged unavailability and data loss
@@ -224,7 +245,8 @@ impl FailFastMonitor {
     }
 
     fn cleanup_probe_file(&self) {
-        for path in [self.raft_probe.path(), self.kv_probe.path()] {
+        let kv_path = self.kv_probe.as_ref().map(|probe| probe.path());
+        for path in std::iter::once(self.raft_probe.path()).chain(kv_path.into_iter()) {
             if let Err(e) = fs::remove_file(path) {
                 if e.kind() != std::io::ErrorKind::NotFound {
                     warn!("failed to remove fail-fast probe file"; "err" => ?e, "path" => %path.display());
