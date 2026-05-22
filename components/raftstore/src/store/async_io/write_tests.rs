@@ -1,6 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::mpsc, time::Duration};
+use std::{
+    sync::{Arc, atomic::AtomicU64, mpsc},
+    time::Duration,
+};
 
 use collections::HashSet;
 use crossbeam::channel::{Receiver, Sender, unbounded};
@@ -218,6 +221,7 @@ impl TestWorker {
                 notifier,
                 trans,
                 &Arc::new(VersionTrack::new(cfg.clone())),
+                Arc::new(AtomicU64::new(0)),
             ),
             msg_rx,
             notify_rx,
@@ -255,6 +259,7 @@ impl TestWriters {
                 &notifier,
                 &trans,
                 &Arc::new(VersionTrack::new(cfg.clone())),
+                Arc::new(AtomicU64::new(0)),
             )
             .unwrap();
         Self {
@@ -469,6 +474,7 @@ fn test_adaptive_config_rejects_zero_threshold() {
         notifier,
         trans,
         &cfg_track,
+        Arc::new(AtomicU64::new(0)),
     );
     assert_eq!(worker.adaptive_high_qps_threshold, 40_000);
 

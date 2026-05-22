@@ -36,12 +36,16 @@ pub(crate) fn write_sync_once(path: &Path, payload: &[u8]) -> std::io::Result<Du
 #[derive(Debug)]
 struct ProbeState {
     current_probe_started_at: Option<Instant>,
+    last_success_at: Option<Instant>,
+    failure_count_since_last_success: u64,
 }
 
 impl ProbeState {
     fn new() -> Self {
         Self {
             current_probe_started_at: None,
+            last_success_at: None,
+            failure_count_since_last_success: 0,
         }
     }
 
@@ -59,10 +63,13 @@ impl ProbeState {
 
     fn finish_probe_success(&mut self) {
         self.current_probe_started_at = None;
+        self.last_success_at = Some(Instant::now());
+        self.failure_count_since_last_success = 0;
     }
 
     fn finish_probe_failure(&mut self) {
         self.current_probe_started_at = None;
+        self.failure_count_since_last_success += 1;
     }
 
     // Tracks whether a probe is in flight and how long it has been blocked.
@@ -70,6 +77,14 @@ impl ProbeState {
     fn current_probe_elapsed(&self) -> Option<Duration> {
         self.current_probe_started_at
             .map(|start| start.saturating_elapsed())
+    }
+
+    fn time_since_last_success(&self) -> Option<Duration> {
+        self.last_success_at.map(|t| t.saturating_elapsed())
+    }
+
+    fn failure_count_since_last_success(&self) -> u64 {
+        self.failure_count_since_last_success
     }
 }
 
@@ -112,6 +127,14 @@ impl ProbeRunner {
     pub(crate) fn current_probe_elapsed(&self) -> Option<Duration> {
         self.state.lock().current_probe_elapsed()
     }
+
+    pub(crate) fn time_since_last_success(&self) -> Option<Duration> {
+        self.state.lock().time_since_last_success()
+    }
+
+    pub(crate) fn failure_count_since_last_success(&self) -> u64 {
+        self.state.lock().failure_count_since_last_success()
+    }
 }
 
 #[cfg(test)]
@@ -146,5 +169,12 @@ mod tests {
         assert!(runner.current_probe_elapsed().is_some());
         runner.finish_probe_success();
         assert!(runner.current_probe_elapsed().is_none());
+        assert!(runner.time_since_last_success().is_some());
+        assert_eq!(runner.failure_count_since_last_success(), 0);
+
+        assert!(runner.try_start_probe());
+        runner.finish_probe_failure();
+        assert!(runner.time_since_last_success().is_some());
+        assert_eq!(runner.failure_count_since_last_success(), 1);
     }
 }

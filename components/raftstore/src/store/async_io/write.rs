@@ -10,7 +10,10 @@
 use std::{
     collections::VecDeque,
     fmt, mem,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     thread::{self, JoinHandle},
 };
 
@@ -779,6 +782,7 @@ where
     message_metrics: RaftSendMessageMetrics,
     perf_context: ER::PerfContext,
     pending_latency_inspect: Vec<(Instant, Vec<LatencyInspector>)>,
+    last_raft_append_success_at_secs: Arc<AtomicU64>,
 
     // Adaptive batching related fields
     adaptive_batch_enabled: bool,
@@ -811,6 +815,7 @@ where
         notifier: N,
         trans: T,
         cfg: &Arc<VersionTrack<Config>>,
+        last_raft_append_success_at_secs: Arc<AtomicU64>,
     ) -> Self {
         let batch = WriteTaskBatch::new(
             raft_engine.log_batch(RAFT_WB_DEFAULT_SIZE),
@@ -835,6 +840,7 @@ where
             message_metrics: RaftSendMessageMetrics::default(),
             perf_context,
             pending_latency_inspect: vec![],
+            last_raft_append_success_at_secs,
 
             // Adaptive batching initialization
             adaptive_batch_enabled: cfg.value().adaptive_batch_enabled,
@@ -1171,6 +1177,12 @@ where
             self.perf_context.report_metrics(&trackers);
             write_raft_time = duration_to_sec(now.saturating_elapsed());
             STORE_WRITE_RAFTDB_DURATION_HISTOGRAM.observe(write_raft_time);
+            self.last_raft_append_success_at_secs.store(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |t| t.as_secs()),
+                Ordering::Relaxed,
+            );
             debug!("raft log is persisted";
                 "req_info" => TrackerTokenArray::new(trackers.as_slice()));
         }
@@ -1309,6 +1321,7 @@ where
     pub transfer: T,
     pub notifier: N,
     pub cfg: Arc<VersionTrack<Config>>,
+    pub last_raft_append_success_at_secs: Arc<AtomicU64>,
 }
 
 #[derive(Clone)]
@@ -1351,6 +1364,7 @@ where
         notifier: &N,
         trans: &T,
         cfg: &Arc<VersionTrack<Config>>,
+        last_raft_append_success_at_secs: Arc<AtomicU64>,
     ) -> Result<()> {
         let pool_size = cfg.value().store_io_pool_size;
         if pool_size > 0 {
@@ -1363,6 +1377,7 @@ where
                     kv_engine,
                     transfer: trans.clone(),
                     cfg: cfg.clone(),
+                    last_raft_append_success_at_secs,
                 },
             )?;
         }
@@ -1430,6 +1445,7 @@ where
                         writer_meta.notifier.clone(),
                         writer_meta.transfer.clone(),
                         &writer_meta.cfg,
+                        writer_meta.last_raft_append_success_at_secs.clone(),
                     );
                     info!("starting store writer {}", i);
                     let t =
