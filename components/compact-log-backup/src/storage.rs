@@ -95,6 +95,10 @@ impl MetaFile {
             .into_iter()
             .flat_map(|g| g.files.into_iter())
     }
+
+    pub fn into_physical_logs(self) -> impl Iterator<Item = PhysicalLogFile> {
+        self.physical_files.into_iter()
+    }
 }
 
 /// The in-memory presentation of the message [`brpb::DataFileGroup`].
