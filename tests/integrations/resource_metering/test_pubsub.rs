@@ -12,6 +12,7 @@ pub fn test_basic() {
     let mut test_suite = TestSuite::new(resource_metering::Config {
         report_receiver_interval: ReadableDuration::secs(3),
         precision: ReadableDuration::secs(1),
+        enable_network_io_collection: false,
         ..Default::default()
     });
 
@@ -34,6 +35,7 @@ pub fn test_multiple_subscribers() {
     let mut test_suite = TestSuite::new(resource_metering::Config {
         report_receiver_interval: ReadableDuration::secs(3),
         precision: ReadableDuration::secs(1),
+        enable_network_io_collection: false,
         ..Default::default()
     });
 
