@@ -146,7 +146,7 @@ async fn load_compressed(
     let item = pin!(Cursor::new(&mut content));
     let mut decompress = decompress(compression, item)?;
     let n = futures::io::copy(source, &mut decompress).await?;
-    decompress.flush().await?;
+    decompress.close().await?;
     drop(decompress);
     Ok((content, n))
 }
