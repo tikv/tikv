@@ -113,6 +113,7 @@ fn new_cluster(port: u16, env: Arc<Environment>) -> (Cluster<ServerCluster>, Tik
         cluster.cfg.resource_metering.receiver_address = format!("127.0.0.1:{}", port);
         cluster.cfg.resource_metering.precision = ReadableDuration::millis(100);
         cluster.cfg.resource_metering.report_receiver_interval = ReadableDuration::millis(400);
+        cluster.cfg.resource_metering.enable_network_io_collection = false;
     });
     let channel =
         ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
@@ -155,9 +156,13 @@ fn test_read_keys_coprocessor() {
     let mut cfg = resource_metering::Config::default();
     cfg.precision = ReadableDuration::millis(100);
     cfg.report_receiver_interval = ReadableDuration::millis(400);
+    cfg.enable_network_io_collection = false;
 
     let (_, collector_reg_handle, resource_tag_factory, recorder_worker) =
-        resource_metering::init_recorder(cfg.precision.as_millis());
+        resource_metering::init_recorder(
+            cfg.precision.as_millis(),
+            cfg.enable_network_io_collection,
+        );
     let (_, data_sink_reg_handle, reporter_worker) =
         resource_metering::init_reporter(cfg, collector_reg_handle);
 

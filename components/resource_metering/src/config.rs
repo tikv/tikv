@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::error::Error;
+use std::{error::Error, sync::atomic::AtomicBool};
 
 use online_config::{ConfigChange, OnlineConfig};
 use serde_derive::{Deserialize, Serialize};
@@ -15,6 +15,10 @@ const MIN_PRECISION: ReadableDuration = ReadableDuration::millis(100);
 const MAX_PRECISION: ReadableDuration = ReadableDuration::hours(1);
 const MAX_MAX_RESOURCE_GROUPS: usize = 5_000;
 const MIN_REPORT_RECEIVER_INTERVAL: ReadableDuration = ReadableDuration::millis(500);
+const DEFAULT_ENABLE_NETWORK_IO_COLLECTION: bool = true;
+
+pub static ENABLE_NETWORK_IO_COLLECTION: AtomicBool =
+    AtomicBool::new(DEFAULT_ENABLE_NETWORK_IO_COLLECTION);
 
 /// Public configuration of resource metering module.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
@@ -34,6 +38,9 @@ pub struct Config {
 
     /// Sampling window. (only for cpu module)
     pub precision: ReadableDuration,
+
+    /// Whether to collect network traffic and logical io
+    pub enable_network_io_collection: bool,
 }
 
 impl Default for Config {
@@ -43,6 +50,7 @@ impl Default for Config {
             report_receiver_interval: ReadableDuration::minutes(1),
             max_resource_groups: 100,
             precision: ReadableDuration::secs(1),
+            enable_network_io_collection: DEFAULT_ENABLE_NETWORK_IO_COLLECTION,
         }
     }
 }
@@ -133,12 +141,14 @@ mod tests {
     #[test]
     fn test_config_validate() {
         let cfg = Config::default();
+        assert!(cfg.enable_network_io_collection);
         cfg.validate().unwrap(); // Empty address is allowed.
         let cfg = Config {
             receiver_address: "127.0.0.1:6666".to_string(),
             report_receiver_interval: ReadableDuration::minutes(1),
             max_resource_groups: 2000,
             precision: ReadableDuration::secs(1),
+            enable_network_io_collection: false,
         };
         cfg.validate().unwrap();
         let cfg = Config {
@@ -146,6 +156,7 @@ mod tests {
             report_receiver_interval: ReadableDuration::days(999), // invalid
             max_resource_groups: 2000,
             precision: ReadableDuration::secs(1),
+            enable_network_io_collection: false,
         };
         cfg.validate().unwrap_err();
         let cfg = Config {
@@ -153,6 +164,7 @@ mod tests {
             report_receiver_interval: ReadableDuration::minutes(1),
             max_resource_groups: usize::MAX, // invalid
             precision: ReadableDuration::secs(1),
+            enable_network_io_collection: false,
         };
         cfg.validate().unwrap_err();
         let cfg = Config {
@@ -160,6 +172,7 @@ mod tests {
             report_receiver_interval: ReadableDuration::minutes(1),
             max_resource_groups: 2000,
             precision: ReadableDuration::days(999), // invalid
+            enable_network_io_collection: false,
         };
         cfg.validate().unwrap_err();
     }

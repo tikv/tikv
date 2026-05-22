@@ -16,12 +16,13 @@ use std::{
 };
 
 pub use collector::Collector;
-pub use config::{Config, ConfigManager};
+pub use config::{Config, ConfigManager, ENABLE_NETWORK_IO_COLLECTION};
 pub use model::*;
 pub use recorder::{
     CollectorGuard, CollectorId, CollectorRegHandle,
     ConfigChangeNotifier as RecorderConfigChangeNotifier, CpuRecorder, Recorder, RecorderBuilder,
-    SummaryRecorder, init_recorder, record_read_keys, record_write_keys,
+    SummaryRecorder, init_recorder, record_logical_read_bytes, record_logical_write_bytes,
+    record_network_in_bytes, record_network_out_bytes, record_read_keys, record_write_keys,
 };
 use recorder::{LocalStorage, LocalStorageRef, STORAGE};
 pub use reporter::{
@@ -146,7 +147,10 @@ impl Drop for Guard {
                 return;
             }
             let cur_record = ls.summary_cur_record.take_and_reset();
-            if cur_record.read_keys.load(Relaxed) == 0 && cur_record.write_keys.load(Relaxed) == 0 {
+            if cur_record.read_keys.load(Relaxed) == 0
+                && cur_record.logical_read_bytes.load(Relaxed) == 0
+                && cur_record.logical_write_bytes.load(Relaxed) == 0
+            {
                 return;
             }
             let mut records = ls.summary_records.lock().unwrap();
