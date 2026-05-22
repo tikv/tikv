@@ -2082,14 +2082,14 @@ macro_rules! test_func {
         req.set_context($ctx.clone());
 
         // Not setting forwarding should lead to store not match.
-        let resp = paste::paste! {
+        let resp = pastey::paste! {
             $client.[<$func _opt>](&req, CallOption::default().timeout(Duration::from_secs(3))).unwrap()
         };
         let err = resp.get_region_error();
         assert!(err.has_store_not_match() || err.has_not_leader(), "{:?}", resp);
 
         // Proxy should redirect the request to the correct store.
-        let resp = paste::paste! {
+        let resp = pastey::paste! {
             $client.[<$func _opt>](&req, $call_opt.clone()).unwrap()
         };
         let err = resp.get_region_error();

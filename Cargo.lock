@@ -5384,6 +5384,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c5d65c4d95931acda4498f675e332fcbdc9a06705cd07086c510e9b6009cd1c1"
 
 [[package]]
+name = "pastey"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b867cad97c0791bbd3aaa6472142568c6c9e8f71937e98379f584cfb0cf35bec"
+
+[[package]]
 name = "pd_client"
 version = "0.1.0"
 dependencies = [
@@ -8220,7 +8226,7 @@ dependencies = [
  "log_wrappers",
  "more-asserts",
  "online_config",
- "paste",
+ "pastey",
  "pd_client",
  "perfcnt",
  "profiler",
@@ -8559,7 +8565,7 @@ dependencies = [
  "openssl",
  "panic_hook",
  "parking_lot 0.12.1",
- "paste",
+ "pastey",
  "pd_client",
  "pin-project",
  "pnet_datalink",
@@ -9271,7 +9277,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 0.1.10",
+ "cfg-if 1.0.0",
  "static_assertions",
 ]
 

@@ -182,7 +182,7 @@ macro_rules! forward_unary {
         let addr = $crate::server::get_target_address(&$ctx);
         if !addr.is_empty() {
             $ctx.spawn($proxy.call_on(addr, move |client| {
-                let f = paste::paste! {
+                let f = pastey::paste! {
                     client.[<$func _async>](&$req).unwrap()
                 };
                 client.spawn(async move {
