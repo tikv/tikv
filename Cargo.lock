@@ -1513,6 +1513,7 @@ name = "compact-log-backup"
 version = "0.1.0"
 dependencies = [
  "async-compression",
+ "backup-stream",
  "bytes",
  "chrono",
  "cloud",

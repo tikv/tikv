@@ -44,9 +44,6 @@ pub const DEFAULT_COMPACTION_OUT_PREFIX: &str = "v1/compaction_out";
 pub const MIGRATION_PREFIX: &str = "v1/migrations";
 pub const LOCK_PREFIX: &str = "v1/LOCK";
 pub const MIGRATION_APPEND_LOCK: &str = "v1/APPEND_LOCK";
-const BACKUP_META_MIN_BEGIN_TS_PREFIX: char = 'd';
-const BACKUP_META_MIN_TS_PREFIX: char = 'l';
-const BACKUP_META_MAX_TS_PREFIX: char = 'u';
 
 /// The in-memory presentation of the message [`brpb::Metadata`].
 #[derive(Debug, PartialEq, Eq)]
@@ -196,14 +193,16 @@ pub struct LogFileId {
 /// Parse the store ID from a backup-stream metadata path.
 ///
 /// Format:
-/// `v1/backupmeta/{flush_ts}{store_id}-d{min_begin_ts}l{min_ts}u{max_ts}.meta`
+/// `v1/backupmeta/
+/// {flush_ts}{store_id}-d{min_begin_ts}l{min_ts}u{max_ts}p{flags}.meta`
+#[cfg(test)]
 fn parse_store_id_from_backupmeta_path(path: &str) -> Option<u64> {
-    parse_backupmeta_path(path).map(|v| v.store_id)
+    parse_backupmeta_path(path).ok().map(|v| v.store_id)
 }
 
 #[cfg(test)]
 fn parse_approx_ts_range_from_backupmeta_path(path: &str) -> Option<(u64, u64)> {
-    let parsed = parse_backupmeta_path(path)?;
+    let parsed = parse_backupmeta_path(path).ok()?;
     let default_min_ts = parsed.min_begin_ts_in_default_cf.min(parsed.min_ts);
     Some((default_min_ts, parsed.max_ts))
 }
@@ -213,12 +212,9 @@ fn intersects_ts_window(min_ts: u64, max_ts: u64, from_ts: u64, until_ts: u64) -
 }
 
 fn store_id_for_sharding_from_path(path: &str) -> Result<u64> {
-    parse_store_id_from_backupmeta_path(path).ok_or_else(|| {
-        Error::from(ErrorKind::Other(format!(
-            "cannot parse store id from backup metadata path: {}",
-            path
-        )))
-    })
+    parse_backupmeta_path(path)
+        .map(|v| v.store_id)
+        .map_err(Error::from)
 }
 
 fn validate_store_id_for_sharding(
@@ -243,75 +239,33 @@ struct ParsedBackupMetaName {
     max_ts: u64,
 }
 
-fn parse_backupmeta_path(path: &str) -> Option<ParsedBackupMetaName> {
-    let stem = Path::new(path).file_stem()?.to_str()?;
-    parse_backupmeta_filename(stem)
-}
-
-fn parse_backupmeta_filename(name: &str) -> Option<ParsedBackupMetaName> {
-    fn parse_hex_u64(part: &str) -> Option<u64> {
-        if part.len() != 16 {
-            return None;
-        }
-        u64::from_str_radix(part, 16).ok()
-    }
-
-    if !name.bytes().all(|c| c.is_ascii()) {
-        return None;
-    }
-
-    let (prefix, suffix) = name.split_once('-')?;
-    if prefix.len() != 32 {
-        return None;
-    }
-    if !prefix.bytes().all(|c| c.is_ascii_hexdigit()) {
-        return None;
-    }
-
-    const TAG_VALUE_LEN: usize = 17;
-    let mut seen_tags = BTreeSet::new();
-    let mut min_begin_ts_in_default_cf = None;
-    let mut min_ts = None;
-    let mut max_ts = None;
-    let suffix_bytes = suffix.as_bytes();
-    let mut pos = 0;
-    while pos < suffix_bytes.len() {
-        let remain = suffix_bytes.len() - pos;
-        if remain < TAG_VALUE_LEN {
-            return None;
-        }
-        let tag = suffix_bytes[pos] as char;
-        if !tag.is_ascii_alphanumeric() {
-            return None;
-        }
-        let hex = &suffix[pos + 1..pos + TAG_VALUE_LEN];
-        let ts = parse_hex_u64(hex)?;
-        match tag {
-            BACKUP_META_MIN_BEGIN_TS_PREFIX => min_begin_ts_in_default_cf = Some(ts),
-            BACKUP_META_MIN_TS_PREFIX => min_ts = Some(ts),
-            BACKUP_META_MAX_TS_PREFIX => max_ts = Some(ts),
-            _ => {}
-        }
-        if !seen_tags.insert(tag) {
-            return None;
-        }
-        pos += TAG_VALUE_LEN;
-    }
-    for tag in [
-        BACKUP_META_MIN_BEGIN_TS_PREFIX,
-        BACKUP_META_MIN_TS_PREFIX,
-        BACKUP_META_MAX_TS_PREFIX,
-    ] {
-        if !seen_tags.contains(&tag) {
-            return None;
-        }
-    }
-
-    Some(ParsedBackupMetaName {
-        store_id: parse_hex_u64(&prefix[16..])?,
-        min_begin_ts_in_default_cf: min_begin_ts_in_default_cf?,
-        min_ts: min_ts?,
-        max_ts: max_ts?,
+fn parse_backupmeta_path(path: &str) -> std::io::Result<ParsedBackupMetaName> {
+    let stem = Path::new(path)
+        .file_stem()
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("backup metadata path has no file stem: {path}"),
+            )
+        })?
+        .to_str()
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("backup metadata path is not valid utf8: {path}"),
+            )
+        })?;
+    let parsed = backup_stream::utils::parse_backupmeta_filename(stem).map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("cannot parse backup metadata path {path}: {err}"),
+        )
+    })?;
+    Ok(ParsedBackupMetaName {
+        store_id: parsed.store_id,
+        min_begin_ts_in_default_cf: parsed.min_begin_ts,
+        min_ts: parsed.min_ts,
+        max_ts: parsed.max_ts,
     })
 }
 
@@ -621,12 +575,7 @@ impl<'a> StreamMetaStorage<'a> {
                 continue;
             }
 
-            let parsed = parse_backupmeta_path(&item.key).ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("cannot parse backup metadata path: {}", item.key),
-                )
-            })?;
+            let parsed = parse_backupmeta_path(&item.key)?;
             if intersects_ts_window(parsed.min_ts, parsed.max_ts, ext.from_ts, ext.until_ts)
                 && parsed.min_begin_ts_in_default_cf > 0
             {
