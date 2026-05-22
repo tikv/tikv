@@ -1184,7 +1184,7 @@ where
             // raw clock. Fail-fast reads this timestamp later to answer a very
             // specific question: "even if the dedicated disk probe is slow, are
             // real raft appends still succeeding recently?"
-            self.last_raft_append_success_at_millis.store(
+            self.last_raft_append_success_at_millis.fetch_max(
                 timespec_to_ns(monotonic_raw_now()) / 1_000_000,
                 Ordering::Relaxed,
             );

@@ -47,6 +47,12 @@ fn record_probe_duration(disk: &str, outcome: &str, duration: Duration) {
         .observe(duration.as_secs_f64());
 }
 
+fn fail_fast_timeout(cfg: &Config) -> Option<Duration> {
+    // `0s` is treated as explicitly disabled.
+    cfg.disk_hang_timeout
+        .and_then(|timeout| (!timeout.0.is_zero()).then_some(timeout.0))
+}
+
 fn run_probe(stop: &AtomicBool, disk: &'static str, probe: &ProbeRunner) -> bool {
     let started = probe.try_start_probe();
     debug_assert!(started, "fail-fast probe must not overlap");
@@ -110,14 +116,10 @@ fn spawn_probe_thread(
             while !stop.load(Ordering::Acquire) {
                 // Avoid issuing any IO when fail-fast is disabled. Otherwise the
                 // default config (None) still creates background fsync traffic.
-                let Some(timeout) = cfg.value().disk_hang_timeout else {
+                let Some(_) = fail_fast_timeout(&cfg.value()) else {
                     std::thread::sleep(PROBE_INTERVAL);
                     continue;
                 };
-                if timeout.0.is_zero() {
-                    std::thread::sleep(PROBE_INTERVAL);
-                    continue;
-                }
 
                 if !run_probe(&stop, "raft", &raft_probe) {
                     return;
@@ -197,13 +199,9 @@ impl FailFastMonitor {
                 return;
             }
 
-            let timeout = cfg.value().disk_hang_timeout;
-            let Some(timeout) = timeout else {
+            let Some(timeout) = fail_fast_timeout(&cfg.value()) else {
                 return;
             };
-            if timeout.0.is_zero() {
-                return;
-            }
 
             log_stuck_probe("raft", &raft_probe_for_check);
             if let Some(probe) = kv_probe_for_check.as_ref() {
@@ -219,17 +217,20 @@ impl FailFastMonitor {
             // progress within the same timeout window.
             let raft_last_append_success_elapsed =
                 last_raft_append_success_elapsed(&last_raft_append_success_at_millis);
-            let raft_recent_append_progress = raft_last_append_success_elapsed
-                .is_some_and(|elapsed| elapsed < timeout.0);
+            let raft_recent_append_progress =
+                raft_last_append_success_elapsed.is_some_and(|elapsed| elapsed < timeout);
             // Fail-fast is armed by either:
             // 1. the current probe staying in flight for >= timeout, or
             // 2. repeated probe failures for >= timeout after a prior success.
-            let raft_should_fail_fast =
-                should_fail_fast_for_raft_probe(&raft_probe_for_check, timeout.0, raft_recent_append_progress);
-            let kv_should_fail_fast = kv_elapsed.is_some_and(|elapsed| elapsed >= timeout.0)
+            let raft_should_fail_fast = should_fail_fast_for_raft_probe(
+                &raft_probe_for_check,
+                timeout,
+                raft_recent_append_progress,
+            );
+            let kv_should_fail_fast = kv_elapsed.is_some_and(|elapsed| elapsed >= timeout)
                 || kv_probe_for_check
                     .as_ref()
-                    .is_some_and(|probe| should_fail_fast_on_repeated_failures(probe, timeout.0));
+                    .is_some_and(|probe| should_fail_fast_on_repeated_failures(probe, timeout));
             if !raft_should_fail_fast && !kv_should_fail_fast {
                 return;
             }
@@ -240,7 +241,7 @@ impl FailFastMonitor {
             // to false to stop new traffic, then exit.
             error!(
                 "fail-fast: disk probe timed out, shutting down to avoid serving on an unhealthy disk";
-                "timeout" => ?timeout.0,
+                "timeout" => ?timeout,
                 "raft_current_probe_elapsed" => ?raft_elapsed,
                 "kv_current_probe_elapsed" => ?kv_elapsed,
                 "raft_time_since_last_success" => ?raft_probe_for_check.time_since_last_success(),
@@ -255,7 +256,6 @@ impl FailFastMonitor {
                 "raft_last_append_success_elapsed" => ?raft_last_append_success_elapsed,
             );
             health_controller.set_is_serving(false);
-            eprintln!("disk hung for configured timeout");
             logger::exit_process_gracefully(1);
         });
 
@@ -348,5 +348,38 @@ mod tests {
         let duration = kv_probe.probe_once().unwrap();
         assert!(duration > Duration::ZERO);
         assert!(kv_probe.path().exists());
+    }
+
+    #[test]
+    fn test_fail_fast_timeout_none_disables() {
+        let mut cfg = Config::default();
+        cfg.disk_hang_timeout = None;
+        assert_eq!(fail_fast_timeout(&cfg), None);
+    }
+
+    #[test]
+    fn test_should_fail_fast_for_raft_probe_with_recent_progress_veto() {
+        let dir = tempdir().unwrap();
+        let probe = ProbeRunner::new(dir.path().join(RAFT_PROBE_FILENAME), RAFT_PROBE_PAYLOAD);
+        let timeout = Duration::from_millis(10);
+
+        assert!(probe.try_start_probe());
+        std::thread::sleep(timeout + Duration::from_millis(5));
+        assert!(!should_fail_fast_for_raft_probe(&probe, timeout, true));
+        assert!(should_fail_fast_for_raft_probe(&probe, timeout, false));
+    }
+
+    #[test]
+    fn test_should_fail_fast_on_repeated_failures_after_prior_success() {
+        let dir = tempdir().unwrap();
+        let probe = ProbeRunner::new(dir.path().join(RAFT_PROBE_FILENAME), RAFT_PROBE_PAYLOAD);
+        let timeout = Duration::from_millis(10);
+
+        assert!(!should_fail_fast_on_repeated_failures(&probe, timeout));
+        probe.finish_probe_success();
+        assert!(probe.try_start_probe());
+        probe.finish_probe_failure();
+        std::thread::sleep(timeout + Duration::from_millis(5));
+        assert!(should_fail_fast_on_repeated_failures(&probe, timeout));
     }
 }

@@ -22,7 +22,7 @@ use time::Duration as TimeDuration;
 use super::worker::{RaftStoreBatchComponent, RefreshConfigTask};
 use crate::{Result, coprocessor::config::RAFTSTORE_V2_SPLIT_SIZE};
 
-const DISK_HANG_TIMEOUT_MIN: ReadableDuration = ReadableDuration::secs(15);
+const DISK_HANG_TIMEOUT_MIN: ReadableDuration = ReadableDuration::secs(30);
 
 lazy_static! {
     pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec!(
@@ -109,7 +109,9 @@ pub struct Config {
     /// If set, TiKV exits when a disk probe cannot complete for this long.
     ///
     /// This applies to both raft and kv disks (depending on whether they are
-    /// deployed on different mount points).
+    /// deployed on different mount points). The default is 1 minute. Set it
+    /// to `0s` to disable fail-fast disk hang detection explicitly. Any
+    /// non-zero value must be at least 30 seconds.
     pub disk_hang_timeout: Option<ReadableDuration>,
     #[doc(hidden)]
     #[online_config(hidden)]
@@ -886,7 +888,7 @@ impl Config {
         }
 
         if let Some(timeout) = self.disk_hang_timeout {
-            if timeout < DISK_HANG_TIMEOUT_MIN {
+            if !timeout.is_zero() && timeout < DISK_HANG_TIMEOUT_MIN {
                 return Err(box_err!(
                     "raftstore.disk-hang-timeout must be at least {} ms",
                     DISK_HANG_TIMEOUT_MIN.as_millis()
@@ -1593,13 +1595,19 @@ mod tests {
             .unwrap_err();
 
         cfg = Config::new();
-        cfg.disk_hang_timeout = Some(ReadableDuration::secs(14));
+        cfg.disk_hang_timeout = Some(ReadableDuration::secs(0));
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap();
+
+        cfg = Config::new();
+        cfg.disk_hang_timeout = Some(ReadableDuration::secs(29));
         cfg.optimize_for(false);
         cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
 
         cfg = Config::new();
-        cfg.disk_hang_timeout = Some(ReadableDuration::secs(15));
+        cfg.disk_hang_timeout = Some(ReadableDuration::secs(30));
         cfg.optimize_for(false);
         cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap();
