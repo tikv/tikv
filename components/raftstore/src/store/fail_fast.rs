@@ -134,20 +134,33 @@ fn spawn_probe_thread(
     Ok(())
 }
 
-/// A best-effort "fail-fast" monitor for cases where TiKV can become
-/// effectively unavailable without crashing.
+/// Detects one class of TiKV "zombie" failure and chooses to hard-exit.
 ///
-/// In some failure modes, TiKV may remain alive and even keep Raft leadership,
-/// but it is no longer able to make forward progress or provide service (a
-/// "zombie" state). In such cases, keeping the process running can prolong
-/// unavailability and hide the real failure from external orchestration.
+/// The target failure mode here is: the process is still alive and may still
+/// hold Raft leadership, but it is no longer truly serviceable because disk IO
+/// on the critical path has stopped making progress. In that state, staying
+/// alive can prolong unavailability and hide the failure from orchestration.
 ///
-/// This monitor chooses to fail fast (exit the process) when it detects such a
-/// condition. Today it covers disk hang detection via a blocking `write +
-/// sync_all` probe on both raft and kv disks. The checker runs on an
-/// independent worker thread so it can still trigger even if the probe thread
-/// is stuck. The scope is expected to expand to cover more zombie-like failure
-/// modes in the future.
+/// The monitor has two parts:
+/// 1. A dedicated probe thread periodically runs a blocking `write + sync_all`
+///    probe against the raft disk, and against the kv disk as well when raft
+///    and kv are deployed on different mount points.
+/// 2. A separate checker worker periodically inspects the probe state, so a
+///    hung blocking probe cannot prevent fail-fast from being triggered.
+///
+/// The checker treats a disk as hung under either of these rules:
+/// 1. The current probe is still in flight and its elapsed time has reached
+///    `raftstore.disk-hang-timeout`.
+/// 2. There is no current in-flight probe, but probes have kept failing for at
+///    least `raftstore.disk-hang-timeout` after a prior successful probe.
+///
+/// Raft has one extra anti-false-positive guard: even if the dedicated raft
+/// probe is slow, the checker will not fail fast on that signal alone if real
+/// raft-log appends have still succeeded within the same timeout window.
+///
+/// Once any disk meets the fail-fast rule, TiKV first flips `is_serving=false`
+/// and then exits gracefully. The scope is intentionally narrow today: disk
+/// hang is the first zombie-failure scenario covered by this monitor.
 pub struct FailFastMonitor {
     stop: Arc<AtomicBool>,
     raft_probe: ProbeRunner,

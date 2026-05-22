@@ -22,7 +22,7 @@ use time::Duration as TimeDuration;
 use super::worker::{RaftStoreBatchComponent, RefreshConfigTask};
 use crate::{Result, coprocessor::config::RAFTSTORE_V2_SPLIT_SIZE};
 
-const DISK_HANG_TIMEOUT_MIN: ReadableDuration = ReadableDuration::secs(1);
+const DISK_HANG_TIMEOUT_MIN: ReadableDuration = ReadableDuration::secs(15);
 
 lazy_static! {
     pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec!(
@@ -1593,7 +1593,13 @@ mod tests {
             .unwrap_err();
 
         cfg = Config::new();
-        cfg.disk_hang_timeout = Some(ReadableDuration::secs(1));
+        cfg.disk_hang_timeout = Some(ReadableDuration::secs(14));
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap_err();
+
+        cfg = Config::new();
+        cfg.disk_hang_timeout = Some(ReadableDuration::secs(15));
         cfg.optimize_for(false);
         cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap();
