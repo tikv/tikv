@@ -42,6 +42,10 @@ pub const METADATA_PREFIX: &str = "v1/backupmeta";
 pub const DEFAULT_COMPACTION_OUT_PREFIX: &str = "v1/compaction_out";
 pub const MIGRATION_PREFIX: &str = "v1/migrations";
 pub const LOCK_PREFIX: &str = "v1/LOCK";
+<<<<<<< HEAD
+=======
+pub const MIGRATION_APPEND_LOCK: &str = "v1/APPEND_LOCK";
+>>>>>>> e0628046b6 (backup-stream: add flag into metadata name tag (#19609))
 
 /// The in-memory presentation of the message [`brpb::Metadata`].
 #[derive(Debug, PartialEq, Eq)]
@@ -186,6 +190,88 @@ pub struct LogFileId {
     pub length: u64,
 }
 
+<<<<<<< HEAD
+=======
+/// Parse the store ID from a backup-stream metadata path.
+///
+/// Format:
+/// `v1/backupmeta/
+/// {flush_ts}{store_id}-d{min_begin_ts}l{min_ts}u{max_ts}p{flags}.meta`
+#[cfg(test)]
+fn parse_store_id_from_backupmeta_path(path: &str) -> Option<u64> {
+    parse_backupmeta_path(path).ok().map(|v| v.store_id)
+}
+
+#[cfg(test)]
+fn parse_approx_ts_range_from_backupmeta_path(path: &str) -> Option<(u64, u64)> {
+    let parsed = parse_backupmeta_path(path).ok()?;
+    let default_min_ts = parsed.min_begin_ts_in_default_cf.min(parsed.min_ts);
+    Some((default_min_ts, parsed.max_ts))
+}
+
+fn intersects_ts_window(min_ts: u64, max_ts: u64, from_ts: u64, until_ts: u64) -> bool {
+    max_ts >= from_ts && min_ts <= until_ts
+}
+
+fn store_id_for_sharding_from_path(path: &str) -> Result<u64> {
+    parse_backupmeta_path(path)
+        .map(|v| v.store_id)
+        .map_err(Error::from)
+}
+
+fn validate_store_id_for_sharding(
+    meta_path: &str,
+    meta_store_id: Option<u64>,
+    path_store_id: u64,
+) -> Result<()> {
+    if let Some(meta_store_id) = meta_store_id.filter(|id| *id != path_store_id) {
+        return Err(ErrorKind::Other(format!(
+            "backup metadata store id mismatch: meta_path={}, store_id.from_path={}, store_id.from_metadata={}",
+            meta_path, path_store_id, meta_store_id,
+        ))
+        .into());
+    }
+    Ok(())
+}
+
+struct ParsedBackupMetaName {
+    store_id: u64,
+    min_begin_ts_in_default_cf: u64,
+    min_ts: u64,
+    max_ts: u64,
+}
+
+fn parse_backupmeta_path(path: &str) -> std::io::Result<ParsedBackupMetaName> {
+    let stem = Path::new(path)
+        .file_stem()
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("backup metadata path has no file stem: {path}"),
+            )
+        })?
+        .to_str()
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("backup metadata path is not valid utf8: {path}"),
+            )
+        })?;
+    let parsed = backup_stream::utils::parse_backupmeta_filename(stem).map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("cannot parse backup metadata path {path}: {err}"),
+        )
+    })?;
+    Ok(ParsedBackupMetaName {
+        store_id: parsed.store_id,
+        min_begin_ts_in_default_cf: parsed.min_begin_ts,
+        min_ts: parsed.min_ts,
+        max_ts: parsed.max_ts,
+    })
+}
+
+>>>>>>> e0628046b6 (backup-stream: add flag into metadata name tag (#19609))
 impl std::fmt::Debug for LogFileId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("Id")
@@ -434,8 +520,23 @@ impl<'a> StreamMetaStorage<'a> {
         let mut n = 0;
         // NOTE: should we allow user to specify the prefix?
         let mut items = s.iter_prefix(METADATA_PREFIX);
+<<<<<<< HEAD
         while items.try_next().await?.is_some() {
             n += 1
+=======
+        while let Some(item) = items.try_next().await? {
+            count += 1;
+            if !ext.calculate_shift_ts {
+                continue;
+            }
+
+            let parsed = parse_backupmeta_path(&item.key)?;
+            if intersects_ts_window(parsed.min_ts, parsed.max_ts, ext.from_ts, ext.until_ts)
+                && parsed.min_begin_ts_in_default_cf > 0
+            {
+                shift_ts = shift_ts.min(parsed.min_begin_ts_in_default_cf);
+            }
+>>>>>>> e0628046b6 (backup-stream: add flag into metadata name tag (#19609))
         }
         Ok(n)
     }

@@ -351,3 +351,161 @@ async fn test_filter_out_small_compactions() {
         assert!(c.get_meta().get_size() >= 27800, "{:?}", c.get_meta());
     }
 }
+<<<<<<< HEAD
+=======
+
+#[tokio::test]
+async fn test_store_id_path_validation_only_runs_in_shard_mode() {
+    let log_path = "v1/20260320/12/7/7100-00000000-0000-0000-0000-000000000042.log";
+    let meta_path = "v1/backupmeta/not_backupmeta_format.meta";
+    let shard = ShardConfig::new(1, 2).unwrap();
+
+    let st_unsharded = TmpStorage::create();
+    st_unsharded
+        .build_flush(log_path, meta_path, gen_store_builders(7))
+        .await;
+    run_exec(st_unsharded.backend(), None, "sharding_bad_store_id_path").await;
+
+    let st_sharded = TmpStorage::create();
+    st_sharded
+        .build_flush(log_path, meta_path, gen_store_builders(7))
+        .await;
+    let err = run_exec_err(st_sharded.backend(), shard, "sharding_bad_store_id_path").await;
+    assert!(
+        err.kind
+            .to_string()
+            .contains("cannot parse backup metadata path")
+    );
+    assert!(err.kind.to_string().contains(meta_path));
+}
+
+#[tokio::test]
+async fn test_sharding_rejects_path_and_metadata_store_id_mismatch() {
+    let shard = ShardConfig::new(1, 2).unwrap();
+    let store_id = (1..=16)
+        .find(|&store_id| shard.contains_store_id(store_id))
+        .unwrap();
+    let (meta_path, log_path) = store_paths(store_id);
+
+    let st = TmpStorage::create();
+    st.build_flush(&log_path, &meta_path, gen_store_builders(store_id))
+        .await;
+    set_metadata_store_id(&st, &meta_path, store_id + 1).await;
+
+    let err = run_exec_err(st.backend(), shard, "sharding_store_id_mismatch").await;
+    assert!(
+        err.kind
+            .to_string()
+            .contains("backup metadata store id mismatch")
+    );
+}
+
+#[tokio::test]
+async fn test_sharding_skips_non_matching_meta_before_reading() {
+    let shard = ShardConfig::new(1, 2).unwrap();
+    let mut included_store_id = None;
+    let mut excluded_store_id = None;
+    for store_id in 1..=16 {
+        if shard.contains_store_id(store_id) {
+            included_store_id.get_or_insert(store_id);
+        } else {
+            excluded_store_id.get_or_insert(store_id);
+        }
+        if included_store_id.is_some() && excluded_store_id.is_some() {
+            break;
+        }
+    }
+
+    let included_store_id = included_store_id.unwrap();
+    let excluded_store_id = excluded_store_id.unwrap();
+    let (good_meta_path, good_log_path) = store_paths(included_store_id);
+    let (bad_meta_path, _) = store_paths(excluded_store_id);
+
+    let st = TmpStorage::create();
+    st.build_flush(
+        &good_log_path,
+        &good_meta_path,
+        gen_store_builders(included_store_id),
+    )
+    .await;
+    st.storage()
+        .write(
+            &bad_meta_path,
+            futures::io::Cursor::new(vec![0xFF]).into(),
+            1,
+        )
+        .await
+        .unwrap();
+
+    run_exec(
+        st.backend(),
+        Some(shard),
+        "sharding_skip_non_matching_meta_before_reading",
+    )
+    .await;
+    assert!(!st.load_migrations().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn test_sharding_by_store_and_union_matches_unsharded() {
+    let st_sharded = TmpStorage::create();
+    let st_unsharded = TmpStorage::create();
+
+    let meta_path_to_store_id = populate_stores(&st_sharded, 1..=6u64).await;
+    let _ = populate_stores(&st_unsharded, 1..=6u64).await;
+
+    let shard1 = ShardConfig::new(1, 2).unwrap();
+    let shard2 = ShardConfig::new(2, 2).unwrap();
+
+    let out_prefix1 = run_exec(st_sharded.backend(), Some(shard1), "sharding_test").await;
+    let out_prefix2 = run_exec(st_sharded.backend(), Some(shard2), "sharding_test").await;
+
+    assert_ne!(out_prefix1, out_prefix2);
+
+    let mut mig_by_out_prefix = load_migrations_by_out_prefix(&st_sharded).await;
+    assert_eq!(mig_by_out_prefix.len(), 2);
+
+    let mig1 = mig_by_out_prefix
+        .remove(&out_prefix1)
+        .expect("missing shard1 migration");
+    let mig2 = mig_by_out_prefix
+        .remove(&out_prefix2)
+        .expect("missing shard2 migration");
+    assert!(mig_by_out_prefix.is_empty());
+
+    for (mig, include_shard, exclude_shard) in [(&mig1, shard1, shard2), (&mig2, shard2, shard1)] {
+        for edit in &mig.edit_meta {
+            let store_id = *meta_path_to_store_id
+                .get(edit.get_path())
+                .expect("unknown meta edit path");
+            assert!(include_shard.contains_store_id(store_id));
+            assert!(!exclude_shard.contains_store_id(store_id));
+        }
+    }
+
+    let out_prefix_all = run_exec(st_unsharded.backend(), None, "sharding_test").await;
+    let mut mig_by_out_prefix_all = load_migrations_by_out_prefix(&st_unsharded).await;
+    assert_eq!(mig_by_out_prefix_all.len(), 1);
+    let mig_all = mig_by_out_prefix_all
+        .remove(&out_prefix_all)
+        .expect("missing unsharded migration");
+
+    let mut union = meta_edits_by_path(&mig1);
+    for (path, edit) in meta_edits_by_path(&mig2) {
+        let prev = union.insert(path.clone(), edit);
+        assert!(prev.is_none(), "duplicate meta edit for {}", path);
+    }
+    let expected = meta_edits_by_path(&mig_all);
+
+    assert_eq!(union.len(), expected.len());
+    for (path, expected_edit) in expected {
+        let union_edit = union.get(&path).unwrap();
+        assert_eq!(union_edit.destruct_self, expected_edit.destruct_self);
+        assert_eq!(
+            union_edit.all_data_files_compacted,
+            expected_edit.all_data_files_compacted
+        );
+        assert_eq!(hash_meta_edit(union_edit), hash_meta_edit(&expected_edit));
+    }
+}
+>>>>>>> e0628046b6 (backup-stream: add flag into metadata name tag (#19609))
