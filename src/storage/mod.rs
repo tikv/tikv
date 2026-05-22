@@ -956,9 +956,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         buckets.as_ref(),
                                     );
                                     statistics.add(&stat);
-                                    let value_size = v.as_ref().map_or(0, |v| {
-                                        v.as_ref().map_or(0, |v1| v1.value.len()) as u64
-                                    });
+                                    let value_size = v
+                                        .as_ref()
+                                        .map_or(0, |v| v.as_ref().map_or(0, |v1| v1.len()) as u64);
                                     record_network_out_bytes(value_size);
                                     record_logical_read_bytes(statistics.processed_size as u64);
                                     consumer.consume(
@@ -1336,8 +1336,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                     .get(CMD)
                                     .observe(kv_pairs.len() as f64);
                                 record_network_out_bytes(kv_pairs.iter().fold(0u64, |acc, r| {
-                                    acc + r.as_ref().map_or(0, |(k, v)| k.len() + v.value.len())
-                                        as u64
+                                    acc + r.as_ref().map_or(0, |(k, v)| k.len() + v.len()) as u64
                                 }));
                                 kv_pairs
                             });
