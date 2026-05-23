@@ -81,24 +81,7 @@ impl Runner {
     }
 
     fn inspect(&self) -> Option<Duration> {
-        // `disk_check` is request-driven, so we do not need the "only one probe
-        // in flight" guard here. Still, we keep the state consistent for
-        // observability / future reuse.
-        let started = self.probe.try_start_probe();
-        debug_assert!(started, "disk_check probe must not overlap");
-        if !started {
-            return None;
-        }
-        match self.probe.probe_once() {
-            Ok(duration) => {
-                self.probe.finish_probe_success();
-                Some(duration)
-            }
-            Err(_) => {
-                self.probe.finish_probe_failure();
-                None
-            }
-        }
+        self.probe.probe_once().ok()
     }
 
     fn execute(&self) {
