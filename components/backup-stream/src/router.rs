@@ -1321,14 +1321,10 @@ impl StreamTaskHandler {
 
         match ret {
             Ok(_) => {
-<<<<<<< HEAD
-                info!(
-=======
                 crate::metrics::UPLOAD_FILE_SIZE
                     .with_label_values(&["log"])
                     .inc_by(stat_length as _);
-                debug!(
->>>>>>> e0628046b6 (backup-stream: add flag into metadata name tag (#19609))
+                info!(
                     "backup stream flush success";
                     "duration" => ?start.saturating_elapsed(),
                     "storage_file" => ?filepath,
