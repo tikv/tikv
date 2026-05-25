@@ -781,13 +781,13 @@ fn test_cdc_watchdog_idle_timeout() {
 
     debug!("Finished waiting, now checking if connection was cancelled");
 
-    // Try to detect if the connection was cancelled by watchdog
-    // We can do this by trying to receive from the underlying receiver
-    // If the connection is closed, recv_timeout should return an error
-    let mut connection_cancelled = false;
+    // Try to detect if the connection was cancelled by watchdog. It should fail
+    // the stream instead of closing it gracefully, so TiCDC can rebuild the event
+    // feed connection.
+    let mut connection_failed = false;
     let start_time = Instant::now();
 
-    // Try to detect connection closure for up to 5 seconds (shorter timeout for
+    // Try to detect connection failure for up to 5 seconds (shorter timeout for
     // testing)
     while start_time.elapsed() < Duration::from_secs(5) {
         // Get the underlying receiver
@@ -804,20 +804,17 @@ fn test_cdc_watchdog_idle_timeout() {
             Ok(Some(Err(_))) => {
                 // Received an error, connection was cancelled
                 debug!("Connection cancelled with error");
-                connection_cancelled = true;
+                connection_failed = true;
                 break;
             }
             Ok(None) => {
-                // No data available, but connection might still be alive
-                debug!("No data available, connection might still be alive");
-                // Put the receiver back
-                event_feed.replace(Some(rx));
+                panic!("Connection should fail instead of closing gracefully");
             }
             Err(_) => {
-                // Connection is closed
-                debug!("Connection closed");
-                connection_cancelled = true;
-                break;
+                // Timed out, connection might still be alive.
+                debug!("Connection might still be alive");
+                // Put the receiver back
+                event_feed.replace(Some(rx));
             }
         }
 
@@ -827,8 +824,8 @@ fn test_cdc_watchdog_idle_timeout() {
 
     // Verify that the connection was cancelled due to watchdog timeout
     assert!(
-        connection_cancelled,
-        "Connection should have been cancelled by watchdog after idle timeout"
+        connection_failed,
+        "Connection should have failed by watchdog after idle timeout"
     );
 
     // Clean up

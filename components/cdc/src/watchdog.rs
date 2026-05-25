@@ -27,8 +27,8 @@ pub(crate) struct CancelSinks {
 
 impl CancelSinks {
     fn cancel(self) {
-        let _ = self.recv.send(());
         let _ = self.send.send(());
+        let _ = self.recv.send(());
     }
 }
 
