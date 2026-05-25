@@ -778,6 +778,7 @@ impl Runnable for ReadPoolConfigRunner {
                 if !s && self.cur_thread_count != self.core_thread_count {
                     self.handle.scale_pool_size(self.core_thread_count);
                     self.cur_thread_count = self.core_thread_count;
+                    self.notify_pool_size_change(self.cur_thread_count);
                 }
             }
             Task::MaxTasksPerWorker(s) => {
