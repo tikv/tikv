@@ -3,26 +3,38 @@
 use engine_rocks::RocksSstIterator;
 use engine_traits::Iterator;
 
+const DEFAULT_SEEK_NEXT_LIMIT: usize = 32;
+
 /// DefaultSeekIterator is a lightweight helper for point seek on multiple
 /// default CF SST iterators. It only supports exact seek matching and avoids
-/// merge-iteration logic that is unnecessary for this access pattern.
+/// merge-iteration logic that is unnecessary for this access pattern. The
+/// caller must request keys in non-decreasing order; this iterator does not
+/// validate or repair backward seeks. For ordered requests, it advances
+/// existing iterator positions with `next` before falling back to `seek`.
 pub struct DefaultSeekIterator<'a> {
     sst_iters: Vec<RocksSstIterator<'a>>,
+    initialized: Vec<bool>,
+    valid: Vec<bool>,
     matched_idx: Option<usize>,
 }
 
 impl<'a> DefaultSeekIterator<'a> {
     pub fn new(sst_iters: Vec<RocksSstIterator<'a>>) -> Self {
+        let len = sst_iters.len();
         Self {
             sst_iters,
+            initialized: vec![false; len],
+            valid: vec![false; len],
             matched_idx: None,
         }
     }
 
     pub fn seek_exact(&mut self, key: &[u8]) -> engine_traits::Result<bool> {
         self.matched_idx = None;
+
         for (idx, iter) in self.sst_iters.iter_mut().enumerate() {
-            if !iter.seek(key)? {
+            if !Self::advance_iter_to(iter, &mut self.initialized[idx], &mut self.valid[idx], key)?
+            {
                 continue;
             }
             if iter.key() == key {
@@ -34,6 +46,40 @@ impl<'a> DefaultSeekIterator<'a> {
             }
         }
         Ok(self.matched_idx.is_some())
+    }
+
+    fn advance_iter_to(
+        iter: &mut RocksSstIterator<'a>,
+        initialized: &mut bool,
+        valid: &mut bool,
+        key: &[u8],
+    ) -> engine_traits::Result<bool> {
+        if !*initialized {
+            *initialized = true;
+            *valid = iter.seek(key)?;
+            return Ok(*valid);
+        }
+
+        if !*valid {
+            return Ok(false);
+        }
+
+        if iter.key() >= key {
+            return Ok(true);
+        }
+
+        for _ in 0..DEFAULT_SEEK_NEXT_LIMIT {
+            *valid = iter.next()?;
+            if !*valid {
+                return Ok(false);
+            }
+            if iter.key() >= key {
+                return Ok(true);
+            }
+        }
+
+        *valid = iter.seek(key)?;
+        Ok(*valid)
     }
 
     pub fn key(&self) -> &[u8] {
@@ -492,13 +538,18 @@ mod tests {
         assert_eq!(seek_iter.key(), k1.as_slice());
         assert_eq!(seek_iter.value(), b"v1");
 
+        // Existing user key, but absent timestamp.
+        let missing_ts = mk_key(b"k1", 40);
+        assert!(!seek_iter.seek_exact(&missing_ts).unwrap());
+
+        let k2 = mk_key(b"k2", 30);
+        assert!(seek_iter.seek_exact(&k2).unwrap());
+        assert_eq!(seek_iter.key(), k2.as_slice());
+        assert_eq!(seek_iter.value(), b"v2");
+
         let k3 = mk_key(b"k3", 20);
         assert!(seek_iter.seek_exact(&k3).unwrap());
         assert_eq!(seek_iter.key(), k3.as_slice());
         assert_eq!(seek_iter.value(), b"v3");
-
-        // Existing user key, but absent timestamp.
-        let missing_ts = mk_key(b"k1", 40);
-        assert!(!seek_iter.seek_exact(&missing_ts).unwrap());
     }
 }
