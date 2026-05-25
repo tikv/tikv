@@ -1639,15 +1639,19 @@ mod tests {
 
         let (tx, rx) = sync_channel(10);
 
-        let core_thread_count = 2;
-        let max_thread_count = 8;
+        let core_thread_count = config.max_thread_count;
+        let max_thread_count = config.max_thread_count;
+        let process_stats = match tikv_util::sys::cpu_time::ProcessStat::cur_proc_stat() {
+            Ok(process_stats) => process_stats,
+            Err(_) => return,
+        };
 
         let mut runner = ReadPoolConfigRunner {
             interval: READ_POOL_THREAD_CHECK_DURATION,
             sender: tx,
             handle,
             cpu_time_tracker: ReadPoolCpuTimeTracker::new("test"),
-            process_stats: tikv_util::sys::cpu_time::ProcessStat::cur_proc_stat().unwrap(),
+            process_stats,
             min_thread_count: core_thread_count,
             core_thread_count,
             max_thread_count,
