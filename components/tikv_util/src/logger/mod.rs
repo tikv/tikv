@@ -8,10 +8,11 @@ use std::{
     io::{self, BufWriter},
     path::{Path, PathBuf},
     sync::{
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
     thread,
+    time::Duration,
 };
 
 use log::{self, SetLoggerError};
@@ -23,6 +24,7 @@ use slog_term::{Decorator, PlainDecorator, RecordDecorator};
 use self::file_log::{RotateBySize, RotatingFileLogger, RotatingFileLoggerBuilder};
 use crate::{
     config::{ReadableDuration, ReadableSize},
+    sys::thread::StdThreadBuildWrapper,
     thread_name_prefix::SLOGGER_THREAD,
 };
 
@@ -147,6 +149,31 @@ pub fn exit_process_gracefully(code: i32) -> ! {
     // force async logger to flush by dropping its guard.
     *ASYNC_LOGGER_GUARD.lock().unwrap() = None;
     std::process::exit(code);
+}
+
+/// Best-effort flushes the async logger, but never waits forever.
+///
+/// This is intended for hard-exit paths such as fail-fast. It gives the async
+/// logger a brief window to drain outstanding messages, then aborts the
+/// process regardless so a hung cleanup path cannot block termination.
+pub fn abort_process_after_best_effort_flush(timeout: Duration) -> ! {
+    let guard = ASYNC_LOGGER_GUARD.lock().unwrap().take();
+    if let Some(guard) = guard {
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let done_for_worker = Arc::clone(&done);
+        let _ = thread::Builder::new()
+            .name("async-log-flush".to_owned())
+            .spawn_wrapper(move || {
+                drop(guard);
+                done_for_worker.store(true, Ordering::Release);
+            });
+        let start = std::time::Instant::now();
+        while !done.load(Ordering::Acquire) && start.elapsed() < timeout {
+            thread::yield_now();
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+    std::process::abort();
 }
 
 /// Constructs a new file writer which outputs log to a file at the specified

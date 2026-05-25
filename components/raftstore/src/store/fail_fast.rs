@@ -15,6 +15,7 @@ use prometheus::{HistogramVec, exponential_buckets, register_histogram_vec};
 use tikv_util::{
     config::VersionTrack,
     error, logger,
+    metrics::CRITICAL_ERROR,
     sys::thread::StdThreadBuildWrapper,
     time::{monotonic_raw_now, timespec_to_ns},
     warn,
@@ -26,11 +27,16 @@ use crate::store::disk_probe::ProbeRunner;
 
 const PROBE_INTERVAL: Duration = Duration::from_secs(1);
 const IN_FLIGHT_LOG_THRESHOLD: Duration = Duration::from_secs(30);
+const FAIL_FAST_LOG_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
 
 const RAFT_PROBE_FILENAME: &str = ".raft_disk_fail_fast_probe.tmp";
 const RAFT_PROBE_PAYLOAD: &[u8] = b"tikv raft disk fail fast probe";
 const KV_PROBE_FILENAME: &str = ".kv_disk_fail_fast_probe.tmp";
 const KV_PROBE_PAYLOAD: &[u8] = b"tikv kv disk fail fast probe";
+const CRITICAL_ERROR_DISK_PROBE_STUCK_RAFT: &str = "disk_probe_stuck_raft";
+const CRITICAL_ERROR_DISK_PROBE_STUCK_KV: &str = "disk_probe_stuck_kv";
+const CRITICAL_ERROR_DISK_PROBE_FAIL_FAST_RAFT: &str = "disk_probe_fail_fast_raft";
+const CRITICAL_ERROR_DISK_PROBE_FAIL_FAST_KV: &str = "disk_probe_fail_fast_kv";
 
 lazy_static::lazy_static! {
     pub static ref DISK_PROBE_DURATION_HISTOGRAM: HistogramVec = register_histogram_vec!(
@@ -90,14 +96,23 @@ fn run_probe(stop: &AtomicBool, disk: &'static str, probe: &ProbeRunner) -> bool
 
 fn log_stuck_probe(disk: &'static str, probe: &ProbeRunner) {
     if let Some(elapsed) = probe.current_probe_elapsed() {
-        if elapsed >= IN_FLIGHT_LOG_THRESHOLD {
-            warn!(
-                "fail-fast probe: disk still not responsive after elapsed";
-                "disk" => disk,
-                "path" => %probe.path().display(),
-                "elapsed" => ?elapsed,
-            );
+        if elapsed < IN_FLIGHT_LOG_THRESHOLD {
+            return;
         }
+        let critical_error_kind = match disk {
+            "raft" => CRITICAL_ERROR_DISK_PROBE_STUCK_RAFT,
+            "kv" => CRITICAL_ERROR_DISK_PROBE_STUCK_KV,
+            _ => return,
+        };
+        CRITICAL_ERROR
+            .with_label_values(&[critical_error_kind])
+            .inc();
+        error!(
+            "fail-fast probe: disk still not responsive after elapsed";
+            "disk" => disk,
+            "path" => %probe.path().display(),
+            "elapsed" => ?elapsed,
+        );
     }
 }
 
@@ -160,9 +175,10 @@ fn spawn_probe_thread(
 /// probe is slow, the checker will not fail fast on that signal alone if real
 /// raft-log appends have still succeeded within the same timeout window.
 ///
-/// Once any disk meets the fail-fast rule, TiKV first flips `is_serving=false`
-/// and then exits gracefully. The scope is intentionally narrow today: disk
-/// hang is the first zombie-failure scenario covered by this monitor.
+/// Once any disk meets the fail-fast rule, TiKV emits the final error, gives
+/// the async logger a brief best-effort flush window, and then aborts. The
+/// scope is intentionally narrow today: disk hang is the first zombie-failure
+/// scenario covered by this monitor.
 pub struct FailFastMonitor {
     stop: Arc<AtomicBool>,
     raft_probe: ProbeRunner,
@@ -172,7 +188,7 @@ pub struct FailFastMonitor {
 impl FailFastMonitor {
     pub fn new(
         cfg: Arc<VersionTrack<Config>>,
-        health_controller: HealthController,
+        _health_controller: HealthController,
         raft_probe_dir: PathBuf,
         kv_probe_dir: Option<PathBuf>,
         check_worker: Worker,
@@ -235,10 +251,17 @@ impl FailFastMonitor {
                 return;
             }
 
-            // We intentionally hard-exit here. Continuing to serve on a
-            // hung disk can cause prolonged unavailability and data loss
-            // risks (e.g. stuck raft/kv writes). We first flip is_serving
-            // to false to stop new traffic, then exit.
+            if raft_should_fail_fast {
+                CRITICAL_ERROR
+                    .with_label_values(&[CRITICAL_ERROR_DISK_PROBE_FAIL_FAST_RAFT])
+                    .inc();
+            }
+            if kv_should_fail_fast {
+                CRITICAL_ERROR
+                    .with_label_values(&[CRITICAL_ERROR_DISK_PROBE_FAIL_FAST_KV])
+                    .inc();
+            }
+
             error!(
                 "fail-fast: disk probe timed out, shutting down to avoid serving on an unhealthy disk";
                 "timeout" => ?timeout,
@@ -255,8 +278,7 @@ impl FailFastMonitor {
                     .map_or(0, |probe| probe.failure_count_since_last_success()),
                 "raft_last_append_success_elapsed" => ?raft_last_append_success_elapsed,
             );
-            health_controller.set_is_serving(false);
-            logger::exit_process_gracefully(1);
+            logger::abort_process_after_best_effort_flush(FAIL_FAST_LOG_FLUSH_TIMEOUT);
         });
 
         Ok(Self {
