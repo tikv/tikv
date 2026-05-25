@@ -259,11 +259,14 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             // iterating all rows. Also, we can directly copy total_size and null_count.
             let col_pos = offsets[0] as usize;
             let col_group_pos = self.columns_info.len() + i;
-            collector.mut_base().fm_sketches[col_group_pos] =
-                collector.mut_base().fm_sketches[col_pos].clone();
+            // Copy whichever sketch type this mode populated; the other Vec is
+            // empty (see BaseRowSampleCollector::new).
             if collector.mut_base().build_singletons {
                 collector.mut_base().singleton_sketches[col_group_pos] =
                     collector.mut_base().singleton_sketches[col_pos].clone();
+            } else {
+                collector.mut_base().fm_sketches[col_group_pos] =
+                    collector.mut_base().fm_sketches[col_pos].clone();
             }
             collector.mut_base().null_count[col_group_pos] =
                 collector.mut_base().null_count[col_pos];
@@ -359,11 +362,11 @@ struct BaseRowSampleCollector {
     null_count: Vec<i64>,
     count: u64,
     sketch_sample_count: u64,
-    max_fm_sketch_size: usize,
+    // fm_sketches and singleton_sketches are mutually exclusive by build_singletons:
+    // the FM sketch backs the exact NDV at full rate, the HLLs back the GEE f1
+    // estimate under NDV sub-sampling. Only the active one is allocated (see new).
     fm_sketches: Vec<FmSketch>,
     singleton_sketches: Vec<SingletonSketch>,
-    // When false, singleton sketches are left empty and not serialized; only the
-    // GEE f1 estimate under NDV sub-sampling needs them.
     build_singletons: bool,
     rng: StdRng,
     total_sizes: Vec<i64>,
@@ -377,7 +380,6 @@ impl Default for BaseRowSampleCollector {
             null_count: vec![],
             count: 0,
             sketch_sample_count: 0,
-            max_fm_sketch_size: 0,
             fm_sketches: vec![],
             singleton_sketches: vec![],
             build_singletons: false,
@@ -415,9 +417,19 @@ impl BaseRowSampleCollector {
             null_count: vec![0; col_and_group_len],
             count: 0,
             sketch_sample_count: 0,
-            max_fm_sketch_size,
-            fm_sketches: vec![FmSketch::new(max_fm_sketch_size); col_and_group_len],
-            singleton_sketches: vec![SingletonSketch::new(); col_and_group_len],
+            // NDV sub-sampling derives the column NDV from the singleton sketches'
+            // HLLs (see SingletonSketch::into_hlls), so the FM sketch is dead weight
+            // there; allocate only the sketch type this mode actually fills.
+            fm_sketches: if build_singletons {
+                vec![]
+            } else {
+                vec![FmSketch::new(max_fm_sketch_size); col_and_group_len]
+            },
+            singleton_sketches: if build_singletons {
+                vec![SingletonSketch::new(); col_and_group_len]
+            } else {
+                vec![]
+            },
             build_singletons,
             rng: StdRng::from_entropy(),
             total_sizes: vec![0; col_and_group_len],
@@ -459,9 +471,11 @@ impl BaseRowSampleCollector {
                 }
             }
             let hash = hasher.finish();
-            self.fm_sketches[col_len + i].insert_hash_value(hash);
+            // See collect_column: only the sketch type this mode allocated is filled.
             if self.build_singletons {
                 self.singleton_sketches[col_len + i].insert_hash_value(hash);
+            } else {
+                self.fm_sketches[col_len + i].insert_hash_value(hash);
             }
         }
     }
@@ -477,16 +491,17 @@ impl BaseRowSampleCollector {
                 self.null_count[i] += 1;
                 continue;
             }
-            if columns_info[i].as_accessor().is_string_like() {
-                self.fm_sketches[i].insert(&collation_keys_val[i]);
-                if self.build_singletons {
-                    self.singleton_sketches[i].insert(&collation_keys_val[i]);
-                }
+            let key: &[u8] = if columns_info[i].as_accessor().is_string_like() {
+                &collation_keys_val[i]
             } else {
-                self.fm_sketches[i].insert(&columns_val[i]);
-                if self.build_singletons {
-                    self.singleton_sketches[i].insert(&columns_val[i]);
-                }
+                &columns_val[i]
+            };
+            // FM and singleton sketches are mutually exclusive: only the one this
+            // mode allocated is filled (see BaseRowSampleCollector::new).
+            if self.build_singletons {
+                self.singleton_sketches[i].insert(key);
+            } else {
+                self.fm_sketches[i].insert(key);
             }
             self.total_sizes[i] += columns_val[i].len() as i64 - 1;
         }
@@ -1384,21 +1399,23 @@ mod tests {
 
     #[test]
     fn test_build_singletons_gate() {
-        // ndv_rate >= 1 maps to build_singletons = false: fill_proto must leave
-        // the per-region HLL fields empty so the work and bytes are saved.
+        // ndv_rate >= 1 maps to build_singletons = false: only the FM sketch is
+        // built; the per-region HLL fields stay empty so the work and bytes are saved.
         let mut base = BaseRowSampleCollector::new(1000, 1, false);
-        base.singleton_sketches[0].insert(b"x");
+        base.fm_sketches[0].insert(b"x");
         let mut proto = tipb::RowSampleCollector::default();
         base.fill_proto(&mut proto);
+        assert_eq!(proto.get_fm_sketch().len(), 1);
         assert!(proto.get_hll_ndv_sketch().is_empty());
         assert!(proto.get_hll_singleton_sketch().is_empty());
 
         // ndv_rate < 1 maps to build_singletons = true: HLL sketches are emitted
-        // (one NDV + one singleton per column).
+        // (one NDV + one singleton per column) and no FM sketch is built.
         let mut base = BaseRowSampleCollector::new(1000, 1, true);
         base.singleton_sketches[0].insert(b"x");
         let mut proto = tipb::RowSampleCollector::default();
         base.fill_proto(&mut proto);
+        assert!(proto.get_fm_sketch().is_empty());
         assert_eq!(proto.get_hll_ndv_sketch().len(), 1);
         assert_eq!(proto.get_hll_singleton_sketch().len(), 1);
     }
