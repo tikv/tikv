@@ -496,8 +496,7 @@ impl Service {
 
         let last_flush_time = Arc::new(AtomicCell::new(Instant::now()));
         let last_flush_time_for_forward = last_flush_time.clone();
-        let last_flush_time_for_watchdog = last_flush_time.clone();
-        let peer_for_watchdog = ctx.peer().to_string();
+        let peer_for_watchdog = ctx.peer();
 
         let peer = ctx.peer();
 
@@ -531,9 +530,9 @@ impl Service {
 
         // Start watchdog to monitor connection activity
         watchdog::start(
-            self.pool.clone(),
-            last_flush_time_for_watchdog.clone(),
-            peer_for_watchdog.clone(),
+            &self.pool,
+            last_flush_time,
+            peer_for_watchdog,
             conn_id,
             cancel_sinks,
             forward_exit_rx,

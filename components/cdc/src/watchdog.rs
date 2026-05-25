@@ -16,11 +16,9 @@ use tokio::sync::oneshot;
 use crate::service::ConnId;
 
 // CDC connection monitoring constants in seconds.
-pub(crate) const CDC_WATCHDOG_INTERVAL_SECS: u64 = 60;
-pub(crate) const CDC_IDLE_DEREGISTER_THRESHOLD_SECS: u64 = 60 * 5; // 5 minutes
+const CDC_WATCHDOG_INTERVAL_SECS: u64 = 60;
+const CDC_IDLE_DEREGISTER_THRESHOLD_SECS: u64 = 60 * 5; // 5 minutes
 const CDC_MEMORY_QUOTA_ABORT_THRESHOLD: f64 = 0.999;
-
-pub(crate) type CancelReceiver = oneshot::Receiver<()>;
 
 pub(crate) struct CancelSinks {
     recv: oneshot::Sender<()>,
@@ -34,7 +32,7 @@ impl CancelSinks {
     }
 }
 
-pub(crate) fn cancel_channels() -> (CancelSinks, CancelReceiver, CancelReceiver) {
+pub(crate) fn cancel_channels() -> (CancelSinks, oneshot::Receiver<()>, oneshot::Receiver<()>) {
     let (recv_tx, recv_rx) = oneshot::channel();
     let (send_tx, send_rx) = oneshot::channel();
     (
@@ -47,7 +45,7 @@ pub(crate) fn cancel_channels() -> (CancelSinks, CancelReceiver, CancelReceiver)
     )
 }
 
-pub(crate) async fn wait_cancel(rx: CancelReceiver) {
+pub(crate) async fn wait_cancel(rx: oneshot::Receiver<()>) {
     if rx.await.is_err() {
         future::pending::<()>().await;
     }
@@ -59,7 +57,7 @@ pub(crate) async fn wait_cancel(rx: CancelReceiver) {
 /// too long. When the idle threshold and memory pressure threshold are both
 /// reached, it notifies both the receive task and the send task to terminate.
 pub(crate) fn start(
-    pool: Arc<Worker>,
+    pool: &Worker,
     last_flush_time: Arc<AtomicCell<Instant>>,
     peer: String,
     conn_id: ConnId,
@@ -89,7 +87,7 @@ pub(crate) fn start(
                     if elapsed > Duration::from_secs(CDC_WATCHDOG_INTERVAL_SECS) {
                         warn!("cdc connection idle too long";
                             "seconds_since_last_flush" => elapsed.as_secs(),
-                            "downstream" => peer.clone(),
+                            "downstream" => peer.as_str(),
                             "conn_id" => ?conn_id);
                     }
 
@@ -106,7 +104,7 @@ pub(crate) fn start(
                     {
                         error!("cdc connection idle for too long, aborting connection";
                             "seconds_since_last_flush" => elapsed.as_secs(),
-                            "downstream" => peer.clone(),
+                            "downstream" => peer.as_str(),
                             "conn_id" => ?conn_id);
                         if let Some(cancel_sinks) = cancel_sinks.take() {
                             cancel_sinks.cancel();
@@ -189,7 +187,7 @@ mod tests {
         let (_forward_exit_tx, forward_exit_rx) = oneshot::channel::<()>();
 
         start(
-            pool.clone(),
+            &pool,
             last_flush_time,
             "127.0.0.1:0".to_owned(),
             ConnId::new(),
