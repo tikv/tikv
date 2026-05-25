@@ -1612,4 +1612,59 @@ mod tests {
         let _ = block_tx.send(());
         thread::sleep(Duration::from_millis(300));
     }
+
+    #[test]
+    fn test_auto_adjust_disable_notifies_pool_size_change() {
+        use std::sync::mpsc::sync_channel;
+
+        let config = UnifiedReadPoolConfig {
+            min_thread_count: 2,
+            max_thread_count: 8,
+            max_tasks_per_worker: 10,
+            ..Default::default()
+        };
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let pool = build_yatp_read_pool(
+            &config,
+            DummyReporter,
+            engine,
+            None,
+            None,
+            CleanupMethod::InPlace,
+            false,
+        );
+        let handle = pool.handle();
+
+        let (tx, rx) = sync_channel(10);
+
+        let core_thread_count = 2;
+        let max_thread_count = 8;
+
+        let mut runner = ReadPoolConfigRunner {
+            interval: READ_POOL_THREAD_CHECK_DURATION,
+            sender: tx,
+            handle,
+            cpu_time_tracker: ReadPoolCpuTimeTracker::new("test"),
+            process_stats: tikv_util::sys::cpu_time::ProcessStat::cur_proc_stat().unwrap(),
+            min_thread_count: core_thread_count,
+            core_thread_count,
+            max_thread_count,
+            cur_thread_count: core_thread_count,
+            auto_adjust: true,
+            cpu_threshold: READ_POOL_THREAD_HIGH_THRESHOLD,
+        };
+
+        runner.cur_thread_count = 5;
+        runner.run(Task::AutoAdjust(false));
+
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(size) => assert_eq!(size, core_thread_count),
+            Err(_) => {
+                panic!("No pool size change notification received when auto-adjust was disabled.")
+            }
+        }
+
+        assert_eq!(runner.cur_thread_count, core_thread_count);
+    }
 }
