@@ -4,4 +4,5 @@ pub mod analyze;
 pub mod analyze_context;
 pub mod cmsketch;
 pub mod fmsketch;
+pub mod hll;
 pub mod histogram;

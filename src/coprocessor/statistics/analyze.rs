@@ -26,7 +26,12 @@ use tikv_util::{
 };
 use tipb::{self, AnalyzeColumnsReq};
 
-use super::{cmsketch::CmSketch, fmsketch::FmSketch, histogram::Histogram};
+use super::{
+    cmsketch::CmSketch,
+    fmsketch::FmSketch,
+    histogram::Histogram,
+    hll::{DEFAULT_HLL_PRECISION, Hll},
+};
 use crate::{
     coprocessor::{MEMTRACE_ANALYZE, dag::TikvStorage, metrics, *},
     storage::{Snapshot, SnapshotStore, Statistics},
@@ -331,12 +336,21 @@ impl SingletonSketch {
         }
     }
 
-    fn into_proto(self, max_fm_sketch_size: usize) -> tipb::FmSketch {
-        let mut fm_sketch = FmSketch::new(max_fm_sketch_size);
-        for hash in self.once {
-            fm_sketch.insert_hash_value(hash);
+    /// Builds this region's NDV and singleton HyperLogLog sketches. The NDV
+    /// sketch covers every distinct hash (once + multi); the singleton sketch
+    /// covers only hashes seen exactly once. TiDB unions these across regions to
+    /// estimate the global singleton (f1) count via a leave-one-out.
+    fn into_hlls(self, precision: u8) -> (tipb::HllSketch, tipb::HllSketch) {
+        let mut ndv = Hll::new(precision);
+        let mut singleton = Hll::new(precision);
+        for &hash in &self.once {
+            ndv.insert_hash_value(hash);
+            singleton.insert_hash_value(hash);
         }
-        fm_sketch.into()
+        for &hash in &self.multi {
+            ndv.insert_hash_value(hash);
+        }
+        ((&ndv).into(), (&singleton).into())
     }
 }
 
@@ -519,14 +533,21 @@ impl BaseRowSampleCollector {
             .map(|fm_sketch| fm_sketch.into())
             .collect();
         proto_collector.set_fm_sketch(pb_fm_sketches);
-        // Only serialize singleton sketches when they were built (NDV sub-sampling);
-        // otherwise leave the field empty so TiDB skips the GEE f1 path.
+        // Only build the per-region HLL sketches when NDV sub-sampling is on;
+        // otherwise leave the fields empty so TiDB skips the f1 estimate. Each
+        // region contributes an NDV HLL (all distinct values) and a singleton HLL
+        // (values seen exactly once), which TiDB unions across regions. HLL is
+        // fixed-size, so TiDB can retain one per region without O(regions) blowup.
         if self.build_singletons {
-            let pb_singleton_sketches = mem::take(&mut self.singleton_sketches)
-                .into_iter()
-                .map(|fm_sketch| fm_sketch.into_proto(self.max_fm_sketch_size))
-                .collect();
-            proto_collector.set_singleton_sketch(pb_singleton_sketches);
+            let mut pb_hll_ndv = Vec::with_capacity(self.singleton_sketches.len());
+            let mut pb_hll_singleton = Vec::with_capacity(self.singleton_sketches.len());
+            for sketch in mem::take(&mut self.singleton_sketches) {
+                let (ndv, singleton) = sketch.into_hlls(DEFAULT_HLL_PRECISION);
+                pb_hll_ndv.push(ndv);
+                pb_hll_singleton.push(singleton);
+            }
+            proto_collector.set_hll_ndv_sketch(pb_hll_ndv.into_iter().collect());
+            proto_collector.set_hll_singleton_sketch(pb_hll_singleton.into_iter().collect());
         }
         proto_collector.set_sketch_sample_count(self.sketch_sample_count as i64);
         proto_collector.set_total_size(self.total_sizes.clone());
@@ -1127,15 +1148,44 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_singleton_sketch_proto_respects_max_size() {
-        let max_fm_sketch_size = 8;
-        let mut sketch = SingletonSketch::new();
-        for i in 0..(max_fm_sketch_size * 4) {
-            sketch.insert_hash_value((i as u64) * 11400714819323198485);
+    fn test_singleton_sketch_into_hlls() {
+        use super::super::hll::{DEFAULT_HLL_PRECISION, Hll};
+        // HLL needs a uniformly distributed hash; mix sequential keys with splitmix64.
+        fn mix(x: u64) -> u64 {
+            let mut z = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
         }
-
-        let proto = sketch.into_proto(max_fm_sketch_size);
-        assert!(proto.get_hashset().len() <= max_fm_sketch_size);
+        let mut sketch = SingletonSketch::new();
+        // 1000 values seen once (singletons) and 1000 seen twice (not singletons).
+        for i in 0..1000u64 {
+            sketch.insert_hash_value(mix(i));
+        }
+        for i in 1000..2000u64 {
+            let h = mix(i);
+            sketch.insert_hash_value(h);
+            sketch.insert_hash_value(h);
+        }
+        let (ndv_proto, singleton_proto) = sketch.into_hlls(DEFAULT_HLL_PRECISION);
+        // Singleton values are a subset of all distinct values, so the singleton
+        // sketch is dominated register-by-register by the NDV sketch.
+        assert_eq!(
+            ndv_proto.get_registers().len(),
+            singleton_proto.get_registers().len()
+        );
+        for (n, s) in ndv_proto
+            .get_registers()
+            .iter()
+            .zip(singleton_proto.get_registers())
+        {
+            assert!(s <= n);
+        }
+        // NDV covers ~2000 distinct values; singletons ~1000.
+        let ndv = Hll::from(&ndv_proto).count() as f64;
+        let singleton = Hll::from(&singleton_proto).count() as f64;
+        assert!((ndv - 2000.0).abs() / 2000.0 < 0.05, "ndv={ndv}");
+        assert!((singleton - 1000.0).abs() / 1000.0 < 0.05, "singleton={singleton}");
     }
 
     #[test]
@@ -1335,19 +1385,22 @@ mod tests {
     #[test]
     fn test_build_singletons_gate() {
         // ndv_rate >= 1 maps to build_singletons = false: fill_proto must leave
-        // the singleton_sketch field empty so the work and bytes are saved.
+        // the per-region HLL fields empty so the work and bytes are saved.
         let mut base = BaseRowSampleCollector::new(1000, 1, false);
         base.singleton_sketches[0].insert(b"x");
         let mut proto = tipb::RowSampleCollector::default();
         base.fill_proto(&mut proto);
-        assert!(proto.get_singleton_sketch().is_empty());
+        assert!(proto.get_hll_ndv_sketch().is_empty());
+        assert!(proto.get_hll_singleton_sketch().is_empty());
 
-        // ndv_rate < 1 maps to build_singletons = true: sketches are emitted.
+        // ndv_rate < 1 maps to build_singletons = true: HLL sketches are emitted
+        // (one NDV + one singleton per column).
         let mut base = BaseRowSampleCollector::new(1000, 1, true);
         base.singleton_sketches[0].insert(b"x");
         let mut proto = tipb::RowSampleCollector::default();
         base.fill_proto(&mut proto);
-        assert_eq!(proto.get_singleton_sketch().len(), 1);
+        assert_eq!(proto.get_hll_ndv_sketch().len(), 1);
+        assert_eq!(proto.get_hll_singleton_sketch().len(), 1);
     }
 }
 
