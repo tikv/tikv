@@ -149,12 +149,17 @@ fn finish_analyze_full_sampling_batch_response(
         });
 
     if can_reduce {
+        let batch_task_count = batch_outputs.len();
         let mut merged = top.sampling_result.take().unwrap();
         for output in &mut batch_outputs {
             merged.merge_from(output.sampling_result.take().unwrap())?;
         }
         set_analyze_sampling_response_data(&mut top.response, merged)?;
         top.response.set_batch_responses(Default::default());
+        info!("analyze full sampling batch reduce finished";
+            "total_task_count" => batch_task_count + 1,
+            "batch_task_count" => batch_task_count,
+        );
         return Ok(top.response);
     }
 

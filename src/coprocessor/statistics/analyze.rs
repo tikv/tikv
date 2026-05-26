@@ -218,6 +218,14 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                     .inc_by(quota_delay.as_micros() as u64);
             }
         }
+        info!("analyze full sampling table full scan finished";
+            "scanned_rows" => collector.mut_base().count,
+            "columns" => self.columns_info.len(),
+            "column_groups" => self.column_groups.len(),
+            "max_sample_size" => self.max_sample_size,
+            "sample_rate" => self.sample_rate,
+            "is_auto_analyze" => self.is_auto_analyze,
+        );
         for i in 0..self.column_groups.len() {
             let offsets = self.column_groups[i].get_column_offsets();
             if offsets.len() != 1 {
