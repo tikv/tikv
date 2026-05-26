@@ -7,7 +7,7 @@ use std::{marker::PhantomData, sync::Arc};
 use api_version::KvFormat;
 use async_trait::async_trait;
 use kvproto::{
-    coprocessor::{KeyRange, Response},
+    coprocessor::{KeyRange, PagingBreakReason, Response},
     metapb::Region,
 };
 use protobuf::Message;
@@ -212,7 +212,7 @@ impl RequestHandler for BatchDagHandler {
 }
 
 fn handle_qe_response(
-    result: tidb_query_common::Result<(SelectResponse, Option<IntervalRange>)>,
+    result: tidb_query_common::Result<(SelectResponse, Option<IntervalRange>, PagingBreakReason)>,
     can_be_cached: bool,
     data_version: Option<u64>,
 ) -> Result<Response> {
@@ -221,7 +221,7 @@ fn handle_qe_response(
     use crate::coprocessor::Error;
 
     match result {
-        Ok((sel_resp, range)) => {
+        Ok((sel_resp, range, paging_break_reason)) => {
             let mut resp = Response::default();
             if let Some(range) = range {
                 resp.mut_range().set_start(range.lower_inclusive);
@@ -230,6 +230,7 @@ fn handle_qe_response(
             resp.set_data(box_try!(sel_resp.write_to_bytes()));
             resp.set_can_be_cached(can_be_cached);
             resp.set_is_cache_hit(false);
+            resp.set_paging_break_reason(paging_break_reason);
             if let Some(v) = data_version {
                 resp.set_cache_last_version(v);
             }
@@ -295,10 +296,18 @@ mod tests {
     #[test]
     fn test_handle_qe_response() {
         // Ok Response
-        let ok_res = Ok((SelectResponse::default(), None));
+        let ok_res = Ok((
+            SelectResponse::default(),
+            None,
+            PagingBreakReason::PagingBreakReasonRangeEnd,
+        ));
         let res = handle_qe_response(ok_res, true, Some(1)).unwrap();
         assert!(res.can_be_cached);
         assert_eq!(res.get_cache_last_version(), 1);
+        assert_eq!(
+            res.get_paging_break_reason(),
+            PagingBreakReason::PagingBreakReasonRangeEnd
+        );
         let mut select_res = SelectResponse::new();
         Message::merge_from_bytes(&mut select_res, res.get_data()).unwrap();
         assert!(!select_res.has_error());

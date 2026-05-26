@@ -5,7 +5,7 @@ use std::{convert::TryFrom, iter, sync::Arc};
 use api_version::KvFormat;
 use fail::fail_point;
 use itertools::Itertools;
-use kvproto::coprocessor::KeyRange;
+use kvproto::coprocessor::{KeyRange, PagingBreakReason};
 use protobuf::Message;
 use tidb_query_common::{
     Result,
@@ -91,9 +91,9 @@ pub struct BatchExecutorsRunner<SS> {
     /// current page.
     paging_size: Option<u64>,
 
-    /// If set, paging_size_bytes indicates the byte budget for the current page.
-    /// When accumulated MVCC scanned bytes reach this limit, the scan stops
-    /// early.
+    /// If set, paging_size_bytes indicates the byte budget for the current
+    /// page. When accumulated MVCC scanned bytes reach this limit, the scan
+    /// stops early.
     paging_size_bytes: Option<u64>,
 
     quota_limiter: Arc<QuotaLimiter>,
@@ -655,8 +655,8 @@ impl<SS: 'static + Default> BatchExecutorsRunner<SS> {
             ranges,
             config.clone(),
             is_streaming || paging_size.is_some() || paging_size_bytes.is_some(), /* For streaming and paging request,
-                                                    * executors will continue scan from range
-                                                    * end where last scan is finished */
+                                                                                   * executors will continue scan from range
+                                                                                   * end where last scan is finished */
         )?;
 
         let req_encode_type = req.get_encode_type();
@@ -766,7 +766,9 @@ impl<SS: 'static + Default> BatchExecutorsRunner<SS> {
     /// IntervalRange records whole range scanned though there are gaps in multi
     /// ranges. e.g.: [(k1 -> k2), (k4 -> k5)] may got response (k1, k2, k4)
     /// with IntervalRange like (k1, k4).
-    pub async fn handle_request(&mut self) -> Result<(SelectResponse, Option<IntervalRange>)> {
+    pub async fn handle_request(
+        &mut self,
+    ) -> Result<(SelectResponse, Option<IntervalRange>, PagingBreakReason)> {
         let mut chunks = vec![];
         let mut batch_size = Self::batch_initial_size();
         let mut warnings = self.config.new_eval_warnings();
@@ -822,20 +824,18 @@ impl<SS: 'static + Default> BatchExecutorsRunner<SS> {
             if self.paging_size_bytes.is_some() {
                 self.out_most_executor
                     .collect_storage_stats(&mut self.accumulated_storage_stats);
-                scanned_bytes_all =
-                    (self.scanned_bytes_fn)(&self.accumulated_storage_stats);
+                scanned_bytes_all = (self.scanned_bytes_fn)(&self.accumulated_storage_stats);
             }
 
             if chunk.has_rows_data() {
                 chunks.push(chunk);
             }
 
-            if drained.stop()
-                || self.paging_size.is_some_and(|p| record_all >= p as usize)
-                || self
-                    .paging_size_bytes
-                    .is_some_and(|p| scanned_bytes_all >= p as usize)
-            {
+            let row_limit_reached = self.paging_size.is_some_and(|p| record_all >= p as usize);
+            let byte_limit_reached = self
+                .paging_size_bytes
+                .is_some_and(|p| scanned_bytes_all >= p as usize);
+            if drained.stop() || row_limit_reached || byte_limit_reached {
                 self.out_most_executor
                     .collect_exec_stats(&mut self.exec_stats);
                 tidb_query_common::metrics::record_coprocessor_executor_iterations(
@@ -845,14 +845,20 @@ impl<SS: 'static + Default> BatchExecutorsRunner<SS> {
                         .map(|s| s.num_iterations as u64)
                         .sum(),
                 );
-                let is_paging =
-                    self.paging_size.is_some() || self.paging_size_bytes.is_some();
-                let range = if drained == BatchExecIsDrain::Drain {
-                    None
+                let is_paging = self.paging_size.is_some() || self.paging_size_bytes.is_some();
+                let (range, paging_break_reason) = if drained == BatchExecIsDrain::Drain {
+                    (None, PagingBreakReason::PagingBreakReasonRangeEnd)
                 } else if is_paging {
-                    Some(self.out_most_executor.take_scanned_range())
+                    let reason = if byte_limit_reached {
+                        PagingBreakReason::PagingBreakReasonByteLimit
+                    } else if row_limit_reached {
+                        PagingBreakReason::PagingBreakReasonRowLimit
+                    } else {
+                        PagingBreakReason::PagingBreakReasonUnknown
+                    };
+                    (Some(self.out_most_executor.take_scanned_range()), reason)
                 } else {
-                    None
+                    (None, PagingBreakReason::PagingBreakReasonUnknown)
                 };
 
                 let mut sel_resp = SelectResponse::default();
@@ -892,7 +898,7 @@ impl<SS: 'static + Default> BatchExecutorsRunner<SS> {
 
                 sel_resp.set_warnings(warnings.warnings.into());
                 sel_resp.set_warning_count(warnings.warning_cnt as i64);
-                return Ok((sel_resp, range));
+                return Ok((sel_resp, range, paging_break_reason));
             }
 
             // Grow batch size
@@ -1165,7 +1171,7 @@ mod tests {
     use api_version::ApiV1;
     use async_trait::async_trait;
     use futures::executor::block_on;
-    use kvproto::metapb::Region;
+    use kvproto::{coprocessor::PagingBreakReason, metapb::Region};
     use tidb_query_common::execute_stats::ExecSummaryCollectorEnabled;
     use tidb_query_datatype::{
         FieldTypeTp,
@@ -2100,7 +2106,7 @@ mod tests {
             output_offsets: vec![0],
             schema: field_types.clone(),
         }];
-        let (mut resp, range) = block_on(runner.handle_request()).unwrap();
+        let (mut resp, range, _) = block_on(runner.handle_request()).unwrap();
         // no paging
         assert!(range.is_none());
         // check the main result
@@ -2191,7 +2197,7 @@ mod tests {
             output_offsets: vec![0],
             schema: field_types.clone(),
         }];
-        let (mut resp, range) = block_on(paging_runner.handle_request()).unwrap();
+        let (mut resp, range, _) = block_on(paging_runner.handle_request()).unwrap();
         assert_eq!(Some(expected_range), range);
         let main_chunks = resp.take_chunks();
         // the results should stop for paging in the second loop
@@ -2401,6 +2407,7 @@ mod tests {
 
     fn build_runner_with_mock_stats(
         executor: MockStatsExecutor,
+        paging_size: Option<u64>,
         paging_size_bytes: Option<u64>,
     ) -> BatchExecutorsRunner<MockStats> {
         let config = Arc::new(EvalConfig::default());
@@ -2413,7 +2420,7 @@ mod tests {
             exec_stats: ExecuteStats::new(1),
             stream_row_limit: 1024,
             encode_type: EncodeType::TypeChunk,
-            paging_size: None,
+            paging_size,
             paging_size_bytes,
             quota_limiter: Arc::new(QuotaLimiter::default()),
             intermediate_channels: vec![],
@@ -2444,11 +2451,12 @@ mod tests {
             vec![1000, 1000, 1000],
         );
 
-        let mut runner = build_runner_with_mock_stats(executor, Some(1500));
-        let (resp, range) = block_on(runner.handle_request()).unwrap();
+        let mut runner = build_runner_with_mock_stats(executor, None, Some(1500));
+        let (resp, range, reason) = block_on(runner.handle_request()).unwrap();
 
-        // Paging should have truncated — range returned for next page.
+        // Paging should have truncated: range returned for next page.
         assert!(range.is_some(), "should return scanned range for paging");
+        assert_eq!(reason, PagingBreakReason::PagingBreakReasonByteLimit);
         // Only 2 batches processed, so 2 chunks.
         assert_eq!(resp.get_chunks().len(), 2);
     }
@@ -2474,9 +2482,10 @@ mod tests {
         );
 
         // Budget 1200: batch 1 (500) + batch 2 (800) = 1300 >= 1200, truncate.
-        let mut runner = build_runner_with_mock_stats(executor, Some(1200));
-        let (_resp, range) = block_on(runner.handle_request()).unwrap();
+        let mut runner = build_runner_with_mock_stats(executor, None, Some(1200));
+        let (_resp, range, reason) = block_on(runner.handle_request()).unwrap();
         assert!(range.is_some());
+        assert_eq!(reason, PagingBreakReason::PagingBreakReasonByteLimit);
 
         // The final collect_storage_stats must return complete stats from all
         // processed batches, not just the last one.
@@ -2496,21 +2505,19 @@ mod tests {
         let field_types: Vec<FieldType> = vec![FieldTypeTp::Long.into()];
         let executor = MockStatsExecutor::new(
             field_types,
-            vec![
-                build_n_rows_int_result(0, 2),
-                {
-                    let mut r = build_n_rows_int_result(10, 3);
-                    r.is_drained = Ok(BatchExecIsDrain::Drain);
-                    r
-                },
-            ],
+            vec![build_n_rows_int_result(0, 2), {
+                let mut r = build_n_rows_int_result(10, 3);
+                r.is_drained = Ok(BatchExecIsDrain::Drain);
+                r
+            }],
             vec![500, 800],
         );
 
         // No paging — all batches processed, no incremental drain in loop.
-        let mut runner = build_runner_with_mock_stats(executor, None);
-        let (_resp, range) = block_on(runner.handle_request()).unwrap();
+        let mut runner = build_runner_with_mock_stats(executor, None, None);
+        let (_resp, range, reason) = block_on(runner.handle_request()).unwrap();
         assert!(range.is_none(), "non-paging should not return range");
+        assert_eq!(reason, PagingBreakReason::PagingBreakReasonRangeEnd);
 
         // Final collect_storage_stats drains everything at once.
         let mut stats = MockStats::default();
@@ -2519,5 +2526,33 @@ mod tests {
             stats.scanned_bytes, 1300,
             "non-paging path must collect all stats"
         );
+    }
+
+    #[test]
+    fn test_paging_size_reports_row_limit_reason() {
+        let field_types: Vec<FieldType> = vec![FieldTypeTp::Long.into()];
+        let executor = MockStatsExecutor::new(
+            field_types,
+            vec![
+                build_n_rows_int_result(0, 1),
+                build_n_rows_int_result(10, 1),
+                {
+                    let mut r = build_n_rows_int_result(20, 1);
+                    r.is_drained = Ok(BatchExecIsDrain::Drain);
+                    r
+                },
+            ],
+            vec![100, 100, 100],
+        );
+
+        let mut runner = build_runner_with_mock_stats(executor, Some(2), Some(10_000));
+        let (resp, range, reason) = block_on(runner.handle_request()).unwrap();
+
+        assert!(
+            range.is_some(),
+            "row-count paging should return scanned range"
+        );
+        assert_eq!(reason, PagingBreakReason::PagingBreakReasonRowLimit);
+        assert_eq!(resp.get_chunks().len(), 2);
     }
 }
