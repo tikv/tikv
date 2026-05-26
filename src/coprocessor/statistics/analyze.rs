@@ -1,6 +1,13 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp::Reverse, collections::BinaryHeap, hash::Hasher, mem, sync::Arc};
+use std::{
+    cmp::Reverse,
+    collections::BinaryHeap,
+    hash::Hasher,
+    mem,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use api_version::KvFormat;
 use kvproto::coprocessor::KeyRange;
@@ -30,6 +37,10 @@ use crate::{
     coprocessor::{MEMTRACE_ANALYZE, dag::TikvStorage, metrics, *},
     storage::{Snapshot, SnapshotStore, Statistics},
 };
+
+fn duration_ms(duration: Duration) -> u64 {
+    duration.as_millis() as u64
+}
 
 pub(crate) struct RowSampleBuilder<S: Snapshot, F: KvFormat> {
     pub(crate) data: BatchTableScanExecutor<TikvStorage<SnapshotStore<S>>, F>,
@@ -115,12 +126,20 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
         let mut is_drained = false;
         let mut collector = self.new_collector();
         let mut ctx = EvalContext::default();
+        let scan_start = Instant::now();
+        let mut batch_count = 0_u64;
+        let mut read_bytes = 0_usize;
+        let mut next_batch_elapsed = Duration::ZERO;
+        let mut encode_collect_elapsed = Duration::ZERO;
+        let mut quota_consume_elapsed = Duration::ZERO;
+        let mut quota_delay_total = Duration::ZERO;
         while !is_drained {
             // Use background limiters for both manual and auto analyze so that iops_limiter
             // (and other background quotas) apply to manual analyze as well.
             let mut sample = self.quota_limiter.new_sample(false);
             let mut read_size: usize = 0;
             {
+                let next_batch_start = Instant::now();
                 let result = {
                     let (duration, res) = sample
                         .observe_cpu_async(self.data.next_batch(BATCH_MAX_SIZE))
@@ -128,6 +147,8 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                     sample.add_cpu_time(duration);
                     res
                 };
+                next_batch_elapsed += next_batch_start.elapsed();
+                batch_count += 1;
 
                 // Use request-scoped storage stats for IOPS (like collect_scan_statistics),
                 // and count only RocksDB block reads as an approximation of disk IOPS.
@@ -160,6 +181,7 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                 let _guard = sample.observe_cpu();
                 is_drained = result.is_drained?.stop();
 
+                let encode_collect_start = Instant::now();
                 let columns_slice = result.physical_columns.as_slice();
                 let mut column_vals: Vec<Vec<u8>> = vec![vec![]; self.columns_info.len()];
                 let mut collation_key_vals: Vec<Vec<u8>> = vec![vec![]; self.columns_info.len()];
@@ -201,16 +223,21 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                     );
                     collector.collect_column(&column_vals, &collation_key_vals, &self.columns_info);
                 }
+                encode_collect_elapsed += encode_collect_start.elapsed();
             }
 
             sample.add_read_bytes(read_size);
+            read_bytes += read_size;
             // Don't let analyze bandwidth limit the quota limiter, this is already limited
             // in rate limiter.
+            let quota_consume_start = Instant::now();
             let quota_delay = {
                 // Use background limiters for both manual and auto analyze so that iops_limiter
                 // applies to manual analyze as well.
                 self.quota_limiter.consume_sample(sample, false).await
             };
+            quota_consume_elapsed += quota_consume_start.elapsed();
+            quota_delay_total += quota_delay;
 
             if !quota_delay.is_zero() {
                 NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
@@ -218,14 +245,25 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                     .inc_by(quota_delay.as_micros() as u64);
             }
         }
-        info!("analyze full sampling table full scan finished";
+        debug!("analyze full sampling trace";
+            "component" => "tikv",
+            "phase" => "tikv.scan_full_sampling_table",
+            "event" => "finish",
+            "elapsed_ms" => scan_start.elapsed().as_millis() as u64,
+            "next_batch_elapsed_ms" => duration_ms(next_batch_elapsed),
+            "encode_collect_elapsed_ms" => duration_ms(encode_collect_elapsed),
+            "quota_consume_elapsed_ms" => duration_ms(quota_consume_elapsed),
+            "quota_delay_ms" => duration_ms(quota_delay_total),
+            "batch_count" => batch_count,
             "scanned_rows" => collector.mut_base().count,
+            "read_bytes" => read_bytes,
             "columns" => self.columns_info.len(),
             "column_groups" => self.column_groups.len(),
             "max_sample_size" => self.max_sample_size,
             "sample_rate" => self.sample_rate,
             "is_auto_analyze" => self.is_auto_analyze,
         );
+        let column_group_fixup_start = Instant::now();
         for i in 0..self.column_groups.len() {
             let offsets = self.column_groups[i].get_column_offsets();
             if offsets.len() != 1 {
@@ -244,6 +282,13 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             collector.mut_base().total_sizes[col_group_pos] =
                 collector.mut_base().total_sizes[col_pos];
         }
+        debug!("analyze full sampling trace";
+            "component" => "tikv",
+            "phase" => "tikv.column_group_fixup",
+            "event" => "finish",
+            "elapsed_ms" => column_group_fixup_start.elapsed().as_millis() as u64,
+            "column_groups" => self.column_groups.len(),
+        );
         Ok(AnalyzeSamplingResult::new(collector))
     }
 }
