@@ -281,6 +281,14 @@ impl ScanPoolHandle {
 /// The default channel size.
 const MESSAGE_BUFFER_SIZE: usize = 32768;
 
+fn message_buffer_size() -> usize {
+    fail::fail_point!("log_backup_region_operator_buffer_size", |v| {
+        v.and_then(|x| x.parse::<usize>().ok())
+            .unwrap_or(MESSAGE_BUFFER_SIZE)
+    });
+    MESSAGE_BUFFER_SIZE
+}
+
 /// The operator for region subscription.
 /// It make a queue for operations over the `SubscriptionTracer`, generally,
 /// we should only modify the `SubscriptionTracer` itself (i.e. insert records,
@@ -344,7 +352,7 @@ where
         HInit: CdcHandle<E> + Sync + 'static,
         HChkLd: CdcHandle<E> + 'static,
     {
-        let (tx, rx) = channel(MESSAGE_BUFFER_SIZE);
+        let (tx, rx) = channel(message_buffer_size());
         let scan_pool_handle = spawn_executors(initial_loader.clone(), scan_pool_size);
         let op = Self {
             regions,
