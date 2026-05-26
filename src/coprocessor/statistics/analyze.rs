@@ -70,13 +70,13 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
         }
         let max_sample_size = req.get_sample_size() as usize;
         let sample_rate = req.get_sample_rate();
-        // `ndv_rate` controls row-level Bernoulli sampling while building the
-        // FM/singleton sketches. When it is unset (0), keep every row (1.0).
+        // `ndv_rate < 1` signals that NDV sampling is on, which means: build the
+        // singleton HLL sketches that feed the GEE f1 estimate. When unset (0),
+        // treat it as full rate (no NDV sampling). At full rate the FM sketch is
+        // already an exact NDV, so skip the singleton sketches to save CPU, memory,
+        // and serialized bytes.
         let ndv_rate = req.get_ndv_rate();
         let ndv_rate = if ndv_rate > 0.0 { ndv_rate } else { 1.0 };
-        // Singleton sketches only feed the GEE f1 estimate under NDV sub-sampling.
-        // At full rate (ndv_rate >= 1) the FM sketch is already an exact NDV, so
-        // skip building them to avoid wasted CPU, memory, and serialized bytes.
         let build_singletons = ndv_rate < 1.0;
         let common_handle_ids = req.take_primary_column_ids();
         let mut table_scanner = BatchTableScanExecutor::new(
@@ -89,7 +89,10 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             false, // Streaming mode is not supported in Analyze request, always false here
             req.take_primary_prefix_column_ids(),
         )?;
-        table_scanner.set_row_sample_rate(ndv_rate);
+        // NDV sampling reduces the data at the TiDB level (it selects a subset of
+        // regions and a key-range within each), so do not also thin rows here —
+        // keep every row of whatever ranges this request was given.
+        table_scanner.set_row_sample_rate(1.0);
         Ok(Self {
             data: table_scanner,
             accumulated_storage_stats: Statistics::default(),
@@ -304,9 +307,11 @@ trait RowSampleCollector: Send {
     }
 }
 
+// SingletonSketch tracks which hashes have been seen exactly once (`once`) versus
+// more than once (`multi`) so into_hlls can build a "seen exactly once" HLL. Both
+// sets are transient per scan and bounded by the sampled distinct count.
 #[derive(Clone)]
 struct SingletonSketch {
-    mask: u64,
     once: HashSet<u64>,
     multi: HashSet<u64>,
 }
@@ -314,7 +319,6 @@ struct SingletonSketch {
 impl SingletonSketch {
     fn new() -> SingletonSketch {
         SingletonSketch {
-            mask: 0,
             once: HashSet::with_capacity_and_hasher(0, Default::default()),
             multi: HashSet::with_capacity_and_hasher(0, Default::default()),
         }
@@ -326,9 +330,6 @@ impl SingletonSketch {
     }
 
     fn insert_hash_value(&mut self, hash_val: u64) {
-        if (hash_val & self.mask) != 0 {
-            return;
-        }
         if self.multi.contains(&hash_val) {
             return;
         }
@@ -353,7 +354,7 @@ impl SingletonSketch {
         for &hash in &self.multi {
             ndv.insert_hash_value(hash);
         }
-        ((&ndv).into(), (&singleton).into())
+        (ndv.into(), singleton.into())
     }
 }
 

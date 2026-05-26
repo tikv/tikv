@@ -92,11 +92,11 @@ fn alpha(m: usize) -> f64 {
     }
 }
 
-impl From<&Hll> for tipb::HllSketch {
-    fn from(h: &Hll) -> tipb::HllSketch {
+impl From<Hll> for tipb::HllSketch {
+    fn from(h: Hll) -> tipb::HllSketch {
         let mut proto = tipb::HllSketch::default();
-        proto.set_registers(h.registers.clone());
         proto.set_precision(u32::from(h.precision));
+        proto.set_registers(h.registers); // move the register bytes, no clone
         proto
     }
 }
@@ -167,7 +167,7 @@ mod tests {
         same.merge(&h);
         assert_eq!(before, same.count());
         // Proto carries the raw registers and precision.
-        let proto: tipb::HllSketch = (&h).into();
+        let proto: tipb::HllSketch = h.into();
         assert_eq!(proto.get_precision(), u32::from(DEFAULT_HLL_PRECISION));
         assert_eq!(proto.get_registers().len(), 1usize << DEFAULT_HLL_PRECISION);
     }
