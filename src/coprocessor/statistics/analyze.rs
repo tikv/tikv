@@ -6,6 +6,7 @@ use api_version::KvFormat;
 use collections::HashSet;
 use kvproto::coprocessor::KeyRange;
 use mur3::{Hasher128, murmurhash3_x64_128};
+use protobuf::Message;
 use rand::{Rng, rngs::StdRng};
 use tidb_query_common::execute_stats::ExecuteStats;
 use tidb_query_datatype::{
@@ -269,8 +270,19 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
     }
 }
 
+type BernoulliSamples = Vec<Vec<Vec<u8>>>;
+type ReservoirSamples = BinaryHeap<Reverse<(i64, Vec<Vec<u8>>)>>;
+
 trait RowSampleCollector: Send {
     fn mut_base(&mut self) -> &mut BaseRowSampleCollector;
+    fn take_base(&mut self) -> BaseRowSampleCollector;
+    fn merge_collector(&mut self, other: Box<dyn RowSampleCollector>) -> Result<()>;
+    fn take_bernoulli_samples(&mut self) -> Option<BernoulliSamples> {
+        None
+    }
+    fn take_reservoir_samples(&mut self) -> Option<ReservoirSamples> {
+        None
+    }
     fn collect_column_group(
         &mut self,
         columns_val: &[Vec<u8>],
@@ -328,6 +340,19 @@ impl SingletonSketch {
             self.multi.insert(hash_val);
         } else {
             self.once.insert(hash_val);
+        }
+    }
+
+    fn merge(&mut self, other: SingletonSketch) {
+        for hash in other.once {
+            self.insert_hash_value(hash);
+        }
+        for hash in other.multi {
+            if (hash & self.mask) != 0 {
+                continue;
+            }
+            self.once.remove(&hash);
+            self.multi.insert(hash);
         }
     }
 
@@ -391,6 +416,23 @@ fn rescale_sampled_value(sampled: i64, total_row_count: u64, sample_count: u64) 
     scaled.min(i64::MAX as u128) as i64
 }
 
+fn add_i64_repeated(dst: &mut Vec<i64>, src: &[i64]) {
+    if dst.len() < src.len() {
+        dst.resize(src.len(), 0);
+    }
+    for (idx, value) in src.iter().enumerate() {
+        dst[idx] += value;
+    }
+}
+
+fn row_sample_memory_usage(row: &[Vec<u8>]) -> usize {
+    row.iter().map(Vec::capacity).sum()
+}
+
+fn bernoulli_samples_memory_usage(samples: &[Vec<Vec<u8>>]) -> usize {
+    samples.iter().map(|row| row_sample_memory_usage(row)).sum()
+}
+
 impl BaseRowSampleCollector {
     fn new(
         max_fm_sketch_size: usize,
@@ -409,6 +451,34 @@ impl BaseRowSampleCollector {
             total_sizes: vec![0; col_and_group_len],
             memory_usage: 0,
             reported_memory_usage: 0,
+        }
+    }
+
+    fn merge_from(&mut self, other: &mut BaseRowSampleCollector) {
+        self.count += other.count;
+        self.sketch_sample_count += other.sketch_sample_count;
+        add_i64_repeated(&mut self.null_count, &other.null_count);
+        add_i64_repeated(&mut self.total_sizes, &other.total_sizes);
+
+        for (idx, other_sketch) in mem::take(&mut other.fm_sketches).into_iter().enumerate() {
+            if idx >= self.fm_sketches.len() {
+                self.fm_sketches.push(other_sketch);
+            } else {
+                self.fm_sketches[idx].merge(&other_sketch);
+            }
+        }
+
+        if self.build_singletons && other.build_singletons {
+            for (idx, other_singleton) in mem::take(&mut other.singleton_sketches)
+                .into_iter()
+                .enumerate()
+            {
+                if idx >= self.singleton_sketches.len() {
+                    self.singleton_sketches.push(other_singleton);
+                } else {
+                    self.singleton_sketches[idx].merge(other_singleton);
+                }
+            }
         }
     }
 
@@ -586,6 +656,29 @@ impl RowSampleCollector for BernoulliRowSampleCollector {
     fn mut_base(&mut self) -> &mut BaseRowSampleCollector {
         &mut self.base
     }
+
+    fn take_base(&mut self) -> BaseRowSampleCollector {
+        mem::take(&mut self.base)
+    }
+
+    fn merge_collector(&mut self, mut other: Box<dyn RowSampleCollector>) -> Result<()> {
+        let mut samples = other.take_bernoulli_samples().ok_or_else(|| {
+            Error::Other("cannot merge reservoir samples into bernoulli samples".to_owned())
+        })?;
+        let sample_memory_usage = bernoulli_samples_memory_usage(&samples);
+        self.samples.append(&mut samples);
+        self.base.memory_usage += sample_memory_usage;
+        self.base.report_memory_usage(false);
+
+        let mut other_base = other.take_base();
+        self.base.merge_from(&mut other_base);
+        Ok(())
+    }
+
+    fn take_bernoulli_samples(&mut self) -> Option<BernoulliSamples> {
+        Some(mem::take(&mut self.samples))
+    }
+
     fn collect_column_group(
         &mut self,
         columns_val: &[Vec<u8>],
@@ -662,12 +755,53 @@ impl ReservoirRowSampleCollector {
             max_sample_size,
         }
     }
+
+    fn should_keep_weight(&self, weight: i64) -> bool {
+        if self.max_sample_size == 0 {
+            return false;
+        }
+        self.samples.len() < self.max_sample_size || self.samples.peek().unwrap().0.0 < weight
+    }
+
+    fn push_weighted_sample(&mut self, weight: i64, sample: Vec<Vec<u8>>) {
+        if self.samples.len() >= self.max_sample_size {
+            let (_, evicted) = self.samples.pop().unwrap().0;
+            self.base.memory_usage -= row_sample_memory_usage(&evicted);
+        }
+        self.base.memory_usage += row_sample_memory_usage(&sample);
+        self.samples.push(Reverse((weight, sample)));
+    }
 }
 
 impl RowSampleCollector for ReservoirRowSampleCollector {
     fn mut_base(&mut self) -> &mut BaseRowSampleCollector {
         &mut self.base
     }
+
+    fn take_base(&mut self) -> BaseRowSampleCollector {
+        mem::take(&mut self.base)
+    }
+
+    fn merge_collector(&mut self, mut other: Box<dyn RowSampleCollector>) -> Result<()> {
+        let samples = other.take_reservoir_samples().ok_or_else(|| {
+            Error::Other("cannot merge bernoulli samples into reservoir samples".to_owned())
+        })?;
+        for Reverse((weight, sample)) in samples {
+            if self.should_keep_weight(weight) {
+                self.push_weighted_sample(weight, sample);
+            }
+        }
+        self.base.report_memory_usage(false);
+
+        let mut other_base = other.take_base();
+        self.base.merge_from(&mut other_base);
+        Ok(())
+    }
+
+    fn take_reservoir_samples(&mut self) -> Option<ReservoirSamples> {
+        Some(mem::take(&mut self.samples))
+    }
+
     fn collect_column_group(
         &mut self,
         columns_val: &[Vec<u8>],
@@ -695,25 +829,10 @@ impl RowSampleCollector for ReservoirRowSampleCollector {
     }
 
     fn sampling(&mut self, data: &[Vec<u8>]) {
-        // We should tolerate the abnormal case => `self.max_sample_size == 0`.
-        if self.max_sample_size == 0 {
-            return;
-        }
-        let mut need_push = false;
         let cur_rng = self.base.rng.gen_range(0, i64::MAX);
-        if self.samples.len() < self.max_sample_size {
-            need_push = true;
-        } else if self.samples.peek().unwrap().0.0 < cur_rng {
-            need_push = true;
-            let (_, evicted) = self.samples.pop().unwrap().0;
-            self.base.memory_usage -= evicted.iter().map(|x| x.capacity()).sum::<usize>();
-        }
-
-        if need_push {
-            let sample = data.to_vec();
-            self.base.memory_usage += sample.iter().map(|x| x.capacity()).sum::<usize>();
+        if self.should_keep_weight(cur_rng) {
+            self.push_weighted_sample(cur_rng, data.to_vec());
             self.base.report_memory_usage(false);
-            self.samples.push(Reverse((cur_rng, sample)));
         }
     }
 
@@ -1002,7 +1121,7 @@ impl From<SampleCollector> for tipb::SampleCollector {
     }
 }
 
-pub(crate) struct AnalyzeSamplingResult {
+pub struct AnalyzeSamplingResult {
     row_sample_collector: Box<dyn RowSampleCollector>,
 }
 
@@ -1011,6 +1130,16 @@ impl AnalyzeSamplingResult {
         AnalyzeSamplingResult {
             row_sample_collector,
         }
+    }
+
+    pub(crate) fn merge_from(&mut self, other: AnalyzeSamplingResult) -> Result<()> {
+        self.row_sample_collector
+            .merge_collector(other.row_sample_collector)
+    }
+
+    pub(crate) fn write_to_bytes(self) -> Result<Vec<u8>> {
+        let resp: tipb::AnalyzeColumnsResp = self.into();
+        Ok(box_try!(resp.write_to_bytes()))
     }
 }
 
@@ -1136,6 +1265,71 @@ mod tests {
 
         let proto = sketch.into_proto(max_fm_sketch_size);
         assert!(proto.get_hashset().len() <= max_fm_sketch_size);
+    }
+
+    fn sorted_hashset(sketch: &tipb::FmSketch) -> Vec<u64> {
+        let mut hashes = sketch.get_hashset().to_vec();
+        hashes.sort_unstable();
+        hashes
+    }
+
+    fn test_sampling_result(
+        count: u64,
+        sketch_sample_count: u64,
+        null_count: i64,
+        total_size: i64,
+        sample_weights: &[i64],
+        ndv_hashes: &[u64],
+        singleton_hashes: &[u64],
+    ) -> AnalyzeSamplingResult {
+        let mut collector = ReservoirRowSampleCollector::new(2, 1000, 1, true);
+        collector.base.count = count;
+        collector.base.sketch_sample_count = sketch_sample_count;
+        collector.base.null_count[0] = null_count;
+        collector.base.total_sizes[0] = total_size;
+        for hash in ndv_hashes {
+            collector.base.fm_sketches[0].insert_hash_value(*hash);
+        }
+        for hash in singleton_hashes {
+            collector.base.singleton_sketches[0].insert_hash_value(*hash);
+        }
+        for weight in sample_weights {
+            collector.push_weighted_sample(*weight, vec![vec![*weight as u8]]);
+        }
+        AnalyzeSamplingResult::new(Box::new(collector))
+    }
+
+    #[test]
+    fn test_analyze_sampling_result_merge_preserves_group_singletons() {
+        let a = 10;
+        let b = 20;
+        let c = 30;
+        let mut result = test_sampling_result(2, 2, 1, 10, &[1, 3], &[a, b], &[a, b]);
+        result
+            .merge_from(test_sampling_result(2, 2, 2, 20, &[4], &[a, c], &[a, c]))
+            .unwrap();
+
+        let resp: tipb::AnalyzeColumnsResp = result.into();
+        let collector = resp.get_row_collector();
+        assert_eq!(collector.get_count(), 4);
+        assert_eq!(collector.get_sketch_sample_count(), 4);
+        assert_eq!(collector.get_null_counts(), &[3]);
+        assert_eq!(collector.get_total_size(), &[30]);
+
+        let mut sample_weights: Vec<_> = collector
+            .get_samples()
+            .iter()
+            .map(|sample| sample.get_weight())
+            .collect();
+        sample_weights.sort_unstable();
+        assert_eq!(sample_weights, vec![3, 4]);
+        assert_eq!(sorted_hashset(&collector.get_fm_sketch()[0]), vec![a, b, c]);
+        // `a` is singleton in both input regions, so it appears twice in the
+        // merged batch and must not survive as a group singleton.
+        assert_eq!(
+            sorted_hashset(&collector.get_singleton_sketch()[0]),
+            vec![b, c]
+        );
     }
 
     #[test]

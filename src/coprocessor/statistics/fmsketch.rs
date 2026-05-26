@@ -79,6 +79,16 @@ impl FmSketch {
             self.mask = mask;
         }
     }
+
+    pub(crate) fn merge(&mut self, other: &FmSketch) {
+        if self.mask < other.mask {
+            self.mask = other.mask;
+            self.hash_set.retain(|&x| x & self.mask == 0);
+        }
+        for hash in &other.hash_set {
+            self.insert_hash_value(*hash);
+        }
+    }
 }
 
 impl From<FmSketch> for tipb::FmSketch {
