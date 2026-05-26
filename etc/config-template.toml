@@ -1331,7 +1331,7 @@
 # num-threads = 8
 
 ## enable this feature. TiKV will starts watch related tasks in PD. and backup kv changes to storage accodring to task.
-## The default value is false.
+## The default value is true.
 # enable = true
 
 ## Enable GCP v2 external storage backend for log-backup.
