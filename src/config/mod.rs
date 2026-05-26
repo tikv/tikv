@@ -4191,6 +4191,7 @@ impl TikvConfig {
         self.gc.validate()?;
         self.resolved_ts.validate()?;
         self.resource_metering.validate()?;
+        self.resource_control.validate()?;
         self.quota.validate()?;
         self.causal_ts.validate()?;
 

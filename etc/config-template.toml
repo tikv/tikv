@@ -177,6 +177,92 @@
 ##                   impacted when the overall load is high.
 # priority-ctl-strategy = "moderate"
 
+## Maximum fraction of read CPU budget used by CPU throttling.
+## This value is also used by the CPU usage monitor when converting observed CPU time
+## into usage ratios.
+# max-read-cpu-ratio = 0.6
+
+[resource-control.cpu-throttle]
+## Whether to enable coprocessor CPU throttling.
+## This option takes effect only when [resource-control].enabled is true.
+# enabled = false
+
+## Estimated CPU time, in microseconds, allocated to a request before execution starts.
+# estimated-cpu-per-request-us = 1000
+
+## Per-resource-group estimated CPU overrides in the format "group_name:cpu_us,...".
+## Group names are case-insensitive. An empty group name maps to the default resource group.
+# resource-group-estimated-cpu-per-request-us = ""
+
+## Whether to adapt the per-request CPU estimate from observed request CPU usage.
+# enable-adaptive-estimated-cpu-per-request-us = true
+
+## Interval for collecting CPU usage samples and driving CPU throttle updates.
+# stats-interval = "1s"
+
+## Sliding window used to aggregate global and per-resource-group CPU usage.
+# window-size = "1m"
+
+## Interval for refilling CPU tokens.
+# refill-interval = "100ms"
+
+## Whether to dynamically adjust refill rates according to CPU usage watermarks.
+# enable-dynamic-adjustment = false
+
+## High watermark for CPU usage.
+## Refill rates are reduced when observed usage exceeds this value.
+# high-watermark = 0.8
+
+## Low watermark for CPU usage.
+## Refill rates recover toward the base rate when observed usage falls below this value.
+# low-watermark = 0.5
+
+## Whether to cap burst borrowing proportionally by resource-group weight when
+## global CPU usage is under pressure.
+# enable-fair-allocation = false
+
+## Global CPU usage threshold above which fair allocation starts limiting burst
+## borrowing.
+# fair-allocation-threshold = 0.7
+
+## Whether requests may continue with only the global bucket after their resource-group bucket is exhausted.
+# enable-burst = false
+
+## Optional per-resource-group burst overrides in the format
+## "group:true,other:false". If omitted for a group, `enable-burst` applies.
+# resource-group-burst-enabled = ""
+
+## CPU usage threshold used by burst mode.
+# burst-threshold = 0.9
+
+## Whether a running request may request additional CPU tokens during execution.
+# enable-runtime-token-management = true
+
+## Interval, in microseconds, between runtime token checks for a running request.
+# runtime-check-interval-us = 2000
+
+## Fraction of already allocated runtime tokens that may be consumed before requesting more.
+# additional-allocation-threshold = 0.5
+
+## Additional CPU tokens, in microseconds, requested each time runtime token allocation is triggered.
+# per-allocation-us = 4000
+
+## Whether to throttle the default resource group as well.
+# throttle-default-group = false
+
+## Equivalent `ru_quota`/weight assigned to the default resource group when
+## throttle-default-group is enabled.
+## TiKV uses this as the default group's expected share weight in the same
+## weighted split as other groups' configured `fill_rate`.
+## This is not a percentage.
+## This option is unset by default. If you enable default-group throttling, set a positive value explicitly.
+## Example:
+## default-group-weight = 100
+
+## Whether to emit extra debug logs for CPU throttling.
+## This option supports online updates.
+# debug = false
+
 [server]
 ## Listening address.
 # addr = "127.0.0.1:20160"
