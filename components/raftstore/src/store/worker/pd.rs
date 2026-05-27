@@ -46,11 +46,11 @@ use tikv_util::{
     logger::{Level, get_log_level},
     metrics::ThreadInfoStatistics,
     store::QueryStats,
-    sys::{SysQuota, disk, thread::StdThreadBuildWrapper},
-    thd_name,
-    thread_name_prefix::{
-        UNIFIED_READ_POOL_THREAD, matches_scheduler_thread_name, matches_thread_name_prefix,
+    sys::{
+        SysQuota, disk,
+        thread::{StdThreadBuildWrapper, matches_thread_name_prefix},
     },
+    thd_name,
     time::{Instant as TiInstant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
     topn::TopN,
@@ -910,6 +910,10 @@ const HOTSPOT_QUERY_RATE_THRESHOLD: u64 = 128;
 const HOTSPOT_BYTE_RATE_THRESHOLD: u64 = 8 * 1024;
 const HOTSPOT_REPORT_CAPACITY: usize = 1000;
 const HOTSPOT_REPORT_METRICS: usize = 5;
+const UNIFIED_READ_POOL_THREAD: &str = "unified-read";
+// Keep scheduler matching broad for CPU attribution. It matches release-8.5's
+// `sched-worker-*` and master's `sched-*`.
+const SCHEDULER_THREAD_PREFIX: &str = "sched";
 
 // TODO: support dynamic configure threshold in future.
 fn hotspot_cpu_usage_report_threshold() -> u64 {
@@ -1083,6 +1087,11 @@ struct TopReadCpuPeer {
 
 fn should_log_store_heartbeat_top_read_cpu() -> bool {
     matches!(get_log_level(), Some(Level::Debug) | Some(Level::Trace))
+}
+
+#[inline]
+fn matches_scheduler_thread_name(thread_name: &str) -> bool {
+    matches_thread_name_prefix(thread_name, SCHEDULER_THREAD_PREFIX)
 }
 
 fn log_store_heartbeat_top_read_cpu(

@@ -25,8 +25,7 @@ use resource_control::{
 use thiserror::Error;
 use tikv_util::{
     resource_control::TaskMetadata,
-    sys::{SysQuota, cpu_time::ProcessStat},
-    thread_name_prefix::{UNIFIED_READ_POOL_THREAD, matches_thread_name_prefix},
+    sys::{SysQuota, cpu_time::ProcessStat, thread::matches_thread_name_prefix},
     time::Instant,
     worker::{Runnable, RunnableWithTimer, Scheduler, Worker},
     yatp_pool::{self, CleanupMethod, FuturePool, PoolTicker, YatpPoolBuilder},
@@ -52,6 +51,7 @@ const READ_POOL_THREAD_HIGH_THRESHOLD: f64 = 0.8;
 const READ_POOL_THREAD_LOW_THRESHOLD: f64 = 0.7;
 // avg running tasks per-thread that indicates read-pool is busy
 const RUNNING_TASKS_PER_THREAD_THRESHOLD: i64 = 3;
+const UNIFIED_READ_POOL_THREAD: &str = "unified-read";
 
 pub enum ReadPool {
     FuturePools {

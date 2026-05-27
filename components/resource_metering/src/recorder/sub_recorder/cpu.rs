@@ -1,12 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use collections::HashMap;
-use tikv_util::{
-    sys::thread::{self, Pid, THREAD_NAME_HASHMAP},
-    thread_name_prefix::{
-        UNIFIED_READ_POOL_THREAD, matches_scheduler_thread_name, matches_thread_name_prefix,
-    },
-};
+use tikv_util::sys::thread::{self, Pid, THREAD_NAME_HASHMAP, matches_thread_name_prefix};
 
 use crate::{
     RawRecords, ThreadPoolType,
@@ -27,6 +22,16 @@ use crate::{
 #[derive(Default)]
 pub struct CpuRecorder {
     thread_stats: HashMap<Pid, ThreadStat>,
+}
+
+const UNIFIED_READ_POOL_THREAD: &str = "unified-read";
+// Keep scheduler matching broad for CPU attribution. It matches release-8.5's
+// `sched-worker-*` and master's `sched-*`.
+const SCHEDULER_THREAD_PREFIX: &str = "sched";
+
+#[inline]
+fn matches_scheduler_thread_name(thread_name: &str) -> bool {
+    matches_thread_name_prefix(thread_name, SCHEDULER_THREAD_PREFIX)
 }
 
 /// Detect the thread pool type from the thread name stored in
