@@ -628,10 +628,7 @@ mod tests {
     use tikv::{
         config::DbConfig,
         storage::{
-<<<<<<< HEAD
-=======
             TestEngineBuilder, TestStorageBuilderApiV1,
->>>>>>> 6d119b06c8 (cdc, tikv_kv: avoid repeated old value cursor prev in incremental scan (#19614))
             kv::Engine,
             lock_manager::MockLockManager,
             txn::{
