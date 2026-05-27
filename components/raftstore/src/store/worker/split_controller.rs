@@ -22,6 +22,7 @@ use tikv_util::{
     debug, info,
     metrics::ThreadInfoStatistics,
     store::{QueryStats, is_read_query},
+    sys::thread::matches_thread_name_prefix,
     time::Instant,
     warn,
 };
@@ -37,6 +38,8 @@ use crate::store::{
 
 const DEFAULT_MAX_SAMPLE_LOOP_COUNT: usize = 10000;
 pub const TOP_N: usize = 10;
+const GRPC_SERVER_THREAD: &str = "grpc-server";
+const UNIFIED_READ_POOL_THREAD: &str = "unified-read";
 
 // It will return prefix sum of the given iter,
 // `read` is a function to process the item from the iter.
@@ -747,7 +750,7 @@ impl AutoSplitController {
         thread_stats
             .get_cpu_usages()
             .iter()
-            .filter(|(thread_name, _)| thread_name.contains(name))
+            .filter(|(thread_name, _)| matches_thread_name_prefix(thread_name, name))
             .fold(0, |cpu_usage_sum, (_, cpu_usage)| {
                 // `cpu_usage` is in [0, 100].
                 cpu_usage_sum + cpu_usage
@@ -772,8 +775,8 @@ impl AutoSplitController {
         // Prepare some diagnostic info.
         thread_stats.record();
         let (grpc_thread_usage, unified_read_pool_thread_usage) = (
-            Self::collect_thread_usage(thread_stats, "grpc-server"),
-            Self::collect_thread_usage(thread_stats, "unified-read-po"),
+            Self::collect_thread_usage(thread_stats, GRPC_SERVER_THREAD),
+            Self::collect_thread_usage(thread_stats, UNIFIED_READ_POOL_THREAD),
         );
         // Update first before calculating the latest average gRPC poll CPU usage.
         self.update_grpc_thread_usage(grpc_thread_usage);
@@ -1430,6 +1433,7 @@ mod tests {
                     network_out_bytes: 0,
                     logical_read_bytes: 0,
                     logical_write_bytes: 0,
+                    ..Default::default()
                 },
             );
         }
@@ -1910,6 +1914,7 @@ mod tests {
                     network_out_bytes: 0,
                     logical_read_bytes: 0,
                     logical_write_bytes: 0,
+                    ..Default::default()
                 },
             );
             // ["c", "d"] with (test_case.1)ms CPU time.
@@ -1923,6 +1928,7 @@ mod tests {
                     network_out_bytes: 0,
                     logical_read_bytes: 0,
                     logical_write_bytes: 0,
+                    ..Default::default()
                 },
             );
             // Multiple key ranges with (test_case.2)ms CPU time.
@@ -1936,6 +1942,7 @@ mod tests {
                     network_out_bytes: 0,
                     logical_read_bytes: 0,
                     logical_write_bytes: 0,
+                    ..Default::default()
                 },
             );
             // Empty key range with (test_case.3)ms CPU time.
@@ -1949,6 +1956,7 @@ mod tests {
                     network_out_bytes: 0,
                     logical_read_bytes: 0,
                     logical_write_bytes: 0,
+                    ..Default::default()
                 },
             );
 

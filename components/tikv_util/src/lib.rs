@@ -13,7 +13,6 @@ extern crate test;
 use std::{
     cmp,
     collections::{
-        HashMap,
         hash_map::Entry,
         vec_deque::{Iter, VecDeque},
     },
