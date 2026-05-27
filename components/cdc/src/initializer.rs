@@ -628,7 +628,6 @@ mod tests {
     use tikv::{
         config::DbConfig,
         storage::{
-            TestEngineBuilder, TestStorageBuilderApiV1,
             kv::Engine,
             lock_manager::MockLockManager,
             txn::{
@@ -638,7 +637,7 @@ mod tests {
                     must_prewrite_put, must_prewrite_put_with_txn_soucre,
                 },
             },
-            TestEngineBuilder,
+            TestEngineBuilder, TestStorageBuilderApiV1,
         },
     };
     use tikv_util::{
