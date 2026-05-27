@@ -14,7 +14,7 @@ use health_controller::HealthController;
 use prometheus::{HistogramVec, exponential_buckets, register_histogram_vec};
 use tikv_util::{
     config::VersionTrack,
-    error, logger,
+    crit, error, logger,
     metrics::CRITICAL_ERROR,
     sys::thread::StdThreadBuildWrapper,
     time::{monotonic_raw_now, timespec_to_ns},
@@ -59,6 +59,7 @@ fn fail_fast_timeout(cfg: &Config) -> Option<Duration> {
         .and_then(|timeout| (!timeout.0.is_zero()).then_some(timeout.0))
 }
 
+// Returns false when shutdown is requested.
 fn run_probe(stop: &AtomicBool, disk: &'static str, probe: &ProbeRunner) -> bool {
     let started = probe.try_start_probe();
     debug_assert!(started, "fail-fast probe must not overlap");
@@ -94,43 +95,19 @@ fn run_probe(stop: &AtomicBool, disk: &'static str, probe: &ProbeRunner) -> bool
     true
 }
 
-fn log_stuck_probe(disk: &'static str, probe: &ProbeRunner) {
-    if let Some(elapsed) = probe.current_probe_elapsed() {
-        if elapsed < IN_FLIGHT_LOG_THRESHOLD {
-            return;
-        }
-        let critical_error_kind = match disk {
-            "raft" => CRITICAL_ERROR_DISK_PROBE_STUCK_RAFT,
-            "kv" => CRITICAL_ERROR_DISK_PROBE_STUCK_KV,
-            _ => return,
-        };
-        CRITICAL_ERROR
-            .with_label_values(&[critical_error_kind])
-            .inc();
-        error!(
-            "fail-fast probe: disk still not responsive after elapsed";
-            "disk" => disk,
-            "path" => %probe.path().display(),
-            "elapsed" => ?elapsed,
-        );
-    }
-}
-
 fn spawn_probe_thread(
+    name: &'static str,
     cfg: Arc<VersionTrack<Config>>,
     stop: Arc<AtomicBool>,
     raft_probe: ProbeRunner,
     kv_probe: Option<ProbeRunner>,
 ) -> std::io::Result<()> {
-    // The blocking `write + sync_all` probe can hang indefinitely on an
-    // unresponsive disk. Run it on a dedicated OS thread that is not joined
-    // during shutdown, so manual stop/restart is not blocked by a stuck probe.
+    // A single probe thread alternates raft -> kv.
     std::thread::Builder::new()
-        .name("fail-fast-probe".to_owned())
+        .name(name.to_owned())
         .spawn_wrapper(move || {
             while !stop.load(Ordering::Acquire) {
-                // Avoid issuing any IO when fail-fast is disabled. Otherwise the
-                // default config (None) still creates background fsync traffic.
+                // Avoid issuing background IO when fail-fast is disabled.
                 let Some(_) = fail_fast_timeout(&cfg.value()) else {
                     std::thread::sleep(PROBE_INTERVAL);
                     continue;
@@ -151,6 +128,75 @@ fn spawn_probe_thread(
     Ok(())
 }
 
+// Returns the fail-fast decision for one disk probe.
+//
+// The base rule comes from the probe itself:
+// 1. an in-flight `write + sync_all` probe reaches the timeout, or
+// 2. probes have kept failing for a full timeout window after a prior success.
+//
+// Recent successful sync-backed progress on the same disk vetoes that decision
+// to reduce false positives. In other words, if the direct probe looks bad but
+// real sync-backed work has still completed recently on that disk, TiKV treats
+// the disk as still making forward progress and does not fail fast yet.
+fn should_fail_fast(
+    probe: Option<&ProbeRunner>,
+    disk: &'static str,
+    timeout: Duration,
+    last_sync_success_at_millis: &AtomicU64,
+    stuck_critical_error_kind: &'static str,
+    fail_fast_critical_error_kind: &'static str,
+) -> bool {
+    let Some(probe) = probe else {
+        return false;
+    };
+    let current_probe_elapsed = probe.current_probe_elapsed();
+    if let Some(elapsed) = current_probe_elapsed {
+        if elapsed >= IN_FLIGHT_LOG_THRESHOLD {
+            CRITICAL_ERROR
+                .with_label_values(&[stuck_critical_error_kind])
+                .inc();
+            error!(
+                "fail-fast probe: disk still not responsive after elapsed";
+                "disk" => disk,
+                "path" => %probe.path().display(),
+                "elapsed" => ?elapsed,
+            );
+        }
+    }
+
+    let last_sync_success_elapsed = last_sync_success_elapsed(last_sync_success_at_millis);
+    let base_signal = current_probe_elapsed.is_some_and(|elapsed| elapsed >= timeout)
+        || should_fail_fast_on_repeated_failures(probe, timeout);
+    if !base_signal {
+        return false;
+    }
+
+    let vetoed_by_recent_progress =
+        last_sync_success_elapsed.is_some_and(|elapsed| elapsed < timeout);
+    if vetoed_by_recent_progress {
+        warn!(
+            "fail-fast vetoed by recent sync-backed progress";
+            "disk" => disk,
+            "timeout" => ?timeout,
+            "current_probe_elapsed" => ?current_probe_elapsed,
+            "last_sync_success_elapsed" => ?last_sync_success_elapsed,
+        );
+        return false;
+    }
+
+    CRITICAL_ERROR
+        .with_label_values(&[fail_fast_critical_error_kind])
+        .inc();
+    crit!(
+        "fail-fast: disk probe timed out, shutting down to avoid serving on an unhealthy disk";
+        "disk" => disk,
+        "timeout" => ?timeout,
+        "current_probe_elapsed" => ?current_probe_elapsed,
+        "last_sync_success_elapsed" => ?last_sync_success_elapsed,
+    );
+    true
+}
+
 /// Detects one class of TiKV "zombie" failure and chooses to hard-exit.
 ///
 /// The target failure mode here is: the process is still alive and may still
@@ -159,25 +205,19 @@ fn spawn_probe_thread(
 /// alive can prolong unavailability and hide the failure from orchestration.
 ///
 /// The monitor has two parts:
-/// 1. A dedicated probe thread periodically runs a blocking `write + sync_all`
-///    probe against the raft disk, and against the kv disk as well when raft
-///    and kv are deployed on different mount points.
+/// 1. One dedicated probe thread periodically runs blocking `write + sync_all`
+///    probes, alternating raft -> kv when both disks are configured.
 /// 2. A separate checker worker periodically inspects the probe state, so a
 ///    hung blocking probe cannot prevent fail-fast from being triggered.
 ///
-/// The checker treats a disk as hung under either of these rules:
-/// 1. The current probe is still in flight and its elapsed time has reached
-///    `raftstore.disk-hang-timeout`.
-/// 2. There is no current in-flight probe, but probes have kept failing for at
-///    least `raftstore.disk-hang-timeout` after a prior successful probe.
-///
-/// Raft has one extra anti-false-positive guard: even if the dedicated raft
-/// probe is slow, the checker will not fail fast on that signal alone if real
-/// raft-log appends have still succeeded within the same timeout window.
+/// The checker applies that same rule directly. Raft may veto a probe timeout
+/// if real raft-log appends have still succeeded recently, and kv may veto a
+/// probe timeout if a real kv WAL sync has still succeeded recently.
 ///
 /// Once any disk meets the fail-fast rule, TiKV emits the final error, gives
-/// the async logger a brief best-effort flush window, and then aborts. The
-/// scope is intentionally narrow today: disk hang is the first zombie-failure
+/// the async logger a brief best-effort flush window, and then panics so the
+/// panic hook can emit the fatal crash log before the process dies. The scope
+/// is intentionally narrow today: disk hang is the first zombie-failure
 /// scenario covered by this monitor.
 pub struct FailFastMonitor {
     stop: Arc<AtomicBool>,
@@ -193,6 +233,7 @@ impl FailFastMonitor {
         kv_probe_dir: Option<PathBuf>,
         check_worker: Worker,
         last_raft_append_success_at_millis: Arc<AtomicU64>,
+        last_kv_sync_success_at_millis: Arc<AtomicU64>,
     ) -> std::io::Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let raft_probe =
@@ -201,6 +242,7 @@ impl FailFastMonitor {
             kv_probe_dir.map(|dir| ProbeRunner::new(dir.join(KV_PROBE_FILENAME), KV_PROBE_PAYLOAD));
 
         spawn_probe_thread(
+            "fail-fast-probe",
             cfg.clone(),
             stop.clone(),
             raft_probe.clone(),
@@ -219,66 +261,28 @@ impl FailFastMonitor {
                 return;
             };
 
-            log_stuck_probe("raft", &raft_probe_for_check);
-            if let Some(probe) = kv_probe_for_check.as_ref() {
-                log_stuck_probe("kv", probe);
-            }
-
-            let raft_elapsed = raft_probe_for_check.current_probe_elapsed();
-            let kv_elapsed = kv_probe_for_check
-                .as_ref()
-                .and_then(|probe| probe.current_probe_elapsed());
-            // Raft has one extra anti-false-positive guard: do not fail fast on
-            // a single slow probe if normal raft-log appends have still made
-            // progress within the same timeout window.
-            let raft_last_append_success_elapsed =
-                last_raft_append_success_elapsed(&last_raft_append_success_at_millis);
-            let raft_recent_append_progress =
-                raft_last_append_success_elapsed.is_some_and(|elapsed| elapsed < timeout);
-            // Fail-fast is armed by either:
-            // 1. the current probe staying in flight for >= timeout, or
-            // 2. repeated probe failures for >= timeout after a prior success.
-            let raft_should_fail_fast = should_fail_fast_for_raft_probe(
-                &raft_probe_for_check,
+            let raft_should_fail_fast = should_fail_fast(
+                Some(&raft_probe_for_check),
+                "raft",
                 timeout,
-                raft_recent_append_progress,
+                &last_raft_append_success_at_millis,
+                CRITICAL_ERROR_DISK_PROBE_STUCK_RAFT,
+                CRITICAL_ERROR_DISK_PROBE_FAIL_FAST_RAFT,
             );
-            let kv_should_fail_fast = kv_elapsed.is_some_and(|elapsed| elapsed >= timeout)
-                || kv_probe_for_check
-                    .as_ref()
-                    .is_some_and(|probe| should_fail_fast_on_repeated_failures(probe, timeout));
-            if !raft_should_fail_fast && !kv_should_fail_fast {
-                return;
-            }
-
-            if raft_should_fail_fast {
-                CRITICAL_ERROR
-                    .with_label_values(&[CRITICAL_ERROR_DISK_PROBE_FAIL_FAST_RAFT])
-                    .inc();
-            }
-            if kv_should_fail_fast {
-                CRITICAL_ERROR
-                    .with_label_values(&[CRITICAL_ERROR_DISK_PROBE_FAIL_FAST_KV])
-                    .inc();
-            }
-
-            error!(
-                "fail-fast: disk probe timed out, shutting down to avoid serving on an unhealthy disk";
-                "timeout" => ?timeout,
-                "raft_current_probe_elapsed" => ?raft_elapsed,
-                "kv_current_probe_elapsed" => ?kv_elapsed,
-                "raft_time_since_last_success" => ?raft_probe_for_check.time_since_last_success(),
-                "kv_time_since_last_success" => ?kv_probe_for_check
-                    .as_ref()
-                    .and_then(|probe| probe.time_since_last_success()),
-                "raft_failure_count_since_last_success" => raft_probe_for_check
-                    .failure_count_since_last_success(),
-                "kv_failure_count_since_last_success" => kv_probe_for_check
-                    .as_ref()
-                    .map_or(0, |probe| probe.failure_count_since_last_success()),
-                "raft_last_append_success_elapsed" => ?raft_last_append_success_elapsed,
+            let kv_should_fail_fast = should_fail_fast(
+                kv_probe_for_check.as_ref(),
+                "kv",
+                timeout,
+                &last_kv_sync_success_at_millis,
+                CRITICAL_ERROR_DISK_PROBE_STUCK_KV,
+                CRITICAL_ERROR_DISK_PROBE_FAIL_FAST_KV,
             );
-            logger::abort_process_after_best_effort_flush(FAIL_FAST_LOG_FLUSH_TIMEOUT);
+            if raft_should_fail_fast || kv_should_fail_fast {
+                logger::panic_after_best_effort_flush(
+                    FAIL_FAST_LOG_FLUSH_TIMEOUT,
+                    "fail-fast: TiKV self-killed due to disk unavailability",
+                );
+            }
         });
 
         Ok(Self {
@@ -294,7 +298,7 @@ impl FailFastMonitor {
     }
 
     fn cleanup_probe_file(&self) {
-        let kv_path = self.kv_probe.as_ref().map(|probe| probe.path());
+        let kv_path = self.kv_probe.as_ref().map(ProbeRunner::path);
         for path in std::iter::once(self.raft_probe.path()).chain(kv_path.into_iter()) {
             if let Err(e) = fs::remove_file(path) {
                 if e.kind() != std::io::ErrorKind::NotFound {
@@ -303,20 +307,6 @@ impl FailFastMonitor {
             }
         }
     }
-}
-
-fn should_fail_fast_for_raft_probe(
-    probe: &ProbeRunner,
-    timeout: Duration,
-    has_recent_append_progress: bool,
-) -> bool {
-    // For raft, a slow probe alone is not enough if real raft appends are
-    // still succeeding recently. That treats actual raft progress as a veto on
-    // top of the generic probe-timeout rule.
-    probe
-        .current_probe_elapsed()
-        .is_some_and(|elapsed| elapsed >= timeout && !has_recent_append_progress)
-        || should_fail_fast_on_repeated_failures(probe, timeout)
 }
 
 // This catches the "not one forever-stuck probe, but no successful probe for a
@@ -330,15 +320,10 @@ fn should_fail_fast_on_repeated_failures(probe: &ProbeRunner, timeout: Duration)
             .is_some_and(|elapsed| elapsed >= timeout)
 }
 
-// Returns how long it has been since the last successful raft-log append,
-// using the same monotonic raw clock as the write thread.
-//
-// This is intentionally only a coarse veto signal for the raft probe path; kv
-// fail-fast currently relies only on the probe state itself.
-fn last_raft_append_success_elapsed(
-    last_raft_append_success_at_millis: &AtomicU64,
-) -> Option<Duration> {
-    let last = last_raft_append_success_at_millis.load(Ordering::Relaxed);
+// Returns how long it has been since the last successful sync-backed progress
+// signal on a disk, using the same monotonic raw clock as the producer side.
+fn last_sync_success_elapsed(last_sync_success_at_millis: &AtomicU64) -> Option<Duration> {
+    let last = last_sync_success_at_millis.load(Ordering::Relaxed);
     if last == 0 {
         return None;
     }
@@ -380,15 +365,21 @@ mod tests {
     }
 
     #[test]
-    fn test_should_fail_fast_for_raft_probe_with_recent_progress_veto() {
+    fn test_should_fail_fast_on_timeout() {
         let dir = tempdir().unwrap();
         let probe = ProbeRunner::new(dir.path().join(RAFT_PROBE_FILENAME), RAFT_PROBE_PAYLOAD);
         let timeout = Duration::from_millis(10);
 
         assert!(probe.try_start_probe());
         std::thread::sleep(timeout + Duration::from_millis(5));
-        assert!(!should_fail_fast_for_raft_probe(&probe, timeout, true));
-        assert!(should_fail_fast_for_raft_probe(&probe, timeout, false));
+        assert!(should_fail_fast(
+            Some(&probe),
+            "raft",
+            timeout,
+            &AtomicU64::new(0),
+            CRITICAL_ERROR_DISK_PROBE_STUCK_RAFT,
+            CRITICAL_ERROR_DISK_PROBE_FAIL_FAST_RAFT,
+        ));
     }
 
     #[test]
@@ -403,5 +394,83 @@ mod tests {
         probe.finish_probe_failure();
         std::thread::sleep(timeout + Duration::from_millis(5));
         assert!(should_fail_fast_on_repeated_failures(&probe, timeout));
+    }
+
+    #[test]
+    fn test_should_fail_fast_repeated_failures_respect_raft_progress_veto() {
+        let dir = tempdir().unwrap();
+        let probe = ProbeRunner::new(dir.path().join(RAFT_PROBE_FILENAME), RAFT_PROBE_PAYLOAD);
+        let timeout = Duration::from_millis(10);
+
+        probe.finish_probe_success();
+        assert!(probe.try_start_probe());
+        probe.finish_probe_failure();
+        std::thread::sleep(timeout + Duration::from_millis(5));
+
+        assert!(!should_fail_fast(
+            Some(&probe),
+            "raft",
+            timeout,
+            &AtomicU64::new(timespec_to_ns(monotonic_raw_now()) / 1_000_000),
+            CRITICAL_ERROR_DISK_PROBE_STUCK_RAFT,
+            CRITICAL_ERROR_DISK_PROBE_FAIL_FAST_RAFT,
+        ));
+        assert!(should_fail_fast(
+            Some(&probe),
+            "raft",
+            timeout,
+            &AtomicU64::new(
+                (timespec_to_ns(monotonic_raw_now()) / 1_000_000)
+                    .saturating_sub(timeout.as_millis() as u64 + 1)
+            ),
+            CRITICAL_ERROR_DISK_PROBE_STUCK_RAFT,
+            CRITICAL_ERROR_DISK_PROBE_FAIL_FAST_RAFT,
+        ));
+        assert!(should_fail_fast(
+            Some(&probe),
+            "raft",
+            timeout,
+            &AtomicU64::new(0),
+            CRITICAL_ERROR_DISK_PROBE_STUCK_RAFT,
+            CRITICAL_ERROR_DISK_PROBE_FAIL_FAST_RAFT,
+        ));
+    }
+
+    #[test]
+    fn test_should_fail_fast_respects_kv_sync_veto() {
+        let dir = tempdir().unwrap();
+        let kv_probe = ProbeRunner::new(dir.path().join(KV_PROBE_FILENAME), KV_PROBE_PAYLOAD);
+        let timeout = Duration::from_millis(10);
+
+        assert!(kv_probe.try_start_probe());
+        std::thread::sleep(timeout + Duration::from_millis(5));
+
+        assert!(!should_fail_fast(
+            Some(&kv_probe),
+            "kv",
+            timeout,
+            &AtomicU64::new(timespec_to_ns(monotonic_raw_now()) / 1_000_000),
+            CRITICAL_ERROR_DISK_PROBE_STUCK_KV,
+            CRITICAL_ERROR_DISK_PROBE_FAIL_FAST_KV,
+        ));
+        assert!(should_fail_fast(
+            Some(&kv_probe),
+            "kv",
+            timeout,
+            &AtomicU64::new(
+                (timespec_to_ns(monotonic_raw_now()) / 1_000_000)
+                    .saturating_sub(timeout.as_millis() as u64 + 1)
+            ),
+            CRITICAL_ERROR_DISK_PROBE_STUCK_KV,
+            CRITICAL_ERROR_DISK_PROBE_FAIL_FAST_KV,
+        ));
+        assert!(should_fail_fast(
+            Some(&kv_probe),
+            "kv",
+            timeout,
+            &AtomicU64::new(0),
+            CRITICAL_ERROR_DISK_PROBE_STUCK_KV,
+            CRITICAL_ERROR_DISK_PROBE_FAIL_FAST_KV,
+        ));
     }
 }

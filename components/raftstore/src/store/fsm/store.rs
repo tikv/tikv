@@ -1304,7 +1304,10 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     write_senders: WriteSenders<EK, ER>,
     node_start_time: Timespec, // monotonic_raw_now
     gc_safe_point: Arc<AtomicU64>,
-    last_raft_append_success_at_millis: Arc<AtomicU64>,
+    // These timestamps feed fail-fast's recent real disk-progress vetoes for
+    // raft and kv respectively.
+    pub(crate) last_raft_append_success_at_millis: Arc<AtomicU64>,
+    pub(crate) last_kv_sync_success_at_millis: Arc<AtomicU64>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
@@ -1627,6 +1630,7 @@ where
             node_start_time: self.node_start_time,
             gc_safe_point: self.gc_safe_point.clone(),
             last_raft_append_success_at_millis: self.last_raft_append_success_at_millis.clone(),
+            last_kv_sync_success_at_millis: self.last_kv_sync_success_at_millis.clone(),
         }
     }
 }
@@ -1746,6 +1750,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         };
         let bgworker_remote = background_worker.remote();
         let last_raft_append_success_at_millis = Arc::new(AtomicU64::new(0));
+        let last_kv_sync_success_at_millis = Arc::new(AtomicU64::new(0));
         let snap_gen_worker = WorkerBuilder::new(SNAP_GENERATOR_THREAD)
             .thread_count(cfg.value().snap_generator_pool_size)
             .thread_count_limits(1, SNAP_GENERATOR_MAX_POOL_SIZE)
@@ -1864,6 +1869,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             separated_raft_mount_path.then(|| PathBuf::from(engines.kv.path())),
             workers.fail_fast_check_worker.clone(),
             last_raft_append_success_at_millis.clone(),
+            last_kv_sync_success_at_millis.clone(),
         )?;
         workers.on_stop_hooks.push(Box::new(move || {
             fail_fast_monitor.stop();
@@ -1905,6 +1911,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             feature_gate: pd_client.feature_gate().clone(),
             write_senders: self.store_writers.senders(),
             last_raft_append_success_at_millis,
+            last_kv_sync_success_at_millis,
             node_start_time: self.node_start_time,
             gc_safe_point,
         };

@@ -153,10 +153,10 @@ pub fn exit_process_gracefully(code: i32) -> ! {
 
 /// Best-effort flushes the async logger, but never waits forever.
 ///
-/// This is intended for hard-exit paths such as fail-fast. It gives the async
-/// logger a brief window to drain outstanding messages, then aborts the
-/// process regardless so a hung cleanup path cannot block termination.
-pub fn abort_process_after_best_effort_flush(timeout: Duration) -> ! {
+/// This is intended for crash paths such as fail-fast. It gives the async
+/// logger a brief window to drain outstanding messages, then panics so the
+/// normal panic hook can emit a fatal log before the process crashes.
+pub fn panic_after_best_effort_flush(timeout: Duration, message: &str) -> ! {
     let guard = ASYNC_LOGGER_GUARD.lock().unwrap().take();
     if let Some(guard) = guard {
         let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -173,7 +173,7 @@ pub fn abort_process_after_best_effort_flush(timeout: Duration) -> ! {
             thread::sleep(Duration::from_millis(1));
         }
     }
-    std::process::abort();
+    panic!("{}", message);
 }
 
 /// Constructs a new file writer which outputs log to a file at the specified
