@@ -69,6 +69,12 @@ use crate::{
 /// light ones, which means they don't need a permit from the semaphore before
 /// execution.
 const LIGHT_TASK_THRESHOLD: Duration = Duration::from_millis(5);
+
+/// Maximum number of batch sub-tasks that run concurrently within a single
+/// batch ANALYZE request.  Limiting this avoids flooding the readpool semaphore
+/// when a large batch arrives, while still providing enough parallelism to keep
+/// the pipeline busy.
+const BATCH_SUB_TASK_CONCURRENCY: usize = 3;
 fn elapsed_ms(start: Instant) -> u64 {
     start.saturating_elapsed().as_millis() as u64
 }
@@ -136,6 +142,19 @@ struct AnalyzeFullSamplingBatchTaskResult {
     sampling_result: Option<AnalyzeSamplingResult>,
 }
 
+/// Result of batch sub-task processing with streaming merge.
+enum AnalyzeFullSamplingBatchMergeResult {
+    /// All sub-tasks succeeded; their sampling results have been merged
+    /// incrementally as each sub-task completed, keeping peak memory low.
+    Merged {
+        merged: AnalyzeSamplingResult,
+        task_count: usize,
+    },
+    /// At least one sub-task had an error; individual results returned for
+    /// TiDB to handle per-region retry.
+    Individual(Vec<AnalyzeFullSamplingBatchTaskResult>),
+}
+
 fn set_analyze_sampling_response_data(
     resp: &mut coppb::Response,
     sampling_result: AnalyzeSamplingResult,
@@ -179,67 +198,84 @@ fn analyze_full_sampling_batch_response(
 
 fn finish_analyze_full_sampling_batch_response(
     mut top: AnalyzeFullSamplingTaskResult,
-    mut batch_outputs: Vec<AnalyzeFullSamplingBatchTaskResult>,
+    batch_result: AnalyzeFullSamplingBatchMergeResult,
 ) -> Result<coppb::Response> {
     let finish_start = Instant::now();
-    let can_reduce = !response_has_error(&top.response)
-        && top.sampling_result.is_some()
-        && batch_outputs.iter().all(|output| {
-            !response_has_error(&output.response) && output.sampling_result.is_some()
-        });
-
-    if can_reduce {
-        let batch_task_count = batch_outputs.len();
-        let merge_start = Instant::now();
-        let mut merged = top.sampling_result.take().unwrap();
-        for output in &mut batch_outputs {
-            merged.merge_from(output.sampling_result.take().unwrap())?;
+    match batch_result {
+        AnalyzeFullSamplingBatchMergeResult::Merged { merged, task_count }
+            if !response_has_error(&top.response) && top.sampling_result.is_some() =>
+        {
+            // Both top and batch succeeded — merge top into the pre-merged batch result.
+            let merge_start = Instant::now();
+            let mut top_sr = top.sampling_result.take().unwrap();
+            top_sr.merge_from(merged)?;
+            info!("analyze full sampling trace";
+                "component" => "tikv",
+                "phase" => "tikv.merge_sampling_results",
+                "event" => "finish",
+                "success" => true,
+                "elapsed_ms" => elapsed_ms(merge_start),
+                "total_task_count" => task_count + 1,
+                "batch_task_count" => task_count,
+            );
+            set_analyze_sampling_response_data(&mut top.response, top_sr, "reduced_top")?;
+            top.response.set_batch_responses(Default::default());
+            info!("analyze full sampling trace";
+                "component" => "tikv",
+                "phase" => "tikv.reduce_batch_response",
+                "event" => "finish",
+                "success" => true,
+                "reduced" => true,
+                "elapsed_ms" => elapsed_ms(finish_start),
+                "total_task_count" => task_count + 1,
+                "batch_task_count" => task_count,
+                "response_bytes" => top.response.get_data().len(),
+            );
+            Ok(top.response)
         }
-        info!("analyze full sampling trace";
-            "component" => "tikv",
-            "phase" => "tikv.merge_sampling_results",
-            "event" => "finish",
-            "success" => true,
-            "elapsed_ms" => elapsed_ms(merge_start),
-            "total_task_count" => batch_task_count + 1,
-            "batch_task_count" => batch_task_count,
-        );
-        set_analyze_sampling_response_data(&mut top.response, merged, "reduced_top")?;
-        top.response.set_batch_responses(Default::default());
-        info!("analyze full sampling trace";
-            "component" => "tikv",
-            "phase" => "tikv.reduce_batch_response",
-            "event" => "finish",
-            "success" => true,
-            "reduced" => true,
-            "elapsed_ms" => elapsed_ms(finish_start),
-            "total_task_count" => batch_task_count + 1,
-            "batch_task_count" => batch_task_count,
-            "response_bytes" => top.response.get_data().len(),
-        );
-        return Ok(top.response);
+        _ => {
+            // Fallback: top had error OR batch had errors → individual responses.
+            let batch_outputs = match batch_result {
+                AnalyzeFullSamplingBatchMergeResult::Individual(outputs) => outputs,
+                AnalyzeFullSamplingBatchMergeResult::Merged { merged, .. } => {
+                    // Top failed but batch was pre-merged. We cannot split the
+                    // merge back into individual results, so we pack the merged
+                    // result as a single batch response entry.
+                    let mut resp = coppb::Response::default();
+                    set_analyze_sampling_response_data(&mut resp, merged, "merged_fallback")?;
+                    vec![AnalyzeFullSamplingBatchTaskResult {
+                        task_id: 0,
+                        response: resp,
+                        sampling_result: None,
+                    }]
+                }
+            };
+            if let Some(sampling_result) = top.sampling_result.take() {
+                set_analyze_sampling_response_data(
+                    &mut top.response,
+                    sampling_result,
+                    "fallback_top",
+                )?;
+            }
+            let mut batch_responses = Vec::with_capacity(batch_outputs.len());
+            for output in batch_outputs {
+                batch_responses.push(analyze_full_sampling_batch_response(output)?);
+            }
+            let batch_response_count = batch_responses.len();
+            top.response.set_batch_responses(batch_responses.into());
+            info!("analyze full sampling trace";
+                "component" => "tikv",
+                "phase" => "tikv.reduce_batch_response",
+                "event" => "finish",
+                "success" => true,
+                "reduced" => false,
+                "elapsed_ms" => elapsed_ms(finish_start),
+                "response_bytes" => top.response.get_data().len(),
+                "batch_response_count" => batch_response_count,
+            );
+            Ok(top.response)
+        }
     }
-
-    if let Some(sampling_result) = top.sampling_result.take() {
-        set_analyze_sampling_response_data(&mut top.response, sampling_result, "fallback_top")?;
-    }
-    let mut batch_responses = Vec::with_capacity(batch_outputs.len());
-    for output in batch_outputs {
-        batch_responses.push(analyze_full_sampling_batch_response(output)?);
-    }
-    let batch_response_count = batch_responses.len();
-    top.response.set_batch_responses(batch_responses.into());
-    info!("analyze full sampling trace";
-        "component" => "tikv",
-        "phase" => "tikv.reduce_batch_response",
-        "event" => "finish",
-        "success" => true,
-        "reduced" => false,
-        "elapsed_ms" => elapsed_ms(finish_start),
-        "response_bytes" => top.response.get_data().len(),
-        "batch_response_count" => batch_response_count,
-    );
-    Ok(top.response)
 }
 
 /// A pool to build and run Coprocessor request handlers.
@@ -1247,7 +1283,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req: &mut coppb::Request,
         peer: &Option<String>,
-    ) -> impl Future<Output = Vec<AnalyzeFullSamplingBatchTaskResult>> {
+    ) -> impl Future<Output = AnalyzeFullSamplingBatchMergeResult> {
         let extract_start = Instant::now();
         let mut batch_futs = Vec::with_capacity(req.tasks.len());
         let batch_reqs: Vec<(coppb::Request, u64)> = req
@@ -1340,7 +1376,91 @@ impl<E: Engine> Endpoint<E> {
                 })),
             }
         }
-        stream::FuturesOrdered::from_iter(batch_futs).collect()
+        // Optimization 1: limit sub-task concurrency to avoid flooding the
+        // readpool semaphore.
+        // Optimization 2: merge sampling results incrementally as each
+        // sub-task completes, so only one merged result is held in memory
+        // instead of all N results simultaneously.
+        async move {
+            let mut stream = futures::stream::iter(batch_futs)
+                .buffered(BATCH_SUB_TASK_CONCURRENCY);
+            let merge_start = Instant::now();
+            let mut merged: Option<AnalyzeSamplingResult> = None;
+            let mut task_count: usize = 0;
+            let mut has_error = false;
+            let mut error_outputs: Vec<AnalyzeFullSamplingBatchTaskResult> = Vec::new();
+
+            while let Some(mut output) = stream.next().await {
+                if has_error
+                    || response_has_error(&output.response)
+                    || output.sampling_result.is_none()
+                {
+                    has_error = true;
+                    error_outputs.push(output);
+                } else {
+                    let sr = output.sampling_result.take().unwrap();
+                    match merged {
+                        None => merged = Some(sr),
+                        Some(ref mut m) => match m.merge_from(sr) {
+                            Ok(()) => {}
+                            Err(e) => {
+                                warn!("streaming merge failed, falling back"; "err" => ?e);
+                                has_error = true;
+                                error_outputs.push(output);
+                                continue;
+                            }
+                        },
+                    }
+                    task_count += 1;
+                    // output.sampling_result is now None; the response metadata
+                    // is small and dropped here — the heavy sampling data has
+                    // already been consumed by merge_from.
+                }
+            }
+
+            if has_error {
+                // Collect remaining: put already-merged results back as one entry
+                // so TiDB can still use them.
+                if let Some(m) = merged {
+                    let mut resp = coppb::Response::default();
+                    if let Err(e) = set_analyze_sampling_response_data(&mut resp, m, "partial_merge") {
+                        warn!("failed to serialize partial merge"; "err" => ?e);
+                    } else {
+                        error_outputs.insert(
+                            0,
+                            AnalyzeFullSamplingBatchTaskResult {
+                                task_id: 0,
+                                response: resp,
+                                sampling_result: None,
+                            },
+                        );
+                    }
+                }
+                info!("analyze full sampling trace";
+                    "component" => "tikv",
+                    "phase" => "tikv.streaming_merge_batch_tasks",
+                    "event" => "finish",
+                    "success" => false,
+                    "elapsed_ms" => elapsed_ms(merge_start),
+                    "merged_count" => task_count,
+                    "error_count" => error_outputs.len(),
+                );
+                AnalyzeFullSamplingBatchMergeResult::Individual(error_outputs)
+            } else {
+                info!("analyze full sampling trace";
+                    "component" => "tikv",
+                    "phase" => "tikv.streaming_merge_batch_tasks",
+                    "event" => "finish",
+                    "success" => true,
+                    "elapsed_ms" => elapsed_ms(merge_start),
+                    "task_count" => task_count,
+                );
+                AnalyzeFullSamplingBatchMergeResult::Merged {
+                    merged: merged.unwrap_or_default(),
+                    task_count,
+                }
+            }
+        }
     }
 
     /// The real implementation of handling a stream request.
