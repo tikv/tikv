@@ -26,8 +26,10 @@ use crate::{
         },
         *,
     },
-    storage::{Snapshot, SnapshotStore, Statistics},
+    storage::{Snapshot, SnapshotStore, Statistics, kv::with_tls_engine},
 };
+
+const SST_RANGE_SAMPLE_SPLIT_COUNT: usize = 200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AnalyzeVersion {
@@ -46,7 +48,7 @@ impl From<i32> for AnalyzeVersion {
 }
 
 /// Used to handle analyze request.
-pub struct AnalyzeContext<S: Snapshot, F: KvFormat> {
+pub struct AnalyzeContext<E: crate::storage::Engine, S: Snapshot, F: KvFormat> {
     req: AnalyzeReq,
     storage: Option<TikvStorage<SnapshotStore<S>>>,
     ranges: Vec<KeyRange>,
@@ -54,10 +56,10 @@ pub struct AnalyzeContext<S: Snapshot, F: KvFormat> {
     quota_limiter: Arc<QuotaLimiter>,
     // is_auto_analyze is used to indicate whether the analyze request is sent by TiDB itself.
     is_auto_analyze: bool,
-    _phantom: PhantomData<F>,
+    _phantom: PhantomData<(E, F)>,
 }
 
-impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
+impl<E: crate::storage::Engine, S: Snapshot, F: KvFormat> AnalyzeContext<E, S, F> {
     pub fn new(
         req: AnalyzeReq,
         ranges: Vec<KeyRange>,
@@ -220,7 +222,9 @@ impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
 }
 
 #[async_trait]
-impl<S: Snapshot, F: KvFormat> RequestHandler for AnalyzeContext<S, F> {
+impl<E: crate::storage::Engine, S: Snapshot, F: KvFormat> RequestHandler
+    for AnalyzeContext<E, S, F>
+{
     async fn handle_request(&mut self) -> Result<MemoryTraceGuard<Response>> {
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex | AnalyzeType::TypeCommonHandle => {
@@ -238,7 +242,7 @@ impl<S: Snapshot, F: KvFormat> RequestHandler for AnalyzeContext<S, F> {
                     is_scanned_range_aware: false,
                     load_commit_ts: false,
                 });
-                let res = AnalyzeContext::handle_index(
+                let res = AnalyzeContext::<E, S, F>::handle_index(
                     req,
                     &mut scanner,
                     self.req.get_tp() == AnalyzeType::TypeCommonHandle,
@@ -253,7 +257,7 @@ impl<S: Snapshot, F: KvFormat> RequestHandler for AnalyzeContext<S, F> {
                 let storage = self.storage.take().unwrap();
                 let ranges = std::mem::take(&mut self.ranges);
                 let mut builder = SampleBuilder::<_, F>::new(col_req, None, storage, ranges)?;
-                let res = AnalyzeContext::handle_column(&mut builder).await;
+                let res = AnalyzeContext::<E, S, F>::handle_column(&mut builder).await;
                 builder.data.collect_storage_stats(&mut self.storage_stats);
                 res
             }
@@ -266,7 +270,7 @@ impl<S: Snapshot, F: KvFormat> RequestHandler for AnalyzeContext<S, F> {
                 let ranges = std::mem::take(&mut self.ranges);
                 let mut builder =
                     SampleBuilder::<_, F>::new(col_req, Some(idx_req), storage, ranges)?;
-                let res = AnalyzeContext::handle_mixed(&mut builder).await;
+                let res = AnalyzeContext::<E, S, F>::handle_mixed(&mut builder).await;
                 builder.data.collect_storage_stats(&mut self.storage_stats);
                 res
             }
@@ -276,15 +280,110 @@ impl<S: Snapshot, F: KvFormat> RequestHandler for AnalyzeContext<S, F> {
                 let storage = self.storage.take().unwrap();
                 let ranges = std::mem::take(&mut self.ranges);
 
-                let mut builder = RowSampleBuilder::<_, F>::new(
+                let req_ndv_rate = col_req.get_ndv_rate();
+                let range_sample_rate = if req_ndv_rate > 0.0 && req_ndv_rate < 1.0 {
+                    req_ndv_rate
+                } else {
+                    1.0
+                };
+
+                // SST seek-probe range sampling is driven by NDVRATE. Keep the split
+                // count as a code constant so this path has one clear tuning surface.
+                let pre_selected: Option<(Vec<KeyRange>, f64)> = if range_sample_rate < 1.0 {
+                    let start = ranges.first().map(|r| r.get_start().to_vec());
+                    let end = ranges.last().map(|r| r.get_end().to_vec());
+                    if let (Some(s), Some(e)) = (start, end) {
+                        unsafe {
+                            with_tls_engine::<E, _, _>(|engine| {
+                                engine.kv_engine().and_then(|db| {
+                                    use engine_traits::{
+                                        CF_WRITE, IterOptions, Iterable,
+                                        Iterator as EngineIterator,
+                                    };
+
+                                    let split_keys =
+                                        crate::coprocessor::statistics::analyze::interpolate_split_keys(
+                                            &s,
+                                            &e,
+                                            SST_RANGE_SAMPLE_SPLIT_COUNT,
+                                        );
+                                    if split_keys.is_empty() {
+                                        return None;
+                                    }
+                                    let mut boundaries = vec![s.clone()];
+                                    boundaries.extend(split_keys.iter().cloned());
+                                    boundaries.push(e.clone());
+
+                                    let encoded_bounds: Vec<Vec<u8>> = boundaries
+                                        .iter()
+                                        .map(|b| {
+                                            keys::data_key(txn_types::Key::from_raw(b).as_encoded())
+                                        })
+                                        .collect();
+                                    let mut iter_opts = IterOptions::default();
+                                    iter_opts
+                                        .set_upper_bound(&encoded_bounds[encoded_bounds.len() - 1], 0);
+                                    let mut iter = db.iterator_opt(CF_WRITE, iter_opts).ok()?;
+                                    let mut non_empty: Vec<KeyRange> = Vec::new();
+                                    for i in 0..boundaries.len() - 1 {
+                                        let valid = iter.seek(&encoded_bounds[i]).ok()?;
+                                        if valid && iter.key() < encoded_bounds[i + 1].as_slice() {
+                                            let mut kr = KeyRange::default();
+                                            kr.set_start(boundaries[i].clone());
+                                            kr.set_end(boundaries[i + 1].clone());
+                                            non_empty.push(kr);
+                                        }
+                                    }
+
+                                    let total = boundaries.len() - 1;
+                                    let non_empty_count = non_empty.len();
+                                    if non_empty_count == 0 {
+                                        return None;
+                                    }
+                                    let select_count = std::cmp::max(
+                                        1,
+                                        (non_empty_count as f64 * range_sample_rate).round()
+                                            as usize,
+                                    );
+                                    let scale = non_empty_count as f64 / select_count as f64;
+                                    use rand::seq::SliceRandom;
+                                    let mut rng = rand::thread_rng();
+                                    let mut indices: Vec<usize> = (0..non_empty_count).collect();
+                                    indices.shuffle(&mut rng);
+                                    indices.truncate(select_count);
+                                    indices.sort();
+                                    let selected: Vec<KeyRange> = indices
+                                        .into_iter()
+                                        .map(|idx| non_empty[idx].clone())
+                                        .collect();
+                                    info!("analyze seek-probe";
+                                        "total_sub" => total,
+                                        "non_empty" => non_empty_count,
+                                        "selected" => selected.len(),
+                                        "range_sample_rate" => range_sample_rate,
+                                        "scale" => scale,
+                                    );
+                                    Some((selected, scale))
+                                })
+                            })
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                let mut builder = RowSampleBuilder::<_, F>::new_with_range_sampling(
                     col_req,
                     storage,
                     ranges,
                     self.quota_limiter.clone(),
                     self.is_auto_analyze,
+                    pre_selected,
                 )?;
 
-                let res = AnalyzeContext::handle_full_sampling(&mut builder).await;
+                let res = AnalyzeContext::<E, S, F>::handle_full_sampling(&mut builder).await;
                 builder.merge_storage_stats_into(&mut self.storage_stats);
                 res
             }

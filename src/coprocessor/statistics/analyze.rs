@@ -6,7 +6,7 @@ use api_version::KvFormat;
 use collections::HashSet;
 use kvproto::coprocessor::KeyRange;
 use mur3::{Hasher128, murmurhash3_x64_128};
-use rand::{Rng, rngs::StdRng};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use tidb_query_common::execute_stats::ExecuteStats;
 use tidb_query_datatype::{
     FieldTypeAccessor,
@@ -32,6 +32,60 @@ use crate::{
     storage::{Snapshot, SnapshotStore, Statistics},
 };
 
+/// Interpolates `count` split keys between `start` and `end` by treating the
+/// keys as big-endian integers and dividing the key space evenly.
+pub(crate) fn interpolate_split_keys(start: &[u8], end: &[u8], count: usize) -> Vec<Vec<u8>> {
+    if count == 0 || start >= end {
+        return vec![];
+    }
+    let min_len = start.len().min(end.len());
+    let mut prefix_len = 0;
+    while prefix_len < min_len && start[prefix_len] == end[prefix_len] {
+        prefix_len += 1;
+    }
+    if prefix_len >= min_len {
+        return vec![];
+    }
+
+    let interp_bytes = 8;
+    let extract = |key: &[u8]| -> u64 {
+        let mut val: u64 = 0;
+        for i in 0..interp_bytes {
+            let pos = prefix_len + i;
+            let byte = if pos < key.len() { key[pos] } else { 0 };
+            val = (val << 8) | byte as u64;
+        }
+        val
+    };
+
+    let s_val = extract(start);
+    let e_val = extract(end);
+    if e_val <= s_val {
+        return vec![];
+    }
+
+    let step = (e_val - s_val) / (count as u64 + 1);
+    if step == 0 {
+        return vec![];
+    }
+
+    let prefix = &start[..prefix_len];
+    let mut keys = Vec::with_capacity(count);
+    for i in 1..=count {
+        let val = s_val + step * i as u64;
+        let mut key = prefix.to_vec();
+        let val_bytes = val.to_be_bytes();
+        key.extend_from_slice(&val_bytes[..interp_bytes]);
+        while key.len() < start.len() {
+            key.push(0);
+        }
+        if key.as_slice() > start && key.as_slice() < end {
+            keys.push(key);
+        }
+    }
+    keys
+}
+
 pub(crate) struct RowSampleBuilder<S: Snapshot, F: KvFormat> {
     pub(crate) data: BatchTableScanExecutor<TikvStorage<SnapshotStore<S>>, F>,
     /// Accumulated storage statistics for this request. Filled per batch so
@@ -42,6 +96,9 @@ pub(crate) struct RowSampleBuilder<S: Snapshot, F: KvFormat> {
     max_sample_size: usize,
     max_fm_sketch_size: usize,
     sample_rate: f64,
+    /// Scale factor for rescaling count/null_count/total_sizes after range
+    /// sub-sampling. 1.0 means no sub-sampling was done.
+    range_sample_scale: f64,
     // Whether to build per-row singleton sketches (only needed when ndv_rate < 1).
     build_singletons: bool,
     columns_info: Vec<tipb::ColumnInfo>,
@@ -52,12 +109,13 @@ pub(crate) struct RowSampleBuilder<S: Snapshot, F: KvFormat> {
 }
 
 impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
-    pub(crate) fn new(
+    pub(crate) fn new_with_range_sampling(
         mut req: AnalyzeColumnsReq,
         storage: TikvStorage<SnapshotStore<S>>,
         ranges: Vec<KeyRange>,
         quota_limiter: Arc<QuotaLimiter>,
         is_auto_analyze: bool,
+        pre_selected_ranges: Option<(Vec<KeyRange>, f64)>,
     ) -> Result<Self> {
         let columns_info: Vec<_> = req.take_columns_info().into();
         if columns_info.is_empty() {
@@ -65,32 +123,37 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
         }
         let max_sample_size = req.get_sample_size() as usize;
         let sample_rate = req.get_sample_rate();
-        // `ndv_rate` controls row-level Bernoulli sampling while building the
-        // FM/singleton sketches. When it is unset (0), keep every row (1.0).
+        // `ndv_rate` controls whether TiDB needs singleton sketches for NDV
+        // extrapolation. Do not apply it as another row-level filter here:
+        // selected SST ranges already carry the intended NDV sampling budget.
         let ndv_rate = req.get_ndv_rate();
         let ndv_rate = if ndv_rate > 0.0 { ndv_rate } else { 1.0 };
-        // Singleton sketches only feed the GEE f1 estimate under NDV sub-sampling.
-        // At full rate (ndv_rate >= 1) the FM sketch is already an exact NDV, so
-        // skip building them to avoid wasted CPU, memory, and serialized bytes.
         let build_singletons = ndv_rate < 1.0;
+
+        let (selected_ranges, scale) = if let Some((ranges, scale)) = pre_selected_ranges {
+            (ranges, scale)
+        } else {
+            (ranges, 1.0)
+        };
+
         let common_handle_ids = req.take_primary_column_ids();
-        let mut table_scanner = BatchTableScanExecutor::new(
+        let table_scanner = BatchTableScanExecutor::new(
             storage,
             Arc::new(EvalConfig::default()),
             columns_info.clone(),
-            ranges,
+            selected_ranges,
             common_handle_ids,
             false,
             false, // Streaming mode is not supported in Analyze request, always false here
             req.take_primary_prefix_column_ids(),
         )?;
-        table_scanner.set_row_sample_rate(ndv_rate);
         Ok(Self {
             data: table_scanner,
             accumulated_storage_stats: Statistics::default(),
             max_sample_size,
             max_fm_sketch_size: req.get_sketch_size() as usize,
             sample_rate,
+            range_sample_scale: scale,
             build_singletons,
             columns_info,
             column_groups: req.take_column_groups().into(),
@@ -239,9 +302,9 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                     .inc_by(quota_delay.as_micros() as u64);
             }
         }
-        // NDV sub-sampling only tallies null_count/total_sizes for rows that
-        // passed the rate check. Rescale them back to per-population estimates
-        // before the single-column-group copy below picks them up.
+        // No-op unless a future row-level NDV sub-sample makes
+        // sketch_sample_count smaller than count. Keep this before the
+        // single-column-group copy so derived columns see corrected values.
         collector.mut_base().rescale_null_count_and_total_sizes();
         for i in 0..self.column_groups.len() {
             let offsets = self.column_groups[i].get_column_offsets();
@@ -264,6 +327,26 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                 collector.mut_base().null_count[col_pos];
             collector.mut_base().total_sizes[col_group_pos] =
                 collector.mut_base().total_sizes[col_pos];
+        }
+        // Rescale count/null_count/total_sizes if SST range sub-sampling was
+        // used. FM/singleton sketches describe only the selected ranges and
+        // stay unchanged.
+        if self.range_sample_scale > 1.0 {
+            let base = collector.mut_base();
+            let scanned_count = base.count;
+            base.count = (base.count as f64 * self.range_sample_scale).round() as u64;
+            for nc in &mut base.null_count {
+                *nc = (*nc as f64 * self.range_sample_scale).round() as i64;
+            }
+            for ts in &mut base.total_sizes {
+                *ts = (*ts as f64 * self.range_sample_scale).round() as i64;
+            }
+            info!("analyze range sampling rescale";
+                "scanned_count" => scanned_count,
+                "rescaled_count" => base.count,
+                "sketch_sample_count" => base.sketch_sample_count,
+                "scale_factor" => self.range_sample_scale,
+            );
         }
         Ok(AnalyzeSamplingResult::new(collector))
     }
