@@ -26,7 +26,6 @@ use super::Config;
 use crate::store::disk_probe::ProbeRunner;
 
 const PROBE_INTERVAL: Duration = Duration::from_secs(1);
-const IN_FLIGHT_LOG_THRESHOLD: Duration = Duration::from_secs(30);
 const FAIL_FAST_LOG_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
 const PROBE_PAYLOAD: &[u8] = b"tikv disk fail fast probe";
 
@@ -176,8 +175,10 @@ fn should_fail_fast(
         return false;
     };
     let current_probe_elapsed = probe.current_probe_elapsed();
+    // Start surfacing the stuck signal halfway to the fail-fast timeout.
+    let stuck_log_threshold = timeout / 2;
     if let Some(elapsed) = current_probe_elapsed {
-        if elapsed >= IN_FLIGHT_LOG_THRESHOLD {
+        if elapsed >= stuck_log_threshold {
             CRITICAL_ERROR
                 .with_label_values(&[stuck_critical_error_kind(disk)])
                 .inc();
