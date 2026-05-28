@@ -786,6 +786,7 @@ where
     perf_context: ER::PerfContext,
     pending_latency_inspect: Vec<(Instant, Vec<LatencyInspector>)>,
     last_raft_append_success_at_millis: Arc<AtomicU64>,
+    last_kv_sync_success_at_millis: Arc<AtomicU64>,
 
     // Adaptive batching related fields
     adaptive_batch_enabled: bool,
@@ -819,6 +820,7 @@ where
         trans: T,
         cfg: &Arc<VersionTrack<Config>>,
         last_raft_append_success_at_millis: Arc<AtomicU64>,
+        last_kv_sync_success_at_millis: Arc<AtomicU64>,
     ) -> Self {
         let batch = WriteTaskBatch::new(
             raft_engine.log_batch(RAFT_WB_DEFAULT_SIZE),
@@ -844,6 +846,7 @@ where
             perf_context,
             pending_latency_inspect: vec![],
             last_raft_append_success_at_millis,
+            last_kv_sync_success_at_millis,
 
             // Adaptive batching initialization
             adaptive_batch_enabled: cfg.value().adaptive_batch_enabled,
@@ -1135,6 +1138,13 @@ where
                         store_id, tag, e
                     );
                 });
+                // Record this sync-backed kv progress so fail-fast can veto a
+                // kv probe timeout when the same disk is still completing real
+                // sync writes.
+                self.last_kv_sync_success_at_millis.fetch_max(
+                    timespec_to_ns(monotonic_raw_now()) / 1_000_000,
+                    Ordering::Relaxed,
+                );
                 if kv_wb.data_size() > KV_WB_SHRINK_SIZE {
                     *kv_wb = self
                         .kv_engine
@@ -1327,6 +1337,7 @@ where
     pub notifier: N,
     pub cfg: Arc<VersionTrack<Config>>,
     pub last_raft_append_success_at_millis: Arc<AtomicU64>,
+    pub last_kv_sync_success_at_millis: Arc<AtomicU64>,
 }
 
 #[derive(Clone)]
@@ -1370,6 +1381,7 @@ where
         trans: &T,
         cfg: &Arc<VersionTrack<Config>>,
         last_raft_append_success_at_millis: Arc<AtomicU64>,
+        last_kv_sync_success_at_millis: Arc<AtomicU64>,
     ) -> Result<()> {
         let pool_size = cfg.value().store_io_pool_size;
         if pool_size > 0 {
@@ -1383,6 +1395,7 @@ where
                     transfer: trans.clone(),
                     cfg: cfg.clone(),
                     last_raft_append_success_at_millis,
+                    last_kv_sync_success_at_millis,
                 },
             )?;
         }
@@ -1451,6 +1464,7 @@ where
                         writer_meta.transfer.clone(),
                         &writer_meta.cfg,
                         writer_meta.last_raft_append_success_at_millis.clone(),
+                        writer_meta.last_kv_sync_success_at_millis.clone(),
                     );
                     info!("starting store writer {}", i);
                     let t =

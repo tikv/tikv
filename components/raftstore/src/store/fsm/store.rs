@@ -1515,6 +1515,7 @@ where
                 self.trans.clone(),
                 &self.cfg,
                 self.last_raft_append_success_at_millis.clone(),
+                self.last_kv_sync_success_at_millis.clone(),
             ))
         } else {
             None
@@ -1883,6 +1884,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             &trans,
             &cfg,
             last_raft_append_success_at_millis.clone(),
+            last_kv_sync_success_at_millis.clone(),
         )?;
 
         let mut builder = RaftPollerBuilder {
@@ -2016,6 +2018,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 last_raft_append_success_at_millis: raft_builder
                     .last_raft_append_success_at_millis
                     .clone(),
+                last_kv_sync_success_at_millis: raft_builder.last_kv_sync_success_at_millis.clone(),
             },
             self.store_writers.clone(),
             self.apply_router.router.clone(),

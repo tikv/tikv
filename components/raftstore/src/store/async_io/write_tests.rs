@@ -203,6 +203,7 @@ struct TestWorker {
     msg_rx: Receiver<RaftMessage>,
     notify_rx: Receiver<(u64, (u64, u64))>,
     last_raft_append_success_at_millis: Arc<AtomicU64>,
+    last_kv_sync_success_at_millis: Arc<AtomicU64>,
 }
 
 impl TestWorker {
@@ -213,6 +214,7 @@ impl TestWorker {
         let (notify_tx, notify_rx) = unbounded();
         let notifier = TestNotifier { tx: notify_tx };
         let last_raft_append_success_at_millis = Arc::new(AtomicU64::new(0));
+        let last_kv_sync_success_at_millis = Arc::new(AtomicU64::new(0));
         Self {
             worker: Worker::new(
                 1,
@@ -224,10 +226,12 @@ impl TestWorker {
                 trans,
                 &Arc::new(VersionTrack::new(cfg.clone())),
                 last_raft_append_success_at_millis.clone(),
+                last_kv_sync_success_at_millis.clone(),
             ),
             msg_rx,
             notify_rx,
             last_raft_append_success_at_millis,
+            last_kv_sync_success_at_millis,
         }
     }
 }
@@ -256,6 +260,7 @@ impl TestWriters {
                 .map(|m| m.derive_controller("test".into(), false)),
         );
         let last_raft_append_success_at_millis = Arc::new(AtomicU64::new(0));
+        let last_kv_sync_success_at_millis = Arc::new(AtomicU64::new(0));
         writers
             .spawn(
                 1,
@@ -265,6 +270,7 @@ impl TestWriters {
                 &trans,
                 &Arc::new(VersionTrack::new(cfg.clone())),
                 last_raft_append_success_at_millis.clone(),
+                last_kv_sync_success_at_millis.clone(),
             )
             .unwrap();
         Self {
@@ -481,6 +487,7 @@ fn test_adaptive_config_rejects_zero_threshold() {
         trans,
         &cfg_track,
         Arc::new(AtomicU64::new(0)),
+        Arc::new(AtomicU64::new(0)),
     );
     assert_eq!(worker.adaptive_high_qps_threshold, 40_000);
 
@@ -664,6 +671,7 @@ fn test_worker() {
         t.last_raft_append_success_at_millis.load(Ordering::Relaxed),
         0
     );
+    assert_ne!(t.last_kv_sync_success_at_millis.load(Ordering::Relaxed), 0);
 }
 
 #[test]

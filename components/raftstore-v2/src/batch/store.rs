@@ -799,6 +799,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         };
 
         let last_raft_append_success_at_millis = Arc::new(AtomicU64::new(0));
+        let last_kv_sync_success_at_millis = Arc::new(AtomicU64::new(0));
         let mut workers = Workers::new(background, pd_worker, purge_worker, resource_ctl);
         workers.async_write.spawn(
             store_id,
@@ -808,6 +809,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             &trans,
             &cfg,
             last_raft_append_success_at_millis.clone(),
+            last_kv_sync_success_at_millis.clone(),
         )?;
 
         let mut read_runner = ReadRunner::new(router.clone(), raft_engine.clone());
@@ -902,6 +904,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
                 notifier: router.clone(),
                 cfg: cfg.clone(),
                 last_raft_append_success_at_millis,
+                last_kv_sync_success_at_millis,
             },
             workers.async_write.clone(),
         );
