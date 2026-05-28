@@ -4,6 +4,7 @@ use std::{cmp::Reverse, collections::BinaryHeap, marker::PhantomData, sync::Arc}
 
 use api_version::{KvFormat, keyspace::KvPairEntry};
 use async_trait::async_trait;
+use engine_traits::{CF_WRITE, DATA_KEY_PREFIX_LEN, IterOptions};
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use tidb_query_common::storage::{
@@ -26,7 +27,7 @@ use crate::{
         },
         *,
     },
-    storage::{Snapshot, SnapshotStore, Statistics, kv::with_tls_engine},
+    storage::{Iterator as _, Snapshot, SnapshotStore, Statistics},
 };
 
 const SST_RANGE_SAMPLE_SPLIT_COUNT: usize = 200;
@@ -50,6 +51,7 @@ impl From<i32> for AnalyzeVersion {
 /// Used to handle analyze request.
 pub struct AnalyzeContext<E: crate::storage::Engine, S: Snapshot, F: KvFormat> {
     req: AnalyzeReq,
+    snapshot: S,
     storage: Option<TikvStorage<SnapshotStore<S>>>,
     ranges: Vec<KeyRange>,
     storage_stats: Statistics,
@@ -68,6 +70,7 @@ impl<E: crate::storage::Engine, S: Snapshot, F: KvFormat> AnalyzeContext<E, S, F
         req_ctx: &ReqContext,
         quota_limiter: Arc<QuotaLimiter>,
     ) -> Result<Self> {
+        let snapshot = snap.clone();
         let store = SnapshotStore::new(
             snap,
             start_ts.into(),
@@ -81,6 +84,7 @@ impl<E: crate::storage::Engine, S: Snapshot, F: KvFormat> AnalyzeContext<E, S, F
 
         Ok(Self {
             req,
+            snapshot,
             storage: Some(TikvStorage::new(store, false)),
             ranges,
             storage_stats: Statistics::default(),
@@ -293,53 +297,49 @@ impl<E: crate::storage::Engine, S: Snapshot, F: KvFormat> RequestHandler
                     let start = ranges.first().map(|r| r.get_start().to_vec());
                     let end = ranges.last().map(|r| r.get_end().to_vec());
                     if let (Some(s), Some(e)) = (start, end) {
-                        unsafe {
-                            with_tls_engine::<E, _, _>(|engine| {
-                                engine.kv_engine().and_then(|db| {
-                                    use engine_traits::{
-                                        CF_WRITE, IterOptions, Iterable,
-                                        Iterator as EngineIterator,
-                                    };
+                        let split_keys =
+                            crate::coprocessor::statistics::analyze::interpolate_split_keys(
+                                &s,
+                                &e,
+                                SST_RANGE_SAMPLE_SPLIT_COUNT,
+                            );
+                        if split_keys.is_empty() {
+                            None
+                        } else {
+                            let mut boundaries = vec![s.clone()];
+                            boundaries.extend(split_keys.iter().cloned());
+                            boundaries.push(e.clone());
 
-                                    let split_keys =
-                                        crate::coprocessor::statistics::analyze::interpolate_split_keys(
-                                            &s,
-                                            &e,
-                                            SST_RANGE_SAMPLE_SPLIT_COUNT,
-                                        );
-                                    if split_keys.is_empty() {
-                                        return None;
+                            let encoded_bounds: Vec<Vec<u8>> = boundaries
+                                .iter()
+                                .map(|b| txn_types::Key::from_raw(b).into_encoded())
+                                .collect();
+                            let mut iter_opts = IterOptions::default();
+                            iter_opts.set_vec_upper_bound(
+                                encoded_bounds[encoded_bounds.len() - 1].clone(),
+                                DATA_KEY_PREFIX_LEN,
+                            );
+                            if let Ok(mut iter) = self.snapshot.iter(CF_WRITE, iter_opts) {
+                                let mut non_empty: Vec<KeyRange> = Vec::new();
+                                for i in 0..boundaries.len() - 1 {
+                                    let valid = iter.seek(&txn_types::Key::from_encoded(
+                                        encoded_bounds[i].clone(),
+                                    ));
+                                    if matches!(valid, Ok(true))
+                                        && iter.key() < encoded_bounds[i + 1].as_slice()
+                                    {
+                                        let mut kr = KeyRange::default();
+                                        kr.set_start(boundaries[i].clone());
+                                        kr.set_end(boundaries[i + 1].clone());
+                                        non_empty.push(kr);
                                     }
-                                    let mut boundaries = vec![s.clone()];
-                                    boundaries.extend(split_keys.iter().cloned());
-                                    boundaries.push(e.clone());
+                                }
 
-                                    let encoded_bounds: Vec<Vec<u8>> = boundaries
-                                        .iter()
-                                        .map(|b| {
-                                            keys::data_key(txn_types::Key::from_raw(b).as_encoded())
-                                        })
-                                        .collect();
-                                    let mut iter_opts = IterOptions::default();
-                                    iter_opts
-                                        .set_upper_bound(&encoded_bounds[encoded_bounds.len() - 1], 0);
-                                    let mut iter = db.iterator_opt(CF_WRITE, iter_opts).ok()?;
-                                    let mut non_empty: Vec<KeyRange> = Vec::new();
-                                    for i in 0..boundaries.len() - 1 {
-                                        let valid = iter.seek(&encoded_bounds[i]).ok()?;
-                                        if valid && iter.key() < encoded_bounds[i + 1].as_slice() {
-                                            let mut kr = KeyRange::default();
-                                            kr.set_start(boundaries[i].clone());
-                                            kr.set_end(boundaries[i + 1].clone());
-                                            non_empty.push(kr);
-                                        }
-                                    }
-
-                                    let total = boundaries.len() - 1;
-                                    let non_empty_count = non_empty.len();
-                                    if non_empty_count == 0 {
-                                        return None;
-                                    }
+                                let total = boundaries.len() - 1;
+                                let non_empty_count = non_empty.len();
+                                if non_empty_count == 0 {
+                                    None
+                                } else {
                                     let select_count = std::cmp::max(
                                         1,
                                         (non_empty_count as f64 * range_sample_rate).round()
@@ -364,8 +364,10 @@ impl<E: crate::storage::Engine, S: Snapshot, F: KvFormat> RequestHandler
                                         "scale" => scale,
                                     );
                                     Some((selected, scale))
-                                })
-                            })
+                                }
+                            } else {
+                                None
+                            }
                         }
                     } else {
                         None
