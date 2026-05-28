@@ -28,15 +28,43 @@ use crate::store::disk_probe::ProbeRunner;
 const PROBE_INTERVAL: Duration = Duration::from_secs(1);
 const IN_FLIGHT_LOG_THRESHOLD: Duration = Duration::from_secs(30);
 const FAIL_FAST_LOG_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
+const PROBE_PAYLOAD: &[u8] = b"tikv disk fail fast probe";
 
-const RAFT_PROBE_FILENAME: &str = ".raft_disk_fail_fast_probe.tmp";
-const RAFT_PROBE_PAYLOAD: &[u8] = b"tikv raft disk fail fast probe";
-const KV_PROBE_FILENAME: &str = ".kv_disk_fail_fast_probe.tmp";
-const KV_PROBE_PAYLOAD: &[u8] = b"tikv kv disk fail fast probe";
-const CRITICAL_ERROR_DISK_PROBE_STUCK_RAFT: &str = "disk_probe_stuck_raft";
-const CRITICAL_ERROR_DISK_PROBE_STUCK_KV: &str = "disk_probe_stuck_kv";
-const CRITICAL_ERROR_DISK_PROBE_FAIL_FAST_RAFT: &str = "disk_probe_fail_fast_raft";
-const CRITICAL_ERROR_DISK_PROBE_FAIL_FAST_KV: &str = "disk_probe_fail_fast_kv";
+#[derive(Clone, Copy)]
+enum DiskKind {
+    Raft,
+    Kv,
+}
+
+impl DiskKind {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Raft => "raft",
+            Self::Kv => "kv",
+        }
+    }
+
+    fn probe_filename(self) -> &'static str {
+        match self {
+            Self::Raft => ".raft_disk_fail_fast_probe.tmp",
+            Self::Kv => ".kv_disk_fail_fast_probe.tmp",
+        }
+    }
+}
+
+const fn stuck_critical_error_kind(disk: DiskKind) -> &'static str {
+    match disk {
+        DiskKind::Raft => "disk_probe_stuck_raft",
+        DiskKind::Kv => "disk_probe_stuck_kv",
+    }
+}
+
+const fn fail_fast_critical_error_kind(disk: DiskKind) -> &'static str {
+    match disk {
+        DiskKind::Raft => "disk_probe_fail_fast_raft",
+        DiskKind::Kv => "disk_probe_fail_fast_kv",
+    }
+}
 
 lazy_static::lazy_static! {
     pub static ref DISK_PROBE_DURATION_HISTOGRAM: HistogramVec = register_histogram_vec!(
@@ -60,7 +88,7 @@ fn fail_fast_timeout(cfg: &Config) -> Option<Duration> {
 }
 
 // Returns false when shutdown is requested.
-fn run_probe(stop: &AtomicBool, disk: &'static str, probe: &ProbeRunner) -> bool {
+fn run_probe(stop: &AtomicBool, disk: DiskKind, probe: &ProbeRunner) -> bool {
     let started = probe.try_start_probe();
     debug_assert!(started, "fail-fast probe must not overlap");
     if !started {
@@ -73,7 +101,7 @@ fn run_probe(stop: &AtomicBool, disk: &'static str, probe: &ProbeRunner) -> bool
             if stop.load(Ordering::Acquire) {
                 return false;
             }
-            record_probe_duration(disk, "success", duration);
+            record_probe_duration(disk.name(), "success", duration);
         }
         Err(e) => {
             let duration = probe.current_probe_elapsed().unwrap_or_default();
@@ -81,10 +109,10 @@ fn run_probe(stop: &AtomicBool, disk: &'static str, probe: &ProbeRunner) -> bool
             if stop.load(Ordering::Acquire) {
                 return false;
             }
-            record_probe_duration(disk, "failure", duration);
+            record_probe_duration(disk.name(), "failure", duration);
             warn!(
                 "fail-fast probe failed";
-                "disk" => disk,
+                "disk" => disk.name(),
                 "path" => %probe.path().display(),
                 "elapsed" => ?duration,
                 "err" => ?e,
@@ -113,11 +141,11 @@ fn spawn_probe_thread(
                     continue;
                 };
 
-                if !run_probe(&stop, "raft", &raft_probe) {
+                if !run_probe(&stop, DiskKind::Raft, &raft_probe) {
                     return;
                 }
                 if let Some(kv_probe) = kv_probe.as_ref() {
-                    if !run_probe(&stop, "kv", kv_probe) {
+                    if !run_probe(&stop, DiskKind::Kv, kv_probe) {
                         return;
                     }
                 }
@@ -140,11 +168,9 @@ fn spawn_probe_thread(
 // the disk as still making forward progress and does not fail fast yet.
 fn should_fail_fast(
     probe: Option<&ProbeRunner>,
-    disk: &'static str,
+    disk: DiskKind,
     timeout: Duration,
     last_sync_success_at_millis: &AtomicU64,
-    stuck_critical_error_kind: &'static str,
-    fail_fast_critical_error_kind: &'static str,
 ) -> bool {
     let Some(probe) = probe else {
         return false;
@@ -153,11 +179,11 @@ fn should_fail_fast(
     if let Some(elapsed) = current_probe_elapsed {
         if elapsed >= IN_FLIGHT_LOG_THRESHOLD {
             CRITICAL_ERROR
-                .with_label_values(&[stuck_critical_error_kind])
+                .with_label_values(&[stuck_critical_error_kind(disk)])
                 .inc();
             error!(
                 "fail-fast probe: disk still not responsive after elapsed";
-                "disk" => disk,
+                "disk" => disk.name(),
                 "path" => %probe.path().display(),
                 "elapsed" => ?elapsed,
             );
@@ -176,7 +202,7 @@ fn should_fail_fast(
     if vetoed_by_recent_progress {
         warn!(
             "fail-fast vetoed by recent sync-backed progress";
-            "disk" => disk,
+            "disk" => disk.name(),
             "timeout" => ?timeout,
             "current_probe_elapsed" => ?current_probe_elapsed,
             "last_sync_success_elapsed" => ?last_sync_success_elapsed,
@@ -185,11 +211,11 @@ fn should_fail_fast(
     }
 
     CRITICAL_ERROR
-        .with_label_values(&[fail_fast_critical_error_kind])
+        .with_label_values(&[fail_fast_critical_error_kind(disk)])
         .inc();
     crit!(
         "fail-fast: disk probe timed out, shutting down to avoid serving on an unhealthy disk";
-        "disk" => disk,
+        "disk" => disk.name(),
         "timeout" => ?timeout,
         "current_probe_elapsed" => ?current_probe_elapsed,
         "last_sync_success_elapsed" => ?last_sync_success_elapsed,
@@ -236,10 +262,12 @@ impl FailFastMonitor {
         last_kv_sync_success_at_millis: Arc<AtomicU64>,
     ) -> std::io::Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
-        let raft_probe =
-            ProbeRunner::new(raft_probe_dir.join(RAFT_PROBE_FILENAME), RAFT_PROBE_PAYLOAD);
-        let kv_probe =
-            kv_probe_dir.map(|dir| ProbeRunner::new(dir.join(KV_PROBE_FILENAME), KV_PROBE_PAYLOAD));
+        let raft_probe = ProbeRunner::new(
+            raft_probe_dir.join(DiskKind::Raft.probe_filename()),
+            PROBE_PAYLOAD,
+        );
+        let kv_probe = kv_probe_dir
+            .map(|dir| ProbeRunner::new(dir.join(DiskKind::Kv.probe_filename()), PROBE_PAYLOAD));
 
         spawn_probe_thread(
             "fail-fast-probe",
@@ -263,19 +291,15 @@ impl FailFastMonitor {
 
             let raft_should_fail_fast = should_fail_fast(
                 Some(&raft_probe_for_check),
-                "raft",
+                DiskKind::Raft,
                 timeout,
                 &last_raft_append_success_at_millis,
-                CRITICAL_ERROR_DISK_PROBE_STUCK_RAFT,
-                CRITICAL_ERROR_DISK_PROBE_FAIL_FAST_RAFT,
             );
             let kv_should_fail_fast = should_fail_fast(
                 kv_probe_for_check.as_ref(),
-                "kv",
+                DiskKind::Kv,
                 timeout,
                 &last_kv_sync_success_at_millis,
-                CRITICAL_ERROR_DISK_PROBE_STUCK_KV,
-                CRITICAL_ERROR_DISK_PROBE_FAIL_FAST_KV,
             );
             if raft_should_fail_fast || kv_should_fail_fast {
                 logger::panic_after_best_effort_flush(
@@ -346,12 +370,18 @@ mod tests {
     #[test]
     fn test_probe_once() {
         let dir = tempdir().unwrap();
-        let raft_probe = ProbeRunner::new(dir.path().join(RAFT_PROBE_FILENAME), RAFT_PROBE_PAYLOAD);
+        let raft_probe = ProbeRunner::new(
+            dir.path().join(DiskKind::Raft.probe_filename()),
+            PROBE_PAYLOAD,
+        );
         let duration = raft_probe.probe_once().unwrap();
         assert!(duration > Duration::ZERO);
         assert!(raft_probe.path().exists());
 
-        let kv_probe = ProbeRunner::new(dir.path().join(KV_PROBE_FILENAME), KV_PROBE_PAYLOAD);
+        let kv_probe = ProbeRunner::new(
+            dir.path().join(DiskKind::Kv.probe_filename()),
+            PROBE_PAYLOAD,
+        );
         let duration = kv_probe.probe_once().unwrap();
         assert!(duration > Duration::ZERO);
         assert!(kv_probe.path().exists());
@@ -367,25 +397,29 @@ mod tests {
     #[test]
     fn test_should_fail_fast_on_timeout() {
         let dir = tempdir().unwrap();
-        let probe = ProbeRunner::new(dir.path().join(RAFT_PROBE_FILENAME), RAFT_PROBE_PAYLOAD);
+        let probe = ProbeRunner::new(
+            dir.path().join(DiskKind::Raft.probe_filename()),
+            PROBE_PAYLOAD,
+        );
         let timeout = Duration::from_millis(10);
 
         assert!(probe.try_start_probe());
         std::thread::sleep(timeout + Duration::from_millis(5));
         assert!(should_fail_fast(
             Some(&probe),
-            "raft",
+            DiskKind::Raft,
             timeout,
             &AtomicU64::new(0),
-            CRITICAL_ERROR_DISK_PROBE_STUCK_RAFT,
-            CRITICAL_ERROR_DISK_PROBE_FAIL_FAST_RAFT,
         ));
     }
 
     #[test]
     fn test_should_fail_fast_on_repeated_failures_after_prior_success() {
         let dir = tempdir().unwrap();
-        let probe = ProbeRunner::new(dir.path().join(RAFT_PROBE_FILENAME), RAFT_PROBE_PAYLOAD);
+        let probe = ProbeRunner::new(
+            dir.path().join(DiskKind::Raft.probe_filename()),
+            PROBE_PAYLOAD,
+        );
         let timeout = Duration::from_millis(10);
 
         assert!(!should_fail_fast_on_repeated_failures(&probe, timeout));
@@ -399,7 +433,10 @@ mod tests {
     #[test]
     fn test_should_fail_fast_repeated_failures_respect_raft_progress_veto() {
         let dir = tempdir().unwrap();
-        let probe = ProbeRunner::new(dir.path().join(RAFT_PROBE_FILENAME), RAFT_PROBE_PAYLOAD);
+        let probe = ProbeRunner::new(
+            dir.path().join(DiskKind::Raft.probe_filename()),
+            PROBE_PAYLOAD,
+        );
         let timeout = Duration::from_millis(10);
 
         probe.finish_probe_success();
@@ -409,37 +446,34 @@ mod tests {
 
         assert!(!should_fail_fast(
             Some(&probe),
-            "raft",
+            DiskKind::Raft,
             timeout,
             &AtomicU64::new(timespec_to_ns(monotonic_raw_now()) / 1_000_000),
-            CRITICAL_ERROR_DISK_PROBE_STUCK_RAFT,
-            CRITICAL_ERROR_DISK_PROBE_FAIL_FAST_RAFT,
         ));
         assert!(should_fail_fast(
             Some(&probe),
-            "raft",
+            DiskKind::Raft,
             timeout,
             &AtomicU64::new(
                 (timespec_to_ns(monotonic_raw_now()) / 1_000_000)
                     .saturating_sub(timeout.as_millis() as u64 + 1)
             ),
-            CRITICAL_ERROR_DISK_PROBE_STUCK_RAFT,
-            CRITICAL_ERROR_DISK_PROBE_FAIL_FAST_RAFT,
         ));
         assert!(should_fail_fast(
             Some(&probe),
-            "raft",
+            DiskKind::Raft,
             timeout,
             &AtomicU64::new(0),
-            CRITICAL_ERROR_DISK_PROBE_STUCK_RAFT,
-            CRITICAL_ERROR_DISK_PROBE_FAIL_FAST_RAFT,
         ));
     }
 
     #[test]
     fn test_should_fail_fast_respects_kv_sync_veto() {
         let dir = tempdir().unwrap();
-        let kv_probe = ProbeRunner::new(dir.path().join(KV_PROBE_FILENAME), KV_PROBE_PAYLOAD);
+        let kv_probe = ProbeRunner::new(
+            dir.path().join(DiskKind::Kv.probe_filename()),
+            PROBE_PAYLOAD,
+        );
         let timeout = Duration::from_millis(10);
 
         assert!(kv_probe.try_start_probe());
@@ -447,30 +481,24 @@ mod tests {
 
         assert!(!should_fail_fast(
             Some(&kv_probe),
-            "kv",
+            DiskKind::Kv,
             timeout,
             &AtomicU64::new(timespec_to_ns(monotonic_raw_now()) / 1_000_000),
-            CRITICAL_ERROR_DISK_PROBE_STUCK_KV,
-            CRITICAL_ERROR_DISK_PROBE_FAIL_FAST_KV,
         ));
         assert!(should_fail_fast(
             Some(&kv_probe),
-            "kv",
+            DiskKind::Kv,
             timeout,
             &AtomicU64::new(
                 (timespec_to_ns(monotonic_raw_now()) / 1_000_000)
                     .saturating_sub(timeout.as_millis() as u64 + 1)
             ),
-            CRITICAL_ERROR_DISK_PROBE_STUCK_KV,
-            CRITICAL_ERROR_DISK_PROBE_FAIL_FAST_KV,
         ));
         assert!(should_fail_fast(
             Some(&kv_probe),
-            "kv",
+            DiskKind::Kv,
             timeout,
             &AtomicU64::new(0),
-            CRITICAL_ERROR_DISK_PROBE_STUCK_KV,
-            CRITICAL_ERROR_DISK_PROBE_FAIL_FAST_KV,
         ));
     }
 }
