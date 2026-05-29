@@ -753,14 +753,12 @@ fn test_cdc_watchdog_idle_timeout() {
     let region = suite.cluster.get_region(b"");
 
     // Enable failpoints to control the watchdog behavior:
-    // - cdc_idle_deregister_threshold makes the threshold 5 seconds and the
-    //   watchdog check interval 1 second instead of minutes.
+    // - cdc_idle_deregister_threshold adjusts the watchdog config so the deregister
+    //   threshold is 5 seconds, the check interval is 1 second, and the
+    //   memory-quota abort threshold is 0.
     // - cdc_sleep_after_sink_flush makes the sink sleep after each flush.
-    // - cdc_watchdog_ignore_memory_quota skips the memory-quota check so the test
-    //   can deterministically trigger watchdog cancellation.
     fail::cfg("cdc_idle_deregister_threshold", "return(true)").unwrap();
     fail::cfg("cdc_sleep_after_sink_flush", "return(true)").unwrap();
-    fail::cfg("cdc_watchdog_ignore_memory_quota", "return(true)").unwrap();
 
     // Create event feed connection
     let (mut req_tx, event_feed, _) = new_event_feed(suite.get_region_cdc_client(region.id));
@@ -775,8 +773,7 @@ fn test_cdc_watchdog_idle_timeout() {
 
     // Wait for the watchdog to trigger and cancel the connection
     // The watchdog should trigger after 5 seconds due to
-    // cdc_idle_deregister_threshold failpoint. The memory quota check is skipped by
-    // cdc_watchdog_ignore_memory_quota.
+    // cdc_idle_deregister_threshold failpoint.
     thread::sleep(Duration::from_secs(6));
 
     debug!("Finished waiting, now checking if connection was cancelled");
@@ -831,7 +828,6 @@ fn test_cdc_watchdog_idle_timeout() {
     // Clean up
     fail::remove("cdc_idle_deregister_threshold");
     fail::remove("cdc_sleep_after_sink_flush");
-    fail::remove("cdc_watchdog_ignore_memory_quota");
 
     drop(event_feed);
     suite.stop();

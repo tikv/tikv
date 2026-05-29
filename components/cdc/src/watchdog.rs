@@ -21,6 +21,42 @@ const CDC_IDLE_DEREGISTER_THRESHOLD_SECS: u64 = 60 * 5; // 5 minutes
 const CDC_MEMORY_QUOTA_ABORT_THRESHOLD: f64 = 0.999;
 
 #[derive(Clone)]
+struct WatchdogConfig {
+    check_interval: Duration,
+    idle_deregister_threshold: Duration,
+    memory_quota_abort_threshold: f64,
+}
+
+impl WatchdogConfig {
+    fn new() -> WatchdogConfig {
+        let mut config = WatchdogConfig::default();
+        #[cfg(feature = "failpoints")]
+        {
+            let short_threshold_enabled = || {
+                fail::fail_point!("cdc_idle_deregister_threshold", |_| true);
+                false
+            };
+            if short_threshold_enabled() {
+                self.check_interval = Duration::from_secs(1);
+                self.idle_deregister_threshold = Duration::from_secs(5);
+                self.memory_quota_abort_threshold = 0.0;
+            }
+        }
+        config
+    }
+}
+
+impl Default for WatchdogConfig {
+    fn default() -> WatchdogConfig {
+        WatchdogConfig {
+            check_interval: Duration::from_secs(CDC_WATCHDOG_INTERVAL_SECS),
+            idle_deregister_threshold: Duration::from_secs(CDC_IDLE_DEREGISTER_THRESHOLD_SECS),
+            memory_quota_abort_threshold: CDC_MEMORY_QUOTA_ABORT_THRESHOLD,
+        }
+    }
+}
+
+#[derive(Clone)]
 pub(crate) struct ActivityHandle {
     last_flush: Arc<AtomicCell<Instant>>,
 }
@@ -113,6 +149,7 @@ pub(crate) async fn wait_for_abort(rx: oneshot::Receiver<()>) {
 }
 
 pub(crate) struct Watchdog {
+    config: WatchdogConfig,
     activity: ActivityHandle,
     peer: String,
     conn_id: ConnId,
@@ -128,7 +165,14 @@ impl Watchdog {
         conn_id: ConnId,
         memory_quota: Arc<MemoryQuota>,
     ) -> WatchdogHandle {
-        Self::spawn_with_activity(pool, peer, conn_id, memory_quota, ActivityHandle::new())
+        Self::spawn_with_activity(
+            pool,
+            peer,
+            conn_id,
+            memory_quota,
+            ActivityHandle::new(),
+            WatchdogConfig::new(),
+        )
     }
 
     fn spawn_with_activity(
@@ -137,10 +181,12 @@ impl Watchdog {
         conn_id: ConnId,
         memory_quota: Arc<MemoryQuota>,
         activity: ActivityHandle,
+        config: WatchdogConfig,
     ) -> WatchdogHandle {
         let (abort, recv_abort, send_abort) = AbortHandle::new();
         let (forward_exit_tx, forward_exit_rx) = oneshot::channel();
         let watchdog = Watchdog {
+            config,
             activity: activity.clone(),
             peer,
             conn_id,
@@ -163,10 +209,7 @@ impl Watchdog {
 
     async fn run(mut self) {
         let mut interval = GLOBAL_TIMER_HANDLE
-            .interval(
-                Instant::now(),
-                Duration::from_secs(watchdog_check_interval_secs()),
-            )
+            .interval(Instant::now(), self.config.check_interval)
             .compat();
 
         loop {
@@ -189,22 +232,22 @@ impl Watchdog {
     fn check_and_maybe_abort(&mut self) -> bool {
         let elapsed = self.activity.idle_elapsed();
 
-        if elapsed > Duration::from_secs(CDC_WATCHDOG_INTERVAL_SECS) {
+        if elapsed > self.config.check_interval {
             warn!("cdc connection idle too long";
                 "seconds_since_last_flush" => elapsed.as_secs(),
                 "downstream" => self.peer.as_str(),
                 "conn_id" => ?self.conn_id);
         }
 
-        let idle_threshold = idle_deregister_threshold_secs();
         let memory_quota_abort_threshold_reached =
-            memory_quota_abort_threshold_reached(&self.memory_quota);
+            self.memory_quota.used_ratio() >= self.config.memory_quota_abort_threshold;
 
         // Check if last flush was more than the deregister threshold.
         // To prevent the case that the connection idle since there are a lot of
         // incremental scan tasks queueing so won't send events, also check on the
-        // memory usage. The failpoint can skip the memory check for manual testing.
-        if elapsed > Duration::from_secs(idle_threshold) && memory_quota_abort_threshold_reached {
+        // memory usage. The failpoint can adjust the memory threshold for manual
+        // testing.
+        if elapsed > self.config.idle_deregister_threshold && memory_quota_abort_threshold_reached {
             error!("cdc connection idle for too long, aborting connection";
                 "seconds_since_last_flush" => elapsed.as_secs(),
                 "downstream" => self.peer.as_str(),
@@ -215,54 +258,6 @@ impl Watchdog {
 
         false
     }
-}
-
-fn watchdog_check_interval_secs() -> u64 {
-    #[cfg(feature = "failpoints")]
-    {
-        if use_short_idle_deregister_threshold() {
-            return 1;
-        }
-    }
-
-    CDC_WATCHDOG_INTERVAL_SECS
-}
-
-fn idle_deregister_threshold_secs() -> u64 {
-    #[cfg(feature = "failpoints")]
-    {
-        if use_short_idle_deregister_threshold() {
-            return 5;
-        }
-    }
-
-    CDC_IDLE_DEREGISTER_THRESHOLD_SECS
-}
-
-fn memory_quota_abort_threshold_reached(memory_quota: &MemoryQuota) -> bool {
-    let threshold_reached = memory_quota.used_ratio() >= CDC_MEMORY_QUOTA_ABORT_THRESHOLD;
-
-    #[cfg(feature = "failpoints")]
-    {
-        let should_ignore_memory_quota = || {
-            fail::fail_point!("cdc_watchdog_ignore_memory_quota", |_| true);
-            false
-        };
-        if should_ignore_memory_quota() {
-            return true;
-        }
-    }
-
-    threshold_reached
-}
-
-#[cfg(feature = "failpoints")]
-fn use_short_idle_deregister_threshold() -> bool {
-    let should_adjust = || {
-        fail::fail_point!("cdc_idle_deregister_threshold", |_| true);
-        false
-    };
-    should_adjust()
 }
 
 #[cfg(test)]
@@ -276,11 +271,15 @@ mod tests {
     #[test]
     fn test_connection_watchdog_cancels_send_and_receive() {
         let pool = Arc::new(Builder::new("cdc-watchdog-test").thread_count(1).create());
-        let activity = ActivityHandle::with_last_flush(
-            Instant::now() - Duration::from_secs(CDC_IDLE_DEREGISTER_THRESHOLD_SECS + 1),
-        );
+        let activity = ActivityHandle::with_last_flush(Instant::now() - Duration::from_secs(1));
         let memory_quota = Arc::new(MemoryQuota::new(1));
         memory_quota.alloc_force(1);
+
+        let config = WatchdogConfig {
+            check_interval: Duration::from_millis(50),
+            idle_deregister_threshold: Duration::from_millis(100),
+            ..Default::default()
+        };
 
         let handle = Watchdog::spawn_with_activity(
             &pool,
@@ -288,9 +287,10 @@ mod tests {
             ConnId::new(),
             memory_quota,
             activity,
+            config,
         );
 
-        let timeout = Duration::from_secs(CDC_WATCHDOG_INTERVAL_SECS + 3);
+        let timeout = Duration::from_secs(1);
         block_on_timeout(wait_for_abort(handle.send_abort), timeout)
             .expect("watchdog should cancel send");
         block_on_timeout(wait_for_abort(handle.recv_abort), timeout)
