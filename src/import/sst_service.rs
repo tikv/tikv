@@ -104,6 +104,10 @@ const HIGH_IMPORT_MEMORY_WATER_RATIO: f64 = 0.95;
 // cleaned up eventually.
 const DEFAULT_FORCE_PARTITION_RANGE_TTL_SECONDS: u64 = 3600;
 
+// See /workspace/tikv/pitr-txn-source/components/cdc/src/txn_source.rs
+// cdc then ignores txn sources with this mask.
+const TXN_SOURCE_LIGHTNING_PHY_IMPORT_MASK: u64 = 1 << 16;
+
 /// Check if the system has enough resources for import tasks
 async fn check_import_resources(mem_limit: u64) -> Result<()> {
     #[cfg(feature = "failpoints")]
@@ -251,7 +255,7 @@ impl RequestCollector {
         }
     }
 
-    fn accept_kv(&mut self, cf: &str, is_delete: bool, k: Vec<u8>, v: Vec<u8>) {
+    fn accept_kv(&mut self, cf: &str, is_delete: bool, k: Vec<u8>, mut v: Vec<u8>) {
         debug!("Accepting KV."; "cf" => %cf,
             "key" => %log_wrappers::Value::key(&k),
             "value" => %log_wrappers::Value::key(&v));
@@ -269,7 +273,7 @@ impl RequestCollector {
         let m = if is_delete {
             Modify::Delete(cf, Key::from_encoded(k))
         } else {
-            if cf == CF_WRITE && !write_needs_restore(&v) {
+            if cf == CF_WRITE && !prepare_write(&mut v) {
                 return;
             }
 
@@ -1735,7 +1739,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     }
 }
 
-fn write_needs_restore(write: &[u8]) -> bool {
+fn prepare_write(write: &mut Vec<u8>) -> bool {
     let w = WriteRef::parse(write);
     match w {
         Ok(w)
@@ -1746,6 +1750,11 @@ fn write_needs_restore(write: &[u8]) -> bool {
                 WriteType::Put | WriteType::Delete
             ) =>
         {
+            let mut w = w.to_owned();
+            // To tell CDC ignore this write.
+            // Perhaps we can give "physcial import mask" a better name?
+            w.txn_source |= TXN_SOURCE_LIGHTNING_PHY_IMPORT_MASK;
+            *write = w.as_ref().to_bytes();
             true
         }
         Ok(w) => {
