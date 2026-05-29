@@ -66,7 +66,8 @@ use crate::{
     initializer::Initializer,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
-    service::{Conn, ConnId, FeatureGate, RequestId, validate_kv_api},
+    service::{Conn, FeatureGate, RequestId, validate_kv_api},
+    types::ConnId,
 };
 
 const FEATURE_RESOLVED_TS_STORE: Feature = Feature::require(5, 0, 0);

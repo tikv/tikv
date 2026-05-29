@@ -1,12 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-    time::Instant,
-};
+use std::sync::Arc;
 
 use collections::{HashMap, HashMapEntry};
 use crossbeam::atomic::AtomicCell;
@@ -26,34 +20,17 @@ use crate::{
     delegate::{Downstream, DownstreamId, DownstreamState, ObservedRange},
     endpoint::{Deregister, Task},
     metrics::CDC_ABORTED_CONNECTIONS,
+    types::ConnId,
     watchdog,
 };
-
-static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
 pub fn validate_kv_api(kv_api: ChangeDataRequestKvApi, api_version: ApiVersion) -> bool {
     kv_api == ChangeDataRequestKvApi::TiDb
         || (kv_api == ChangeDataRequestKvApi::RawKv && api_version == ApiVersion::V2)
 }
 
-/// A unique identifier of a Connection.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct ConnId(usize);
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct RequestId(pub u64);
-
-impl ConnId {
-    pub fn new() -> ConnId {
-        ConnId(CONNECTION_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
-    }
-}
-
-impl Default for ConnId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 // FeatureGate checks whether a feature is enabled or not on client versions.
 //
@@ -470,13 +447,18 @@ impl Service {
             Ok::<(), String>(())
         };
 
-        let (cancel_sinks, recv_cancel_rx, send_cancel_rx) = watchdog::cancel_channels();
+        let watchdog::WatchdogHandle {
+            activity,
+            recv_abort,
+            send_abort,
+            forward_exit,
+        } = watchdog::Watchdog::spawn(&self.pool, ctx.peer(), conn_id, self.memory_quota.clone());
 
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
         ctx.spawn(async move {
             tokio::select! {
-                _ = watchdog::wait_cancel(recv_cancel_rx) => {
+                _ = watchdog::wait_for_abort(recv_abort) => {
                     warn!("cdc receive cancelled"; "downstream" => peer, "conn_id" => ?conn_id);
                 }
                 result = recv_req => {
@@ -494,26 +476,20 @@ impl Service {
             }
         });
 
-        let last_flush_time = Arc::new(AtomicCell::new(Instant::now()));
-        let last_flush_time_for_forward = last_flush_time.clone();
-        let peer_for_watchdog = ctx.peer();
-
         let peer = ctx.peer();
 
-        // Create cancelCh for eventDrain.forward exit signal
-        let (forward_exit_tx, forward_exit_rx) = tokio::sync::oneshot::channel::<()>();
-
         ctx.spawn(async move {
+            let _forward_exit = forward_exit;
             #[cfg(feature = "failpoints")]
             sleep_before_drain_change_event().await;
             tokio::select! {
-                _ = watchdog::wait_cancel(send_cancel_rx) => {
+                _ = watchdog::wait_for_abort(send_abort) => {
                     warn!("cdc send cancelled"; "downstream" => peer, "conn_id" => ?conn_id);
                     let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, "connection cancelled".to_string());
                     let _ = sink.fail(status).await;
                     CDC_ABORTED_CONNECTIONS.inc();
                 }
-                result = event_drain.forward(&mut sink, Some(&last_flush_time_for_forward)) => {
+                result = event_drain.forward(&mut sink, Some(&activity)) => {
                     if let Err(e) = result {
                         warn!("cdc send failed, set the sink to fail"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
                         let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN,  format!("{:?}", e));
@@ -522,22 +498,9 @@ impl Service {
                         info!("cdc send closed, close the sink"; "downstream" => peer, "conn_id" => ?conn_id);
                         let _ = sink.close().await;
                     }
-                    // Send signal when eventDrain.forward exits
-                    let _ = forward_exit_tx.send(());
                 }
             }
         });
-
-        // Start watchdog to monitor connection activity
-        watchdog::start(
-            &self.pool,
-            last_flush_time,
-            peer_for_watchdog,
-            conn_id,
-            cancel_sinks,
-            forward_exit_rx,
-            self.memory_quota.clone(),
-        );
     }
 }
 
