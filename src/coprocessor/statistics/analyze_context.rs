@@ -4,7 +4,9 @@ use std::{cmp::Reverse, collections::BinaryHeap, marker::PhantomData, sync::Arc}
 
 use api_version::{KvFormat, keyspace::KvPairEntry};
 use async_trait::async_trait;
-use engine_traits::{CF_WRITE, DATA_KEY_PREFIX_LEN, IterOptions};
+use engine_traits::{
+    CF_WRITE, DATA_KEY_PREFIX_LEN, IterOptions, Range as EngineRange, RangePropertiesExt,
+};
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use tidb_query_common::storage::{
@@ -28,7 +30,7 @@ use crate::{
         },
         *,
     },
-    storage::{Iterator as _, Snapshot, SnapshotStore, Statistics},
+    storage::{Iterator as _, Snapshot, SnapshotStore, Statistics, kv::with_tls_engine},
 };
 
 const SST_RANGE_SAMPLE_SPLIT_COUNT: usize = 200;
@@ -50,7 +52,7 @@ impl From<i32> for AnalyzeVersion {
 }
 
 /// Used to handle analyze request.
-pub struct AnalyzeContext<S: Snapshot, F: KvFormat> {
+pub struct AnalyzeContext<E: crate::storage::Engine, S: Snapshot, F: KvFormat> {
     req: AnalyzeReq,
     // Kept alongside `storage` so TypeFullSampling can run the seek-probe
     // range sampler against the same MVCC snapshot.
@@ -64,10 +66,12 @@ pub struct AnalyzeContext<S: Snapshot, F: KvFormat> {
     quota_limiter: Arc<QuotaLimiter>,
     // is_auto_analyze is used to indicate whether the analyze request is sent by TiDB itself.
     is_auto_analyze: bool,
-    _phantom: PhantomData<F>,
+    // `E` is only used to reach the thread-local KvEngine for SST
+    // RangeProperties when building density-aware sample sub-ranges.
+    _phantom: PhantomData<(E, F)>,
 }
 
-impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
+impl<E: crate::storage::Engine, S: Snapshot, F: KvFormat> AnalyzeContext<E, S, F> {
     pub fn new(
         req: AnalyzeReq,
         ranges: Vec<KeyRange>,
@@ -102,6 +106,54 @@ impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
         })
     }
 
+    /// Build split keys from CF_WRITE SST RangeProperties.
+    ///
+    /// This reads SST metadata only. If properties are unavailable, the caller
+    /// falls back to key-space interpolation. The returned keys are raw user
+    /// keys suitable for KeyRange boundaries.
+    fn range_properties_split_keys(start_raw: &[u8], end_raw: &[u8], count: usize) -> Vec<Vec<u8>> {
+        let lower = keys::data_key(Key::from_raw(start_raw).as_encoded());
+        let upper = keys::data_key(Key::from_raw(end_raw).as_encoded());
+
+        // The coprocessor read pool installs a thread-local engine for request
+        // handlers. The actual row probe below still uses the safe snapshot
+        // iterator; this is only for SST metadata.
+        let data_keys = unsafe {
+            with_tls_engine::<E, _, _>(|engine| {
+                engine.kv_engine().and_then(|db| {
+                    db.get_range_approximate_split_keys_cf(
+                        CF_WRITE,
+                        EngineRange::new(&lower, &upper),
+                        count,
+                    )
+                    .ok()
+                })
+            })
+        };
+        let Some(data_keys) = data_keys else {
+            return Vec::new();
+        };
+
+        let mut raw = Vec::with_capacity(data_keys.len());
+        for data_key in &data_keys {
+            if !keys::validate_data_key(data_key) {
+                continue;
+            }
+            let encoded = keys::origin_key(data_key);
+            let Ok(no_ts) = Key::from_encoded_slice(encoded).truncate_ts() else {
+                continue;
+            };
+            let Ok(user_key) = no_ts.into_raw() else {
+                continue;
+            };
+            if user_key.as_slice() > start_raw && user_key.as_slice() < end_raw {
+                raw.push(user_key);
+            }
+        }
+        raw.dedup();
+        raw
+    }
+
     /// Split the request range into `SST_RANGE_SAMPLE_SPLIT_COUNT` sub-ranges,
     /// drop the ones with no live row visible at `read_ts`, then randomly
     /// sample `range_sample_rate` of the rest. Returns the selected sub-ranges
@@ -129,11 +181,17 @@ impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
         let start = ranges.first().map(|r| r.get_start().to_vec())?;
         let end = ranges.last().map(|r| r.get_end().to_vec())?;
 
-        let split_keys = crate::coprocessor::statistics::analyze::interpolate_split_keys(
-            &start,
-            &end,
-            SST_RANGE_SAMPLE_SPLIT_COUNT,
-        );
+        let mut split_source = "range_properties";
+        let mut split_keys =
+            Self::range_properties_split_keys(&start, &end, SST_RANGE_SAMPLE_SPLIT_COUNT);
+        if split_keys.is_empty() {
+            split_source = "interpolate";
+            split_keys = crate::coprocessor::statistics::analyze::interpolate_split_keys(
+                &start,
+                &end,
+                SST_RANGE_SAMPLE_SPLIT_COUNT,
+            );
+        }
         if split_keys.is_empty() {
             return None;
         }
@@ -239,6 +297,7 @@ impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
             .map(|idx| non_empty[idx].clone())
             .collect::<Vec<_>>();
         info!("analyze seek-probe";
+            "split_source" => split_source,
             "total_sub" => total,
             "non_empty" => non_empty_count,
             "selected" => selected.len(),
@@ -380,7 +439,9 @@ impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
 }
 
 #[async_trait]
-impl<S: Snapshot, F: KvFormat> RequestHandler for AnalyzeContext<S, F> {
+impl<E: crate::storage::Engine, S: Snapshot, F: KvFormat> RequestHandler
+    for AnalyzeContext<E, S, F>
+{
     async fn handle_request(&mut self) -> Result<MemoryTraceGuard<Response>> {
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex | AnalyzeType::TypeCommonHandle => {
