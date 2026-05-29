@@ -11,6 +11,7 @@ use aws_config::{
     provider_config::ProviderConfig,
 };
 use aws_credential_types::provider::{ProvideCredentials, error::CredentialsError};
+use aws_smithy_types::error::metadata::ProvideErrorMetadata;
 use aws_sdk_kms::config::SharedHttpClient;
 use aws_sdk_s3::config::HttpClient;
 use aws_smithy_runtime::client::http::hyper_014::HyperClientBuilder;
@@ -66,7 +67,7 @@ pub fn new_credentials_provider(http: impl HttpClient + 'static) -> DefaultCrede
     }
 }
 
-pub fn is_retryable<T>(error: &SdkError<T>) -> bool {
+pub fn is_retryable<T: ProvideErrorMetadata>(error: &SdkError<T>) -> bool {
     match error {
         SdkError::TimeoutError(_) => true,
         SdkError::DispatchFailure(_) => true,
@@ -76,7 +77,19 @@ pub fn is_retryable<T>(error: &SdkError<T>) -> bool {
         }
         SdkError::ServiceError(service_err) => {
             let code = service_err.raw().status();
-            code.is_server_error() || code.as_u16() == http::StatusCode::REQUEST_TIMEOUT.as_u16()
+            if code.is_server_error()
+                || code.as_u16() == http::StatusCode::REQUEST_TIMEOUT.as_u16()
+            {
+                return true;
+            }
+            // S3 can return throttling errors (e.g. SlowDown) as HTTP 200 with
+            // an error code embedded in the XML response body. The SDK detects
+            // this via body_is_error() and routes it through the error path,
+            // producing a ServiceError with raw status 200 but a parsed code.
+            matches!(
+                service_err.err().code(),
+                Some("SlowDown") | Some("RequestThrottled") | Some("RequestTimeout")
+            )
         }
         _ => false,
     }
@@ -204,87 +217,138 @@ impl ProvideCredentials for DefaultCredentialsProvider {
 #[cfg(test)]
 mod tests {
     use aws_smithy_runtime_api::http::StatusCode;
-    use aws_smithy_types::body::SdkBody;
+    use aws_smithy_types::{body::SdkBody, error::ErrorMetadata};
 
     #[allow(unused_imports)]
     use super::*;
 
+    // Minimal error type that satisfies ProvideErrorMetadata for unit tests.
+    #[derive(Debug)]
+    struct TestError {
+        meta: ErrorMetadata,
+    }
+
+    impl TestError {
+        fn with_code(code: &'static str) -> Self {
+            Self {
+                meta: ErrorMetadata::builder().code(code).build(),
+            }
+        }
+
+        fn no_code() -> Self {
+            Self {
+                meta: ErrorMetadata::builder().build(),
+            }
+        }
+    }
+
+    impl std::fmt::Display for TestError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{:?}", self.meta)
+        }
+    }
+
+    impl std::error::Error for TestError {}
+
+    impl ProvideErrorMetadata for TestError {
+        fn meta(&self) -> &ErrorMetadata {
+            &self.meta
+        }
+    }
+
     #[test]
     fn test_is_retryable_response_error_5xx() {
-        // Test that ResponseError with 5xx status codes are retryable
         let response = HttpResponse::new(StatusCode::try_from(503).unwrap(), SdkBody::empty());
-        let err = SdkError::<(), _>::response_error("service unavailable", response);
+        let err = SdkError::<TestError, _>::response_error("service unavailable", response);
         assert!(is_retryable(&err));
 
         let response = HttpResponse::new(StatusCode::try_from(500).unwrap(), SdkBody::empty());
-        let err = SdkError::<(), _>::response_error("internal server error", response);
+        let err = SdkError::<TestError, _>::response_error("internal server error", response);
         assert!(is_retryable(&err));
     }
 
     #[test]
     fn test_is_retryable_response_error_4xx() {
-        // Test that ResponseError with 4xx status codes are not retryable
         let response = HttpResponse::new(StatusCode::try_from(404).unwrap(), SdkBody::empty());
-        let err = SdkError::<(), _>::response_error("not found", response);
+        let err = SdkError::<TestError, _>::response_error("not found", response);
         assert!(!is_retryable(&err));
 
         let response = HttpResponse::new(StatusCode::try_from(400).unwrap(), SdkBody::empty());
-        let err = SdkError::<(), _>::response_error("bad request", response);
+        let err = SdkError::<TestError, _>::response_error("bad request", response);
         assert!(!is_retryable(&err));
     }
 
     #[test]
     fn test_is_retryable_response_error_408() {
-        // Test that ResponseError with 408 Request Timeout is retryable
         let response = HttpResponse::new(StatusCode::try_from(408).unwrap(), SdkBody::empty());
-        let err = SdkError::<(), _>::response_error("request timeout", response);
+        let err = SdkError::<TestError, _>::response_error("request timeout", response);
         assert!(is_retryable(&err));
     }
 
     #[test]
     fn test_is_retryable_service_error_5xx() {
-        // Test that ServiceError with 5xx status codes are retryable (e.g., S3
-        // SlowDown)
         let response = HttpResponse::new(StatusCode::try_from(503).unwrap(), SdkBody::empty());
-        let err = SdkError::<(), _>::service_error((), response);
+        let err = SdkError::service_error(TestError::no_code(), response);
         assert!(is_retryable(&err));
 
         let response = HttpResponse::new(StatusCode::try_from(500).unwrap(), SdkBody::empty());
-        let err = SdkError::<(), _>::service_error((), response);
+        let err = SdkError::service_error(TestError::no_code(), response);
         assert!(is_retryable(&err));
     }
 
     #[test]
     fn test_is_retryable_service_error_4xx() {
-        // Test that ServiceError with 4xx status codes are not retryable
         let response = HttpResponse::new(StatusCode::try_from(404).unwrap(), SdkBody::empty());
-        let err = SdkError::<(), _>::service_error((), response);
+        let err = SdkError::service_error(TestError::no_code(), response);
         assert!(!is_retryable(&err));
 
         let response = HttpResponse::new(StatusCode::try_from(403).unwrap(), SdkBody::empty());
-        let err = SdkError::<(), _>::service_error((), response);
+        let err = SdkError::service_error(TestError::no_code(), response);
         assert!(!is_retryable(&err));
     }
 
     #[test]
     fn test_is_retryable_service_error_408() {
-        // Test that ServiceError with 408 Request Timeout is retryable
         let response = HttpResponse::new(StatusCode::try_from(408).unwrap(), SdkBody::empty());
-        let err = SdkError::<(), _>::service_error((), response);
+        let err = SdkError::service_error(TestError::no_code(), response);
         assert!(is_retryable(&err));
     }
 
     #[test]
+    fn test_is_retryable_service_error_slowdown_http_200() {
+        // S3 SlowDown / throttling can arrive as HTTP 200 with the error code in
+        // the XML body. Verify all three throttling codes are retryable at
+        // status 200.
+        for code in &["SlowDown", "RequestThrottled", "RequestTimeout"] {
+            let response =
+                HttpResponse::new(StatusCode::try_from(200).unwrap(), SdkBody::empty());
+            let err = SdkError::service_error(TestError::with_code(code), response);
+            assert!(
+                is_retryable(&err),
+                "expected HTTP 200 ServiceError with code={} to be retryable",
+                code
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_retryable_service_error_other_200() {
+        // A 200 ServiceError with an unrelated code must not be retried.
+        let response = HttpResponse::new(StatusCode::try_from(200).unwrap(), SdkBody::empty());
+        let err = SdkError::service_error(TestError::with_code("NoSuchKey"), response);
+        assert!(!is_retryable(&err));
+    }
+
+    #[test]
     fn test_is_retryable_timeout_error() {
-        // Test that TimeoutError is retryable
-        let err = SdkError::<(), HttpResponse>::timeout_error("operation timed out");
+        let err = SdkError::<TestError, HttpResponse>::timeout_error("operation timed out");
         assert!(is_retryable(&err));
     }
 
     #[test]
     fn test_is_retryable_construction_failure() {
-        // Test that ConstructionFailure is not retryable
-        let err = SdkError::<(), HttpResponse>::construction_failure("failed to build request");
+        let err =
+            SdkError::<TestError, HttpResponse>::construction_failure("failed to build request");
         assert!(!is_retryable(&err));
     }
 
