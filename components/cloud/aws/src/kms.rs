@@ -16,6 +16,7 @@ use cloud::{
     error::{Error, KmsError, OtherError, Result},
     kms::{Config, CryptographyType, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey},
 };
+use aws_smithy_types::error::metadata::ProvideErrorMetadata;
 use futures::executor::block_on;
 
 use crate::util::{self, SdkError, is_retryable};
@@ -175,7 +176,9 @@ fn classify_decrypt_error(err: SdkError<DecryptError>) -> Error {
     }
 }
 
-fn classify_error<E: std::error::Error + Send + Sync + 'static>(err: SdkError<E>) -> Error {
+fn classify_error<E: std::error::Error + ProvideErrorMetadata + Send + Sync + 'static>(
+    err: SdkError<E>,
+) -> Error {
     match &err {
         SdkError::DispatchFailure(dispatch_failure) => {
             let maybe_credentials_err = dispatch_failure
