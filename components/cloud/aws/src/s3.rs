@@ -41,6 +41,8 @@ use tikv_util::{
 use tokio::time::{sleep, timeout};
 use tokio_util::io::ReaderStream;
 
+use aws_smithy_types::error::metadata::ProvideErrorMetadata;
+
 use crate::util::{self, SdkError, retry_and_count};
 
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(900);
@@ -402,7 +404,7 @@ impl RetryError for UploadError {
     }
 }
 
-impl<T: 'static + StdError> From<SdkError<T>> for UploadError {
+impl<T: 'static + StdError + ProvideErrorMetadata> From<SdkError<T>> for UploadError {
     fn from(err: SdkError<T>) -> Self {
         let msg = format!("{:?}", err);
         Self::Sdk {
