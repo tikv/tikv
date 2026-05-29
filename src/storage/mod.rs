@@ -75,7 +75,7 @@ use std::{
 use api_version::{ApiV1, ApiV2, KeyMode, KvFormat, RawValue};
 use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
 use collections::HashMap;
-use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
+use concurrency_manager::{ConcurrencyManager, IntoErrorSource, KeyHandleGuard, MaxTsUpdateSource};
 use engine_traits::{
     CF_DEFAULT, CF_LOCK, CF_WRITE, CfName, DATA_CFS, DATA_CFS_LEN, raw_ttl::ttl_to_expire_ts,
 };
@@ -1747,7 +1747,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let command_duration = Instant::now();
 
                 concurrency_manager
-                    .update_max_ts(max_ts, "scan_lock")
+                    .update_max_ts(max_ts, max_ts_update_source(&ctx, "scan_lock"))
                     .map_err(txn::Error::from)?;
                 let begin_instant = Instant::now();
                 // TODO: Though it's very unlikely to find a conflicting memory lock here, it's
@@ -3479,6 +3479,14 @@ fn get_priority_tag(priority: CommandPri) -> CommandPriority {
         CommandPri::Normal => CommandPriority::normal,
         CommandPri::High => CommandPriority::high,
     }
+}
+
+pub(crate) fn max_ts_update_source<S>(ctx: &Context, source: S) -> MaxTsUpdateSource<S>
+where
+    S: IntoErrorSource,
+{
+    MaxTsUpdateSource::new(source)
+        .allow_drift(ctx.get_request_origin() == kvrpcpb::RequestOrigin::RequestOriginTidb)
 }
 
 fn prepare_snap_ctx<'a>(

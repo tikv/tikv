@@ -10,6 +10,7 @@ use crate::storage::{
     ProcessResult, Snapshot,
     kv::WriteData,
     lock_manager::LockManager,
+    max_ts_update_source,
     mvcc::{MvccTxn, OverlappedWrite, ReleasedLock, SnapshotReader, TimeStamp, TxnCommitRecord},
     txn::{
         Result,
@@ -148,11 +149,12 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
         // It is not allowed for commit to overwrite a protected rollback. So we update
         // max_ts to prevent this case from happening.
         let region_id = self.ctx.get_region_id();
-        context
-            .concurrency_manager
-            .update_max_ts(self.start_ts, || {
+        context.concurrency_manager.update_max_ts(
+            self.start_ts,
+            max_ts_update_source(&self.ctx, || {
                 format!("check_secondary_locks-{}", self.start_ts)
-            })?;
+            }),
+        )?;
 
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
         let mut reader = ReaderWithStats::new(

@@ -10,14 +10,14 @@ use std::{
 
 use async_channel::SendError;
 use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
-use concurrency_manager::ConcurrencyManager;
+use concurrency_manager::{ConcurrencyManager, MaxTsUpdateSource};
 use engine_traits::{CfName, KvEngine, SstCompressionType, name_to_cf, raw_ttl::ttl_current_ts};
 use external_storage::{BackendConfig, ExternalStorage, HdfsConfig, create_storage};
 use futures::{channel::mpsc::*, executor::block_on};
 use kvproto::{
     brpb::*,
     encryptionpb::EncryptionMethod,
-    kvrpcpb::{ApiVersion, Context, IsolationLevel, KeyRange},
+    kvrpcpb::{ApiVersion, Context, IsolationLevel, KeyRange, RequestOrigin},
     metapb::*,
 };
 use online_config::OnlineConfig;
@@ -93,6 +93,7 @@ struct Request {
     replica_read: bool,
     resource_group_name: String,
     source_tag: String,
+    request_origin: RequestOrigin,
     bypass_locks: Vec<u64>,
     access_locks: Vec<u64>,
 }
@@ -166,6 +167,7 @@ impl Task {
                     .get_resource_group_name()
                     .to_owned(),
                 source_tag,
+                request_origin: req.get_context().get_request_origin(),
                 bypass_locks: req.get_context().get_resolved_locks().to_owned(),
                 access_locks: req.get_context().get_committed_locks().to_owned(),
                 cipher: req.cipher_info.unwrap_or_else(|| {
@@ -194,6 +196,7 @@ pub struct BackupRange {
     codec: KeyValueCodec,
     cf: CfName,
     uses_replica_read: bool,
+    request_origin: RequestOrigin,
 }
 
 /// The generic saveable writer. for generic `InMemBackupFiles`.
@@ -358,6 +361,7 @@ impl BackupRange {
         ctx.set_peer(self.peer.clone());
         ctx.set_replica_read(self.uses_replica_read);
         ctx.set_isolation_level(IsolationLevel::Si);
+        ctx.set_request_origin(self.request_origin);
 
         let mut snap_ctx = SnapContext {
             pb_ctx: &ctx,
@@ -377,7 +381,11 @@ impl BackupRange {
         } else {
             // Update max_ts and check the in-memory lock table before getting the snapshot
             concurrency_manager
-                .update_max_ts(backup_ts, "backup_range")
+                .update_max_ts(
+                    backup_ts,
+                    MaxTsUpdateSource::new("backup_range")
+                        .allow_drift(self.request_origin == RequestOrigin::RequestOriginTidb),
+                )
                 .map_err(TxnError::from)?;
             concurrency_manager
                 .read_range_check(
@@ -825,7 +833,12 @@ impl<R: RegionInfoProvider> Progress<R> {
     /// Notice: Returning an empty BackupRanges means that no leader region
     /// corresponding to the current range is sought. The caller should
     /// call `forward` again to seek regions for the next range.
-    fn forward(&mut self, limit: usize, replica_read: bool) -> Option<Vec<BackupRange>> {
+    fn forward(
+        &mut self,
+        limit: usize,
+        replica_read: bool,
+        request_origin: RequestOrigin,
+    ) -> Option<Vec<BackupRange>> {
         if self.finished {
             return None;
         }
@@ -875,6 +888,7 @@ impl<R: RegionInfoProvider> Progress<R> {
                             codec,
                             cf: cf_name,
                             uses_replica_read: info.role != StateRole::Leader,
+                            request_origin,
                         };
                         tx.send(backup_range).unwrap();
                         count += 1;
@@ -1003,7 +1017,8 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     // needs to be `Send`. (See https://tokio.rs/tokio/tutorial/shared-state)
                     // Use &mut and mark the type for making rust-analyzer happy.
                     let progress: &mut Progress<_> = &mut prs.lock().unwrap();
-                    match progress.forward(batch_size, request.replica_read) {
+                    match progress.forward(batch_size, request.replica_read, request.request_origin)
+                    {
                         Some(batch) => (batch, progress.codec.is_raw_kv, progress.cf),
                         None => return,
                     }
@@ -1627,7 +1642,9 @@ pub mod tests {
                 let mut ranges = Vec::with_capacity(expect.len());
                 while ranges.len() != expect.len() {
                     let n = (rand::random::<usize>() % 3) + 1;
-                    let mut r = prs.forward(n, false).unwrap();
+                    let mut r = prs
+                        .forward(n, false, RequestOrigin::RequestOriginUnknown)
+                        .unwrap();
                     // The returned backup ranges should <= n
                     assert!(r.len() <= n);
 
@@ -1880,7 +1897,7 @@ pub mod tests {
                 let mut ranges = Vec::with_capacity(expect.len());
                 loop {
                     let n = (rand::random::<usize>() % 3) + 1;
-                    let mut r = match prs.forward(n, false) {
+                    let mut r = match prs.forward(n, false, RequestOrigin::RequestOriginUnknown) {
                         None => break,
                         Some(r) => r,
                     };
@@ -2041,6 +2058,7 @@ pub mod tests {
             codec: KeyValueCodec::new(false, ApiVersion::V1, ApiVersion::V1),
             cf: "",
             uses_replica_read: false,
+            request_origin: RequestOrigin::RequestOriginUnknown,
         }]
     }
 
@@ -2072,7 +2090,7 @@ pub mod tests {
         let mut ranges = Vec::with_capacity(expect.len());
         loop {
             let n = (rand::random::<usize>() % 2) + 1;
-            let mut r = match prs.forward(n, false) {
+            let mut r = match prs.forward(n, false, RequestOrigin::RequestOriginUnknown) {
                 None => break,
                 Some(r) => r,
             };
