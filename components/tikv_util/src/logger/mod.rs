@@ -8,8 +8,9 @@ use std::{
     io::{self, BufWriter},
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
+        Mutex,
         atomic::{AtomicUsize, Ordering},
+        mpsc::channel,
     },
     thread,
     time::Duration,
@@ -159,19 +160,14 @@ pub fn exit_process_gracefully(code: i32) -> ! {
 pub fn panic_after_best_effort_flush(timeout: Duration, message: &str) -> ! {
     let guard = ASYNC_LOGGER_GUARD.lock().unwrap().take();
     if let Some(guard) = guard {
-        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let done_for_worker = Arc::clone(&done);
+        let (done_tx, done_rx) = channel();
         let _ = thread::Builder::new()
             .name("async-log-flush".to_owned())
             .spawn_wrapper(move || {
                 drop(guard);
-                done_for_worker.store(true, Ordering::Release);
+                let _ = done_tx.send(());
             });
-        let start = std::time::Instant::now();
-        while !done.load(Ordering::Acquire) && start.elapsed() < timeout {
-            thread::yield_now();
-            thread::sleep(Duration::from_millis(1));
-        }
+        let _ = done_rx.recv_timeout(timeout);
     }
     panic!("{}", message);
 }
