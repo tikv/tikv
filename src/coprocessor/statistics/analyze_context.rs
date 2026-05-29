@@ -339,13 +339,48 @@ impl<E: crate::storage::Engine, S: Snapshot, F: KvFormat> AnalyzeContext<E, S, F
         Ok(res_data)
     }
 
-    async fn handle_full_sampling(builder: &mut RowSampleBuilder<S, F>) -> Result<Vec<u8>> {
-        let sample_res = builder.collect_column_stats().await?;
-        let res_data = {
-            let res: tipb::AnalyzeColumnsResp = sample_res.into();
-            box_try!(res.write_to_bytes())
+    async fn handle_full_sampling_result(&mut self) -> Result<AnalyzeSamplingResult> {
+        if self.req.get_tp() != AnalyzeType::TypeFullSampling {
+            return Err(Error::Other(
+                "typed analyze result is only supported for full sampling".to_owned(),
+            ));
+        }
+        let col_req = self.req.take_col_req();
+        let storage = self.storage.take().unwrap();
+        let ranges = std::mem::take(&mut self.ranges);
+
+        let req_ndv_rate = col_req.get_ndv_rate();
+        let range_sample_rate = if req_ndv_rate > 0.0 && req_ndv_rate < 1.0 {
+            req_ndv_rate
+        } else {
+            1.0
         };
-        Ok(res_data)
+
+        // SST seek-probe range sampling is driven by NDVRATE. Keep the split
+        // count as a code constant so this path has one clear tuning surface.
+        let pre_selected = if range_sample_rate < 1.0 {
+            Self::pre_select_ranges_via_seek_probe(
+                &self.snapshot,
+                &ranges,
+                range_sample_rate,
+                self.start_ts,
+            )
+        } else {
+            None
+        };
+
+        let mut builder = RowSampleBuilder::<_, F>::new_with_range_sampling(
+            col_req,
+            storage,
+            ranges,
+            self.quota_limiter.clone(),
+            self.is_auto_analyze,
+            pre_selected,
+        )?;
+
+        let res = builder.collect_column_stats().await;
+        builder.merge_storage_stats_into(&mut self.storage_stats);
+        res
     }
 
     // handle_index is used to handle `AnalyzeIndexReq`,
@@ -493,42 +528,8 @@ impl<E: crate::storage::Engine, S: Snapshot, F: KvFormat> RequestHandler
             }
 
             AnalyzeType::TypeFullSampling => {
-                let col_req = self.req.take_col_req();
-                let storage = self.storage.take().unwrap();
-                let ranges = std::mem::take(&mut self.ranges);
-
-                let req_ndv_rate = col_req.get_ndv_rate();
-                let range_sample_rate = if req_ndv_rate > 0.0 && req_ndv_rate < 1.0 {
-                    req_ndv_rate
-                } else {
-                    1.0
-                };
-
-                // SST seek-probe range sampling is driven by NDVRATE. Keep the split
-                // count as a code constant so this path has one clear tuning surface.
-                let pre_selected: Option<(Vec<KeyRange>, f64)> = if range_sample_rate < 1.0 {
-                    Self::pre_select_ranges_via_seek_probe(
-                        &self.snapshot,
-                        &ranges,
-                        range_sample_rate,
-                        self.start_ts,
-                    )
-                } else {
-                    None
-                };
-
-                let mut builder = RowSampleBuilder::<_, F>::new_with_range_sampling(
-                    col_req,
-                    storage,
-                    ranges,
-                    self.quota_limiter.clone(),
-                    self.is_auto_analyze,
-                    pre_selected,
-                )?;
-
-                let res = Self::handle_full_sampling(&mut builder).await;
-                builder.merge_storage_stats_into(&mut self.storage_stats);
-                res
+                let res = self.handle_full_sampling_result().await;
+                res.and_then(AnalyzeSamplingResult::write_to_bytes)
             }
 
             AnalyzeType::TypeSampleIndex => Err(Error::Other(
@@ -549,6 +550,10 @@ impl<E: crate::storage::Engine, S: Snapshot, F: KvFormat> RequestHandler
             }
             Err(e) => Err(e),
         }
+    }
+
+    async fn handle_analyze_full_sampling(&mut self) -> Result<AnalyzeSamplingResult> {
+        self.handle_full_sampling_result().await
     }
 
     fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
