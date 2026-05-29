@@ -4,9 +4,11 @@ use std::{
     fs,
     path::PathBuf,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc::{Receiver, channel},
     },
+    thread::JoinHandle,
     time::Duration,
 };
 
@@ -27,6 +29,7 @@ use crate::store::disk_probe::ProbeRunner;
 
 const PROBE_INTERVAL: Duration = Duration::from_secs(1);
 const FAIL_FAST_LOG_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
+const PROBE_THREAD_STOP_TIMEOUT: Duration = Duration::from_secs(2);
 const PROBE_PAYLOAD: &[u8] = b"tikv disk fail fast probe";
 
 #[derive(Clone, Copy)]
@@ -128,9 +131,10 @@ fn spawn_probe_thread(
     stop: Arc<AtomicBool>,
     raft_probe: ProbeRunner,
     kv_probe: Option<ProbeRunner>,
-) -> std::io::Result<()> {
+) -> std::io::Result<(JoinHandle<()>, Receiver<()>)> {
+    let (exit_tx, exit_rx) = channel();
     // A single probe thread alternates raft -> kv.
-    std::thread::Builder::new()
+    let handle = std::thread::Builder::new()
         .name(name.to_owned())
         .spawn_wrapper(move || {
             while !stop.load(Ordering::Acquire) {
@@ -151,8 +155,9 @@ fn spawn_probe_thread(
 
                 std::thread::sleep(PROBE_INTERVAL);
             }
+            let _ = exit_tx.send(());
         })?;
-    Ok(())
+    Ok((handle, exit_rx))
 }
 
 // Returns the fail-fast decision for one disk probe.
@@ -250,6 +255,8 @@ pub struct FailFastMonitor {
     stop: Arc<AtomicBool>,
     raft_probe: ProbeRunner,
     kv_probe: Option<ProbeRunner>,
+    probe_thread_handle: Mutex<Option<JoinHandle<()>>>,
+    probe_thread_exit_rx: Mutex<Option<Receiver<()>>>,
 }
 
 impl FailFastMonitor {
@@ -270,7 +277,7 @@ impl FailFastMonitor {
         let kv_probe = kv_probe_dir
             .map(|dir| ProbeRunner::new(dir.join(DiskKind::Kv.probe_filename()), PROBE_PAYLOAD));
 
-        spawn_probe_thread(
+        let (probe_thread_handle, probe_thread_exit_rx) = spawn_probe_thread(
             "fail-fast-probe",
             cfg.clone(),
             stop.clone(),
@@ -314,12 +321,29 @@ impl FailFastMonitor {
             stop,
             raft_probe,
             kv_probe,
+            probe_thread_handle: Mutex::new(Some(probe_thread_handle)),
+            probe_thread_exit_rx: Mutex::new(Some(probe_thread_exit_rx)),
         })
     }
 
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Release);
+        self.try_join_probe_thread();
         self.cleanup_probe_file();
+    }
+
+    fn try_join_probe_thread(&self) {
+        let Some(exit_rx) = self.probe_thread_exit_rx.lock().unwrap().take() else {
+            return;
+        };
+        let Some(probe_thread_handle) = self.probe_thread_handle.lock().unwrap().take() else {
+            return;
+        };
+        if exit_rx.recv_timeout(PROBE_THREAD_STOP_TIMEOUT).is_ok() {
+            if let Err(e) = probe_thread_handle.join() {
+                warn!("fail-fast probe thread panicked during shutdown"; "err" => ?e);
+            }
+        }
     }
 
     fn cleanup_probe_file(&self) {
