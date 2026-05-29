@@ -334,7 +334,7 @@ impl<E: Engine> Endpoint<E> {
                 let quota_limiter = self.quota_limiter.clone();
 
                 handler_builder = Box::new(move |snap, req_ctx| {
-                    AnalyzeContext::<_, F>::new(
+                    AnalyzeContext::<E, _, F>::new(
                         analyze,
                         req_ctx.ranges.clone(),
                         start_ts,
