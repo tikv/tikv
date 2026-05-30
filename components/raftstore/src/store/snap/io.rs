@@ -222,7 +222,9 @@ where
 
     box_try!(snap.scan(cf, start_key, end_key, false, |key, value| {
         let entry_len = key.len() + value.len();
-        // Allow a single large entry to occupy one SST that exceeds the target size.
+        // Avoid producing an empty SST file, which can make RocksDB panic when
+        // ingested. Allow a single large entry to occupy one SST that exceeds
+        // the target size.
         if file_length > 0 && file_length + entry_len > raw_size_per_file as usize {
             cf_file.add_file(file_id); // add previous file
             file_length = 0;
