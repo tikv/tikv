@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ABSPATH="$( cd "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )/.."
+pushd "$(dirname "$0")/.." >/dev/null
+make build
+data_dir=./run/tikv1
+mkdir -p "$data_dir"
+
+popd >/dev/null
+
+exec "$ABSPATH/target/debug/tikv-server" \
+	--pd-endpoints="127.0.0.1:2379" \
+	--addr="127.0.0.1:20160" \
+	--data-dir="$ABSPATH/$data_dir" \
+	"$@"
