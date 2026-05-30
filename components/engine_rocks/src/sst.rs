@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{io::Write, path::PathBuf, sync::Arc};
 
 use ::encryption::DataKeyManager;
 use engine_traits::{
@@ -12,7 +12,7 @@ use file_system::get_io_rate_limiter;
 use rocksdb::{
     ColumnFamilyOptions, DB, DBCompressionType, DBIterator, Env, EnvOptions,
     ExternalSstFileInfo as RawExternalSstFileInfo, SequentialFile, SstFileReader, SstFileWriter,
-    rocksdb::supported_compression,
+    WritableFile, rocksdb::supported_compression,
 };
 
 use crate::{engine::RocksEngine, get_env, options::RocksReadOptions, r2e};
@@ -36,6 +36,12 @@ impl RocksSstReader {
         let mut reader = SstFileReader::new(cf_options);
         reader.open(path).map_err(r2e)?;
         Ok(RocksSstReader { inner: reader })
+    }
+
+    pub fn open_in_memory(path: &str, content: &[u8]) -> Result<Self> {
+        let mut file = RocksInMemoryFile::new(path)?;
+        file.write_all(content).map_err(|e| r2e(e.to_string()))?;
+        file.finish_reader()
     }
 
     pub fn compression_name(&self) -> String {
@@ -76,6 +82,68 @@ impl RefIterable for RocksSstReader {
         let opt: RocksReadOptions = opts.into();
         let opt = opt.into_raw();
         Ok(RocksSstIterator(SstFileReader::iter_opt(&self.inner, opt)))
+    }
+}
+
+pub struct RocksInMemoryFile {
+    env: Arc<Env>,
+    path: String,
+    file: WritableFile,
+}
+
+pub struct RocksInMemorySst {
+    env: Arc<Env>,
+    path: String,
+}
+
+impl std::fmt::Debug for RocksInMemorySst {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RocksInMemorySst")
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
+}
+
+impl RocksInMemorySst {
+    pub fn open_reader(&self) -> Result<RocksSstReader> {
+        RocksSstReader::open_with_env(&self.path, Some(self.env.clone()))
+    }
+}
+
+impl RocksInMemoryFile {
+    pub fn new(path: &str) -> Result<RocksInMemoryFile> {
+        let env = Arc::new(Env::new_mem());
+        let file = env
+            .new_writable_file(path, EnvOptions::new())
+            .map_err(r2e)?;
+        Ok(RocksInMemoryFile {
+            env,
+            path: path.to_owned(),
+            file,
+        })
+    }
+
+    pub fn finish(mut self) -> Result<RocksInMemorySst> {
+        self.file.flush().map_err(|e| r2e(e.to_string()))?;
+        self.file.close().map_err(r2e)?;
+        Ok(RocksInMemorySst {
+            env: self.env,
+            path: self.path,
+        })
+    }
+
+    fn finish_reader(self) -> Result<RocksSstReader> {
+        self.finish()?.open_reader()
+    }
+}
+
+impl Write for RocksInMemoryFile {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.file.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
     }
 }
 
@@ -433,5 +501,13 @@ mod tests {
         reader.reset().unwrap();
         reader.read_to_end(&mut buf2).unwrap();
         assert_eq!(buf, buf2);
+
+        let in_memory_reader = RocksSstReader::open_in_memory("downloaded.sst", &buf).unwrap();
+        in_memory_reader.verify_checksum().unwrap();
+        let mut iter = in_memory_reader.iter(IterOptions::default()).unwrap();
+        assert!(iter.seek_to_first().unwrap());
+        assert_eq!(iter.key(), k);
+        assert_eq!(iter.value(), v);
+        assert!(!iter.next().unwrap());
     }
 }
