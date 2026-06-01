@@ -3486,7 +3486,7 @@ where
     S: IntoErrorSource,
 {
     MaxTsUpdateSource::new(source)
-        .allow_drift(ctx.get_request_origin() == kvrpcpb::RequestOrigin::RequestOriginTidb)
+        .allow_drift(ctx.get_request_origin() == kvrpcpb::RequestOrigin::RequestOriginTiDb)
 }
 
 fn prepare_snap_ctx<'a>(
