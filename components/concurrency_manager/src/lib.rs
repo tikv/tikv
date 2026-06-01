@@ -240,36 +240,16 @@ impl ConcurrencyManager {
         let limits = self.max_ts_limit.load();
         let update_limit = limits.max_ts_update_limit(exact_limit_required);
 
-        // Check that new_ts is less than or equal to the selected update limit.
-        if !exact_limit_required && !update_limit.is_zero() && new_ts > update_limit {
-            let last_update = limits.update_time;
-            let now = self.time_provider.now();
-            if now < last_update {
-                warn!("clock went backwards"; "now" => ?now, "last_update" => ?last_update);
-            }
-            let duration_to_last_limit_update = now.saturating_duration_since(last_update);
-
-            if duration_to_last_limit_update < self.limit_valid_duration {
-                // limit is valid
-                let source = source.into_error_source();
-                self.double_check(new_ts, update_limit, source, false, request_origin)?;
-            } else {
-                // limit is stale
-                // use an approximate limit to avoid false alerts caused by failed limit updates
-
-                let approximate_limit = TimeStamp::compose(
-                    limits.drifted.physical() + duration_to_last_limit_update.as_millis() as u64,
-                    limits.drifted.logical(),
-                );
-
-                if new_ts > approximate_limit {
-                    let source = source.into_error_source();
-                    self.double_check(new_ts, approximate_limit, source, true, request_origin)?;
-                }
-            }
-        } else if exact_limit_required && (update_limit.is_zero() || new_ts > update_limit) {
-            let source = source.into_error_source();
-            self.double_check(new_ts, update_limit, source, false, request_origin)?;
+        if exact_limit_required {
+            self.check_exact_max_ts_update_limit(new_ts, update_limit, source, request_origin)?;
+        } else {
+            self.check_drifted_max_ts_update_limit(
+                new_ts,
+                limits,
+                update_limit,
+                source,
+                request_origin,
+            )?;
         }
 
         MAX_TS_GAUGE.set(
@@ -277,6 +257,60 @@ impl ConcurrencyManager {
                 .fetch_max(new_ts.into_inner(), Ordering::SeqCst)
                 .max(new_ts.into_inner()) as i64,
         );
+        Ok(())
+    }
+
+    fn check_exact_max_ts_update_limit(
+        &self,
+        new_ts: TimeStamp,
+        update_limit: TimeStamp,
+        source: impl IntoErrorSource,
+        request_origin: Option<RequestOrigin>,
+    ) -> Result<(), InvalidMaxTsUpdate> {
+        if update_limit.is_zero() || new_ts > update_limit {
+            let source = source.into_error_source();
+            self.double_check(new_ts, update_limit, source, false, request_origin)?;
+        }
+        Ok(())
+    }
+
+    fn check_drifted_max_ts_update_limit(
+        &self,
+        new_ts: TimeStamp,
+        limits: MaxTsLimit,
+        update_limit: TimeStamp,
+        source: impl IntoErrorSource,
+        request_origin: Option<RequestOrigin>,
+    ) -> Result<(), InvalidMaxTsUpdate> {
+        if update_limit.is_zero() || new_ts <= update_limit {
+            return Ok(());
+        }
+
+        let duration_to_last_limit_update = {
+            let last_update = limits.update_time;
+            let now = self.time_provider.now();
+            if now < last_update {
+                warn!("clock went backwards"; "now" => ?now, "last_update" => ?last_update);
+            }
+            now.saturating_duration_since(last_update)
+        };
+
+        if duration_to_last_limit_update < self.limit_valid_duration {
+            let source = source.into_error_source();
+            return self.double_check(new_ts, update_limit, source, false, request_origin);
+        }
+
+        // Use an approximate limit to avoid false alerts caused by failed limit
+        // updates.
+        let approximate_limit = TimeStamp::compose(
+            limits.drifted.physical() + duration_to_last_limit_update.as_millis() as u64,
+            limits.drifted.logical(),
+        );
+
+        if new_ts > approximate_limit {
+            let source = source.into_error_source();
+            self.double_check(new_ts, approximate_limit, source, true, request_origin)?;
+        }
         Ok(())
     }
 
