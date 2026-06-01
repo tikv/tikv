@@ -79,7 +79,7 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
         let ndv_rate = if ndv_rate > 0.0 { ndv_rate } else { 1.0 };
         let build_singletons = ndv_rate < 1.0;
         let common_handle_ids = req.take_primary_column_ids();
-        let table_scanner = BatchTableScanExecutor::new(
+        let mut table_scanner = BatchTableScanExecutor::new(
             storage,
             Arc::new(EvalConfig::default()),
             columns_info.clone(),
@@ -89,6 +89,9 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             false, // Streaming mode is not supported in Analyze request, always false here
             req.take_primary_prefix_column_ids(),
         )?;
+        if build_singletons {
+            table_scanner.set_row_sample_rate(ndv_rate);
+        }
         Ok(Self {
             data: table_scanner,
             accumulated_storage_stats: Statistics::default(),
