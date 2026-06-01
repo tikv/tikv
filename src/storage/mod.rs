@@ -3485,8 +3485,7 @@ pub(crate) fn max_ts_update_source<S>(ctx: &Context, source: S) -> MaxTsUpdateSo
 where
     S: IntoErrorSource,
 {
-    MaxTsUpdateSource::new(source)
-        .allow_drift(ctx.get_request_origin() == kvrpcpb::RequestOrigin::RequestOriginTiDb)
+    MaxTsUpdateSource::new(source).request_origin(ctx.get_request_origin())
 }
 
 fn prepare_snap_ctx<'a>(
