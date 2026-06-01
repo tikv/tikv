@@ -35,6 +35,62 @@ use crate::{
 
 const SST_RANGE_SAMPLE_SPLIT_COUNT: usize = 200;
 
+fn select_weighted_systematic_ranges(
+    weights: &[u64],
+    select_count: usize,
+    overlay_edges: bool,
+) -> (Vec<usize>, f64) {
+    if weights.is_empty() {
+        return (Vec::new(), 1.0);
+    }
+
+    let sample_count = select_count.max(1).min(weights.len());
+    let weights = weights
+        .iter()
+        .map(|weight| (*weight).max(1))
+        .collect::<Vec<_>>();
+    let total_weight = weights
+        .iter()
+        .fold(0_u128, |sum, weight| sum + *weight as u128);
+
+    let mut indices = if sample_count >= weights.len() {
+        (0..weights.len()).collect::<Vec<_>>()
+    } else {
+        let mut selected = Vec::with_capacity(sample_count + 2);
+        let mut weight_prefix = 0_u128;
+        let mut range_idx = 0_usize;
+        for bucket_idx in 0..sample_count {
+            let target = ((bucket_idx as u128 * 2 + 1) * total_weight) / (sample_count as u128 * 2);
+            while range_idx + 1 < weights.len()
+                && weight_prefix + weights[range_idx] as u128 <= target
+            {
+                weight_prefix += weights[range_idx] as u128;
+                range_idx += 1;
+            }
+            selected.push(range_idx);
+        }
+        selected
+    };
+
+    if overlay_edges && weights.len() > 1 {
+        indices.push(0);
+        indices.push(weights.len() - 1);
+    }
+    indices.sort_unstable();
+    indices.dedup();
+
+    let selected_weight = indices
+        .iter()
+        .fold(0_u128, |sum, idx| sum + weights[*idx] as u128);
+    let scale = if selected_weight == 0 {
+        1.0
+    } else {
+        total_weight as f64 / selected_weight as f64
+    };
+
+    (indices, scale)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AnalyzeVersion {
     V1,
@@ -152,6 +208,19 @@ impl<E: crate::storage::Engine, S: Snapshot, F: KvFormat> AnalyzeContext<E, S, F
         }
         raw.dedup();
         raw
+    }
+
+    fn range_properties_approximate_keys(start_raw: &[u8], end_raw: &[u8]) -> Option<u64> {
+        let lower = keys::data_key(Key::from_raw(start_raw).as_encoded());
+        let upper = keys::data_key(Key::from_raw(end_raw).as_encoded());
+        unsafe {
+            with_tls_engine::<E, _, _>(|engine| {
+                engine.kv_engine().and_then(|db| {
+                    db.get_range_approximate_keys_cf(CF_WRITE, EngineRange::new(&lower, &upper), 0)
+                        .ok()
+                })
+            })
+        }
     }
 
     /// Split the request range into `SST_RANGE_SAMPLE_SPLIT_COUNT` sub-ranges,
@@ -284,14 +353,23 @@ impl<E: crate::storage::Engine, S: Snapshot, F: KvFormat> AnalyzeContext<E, S, F
         let select_count = std::cmp::max(
             1,
             (non_empty_count as f64 * range_sample_rate).round() as usize,
-        );
-        let scale = non_empty_count as f64 / select_count as f64;
-        use rand::seq::SliceRandom;
-        let mut rng = rand::thread_rng();
-        let mut indices: Vec<usize> = (0..non_empty_count).collect();
-        indices.shuffle(&mut rng);
-        indices.truncate(select_count);
-        indices.sort();
+        )
+        .min(non_empty_count);
+        let (indices, scale) = if select_count >= non_empty_count {
+            ((0..non_empty_count).collect::<Vec<_>>(), 1.0)
+        } else {
+            let weights = non_empty
+                .iter()
+                .map(|range| {
+                    Self::range_properties_approximate_keys(range.get_start(), range.get_end())
+                        .filter(|keys| *keys > 0)
+                        .unwrap_or(1)
+                })
+                .collect::<Vec<_>>();
+            // Overlay the first and last live sub-ranges without consuming sample
+            // budget. This keeps interior coverage while covering table edges.
+            select_weighted_systematic_ranges(&weights, select_count, true)
+        };
         let selected = indices
             .into_iter()
             .map(|idx| non_empty[idx].clone())
@@ -303,6 +381,8 @@ impl<E: crate::storage::Engine, S: Snapshot, F: KvFormat> AnalyzeContext<E, S, F
             "selected" => selected.len(),
             "range_sample_rate" => range_sample_rate,
             "scale" => scale,
+            "forced_edge_ranges" => non_empty_count > 1,
+            "selection" => "weighted_systematic",
         );
         Some((selected, scale))
     }
@@ -559,5 +639,38 @@ impl<E: crate::storage::Engine, S: Snapshot, F: KvFormat> RequestHandler
     fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
         dest.add(&self.storage_stats);
         self.storage_stats = Statistics::default();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::select_weighted_systematic_ranges;
+
+    #[test]
+    fn test_weighted_systematic_ranges_overlay_edges() {
+        let (indices, scale) = select_weighted_systematic_ranges(&[1; 10], 2, true);
+        assert_eq!(indices, vec![0, 2, 7, 9]);
+        assert!((scale - 2.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_weighted_systematic_ranges_use_key_weight_scale() {
+        let (indices, scale) = select_weighted_systematic_ranges(&[100, 1, 1, 1, 100], 2, true);
+        assert_eq!(indices, vec![0, 4]);
+        assert!((scale - 1.015).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_weighted_systematic_ranges_select_all() {
+        let (indices, scale) = select_weighted_systematic_ranges(&[3, 0, 2], 10, true);
+        assert_eq!(indices, vec![0, 1, 2]);
+        assert!((scale - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_weighted_systematic_ranges_empty() {
+        let (indices, scale) = select_weighted_systematic_ranges(&[], 10, true);
+        assert!(indices.is_empty());
+        assert!((scale - 1.0).abs() < f64::EPSILON);
     }
 }
