@@ -114,18 +114,46 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
         ));
 
         let (txn_status, released) = match reader.load_lock(&self.primary_key)? {
-            Some(Either::Left(lock)) if lock.ts == self.lock_ts => check_txn_status_lock_exists(
-                &mut txn,
-                &mut reader,
-                self.primary_key,
-                lock,
-                self.current_ts,
-                self.caller_start_ts,
-                self.force_sync_commit,
-                self.resolving_pessimistic_lock,
-                self.verify_is_primary,
-                self.rollback_if_not_exist,
-            )?,
+            Some(Either::Left(lock)) if lock.ts == self.lock_ts => {
+                let lock_type = lock.lock_type;
+                let ttl = lock.ttl;
+
+                let result = check_txn_status_lock_exists(
+                    &mut txn,
+                    &mut reader,
+                    self.primary_key.clone(),
+                    lock,
+                    self.current_ts,
+                    self.caller_start_ts,
+                    self.force_sync_commit,
+                    self.resolving_pessimistic_lock,
+                    self.verify_is_primary,
+                    self.rollback_if_not_exist,
+                )?;
+
+                if matches!(
+                    &result.0,
+                    TxnStatus::TtlExpire | TxnStatus::PessimisticRollBack
+                ) {
+                    let status_str = match &result.0 {
+                        TxnStatus::TtlExpire => "ttl_expire",
+                        TxnStatus::PessimisticRollBack => "pessimistic_rollback",
+                        _ => unreachable!(),
+                    };
+                    info!(
+                        "check_txn_status rolled back lock";
+                        "status" => status_str,
+                        "lock_ts" => self.lock_ts,
+                        "current_ts" => self.current_ts,
+                        "ttl" => ttl,
+                        "lock_type" => ?lock_type,
+                        "resolving_pessimistic_lock" => self.resolving_pessimistic_lock,
+                        "request_source" => %self.ctx.get_request_source(),
+                    );
+                }
+
+                result
+            }
             Some(Either::Right(shared_locks)) => {
                 // a shared-locked key cannot be the primary key of a transaction thus reject
                 // the request directly.
@@ -143,17 +171,26 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
                     Either::Left(lock) => Some(lock),
                     Either::Right(_) => None, // SharedLocks already handled above
                 });
-                (
-                    check_txn_status_missing_lock(
-                        &mut txn,
-                        &mut reader,
-                        self.primary_key,
-                        lock,
-                        MissingLockAction::rollback(self.rollback_if_not_exist),
-                        self.resolving_pessimistic_lock,
-                    )?,
-                    None,
-                )
+                let result = check_txn_status_missing_lock(
+                    &mut txn,
+                    &mut reader,
+                    self.primary_key.clone(),
+                    lock,
+                    MissingLockAction::rollback(self.rollback_if_not_exist),
+                    self.resolving_pessimistic_lock,
+                )?;
+
+                if matches!(result, TxnStatus::LockNotExist) && self.rollback_if_not_exist {
+                    info!(
+                        "check_txn_status wrote rollback for missing lock";
+                        "lock_ts" => self.lock_ts,
+                        "rollback_if_not_exist" => self.rollback_if_not_exist,
+                        "resolving_pessimistic_lock" => self.resolving_pessimistic_lock,
+                        "request_source" => %self.ctx.get_request_source(),
+                    );
+                }
+
+                (result, None)
             }
         };
 
