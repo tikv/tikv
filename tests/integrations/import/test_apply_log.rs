@@ -64,6 +64,7 @@ fn test_apply_write_cf_sets_txn_source() {
         .unwrap()
         .unwrap();
     let write = WriteRef::parse(&write_value).unwrap();
+    // See components/cdc/src/txn_source.rs, LIGHTNING_PHYSICAL_IMPORT_SHIFT
     let expected_txn_source = old_txn_source | (1 << 16);
     assert_eq!(write.txn_source, expected_txn_source);
 }
