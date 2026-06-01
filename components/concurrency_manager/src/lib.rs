@@ -66,21 +66,21 @@ const TSO_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Copy, Clone, PartialEq, Eq)]
 struct MaxTsLimit {
     exact: TimeStamp,
-    limit: TimeStamp,
+    drifted: TimeStamp,
     update_time: Instant,
 }
 
 impl MaxTsLimit {
-    fn validation_limit(&self, use_exact_limit: bool) -> TimeStamp {
-        if use_exact_limit {
+    fn max_ts_update_limit(&self, exact_limit_required: bool) -> TimeStamp {
+        if exact_limit_required {
             self.exact
         } else {
-            self.limit
+            self.drifted
         }
     }
 }
 
-fn use_exact_limit_for_origin(request_origin: Option<RequestOrigin>) -> bool {
+fn exact_limit_required_for_origin(request_origin: Option<RequestOrigin>) -> bool {
     matches!(request_origin, Some(origin) if origin != RequestOrigin::RequestOriginTiDb)
 }
 
@@ -102,10 +102,10 @@ pub struct ConcurrencyManager {
     max_ts: Arc<AtomicU64>,
     lock_table: LockTable,
 
-    // max_ts_limit and its update time.
+    // max_ts_limit stores the exact PD TSO limit and the drifted limit.
     //
-    // max_ts_limit is an assertion: max_ts should not be updated to a value greater than this
-    // limit.
+    // The selected max-ts update limit is an assertion: max_ts should not be
+    // updated to a value greater than it.
     //
     // When the limit is not updated for a long time(exceeding the threshold), we use an
     // approximate limit.
@@ -155,7 +155,7 @@ impl ConcurrencyManager {
     ) -> Self {
         let initial_limit = MaxTsLimit {
             exact: TimeStamp::new(0),
-            limit: TimeStamp::new(0),
+            drifted: TimeStamp::new(0),
             update_time: Instant::now(),
         };
 
@@ -194,7 +194,7 @@ impl ConcurrencyManager {
     ) -> Self {
         let initial_limit = MaxTsLimit {
             exact: TimeStamp::new(0),
-            limit: TimeStamp::new(0),
+            drifted: TimeStamp::new(0),
             update_time: time_provider.now(),
         };
         ConcurrencyManager {
@@ -221,7 +221,7 @@ impl ConcurrencyManager {
     /// max_ts >= new_ts or new_ts is TimeStamp::max().
     ///
     /// To avoid invalid ts breaking the invariants, the new_ts should be
-    /// less than or equal to the max_ts_limit.
+    /// less than or equal to the selected max-ts update limit.
     ///
     /// # Returns
     /// - Ok(()): If the update is successful or has no effect
@@ -236,13 +236,13 @@ impl ConcurrencyManager {
             return Ok(());
         }
         let request_origin = source.request_origin();
-        let use_exact_limit = use_exact_limit_for_origin(request_origin);
-        let limit = self.max_ts_limit.load();
-        let validation_limit = limit.validation_limit(use_exact_limit);
+        let exact_limit_required = exact_limit_required_for_origin(request_origin);
+        let limits = self.max_ts_limit.load();
+        let update_limit = limits.max_ts_update_limit(exact_limit_required);
 
-        // check that new_ts is less than or equal to the limit
-        if !use_exact_limit && !validation_limit.is_zero() && new_ts > validation_limit {
-            let last_update = limit.update_time;
+        // Check that new_ts is less than or equal to the selected update limit.
+        if !exact_limit_required && !update_limit.is_zero() && new_ts > update_limit {
+            let last_update = limits.update_time;
             let now = self.time_provider.now();
             if now < last_update {
                 warn!("clock went backwards"; "now" => ?now, "last_update" => ?last_update);
@@ -252,14 +252,14 @@ impl ConcurrencyManager {
             if duration_to_last_limit_update < self.limit_valid_duration {
                 // limit is valid
                 let source = source.into_error_source();
-                self.double_check(new_ts, validation_limit, source, false, request_origin)?;
+                self.double_check(new_ts, update_limit, source, false, request_origin)?;
             } else {
                 // limit is stale
                 // use an approximate limit to avoid false alerts caused by failed limit updates
 
                 let approximate_limit = TimeStamp::compose(
-                    limit.limit.physical() + duration_to_last_limit_update.as_millis() as u64,
-                    limit.limit.logical(),
+                    limits.drifted.physical() + duration_to_last_limit_update.as_millis() as u64,
+                    limits.drifted.logical(),
                 );
 
                 if new_ts > approximate_limit {
@@ -267,9 +267,9 @@ impl ConcurrencyManager {
                     self.double_check(new_ts, approximate_limit, source, true, request_origin)?;
                 }
             }
-        } else if use_exact_limit && (validation_limit.is_zero() || new_ts > validation_limit) {
+        } else if exact_limit_required && (update_limit.is_zero() || new_ts > update_limit) {
             let source = source.into_error_source();
-            self.double_check(new_ts, validation_limit, source, false, request_origin)?;
+            self.double_check(new_ts, update_limit, source, false, request_origin)?;
         }
 
         MAX_TS_GAUGE.set(
@@ -280,24 +280,24 @@ impl ConcurrencyManager {
         Ok(())
     }
 
-    // new_ts is greater than limit, or the approximate limit.
+    // new_ts is greater than the selected update limit, or the approximate limit.
     // To avoid false positive and guarantee TiKV availability, we need to
     // double-check the new_ts with PD TSO.
     fn double_check(
         &self,
         new_ts: TimeStamp,
-        limit: TimeStamp,
+        checked_limit: TimeStamp,
         source: impl slog::Value + Display,
         using_approximate: bool,
         request_origin: Option<RequestOrigin>,
     ) -> Result<(), crate::InvalidMaxTsUpdate> {
-        let use_exact_limit = use_exact_limit_for_origin(request_origin);
+        let exact_limit_required = exact_limit_required_for_origin(request_origin);
         warn!("possible invalid max_ts update; double checking";
             "attempted_ts" => new_ts,
-            "limit" => limit.into_inner(),
+            "limit" => checked_limit.into_inner(),
             "source" => &source,
             "using_approximate" => using_approximate,
-            "use_exact_limit" => use_exact_limit,
+            "exact_limit_required" => exact_limit_required,
             "request_origin" => ?request_origin,
             "TSO_TIMEOUT" => ?TSO_TIMEOUT,
         );
@@ -316,12 +316,12 @@ impl ConcurrencyManager {
                 }
             }
         }
-        let new_limit = self.max_ts_limit.load();
-        let validation_limit = new_limit.validation_limit(use_exact_limit);
-        if new_ts > validation_limit {
+        let new_limits = self.max_ts_limit.load();
+        let update_limit = new_limits.max_ts_update_limit(exact_limit_required);
+        if new_ts > update_limit {
             self.report_error(
                 new_ts,
-                new_limit,
+                new_limits,
                 source,
                 using_approximate,
                 tso_confirmed,
@@ -334,32 +334,32 @@ impl ConcurrencyManager {
     fn report_error(
         &self,
         new_ts: TimeStamp,
-        limit: MaxTsLimit,
+        limits: MaxTsLimit,
         source: impl slog::Value + Display,
         using_approximate: bool,
         tso_confirmed: bool,
         request_origin: Option<RequestOrigin>,
     ) -> Result<(), InvalidMaxTsUpdate> {
-        let use_exact_limit = use_exact_limit_for_origin(request_origin);
-        let validation_limit = limit.validation_limit(use_exact_limit);
+        let exact_limit_required = exact_limit_required_for_origin(request_origin);
+        let update_limit = limits.max_ts_update_limit(exact_limit_required);
         if tso_confirmed {
             error!("invalid max_ts update";
                 "attempted_ts" => new_ts,
-                "limit" => validation_limit.into_inner(),
-                "limit_update_time" => ?limit.update_time,
+                "limit" => update_limit.into_inner(),
+                "limit_update_time" => ?limits.update_time,
                 "source" => &source,
                 "using_approximate" => using_approximate,
-                "use_exact_limit" => use_exact_limit,
+                "exact_limit_required" => exact_limit_required,
                 "request_origin" => ?request_origin,
             );
         } else {
             warn!("possible invalid max_ts update";
                 "attempted_ts" => new_ts,
-                "limit" => validation_limit.into_inner(),
-                "limit_update_time" => ?limit.update_time,
+                "limit" => update_limit.into_inner(),
+                "limit_update_time" => ?limits.update_time,
                 "source" => &source,
                 "using_approximate" => using_approximate,
-                "use_exact_limit" => use_exact_limit,
+                "exact_limit_required" => exact_limit_required,
                 "request_origin" => ?request_origin,
             );
         }
@@ -369,13 +369,13 @@ impl ConcurrencyManager {
                 panic!(
                     "invalid max_ts update: {} exceeds the limit {}, source={}",
                     new_ts,
-                    validation_limit.into_inner(),
+                    update_limit.into_inner(),
                     source
                 );
             }
             ActionOnInvalidMaxTs::Error if tso_confirmed => Err(InvalidMaxTsUpdate {
                 attempted_ts: new_ts,
-                limit: validation_limit,
+                limit: update_limit,
             }),
             _ => Ok(()),
         }
@@ -398,7 +398,7 @@ impl ConcurrencyManager {
             return;
         }
 
-        let limit = TimeStamp::compose(
+        let drifted_limit = TimeStamp::compose(
             ts_from_tso.physical() + self.max_ts_drift_allowance_ms.load(Ordering::SeqCst),
             ts_from_tso.logical(),
         );
@@ -407,20 +407,20 @@ impl ConcurrencyManager {
             let current = self.max_ts_limit.load();
 
             if ts_from_tso.into_inner() <= current.exact.into_inner()
-                && limit.into_inner() <= current.limit.into_inner()
+                && drifted_limit.into_inner() <= current.drifted.into_inner()
             {
                 break;
             }
 
             let new_state = MaxTsLimit {
                 exact: ts_from_tso.max(current.exact),
-                limit: limit.max(current.limit),
+                drifted: drifted_limit.max(current.drifted),
                 update_time: self.time_provider.now(),
             };
 
             match self.max_ts_limit.compare_exchange(current, new_state) {
                 Ok(_) => {
-                    MAX_TS_LIMIT_GAUGE.set(limit.into_inner() as i64);
+                    MAX_TS_LIMIT_GAUGE.set(drifted_limit.into_inner() as i64);
                     break;
                 }
                 Err(_) => {
@@ -933,18 +933,18 @@ mod tests {
     fn test_max_ts_limit_edge_cases() {
         let cm = ConcurrencyManager::new_for_test(TimeStamp::new(100));
 
-        // Test transition from zero limit
-        assert_eq!(cm.max_ts_limit.load().limit, 0.into());
+        // Test transition from zero limit.
+        assert_eq!(cm.max_ts_limit.load().drifted, 0.into());
         cm.set_max_ts_limit(TimeStamp::new(1000));
-        assert_eq!(cm.max_ts_limit.load().limit, 12058625000.into());
+        assert_eq!(cm.max_ts_limit.load().drifted, 12058625000.into());
 
         // Try to lower from 1000 to 500 - should be ignored
         cm.set_max_ts_limit(TimeStamp::new(500));
-        assert_eq!(cm.max_ts_limit.load().limit, 12058625000.into());
+        assert_eq!(cm.max_ts_limit.load().drifted, 12058625000.into());
 
         // Test setting limit to max, should have no effect
         cm.set_max_ts_limit(TimeStamp::max());
-        assert_eq!(cm.max_ts_limit.load().limit, 12058625000.into());
+        assert_eq!(cm.max_ts_limit.load().drifted, 12058625000.into());
     }
 
     #[test]
