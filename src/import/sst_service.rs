@@ -104,7 +104,7 @@ const REJECT_SERVE_MEMORY_USAGE: u64 = 1024 * 1024 * 1024; //1G
 // consider block cache and raft store. the memory usage will be
 const HIGH_IMPORT_MEMORY_WATER_RATIO: f64 = 0.95;
 
-// See /workspace/tikv/pitr-txn-source/components/cdc/src/txn_source.rs
+// See components/cdc/src/txn_source.rs
 // cdc then ignores txn sources with this mask.
 const TXN_SOURCE_LIGHTNING_PHY_IMPORT_MASK: u64 = 1 << 16;
 
@@ -1596,7 +1596,6 @@ fn prepare_write(write: &mut Vec<u8>) -> bool {
         {
             let mut w = w.to_owned();
             // To tell CDC ignore this write.
-            // Perhaps we can give "physcial import mask" a better name?
             w.txn_source |= TXN_SOURCE_LIGHTNING_PHY_IMPORT_MASK;
             *write = w.as_ref().to_bytes();
             true
