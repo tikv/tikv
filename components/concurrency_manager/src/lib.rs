@@ -303,7 +303,10 @@ impl ConcurrencyManager {
         // Use an approximate limit to avoid false alerts caused by failed limit
         // updates.
         let approximate_limit = TimeStamp::compose(
-            limits.drifted.physical() + duration_to_last_limit_update.as_millis() as u64,
+            limits
+                .drifted
+                .physical()
+                .saturating_add(duration_to_last_limit_update.as_millis() as u64),
             limits.drifted.logical(),
         );
 
@@ -454,7 +457,7 @@ impl ConcurrencyManager {
 
             match self.max_ts_limit.compare_exchange(current, new_state) {
                 Ok(_) => {
-                    MAX_TS_LIMIT_GAUGE.set(drifted_limit.into_inner() as i64);
+                    MAX_TS_LIMIT_GAUGE.set(new_state.drifted.into_inner() as i64);
                     break;
                 }
                 Err(_) => {
@@ -900,6 +903,7 @@ mod tests {
 
         cm.set_max_ts_limit(TimeStamp::compose(100, 0));
         let within_drift = TimeStamp::compose(150, 0);
+        let strict_attempt = TimeStamp::compose(151, 0);
         cm.update_max_ts(
             within_drift,
             MaxTsUpdateSource::new("tidb").request_origin(RequestOrigin::RequestOriginTiDb),
@@ -907,12 +911,12 @@ mod tests {
         .unwrap();
 
         let result = cm.update_max_ts(
-            within_drift,
+            strict_attempt,
             MaxTsUpdateSource::new("unknown").request_origin(RequestOrigin::RequestOriginUnknown),
         );
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert_eq!(err.attempted_ts, within_drift);
+        assert_eq!(err.attempted_ts, strict_attempt);
         assert_eq!(err.limit, TimeStamp::compose(120, 0));
     }
 
