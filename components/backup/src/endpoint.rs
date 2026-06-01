@@ -368,6 +368,14 @@ impl BackupRange {
             allowed_in_flashback: self.region.is_in_flashback,
             ..Default::default()
         };
+        // Replica reads do lock checks via read-index, but backup_range should
+        // still run the origin-aware max-ts validation before taking a snapshot.
+        concurrency_manager
+            .update_max_ts(
+                backup_ts,
+                MaxTsUpdateSource::new("backup_range").request_origin(self.request_origin),
+            )
+            .map_err(TxnError::from)?;
         if self.uses_replica_read {
             snap_ctx.start_ts = Some(backup_ts);
             let mut key_range = KeyRange::default();
@@ -379,13 +387,6 @@ impl BackupRange {
             }
             snap_ctx.key_ranges = vec![key_range];
         } else {
-            // Update max_ts and check the in-memory lock table before getting the snapshot
-            concurrency_manager
-                .update_max_ts(
-                    backup_ts,
-                    MaxTsUpdateSource::new("backup_range").request_origin(self.request_origin),
-                )
-                .map_err(TxnError::from)?;
             concurrency_manager
                 .read_range_check(
                     self.start_key.as_ref(),
