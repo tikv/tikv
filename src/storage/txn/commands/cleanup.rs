@@ -1,13 +1,13 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use concurrency_manager::MaxTsUpdateSource;
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
     ProcessResult, Snapshot,
     kv::WriteData,
     lock_manager::LockManager,
-    max_ts_update_source,
     mvcc::{MvccTxn, SnapshotReader},
     txn::{
         Result, cleanup,
@@ -53,7 +53,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Cleanup {
         // max_ts to prevent this case from happening.
         context.concurrency_manager.update_max_ts(
             self.start_ts,
-            max_ts_update_source(&self.ctx, || format!("cleanup-{}", self.start_ts)),
+            MaxTsUpdateSource::new(|| format!("cleanup-{}", self.start_ts))
+                .require_request_origin_check(self.ctx.get_request_origin()),
         )?;
 
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);

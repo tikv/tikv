@@ -373,7 +373,8 @@ impl BackupRange {
         concurrency_manager
             .update_max_ts(
                 backup_ts,
-                MaxTsUpdateSource::new("backup_range").request_origin(self.request_origin),
+                MaxTsUpdateSource::new("backup_range")
+                    .require_request_origin_check(self.request_origin),
             )
             .map_err(TxnError::from)?;
         if self.uses_replica_read {

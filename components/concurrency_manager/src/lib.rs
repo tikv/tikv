@@ -80,8 +80,13 @@ impl MaxTsLimit {
     }
 }
 
-fn exact_limit_required_for_origin(request_origin: Option<RequestOrigin>) -> bool {
-    matches!(request_origin, Some(origin) if origin != RequestOrigin::RequestOriginTiDb)
+fn exact_limit_required_for_request_origin_check(
+    request_origin_for_check: Option<RequestOrigin>,
+) -> bool {
+    matches!(
+        request_origin_for_check,
+        Some(origin) if origin != RequestOrigin::RequestOriginTiDb
+    )
 }
 
 #[automock]
@@ -235,20 +240,26 @@ impl ConcurrencyManager {
         if new_ts.is_max() {
             return Ok(());
         }
-        let request_origin = source.request_origin();
-        let exact_limit_required = exact_limit_required_for_origin(request_origin);
+        let request_origin_for_check = source.request_origin_for_check();
+        let exact_limit_required =
+            exact_limit_required_for_request_origin_check(request_origin_for_check);
         let limits = self.max_ts_limit.load();
         let update_limit = limits.max_ts_update_limit(exact_limit_required);
 
         if exact_limit_required {
-            self.check_exact_max_ts_update_limit(new_ts, update_limit, source, request_origin)?;
+            self.check_exact_max_ts_update_limit(
+                new_ts,
+                update_limit,
+                source,
+                request_origin_for_check,
+            )?;
         } else {
             self.check_drifted_max_ts_update_limit(
                 new_ts,
                 limits,
                 update_limit,
                 source,
-                request_origin,
+                request_origin_for_check,
             )?;
         }
 
@@ -265,11 +276,17 @@ impl ConcurrencyManager {
         new_ts: TimeStamp,
         update_limit: TimeStamp,
         source: impl IntoErrorSource,
-        request_origin: Option<RequestOrigin>,
+        request_origin_for_check: Option<RequestOrigin>,
     ) -> Result<(), InvalidMaxTsUpdate> {
         if update_limit.is_zero() || new_ts > update_limit {
             let source = source.into_error_source();
-            self.double_check(new_ts, update_limit, source, false, request_origin)?;
+            self.double_check(
+                new_ts,
+                update_limit,
+                source,
+                false,
+                request_origin_for_check,
+            )?;
         }
         Ok(())
     }
@@ -280,7 +297,7 @@ impl ConcurrencyManager {
         limits: MaxTsLimit,
         update_limit: TimeStamp,
         source: impl IntoErrorSource,
-        request_origin: Option<RequestOrigin>,
+        request_origin_for_check: Option<RequestOrigin>,
     ) -> Result<(), InvalidMaxTsUpdate> {
         if update_limit.is_zero() || new_ts <= update_limit {
             return Ok(());
@@ -297,7 +314,13 @@ impl ConcurrencyManager {
 
         if duration_to_last_limit_update < self.limit_valid_duration {
             let source = source.into_error_source();
-            return self.double_check(new_ts, update_limit, source, false, request_origin);
+            return self.double_check(
+                new_ts,
+                update_limit,
+                source,
+                false,
+                request_origin_for_check,
+            );
         }
 
         // Use an approximate limit to avoid false alerts caused by failed limit
@@ -312,7 +335,13 @@ impl ConcurrencyManager {
 
         if new_ts > approximate_limit {
             let source = source.into_error_source();
-            self.double_check(new_ts, approximate_limit, source, true, request_origin)?;
+            self.double_check(
+                new_ts,
+                approximate_limit,
+                source,
+                true,
+                request_origin_for_check,
+            )?;
         }
         Ok(())
     }
@@ -326,16 +355,17 @@ impl ConcurrencyManager {
         checked_limit: TimeStamp,
         source: impl slog::Value + Display,
         using_approximate: bool,
-        request_origin: Option<RequestOrigin>,
+        request_origin_for_check: Option<RequestOrigin>,
     ) -> Result<(), crate::InvalidMaxTsUpdate> {
-        let exact_limit_required = exact_limit_required_for_origin(request_origin);
+        let exact_limit_required =
+            exact_limit_required_for_request_origin_check(request_origin_for_check);
         warn!("possible invalid max_ts update; double checking";
             "attempted_ts" => new_ts,
             "limit" => checked_limit.into_inner(),
             "source" => &source,
             "using_approximate" => using_approximate,
             "exact_limit_required" => exact_limit_required,
-            "request_origin" => ?request_origin,
+            "request_origin" => ?request_origin_for_check,
             "TSO_TIMEOUT" => ?TSO_TIMEOUT,
         );
         let mut tso_confirmed = false;
@@ -362,7 +392,7 @@ impl ConcurrencyManager {
                 source,
                 using_approximate,
                 tso_confirmed,
-                request_origin,
+                request_origin_for_check,
             )?;
         }
         Ok(())
@@ -375,9 +405,10 @@ impl ConcurrencyManager {
         source: impl slog::Value + Display,
         using_approximate: bool,
         tso_confirmed: bool,
-        request_origin: Option<RequestOrigin>,
+        request_origin_for_check: Option<RequestOrigin>,
     ) -> Result<(), InvalidMaxTsUpdate> {
-        let exact_limit_required = exact_limit_required_for_origin(request_origin);
+        let exact_limit_required =
+            exact_limit_required_for_request_origin_check(request_origin_for_check);
         let update_limit = limits.max_ts_update_limit(exact_limit_required);
         if tso_confirmed {
             error!("invalid max_ts update";
@@ -387,7 +418,7 @@ impl ConcurrencyManager {
                 "source" => &source,
                 "using_approximate" => using_approximate,
                 "exact_limit_required" => exact_limit_required,
-                "request_origin" => ?request_origin,
+                "request_origin" => ?request_origin_for_check,
             );
         } else {
             warn!("possible invalid max_ts update";
@@ -397,7 +428,7 @@ impl ConcurrencyManager {
                 "source" => &source,
                 "using_approximate" => using_approximate,
                 "exact_limit_required" => exact_limit_required,
-                "request_origin" => ?request_origin,
+                "request_origin" => ?request_origin_for_check,
             );
         }
 
@@ -649,19 +680,24 @@ impl ValueDisplay for &str {}
 
 pub struct MaxTsUpdateSource<S> {
     source: S,
-    request_origin: Option<RequestOrigin>,
+    request_origin_for_check: Option<RequestOrigin>,
 }
 
 impl<S> MaxTsUpdateSource<S> {
     pub fn new(source: S) -> Self {
         Self {
             source,
-            request_origin: None,
+            request_origin_for_check: None,
         }
     }
 
-    pub fn request_origin(mut self, request_origin: RequestOrigin) -> Self {
-        self.request_origin = Some(request_origin);
+    /// Marks a max-ts update path as requiring an extra request-origin check.
+    ///
+    /// This is for request paths where invalid max-ts values are easier to pass
+    /// in by mistake. Non-TiDB origins use exact validation, while TiDB-origin
+    /// requests keep the legacy drift tolerance.
+    pub fn require_request_origin_check(mut self, request_origin: RequestOrigin) -> Self {
+        self.request_origin_for_check = Some(request_origin);
         self
     }
 }
@@ -672,7 +708,7 @@ mod sealed {
 
 pub trait IntoErrorSource: sealed::Sealed {
     type Output: ValueDisplay;
-    fn request_origin(&self) -> Option<RequestOrigin> {
+    fn request_origin_for_check(&self) -> Option<RequestOrigin> {
         None
     }
     fn into_error_source(self) -> Self::Output;
@@ -702,8 +738,8 @@ where
     S: IntoErrorSource,
 {
     type Output = S::Output;
-    fn request_origin(&self) -> Option<RequestOrigin> {
-        self.request_origin
+    fn request_origin_for_check(&self) -> Option<RequestOrigin> {
+        self.request_origin_for_check
     }
     fn into_error_source(self) -> Self::Output {
         self.source.into_error_source()
@@ -906,13 +942,15 @@ mod tests {
         let strict_attempt = TimeStamp::compose(151, 0);
         cm.update_max_ts(
             within_drift,
-            MaxTsUpdateSource::new("tidb").request_origin(RequestOrigin::RequestOriginTiDb),
+            MaxTsUpdateSource::new("tidb")
+                .require_request_origin_check(RequestOrigin::RequestOriginTiDb),
         )
         .unwrap();
 
         let result = cm.update_max_ts(
             strict_attempt,
-            MaxTsUpdateSource::new("unknown").request_origin(RequestOrigin::RequestOriginUnknown),
+            MaxTsUpdateSource::new("unknown")
+                .require_request_origin_check(RequestOrigin::RequestOriginUnknown),
         );
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -938,7 +976,8 @@ mod tests {
         let ts = TimeStamp::compose(150, 0);
         cm.update_max_ts(
             ts,
-            MaxTsUpdateSource::new("unknown").request_origin(RequestOrigin::RequestOriginUnknown),
+            MaxTsUpdateSource::new("unknown")
+                .require_request_origin_check(RequestOrigin::RequestOriginUnknown),
         )
         .unwrap();
         assert_eq!(cm.max_ts(), ts);
@@ -961,7 +1000,8 @@ mod tests {
         let ts = TimeStamp::compose(90, 0);
         cm.update_max_ts(
             ts,
-            MaxTsUpdateSource::new("unknown").request_origin(RequestOrigin::RequestOriginUnknown),
+            MaxTsUpdateSource::new("unknown")
+                .require_request_origin_check(RequestOrigin::RequestOriginUnknown),
         )
         .unwrap();
         assert_eq!(cm.max_ts(), ts);

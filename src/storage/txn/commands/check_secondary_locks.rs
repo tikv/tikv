@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use concurrency_manager::MaxTsUpdateSource;
 use protobuf::Message;
 use resource_metering::record_network_out_bytes;
 use tikv_util::Either;
@@ -10,7 +11,6 @@ use crate::storage::{
     ProcessResult, Snapshot,
     kv::WriteData,
     lock_manager::LockManager,
-    max_ts_update_source,
     mvcc::{MvccTxn, OverlappedWrite, ReleasedLock, SnapshotReader, TimeStamp, TxnCommitRecord},
     txn::{
         Result,
@@ -151,9 +151,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
         let region_id = self.ctx.get_region_id();
         context.concurrency_manager.update_max_ts(
             self.start_ts,
-            max_ts_update_source(&self.ctx, || {
-                format!("check_secondary_locks-{}", self.start_ts)
-            }),
+            MaxTsUpdateSource::new(|| format!("check_secondary_locks-{}", self.start_ts))
+                .require_request_origin_check(self.ctx.get_request_origin()),
         )?;
 
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
