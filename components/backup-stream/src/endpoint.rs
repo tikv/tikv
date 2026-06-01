@@ -75,6 +75,8 @@ const SLOW_EVENT_THRESHOLD: f64 = 120.0;
 /// task has fatal error.
 const CHECKPOINT_SAFEPOINT_TTL_IF_ERROR: u64 = 24;
 
+#[allow(dead_code)]
+#[derive(Debug)]
 enum SampleCheckpoint {
     NotFound {
         region_id: u64,
@@ -86,29 +88,21 @@ enum SampleCheckpoint {
     },
 }
 
-impl fmt::Debug for SampleCheckpoint {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SampleCheckpoint::NotFound {
-                region_id,
-                region_epoch_version,
-            } => f
-                .debug_struct("NotFound")
-                .field("region_id", region_id)
-                .field("region_epoch_version", region_epoch_version)
-                .finish(),
-            SampleCheckpoint::EpochNotMatch {
-                region_id,
-                region_epoch_version,
-            } => f
-                .debug_struct("EpochNotMatch")
-                .field("region_id", region_id)
-                .field("region_epoch_version", region_epoch_version)
-                .finish(),
+impl SampleCheckpoint {
+    fn from_checkpoint_result(checkpoint: &GetCheckpointResult) -> Option<Self> {
+        match checkpoint {
+            GetCheckpointResult::EpochNotMatch { region, .. } => Some(Self::EpochNotMatch {
+                region_id: region.id,
+                region_epoch_version: region.get_region_epoch().get_version(),
+            }),
+            GetCheckpointResult::NotFound { id, .. } => Some(Self::NotFound {
+                region_id: id.region_id,
+                region_epoch_version: id.region_epoch_version,
+            }),
+            _ => None,
         }
     }
 }
-
 pub struct Endpoint<S, R, E: KvEngine, PDC> {
     // Note: those fields are more like a shared context between components.
     // For now, we copied them everywhere, maybe we'd better extract them into a
@@ -1267,23 +1261,11 @@ where
                                     .checkpoint_mgr
                                     .get_from_region(RegionIdWithVersion::new(*id, *version));
                                 if samples.len() < SAMPLE_COUNT {
-                                    match &checkpoint {
-                                        GetCheckpointResult::EpochNotMatch { region, .. } => {
-                                            samples.push(SampleCheckpoint::EpochNotMatch {
-                                                region_id: region.id,
-                                                region_epoch_version: region
-                                                    .get_region_epoch()
-                                                    .get_version(),
-                                            });
-                                        }
-                                        GetCheckpointResult::NotFound { id, .. } => {
-                                            samples.push(SampleCheckpoint::NotFound {
-                                                region_id: id.region_id,
-                                                region_epoch_version: id.region_epoch_version,
-                                            });
-                                        }
-                                        _ => {}
-                                    };
+                                    if let Some(sample) =
+                                        SampleCheckpoint::from_checkpoint_result(&checkpoint)
+                                    {
+                                        samples.push(sample);
+                                    }
                                 }
                                 checkpoint
                             })
