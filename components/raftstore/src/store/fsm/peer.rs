@@ -1265,7 +1265,7 @@ where
                 if store.is_applying_snapshot() {
                     local_state.set_state(PeerState::Applying);
                 }
-                let mut meta = RegionMeta::new(
+                let meta = RegionMeta::new(
                     &local_state,
                     store.apply_state(),
                     self.fsm.hibernate_state.group_state(),
@@ -1275,11 +1275,14 @@ where
                 );
                 #[cfg(any(test, feature = "testexport"))]
                 {
+                    let mut meta = meta;
                     let unstable = &peer.raft_group.raft.raft_log.unstable;
                     meta.raft_status.unstable_entries_len = unstable.entries.len();
                     meta.raft_status.unstable_entries_capacity = unstable.entries.capacity();
                     meta.raft_status.unstable_entries_size = unstable.entries_size;
+                    cb(meta)
                 }
+                #[cfg(not(any(test, feature = "testexport")))]
                 cb(meta)
             }
             CasualMessage::QueryRegionLeaderResp { region, leader } => {

@@ -2,7 +2,6 @@
 
 use std::{
     fmt::{self, Display, Formatter},
-    io::Write,
     path::PathBuf,
     time::Duration,
 };
@@ -10,10 +9,11 @@ use std::{
 use crossbeam::channel::{Receiver, Sender, bounded};
 use health_controller::types::LatencyInspector;
 use tikv_util::{
-    time::Instant,
     warn,
     worker::{Runnable, Worker},
 };
+
+use crate::store::disk_probe::ProbeRunner;
 
 #[derive(Debug)]
 pub enum Task {
@@ -36,7 +36,7 @@ impl Display for Task {
 /// The inspector writes a file to the disk and measures the time it takes to
 /// complete the write operation.
 pub struct Runner {
-    target: PathBuf,
+    probe: ProbeRunner,
     notifier: Sender<Task>,
     receiver: Receiver<Task>,
     bg_worker: Option<Worker>,
@@ -56,7 +56,7 @@ impl Runner {
         // `capacity` for the disk check worker.
         let (notifier, receiver) = bounded(3);
         Self {
-            target,
+            probe: ProbeRunner::new(target, Self::DISK_IO_LATENCY_INSPECT_FLUSH_STR),
             notifier,
             receiver,
             bg_worker: None,
@@ -81,19 +81,7 @@ impl Runner {
     }
 
     fn inspect(&self) -> Option<Duration> {
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&self.target)
-            .ok()?;
-
-        let start = Instant::now();
-        // Ignore the error
-        file.write_all(Self::DISK_IO_LATENCY_INSPECT_FLUSH_STR)
-            .ok()?;
-        file.sync_all().ok()?;
-        Some(start.saturating_elapsed())
+        self.probe.probe_once().ok()
     }
 
     fn execute(&self) {
@@ -130,6 +118,17 @@ impl Runnable for Runner {
     }
 }
 
+<<<<<<< HEAD
+=======
+impl Drop for Runner {
+    fn drop(&mut self) {
+        if let Err(e) = std::fs::remove_file(self.probe.path()) {
+            warn!("remove disk latency inspector file failed"; "err" => ?e);
+        }
+    }
+}
+
+>>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
 #[cfg(test)]
 mod tests {
     use tikv_util::worker::Builder;

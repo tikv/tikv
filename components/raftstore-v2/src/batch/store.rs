@@ -5,7 +5,7 @@ use std::{
     path::Path,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -790,10 +790,19 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             None
         };
 
+        let last_raft_append_success_at_millis = Arc::new(AtomicU64::new(0));
+        let last_kv_sync_success_at_millis = Arc::new(AtomicU64::new(0));
         let mut workers = Workers::new(background, pd_worker, purge_worker, resource_ctl);
-        workers
-            .async_write
-            .spawn(store_id, raft_engine.clone(), None, router, &trans, &cfg)?;
+        workers.async_write.spawn(
+            store_id,
+            raft_engine.clone(),
+            None,
+            router,
+            &trans,
+            &cfg,
+            last_raft_append_success_at_millis.clone(),
+            last_kv_sync_success_at_millis.clone(),
+        )?;
 
         let mut read_runner = ReadRunner::new(router.clone(), raft_engine.clone());
         read_runner.set_snap_mgr(snap_mgr.clone());
@@ -884,6 +893,8 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
                 transfer: trans,
                 notifier: router.clone(),
                 cfg: cfg.clone(),
+                last_raft_append_success_at_millis,
+                last_kv_sync_success_at_millis,
             },
             workers.async_write.clone(),
         );

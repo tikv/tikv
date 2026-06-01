@@ -64,7 +64,11 @@ use tikv_util::{
     mpsc::{LooseBoundedSender, Receiver, loose_bounded},
     safe_panic, slow_log,
     store::{find_peer, find_peer_by_id, find_peer_mut, is_learner, remove_peer},
+<<<<<<< HEAD
     time::{Instant, duration_to_sec},
+=======
+    time::{Instant, Timespec, duration_to_sec, monotonic_raw_now, timespec_to_ns},
+>>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
     warn,
     worker::Scheduler,
 };
@@ -470,6 +474,10 @@ where
     uncommitted_res_count: usize,
 
     enable_v2_compatible_learner: bool,
+    // Records the most recent successful kv write that actually requested
+    // sync=true, so fail-fast can treat recent real kv WAL sync progress as a
+    // veto on the kv probe timeout signal.
+    last_kv_sync_success_at_millis: Arc<AtomicU64>,
 }
 
 impl<EK> ApplyContext<EK>
@@ -488,6 +496,7 @@ where
         store_id: u64,
         pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
         priority: Priority,
+        last_kv_sync_success_at_millis: Arc<AtomicU64>,
     ) -> ApplyContext<EK> {
         let kv_wb = engine.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
         let kv_wb = host.on_create_apply_write_batch(kv_wb);
@@ -531,6 +540,7 @@ where
             disable_wal: false,
             uncommitted_res_count: 0,
             enable_v2_compatible_learner: cfg.enable_v2_compatible_learner,
+            last_kv_sync_success_at_millis,
         }
     }
 
@@ -603,6 +613,15 @@ where
             let seq = self.kv_wb_mut().write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!("failed to write to engine: {:?}", e);
             });
+            if need_sync {
+                // Only sync-backed kv writes count here. Plain kv write success
+                // can still be page-cache progress, which is too weak to veto
+                // a kv probe timeout.
+                self.last_kv_sync_success_at_millis.fetch_max(
+                    timespec_to_ns(monotonic_raw_now()) / 1_000_000,
+                    Ordering::Relaxed,
+                );
+            }
             if let Some(seqno) = seqno.as_mut() {
                 seqno.post_write(seq)
             }
@@ -4812,6 +4831,7 @@ pub struct Builder<EK: KvEngine> {
     router: ApplyRouter<EK>,
     store_id: u64,
     pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+    last_kv_sync_success_at_millis: Arc<AtomicU64>,
 }
 
 impl<EK: KvEngine> Builder<EK> {
@@ -4831,6 +4851,7 @@ impl<EK: KvEngine> Builder<EK> {
             router,
             store_id: builder.store.get_id(),
             pending_create_peers: builder.pending_create_peers.clone(),
+            last_kv_sync_success_at_millis: builder.last_kv_sync_success_at_millis.clone(),
         }
     }
 }
@@ -4857,6 +4878,7 @@ where
                 self.store_id,
                 self.pending_create_peers.clone(),
                 priority,
+                self.last_kv_sync_success_at_millis.clone(),
             ),
             messages_per_tick: cfg.messages_per_tick,
             cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),
@@ -4881,6 +4903,7 @@ where
             router: self.router.clone(),
             store_id: self.store_id,
             pending_create_peers: self.pending_create_peers.clone(),
+            last_kv_sync_success_at_millis: self.last_kv_sync_success_at_millis.clone(),
         }
     }
 }
@@ -5538,6 +5561,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            last_kv_sync_success_at_millis: Arc::new(AtomicU64::new(0)),
         };
         system.spawn("test-basic".to_owned(), builder);
 
@@ -6105,6 +6129,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            last_kv_sync_success_at_millis: Arc::new(AtomicU64::new(0)),
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -6446,6 +6471,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            last_kv_sync_success_at_millis: Arc::new(AtomicU64::new(0)),
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -6789,6 +6815,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            last_kv_sync_success_at_millis: Arc::new(AtomicU64::new(0)),
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -6880,6 +6907,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            last_kv_sync_success_at_millis: Arc::new(AtomicU64::new(0)),
         };
         system.spawn("test-ingest".to_owned(), builder);
 
@@ -7063,6 +7091,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            last_kv_sync_success_at_millis: Arc::new(AtomicU64::new(0)),
         };
         system.spawn("test-bucket".to_owned(), builder);
 
@@ -7156,6 +7185,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            last_kv_sync_success_at_millis: Arc::new(AtomicU64::new(0)),
         };
         system.spawn("test-exec-observer".to_owned(), builder);
 
@@ -7381,6 +7411,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            last_kv_sync_success_at_millis: Arc::new(AtomicU64::new(0)),
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -7661,6 +7692,7 @@ mod tests {
             router: router.clone(),
             store_id: 2,
             pending_create_peers,
+            last_kv_sync_success_at_millis: Arc::new(AtomicU64::new(0)),
         };
         system.spawn("test-split".to_owned(), builder);
 
@@ -7881,6 +7913,7 @@ mod tests {
             router: router.clone(),
             store_id: 2,
             pending_create_peers,
+            last_kv_sync_success_at_millis: Arc::new(AtomicU64::new(0)),
         };
         system.spawn("test-conf-change".to_owned(), builder);
 
@@ -8006,6 +8039,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            last_kv_sync_success_at_millis: Arc::new(AtomicU64::new(0)),
         };
         system.spawn("flashback_need_to_be_applied".to_owned(), builder);
 
