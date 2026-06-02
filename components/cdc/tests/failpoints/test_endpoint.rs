@@ -754,8 +754,7 @@ fn test_cdc_watchdog_idle_timeout() {
 
     // Enable failpoints to control the watchdog behavior:
     // - cdc_idle_deregister_threshold adjusts the watchdog config so the deregister
-    //   threshold is 5 seconds, the check interval is 1 second, and the
-    //   memory-quota abort threshold is 0.
+    //   threshold is 5 seconds and the memory-quota abort threshold is 0.
     // - cdc_sleep_after_sink_flush makes the sink sleep after each flush.
     fail::cfg("cdc_idle_deregister_threshold", "return(true)").unwrap();
     fail::cfg("cdc_sleep_after_sink_flush", "return(true)").unwrap();
@@ -772,9 +771,9 @@ fn test_cdc_watchdog_idle_timeout() {
     debug!("Starting watchdog test - waiting for connection to be cancelled");
 
     // Wait for the watchdog to trigger and cancel the connection
-    // The watchdog should trigger after 5 seconds due to
-    // cdc_idle_deregister_threshold failpoint.
-    thread::sleep(Duration::from_secs(6));
+    // The watchdog still checks every 60 seconds. The failpoint only shortens
+    // the idle threshold checked by the next tick.
+    thread::sleep(Duration::from_secs(65));
 
     debug!("Finished waiting, now checking if connection was cancelled");
 

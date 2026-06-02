@@ -20,7 +20,6 @@ const CDC_WATCHDOG_INTERVAL_SECS: u64 = 60;
 const CDC_IDLE_DEREGISTER_THRESHOLD_SECS: u64 = 60 * 5; // 5 minutes
 const CDC_MEMORY_QUOTA_ABORT_THRESHOLD: f64 = 0.999;
 
-#[derive(Clone)]
 struct WatchdogConfig {
     check_interval: Duration,
     idle_deregister_threshold: Duration,
@@ -29,20 +28,17 @@ struct WatchdogConfig {
 
 impl WatchdogConfig {
     fn new() -> WatchdogConfig {
-        let mut config = WatchdogConfig::default();
-        #[cfg(feature = "failpoints")]
-        {
-            let short_threshold_enabled = || {
-                fail::fail_point!("cdc_idle_deregister_threshold", |_| true);
-                false
-            };
-            if short_threshold_enabled() {
-                self.check_interval = Duration::from_secs(1);
-                self.idle_deregister_threshold = Duration::from_secs(5);
-                self.memory_quota_abort_threshold = 0.0;
-            }
-        }
-        config
+        WatchdogConfig::default()
+    }
+
+    fn idle_deregister_threshold(&self) -> Duration {
+        fail::fail_point!("cdc_idle_deregister_threshold", |_| Duration::from_secs(5));
+        self.idle_deregister_threshold
+    }
+
+    fn memory_quota_abort_threshold(&self) -> f64 {
+        fail::fail_point!("cdc_idle_deregister_threshold", |_| 0.0);
+        self.memory_quota_abort_threshold
     }
 }
 
@@ -240,14 +236,15 @@ impl Watchdog {
         }
 
         let memory_quota_abort_threshold_reached =
-            self.memory_quota.used_ratio() >= self.config.memory_quota_abort_threshold;
+            self.memory_quota.used_ratio() >= self.config.memory_quota_abort_threshold();
 
         // Check if last flush was more than the deregister threshold.
         // To prevent the case that the connection idle since there are a lot of
         // incremental scan tasks queueing so won't send events, also check on the
         // memory usage. The failpoint can adjust the memory threshold for manual
         // testing.
-        if elapsed > self.config.idle_deregister_threshold && memory_quota_abort_threshold_reached {
+        if elapsed > self.config.idle_deregister_threshold() && memory_quota_abort_threshold_reached
+        {
             error!("cdc connection idle for too long, aborting connection";
                 "seconds_since_last_flush" => elapsed.as_secs(),
                 "downstream" => self.peer.as_str(),
