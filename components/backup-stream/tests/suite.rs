@@ -1,5 +1,10 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+// This file will be included to two files.
+// Some of functions might just be used by one of them,
+// which triggers dead_code warning.
+#![allow(dead_code)]
+
 use std::{
     collections::{HashMap, HashSet},
     fmt::Display,
