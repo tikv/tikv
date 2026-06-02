@@ -5,7 +5,10 @@ use std::{cmp::Reverse, collections::BinaryHeap, marker::PhantomData, sync::Arc}
 use api_version::{KvFormat, keyspace::KvPairEntry};
 use async_trait::async_trait;
 use engine_traits::{CF_WRITE, DATA_KEY_PREFIX_LEN, IterOptions};
-use kvproto::coprocessor::{KeyRange, Response};
+use kvproto::{
+    coprocessor::{KeyRange, Response},
+    kvrpcpb::IsolationLevel,
+};
 use mur3::murmurhash3_x64_128;
 use protobuf::Message;
 use tidb_query_common::storage::{
@@ -17,7 +20,7 @@ use tidb_query_executors::interface::BatchExecutor;
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_util::{keybuilder::KeyBuilder, quota_limiter::QuotaLimiter};
 use tipb::{self, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
-use txn_types::{Key, TimeStamp, WriteRef, WriteType};
+use txn_types::{Key, TimeStamp, TsSet, WriteRef, WriteType};
 
 use super::{cmsketch::CmSketch, fmsketch::FmSketch, histogram::Histogram};
 use crate::{
@@ -25,12 +28,15 @@ use crate::{
         MEMTRACE_ANALYZE,
         dag::TikvStorage,
         statistics::analyze::{
-            AnalyzeIndexResult, AnalyzeMixedResult, RowSampleBuilder, SampleBuilder,
+            AnalyzeIndexResult, AnalyzeMixedResult, PointRowSampleBuilder, RowSampleBuilder,
+            SampleBuilder, effective_bernoulli_sample_rate_after_preselection,
         },
         *,
     },
     storage::{Iterator as _, Snapshot, SnapshotStore, Statistics},
 };
+
+const HASH_SAMPLE_RAW_KEY_BATCH_SIZE: usize = 8192;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AnalyzeVersion {
@@ -57,6 +63,10 @@ pub struct AnalyzeContext<E: crate::storage::Engine, S: Snapshot, F: KvFormat> {
     // Read timestamp used by the row-key sampler to ignore writes a snapshot read
     // would not see.
     start_ts: TimeStamp,
+    isolation_level: IsolationLevel,
+    fill_cache: bool,
+    bypass_locks: TsSet,
+    access_locks: TsSet,
     storage: Option<TikvStorage<SnapshotStore<S>>>,
     ranges: Vec<KeyRange>,
     storage_stats: Statistics,
@@ -79,13 +89,17 @@ impl<E: crate::storage::Engine, S: Snapshot, F: KvFormat> AnalyzeContext<E, S, F
     ) -> Result<Self> {
         let snapshot = snap.clone();
         let read_ts: TimeStamp = start_ts.into();
+        let isolation_level = req_ctx.context.get_isolation_level();
+        let fill_cache = !req_ctx.context.get_not_fill_cache();
+        let bypass_locks = req_ctx.bypass_locks.clone();
+        let access_locks = req_ctx.access_locks.clone();
         let store = SnapshotStore::new(
             snap,
             read_ts,
-            req_ctx.context.get_isolation_level(),
-            !req_ctx.context.get_not_fill_cache(),
-            req_ctx.bypass_locks.clone(),
-            req_ctx.access_locks.clone(),
+            isolation_level,
+            fill_cache,
+            bypass_locks.clone(),
+            access_locks.clone(),
             false,
         );
         let is_auto_analyze = req.get_flags() & REQ_FLAG_TIDB_SYSSESSION > 0;
@@ -94,6 +108,10 @@ impl<E: crate::storage::Engine, S: Snapshot, F: KvFormat> AnalyzeContext<E, S, F
             req,
             snapshot,
             start_ts: read_ts,
+            isolation_level,
+            fill_cache,
+            bypass_locks,
+            access_locks,
             storage: Some(TikvStorage::new(store, false)),
             ranges,
             storage_stats: Statistics::default(),
@@ -103,13 +121,17 @@ impl<E: crate::storage::Engine, S: Snapshot, F: KvFormat> AnalyzeContext<E, S, F
         })
     }
 
-    fn point_range_for_raw_key(raw_key: &[u8]) -> KeyRange {
-        let mut range = KeyRange::default();
-        range.set_start(raw_key.to_vec());
-        let mut end = raw_key.to_vec();
-        end.push(0);
-        range.set_end(end);
-        range
+    fn build_tikv_storage(&self) -> TikvStorage<SnapshotStore<S>> {
+        let store = SnapshotStore::new(
+            self.snapshot.clone(),
+            self.start_ts,
+            self.isolation_level,
+            self.fill_cache,
+            self.bypass_locks.clone(),
+            self.access_locks.clone(),
+            false,
+        );
+        TikvStorage::new(store, false)
     }
 
     fn hash_sample_threshold(sample_rate: f64) -> Option<u64> {
@@ -120,177 +142,6 @@ impl<E: crate::storage::Engine, S: Snapshot, F: KvFormat> AnalyzeContext<E, S, F
             return Some(u64::MAX);
         }
         Some((sample_rate * u64::MAX as f64).round() as u64)
-    }
-
-    fn skip_current_write_key(iter: &mut S::Iter, user_key: &[u8]) -> Option<bool> {
-        let skip_target = Key::from_encoded_slice(user_key).append_ts(TimeStamp::zero());
-        if !iter.seek(&skip_target).ok()? {
-            return Some(false);
-        }
-        if !iter.valid().ok()? {
-            return Some(false);
-        }
-        let (landed_key, _) = Key::split_on_ts_for(iter.key()).ok()?;
-        if landed_key == user_key && !iter.next().ok()? {
-            return Some(false);
-        }
-        Some(true)
-    }
-
-    fn sample_visible_row_keys_in_range(
-        snapshot: &S,
-        range: &KeyRange,
-        sample_threshold: u64,
-        read_ts: TimeStamp,
-        selected: &mut Vec<KeyRange>,
-    ) -> Option<(u64, Option<(u64, Vec<u8>)>)> {
-        let start = range.get_start();
-        let end = range.get_end();
-        if !end.is_empty() && start >= end {
-            return Some((0, None));
-        }
-
-        let lower = KeyBuilder::from_vec(
-            Key::from_raw(start).as_encoded().clone(),
-            DATA_KEY_PREFIX_LEN,
-            0,
-        );
-        let upper = if end.is_empty() {
-            None
-        } else {
-            Some(KeyBuilder::from_vec(
-                Key::from_raw(end).as_encoded().clone(),
-                DATA_KEY_PREFIX_LEN,
-                0,
-            ))
-        };
-        let end_encoded = if end.is_empty() {
-            None
-        } else {
-            Some(Key::from_raw(end).as_encoded().clone())
-        };
-        let iter_opt = IterOptions::new(Some(lower), upper, false);
-        let mut iter = snapshot.iter(CF_WRITE, iter_opt).ok()?;
-        if !iter.seek(&Key::from_raw(start)).ok()? {
-            return Some((0, None));
-        }
-
-        let mut visible_rows = 0_u64;
-        let mut min_hash_key = None;
-        while iter.valid().ok()? {
-            let (user_key, _) = Key::split_on_ts_for(iter.key()).ok()?;
-            let user_key = user_key.to_vec();
-            if end_encoded
-                .as_ref()
-                .is_some_and(|end| user_key.as_slice() >= end.as_slice())
-            {
-                break;
-            }
-
-            let mut found_visible_put = false;
-            loop {
-                let (current_key, commit_ts) = Key::split_on_ts_for(iter.key()).ok()?;
-                if current_key != user_key.as_slice() {
-                    break;
-                }
-
-                if commit_ts <= read_ts {
-                    let write = WriteRef::parse(iter.value()).ok()?;
-                    match write.write_type {
-                        WriteType::Put => {
-                            found_visible_put = true;
-                            break;
-                        }
-                        WriteType::Delete => break,
-                        WriteType::Lock | WriteType::Rollback => {}
-                    }
-                }
-
-                if !iter.next().ok()? || !iter.valid().ok()? {
-                    break;
-                }
-            }
-
-            if found_visible_put {
-                visible_rows += 1;
-                let hash = murmurhash3_x64_128(&user_key, 0).0;
-                if min_hash_key
-                    .as_ref()
-                    .is_none_or(|(min_hash, _)| hash < *min_hash)
-                {
-                    min_hash_key = Some((hash, user_key.clone()));
-                }
-                if hash <= sample_threshold {
-                    let raw_key = Key::from_encoded_slice(&user_key).into_raw().ok()?;
-                    selected.push(Self::point_range_for_raw_key(&raw_key));
-                }
-            }
-
-            if !Self::skip_current_write_key(&mut iter, &user_key)? {
-                break;
-            }
-        }
-
-        Some((visible_rows, min_hash_key))
-    }
-
-    /// Prototype hidden sampling index behavior by selecting live row keys via
-    /// a deterministic hash and then scanning those rows as point ranges.
-    ///
-    /// A real hidden sampling index would maintain keys ordered by
-    /// hash(row-key), so analyze could seek directly into hash space. This POC
-    /// still scans CF_WRITE once to discover visible row keys, but it uses the
-    /// same sampling unit the hidden index would expose: snapshot-visible rows,
-    /// not physical SST/range chunks.
-    fn pre_select_ranges_via_hash_sampling_index(
-        snapshot: &S,
-        ranges: &[KeyRange],
-        sample_rate: f64,
-        read_ts: TimeStamp,
-    ) -> Option<(Vec<KeyRange>, f64)> {
-        let sample_threshold = Self::hash_sample_threshold(sample_rate)?;
-        let mut visible_rows = 0_u64;
-        let mut selected = Vec::new();
-        let mut min_hash_key = None;
-        for range in ranges {
-            let (range_visible_rows, range_min_hash_key) = Self::sample_visible_row_keys_in_range(
-                snapshot,
-                range,
-                sample_threshold,
-                read_ts,
-                &mut selected,
-            )?;
-            visible_rows += range_visible_rows;
-            if let Some((hash, key)) = range_min_hash_key {
-                if min_hash_key
-                    .as_ref()
-                    .is_none_or(|(min_hash, _)| hash < *min_hash)
-                {
-                    min_hash_key = Some((hash, key));
-                }
-            }
-        }
-
-        if selected.is_empty() {
-            let (_, key) = min_hash_key?;
-            let raw_key = Key::from_encoded_slice(&key).into_raw().ok()?;
-            selected.push(Self::point_range_for_raw_key(&raw_key));
-        }
-
-        if visible_rows == 0 {
-            return None;
-        }
-        selected.sort_by(|a, b| a.get_start().cmp(b.get_start()));
-        let scale = visible_rows as f64 / selected.len() as f64;
-        info!("analyze hidden sampling index prototype";
-            "visible_rows" => visible_rows,
-            "selected" => selected.len(),
-            "sample_rate" => sample_rate,
-            "scale" => scale,
-            "selection" => "row_key_hash_bernoulli",
-            "source" => "cf_write_scan",
-        );
-        Some((selected, scale))
     }
 
     // handle_column is used to process `AnalyzeColumnsReq`
@@ -332,7 +183,6 @@ impl<E: crate::storage::Engine, S: Snapshot, F: KvFormat> AnalyzeContext<E, S, F
             ));
         }
         let col_req = self.req.take_col_req();
-        let storage = self.storage.take().unwrap();
         let ranges = std::mem::take(&mut self.ranges);
 
         let req_ndv_rate = col_req.get_ndv_rate();
@@ -342,32 +192,84 @@ impl<E: crate::storage::Engine, S: Snapshot, F: KvFormat> AnalyzeContext<E, S, F
             1.0
         };
 
-        let pre_selected = if row_sample_rate < 1.0 {
-            // Emulate a hidden sampling index by selecting point ranges keyed by
-            // hash(row-key). Unlike SST range sampling, this makes the sampling
-            // unit a row rather than a physical key interval.
-            Self::pre_select_ranges_via_hash_sampling_index(
-                &self.snapshot,
-                &ranges,
-                row_sample_rate,
-                self.start_ts,
-            )
-        } else {
-            None
-        };
+        if row_sample_rate < 1.0 {
+            return self
+                .handle_hash_sampled_full_sampling_result(col_req, ranges, row_sample_rate)
+                .await;
+        }
 
+        let storage = self.storage.take().unwrap();
         let mut builder = RowSampleBuilder::<_, F>::new_with_preselected_ranges(
             col_req,
             storage,
             ranges,
             self.quota_limiter.clone(),
             self.is_auto_analyze,
-            pre_selected,
+            None,
         )?;
 
         let res = builder.collect_column_stats().await;
         builder.merge_storage_stats_into(&mut self.storage_stats);
         res
+    }
+
+    async fn handle_hash_sampled_full_sampling_result(
+        &mut self,
+        mut col_req: tipb::AnalyzeColumnsReq,
+        ranges: Vec<KeyRange>,
+        row_sample_rate: f64,
+    ) -> Result<AnalyzeSamplingResult> {
+        let sample_threshold = Self::hash_sample_threshold(row_sample_rate).ok_or_else(|| {
+            Error::Other(format!(
+                "invalid analyze NDV sample rate: {}",
+                row_sample_rate
+            ))
+        })?;
+        if col_req.get_sample_size() == 0 {
+            let sample_rate = effective_bernoulli_sample_rate_after_preselection(
+                col_req.get_sample_rate(),
+                1.0 / row_sample_rate,
+            );
+            col_req.set_sample_rate(sample_rate);
+        }
+
+        let mut sampler =
+            HashSamplingRangeBatcher::new(&self.snapshot, &ranges, sample_threshold, self.start_ts);
+        let mut builder = PointRowSampleBuilder::<_, F>::new(
+            col_req,
+            self.build_tikv_storage(),
+            self.quota_limiter.clone(),
+            self.is_auto_analyze,
+        )?;
+        let mut range_batch_count = 0_u64;
+        let mut max_raw_key_batch_size = 0_usize;
+        while let Some(raw_keys) = sampler.next_batch(HASH_SAMPLE_RAW_KEY_BATCH_SIZE)? {
+            max_raw_key_batch_size = max_raw_key_batch_size.max(raw_keys.len());
+            range_batch_count += 1;
+            builder.collect_raw_key_batch(raw_keys).await?;
+        }
+
+        let visible_rows = sampler.visible_rows();
+        let selected_rows = sampler.selected_rows();
+        builder.rescale_pre_sampled_rows(visible_rows, selected_rows);
+        builder.merge_storage_stats_into(&mut self.storage_stats);
+        let scale = if selected_rows > 0 {
+            visible_rows as f64 / selected_rows as f64
+        } else {
+            1.0
+        };
+        info!("analyze hidden sampling index prototype";
+            "visible_rows" => visible_rows,
+            "selected" => selected_rows,
+            "sample_rate" => row_sample_rate,
+            "scale" => scale,
+            "raw_key_batches" => range_batch_count,
+            "max_raw_key_batch_size" => max_raw_key_batch_size,
+            "selection" => "row_key_hash_bernoulli",
+            "source" => "cf_write_scan",
+            "scan" => "streaming_point_get",
+        );
+        Ok(builder.into_result())
     }
 
     // handle_index is used to handle `AnalyzeIndexReq`,
@@ -458,6 +360,218 @@ impl<E: crate::storage::Engine, S: Snapshot, F: KvFormat> AnalyzeContext<E, S, F
         let dt = box_try!(res.write_to_bytes());
         Ok(dt)
     }
+}
+
+struct HashSamplingRangeBatcher<'a, S: Snapshot> {
+    snapshot: &'a S,
+    ranges: &'a [KeyRange],
+    range_index: usize,
+    iter: Option<S::Iter>,
+    end_encoded: Option<Vec<u8>>,
+    sample_threshold: u64,
+    read_ts: TimeStamp,
+    visible_rows: u64,
+    selected_rows: u64,
+    min_hash_key: Option<(u64, Vec<u8>)>,
+    fallback_emitted: bool,
+}
+
+impl<'a, S: Snapshot> HashSamplingRangeBatcher<'a, S> {
+    fn new(
+        snapshot: &'a S,
+        ranges: &'a [KeyRange],
+        sample_threshold: u64,
+        read_ts: TimeStamp,
+    ) -> Self {
+        Self {
+            snapshot,
+            ranges,
+            range_index: 0,
+            iter: None,
+            end_encoded: None,
+            sample_threshold,
+            read_ts,
+            visible_rows: 0,
+            selected_rows: 0,
+            min_hash_key: None,
+            fallback_emitted: false,
+        }
+    }
+
+    fn visible_rows(&self) -> u64 {
+        self.visible_rows
+    }
+
+    fn selected_rows(&self) -> u64 {
+        self.selected_rows
+    }
+
+    fn next_batch(&mut self, limit: usize) -> Result<Option<Vec<Vec<u8>>>> {
+        assert!(limit > 0);
+        let mut raw_keys = Vec::with_capacity(limit);
+        while raw_keys.len() < limit {
+            if self.iter.is_none() && !self.open_next_range()? {
+                break;
+            }
+            if !self.consume_current_write_key(&mut raw_keys)? {
+                self.iter = None;
+                self.end_encoded = None;
+            }
+        }
+        if !raw_keys.is_empty() {
+            return Ok(Some(raw_keys));
+        }
+        if self.iter.is_none()
+            && self.range_index >= self.ranges.len()
+            && self.visible_rows > 0
+            && self.selected_rows == 0
+            && !self.fallback_emitted
+        {
+            self.fallback_emitted = true;
+            if let Some((_, key)) = self.min_hash_key.take() {
+                let raw_key = Key::from_encoded_slice(&key)
+                    .into_raw()
+                    .map_err(|err| Error::Other(err.to_string()))?;
+                self.selected_rows = 1;
+                return Ok(Some(vec![raw_key]));
+            }
+        }
+        Ok(None)
+    }
+
+    fn open_next_range(&mut self) -> Result<bool> {
+        while self.range_index < self.ranges.len() {
+            let range = &self.ranges[self.range_index];
+            self.range_index += 1;
+            let start = range.get_start();
+            let end = range.get_end();
+            if !end.is_empty() && start >= end {
+                continue;
+            }
+
+            let lower = KeyBuilder::from_vec(
+                Key::from_raw(start).as_encoded().clone(),
+                DATA_KEY_PREFIX_LEN,
+                0,
+            );
+            let upper = if end.is_empty() {
+                None
+            } else {
+                Some(KeyBuilder::from_vec(
+                    Key::from_raw(end).as_encoded().clone(),
+                    DATA_KEY_PREFIX_LEN,
+                    0,
+                ))
+            };
+            let iter_opt = IterOptions::new(Some(lower), upper, false);
+            let mut iter = self
+                .snapshot
+                .iter(CF_WRITE, iter_opt)
+                .map_err(|err| Error::Other(err.to_string()))?;
+            if iter
+                .seek(&Key::from_raw(start))
+                .map_err(|err| Error::Other(err.to_string()))?
+            {
+                self.end_encoded = if end.is_empty() {
+                    None
+                } else {
+                    Some(Key::from_raw(end).as_encoded().clone())
+                };
+                self.iter = Some(iter);
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn consume_current_write_key(&mut self, raw_keys: &mut Vec<Vec<u8>>) -> Result<bool> {
+        let iter = self
+            .iter
+            .as_mut()
+            .expect("hash sampling iterator must be opened");
+        if !iter.valid().map_err(|err| Error::Other(err.to_string()))? {
+            return Ok(false);
+        }
+        let (user_key, _) =
+            Key::split_on_ts_for(iter.key()).map_err(|err| Error::Other(err.to_string()))?;
+        let user_key = user_key.to_vec();
+        if self
+            .end_encoded
+            .as_ref()
+            .is_some_and(|end| user_key.as_slice() >= end.as_slice())
+        {
+            return Ok(false);
+        }
+
+        let mut found_visible_put = false;
+        loop {
+            let (current_key, commit_ts) =
+                Key::split_on_ts_for(iter.key()).map_err(|err| Error::Other(err.to_string()))?;
+            if current_key != user_key.as_slice() {
+                break;
+            }
+            if commit_ts <= self.read_ts {
+                let write =
+                    WriteRef::parse(iter.value()).map_err(|err| Error::Other(err.to_string()))?;
+                match write.write_type {
+                    WriteType::Put => {
+                        found_visible_put = true;
+                        break;
+                    }
+                    WriteType::Delete => break,
+                    WriteType::Lock | WriteType::Rollback => {}
+                }
+            }
+            if !iter.next().map_err(|err| Error::Other(err.to_string()))?
+                || !iter.valid().map_err(|err| Error::Other(err.to_string()))?
+            {
+                break;
+            }
+        }
+
+        if found_visible_put {
+            self.visible_rows += 1;
+            let hash = murmurhash3_x64_128(&user_key, 0).0;
+            if self
+                .min_hash_key
+                .as_ref()
+                .is_none_or(|(min_hash, _)| hash < *min_hash)
+            {
+                self.min_hash_key = Some((hash, user_key.clone()));
+            }
+            if hash <= self.sample_threshold {
+                let raw_key = Key::from_encoded_slice(&user_key)
+                    .into_raw()
+                    .map_err(|err| Error::Other(err.to_string()))?;
+                raw_keys.push(raw_key);
+                self.selected_rows += 1;
+            }
+        }
+
+        skip_current_write_key(iter, &user_key)
+    }
+}
+
+fn skip_current_write_key<I: crate::storage::Iterator>(
+    iter: &mut I,
+    user_key: &[u8],
+) -> Result<bool> {
+    let skip_target = Key::from_encoded_slice(user_key).append_ts(TimeStamp::zero());
+    if !iter
+        .seek(&skip_target)
+        .map_err(|err| Error::Other(err.to_string()))?
+    {
+        return Ok(false);
+    }
+    if !iter.valid().map_err(|err| Error::Other(err.to_string()))? {
+        return Ok(false);
+    }
+    let (landed_key, _) =
+        Key::split_on_ts_for(iter.key()).map_err(|err| Error::Other(err.to_string()))?;
+    if landed_key == user_key && !iter.next().map_err(|err| Error::Other(err.to_string()))? {
+        return Ok(false);
+    }
+    Ok(true)
 }
 
 #[async_trait]
