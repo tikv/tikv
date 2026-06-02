@@ -248,8 +248,6 @@ async fn test_exec_simple() {
         .unwrap();
     assert_eq!(subc.len(), 10);
 
-    let comments: serde_json::Value =
-        serde_json::from_str(mig.compactions[0].get_comments()).unwrap();
     let mut expected_cmeta_files_total_size = 0;
     let mut stream = st.storage().iter_prefix(mig.compactions[0].get_artifacts());
     while let Some(item) = stream.try_next().await.unwrap() {
@@ -264,9 +262,7 @@ async fn test_exec_simple() {
         }
     }
     assert_eq!(
-        comments["generated-cmeta-files-total-size"]
-            .as_u64()
-            .unwrap(),
+        mig.compactions[0].get_generated_cmeta_files_total_size(),
         expected_cmeta_files_total_size
     );
 
@@ -276,7 +272,7 @@ async fn test_exec_simple() {
         .map(|file| file.get_size())
         .sum();
     assert_eq!(
-        comments["generated-sst-files-total-size"].as_u64().unwrap(),
+        mig.compactions[0].get_generated_sst_files_total_size(),
         expected_sst_files_total_size
     );
 }
@@ -404,8 +400,6 @@ async fn test_checkpointing_reuses_only_committed_batches() {
         .unwrap();
     assert_eq!(subc.len(), 15);
 
-    let comments: serde_json::Value =
-        serde_json::from_str(mig.compactions[0].get_comments()).unwrap();
     let mut expected_cmeta_files_total_size = 0;
     let mut stream = st.storage().iter_prefix(mig.compactions[0].get_artifacts());
     while let Some(item) = stream.try_next().await.unwrap() {
@@ -420,9 +414,7 @@ async fn test_checkpointing_reuses_only_committed_batches() {
         }
     }
     assert_eq!(
-        comments["generated-cmeta-files-total-size"]
-            .as_u64()
-            .unwrap(),
+        mig.compactions[0].get_generated_cmeta_files_total_size(),
         expected_cmeta_files_total_size
     );
 
@@ -432,7 +424,7 @@ async fn test_checkpointing_reuses_only_committed_batches() {
         .map(|file| file.get_size())
         .sum();
     assert_eq!(
-        comments["generated-sst-files-total-size"].as_u64().unwrap(),
+        mig.compactions[0].get_generated_sst_files_total_size(),
         expected_sst_files_total_size
     );
 }

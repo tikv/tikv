@@ -23,10 +23,6 @@ pub struct CompactLogBackupStatistic {
     pub load_meta_stat: LoadMetaStatistic,
     pub collect_subcompactions_stat: CollectSubcompactionStatistic,
     pub subcompact_stat: SubcompactStatistic,
-    /// Total size of generated compact-log-backup cmeta files.
-    pub generated_cmeta_files_total_size: u64,
-    /// Total size of generated compact-log-backup SST files.
-    pub generated_sst_files_total_size: u64,
     pub prometheus: prom::SerAll,
 }
 

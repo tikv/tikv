@@ -350,16 +350,11 @@ impl SaveMeta {
         self
     }
 
-    fn comments(&self, new_cmeta_files_total_size: u64) -> String {
+    fn comments(&self) -> String {
         let now = Local::now();
-        let checkpointed = self
-            .checkpointed_file_sizes
-            .as_ref()
-            .map(CheckpointedFileSizes::snapshot)
-            .unwrap_or_default();
         let stat = CompactLogBackupStatistic {
             start_time: self.begin,
-            end_time: Local::now(),
+            end_time: now,
             time_taken: (now - self.begin).to_std().unwrap_or_default(),
             exec_by: tikv_util::sys::hostname().unwrap_or_default(),
 
@@ -367,13 +362,26 @@ impl SaveMeta {
             subcompact_stat: self.stats.compact_stat.clone(),
             load_meta_stat: self.stats.load_meta_stat.clone(),
             collect_subcompactions_stat: self.stats.collect_stat.clone(),
-            generated_cmeta_files_total_size: checkpointed.cmeta_files_total_size
-                + new_cmeta_files_total_size,
-            generated_sst_files_total_size: checkpointed.sst_files_total_size
-                + self.stats.compact_stat.physical_bytes_out,
             prometheus: Default::default(),
         };
         serde_json::to_string(&stat).unwrap_or_else(|err| format!("ERR DURING MARSHALING: {}", err))
+    }
+
+    fn generated_file_sizes(
+        &self,
+        new_cmeta_files_total_size: u64,
+    ) -> CheckpointedFileSizesSnapshot {
+        let checkpointed = self
+            .checkpointed_file_sizes
+            .as_ref()
+            .map(CheckpointedFileSizes::snapshot)
+            .unwrap_or_default();
+        CheckpointedFileSizesSnapshot {
+            cmeta_files_total_size: checkpointed.cmeta_files_total_size
+                + new_cmeta_files_total_size,
+            sst_files_total_size: checkpointed.sst_files_total_size
+                + self.stats.compact_stat.physical_bytes_out,
+        }
     }
 }
 
@@ -434,8 +442,12 @@ impl ExecHooks for SaveMeta {
             0
         };
 
-        let comments = self.comments(generated_cmeta_files_total_size);
-        self.collector.mut_meta().set_comments(comments);
+        let comments = self.comments();
+        let generated_file_sizes = self.generated_file_sizes(generated_cmeta_files_total_size);
+        let meta = self.collector.mut_meta();
+        meta.set_generated_cmeta_files_total_size(generated_file_sizes.cmeta_files_total_size);
+        meta.set_generated_sst_files_total_size(generated_file_sizes.sst_files_total_size);
+        meta.set_comments(comments);
         let begin = Instant::now();
         self.collector
             .write_migration(Arc::clone(cx.storage), cx.this.cfg.shard)
