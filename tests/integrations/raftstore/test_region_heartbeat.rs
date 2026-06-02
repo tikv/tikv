@@ -229,17 +229,23 @@ fn test_region_heartbeat_leader_change() {
 
     // add a peer to trigger region heartbeat.
     pd_client.must_add_peer(region_id, new_peer(2, 2));
-    test_util::eventually(
-        Duration::from_millis(100),
-        Duration::from_millis(3000),
-        || {
+    test_util::retry!(
+        {
             let size = cluster
                 .pd_client
                 .get_region_approximate_size(region_id)
                 .unwrap_or_default();
-            size >= 1000
+            if size >= 1000 { Ok(()) } else { Err(size) }
         },
-    );
+        30,
+        100
+    )
+    .unwrap_or_else(|size| {
+        panic!(
+            "region approximate size {} is still less than 1000 after 3 secs",
+            size
+        )
+    });
 
     cluster.must_transfer_leader(region_id, new_peer(2, 2));
 
@@ -248,17 +254,23 @@ fn test_region_heartbeat_leader_change() {
 
     // add a new peer to trigger heartbeat pd.
     pd_client.must_add_peer(region_id, new_peer(3, 3));
-    test_util::eventually(
-        Duration::from_millis(100),
-        Duration::from_millis(3000),
-        || {
+    test_util::retry!(
+        {
             let size = cluster
                 .pd_client
                 .get_region_approximate_size(region_id)
                 .unwrap_or_default();
-            size >= 2000
+            if size >= 2000 { Ok(()) } else { Err(size) }
         },
-    );
+        30,
+        100
+    )
+    .unwrap_or_else(|size| {
+        panic!(
+            "region approximate size {} is still less than 2000 after 3 secs",
+            size
+        )
+    });
     let approximate_size = cluster
         .pd_client
         .get_region_approximate_size(region_id)
