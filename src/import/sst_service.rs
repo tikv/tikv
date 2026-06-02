@@ -1695,13 +1695,16 @@ mod test {
     use txn_types::{Key, TimeStamp, Write, WriteBatchFlags, WriteType};
 
     use crate::{
-        import::sst_service::{RequestCollector, check_local_region_stale},
+        import::sst_service::{
+            RequestCollector, TXN_SOURCE_LIGHTNING_PHY_IMPORT_MASK, check_local_region_stale,
+        },
         server::raftkv,
     };
 
     fn write(key: &[u8], ty: WriteType, commit_ts: u64, start_ts: u64) -> (Vec<u8>, Vec<u8>) {
         let k = Key::from_raw(key).append_ts(TimeStamp::new(commit_ts));
-        let v = Write::new(ty, TimeStamp::new(start_ts), None);
+        let mut v = Write::new(ty, TimeStamp::new(start_ts), None);
+        v.txn_source |= TXN_SOURCE_LIGHTNING_PHY_IMPORT_MASK;
         (k.into_encoded(), v.as_ref().to_bytes())
     }
 
