@@ -464,9 +464,10 @@ impl Service {
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
         ctx.spawn(async move {
-            tokio::select! {
+            let should_deregister = tokio::select! {
                 _ = watchdog::wait_for_abort(recv_abort) => {
                     warn!("cdc receive cancelled"; "downstream" => peer, "conn_id" => ?conn_id);
+                    false
                 }
                 result = recv_req => {
                     if let Err(e) = result {
@@ -474,16 +475,20 @@ impl Service {
                     } else {
                         info!("cdc receive closed"; "downstream" => peer, "conn_id" => ?conn_id);
                     }
+                    true
                 }
-            }
+            };
 
-            let deregister = Deregister::Conn(conn_id);
-            if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
-                error!("cdc deregister failed"; "error" => ?e, "conn_id" => ?conn_id);
+            if should_deregister {
+                let deregister = Deregister::Conn(conn_id);
+                if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
+                    error!("cdc deregister failed"; "error" => ?e, "conn_id" => ?conn_id);
+                }
             }
         });
 
         let peer = ctx.peer();
+        let scheduler = self.scheduler.clone();
 
         ctx.spawn(async move {
             let _forward_exit = forward_exit;
@@ -492,6 +497,10 @@ impl Service {
             tokio::select! {
                 _ = watchdog::wait_for_abort(send_abort) => {
                     warn!("cdc send cancelled"; "downstream" => peer, "conn_id" => ?conn_id);
+                    let deregister = Deregister::Conn(conn_id);
+                    if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
+                        error!("cdc deregister failed"; "error" => ?e, "conn_id" => ?conn_id);
+                    }
                     let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, "connection cancelled".to_string());
                     let _ = sink.fail(status).await;
                     CDC_ABORTED_CONNECTIONS.inc();
