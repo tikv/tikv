@@ -572,12 +572,11 @@ impl<E: KvEngine> SstImporter<E> {
                     false,
                 )
                 .await?;
-            let sst_reader = downloaded.open_reader(self.key_manager.clone())?;
-
-            sst_readers.push(sst_reader);
-            if matches!(downloaded, DownloadedSstFile::Disk(_)) {
+            if matches!(&downloaded, DownloadedSstFile::Disk(_)) {
                 clean_paths.lock().unwrap().push(path.temp);
             }
+            let sst_reader = downloaded.open_reader(self.key_manager.clone())?;
+            sst_readers.push(sst_reader);
         }
 
         fail::fail_point!("download_files_ext_after_download", |msg| {
@@ -659,11 +658,10 @@ impl<E: KvEngine> SstImporter<E> {
                     true,
                 )
                 .await?;
-            let reader = downloaded.open_reader(self.key_manager.clone())?;
-            if matches!(downloaded, DownloadedSstFile::Disk(_)) {
+            if matches!(&downloaded, DownloadedSstFile::Disk(_)) {
                 clean_paths.lock().unwrap().push(path.temp);
             }
-
+            let reader = downloaded.open_reader(self.key_manager.clone())?;
             readers_with_cf_name.push((reader, meta.get_cf_name().to_owned()));
         }
 
@@ -1238,7 +1236,7 @@ impl<E: KvEngine> SstImporter<E> {
         speed_limiter: &Limiter,
         restore_config: RestoreConfig,
     ) -> Result<Vec<u8>> {
-        let mut buff = Vec::new();
+        let mut buff = Vec::with_capacity(usize::try_from(file_length).unwrap_or_default());
         self.download_file_from_external_storage_to_writer(
             file_length,
             file_name,
@@ -3003,6 +3001,21 @@ mod tests {
         })
     }
 
+    fn check_downloaded_sample_sst_file(downloaded: &DownloadedSstFile) {
+        let reader = downloaded.open_reader(None).unwrap();
+        let mut iter = reader.reader().iter(IterOptions::default()).unwrap();
+        iter.seek_to_first().unwrap();
+        assert_eq!(
+            collect(iter),
+            vec![
+                (b"zt123_r01".to_vec(), b"abc".to_vec()),
+                (b"zt123_r04".to_vec(), b"xyz".to_vec()),
+                (b"zt123_r07".to_vec(), b"pqrst".to_vec()),
+                (b"zt123_r13".to_vec(), b"www".to_vec()),
+            ]
+        );
+    }
+
     fn create_sample_external_kv_file() -> Result<(TempDir, StorageBackend, KvMeta, Vec<u8>)> {
         create_sample_external_kv_file_with_optional_encryption(
             None,
@@ -3546,6 +3559,80 @@ mod tests {
         assert_eq!(iter.key(), b"k1");
         assert_eq!(iter.value(), b"v1");
         assert!(!iter.next().unwrap());
+    }
+
+    #[test]
+    fn test_do_download_sst_file_try_memory_uses_mem() {
+        let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file().unwrap();
+        let importer_dir = tempfile::tempdir().unwrap();
+        let importer = SstImporter::<TestEngine>::new(
+            &Config::default(),
+            &importer_dir,
+            None,
+            ApiVersion::V1,
+            false,
+        )
+        .unwrap();
+        assert!(!importer.download_to_disk_only());
+
+        let path = importer.dir.join_for_write(&meta).unwrap();
+        let downloaded = importer
+            ._download_rt
+            .block_on(importer.do_download_sst_file(
+                &path,
+                &meta,
+                &backend,
+                "sample.sst",
+                None,
+                &Limiter::new(f64::INFINITY),
+                "",
+                true,
+            ))
+            .unwrap();
+
+        assert!(
+            matches!(&downloaded, DownloadedSstFile::Mem(_)),
+            "{:?}",
+            downloaded
+        );
+        assert!(!path.temp.exists());
+        check_downloaded_sample_sst_file(&downloaded);
+    }
+
+    #[test]
+    fn test_do_download_sst_file_try_memory_falls_back_to_disk() {
+        let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file().unwrap();
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config {
+            memory_use_ratio: 0.0,
+            ..Default::default()
+        };
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
+        assert!(importer.download_to_disk_only());
+
+        let path = importer.dir.join_for_write(&meta).unwrap();
+        let downloaded = importer
+            ._download_rt
+            .block_on(importer.do_download_sst_file(
+                &path,
+                &meta,
+                &backend,
+                "sample.sst",
+                None,
+                &Limiter::new(f64::INFINITY),
+                "",
+                true,
+            ))
+            .unwrap();
+
+        match &downloaded {
+            DownloadedSstFile::Disk(file) => assert_eq!(file, path.temp.to_str().unwrap()),
+            DownloadedSstFile::Mem(_) => panic!("expected disk fallback, got {:?}", downloaded),
+        }
+        assert!(path.temp.exists());
+        check_downloaded_sample_sst_file(&downloaded);
     }
 
     #[test]
@@ -5456,7 +5543,11 @@ mod tests {
 
         let mut metas = HashMap::new();
         metas.insert("sample_0.sst".to_string(), meta0.clone());
-        metas.insert("sample_1.sst".to_string(), meta1);
+        metas.insert("sample_1.sst".to_string(), meta1.clone());
+        let temp_paths = vec![
+            importer.dir.join_for_write(&meta0).unwrap().temp,
+            importer.dir.join_for_write(&meta1).unwrap().temp,
+        ];
 
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let result = runtime.block_on(importer.download_files_ext_with_ssts(
@@ -5472,6 +5563,13 @@ mod tests {
 
         // Should fail due to invalid SST file
         result.unwrap_err();
+        for path in temp_paths {
+            assert!(
+                !path.exists(),
+                "temporary download file {:?} should be cleaned up",
+                path
+            );
+        }
     }
 
     #[test]

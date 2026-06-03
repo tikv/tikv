@@ -40,7 +40,7 @@ impl RocksSstReader {
 
     pub fn open_in_memory(path: &str, content: &[u8]) -> Result<Self> {
         let mut file = RocksInMemoryFile::new(path)?;
-        file.write_all(content).map_err(|e| r2e(e.to_string()))?;
+        file.write_all(content).map_err(Error::from)?;
         file.finish_reader()
     }
 
@@ -124,7 +124,7 @@ impl RocksInMemoryFile {
     }
 
     pub fn finish(mut self) -> Result<RocksInMemorySst> {
-        self.file.flush().map_err(|e| r2e(e.to_string()))?;
+        self.file.flush().map_err(Error::from)?;
         self.file.close().map_err(r2e)?;
         Ok(RocksInMemorySst {
             env: self.env,
