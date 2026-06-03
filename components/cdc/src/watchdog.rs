@@ -15,20 +15,25 @@ use tokio::sync::oneshot;
 
 use crate::types::ConnId;
 
-// CDC connection monitoring constants in seconds.
-const CDC_WATCHDOG_INTERVAL_SECS: u64 = 60;
-const CDC_IDLE_DEREGISTER_THRESHOLD_SECS: u64 = 60 * 5; // 5 minutes
-const CDC_MEMORY_QUOTA_ABORT_THRESHOLD: f64 = 0.999;
-
-struct WatchdogConfig {
+#[derive(Clone)]
+pub(crate) struct Config {
     check_interval: Duration,
     idle_deregister_threshold: Duration,
     memory_quota_abort_threshold: f64,
 }
 
-impl WatchdogConfig {
-    fn new() -> WatchdogConfig {
-        WatchdogConfig::default()
+impl Config {
+    #[cfg(test)]
+    pub(crate) fn new(
+        check_interval: Duration,
+        idle_deregister_threshold: Duration,
+        memory_quota_abort_threshold: f64,
+    ) -> Config {
+        Config {
+            check_interval,
+            idle_deregister_threshold,
+            memory_quota_abort_threshold,
+        }
     }
 
     fn idle_deregister_threshold(&self) -> Duration {
@@ -42,31 +47,36 @@ impl WatchdogConfig {
     }
 }
 
-impl Default for WatchdogConfig {
-    fn default() -> WatchdogConfig {
-        WatchdogConfig {
-            check_interval: Duration::from_secs(CDC_WATCHDOG_INTERVAL_SECS),
-            idle_deregister_threshold: Duration::from_secs(CDC_IDLE_DEREGISTER_THRESHOLD_SECS),
-            memory_quota_abort_threshold: CDC_MEMORY_QUOTA_ABORT_THRESHOLD,
+impl Default for Config {
+    fn default() -> Config {
+        Config {
+            check_interval: Duration::from_secs(60),
+            idle_deregister_threshold: Duration::from_secs(5 * 60),
+            memory_quota_abort_threshold: 0.999,
         }
     }
 }
 
+/// Shared flush activity for one CDC EventFeed connection.
+///
+/// The send task records a successful sink flush through this handle, and the
+/// watchdog task reads the same timestamp to decide whether the connection has
+/// been idle for too long. Clones share the same timestamp.
 #[derive(Clone)]
-pub(crate) struct ActivityHandle {
+pub(crate) struct FlushActivity {
     last_flush: Arc<AtomicCell<Instant>>,
 }
 
-impl ActivityHandle {
-    fn new() -> ActivityHandle {
-        ActivityHandle {
+impl FlushActivity {
+    fn new() -> FlushActivity {
+        FlushActivity {
             last_flush: Arc::new(AtomicCell::new(Instant::now())),
         }
     }
 
     #[cfg(test)]
-    fn with_last_flush(last_flush: Instant) -> ActivityHandle {
-        ActivityHandle {
+    fn with_last_flush(last_flush: Instant) -> FlushActivity {
+        FlushActivity {
             last_flush: Arc::new(AtomicCell::new(last_flush)),
         }
     }
@@ -77,13 +87,18 @@ impl ActivityHandle {
     }
 
     #[inline]
-    fn idle_elapsed(&self) -> Duration {
+    fn elapsed_since_last_flush(&self) -> Duration {
         self.last_flush.load().elapsed()
     }
 }
 
+/// Handles returned to the EventFeed tasks after the watchdog is spawned.
+///
+/// `recv_abort` and `send_abort` are explicit cancellation signals from the
+/// watchdog. `forward_exit` must be held by the send task so the watchdog can
+/// stop polling when event forwarding exits normally.
 pub(crate) struct WatchdogHandle {
-    pub(crate) activity: ActivityHandle,
+    pub(crate) activity: FlushActivity,
     pub(crate) recv_abort: oneshot::Receiver<()>,
     pub(crate) send_abort: oneshot::Receiver<()>,
     pub(crate) forward_exit: ForwardExitGuard,
@@ -92,7 +107,8 @@ pub(crate) struct WatchdogHandle {
 /// Keeps the watchdog alive while the send task is forwarding events.
 ///
 /// Dropping this guard drops the underlying oneshot sender, which wakes the
-/// watchdog and lets it stop polling the connection.
+/// watchdog and lets it stop polling the connection. This represents normal
+/// forward-task exit, not a watchdog abort.
 pub(crate) struct ForwardExitGuard {
     _tx: oneshot::Sender<()>,
 }
@@ -103,19 +119,25 @@ impl ForwardExitGuard {
     }
 }
 
-struct AbortHandle {
-    recv: Option<oneshot::Sender<()>>,
-    send: Option<oneshot::Sender<()>>,
+/// Explicit abort signals owned by the watchdog.
+///
+/// When the watchdog decides the connection should be aborted, these senders
+/// cancel the receive and send tasks. The senders are optional so `abort` is
+/// idempotent and can be called safely after either signal has already been
+/// sent.
+struct AbortSenders {
+    recv_abort_tx: Option<oneshot::Sender<()>>,
+    send_abort_tx: Option<oneshot::Sender<()>>,
 }
 
-impl AbortHandle {
-    fn new() -> (AbortHandle, oneshot::Receiver<()>, oneshot::Receiver<()>) {
+impl AbortSenders {
+    fn new() -> (AbortSenders, oneshot::Receiver<()>, oneshot::Receiver<()>) {
         let (recv_tx, recv_rx) = oneshot::channel();
         let (send_tx, send_rx) = oneshot::channel();
         (
-            AbortHandle {
-                recv: Some(recv_tx),
-                send: Some(send_tx),
+            AbortSenders {
+                recv_abort_tx: Some(recv_tx),
+                send_abort_tx: Some(send_tx),
             },
             recv_rx,
             send_rx,
@@ -123,10 +145,10 @@ impl AbortHandle {
     }
 
     fn abort(&mut self) {
-        if let Some(send) = self.send.take() {
+        if let Some(send) = self.send_abort_tx.take() {
             let _ = send.send(());
         }
-        if let Some(recv) = self.recv.take() {
+        if let Some(recv) = self.recv_abort_tx.take() {
             let _ = recv.send(());
         }
     }
@@ -145,11 +167,11 @@ pub(crate) async fn wait_for_abort(rx: oneshot::Receiver<()>) {
 }
 
 pub(crate) struct Watchdog {
-    config: WatchdogConfig,
-    activity: ActivityHandle,
+    config: Config,
+    activity: FlushActivity,
     peer: String,
     conn_id: ConnId,
-    abort: AbortHandle,
+    abort: AbortSenders,
     forward_exit_rx: oneshot::Receiver<()>,
     memory_quota: Arc<MemoryQuota>,
 }
@@ -160,14 +182,15 @@ impl Watchdog {
         peer: String,
         conn_id: ConnId,
         memory_quota: Arc<MemoryQuota>,
+        config: Config,
     ) -> WatchdogHandle {
         Self::spawn_with_activity(
             pool,
             peer,
             conn_id,
             memory_quota,
-            ActivityHandle::new(),
-            WatchdogConfig::new(),
+            FlushActivity::new(),
+            config,
         )
     }
 
@@ -176,10 +199,10 @@ impl Watchdog {
         peer: String,
         conn_id: ConnId,
         memory_quota: Arc<MemoryQuota>,
-        activity: ActivityHandle,
-        config: WatchdogConfig,
+        activity: FlushActivity,
+        config: Config,
     ) -> WatchdogHandle {
-        let (abort, recv_abort, send_abort) = AbortHandle::new();
+        let (abort, recv_abort, send_abort) = AbortSenders::new();
         let (forward_exit_tx, forward_exit_rx) = oneshot::channel();
         let watchdog = Watchdog {
             config,
@@ -226,8 +249,7 @@ impl Watchdog {
     }
 
     fn check_and_maybe_abort(&mut self) -> bool {
-        let elapsed = self.activity.idle_elapsed();
-
+        let elapsed = self.activity.elapsed_since_last_flush();
         if elapsed > self.config.check_interval {
             warn!("cdc connection idle too long";
                 "seconds_since_last_flush" => elapsed.as_secs(),
@@ -268,11 +290,11 @@ mod tests {
     #[test]
     fn test_connection_watchdog_cancels_send_and_receive() {
         let pool = Arc::new(Builder::new("cdc-watchdog-test").thread_count(1).create());
-        let activity = ActivityHandle::with_last_flush(Instant::now() - Duration::from_secs(1));
+        let activity = FlushActivity::with_last_flush(Instant::now() - Duration::from_secs(1));
         let memory_quota = Arc::new(MemoryQuota::new(1));
         memory_quota.alloc_force(1);
 
-        let config = WatchdogConfig {
+        let config = Config {
             check_interval: Duration::from_millis(50),
             idle_deregister_threshold: Duration::from_millis(100),
             ..Default::default()
@@ -297,7 +319,7 @@ mod tests {
 
     #[test]
     fn test_abort_handle_idempotent() {
-        let (mut abort, recv_abort, send_abort) = AbortHandle::new();
+        let (mut abort, recv_abort, send_abort) = AbortSenders::new();
 
         abort.abort();
         abort.abort();

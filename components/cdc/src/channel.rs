@@ -29,7 +29,7 @@ use tikv_util::{
     warn,
 };
 
-use crate::{metrics::*, types::ConnId, watchdog::ActivityHandle};
+use crate::{metrics::*, types::ConnId, watchdog::FlushActivity};
 
 /// The maximum bytes of events can be batched into one `CdcEvent::Event`, 32KB.
 pub const CDC_EVENT_MAX_BYTES: usize = 32 * 1024;
@@ -392,7 +392,7 @@ impl<'a> Drain {
     pub async fn forward<S, E>(
         &'a mut self,
         sink: &mut S,
-        activity: Option<&ActivityHandle>,
+        activity: Option<&FlushActivity>,
     ) -> Result<(), E>
     where
         S: futures::Sink<(ChangeDataEvent, WriteFlags), Error = E> + Unpin,

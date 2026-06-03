@@ -391,6 +391,7 @@ impl Service {
         stream: RequestStream<ChangeDataRequest>,
         mut sink: DuplexSink<ChangeDataEvent>,
         event_feed_v2: bool,
+        watchdog_config: watchdog::Config,
     ) {
         sink.enhance_batch(true);
         let conn_id = ConnId::new();
@@ -452,7 +453,13 @@ impl Service {
             recv_abort,
             send_abort,
             forward_exit,
-        } = watchdog::Watchdog::spawn(&self.pool, ctx.peer(), conn_id, self.memory_quota.clone());
+        } = watchdog::Watchdog::spawn(
+            &self.pool,
+            ctx.peer(),
+            conn_id,
+            self.memory_quota.clone(),
+            watchdog_config,
+        );
 
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
@@ -511,7 +518,7 @@ impl ChangeData for Service {
         stream: RequestStream<ChangeDataRequest>,
         sink: DuplexSink<ChangeDataEvent>,
     ) {
-        self.handle_event_feed(ctx, stream, sink, false);
+        self.handle_event_feed(ctx, stream, sink, false, watchdog::Config::default());
     }
 
     fn event_feed_v2(
@@ -520,7 +527,7 @@ impl ChangeData for Service {
         stream: RequestStream<ChangeDataRequest>,
         sink: DuplexSink<ChangeDataEvent>,
     ) {
-        self.handle_event_feed(ctx, stream, sink, true);
+        self.handle_event_feed(ctx, stream, sink, true, watchdog::Config::default());
     }
 }
 
@@ -542,7 +549,10 @@ async fn sleep_before_drain_change_event() {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
+    use std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    };
 
     use futures::executor::block_on;
     use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder, WriteFlags};
@@ -552,14 +562,62 @@ mod tests {
     use super::*;
     use crate::channel::{CdcEvent, recv_timeout};
 
+    #[derive(Clone)]
+    struct ServiceWithWatchdogConfig {
+        service: Service,
+        watchdog_config: watchdog::Config,
+    }
+
+    impl ChangeData for ServiceWithWatchdogConfig {
+        fn event_feed(
+            &mut self,
+            ctx: RpcContext<'_>,
+            stream: RequestStream<ChangeDataRequest>,
+            sink: DuplexSink<ChangeDataEvent>,
+        ) {
+            self.service
+                .handle_event_feed(ctx, stream, sink, false, self.watchdog_config.clone());
+        }
+
+        fn event_feed_v2(
+            &mut self,
+            ctx: RpcContext<'_>,
+            stream: RequestStream<ChangeDataRequest>,
+            sink: DuplexSink<ChangeDataEvent>,
+        ) {
+            self.service
+                .handle_event_feed(ctx, stream, sink, true, self.watchdog_config.clone());
+        }
+    }
+
     fn new_rpc_suite(capacity: usize) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
         let memory_quota = Arc::new(MemoryQuota::new(capacity));
         let pool = Arc::new(Builder::new("cdc-watchdog-test").thread_count(1).create());
         let (scheduler, rx) = dummy_scheduler();
-        let cdc_service = Service::new(scheduler, memory_quota, pool);
+        let cdc_service = create_change_data(Service::new(scheduler, memory_quota, pool));
+        new_rpc_suite_from_service(cdc_service, rx)
+    }
+
+    fn new_rpc_suite_with_watchdog_config(
+        capacity: usize,
+        watchdog_config: watchdog::Config,
+    ) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
+        let memory_quota = Arc::new(MemoryQuota::new(capacity));
+        let pool = Arc::new(Builder::new("cdc-watchdog-test").thread_count(1).create());
+        let (scheduler, rx) = dummy_scheduler();
+        let cdc_service = create_change_data(ServiceWithWatchdogConfig {
+            service: Service::new(scheduler, memory_quota, pool),
+            watchdog_config,
+        });
+        new_rpc_suite_from_service(cdc_service, rx)
+    }
+
+    fn new_rpc_suite_from_service(
+        cdc_service: grpcio::Service,
+        rx: ReceiverWrapper<Task>,
+    ) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
         let env = Arc::new(EnvBuilder::new().build());
-        let builder =
-            ServerBuilder::new(env.clone()).register_service(create_change_data(cdc_service));
+        let builder = ServerBuilder::new(env.clone()).register_service(cdc_service);
         let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
         server.start();
         let (_, port) = server.bind_addrs().next().unwrap();
@@ -637,5 +695,60 @@ mod tests {
         // though server should not be able to send messages infinitely.
         let window_size = must_fill_window();
         assert_ne!(window_size, 0);
+    }
+
+    #[test]
+    fn test_cdc_watchdog_idle_timeout() {
+        let watchdog_config =
+            watchdog::Config::new(Duration::from_millis(10), Duration::from_millis(50), 0.0);
+        let (_server, client, mut task_rx) =
+            new_rpc_suite_with_watchdog_config(usize::MAX, watchdog_config);
+        let (mut tx, mut rx) = client.event_feed().unwrap();
+
+        let mut req = ChangeDataRequest {
+            region_id: 1,
+            ..Default::default()
+        };
+        req.mut_header().set_ticdc_version("7.5.0".into());
+        block_on(tx.send((req, WriteFlags::default()))).unwrap();
+
+        let conn_id = loop {
+            match task_rx.recv_timeout(Duration::from_secs(1)).unwrap() {
+                Some(Task::OpenConn { conn }) => break conn.get_id(),
+                Some(_) => continue,
+                None => panic!("scheduler should stay open"),
+            }
+        };
+
+        let start = Instant::now();
+        let timeout = Duration::from_secs(2);
+        let mut stream_failed = false;
+        let mut deregistered = false;
+        while start.elapsed() < timeout && (!stream_failed || !deregistered) {
+            if !stream_failed {
+                match recv_timeout(&mut rx, Duration::from_millis(20)) {
+                    Ok(Some(Err(_))) => stream_failed = true,
+                    Ok(Some(Ok(event))) => panic!("unexpected CDC event: {:?}", event),
+                    Ok(None) | Err(_) => {}
+                }
+            }
+
+            while let Ok(Some(task)) = task_rx.recv_timeout(Duration::from_millis(1)) {
+                if let Task::Deregister(Deregister::Conn(id)) = task {
+                    assert_eq!(id, conn_id);
+                    deregistered = true;
+                    break;
+                }
+            }
+        }
+
+        assert!(
+            stream_failed,
+            "watchdog should fail the EventFeed stream after idle timeout"
+        );
+        assert!(
+            deregistered,
+            "watchdog abort should deregister the CDC connection"
+        );
     }
 }
