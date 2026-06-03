@@ -16,6 +16,7 @@ pub struct TikvStorage<S: Store> {
     scanner: Option<S::Scanner>,
     cf_stats_backlog: Statistics,
     met_newer_ts_data_backlog: NewerTsCheckState,
+    scan_value_sample_rate: f64,
 }
 
 impl<S: Store> TikvStorage<S> {
@@ -29,6 +30,7 @@ impl<S: Store> TikvStorage<S> {
             } else {
                 NewerTsCheckState::Unknown
             },
+            scan_value_sample_rate: 1.0,
         }
     }
 }
@@ -52,21 +54,30 @@ impl<S: Store> Storage for TikvStorage<S> {
         }
         let lower = Some(Key::from_raw(&range.lower_inclusive));
         let upper = Some(Key::from_raw(&range.upper_exclusive));
-        self.scanner = Some(
-            self.store
-                .scanner(
-                    is_backward_scan,
-                    is_key_only,
-                    self.met_newer_ts_data_backlog == NewerTsCheckState::NotMetYet,
-                    load_commit_ts,
-                    lower,
-                    upper,
-                )
-                .map_err(Error::from)?,
+        let mut scanner = self
+            .store
+            .scanner(
+                is_backward_scan,
+                is_key_only,
+                self.met_newer_ts_data_backlog == NewerTsCheckState::NotMetYet,
+                load_commit_ts,
+                lower,
+                upper,
+            )
             // There is no transform from storage error to QE's StorageError,
             // so an intermediate error is needed.
-        );
+            .map_err(Error::from)?;
+        scanner.set_value_sample_rate(self.scan_value_sample_rate);
+        self.scanner = Some(scanner);
         Ok(())
+    }
+
+    fn set_scan_value_sample_rate(&mut self, sample_rate: f64) -> bool {
+        if sample_rate.is_finite() {
+            self.scan_value_sample_rate = sample_rate.clamp(0.0, 1.0);
+            return true;
+        }
+        false
     }
 
     fn scan_next_entry(&mut self) -> QeResult<Option<OwnedKvPairEntry>> {
@@ -83,6 +94,13 @@ impl<S: Store> Storage for TikvStorage<S> {
             value: v.value,
             commit_ts: v.commit_ts.map(|ts| ts.into_inner()),
         }))
+    }
+
+    fn take_scan_skipped_entries(&mut self) -> usize {
+        self.scanner
+            .as_mut()
+            .map(|scanner| scanner.take_skipped_entries())
+            .unwrap_or(0)
     }
 
     fn get_entry(

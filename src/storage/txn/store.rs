@@ -91,6 +91,12 @@ pub trait Scanner: Send {
     /// Get the next [`KvPairEntry`](KvPairEntry) if it exists.
     fn next_entry(&mut self) -> Result<Option<(Key, ValueEntry)>>;
 
+    fn set_value_sample_rate(&mut self, _sample_rate: f64) {}
+
+    fn take_skipped_entries(&mut self) -> usize {
+        0
+    }
+
     /// Get the next [`KvPair`](KvPair) if it exists.
     #[inline]
     fn next(&mut self) -> Result<Option<(Key, Value)>> {
@@ -1089,6 +1095,26 @@ mod tests {
             .map(|k| Some((k.clone().into_bytes(), k.clone().into_bytes())))
             .collect();
         assert_eq!(result, expect, "expect {:?}, but got {:?}", expect, result);
+
+        let mut sampled_scanner = snapshot_store
+            .scanner(false, false, false, false, Some(start_key.clone()), None)
+            .unwrap();
+        sampled_scanner.set_value_sample_rate(0.0);
+        assert!(sampled_scanner.scan(half, 0).unwrap().is_empty());
+        assert_eq!(sampled_scanner.take_skipped_entries(), key_num as usize);
+
+        let mut key_only_scanner = snapshot_store
+            .scanner(false, true, false, false, Some(start_key.clone()), None)
+            .unwrap();
+        key_only_scanner.set_value_sample_rate(0.0);
+        let result = key_only_scanner.scan(half, 0).unwrap();
+        let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
+        let expect: Vec<Option<KvPair>> = expect
+            .iter()
+            .map(|item| item.as_ref().map(|(k, _)| (k.clone(), Vec::new())))
+            .collect();
+        assert_eq!(result, expect, "expect {:?}, but got {:?}", expect, result);
+        assert_eq!(key_only_scanner.take_skipped_entries(), 0);
 
         // cover load commit ts
         let mut scanner1 = snapshot_store

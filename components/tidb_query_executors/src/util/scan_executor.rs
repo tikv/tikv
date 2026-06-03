@@ -121,6 +121,13 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
     pub fn set_row_sample_rate(&mut self, sample_rate: f64) {
         if sample_rate.is_finite() {
             self.row_sample_rate = sample_rate.clamp(0.0, 1.0);
+            if self.row_sample_rate < 1.0
+                && self
+                    .scanner
+                    .set_scan_value_sample_rate(self.row_sample_rate)
+            {
+                self.row_sample_rate = 1.0;
+            }
         }
     }
 
