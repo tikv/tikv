@@ -2490,6 +2490,18 @@ where
                 }
                 _ => {}
             }
+            if let Err(e) = ctx.pd_scheduler.schedule(PdTask::UpdateRegionRole {
+                region_id: self.region_id,
+                role: ss.raft_state,
+            }) {
+                warn!(
+                    "failed to notify pd worker about region role";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "role" => ?ss.raft_state,
+                    "err" => ?e,
+                );
+            }
             self.on_leader_changed(ss.leader_id, self.term());
             ctx.coprocessor_host.on_role_change(
                 self.region(),

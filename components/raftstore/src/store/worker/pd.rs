@@ -36,7 +36,7 @@ use kvproto::{
 };
 use pd_client::{BucketStat, Error, PdClient, RegionStat, RegionWriteCfCopDetail, metrics::*};
 use prometheus::local::LocalHistogram;
-use raft::eraftpb::ConfChangeType;
+use raft::{StateRole, eraftpb::ConfChangeType};
 use resource_metering::{
     Collector, CollectorGuard, CollectorRegHandle, RawRecords, RegionCpuRecord,
 };
@@ -208,6 +208,10 @@ where
         duration: RaftstoreDuration,
     },
     RegionCpuRecords(Arc<RawRecords>),
+    UpdateRegionRole {
+        region_id: u64,
+        role: StateRole,
+    },
     ReportMinResolvedTs {
         store_id: u64,
         min_resolved_ts: u64,
@@ -471,6 +475,9 @@ where
             }
             Task::RegionCpuRecords(ref cpu_records) => {
                 write!(f, "get region cpu records: {:?}", cpu_records)
+            }
+            Task::UpdateRegionRole { region_id, role } => {
+                write!(f, "update region {} role to {:?}", region_id, role)
             }
             Task::ReportMinResolvedTs {
                 store_id,
@@ -1099,6 +1106,9 @@ where
     // region_id -> CPU time breakdown accumulated for RegionHeartbeat reporting.
     // This map is consumed/cleared by the region-heartbeat path.
     region_cpu_records_since_region_heartbeat: HashMap<u64, RegionCpuRecord>,
+    // RegionHeartbeat is reported by leaders. Keep this set to avoid
+    // accumulating follower CPU into the next leader heartbeat interval.
+    leader_regions: HashSet<u64>,
     // region_id -> CPU time breakdown accumulated for StoreHeartbeat peer_stats.
     // This map is consumed/cleared by real store heartbeats (not fake ones).
     region_cpu_records_since_store_heartbeat: HashMap<u64, RegionCpuRecord>,
@@ -1207,6 +1217,7 @@ where
             store_heartbeat_interval,
             stats_monitor,
             region_cpu_records_since_region_heartbeat: HashMap::default(),
+            leader_regions: HashSet::default(),
             region_cpu_records_since_store_heartbeat: HashMap::default(),
             concurrency_manager,
             snap_mgr,
@@ -2065,6 +2076,7 @@ where
                 &mut self.region_cpu_records_since_store_heartbeat,
             )
         };
+        self.leader_regions.remove(&region_id);
         if removed {
             info!("remove peer statistic record in pd"; "region_id" => region_id);
         }
@@ -2214,16 +2226,27 @@ where
     fn handle_region_cpu_records(&mut self, records: Arc<RawRecords>) {
         // Send Region CPU info to AutoSplitController inside the stats_monitor.
         self.stats_monitor.maybe_send_cpu_stats(&records);
-        calculate_region_cpu_records(
+        calculate_leader_region_cpu_records(
             self.store_id,
             records.clone(),
             &mut self.region_cpu_records_since_region_heartbeat,
+            &self.leader_regions,
         );
         calculate_region_cpu_records(
             self.store_id,
             records,
             &mut self.region_cpu_records_since_store_heartbeat,
         );
+    }
+
+    fn handle_update_region_role(&mut self, region_id: u64, role: StateRole) {
+        if role == StateRole::Leader {
+            self.leader_regions.insert(region_id);
+        } else {
+            self.leader_regions.remove(&region_id);
+            self.region_cpu_records_since_region_heartbeat
+                .remove(&region_id);
+        }
     }
 
     fn handle_report_min_resolved_ts(&self, store_id: u64, min_resolved_ts: u64) {
@@ -2459,6 +2482,24 @@ fn calculate_region_cpu_records(
     }
 }
 
+fn calculate_leader_region_cpu_records(
+    store_id: u64,
+    records: Arc<RawRecords>,
+    region_cpu_records: &mut HashMap<u64, RegionCpuRecord>,
+    leader_regions: &HashSet<u64>,
+) {
+    for (tag, record) in &records.records {
+        if tag.store_id != store_id || !leader_regions.contains(&tag.region_id) {
+            continue;
+        }
+        // Reporting a leader region heartbeat later will clear the record.
+        region_cpu_records
+            .entry(tag.region_id)
+            .or_default()
+            .merge_raw_record(record);
+    }
+}
+
 impl<EK, ER, T> Runnable for Runner<EK, ER, T>
 where
     EK: KvEngine,
@@ -2601,6 +2642,10 @@ where
                     cpu_stats,
                 ) = {
                     let region_id = hb_task.region.get_id();
+                    // A region heartbeat is reported by the leader peer. Refresh
+                    // the local leader set in case the role-change notification
+                    // has not reached the PD worker yet.
+                    self.leader_regions.insert(region_id);
                     let mut region_peers = self.region_peers.write().unwrap();
                     let peer_stat = region_peers.entry(region_id).or_default();
                     peer_stat.approximate_size = approximate_size;
@@ -2726,6 +2771,9 @@ where
                 );
             }
             Task::RegionCpuRecords(records) => self.handle_region_cpu_records(records),
+            Task::UpdateRegionRole { region_id, role } => {
+                self.handle_update_region_role(region_id, role)
+            }
             Task::ReportMinResolvedTs {
                 store_id,
                 min_resolved_ts,
@@ -3469,6 +3517,54 @@ mod tests {
             assert!(record.unified_read_cpu_time_ms > 0);
             assert!(record.scheduler_cpu_time_ms > 0);
         }
+    }
+
+    #[test]
+    fn test_calculate_leader_region_cpu_records_skips_non_leaders() {
+        let mut records = HashMap::default();
+        for region_id in [1, 2] {
+            let mut peer = Peer::default();
+            peer.set_id(region_id + 10);
+            peer.set_store_id(DEFAULT_TEST_STORE_ID);
+            let mut context = kvrpcpb::Context::default();
+            context.set_peer(peer);
+            context.set_region_id(region_id);
+            let resource_tag = Arc::new(TagInfos::from_rpc_context(&context));
+            records.insert(
+                resource_tag,
+                RawRecord {
+                    cpu_time: 10,
+                    unified_read_cpu_time: 6,
+                    scheduler_cpu_time: 4,
+                    ..Default::default()
+                },
+            );
+        }
+        let raw_records = Arc::new(RawRecords {
+            records,
+            ..Default::default()
+        });
+
+        let mut leader_regions = HashSet::default();
+        leader_regions.insert(1);
+        let mut region_cpu_records_since_region_heartbeat = HashMap::default();
+        calculate_leader_region_cpu_records(
+            DEFAULT_TEST_STORE_ID,
+            raw_records.clone(),
+            &mut region_cpu_records_since_region_heartbeat,
+            &leader_regions,
+        );
+        assert!(region_cpu_records_since_region_heartbeat.contains_key(&1));
+        assert!(!region_cpu_records_since_region_heartbeat.contains_key(&2));
+
+        let mut region_cpu_records_since_store_heartbeat = HashMap::default();
+        calculate_region_cpu_records(
+            DEFAULT_TEST_STORE_ID,
+            raw_records,
+            &mut region_cpu_records_since_store_heartbeat,
+        );
+        assert!(region_cpu_records_since_store_heartbeat.contains_key(&1));
+        assert!(region_cpu_records_since_store_heartbeat.contains_key(&2));
     }
 
     #[test]
