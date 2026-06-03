@@ -721,13 +721,17 @@ mod tests {
         req.mut_header().set_ticdc_version("7.5.0".into());
         block_on(tx.send((req, WriteFlags::default()))).unwrap();
 
-        let conn_id = loop {
+        let conn = loop {
             match task_rx.recv_timeout(Duration::from_secs(1)).unwrap() {
-                Some(Task::OpenConn { conn }) => break conn.get_id(),
+                Some(Task::OpenConn { conn }) => break conn,
                 Some(_) => continue,
                 None => panic!("scheduler should stay open"),
             }
         };
+        // Keep the connection alive as `Endpoint::on_open_conn` does. Dropping
+        // it here closes the event drain and makes the send task close normally
+        // before the watchdog can abort the stream.
+        let conn_id = conn.get_id();
 
         let start = Instant::now();
         let timeout = Duration::from_secs(2);
