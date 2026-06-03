@@ -52,6 +52,6 @@ pub use self::{
     simple_aggr_executor::BatchSimpleAggregationExecutor,
     slow_hash_aggr_executor::BatchSlowHashAggregationExecutor,
     stream_aggr_executor::BatchStreamAggregationExecutor,
-    table_scan_executor::{BatchTablePointScanExecutor, BatchTableScanExecutor},
+    table_scan_executor::{BatchTableScanExecutor, TableRowDecoder},
     top_n_executor::BatchTopNExecutor,
 };

@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashSet, marker::PhantomData, mem, sync::Arc};
+use std::{collections::HashSet, sync::Arc};
 
 use api_version::{ApiV1, KvFormat};
 use async_trait::async_trait;
@@ -9,8 +9,8 @@ use kvproto::coprocessor::KeyRange;
 use smallvec::SmallVec;
 use tidb_query_common::{
     Result,
-    metrics::{ExecutorName, record_executor_work},
-    storage::{IntervalRange, PointRange, Storage},
+    metrics::ExecutorName,
+    storage::{IntervalRange, Storage},
 };
 use tidb_query_datatype::{
     EvalType, FieldTypeAccessor,
@@ -83,171 +83,37 @@ impl<S: Storage, F: KvFormat> BatchTableScanExecutor<S, F> {
     }
 }
 
-pub struct BatchTablePointScanExecutor<S: Storage, F: KvFormat> {
+pub struct TableRowDecoder {
     imp: TableScanExecutorImpl,
-    storage: S,
-    raw_keys: Vec<Vec<u8>>,
-    cursor: usize,
-    is_key_only: bool,
-    load_commit_ts: bool,
-    pending_scanned_rows: usize,
-    is_ended: bool,
-    _phantom: PhantomData<F>,
 }
 
-impl<S: Storage, F: KvFormat> BatchTablePointScanExecutor<S, F> {
+impl TableRowDecoder {
     pub fn new(
-        storage: S,
         config: Arc<EvalConfig>,
         columns_info: Vec<ColumnInfo>,
-        raw_keys: Vec<Vec<u8>>,
         primary_column_ids: Vec<i64>,
         primary_prefix_column_ids: Vec<i64>,
-    ) -> Result<Self> {
+    ) -> Self {
         let setup = build_table_scan_setup(
             config,
             columns_info,
             primary_column_ids,
             primary_prefix_column_ids,
         );
-        Ok(Self {
-            imp: setup.imp,
-            storage,
-            raw_keys,
-            cursor: 0,
-            is_key_only: setup.is_key_only,
-            load_commit_ts: setup.load_commit_ts,
-            pending_scanned_rows: 0,
-            is_ended: false,
-            _phantom: PhantomData,
-        })
+        Self { imp: setup.imp }
     }
 
-    pub fn reset_raw_keys(&mut self, raw_keys: Vec<Vec<u8>>) {
-        self.raw_keys = raw_keys;
-        self.cursor = 0;
-        self.pending_scanned_rows = 0;
-        self.is_ended = false;
-    }
-}
-
-#[async_trait]
-impl<S: Storage, F: KvFormat> BatchExecutor for BatchTablePointScanExecutor<S, F> {
-    type StorageStats = S::Statistics;
-
-    #[inline]
-    fn schema(&self) -> &[FieldType] {
-        self.imp.schema()
-    }
-
-    #[inline]
-    fn intermediate_schema(&self, index: usize) -> Result<&[FieldType]> {
-        Err(other_err!(
-            "The intermediate schema is not found until root executor, index: {}",
-            index
-        ))
-    }
-
-    #[inline]
-    fn consume_and_fill_intermediate_results(
+    pub fn decode_row(
         &mut self,
-        _results: &mut [Vec<BatchExecuteResult>],
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        assert!(!self.is_ended);
-        assert!(scan_rows > 0);
-
-        let mut logical_columns = self.imp.build_column_vec(scan_rows);
-        let mut scanned_kv_bytes = 0_u64;
-        let mut error = None;
-        for _ in 0..scan_rows {
-            if self.cursor >= self.raw_keys.len() {
-                break;
-            }
-            let raw_key = mem::take(&mut self.raw_keys[self.cursor]);
-            self.cursor += 1;
-            match self
-                .storage
-                .get_entry(self.is_key_only, self.load_commit_ts, PointRange(raw_key))
-            {
-                Ok(Some(row)) => {
-                    let key_len = row.key.len();
-                    let value_len = row.value.len();
-                    let commit_ts = row.commit_ts.map(TimeStamp::new);
-                    if let Err(err) = self.imp.process_kv_pair(
-                        &row.key,
-                        &row.value,
-                        &mut logical_columns,
-                        commit_ts,
-                    ) {
-                        logical_columns.truncate_into_equal_length();
-                        error = Some(err);
-                        break;
-                    }
-                    scanned_kv_bytes =
-                        scanned_kv_bytes.saturating_add((key_len + value_len) as u64);
-                    self.pending_scanned_rows += 1;
-                }
-                Ok(None) => {}
-                Err(err) => {
-                    error = Some(err.into());
-                    break;
-                }
-            }
-        }
-
-        if scanned_kv_bytes > 0 {
-            record_executor_work(ExecutorName::batch_table_scan, scanned_kv_bytes);
-        }
-
-        logical_columns.assert_columns_equal_length();
-        let logical_rows_len = logical_columns.rows_len();
-        let logical_rows = (0..logical_rows_len).collect();
-        let is_drained = if let Some(err) = error {
-            self.is_ended = true;
-            Err(err)
-        } else if self.cursor >= self.raw_keys.len() {
-            self.is_ended = true;
-            Ok(BatchExecIsDrain::Drain)
-        } else {
-            Ok(BatchExecIsDrain::Remain)
-        };
-
-        BatchExecuteResult {
-            physical_columns: logical_columns,
-            logical_rows,
-            is_drained,
-            warnings: self.imp.mut_context().take_warnings(),
-        }
-    }
-
-    #[inline]
-    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
-        dest.scanned_rows_per_range
-            .push(mem::take(&mut self.pending_scanned_rows));
-    }
-
-    #[inline]
-    fn peek_scanned_rows_sum(&self) -> usize {
-        self.pending_scanned_rows
-    }
-
-    #[inline]
-    fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
-        self.storage.collect_statistics(dest);
-    }
-
-    #[inline]
-    fn take_scanned_range(&mut self) -> IntervalRange {
-        IntervalRange::default()
-    }
-
-    #[inline]
-    fn can_be_cached(&self) -> bool {
-        !self.storage.met_uncacheable_data().unwrap_or(true)
+        key: &[u8],
+        value: &[u8],
+        commit_ts: Option<TimeStamp>,
+    ) -> Result<LazyBatchColumnVec> {
+        let mut columns = self.imp.build_column_vec(1);
+        self.imp
+            .process_kv_pair(key, value, &mut columns, commit_ts)?;
+        columns.assert_columns_equal_length();
+        Ok(columns)
     }
 }
 
@@ -1007,6 +873,24 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_table_row_decoder() {
+        let helper = TableScanTestHelper::new();
+        let columns_info = helper.columns_info_by_idx(&[0, 1, 2]);
+        let key = table::encode_row_key(helper.table_id, 4);
+        let value =
+            table::encode_row(&mut EvalContext::default(), vec![Datum::Null], &[2]).unwrap();
+
+        let mut decoder = TableRowDecoder::new(
+            Arc::new(EvalConfig::default()),
+            columns_info,
+            vec![],
+            vec![],
+        );
+        let columns = decoder.decode_row(&key, &value, None).unwrap();
+        helper.expect_table_values(&[0, 1, 2], 2, 1, columns);
     }
 
     #[test]

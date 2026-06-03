@@ -19,15 +19,14 @@ use tidb_query_common::execute_stats::ExecuteStats;
 use tidb_query_datatype::{
     FieldTypeAccessor,
     codec::{
+        batch::LazyBatchColumnVec,
         datum::{DURATION_FLAG, Datum, DatumDecoder, INT_FLAG, NIL_FLAG, UINT_FLAG, encode_value},
         table,
     },
     def::Collation,
     expr::{EvalConfig, EvalContext},
 };
-use tidb_query_executors::{
-    BatchTablePointScanExecutor, BatchTableScanExecutor, interface::BatchExecutor,
-};
+use tidb_query_executors::{BatchTableScanExecutor, TableRowDecoder, interface::BatchExecutor};
 use tidb_query_expr::BATCH_MAX_SIZE;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
@@ -35,6 +34,7 @@ use tikv_util::{
     quota_limiter::QuotaLimiter,
 };
 use tipb::{self, AnalyzeColumnsReq};
+use txn_types::TimeStamp;
 
 use super::{
     cmsketch::CmSketch,
@@ -46,6 +46,13 @@ use crate::{
     coprocessor::{MEMTRACE_ANALYZE, dag::TikvStorage, metrics, *},
     storage::{Snapshot, SnapshotStore, Statistics},
 };
+
+pub(crate) struct HashSampledRow {
+    pub(crate) raw_key: Vec<u8>,
+    pub(crate) value: Vec<u8>,
+    pub(crate) commit_ts: TimeStamp,
+    pub(crate) loaded_from_default: bool,
+}
 
 fn duration_ms(duration: Duration) -> u64 {
     duration.as_millis() as u64
@@ -387,264 +394,54 @@ fn new_row_sample_collector(
     ))
 }
 
-pub(crate) struct PointRowSampleBuilder<S: Snapshot, F: KvFormat> {
-    data: BatchTablePointScanExecutor<TikvStorage<SnapshotStore<S>>, F>,
-    accumulated_storage_stats: Statistics,
-    collector: Box<dyn RowSampleCollector>,
-    columns_info: Vec<tipb::ColumnInfo>,
-    column_groups: Vec<tipb::AnalyzeColumnGroup>,
-    quota_limiter: Arc<QuotaLimiter>,
-    max_sample_size: usize,
-    sample_rate: f64,
-    is_auto_analyze: bool,
+fn collect_decoded_row(
+    collector: &mut dyn RowSampleCollector,
+    physical_columns: &LazyBatchColumnVec,
+    columns_info: &[tipb::ColumnInfo],
+    column_groups: &[tipb::AnalyzeColumnGroup],
+    ctx: &mut EvalContext,
+) -> Result<usize> {
+    use tidb_query_datatype::{codec::collation::Collator, match_template_collator};
+
+    let mut read_size = 0;
+    let mut column_vals: Vec<Vec<u8>> = vec![vec![]; columns_info.len()];
+    let mut collation_key_vals: Vec<Vec<u8>> = vec![vec![]; columns_info.len()];
+    for i in 0..columns_info.len() {
+        physical_columns[i].encode(0, &columns_info[i], ctx, &mut column_vals[i])?;
+        if columns_info[i].as_accessor().is_string_like() {
+            match_template_collator! {
+                TT, match columns_info[i].as_accessor().collation()? {
+                    Collation::TT => {
+                        let mut mut_val = &column_vals[i][..];
+                        let decoded_val = table::decode_col_value(&mut mut_val, ctx, &columns_info[i])?;
+                        if decoded_val == Datum::Null {
+                            collation_key_vals[i].clone_from(&column_vals[i]);
+                        } else {
+                            TT::write_sort_key(&mut collation_key_vals[i], &decoded_val.as_string()?.unwrap())?;
+                        }
+                    }
+                }
+            };
+        }
+        read_size += column_vals[i].len();
+    }
+    collector.mut_base().count += 1;
+    collector.mut_base().sketch_sample_count += 1;
+    collector.collect_column_group(
+        &column_vals,
+        &collation_key_vals,
+        columns_info,
+        column_groups,
+    );
+    collector.collect_column(&column_vals, &collation_key_vals, columns_info);
+    Ok(read_size)
 }
 
-impl<S: Snapshot, F: KvFormat> PointRowSampleBuilder<S, F> {
-    pub(crate) fn new(
-        mut req: AnalyzeColumnsReq,
-        storage: TikvStorage<SnapshotStore<S>>,
-        quota_limiter: Arc<QuotaLimiter>,
-        is_auto_analyze: bool,
-    ) -> Result<Self> {
-        let columns_info: Vec<_> = req.take_columns_info().into();
-        if columns_info.is_empty() {
-            return Err(box_err!("empty columns_info"));
-        }
-        let max_sample_size = req.get_sample_size() as usize;
-        let max_fm_sketch_size = req.get_sketch_size() as usize;
-        let sample_rate = req.get_sample_rate();
-        let ndv_rate = req.get_ndv_rate();
-        let ndv_rate = if ndv_rate > 0.0 { ndv_rate } else { 1.0 };
-        let build_singletons = ndv_rate < 1.0;
-        let column_groups: Vec<_> = req.take_column_groups().into();
-        let collector = new_row_sample_collector(
-            max_sample_size,
-            max_fm_sketch_size,
-            columns_info.len() + column_groups.len(),
-            build_singletons,
-            sample_rate,
-        );
-        let data = BatchTablePointScanExecutor::new(
-            storage,
-            Arc::new(EvalConfig::default()),
-            columns_info.clone(),
-            Vec::new(),
-            req.take_primary_column_ids(),
-            req.take_primary_prefix_column_ids(),
-        )?;
-        Ok(Self {
-            data,
-            accumulated_storage_stats: Statistics::default(),
-            collector,
-            columns_info,
-            column_groups,
-            quota_limiter,
-            max_sample_size,
-            sample_rate,
-            is_auto_analyze,
-        })
-    }
-
-    pub(crate) async fn collect_raw_key_batch(&mut self, raw_keys: Vec<Vec<u8>>) -> Result<()> {
-        if raw_keys.is_empty() {
-            return Ok(());
-        }
-        self.data.reset_raw_keys(raw_keys);
-        collect_column_stats_from_executor(
-            &mut self.data,
-            self.collector.as_mut(),
-            &self.columns_info,
-            &self.column_groups,
-            &self.quota_limiter,
-            self.max_sample_size,
-            self.sample_rate,
-            self.is_auto_analyze,
-            &mut self.accumulated_storage_stats,
-        )
-        .await
-    }
-
-    pub(crate) fn rescale_pre_sampled_rows(&mut self, total_rows: u64, selected_rows: u64) {
-        if total_rows == 0 || selected_rows == 0 || total_rows == selected_rows {
-            return;
-        }
-        let scale = total_rows as f64 / selected_rows as f64;
-        rescale_pre_sampled_base(self.collector.mut_base(), total_rows, scale);
-    }
-
-    pub(crate) fn into_result(self) -> AnalyzeSamplingResult {
-        AnalyzeSamplingResult::new(self.collector)
-    }
-
-    pub(crate) fn merge_storage_stats_into(&mut self, dest: &mut Statistics) {
-        dest.add(&mem::take(&mut self.accumulated_storage_stats));
-        self.data.collect_storage_stats(dest);
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn collect_column_stats_from_executor<D>(
-    data: &mut D,
+fn finish_row_sample_collector(
     collector: &mut dyn RowSampleCollector,
     columns_info: &[tipb::ColumnInfo],
     column_groups: &[tipb::AnalyzeColumnGroup],
-    quota_limiter: &Arc<QuotaLimiter>,
-    max_sample_size: usize,
-    sample_rate: f64,
-    is_auto_analyze: bool,
-    accumulated_storage_stats: &mut Statistics,
-) -> Result<()>
-where
-    D: BatchExecutor<StorageStats = Statistics>,
-{
-    use tidb_query_datatype::{codec::collation::Collator, match_template_collator};
-
-    let mut is_drained = false;
-    let mut ctx = EvalContext::default();
-    let scan_start = Instant::now();
-    let mut batch_count = 0_u64;
-    let mut read_bytes = 0_usize;
-    let mut next_batch_elapsed = Duration::ZERO;
-    let mut encode_collect_elapsed = Duration::ZERO;
-    let mut quota_consume_elapsed = Duration::ZERO;
-    let mut quota_delay_total = Duration::ZERO;
-    while !is_drained {
-        // Use background limiters for both manual and auto analyze so that iops_limiter
-        // (and other background quotas) apply to manual analyze as well.
-        let mut sample = quota_limiter.new_sample(false);
-        let mut read_size: usize = 0;
-        {
-            let next_batch_start = Instant::now();
-            let result = {
-                let (duration, res) = sample
-                    .observe_cpu_async(data.next_batch(BATCH_MAX_SIZE))
-                    .await;
-                sample.add_cpu_time(duration);
-                res
-            };
-            next_batch_elapsed += next_batch_start.elapsed();
-            batch_count += 1;
-
-            // Use request-scoped storage stats for IOPS (like collect_scan_statistics),
-            // and count only RocksDB block reads as an approximation of disk IOPS.
-            // PerfContext is thread-local; across an await other tasks can run on the same
-            // thread and pollute it, so we use the Scanner's statistics instead.
-            let mut batch_stats = Statistics::default();
-            data.collect_storage_stats(&mut batch_stats);
-            let batch_iops = batch_stats.data.block_read_count
-                + batch_stats.lock.block_read_count
-                + batch_stats.write.block_read_count;
-            let batch_total_ops = batch_stats.data.total_op_count()
-                + batch_stats.lock.total_op_count()
-                + batch_stats.write.total_op_count();
-            sample.add_iops(batch_iops);
-            accumulated_storage_stats.add(&batch_stats);
-
-            metrics::ANALYZE_METRICS_STATIC
-                .get(metrics::AnalyzeMetricKind::read_iops)
-                .inc_by(batch_iops as u64);
-            metrics::ANALYZE_METRICS_STATIC
-                .get(metrics::AnalyzeMetricKind::read_total_op_count)
-                .inc_by(batch_total_ops as u64);
-            if batch_total_ops > 0 {
-                metrics::ANALYZE_IOPS_PER_TOTAL_OP_HISTOGRAM
-                    .observe(batch_iops as f64 / batch_total_ops as f64);
-            }
-            metrics::ANALYZE_METRICS_STATIC
-                .get(metrics::AnalyzeMetricKind::next_batch_count)
-                .inc();
-            let _guard = sample.observe_cpu();
-            is_drained = result.is_drained?.stop();
-            let mut exec_stats = ExecuteStats::new(0);
-            data.collect_exec_stats(&mut exec_stats);
-            collector.mut_base().count +=
-                exec_stats.scanned_rows_per_range.into_iter().sum::<usize>() as u64;
-
-            let encode_collect_start = Instant::now();
-            let columns_slice = result.physical_columns.as_slice();
-            let mut column_vals: Vec<Vec<u8>> = vec![vec![]; columns_info.len()];
-            let mut collation_key_vals: Vec<Vec<u8>> = vec![vec![]; columns_info.len()];
-            for logical_row in &result.logical_rows {
-                for i in 0..columns_info.len() {
-                    column_vals[i].clear();
-                    collation_key_vals[i].clear();
-                    columns_slice[i].encode(
-                        *logical_row,
-                        &columns_info[i],
-                        &mut ctx,
-                        &mut column_vals[i],
-                    )?;
-                    if columns_info[i].as_accessor().is_string_like() {
-                        match_template_collator! {
-                            TT, match columns_info[i].as_accessor().collation()? {
-                                Collation::TT => {
-                                    let mut mut_val = &column_vals[i][..];
-                                    let decoded_val = table::decode_col_value(&mut mut_val, &mut ctx, &columns_info[i])?;
-                                    if decoded_val == Datum::Null {
-                                        collation_key_vals[i].clone_from(&column_vals[i]);
-                                    } else {
-                                        // Only if the `decoded_val` is Datum::Null, `decoded_val` is a Ok(None).
-                                        // So it is safe the unwrap the Ok value.
-                                        TT::write_sort_key(&mut collation_key_vals[i], &decoded_val.as_string()?.unwrap())?;
-                                    }
-                                }
-                            }
-                        };
-                    }
-                    read_size += column_vals[i].len();
-                }
-                collector.mut_base().sketch_sample_count += 1;
-                collector.collect_column_group(
-                    &column_vals,
-                    &collation_key_vals,
-                    columns_info,
-                    column_groups,
-                );
-                collector.collect_column(&column_vals, &collation_key_vals, columns_info);
-            }
-            encode_collect_elapsed += encode_collect_start.elapsed();
-        }
-
-        sample.add_read_bytes(read_size);
-        read_bytes += read_size;
-        // Don't let analyze bandwidth limit the quota limiter, this is already limited
-        // in rate limiter.
-        let quota_consume_start = Instant::now();
-        let quota_delay = {
-            // Use background limiters for both manual and auto analyze so that iops_limiter
-            // applies to manual analyze as well.
-            quota_limiter.consume_sample(sample, false).await
-        };
-        quota_consume_elapsed += quota_consume_start.elapsed();
-        quota_delay_total += quota_delay;
-
-        if !quota_delay.is_zero() {
-            NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
-                .get(ThrottleType::analyze_full_sampling)
-                .inc_by(quota_delay.as_micros() as u64);
-        }
-    }
-    debug!("analyze full sampling trace";
-        "component" => "tikv",
-        "phase" => "tikv.scan_full_sampling_table",
-        "event" => "finish",
-        "elapsed_ms" => scan_start.elapsed().as_millis() as u64,
-        "next_batch_elapsed_ms" => duration_ms(next_batch_elapsed),
-        "encode_collect_elapsed_ms" => duration_ms(encode_collect_elapsed),
-        "quota_consume_elapsed_ms" => duration_ms(quota_consume_elapsed),
-        "quota_delay_ms" => duration_ms(quota_delay_total),
-        "batch_count" => batch_count,
-        "scanned_rows" => collector.mut_base().count,
-        "read_bytes" => read_bytes,
-        "columns" => columns_info.len(),
-        "column_groups" => column_groups.len(),
-        "max_sample_size" => max_sample_size,
-        "sample_rate" => sample_rate,
-        "is_auto_analyze" => is_auto_analyze,
-    );
-    // No-op unless a future row-level NDV sub-sample makes sketch_sample_count
-    // smaller than count. Keep this before the single-column-group copy so
-    // derived columns see corrected values.
+) {
     collector.mut_base().rescale_null_count_and_total_sizes();
     let column_group_fixup_start = Instant::now();
     for i in 0..column_groups.len() {
@@ -652,9 +449,6 @@ where
         if offsets.len() != 1 {
             continue;
         }
-        // For the single-column group, its sketch/null_count/total_size is the
-        // same as the corresponding column. We do not collect it in
-        // collect_column_group, so copy it after iterating rows.
         let col_pos = offsets[0] as usize;
         let col_group_pos = columns_info.len() + i;
         let base = collector.mut_base();
@@ -677,7 +471,160 @@ where
         "elapsed_ms" => duration_ms(column_group_fixup_start.elapsed()),
         "column_groups" => column_groups.len(),
     );
-    Ok(())
+}
+
+pub(crate) struct DirectHashRowSampleBuilder {
+    decoder: TableRowDecoder,
+    accumulated_storage_stats: Statistics,
+    collector: Box<dyn RowSampleCollector>,
+    columns_info: Vec<tipb::ColumnInfo>,
+    column_groups: Vec<tipb::AnalyzeColumnGroup>,
+    quota_limiter: Arc<QuotaLimiter>,
+    max_sample_size: usize,
+    sample_rate: f64,
+    is_auto_analyze: bool,
+    finished: bool,
+}
+
+impl DirectHashRowSampleBuilder {
+    pub(crate) fn new(
+        mut req: AnalyzeColumnsReq,
+        quota_limiter: Arc<QuotaLimiter>,
+        is_auto_analyze: bool,
+    ) -> Result<Self> {
+        let columns_info: Vec<_> = req.take_columns_info().into();
+        if columns_info.is_empty() {
+            return Err(box_err!("empty columns_info"));
+        }
+        let max_sample_size = req.get_sample_size() as usize;
+        let max_fm_sketch_size = req.get_sketch_size() as usize;
+        let sample_rate = req.get_sample_rate();
+        let ndv_rate = req.get_ndv_rate();
+        let ndv_rate = if ndv_rate > 0.0 { ndv_rate } else { 1.0 };
+        let build_singletons = ndv_rate < 1.0;
+        let column_groups: Vec<_> = req.take_column_groups().into();
+        let collector = new_row_sample_collector(
+            max_sample_size,
+            max_fm_sketch_size,
+            columns_info.len() + column_groups.len(),
+            build_singletons,
+            sample_rate,
+        );
+        let decoder = TableRowDecoder::new(
+            Arc::new(EvalConfig::default()),
+            columns_info.clone(),
+            req.take_primary_column_ids(),
+            req.take_primary_prefix_column_ids(),
+        );
+        Ok(Self {
+            decoder,
+            accumulated_storage_stats: Statistics::default(),
+            collector,
+            columns_info,
+            column_groups,
+            quota_limiter,
+            max_sample_size,
+            sample_rate,
+            is_auto_analyze,
+            finished: false,
+        })
+    }
+
+    pub(crate) async fn collect_row_batch(&mut self, rows: Vec<HashSampledRow>) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let mut sample = self.quota_limiter.new_sample(false);
+        let mut read_size = 0_usize;
+        let mut direct_stats = Statistics::default();
+        let collect_start = Instant::now();
+        {
+            let _guard = sample.observe_cpu();
+            let mut ctx = EvalContext::default();
+            for row in rows {
+                if row.loaded_from_default {
+                    direct_stats.data.get += 1;
+                }
+                direct_stats.data.processed_keys += 1;
+                direct_stats.processed_size += row.raw_key.len() + row.value.len();
+                let columns =
+                    self.decoder
+                        .decode_row(&row.raw_key, &row.value, Some(row.commit_ts))?;
+                read_size += collect_decoded_row(
+                    self.collector.as_mut(),
+                    &columns,
+                    &self.columns_info,
+                    &self.column_groups,
+                    &mut ctx,
+                )?;
+            }
+        }
+        sample.add_read_bytes(read_size);
+        self.accumulated_storage_stats.add(&direct_stats);
+        let quota_delay = self.quota_limiter.consume_sample(sample, false).await;
+        if !quota_delay.is_zero() {
+            NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
+                .get(ThrottleType::analyze_full_sampling)
+                .inc_by(quota_delay.as_micros() as u64);
+        }
+        debug!("analyze direct hash-sampled rows trace";
+            "component" => "tikv",
+            "phase" => "tikv.collect_direct_hash_sampled_rows",
+            "event" => "finish",
+            "elapsed_ms" => duration_ms(collect_start.elapsed()),
+            "rows" => self.collector.mut_base().count,
+            "read_bytes" => read_size,
+            "columns" => self.columns_info.len(),
+            "column_groups" => self.column_groups.len(),
+            "max_sample_size" => self.max_sample_size,
+            "sample_rate" => self.sample_rate,
+            "is_auto_analyze" => self.is_auto_analyze,
+        );
+        Ok(())
+    }
+
+    pub(crate) fn add_sampling_stats(&mut self, visible_rows: u64, write_versions: u64) {
+        self.accumulated_storage_stats.write.processed_keys = self
+            .accumulated_storage_stats
+            .write
+            .processed_keys
+            .saturating_add(visible_rows as usize);
+        self.accumulated_storage_stats.write.next = self
+            .accumulated_storage_stats
+            .write
+            .next
+            .saturating_add(write_versions as usize);
+    }
+
+    pub(crate) fn rescale_pre_sampled_rows(&mut self, total_rows: u64, selected_rows: u64) {
+        self.finish();
+        if total_rows == 0 || selected_rows == 0 || total_rows == selected_rows {
+            return;
+        }
+        let scale = total_rows as f64 / selected_rows as f64;
+        rescale_pre_sampled_base(self.collector.mut_base(), total_rows, scale);
+    }
+
+    fn finish(&mut self) {
+        if self.finished {
+            return;
+        }
+        finish_row_sample_collector(
+            self.collector.as_mut(),
+            &self.columns_info,
+            &self.column_groups,
+        );
+        self.finished = true;
+    }
+
+    pub(crate) fn into_result(mut self) -> AnalyzeSamplingResult {
+        self.finish();
+        AnalyzeSamplingResult::new(self.collector)
+    }
+
+    pub(crate) fn merge_storage_stats_into(&mut self, dest: &mut Statistics) {
+        dest.add(&mem::take(&mut self.accumulated_storage_stats));
+    }
 }
 
 fn rescale_pre_sampled_base(base: &mut BaseRowSampleCollector, total_rows: u64, scale: f64) {
