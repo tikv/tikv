@@ -2300,6 +2300,8 @@ pub struct UnifiedReadPoolConfig {
     ///   0.8 means read pool should not use more than 80% of available CPU
     ///   cores.
     pub cpu_threshold: f64,
+    /// The maximum time a coprocessor scan coroutine can run before yielding.
+    pub max_time_slice: ReadableDuration,
     // FIXME: Add more configs when they are effective in yatp
 }
 
@@ -2334,6 +2336,9 @@ impl UnifiedReadPoolConfig {
         if self.cpu_threshold < 0.0 || self.cpu_threshold > 1.0 {
             return Err("readpool.unified.cpu-threshold should be between 0.0 and 1.0".into());
         }
+        if self.max_time_slice.0.is_zero() {
+            return Err("readpool.unified.max-time-slice should be > 0".into());
+        }
         Ok(())
     }
 }
@@ -2353,6 +2358,7 @@ impl Default for UnifiedReadPoolConfig {
             max_tasks_per_worker: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
             auto_adjust_pool_size: false,
             cpu_threshold: 0.0, // 0 means no threshold (disabled)
+            max_time_slice: ReadableDuration::millis(1),
         }
     }
 }
@@ -2370,6 +2376,7 @@ mod unified_read_pool_tests {
             max_tasks_per_worker: 2000,
             auto_adjust_pool_size: false,
             cpu_threshold: 0.0,
+            max_time_slice: ReadableDuration::millis(1),
         };
         cfg.validate().unwrap();
         let cfg = UnifiedReadPoolConfig {
@@ -2408,6 +2415,11 @@ mod unified_read_pool_tests {
         invalid_cfg.validate().unwrap_err();
         let invalid_cfg = UnifiedReadPoolConfig {
             max_thread_count: SysQuota::cpu_cores_quota() as usize * 10 + 1,
+            ..cfg
+        };
+        invalid_cfg.validate().unwrap_err();
+        let invalid_cfg = UnifiedReadPoolConfig {
+            max_time_slice: ReadableDuration::millis(0),
             ..cfg
         };
         invalid_cfg.validate().unwrap_err();
@@ -2706,6 +2718,7 @@ mod readpool_tests {
             max_tasks_per_worker: 0,
             auto_adjust_pool_size: false,
             cpu_threshold: 0.0,
+            max_time_slice: ReadableDuration::millis(1),
         };
         unified.validate().unwrap_err();
         let storage = StorageReadPoolConfig {

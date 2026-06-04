@@ -23,6 +23,7 @@ use resource_control::{
     ControlledFuture, ResourceController, ResourceLimiter, TaskPriority, with_resource_limiter,
 };
 use thiserror::Error;
+use tidb_query_common::storage::scanner::set_max_time_slice;
 use tikv_util::{
     resource_control::TaskMetadata,
     sys::{SysQuota, cpu_time::ProcessStat, thread::matches_thread_name_prefix},
@@ -52,6 +53,7 @@ const READ_POOL_THREAD_LOW_THRESHOLD: f64 = 0.7;
 // avg running tasks per-thread that indicates read-pool is busy
 const RUNNING_TASKS_PER_THREAD_THRESHOLD: i64 = 3;
 const UNIFIED_READ_POOL_THREAD: &str = "unified-read";
+static READ_POOL_TASK_METRIC_ID: AtomicU64 = AtomicU64::new(1);
 
 pub enum ReadPool {
     FuturePools {
@@ -170,6 +172,8 @@ impl ReadPoolHandle {
                     CommandPri::Low => Some(2),
                 };
                 let group_name = metadata.group_name().to_owned();
+                let metadata = metadata
+                    .with_metric_task_id(READ_POOL_TASK_METRIC_ID.fetch_add(1, Ordering::Relaxed));
                 let mut extras = Extras::new_multilevel(task_id, fixed_level);
                 extras.set_metadata(metadata.to_vec());
                 let task_cell = if let Some(resource_ctl) = resource_ctl {
@@ -452,6 +456,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     cleanup_method: CleanupMethod,
     enable_task_wait_metrics: bool,
 ) -> ReadPool {
+    set_max_time_slice(config.max_time_slice.0);
     let unified_read_pool_name = get_unified_read_pool_name();
     build_yatp_read_pool_with_name(
         config,
@@ -865,6 +870,11 @@ impl ConfigManager for ReadPoolConfigManager {
                 self.scheduler
                     .schedule(Task::CpuThreshold(*cpu_threshold))?;
             }
+            if let Some(max_time_slice) = unified.get("max_time_slice") {
+                let max_time_slice =
+                    tikv_util::config::ReadableDuration::from(max_time_slice.clone());
+                set_max_time_slice(max_time_slice.0);
+            }
         }
         info!(
             "readpool config changed";
@@ -1169,7 +1179,7 @@ mod tests {
 
     #[test]
     fn test_config_validation_cpu_threshold() {
-        use tikv_util::config::ReadableSize;
+        use tikv_util::config::{ReadableDuration, ReadableSize};
         // Valid cpu_threshold
         let valid_config = UnifiedReadPoolConfig {
             min_thread_count: 1,
@@ -1178,6 +1188,7 @@ mod tests {
             max_tasks_per_worker: 2,
             auto_adjust_pool_size: true,
             cpu_threshold: 0.7,
+            max_time_slice: ReadableDuration::millis(1),
         };
         // Just verify config can be created
         assert_eq!(valid_config.cpu_threshold, 0.7);

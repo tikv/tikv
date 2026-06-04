@@ -93,7 +93,9 @@ use pd_client::FeatureGate;
 use protobuf::Message;
 use raftstore::store::{ReadStats, TxnExt, WriteStats, util::build_key_range};
 use rand::prelude::*;
-use resource_control::{ResourceController, ResourceGroupManager, ResourceLimiter, TaskMetadata};
+use resource_control::{
+    ResourceController, ResourceGroupManager, ResourceLimiter, TaskMetadata, TaskType,
+};
 use resource_metering::{
     FutureExt, ResourceTagFactory, record_logical_read_bytes, record_network_in_bytes,
     record_network_out_bytes,
@@ -632,7 +634,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let deadline = Self::get_deadline(&ctx);
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
-        let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
+        let metadata = TaskMetadata::from_ctx_with_task_type(
+            ctx.get_resource_control_context(),
+            TaskType::PointGet,
+        );
         let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
             r.get_resource_limiter(
                 ctx.get_resource_control_context().get_resource_group_name(),
@@ -813,8 +818,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         const CMD: CommandKind = CommandKind::batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let priority = requests[0].get_context().get_priority();
-        let metadata =
-            TaskMetadata::from_ctx(requests[0].get_context().get_resource_control_context());
+        let metadata = TaskMetadata::from_ctx_with_task_type(
+            requests[0].get_context().get_resource_control_context(),
+            TaskType::BatchPointGet,
+        );
         let resource_group_name = requests[0]
             .get_context()
             .get_resource_control_context()
@@ -1034,7 +1041,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let deadline = Self::get_deadline(&ctx);
         const CMD: CommandKind = CommandKind::buffer_batch_get;
         let priority = ctx.get_priority();
-        let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
+        let metadata = TaskMetadata::from_ctx_with_task_type(
+            ctx.get_resource_control_context(),
+            TaskType::BatchPointGet,
+        );
         let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
             r.get_resource_limiter(
                 ctx.get_resource_control_context().get_resource_group_name(),
@@ -1242,7 +1252,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let deadline = Self::get_deadline(&ctx);
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
-        let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
+        let metadata = TaskMetadata::from_ctx_with_task_type(
+            ctx.get_resource_control_context(),
+            TaskType::BatchPointGet,
+        );
         let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
             r.get_resource_limiter(
                 ctx.get_resource_control_context().get_resource_group_name(),
@@ -1639,7 +1652,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<Vec<LockInfo>>> {
         const CMD: CommandKind = CommandKind::scan_lock;
         let priority = ctx.get_priority();
-        let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
+        let metadata = TaskMetadata::from_ctx_with_task_type(
+            ctx.get_resource_control_context(),
+            TaskType::PointGet,
+        );
         let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
             r.get_resource_limiter(
                 ctx.get_resource_control_context().get_resource_group_name(),
@@ -1982,7 +1998,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<Option<Vec<u8>>>> {
         const CMD: CommandKind = CommandKind::raw_get;
         let priority = ctx.get_priority();
-        let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
+        let metadata = TaskMetadata::from_ctx_with_task_type(
+            ctx.get_resource_control_context(),
+            TaskType::PointGet,
+        );
         let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
             r.get_resource_limiter(
                 ctx.get_resource_control_context().get_resource_group_name(),
@@ -2072,7 +2091,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         const CMD: CommandKind = CommandKind::raw_batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let priority = gets[0].get_context().get_priority();
-        let metadata = TaskMetadata::from_ctx(gets[0].get_context().get_resource_control_context());
+        let metadata = TaskMetadata::from_ctx_with_task_type(
+            gets[0].get_context().get_resource_control_context(),
+            TaskType::BatchPointGet,
+        );
         let resource_group_name = gets[0]
             .get_context()
             .get_resource_control_context()
