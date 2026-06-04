@@ -10363,6 +10363,36 @@ def StatusServer() -> RowPanel:
     return layout.row_panel
 
 
+def readpool_duration_quantile_panel(title: str, description: str, metric: str):
+    by_labels = ["resource_group", "task_type"]
+
+    def legend_format(quantile: str):
+        return "-".join([quantile] + ["{{%s}}" % label for label in by_labels])
+
+    def quantile_target(quantile: float, legend_quantile: str):
+        return target(
+            expr=expr_histogram_quantile(
+                quantile,
+                metric,
+                label_selectors=['name="unified-read-pool"'],
+                by_labels=by_labels,
+            ),
+            legend_format=legend_format(legend_quantile),
+            additional_groupby=True,
+        )
+
+    return graph_panel(
+        title=title,
+        description=description,
+        yaxes=yaxes(left_format=UNITS.SECONDS),
+        targets=[
+            quantile_target(0.5, "p50"),
+            quantile_target(0.8, "p80"),
+            quantile_target(0.99, "p99"),
+        ],
+    )
+
+
 def ResourceControl() -> RowPanel:
     layout = Layout(title="Resource Control")
     layout.row(
@@ -10391,6 +10421,108 @@ def ResourceControl() -> RowPanel:
                         ),
                     ),
                 ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Readpool Resource Group CPU Time Rate",
+                description="The CPU seconds consumed per second by readpool tasks per resource group.",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_yatp_pool_resource_group_cpu_seconds_total",
+                            label_selectors=['name="unified-read-pool"'],
+                            by_labels=["resource_group", "task_type"],
+                        ),
+                        legend_format="{{resource_group}}-{{task_type}}",
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Readpool Resource Group Wall Time Rate",
+                description="The wall seconds consumed per second by readpool tasks per resource group.",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_yatp_pool_resource_group_wall_seconds_total",
+                            label_selectors=['name="unified-read-pool"'],
+                            by_labels=["resource_group", "task_type"],
+                        ),
+                        legend_format="{{resource_group}}-{{task_type}}",
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            readpool_duration_quantile_panel(
+                title="Readpool Slice Wait Duration",
+                description="The schedule wait duration of readpool task slices per resource group.",
+                metric="tikv_yatp_pool_resource_group_schedule_wait_duration",
+            ),
+            readpool_duration_quantile_panel(
+                title="Readpool Slice CPU Time",
+                description="The CPU time consumed by each readpool task slice per resource group.",
+                metric="tikv_yatp_pool_resource_group_schedule_exec_cpu_duration",
+            ),
+        ]
+    )
+    layout.row(
+        [
+            readpool_duration_quantile_panel(
+                title="Readpool Slice Wall Time",
+                description="The wall time consumed by each readpool task slice per resource group.",
+                metric="tikv_yatp_pool_resource_group_schedule_exec_wall_duration",
+            ),
+        ]
+    )
+    layout.row(
+        [
+            readpool_duration_quantile_panel(
+                title="Readpool Task Schedule Wait Duration",
+                description="The total schedule wait duration of each readpool task per resource group.",
+                metric="tikv_yatp_pool_resource_group_task_schedule_wait_duration",
+            ),
+            readpool_duration_quantile_panel(
+                title="Readpool Task Total Time",
+                description="The end-to-end duration of each readpool task per resource group.",
+                metric="tikv_yatp_pool_resource_group_task_total_duration",
+            ),
+        ]
+    )
+    layout.row(
+        [
+            readpool_duration_quantile_panel(
+                title="Readpool Task CPU Time",
+                description="The total CPU time consumed by each readpool task per resource group.",
+                metric="tikv_yatp_pool_resource_group_task_exec_cpu_duration",
+            ),
+            readpool_duration_quantile_panel(
+                title="Readpool Task Wall Time",
+                description="The total wall time consumed by each readpool task per resource group.",
+                metric="tikv_yatp_pool_resource_group_task_exec_wall_duration",
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Readpool Task Slice Count",
+                description="The number of slices used by each completed readpool task per resource group.",
+                metric="tikv_yatp_pool_resource_group_task_slice_num",
+                label_selectors=['name="unified-read-pool"'],
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                by_labels=["resource_group", "task_type"],
+                hide_p9999=True,
+                hide_count=True,
+                additional_groupby=True,
             ),
         ]
     )

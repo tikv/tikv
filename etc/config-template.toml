@@ -114,6 +114,9 @@
 ## Max running tasks of each worker, reject if exceeded.
 # max-tasks-per-worker = 2000
 
+## Max duration a coprocessor scan coroutine can run before yielding.
+# max-time-slice = "1ms"
+
 [readpool.storage]
 ## Whether to use the unified read pool to handle storage requests.
 # use-unified-pool = true

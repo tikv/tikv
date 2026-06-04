@@ -21,7 +21,7 @@ use futures::{
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri, metapb};
 use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
-use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
+use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata, TaskType};
 use resource_metering::{
     FutureExt, ResourceTagFactory, StreamExt, record_logical_read_bytes, record_network_in_bytes,
     record_network_out_bytes,
@@ -572,7 +572,10 @@ impl<E: Engine> Endpoint<E> {
             .new_tag_with_key_ranges(&req_ctx.context, key_ranges);
         let mut allocated_bytes = resource_tag.approximate_heap_size();
 
-        let metadata = TaskMetadata::from_ctx(req_ctx.context.get_resource_control_context());
+        let metadata = TaskMetadata::from_ctx_with_task_type(
+            req_ctx.context.get_resource_control_context(),
+            TaskType::CopTask,
+        );
         let resource_limiter = self.resource_ctl.as_ref().and_then(|r| {
             r.get_resource_limiter(
                 req_ctx
@@ -842,7 +845,10 @@ impl<E: Engine> Endpoint<E> {
         let req_ctx = r.req_ctx;
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
-        let metadata = TaskMetadata::from_ctx(req_ctx.context.get_resource_control_context());
+        let metadata = TaskMetadata::from_ctx_with_task_type(
+            req_ctx.context.get_resource_control_context(),
+            TaskType::CopTask,
+        );
         let resource_limiter = self.resource_ctl.as_ref().and_then(|r| {
             r.get_resource_limiter(
                 req_ctx

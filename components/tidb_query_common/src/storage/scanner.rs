@@ -1,6 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{marker::PhantomData, time::Duration};
+use std::{
+    marker::PhantomData,
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
+};
 
 use api_version::KvFormat;
 use tikv_util::time::Instant;
@@ -12,9 +16,19 @@ use crate::error::StorageError;
 const KEY_BUFFER_CAPACITY: usize = 64;
 /// Batch executors are run in coroutines. `MAX_TIME_SLICE` is the maximum time
 /// a coroutine can run without being yielded.
-const MAX_TIME_SLICE: Duration = Duration::from_millis(1);
+const DEFAULT_MAX_TIME_SLICE: Duration = Duration::from_millis(1);
+static MAX_TIME_SLICE_NANOS: AtomicU64 = AtomicU64::new(DEFAULT_MAX_TIME_SLICE.as_nanos() as u64);
 /// the number of scanned keys that should trigger a reschedule.
 const CHECK_KEYS: usize = 32;
+
+pub fn set_max_time_slice(max_time_slice: Duration) {
+    let nanos = max_time_slice.as_nanos().min(u64::MAX as u128) as u64;
+    MAX_TIME_SLICE_NANOS.store(nanos.max(1), Ordering::Release);
+}
+
+fn max_time_slice() -> Duration {
+    Duration::from_nanos(MAX_TIME_SLICE_NANOS.load(Ordering::Acquire))
+}
 
 /// A scanner that scans over multiple ranges. Each range can be a point range
 /// containing only one row, or an interval range containing multiple rows.
@@ -59,7 +73,7 @@ impl RescheduleChecker {
     async fn check_reschedule(&mut self, force_check: bool) {
         self.prev_key_count += 1;
         if (force_check || self.prev_key_count % CHECK_KEYS == 0)
-            && self.prev_start.saturating_elapsed() > MAX_TIME_SLICE
+            && self.prev_start.saturating_elapsed() > max_time_slice()
         {
             reschedule().await;
             self.prev_start = Instant::now();
