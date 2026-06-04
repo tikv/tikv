@@ -1,11 +1,16 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+// This file will be included to two files.
+// Some of functions might just be used by one of them,
+// which triggers dead_code warning.
+#![allow(dead_code)]
+
 use std::{
     collections::{HashMap, HashSet},
     fmt::Display,
     path::{Path, PathBuf},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use async_compression::futures::write::ZstdDecoder;
@@ -955,8 +960,56 @@ impl Suite {
             .for_each(|rx| rx.recv().unwrap())
     }
 
+    pub fn wait_with_timeout(
+        &self,
+        cond: impl FnMut(&mut TestEndpoint) -> bool + Send + 'static + Clone,
+        timeout: Duration,
+    ) -> bool {
+        let deadline = Instant::now() + timeout;
+        let rxs = self
+            .endpoints
+            .iter()
+            .map({
+                move |(_, wkr)| {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    let mut cond = cond.clone();
+                    wkr.scheduler()
+                        .schedule(Task::Sync(
+                            Box::new(move || tx.send(()).unwrap()),
+                            Box::new(move |this| {
+                                let ep = this
+                                    .downcast_mut::<TestEndpoint>()
+                                    .expect("`Sync` with wrong type");
+                                cond(ep)
+                            }),
+                        ))
+                        .unwrap();
+                    rx
+                }
+            })
+            .collect::<Vec<_>>();
+
+        for rx in rxs {
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                return false;
+            };
+            if rx.recv_timeout(remaining).is_err() {
+                return false;
+            }
+        }
+        true
+    }
+
     pub fn wait_with_router(&self, mut cond: impl FnMut(&Router) -> bool + Send + 'static + Clone) {
         self.wait_with(move |ep| cond(&ep.range_router))
+    }
+
+    pub fn wait_with_router_timeout(
+        &self,
+        mut cond: impl FnMut(&Router) -> bool + Send + 'static + Clone,
+        timeout: Duration,
+    ) -> bool {
+        self.wait_with_timeout(move |ep| cond(&ep.range_router), timeout)
     }
 
     pub fn wait_for_flush(&self) {
