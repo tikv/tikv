@@ -631,12 +631,10 @@ where
     /// initialize a range: it simply scan the regions with leader role and send
     /// them to [`initialize_region`].
     pub async fn initialize_range(&self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
-        // Generally we will be very very fast to consume.
-        // Directly clone the initial data loader to the background thread looks a
-        // little heavier than creating a new channel. TODO: Perhaps we need a
-        // handle to the `InitialDataLoader`. Making it a `Runnable` worker might be a
-        // good idea.
-        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        // Generally we will be very very fast to consume. However `region-collector`
+        // might be blocked then deadlocking happens, see #19615. Making it unbounded to
+        // avoid that.
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         self.regions
             .seek_region(
                 &start_key,
@@ -647,7 +645,7 @@ where
                         .filter(|r| r.role == StateRole::Leader)
                         .take_while(|r| r.region.start_key < end_key)
                         .try_for_each(|r| {
-                            tx.blocking_send(ObserveOp::Start {
+                            tx.send(ObserveOp::Start {
                                 region: r.region.clone(),
                             })
                         });
