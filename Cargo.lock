@@ -1687,6 +1687,7 @@ name = "compact-log-backup"
 version = "0.1.0"
 dependencies = [
  "async-compression",
+ "backup-stream",
  "bytes",
  "chrono",
  "cloud",
@@ -1707,6 +1708,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log_wrappers",
+ "parking_lot 0.12.1",
  "pin-project",
  "pprof",
  "prometheus",

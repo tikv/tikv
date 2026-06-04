@@ -13,6 +13,7 @@ async-compression = { version = "0.4.27", features = [
   "futures-io",
   "zstd",
 ] }
+backup-stream = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 cloud = { workspace = true }
@@ -33,6 +34,7 @@ keys = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.4"
 log_wrappers = { workspace = true }
+parking_lot = "0.12"
 pin-project = "1.0"
 prometheus = { version = "0.13", default-features = false, features = [
   "nightly",

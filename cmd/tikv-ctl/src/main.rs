@@ -404,10 +404,12 @@ fn main() {
             name,
             shard,
             cal_shift_ts,
+            replication_status_sub_prefix,
             force_regenerate,
             minimal_compaction_size,
             prefetch_running_count,
             prefetch_buffer_count,
+            physical_file_cache_capacity,
             gcp_v2_enable,
         } => {
             let maybe_external_storage = base64::decode(storage_base64)
@@ -430,6 +432,52 @@ fn main() {
                     .exit();
                 }
             };
+            let storage =
+                match compact_log::create_storage_with_gcp_v2(&external_storage, gcp_v2_enable) {
+                    Ok(storage) => storage,
+                    Err(err) => {
+                        clap::Error {
+                            message: format!("failed to create external storage: {}", err),
+                            kind: ErrorKind::Io,
+                            info: None,
+                        }
+                        .exit();
+                    }
+                };
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build runtime for compact-log-backup");
+            let until_ts_unspecified = until_ts.is_none();
+            let until_ts = match until_ts {
+                Some(until_ts) => until_ts,
+                None => {
+                    match runtime.block_on(compact_log::load_until_ts_from_checkpoint(
+                        storage.as_ref(),
+                        replication_status_sub_prefix.as_deref(),
+                    )) {
+                        Ok(until_ts) => {
+                            tikv_util::info!(
+                                "Loaded compact log backup until-ts from checkpoint.";
+                                "until_ts" => until_ts,
+                                "replication_status_sub_prefix" => ?replication_status_sub_prefix,
+                            );
+                            until_ts
+                        }
+                        Err(err) => {
+                            clap::Error {
+                                message: format!(
+                                    "failed to load compact-log-backup checkpoint: {}",
+                                    err
+                                ),
+                                kind: ErrorKind::Io,
+                                info: None,
+                            }
+                            .exit();
+                        }
+                    }
+                }
+            };
             let ccfg = compact_log::ExecutionConfig {
                 shard,
                 shift_ts: from_ts,
@@ -438,6 +486,7 @@ fn main() {
                 until_ts,
                 prefetch_running_count,
                 prefetch_buffer_count,
+                physical_file_cache_capacity: physical_file_cache_capacity.0,
                 compression,
                 compression_level,
             };
@@ -497,7 +546,13 @@ fn main() {
             let log_to_term = compact_log_hooks::observability::Observability::default();
             let save_meta = compact_log_hooks::save_meta::SaveMeta::default();
             let checkpoint = Some(compact_log_hooks::checkpoint::Checkpoint::default());
-            let with_lock = compact_log_hooks::consistency::StorageConsistencyGuard::default();
+            let with_lock = if until_ts_unspecified {
+                compact_log_hooks::consistency::StorageConsistencyGuard::without_checkpoint_check()
+            } else if let Some(sub_prefix) = replication_status_sub_prefix {
+                compact_log_hooks::consistency::StorageConsistencyGuard::with_replication_status_sub_prefix(sub_prefix)
+            } else {
+                compact_log_hooks::consistency::StorageConsistencyGuard::default()
+            };
             let with_status_server = ExportTiKVInfo { cfg: cfg.clone() };
             let skip_small_compaction = SkipSmallCompaction::new(minimal_compaction_size.0);
             let hooks = (
@@ -507,7 +562,7 @@ fn main() {
                 ),
                 (save_meta, with_lock),
             );
-            match exec.run(hooks) {
+            match runtime.block_on(exec.run_with_storage_async(storage, hooks)) {
                 Ok(()) => tikv_util::info!("Compact log backup successfully."),
                 Err(err) => {
                     tikv_util::error!("Failed to compact log backup."; "err" => %err, "err_verbose" => ?err);
