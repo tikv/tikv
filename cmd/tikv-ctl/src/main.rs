@@ -544,8 +544,10 @@ fn main() {
             }
 
             let log_to_term = compact_log_hooks::observability::Observability::default();
-            let save_meta = compact_log_hooks::save_meta::SaveMeta::default();
-            let checkpoint = Some(compact_log_hooks::checkpoint::Checkpoint::default());
+            let checkpoint_hook = compact_log_hooks::checkpoint::Checkpoint::default();
+            let save_meta = compact_log_hooks::save_meta::SaveMeta::default()
+                .with_checkpointed_file_sizes(checkpoint_hook.file_sizes());
+            let checkpoint = Some(checkpoint_hook);
             let with_lock = if until_ts_unspecified {
                 compact_log_hooks::consistency::StorageConsistencyGuard::without_checkpoint_check()
             } else if let Some(sub_prefix) = replication_status_sub_prefix {

@@ -247,6 +247,34 @@ async fn test_exec_simple() {
         .await
         .unwrap();
     assert_eq!(subc.len(), 10);
+
+    let mut expected_cmeta_files_total_size = 0;
+    let mut stream = st.storage().iter_prefix(mig.compactions[0].get_artifacts());
+    while let Some(item) = stream.try_next().await.unwrap() {
+        if item.key.ends_with(".cmeta") {
+            let mut content = vec![];
+            st.storage()
+                .read(&item.key)
+                .read_to_end(&mut content)
+                .await
+                .unwrap();
+            expected_cmeta_files_total_size += content.len() as u64;
+        }
+    }
+    assert_eq!(
+        mig.compactions[0].get_generated_cmeta_files_total_size(),
+        expected_cmeta_files_total_size
+    );
+
+    let expected_sst_files_total_size: u64 = subc
+        .iter()
+        .flat_map(|subcompaction| subcompaction.get_sst_outputs())
+        .map(|file| file.get_size())
+        .sum();
+    assert_eq!(
+        mig.compactions[0].get_generated_sst_files_total_size(),
+        expected_sst_files_total_size
+    );
 }
 
 #[tokio::test]
@@ -293,13 +321,16 @@ async fn test_checkpointing_reuses_only_committed_batches() {
             move || {
                 let mut exec = create_compaction(be);
                 exec.max_concurrent_subcompaction = 1;
-                let save_meta = SaveMeta::default().with_batch_limits(2, usize::MAX);
+                let checkpoint = Checkpoint::default();
+                let save_meta = SaveMeta::default()
+                    .with_batch_limits(2, usize::MAX)
+                    .with_checkpointed_file_sizes(checkpoint.file_sizes());
                 let abort = AbortAfterNFinishes {
                     seen: Arc::new(AtomicU64::new(0)),
                     abort_at: 5,
                 };
                 if with_checkpoint {
-                    exec.run(((save_meta, Checkpoint::default()), abort))
+                    exec.run(((save_meta, checkpoint), abort))
                 } else {
                     exec.run((save_meta, abort))
                 }
@@ -333,14 +364,12 @@ async fn test_checkpointing_reuses_only_committed_batches() {
         move || {
             let mut exec = create_compaction(be);
             exec.max_concurrent_subcompaction = 1;
-            exec.run((
-                (
-                    SaveMeta::default().with_batch_limits(2, usize::MAX),
-                    Checkpoint::default(),
-                ),
-                CompactionSpy(tx),
-            ))
-            .unwrap();
+            let checkpoint = Checkpoint::default();
+            let save_meta = SaveMeta::default()
+                .with_batch_limits(2, usize::MAX)
+                .with_checkpointed_file_sizes(checkpoint.file_sizes());
+            exec.run(((save_meta, checkpoint), CompactionSpy(tx)))
+                .unwrap();
         }
     });
 
@@ -370,6 +399,34 @@ async fn test_checkpointing_reuses_only_committed_batches() {
         .await
         .unwrap();
     assert_eq!(subc.len(), 15);
+
+    let mut expected_cmeta_files_total_size = 0;
+    let mut stream = st.storage().iter_prefix(mig.compactions[0].get_artifacts());
+    while let Some(item) = stream.try_next().await.unwrap() {
+        if item.key.ends_with(".cmeta") {
+            let mut content = vec![];
+            st.storage()
+                .read(&item.key)
+                .read_to_end(&mut content)
+                .await
+                .unwrap();
+            expected_cmeta_files_total_size += content.len() as u64;
+        }
+    }
+    assert_eq!(
+        mig.compactions[0].get_generated_cmeta_files_total_size(),
+        expected_cmeta_files_total_size
+    );
+
+    let expected_sst_files_total_size: u64 = subc
+        .iter()
+        .flat_map(|subcompaction| subcompaction.get_sst_outputs())
+        .map(|file| file.get_size())
+        .sum();
+    assert_eq!(
+        mig.compactions[0].get_generated_sst_files_total_size(),
+        expected_sst_files_total_size
+    );
 }
 
 async fn put_checkpoint(storage: &dyn ExternalStorage, store: u64, cp: u64) {
