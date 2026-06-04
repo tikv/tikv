@@ -650,9 +650,8 @@ where
         *gen_snap_task = Some(task);
     }
 
-    pub fn on_compact_raftlog(&mut self, idx: u64, state: Option<&mut CacheWarmupState>) {
+    pub fn on_compact_raftlog_cache(&mut self, idx: u64, state: Option<&mut CacheWarmupState>) {
         self.entry_storage.compact_entry_cache(idx, state);
-        self.cancel_generating_snap(Some(idx));
     }
 
     // Apply the peer with given snapshot.
@@ -1846,6 +1845,33 @@ pub mod tests {
             Err(RaftError::Store(StorageError::Other(_))) => {}
             res => panic!("unexpected res: {:?}", res),
         }
+    }
+
+    #[test]
+    fn test_compact_raftlog_cache_does_not_cancel_generating_snap() {
+        let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
+        let (sched, _) = dummy_scheduler();
+        let (dummy_scheduler, _) = dummy_scheduler();
+        let mut s = new_storage(sched, dummy_scheduler, &td);
+        let (_tx, rx) = channel();
+        let canceled = Arc::new(AtomicBool::new(false));
+        s.set_snap_state(SnapState::Generating {
+            canceled: Arc::clone(&canceled),
+            index: Arc::new(AtomicU64::new(5)),
+            receiver: rx,
+        });
+
+        // Entry-cache compaction is not allowed to cancel an in-flight snapshot.
+        // Otherwise a healthy snapshot generation can be discarded before the real
+        // raft-engine compact index overtakes the snapshot index.
+        s.on_compact_raftlog_cache(10, None);
+
+        assert!(!canceled.load(Ordering::SeqCst));
+
+        // The actual stale-snapshot cancel path is still driven explicitly by
+        // `cancel_generating_snap`.
+        s.cancel_generating_snap(Some(10));
+        assert!(canceled.load(Ordering::SeqCst));
     }
 
     fn test_storage_create_snapshot_for_role(role: &str, expected_snapshot_file_count: usize) {
