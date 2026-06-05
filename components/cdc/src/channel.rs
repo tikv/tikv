@@ -382,10 +382,6 @@ impl<'a> Drain {
         })
     }
 
-<<<<<<< HEAD
-    // Forwards contents to the sink, simulates StreamExt::forward.
-    pub async fn forward<S, E>(&'a mut self, sink: &mut S) -> Result<(), E>
-=======
     // Forwards contents to the sink with time tracking, simulates
     // StreamExt::forward.
     pub async fn forward<S, E>(
@@ -393,7 +389,6 @@ impl<'a> Drain {
         sink: &mut S,
         activity: Option<&FlushActivity>,
     ) -> Result<(), E>
->>>>>>> 491703523c (cdc: cancel both send and receive on watchdog abort (#19612))
     where
         S: futures::Sink<(ChangeDataEvent, WriteFlags), Error = E> + Unpin,
     {
@@ -421,14 +416,11 @@ impl<'a> Drain {
                 sink.feed((e, write_flags)).await?;
             }
             sink.flush().await?;
-<<<<<<< HEAD
-=======
             #[cfg(feature = "failpoints")]
             sleep_after_sink_flush().await;
             if let Some(activity) = activity {
                 activity.record_flush();
             }
->>>>>>> 491703523c (cdc: cancel both send and receive on watchdog abort (#19612))
             total_event_bytes.inc_by(event_bytes as u64);
             total_resolved_ts_bytes.inc_by(resolved_ts_bytes as u64);
         }
