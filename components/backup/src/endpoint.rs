@@ -244,12 +244,7 @@ async fn save_backup_file_worker<EK: KvEngine>(
 ) {
     while let Ok(msg) = rx.recv().await {
         let files = if msg.files.need_flush_keys() {
-            match with_resource_limiter(
-                msg.files.save(&storage),
-                msg.limiter.clone(),
-                false,
-            )
-            .await
+            match with_resource_limiter(msg.files.save(&storage), msg.limiter.clone(), false).await
             {
                 Ok(mut split_files) => {
                     let mut has_err = false;
