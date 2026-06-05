@@ -30,4 +30,82 @@ lazy_static! {
         exponential_buckets(1e-5, 2.0, 22).unwrap() // 10us ~ 42s
     )
     .unwrap();
+    pub static ref YATP_POOL_RESOURCE_GROUP_CPU_SECONDS_TOTAL_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_yatp_pool_resource_group_cpu_seconds_total",
+            "Total CPU time consumed by yatp pool tasks per resource group.",
+            &["name", "resource_group", "task_type"]
+        )
+        .unwrap();
+    pub static ref YATP_POOL_RESOURCE_GROUP_WALL_SECONDS_TOTAL_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_yatp_pool_resource_group_wall_seconds_total",
+            "Total wall time consumed by yatp pool tasks per resource group.",
+            &["name", "resource_group", "task_type"]
+        )
+        .unwrap();
+    pub static ref YATP_POOL_RESOURCE_GROUP_SCHEDULE_WAIT_DURATION_VEC: HistogramVec =
+        register_histogram_vec!(
+            "tikv_yatp_pool_resource_group_schedule_wait_duration",
+            "Histogram of yatp pool task schedule wait duration per resource group.",
+            &["name", "resource_group", "task_type"],
+            exponential_buckets(1e-5, 2.0, 18).unwrap() // 10us ~ 2.5s
+        )
+        .unwrap();
+    pub static ref YATP_POOL_RESOURCE_GROUP_SCHEDULE_EXEC_CPU_DURATION_VEC: HistogramVec =
+        register_histogram_vec!(
+            "tikv_yatp_pool_resource_group_schedule_exec_cpu_duration",
+            "Histogram of yatp pool task execution CPU time per resource group.",
+            &["name", "resource_group", "task_type"],
+            exponential_buckets(1e-5, 2.0, 22).unwrap() // 10us ~ 42s
+        )
+        .unwrap();
+    pub static ref YATP_POOL_RESOURCE_GROUP_SCHEDULE_EXEC_WALL_DURATION_VEC: HistogramVec =
+        register_histogram_vec!(
+            "tikv_yatp_pool_resource_group_schedule_exec_wall_duration",
+            "Histogram of yatp pool task execution wall time per resource group.",
+            &["name", "resource_group", "task_type"],
+            exponential_buckets(1e-5, 2.0, 22).unwrap() // 10us ~ 42s
+        )
+        .unwrap();
+    pub static ref YATP_POOL_RESOURCE_GROUP_TASK_SCHEDULE_WAIT_DURATION_VEC: HistogramVec =
+        register_histogram_vec!(
+            "tikv_yatp_pool_resource_group_task_schedule_wait_duration",
+            "Histogram of yatp pool task total schedule wait duration per resource group.",
+            &["name", "resource_group", "task_type"],
+            exponential_buckets(1e-5, 2.0, 28).unwrap() // 10us ~ 22m
+        )
+        .unwrap();
+    pub static ref YATP_POOL_RESOURCE_GROUP_TASK_EXEC_CPU_DURATION_VEC: HistogramVec =
+        register_histogram_vec!(
+            "tikv_yatp_pool_resource_group_task_exec_cpu_duration",
+            "Histogram of yatp pool task total execution CPU time per resource group.",
+            &["name", "resource_group", "task_type"],
+            exponential_buckets(1e-5, 2.0, 28).unwrap() // 10us ~ 22m
+        )
+        .unwrap();
+    pub static ref YATP_POOL_RESOURCE_GROUP_TASK_EXEC_WALL_DURATION_VEC: HistogramVec =
+        register_histogram_vec!(
+            "tikv_yatp_pool_resource_group_task_exec_wall_duration",
+            "Histogram of yatp pool task total execution wall time per resource group.",
+            &["name", "resource_group", "task_type"],
+            exponential_buckets(1e-5, 2.0, 28).unwrap() // 10us ~ 22m
+        )
+        .unwrap();
+    pub static ref YATP_POOL_RESOURCE_GROUP_TASK_TOTAL_DURATION_VEC: HistogramVec =
+        register_histogram_vec!(
+            "tikv_yatp_pool_resource_group_task_total_duration",
+            "Histogram of yatp pool task end-to-end duration per resource group.",
+            &["name", "resource_group", "task_type"],
+            exponential_buckets(1e-5, 2.0, 28).unwrap() // 10us ~ 22m
+        )
+        .unwrap();
+    pub static ref YATP_POOL_RESOURCE_GROUP_TASK_SLICE_COUNT_VEC: HistogramVec =
+        register_histogram_vec!(
+            "tikv_yatp_pool_resource_group_task_slice_num",
+            "Histogram of yatp pool task slice count per resource group.",
+            &["name", "resource_group", "task_type"],
+            exponential_buckets(1.0, 2.0, 16).unwrap() // 1 ~ 32768
+        )
+        .unwrap();
 }

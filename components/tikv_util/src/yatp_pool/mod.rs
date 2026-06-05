@@ -3,8 +3,12 @@
 mod future_pool;
 pub mod metrics;
 
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
+use cpu_time::ThreadTime;
 use fail::fail_point;
 pub use future_pool::{Full, FuturePool};
 use futures::{StreamExt, compat::Stream01CompatExt};
@@ -17,7 +21,7 @@ use yatp::{
 };
 
 use crate::{
-    resource_control::{TaskPriority, priority_from_task_meta},
+    resource_control::{TaskMetadata, TaskPriority, TaskType, priority_from_task_meta},
     thread_group::GroupProperties,
     time::{Duration, Instant},
     timer::GLOBAL_TIMER_HANDLE,
@@ -170,10 +174,6 @@ impl TaskScheduleHistograms {
         }
     }
 
-    fn enabled(&self) -> bool {
-        self.0.is_some()
-    }
-
     fn observe(&mut self, priority: TaskPriority, duration: Duration) {
         if let Some(histograms) = &mut self.0 {
             let idx = priority as usize;
@@ -191,7 +191,51 @@ impl TaskScheduleHistograms {
 }
 
 #[derive(Clone)]
+struct TaskMetricAccumulator {
+    resource_group: String,
+    task_type: &'static str,
+    first_schedule_time: std::time::Instant,
+    schedule_wait_time: Duration,
+    exec_wall_time: Duration,
+    exec_cpu_time: Duration,
+    slice_count: u64,
+}
+
+impl TaskMetricAccumulator {
+    fn new(
+        resource_group: String,
+        task_type: &'static str,
+        first_schedule_time: std::time::Instant,
+    ) -> Self {
+        Self {
+            resource_group,
+            task_type,
+            first_schedule_time,
+            schedule_wait_time: Duration::ZERO,
+            exec_wall_time: Duration::ZERO,
+            exec_cpu_time: Duration::ZERO,
+            slice_count: 0,
+        }
+    }
+
+    fn observe_slice(
+        &mut self,
+        schedule_wait_time: Option<Duration>,
+        exec_wall_time: Duration,
+        exec_cpu_time: Duration,
+    ) {
+        if let Some(schedule_wait_time) = schedule_wait_time {
+            self.schedule_wait_time += schedule_wait_time;
+        }
+        self.exec_wall_time += exec_wall_time;
+        self.exec_cpu_time += exec_cpu_time;
+        self.slice_count += 1;
+    }
+}
+
+#[derive(Clone)]
 pub struct YatpPoolRunner<T: PoolTicker> {
+    name: String,
     inner: FutureRunner,
     ticker: TickerWrapper<T>,
     props: Option<GroupProperties>,
@@ -203,6 +247,7 @@ pub struct YatpPoolRunner<T: PoolTicker> {
     // local histogram for high,medium,low priority tasks.
     schedule_wait_durations: TaskScheduleHistograms,
     schedule_exec_durations: TaskScheduleHistograms,
+    task_metrics: Arc<Mutex<HashMap<u64, TaskMetricAccumulator>>>,
 }
 
 impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
@@ -227,30 +272,58 @@ impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
 
     fn handle(&mut self, local: &mut Local<Self::TaskCell>, mut task_cell: Self::TaskCell) -> bool {
         let extras = task_cell.mut_extras();
+        let task_id = extras.task_id();
         let priority = priority_from_task_meta(extras.metadata());
-        let start_time =
-            if self.schedule_wait_durations.enabled() || self.schedule_exec_durations.enabled() {
-                Some(std::time::Instant::now())
-            } else {
-                None
-            };
-        if let Some(dur) = start_time
-            .zip(extras.schedule_time())
-            .map(|(t1, t2)| t1.saturating_duration_since(t2))
-        {
+        let metadata = TaskMetadata::from(extras.metadata());
+        let metric_task_id = metadata.metric_task_id();
+        let resource_group = String::from_utf8_lossy(metadata.group_name()).into_owned();
+        let task_type = metadata.task_type();
+        let task_type_label = task_type.as_str();
+        let start_time = std::time::Instant::now();
+        let schedule_time = extras.schedule_time();
+        let schedule_wait_time =
+            schedule_time.map(|scheduled_at| start_time.saturating_duration_since(scheduled_at));
+        if let Some(dur) = schedule_wait_time {
             self.schedule_wait_durations.observe(priority, dur);
+            metrics::YATP_POOL_RESOURCE_GROUP_SCHEDULE_WAIT_DURATION_VEC
+                .with_label_values(&[&self.name, &resource_group, task_type_label])
+                .observe(dur.as_secs_f64());
         }
+        let cpu_time = ThreadTime::now();
         let finished = self.inner.handle(local, task_cell);
-        let end_time = if self.schedule_exec_durations.enabled() {
-            Some(std::time::Instant::now())
+        let end_time = std::time::Instant::now();
+        let wall_time = end_time.saturating_duration_since(start_time);
+        let cpu_time = cpu_time.elapsed();
+        self.schedule_exec_durations.observe(priority, wall_time);
+        metrics::YATP_POOL_RESOURCE_GROUP_WALL_SECONDS_TOTAL_VEC
+            .with_label_values(&[&self.name, &resource_group, task_type_label])
+            .inc_by(wall_time.as_secs_f64());
+        metrics::YATP_POOL_RESOURCE_GROUP_CPU_SECONDS_TOTAL_VEC
+            .with_label_values(&[&self.name, &resource_group, task_type_label])
+            .inc_by(cpu_time.as_secs_f64());
+        metrics::YATP_POOL_RESOURCE_GROUP_SCHEDULE_EXEC_WALL_DURATION_VEC
+            .with_label_values(&[&self.name, &resource_group, task_type_label])
+            .observe(wall_time.as_secs_f64());
+        metrics::YATP_POOL_RESOURCE_GROUP_SCHEDULE_EXEC_CPU_DURATION_VEC
+            .with_label_values(&[&self.name, &resource_group, task_type_label])
+            .observe(cpu_time.as_secs_f64());
+        let task_metric_key = if metric_task_id == 0 {
+            task_id
         } else {
-            None
+            metric_task_id
         };
-        if let Some(dur) = end_time
-            .zip(start_time)
-            .map(|(t1, t2)| t1.saturating_duration_since(t2))
-        {
-            self.schedule_exec_durations.observe(priority, dur);
+        if task_metric_key != 0 || task_type != TaskType::Other {
+            self.record_task_metrics(
+                task_metric_key,
+                resource_group,
+                task_type_label,
+                schedule_time.unwrap_or(start_time),
+                schedule_wait_time,
+                wall_time,
+                cpu_time,
+                end_time,
+                finished,
+            );
         }
         if self.ticker.try_tick() {
             self.schedule_wait_durations.flush();
@@ -282,7 +355,64 @@ impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
 }
 
 impl<T: PoolTicker> YatpPoolRunner<T> {
+    #[allow(clippy::too_many_arguments)]
+    fn record_task_metrics(
+        &self,
+        task_id: u64,
+        resource_group: String,
+        task_type: &'static str,
+        schedule_time: std::time::Instant,
+        schedule_wait_time: Option<Duration>,
+        exec_wall_time: Duration,
+        exec_cpu_time: Duration,
+        end_time: std::time::Instant,
+        finished: bool,
+    ) {
+        let completed_task = {
+            let mut task_metrics = self.task_metrics.lock().unwrap();
+            let task_metric = task_metrics.entry(task_id).or_insert_with(|| {
+                TaskMetricAccumulator::new(resource_group, task_type, schedule_time)
+            });
+            task_metric.observe_slice(schedule_wait_time, exec_wall_time, exec_cpu_time);
+            if finished {
+                let task_metric = task_metric.clone();
+                task_metrics.remove(&task_id);
+                Some(task_metric)
+            } else {
+                None
+            }
+        };
+
+        if let Some(task_metric) = completed_task {
+            let label_values = &[
+                self.name.as_str(),
+                task_metric.resource_group.as_str(),
+                task_metric.task_type,
+            ];
+            metrics::YATP_POOL_RESOURCE_GROUP_TASK_SCHEDULE_WAIT_DURATION_VEC
+                .with_label_values(label_values)
+                .observe(task_metric.schedule_wait_time.as_secs_f64());
+            metrics::YATP_POOL_RESOURCE_GROUP_TASK_EXEC_WALL_DURATION_VEC
+                .with_label_values(label_values)
+                .observe(task_metric.exec_wall_time.as_secs_f64());
+            metrics::YATP_POOL_RESOURCE_GROUP_TASK_EXEC_CPU_DURATION_VEC
+                .with_label_values(label_values)
+                .observe(task_metric.exec_cpu_time.as_secs_f64());
+            metrics::YATP_POOL_RESOURCE_GROUP_TASK_TOTAL_DURATION_VEC
+                .with_label_values(label_values)
+                .observe(
+                    end_time
+                        .saturating_duration_since(task_metric.first_schedule_time)
+                        .as_secs_f64(),
+                );
+            metrics::YATP_POOL_RESOURCE_GROUP_TASK_SLICE_COUNT_VEC
+                .with_label_values(label_values)
+                .observe(task_metric.slice_count as f64);
+        }
+    }
+
     fn new(
+        name: String,
         inner: FutureRunner,
         ticker: TickerWrapper<T>,
         after_start: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -292,6 +422,7 @@ impl<T: PoolTicker> YatpPoolRunner<T> {
         schedule_exec_durations: TaskScheduleHistograms,
     ) -> Self {
         YatpPoolRunner {
+            name,
             inner,
             ticker,
             props: crate::thread_group::current_properties(),
@@ -300,6 +431,7 @@ impl<T: PoolTicker> YatpPoolRunner<T> {
             before_pause,
             schedule_wait_durations,
             schedule_exec_durations,
+            task_metrics: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -568,6 +700,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
             &metrics::YATP_POOL_SCHEDULE_EXEC_DURATION_VEC,
         );
         let read_pool_runner = YatpPoolRunner::new(
+            name,
             Default::default(),
             self.ticker.clone(),
             after_start,
