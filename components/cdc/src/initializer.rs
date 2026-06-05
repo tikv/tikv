@@ -57,9 +57,15 @@ use crate::{
     delegate::{post_init_downstream, Delegate, DownstreamId, DownstreamState, ObservedRange},
     endpoint::Deregister,
     metrics::*,
+<<<<<<< HEAD
     old_value::{near_seek_old_value, OldValueCursors},
     service::ConnId,
     Error, Result, Task,
+=======
+    old_value::{OldValueCursors, near_seek_old_value},
+    service::RequestId,
+    types::ConnId,
+>>>>>>> 491703523c (cdc: cancel both send and receive on watchdog abort (#19612))
 };
 
 struct ScanStat {
@@ -230,6 +236,7 @@ impl<E: KvEngine> Initializer<E> {
         }
 
         self.observed_range.update_region_key_range(&region);
+<<<<<<< HEAD
         debug!("cdc async incremental scan";
             "region_id" => region_id,
             "downstream_id" => ?downstream_id,
@@ -240,6 +247,12 @@ impl<E: KvEngine> Initializer<E> {
 
         let mut resolver = if self.build_resolver {
             Some(Resolver::new(region_id, memory_quota))
+=======
+        // Be compatible with old TiCDC clients, which won't give `observed_range`.
+        let (start_key, end_key): (Key, Key);
+        if self.observed_range.start_key_encoded.as_encoded() <= &region.start_key {
+            start_key = Key::from_encoded_slice(&region.start_key);
+>>>>>>> 491703523c (cdc: cancel both send and receive on watchdog abort (#19612))
         } else {
             None
         };
