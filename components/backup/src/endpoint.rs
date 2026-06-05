@@ -246,7 +246,7 @@ async fn save_backup_file_worker<EK: KvEngine>(
         let files = if msg.files.need_flush_keys() {
             match with_resource_limiter(
                 msg.files.save(&storage),
-                msg.resource_limiter.clone(),
+                msg.limiter.clone(),
                 false,
             )
             .await
