@@ -481,7 +481,7 @@ impl Service {
 
             if should_deregister {
                 let deregister = Deregister::Conn(conn_id);
-                if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
+                if let Err(e) = scheduler_dereg.schedule(Task::Deregister(deregister)) {
                     error!("cdc deregister failed"; "error" => ?e, "conn_id" => ?conn_id);
                 }
             }
@@ -539,6 +539,9 @@ impl ChangeData for Service {
 
 #[cfg(feature = "failpoints")]
 async fn sleep_before_drain_change_event() {
+    use std::time::{Duration, Instant};
+
+    use tikv_util::timer::GLOBAL_TIMER_HANDLE;
     let should_sleep = || {
         fail::fail_point!("cdc_sleep_before_drain_change_event", |_| true);
         false
