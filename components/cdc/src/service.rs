@@ -4,14 +4,11 @@ use std::sync::Arc;
 
 use collections::{HashMap, HashMapEntry};
 use crossbeam::atomic::AtomicCell;
-<<<<<<< HEAD
 use futures::{
+    SinkExt,
     compat::Stream01CompatExt,
     stream::{StreamExt, TryStreamExt},
 };
-=======
-use futures::{SinkExt, stream::TryStreamExt};
->>>>>>> 491703523c (cdc: cancel both send and receive on watchdog abort (#19612))
 use grpcio::{DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::{
     cdcpb::{
@@ -31,16 +28,6 @@ use crate::{
     watchdog,
 };
 
-<<<<<<< HEAD
-static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
-
-// CDC connection monitoring constants in seconds
-const CDC_WATCHDOG_CHECK_INTERVAL_SECS: u64 = 2;
-const CDC_IDLE_DEREGISTER_THRESHOLD_SECS: u64 = 60 * 20; // 20 minutes
-const CDC_MEMORY_QUOTA_ABORT_THRESHOLD: f64 = 0.999;
-
-=======
->>>>>>> 491703523c (cdc: cancel both send and receive on watchdog abort (#19612))
 pub fn validate_kv_api(kv_api: ChangeDataRequestKvApi, api_version: ApiVersion) -> bool {
     kv_api == ChangeDataRequestKvApi::TiDb
         || (kv_api == ChangeDataRequestKvApi::RawKv && api_version == ApiVersion::V2)
@@ -465,9 +452,7 @@ impl Service {
             Ok::<(), String>(())
         };
 
-<<<<<<< HEAD
         let scheduler_dereg = self.scheduler.clone();
-=======
         let watchdog::WatchdogHandle {
             activity,
             recv_abort,
@@ -481,7 +466,6 @@ impl Service {
             watchdog_config,
         );
 
->>>>>>> 491703523c (cdc: cancel both send and receive on watchdog abort (#19612))
         let peer = ctx.peer();
         ctx.spawn(async move {
             let should_deregister = tokio::select! {
@@ -499,17 +483,11 @@ impl Service {
                 }
             };
 
-<<<<<<< HEAD
-            let deregister = Deregister::Conn(conn_id);
-            if let Err(e) = scheduler_dereg.schedule(Task::Deregister(deregister)) {
-                error!("cdc deregister failed"; "error" => ?e, "conn_id" => ?conn_id);
-=======
             if should_deregister {
                 let deregister = Deregister::Conn(conn_id);
                 if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
                     error!("cdc deregister failed"; "error" => ?e, "conn_id" => ?conn_id);
                 }
->>>>>>> 491703523c (cdc: cancel both send and receive on watchdog abort (#19612))
             }
         });
 
@@ -537,91 +515,6 @@ impl Service {
                     } else {
                         info!("cdc send closed"; "downstream" => peer, "conn_id" => ?conn_id);
                     }
-<<<<<<< HEAD
-                    // Send signal when eventDrain.forward exits
-                    let _ = forward_exit_tx.send(());
-                }
-            }
-        });
-
-        // Start watchdog to monitor connection activity
-        Self::start_connection_watchdog(
-            self.pool.clone(),
-            last_flush_time_for_watchdog.clone(),
-            peer_for_watchdog.clone(),
-            conn_id,
-            cancel_tx,
-            forward_exit_rx,
-            self.memory_quota.clone(),
-        );
-    }
-
-    /// Start a watchdog to monitor CDC connection activity.
-    ///
-    /// This function creates a background task that periodically checks if the
-    /// connection has been idle for too long and takes appropriate action
-    /// (warning or aborting).
-    fn start_connection_watchdog(
-        pool: Arc<Worker>,
-        last_flush_time: Arc<AtomicCell<Instant>>,
-        peer: String,
-        conn_id: ConnId,
-        cancel_tx: tokio::sync::oneshot::Sender<()>,
-        mut forward_exit_rx: tokio::sync::oneshot::Receiver<()>,
-        memory_quota: Arc<MemoryQuota>,
-    ) {
-        let last_flush_time_clone = last_flush_time.clone();
-        let peer_clone = peer.clone();
-
-        // Create a custom interval task that can be stopped
-        let _ = pool.pool().spawn(async move {
-            let mut interval = GLOBAL_TIMER_HANDLE
-                .interval(
-                    Instant::now(),
-                    Duration::from_secs(CDC_WATCHDOG_CHECK_INTERVAL_SECS),
-                )
-                .compat();
-
-            loop {
-                tokio::select! {
-                    _ = &mut forward_exit_rx => {
-                        info!("cdc connection forward exit signal received, stopping watchdog");
-                        break;
-                    }
-                    _ = interval.next() => {
-                        let _idle_threshold = CDC_IDLE_DEREGISTER_THRESHOLD_SECS;
-
-                        #[cfg(feature = "failpoints")]
-                        let _idle_threshold = {
-                            let should_adjust = || {
-                                fail::fail_point!("cdc_idle_deregister_threshold", |_| true);
-                                false
-                            };
-                            if should_adjust() {
-                                5
-                            } else {
-                                CDC_IDLE_DEREGISTER_THRESHOLD_SECS
-                            }
-                        };
-
-                        // Check if last flush was more than the deregister threshold
-                        // To prevent the case that the connection idle since there are a lot of
-                        // incremental scan tasks queueing so won't send events, also check on the
-                        // memory usage, if the memory quota is almost used up, we abort the connection.
-                        let elapsed = last_flush_time_clone.load().elapsed();
-                        if elapsed > Duration::from_secs(_idle_threshold) &&
-                        memory_quota.used_ratio() >= CDC_MEMORY_QUOTA_ABORT_THRESHOLD{
-                            error!("cdc connection idle for too long, aborting connection";
-                                   "downstream" => peer_clone.clone(),
-                                   "conn_id" => ?conn_id,
-                                   "seconds_since_last_flush" => elapsed.as_secs());
-                            // Cancel the gRPC connection
-                            let _ = cancel_tx.send(());
-                            break;
-                        }
-                    }
-=======
->>>>>>> 491703523c (cdc: cancel both send and receive on watchdog abort (#19612))
                 }
             }
         });
