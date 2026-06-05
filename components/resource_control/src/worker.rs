@@ -815,12 +815,7 @@ mod tests {
         check_limiter_rates(&limiter, 3.63, 5500.0);
 
         // --- Multi-group: proportional distribution by RU quota ---
-        let bg = new_background_resource_group_ru(
-            "background".into(),
-            1000,
-            15,
-            vec!["br".into()],
-        );
+        let bg = new_background_resource_group_ru("background".into(), 1000, 15, vec!["br".into()]);
         resource_ctl.add_resource_group(bg);
         let bg_limiter = resource_ctl
             .get_background_resource_limiter("background", "br")
