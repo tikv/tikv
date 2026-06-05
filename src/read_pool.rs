@@ -5,7 +5,7 @@ use std::{
     future::Future,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::SyncSender,
     },
     time::Duration,
@@ -69,6 +69,7 @@ pub enum ReadPool {
         pool_size: usize,
         resource_ctl: Option<Arc<ResourceController>>,
         time_slice_inspector: Arc<TimeSliceInspector>,
+        force_priority_level_zero: Arc<AtomicBool>,
     },
 }
 
@@ -92,6 +93,7 @@ impl ReadPool {
                 pool_size,
                 resource_ctl,
                 time_slice_inspector,
+                force_priority_level_zero,
             } => ReadPoolHandle::Yatp {
                 remote: pool.remote().clone(),
                 running_tasks: running_tasks.clone(),
@@ -100,6 +102,7 @@ impl ReadPool {
                 pool_size: *pool_size,
                 resource_ctl: resource_ctl.clone(),
                 time_slice_inspector: time_slice_inspector.clone(),
+                force_priority_level_zero: force_priority_level_zero.clone(),
             },
         }
     }
@@ -120,7 +123,19 @@ pub enum ReadPoolHandle {
         pool_size: usize,
         resource_ctl: Option<Arc<ResourceController>>,
         time_slice_inspector: Arc<TimeSliceInspector>,
+        force_priority_level_zero: Arc<AtomicBool>,
     },
+}
+
+fn fixed_level_for_priority(priority: CommandPri, force_priority_level_zero: bool) -> Option<u8> {
+    if force_priority_level_zero {
+        return Some(0);
+    }
+    match priority {
+        CommandPri::High => Some(0),
+        CommandPri::Normal => None,
+        CommandPri::Low => Some(2),
+    }
 }
 
 impl ReadPoolHandle {
@@ -154,6 +169,7 @@ impl ReadPoolHandle {
                 running_tasks,
                 max_tasks,
                 resource_ctl,
+                force_priority_level_zero,
                 ..
             } => {
                 let task_priority = TaskPriority::from(metadata.override_priority());
@@ -166,11 +182,10 @@ impl ReadPoolHandle {
                     return Err(ReadPoolError::UnifiedReadPoolFull);
                 }
                 running_tasks.inc();
-                let fixed_level = match priority {
-                    CommandPri::High => Some(0),
-                    CommandPri::Normal => None,
-                    CommandPri::Low => Some(2),
-                };
+                let fixed_level = fixed_level_for_priority(
+                    priority,
+                    force_priority_level_zero.load(Ordering::Relaxed),
+                );
                 let group_name = metadata.group_name().to_owned();
                 let metadata = metadata
                     .with_metric_task_id(READ_POOL_TASK_METRIC_ID.fetch_add(1, Ordering::Relaxed));
@@ -287,6 +302,20 @@ impl ReadPoolHandle {
                 ..
             } => {
                 *max_tasks = tasks_per_thread.saturating_mul(*pool_size);
+            }
+        }
+    }
+
+    pub fn set_force_priority_level_zero(&self, force: bool) {
+        match self {
+            ReadPoolHandle::FuturePools { .. } => {
+                unreachable!()
+            }
+            ReadPoolHandle::Yatp {
+                force_priority_level_zero,
+                ..
+            } => {
+                force_priority_level_zero.store(force, Ordering::Relaxed);
             }
         }
     }
@@ -528,6 +557,7 @@ pub fn build_yatp_read_pool_with_name<E: Engine, R: FlowStatsReporter>(
         pool_size: config.max_thread_count,
         resource_ctl,
         time_slice_inspector,
+        force_priority_level_zero: Arc::new(AtomicBool::new(config.force_priority_level_zero)),
     }
 }
 
@@ -698,6 +728,9 @@ impl Runnable for ReadPoolConfigRunner {
             Task::CpuThreshold(s) => {
                 self.cpu_threshold = s;
             }
+            Task::ForcePriorityLevelZero(s) => {
+                self.handle.set_force_priority_level_zero(s);
+            }
         }
     }
 }
@@ -801,6 +834,7 @@ enum Task {
     AutoAdjust(bool),
     MaxTasksPerWorker(usize),
     CpuThreshold(f64),
+    ForcePriorityLevelZero(bool),
 }
 
 impl std::fmt::Display for Task {
@@ -810,6 +844,7 @@ impl std::fmt::Display for Task {
             Task::AutoAdjust(s) => write!(f, "AutoAdjust({})", *s),
             Task::MaxTasksPerWorker(s) => write!(f, "MaxTasksPerWorker({})", *s),
             Task::CpuThreshold(s) => write!(f, "CpuThreshold({})", *s),
+            Task::ForcePriorityLevelZero(s) => write!(f, "ForcePriorityLevelZero({})", *s),
         }
     }
 }
@@ -875,6 +910,10 @@ impl ConfigManager for ReadPoolConfigManager {
                     tikv_util::config::ReadableDuration::from(max_time_slice.clone());
                 set_max_time_slice(max_time_slice.0);
             }
+            if let Some(ConfigValue::Bool(force)) = unified.get("force_priority_level_zero") {
+                self.scheduler
+                    .schedule(Task::ForcePriorityLevelZero(*force))?;
+            }
         }
         info!(
             "readpool config changed";
@@ -935,6 +974,17 @@ mod tests {
     impl FlowStatsReporter for DummyReporter {
         fn report_read_stats(&self, _read_stats: ReadStats) {}
         fn report_write_stats(&self, _write_stats: WriteStats) {}
+    }
+
+    #[test]
+    fn test_force_priority_level_zero() {
+        assert_eq!(fixed_level_for_priority(CommandPri::High, true), Some(0));
+        assert_eq!(fixed_level_for_priority(CommandPri::Normal, true), Some(0));
+        assert_eq!(fixed_level_for_priority(CommandPri::Low, true), Some(0));
+
+        assert_eq!(fixed_level_for_priority(CommandPri::High, false), Some(0));
+        assert_eq!(fixed_level_for_priority(CommandPri::Normal, false), None);
+        assert_eq!(fixed_level_for_priority(CommandPri::Low, false), Some(2));
     }
 
     #[test]
@@ -1189,6 +1239,7 @@ mod tests {
             auto_adjust_pool_size: true,
             cpu_threshold: 0.7,
             max_time_slice: ReadableDuration::millis(1),
+            force_priority_level_zero: true,
         };
         // Just verify config can be created
         assert_eq!(valid_config.cpu_threshold, 0.7);

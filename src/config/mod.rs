@@ -2302,6 +2302,8 @@ pub struct UnifiedReadPoolConfig {
     pub cpu_threshold: f64,
     /// The maximum time a coprocessor scan coroutine can run before yielding.
     pub max_time_slice: ReadableDuration,
+    /// Whether to force all read pool tasks to YATP level 0.
+    pub force_priority_level_zero: bool,
     // FIXME: Add more configs when they are effective in yatp
 }
 
@@ -2359,6 +2361,7 @@ impl Default for UnifiedReadPoolConfig {
             auto_adjust_pool_size: false,
             cpu_threshold: 0.0, // 0 means no threshold (disabled)
             max_time_slice: ReadableDuration::millis(1),
+            force_priority_level_zero: false,
         }
     }
 }
@@ -2377,6 +2380,7 @@ mod unified_read_pool_tests {
             auto_adjust_pool_size: false,
             cpu_threshold: 0.0,
             max_time_slice: ReadableDuration::millis(1),
+            force_priority_level_zero: true,
         };
         cfg.validate().unwrap();
         let cfg = UnifiedReadPoolConfig {
@@ -2719,6 +2723,7 @@ mod readpool_tests {
             auto_adjust_pool_size: false,
             cpu_threshold: 0.0,
             max_time_slice: ReadableDuration::millis(1),
+            force_priority_level_zero: true,
         };
         unified.validate().unwrap_err();
         let storage = StorageReadPoolConfig {

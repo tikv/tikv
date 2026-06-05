@@ -117,6 +117,9 @@
 ## Max duration a coprocessor scan coroutine can run before yielding.
 # max-time-slice = "1ms"
 
+## Whether to force all read pool tasks to YATP level 0.
+# force-priority-level-zero = true
+
 [readpool.storage]
 ## Whether to use the unified read pool to handle storage requests.
 # use-unified-pool = true
