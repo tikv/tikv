@@ -746,9 +746,6 @@ fn test_cdc_load_unnecessary_old_value() {
     assert_eq!(stats.next_tombstone, 0);
     assert_eq!(stats.prev_tombstone, 0);
 
-<<<<<<< HEAD
-    fail::remove("ts_filter_is_helpful_always_true");
-=======
     // create event feed for all regions
     let mut req_txs = Vec::with_capacity(region_count);
     let mut event_feeds = Vec::with_capacity(region_count);
@@ -780,6 +777,5 @@ fn test_cdc_load_unnecessary_old_value() {
     for event_feed in event_feeds {
         drop(event_feed);
     }
->>>>>>> 491703523c (cdc: cancel both send and receive on watchdog abort (#19612))
     suite.stop();
 }

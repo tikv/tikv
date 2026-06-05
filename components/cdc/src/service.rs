@@ -1,21 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-<<<<<<< HEAD
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-};
-
-use collections::{HashMap, HashMapEntry};
-use crossbeam::atomic::AtomicCell;
-use futures::stream::TryStreamExt;
-=======
 use std::sync::Arc;
 
 use collections::{HashMap, HashMapEntry};
 use crossbeam::atomic::AtomicCell;
-use futures::{SinkExt, stream::TryStreamExt};
->>>>>>> 491703523c (cdc: cancel both send and receive on watchdog abort (#19612))
+use futures::{stream::TryStreamExt, SinkExt};
 use grpcio::{DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::{
     cdcpb::{
@@ -30,43 +19,15 @@ use crate::{
     channel::{channel, Sink, CDC_CHANNLE_CAPACITY},
     delegate::{Downstream, DownstreamId, DownstreamState, ObservedRange},
     endpoint::{Deregister, Task},
-<<<<<<< HEAD
-};
-
-static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
-
-=======
     metrics::CDC_ABORTED_CONNECTIONS,
     types::ConnId,
     watchdog,
 };
 
->>>>>>> 491703523c (cdc: cancel both send and receive on watchdog abort (#19612))
 pub fn validate_kv_api(kv_api: ChangeDataRequestKvApi, api_version: ApiVersion) -> bool {
     kv_api == ChangeDataRequestKvApi::TiDb
         || (kv_api == ChangeDataRequestKvApi::RawKv && api_version == ApiVersion::V2)
 }
-
-<<<<<<< HEAD
-/// A unique identifier of a Connection.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct ConnId(usize);
-
-impl ConnId {
-    pub fn new() -> ConnId {
-        ConnId(CONNECTION_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
-    }
-}
-
-impl Default for ConnId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-=======
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct RequestId(pub u64);
->>>>>>> 491703523c (cdc: cancel both send and receive on watchdog abort (#19612))
 
 // FeatureGate checks whether a feature is enabled or not on client versions.
 //
@@ -481,9 +442,6 @@ impl Service {
             Ok::<(), String>(())
         };
 
-<<<<<<< HEAD
-        let scheduler_dereg = self.scheduler.clone();
-=======
         let watchdog::WatchdogHandle {
             activity,
             recv_abort,
@@ -497,7 +455,6 @@ impl Service {
             watchdog_config,
         );
 
->>>>>>> 491703523c (cdc: cancel both send and receive on watchdog abort (#19612))
         let peer = ctx.peer();
         ctx.spawn(async move {
             let should_deregister = tokio::select! {
@@ -515,36 +472,21 @@ impl Service {
                 }
             };
 
-<<<<<<< HEAD
-            let deregister = Deregister::Conn(conn_id);
-            if let Err(e) = scheduler_dereg.schedule(Task::Deregister(deregister)) {
-                error!("cdc deregister failed"; "error" => ?e, "conn_id" => ?conn_id);
-=======
             if should_deregister {
                 let deregister = Deregister::Conn(conn_id);
                 if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
                     error!("cdc deregister failed"; "error" => ?e, "conn_id" => ?conn_id);
                 }
->>>>>>> 491703523c (cdc: cancel both send and receive on watchdog abort (#19612))
             }
         });
 
         let peer = ctx.peer();
-<<<<<<< HEAD
-=======
         let scheduler = self.scheduler.clone();
 
->>>>>>> 491703523c (cdc: cancel both send and receive on watchdog abort (#19612))
         ctx.spawn(async move {
             let _forward_exit = forward_exit;
             #[cfg(feature = "failpoints")]
             sleep_before_drain_change_event().await;
-<<<<<<< HEAD
-            if let Err(e) = event_drain.forward(&mut sink).await {
-                warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
-            } else {
-                info!("cdc send closed"; "downstream" => peer, "conn_id" => ?conn_id);
-=======
             tokio::select! {
                 _ = watchdog::wait_for_abort(send_abort) => {
                     warn!("cdc send cancelled"; "downstream" => peer, "conn_id" => ?conn_id);
@@ -566,7 +508,6 @@ impl Service {
                         let _ = sink.close().await;
                     }
                 }
->>>>>>> 491703523c (cdc: cancel both send and receive on watchdog abort (#19612))
             }
         });
     }
@@ -654,10 +595,7 @@ mod tests {
     fn new_rpc_suite(capacity: usize) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
         let memory_quota = Arc::new(MemoryQuota::new(capacity));
         let (scheduler, rx) = dummy_scheduler();
-<<<<<<< HEAD
-        let cdc_service = Service::new(scheduler, memory_quota);
-=======
-        let cdc_service = create_change_data(Service::new(scheduler, memory_quota, pool));
+        let cdc_service = create_change_data(Service::new(scheduler, memory_quota));
         new_rpc_suite_from_service(cdc_service, rx)
     }
 
@@ -666,10 +604,9 @@ mod tests {
         watchdog_config: watchdog::Config,
     ) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
         let memory_quota = Arc::new(MemoryQuota::new(capacity));
-        let pool = Arc::new(Builder::new("cdc-watchdog-test").thread_count(1).create());
         let (scheduler, rx) = dummy_scheduler();
         let cdc_service = create_change_data(ServiceWithWatchdogConfig {
-            service: Service::new(scheduler, memory_quota, pool),
+            service: Service::new(scheduler, memory_quota),
             watchdog_config,
         });
         new_rpc_suite_from_service(cdc_service, rx)
@@ -679,7 +616,6 @@ mod tests {
         cdc_service: grpcio::Service,
         rx: ReceiverWrapper<Task>,
     ) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
->>>>>>> 491703523c (cdc: cancel both send and receive on watchdog abort (#19612))
         let env = Arc::new(EnvBuilder::new().build());
         let builder = ServerBuilder::new(env.clone()).register_service(cdc_service);
         let mut server = builder.bind("127.0.0.1", 0).build().unwrap();

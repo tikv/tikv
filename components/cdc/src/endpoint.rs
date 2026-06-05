@@ -62,13 +62,9 @@ use crate::{
     initializer::{InitializeStats, Initializer},
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
-<<<<<<< HEAD
     service::{validate_kv_api, Conn, ConnId, FeatureGate},
-    CdcObserver, Error,
-=======
-    service::{Conn, FeatureGate, RequestId, validate_kv_api},
     types::ConnId,
->>>>>>> 491703523c (cdc: cancel both send and receive on watchdog abort (#19612))
+    CdcObserver, Error,
 };
 
 const FEATURE_RESOLVED_TS_STORE: Feature = Feature::require(5, 0, 0);
