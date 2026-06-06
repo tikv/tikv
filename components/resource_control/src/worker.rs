@@ -17,7 +17,6 @@ use tikv_util::{
     debug,
     resource_control::{DEFAULT_RESOURCE_GROUP_NAME, TaskPriority},
     sys::{SysQuota, cpu_time::ProcessStat},
-
     time::Instant,
     warn,
     yatp_pool::metrics::YATP_POOL_SCHEDULE_WAIT_DURATION_VEC,
@@ -534,8 +533,8 @@ struct PriorityLimiterStatsTracker {
 
 impl PriorityLimiterStatsTracker {
     fn new(limiter: Arc<ResourceLimiter>, priority: &'static str) -> Self {
-        let task_wait_dur_trakcers = ["unified-read-pool", "sched-worker-priority"]
-            .map(|pool_name| {
+        let task_wait_dur_trakcers =
+            ["unified-read-pool", "sched-worker-priority"].map(|pool_name| {
                 HistogramTracker::new(
                     YATP_POOL_SCHEDULE_WAIT_DURATION_VEC
                         .get_metric_with_label_values(&[pool_name, priority])
@@ -578,7 +577,6 @@ impl PriorityLimiterStatsTracker {
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
-
 
     use super::*;
     use crate::resource_group::tests::*;
@@ -755,12 +753,7 @@ mod tests {
 
         // Adding a second background group does not change the limiter —
         // all background groups share the single global bg_limiter.
-        let bg = new_background_resource_group_ru(
-            "background".into(),
-            1000,
-            15,
-            vec!["br".into()],
-        );
+        let bg = new_background_resource_group_ru("background".into(), 1000, 15, vec!["br".into()]);
         resource_ctl.add_resource_group(bg);
         let bg_limiter2 = resource_ctl
             .get_background_resource_limiter("background", "br")
