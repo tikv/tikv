@@ -6,7 +6,6 @@ use std::{
     hash::Hasher,
     mem,
     sync::Arc,
-    time::{Duration, Instant},
 };
 
 use api_version::KvFormat;
@@ -47,10 +46,6 @@ use crate::{
     storage::{Snapshot, SnapshotStore, Statistics},
 };
 
-fn duration_ms(duration: Duration) -> u64 {
-    duration.as_millis() as u64
-}
-
 fn new_key_range(start: Vec<u8>, end: Vec<u8>) -> KeyRange {
     let mut range = KeyRange::default();
     range.set_start(start);
@@ -86,36 +81,20 @@ fn build_true_block_sample_ranges<S: Snapshot>(
     if !(0.0..1.0).contains(&sample_rate) {
         return Ok(None);
     }
-    let build_start = Instant::now();
-    let anchor_load_start = Instant::now();
     let mut anchors = snapshot.approximate_key_anchors_cf(CF_WRITE)?;
-    let anchor_load_elapsed = anchor_load_start.elapsed();
     if anchors.is_empty() {
-        info!("analyze true data block sampling fallback";
-            "component" => "tikv",
-            "reason" => "empty_anchor",
-            "cf" => CF_WRITE,
-            "input_ranges" => ranges.len(),
-            "anchor_load_elapsed_ms" => duration_ms(anchor_load_elapsed),
-        );
         return Ok(None);
     }
-    let original_anchor_count = anchors.len();
-    let normalize_start = Instant::now();
     for anchor in &mut anchors {
         anchor.user_key = normalize_block_anchor_key(mem::take(&mut anchor.user_key));
     }
     anchors.sort_by(|lhs, rhs| lhs.user_key.cmp(&rhs.user_key));
-    let mut dedup_anchor_count = 0_usize;
-    let mut dedup_merged_weight = 0_u64;
     let mut merged_anchors: Vec<engine_traits::DataBlockKeyAnchor> =
         Vec::with_capacity(anchors.len());
     for mut anchor in anchors {
         anchor.range_size = anchor.range_size.max(1);
         if let Some(last) = merged_anchors.last_mut() {
             if last.user_key == anchor.user_key {
-                dedup_anchor_count += 1;
-                dedup_merged_weight = dedup_merged_weight.saturating_add(anchor.range_size);
                 last.range_size = last.range_size.saturating_add(anchor.range_size);
                 continue;
             }
@@ -123,11 +102,8 @@ fn build_true_block_sample_ranges<S: Snapshot>(
         merged_anchors.push(anchor);
     }
     anchors = merged_anchors;
-    let normalize_elapsed = normalize_start.elapsed();
 
-    let candidate_build_start = Instant::now();
     let mut candidates = Vec::new();
-    let mut skipped_prefix_gap_count = 0_usize;
     for range in ranges {
         let start = range.get_start();
         let end = range.get_end();
@@ -147,26 +123,7 @@ fn build_true_block_sample_ranges<S: Snapshot>(
         }
 
         if range_anchors.is_empty() {
-            info!("analyze true data block sampling fallback";
-                "component" => "tikv",
-                "reason" => "range_without_anchor",
-                "cf" => CF_WRITE,
-                "input_ranges" => ranges.len(),
-                "anchor_count" => anchors.len(),
-                "original_anchor_count" => original_anchor_count,
-                "dedup_anchor_count" => dedup_anchor_count,
-                "dedup_merged_weight" => dedup_merged_weight,
-                "anchor_load_elapsed_ms" => duration_ms(anchor_load_elapsed),
-                "normalize_elapsed_ms" => duration_ms(normalize_elapsed),
-            );
             return Ok(None);
-        }
-
-        if start < range_anchors[0].0.as_slice() {
-            // The first anchor is the first storage key in the first data
-            // block for this range, so the prefix before it should not reuse
-            // the first block's weight.
-            skipped_prefix_gap_count += 1;
         }
 
         for (idx, (block_start, weight)) in range_anchors.iter().enumerate() {
@@ -183,22 +140,7 @@ fn build_true_block_sample_ranges<S: Snapshot>(
             }
         }
     }
-    let candidate_build_elapsed = candidate_build_start.elapsed();
     if candidates.is_empty() {
-        info!("analyze true data block sampling fallback";
-            "component" => "tikv",
-            "reason" => "empty_candidate",
-            "cf" => CF_WRITE,
-            "input_ranges" => ranges.len(),
-            "anchor_count" => anchors.len(),
-            "original_anchor_count" => original_anchor_count,
-            "dedup_anchor_count" => dedup_anchor_count,
-            "dedup_merged_weight" => dedup_merged_weight,
-            "skipped_prefix_gap_count" => skipped_prefix_gap_count,
-            "anchor_load_elapsed_ms" => duration_ms(anchor_load_elapsed),
-            "normalize_elapsed_ms" => duration_ms(normalize_elapsed),
-            "candidate_build_elapsed_ms" => duration_ms(candidate_build_elapsed),
-        );
         return Ok(None);
     }
 
@@ -206,25 +148,9 @@ fn build_true_block_sample_ranges<S: Snapshot>(
         .iter()
         .fold(0_u64, |sum, candidate| sum.saturating_add(candidate.weight));
     if total_weight == 0 {
-        info!("analyze true data block sampling fallback";
-            "component" => "tikv",
-            "reason" => "zero_total_weight",
-            "cf" => CF_WRITE,
-            "input_ranges" => ranges.len(),
-            "anchor_count" => anchors.len(),
-            "candidate_ranges" => candidates.len(),
-            "original_anchor_count" => original_anchor_count,
-            "dedup_anchor_count" => dedup_anchor_count,
-            "dedup_merged_weight" => dedup_merged_weight,
-            "skipped_prefix_gap_count" => skipped_prefix_gap_count,
-            "anchor_load_elapsed_ms" => duration_ms(anchor_load_elapsed),
-            "normalize_elapsed_ms" => duration_ms(normalize_elapsed),
-            "candidate_build_elapsed_ms" => duration_ms(candidate_build_elapsed),
-        );
         return Ok(None);
     }
 
-    let select_start = Instant::now();
     let sample_count =
         ((candidates.len() as f64 * sample_rate).ceil() as usize).clamp(1, candidates.len());
     let mut selected_indices = BTreeSet::new();
@@ -247,36 +173,17 @@ fn build_true_block_sample_ranges<S: Snapshot>(
     }
     let mut selected = Vec::with_capacity(selected_indices.len());
     let mut selected_weight = 0_u64;
-    let mut max_unselected_index_gap = 0_usize;
-    let mut max_unselected_weight_gap = 0_u64;
-    let mut last_selected = None;
-    let mut prefix_weight = 0_u64;
     let mut selected_iter = selected_indices.iter().copied().peekable();
     for (idx, candidate) in candidates.iter().enumerate() {
         if matches!(selected_iter.peek(), Some(selected_idx) if *selected_idx == idx) {
             selected_iter.next();
-            let index_gap = match last_selected {
-                Some(last_idx) => idx.saturating_sub(last_idx + 1),
-                None => idx,
-            };
-            max_unselected_index_gap = max_unselected_index_gap.max(index_gap);
-            max_unselected_weight_gap = max_unselected_weight_gap.max(prefix_weight);
-            prefix_weight = 0;
-            last_selected = Some(idx);
             selected_weight = selected_weight.saturating_add(candidate.weight);
             selected.push(new_key_range(
                 candidate.start.clone(),
                 candidate.end.clone(),
             ));
-        } else {
-            prefix_weight = prefix_weight.saturating_add(candidate.weight);
         }
     }
-    max_unselected_index_gap = max_unselected_index_gap.max(match last_selected {
-        Some(last_idx) => candidates.len().saturating_sub(last_idx + 1),
-        None => candidates.len(),
-    });
-    max_unselected_weight_gap = max_unselected_weight_gap.max(prefix_weight);
     if selected.is_empty() {
         let candidate = &candidates[0];
         selected_weight = candidate.weight;
@@ -285,54 +192,10 @@ fn build_true_block_sample_ranges<S: Snapshot>(
             candidate.end.clone(),
         ));
     }
-    let select_elapsed = select_start.elapsed();
     if selected.is_empty() || selected_weight == 0 {
-        info!("analyze true data block sampling fallback";
-            "component" => "tikv",
-            "reason" => "empty_selected",
-            "cf" => CF_WRITE,
-            "input_ranges" => ranges.len(),
-            "anchor_count" => anchors.len(),
-            "candidate_ranges" => candidates.len(),
-            "total_weight" => total_weight,
-            "original_anchor_count" => original_anchor_count,
-            "dedup_anchor_count" => dedup_anchor_count,
-            "dedup_merged_weight" => dedup_merged_weight,
-            "skipped_prefix_gap_count" => skipped_prefix_gap_count,
-            "anchor_load_elapsed_ms" => duration_ms(anchor_load_elapsed),
-            "normalize_elapsed_ms" => duration_ms(normalize_elapsed),
-            "candidate_build_elapsed_ms" => duration_ms(candidate_build_elapsed),
-            "select_elapsed_ms" => duration_ms(select_elapsed),
-        );
         return Ok(None);
     }
 
-    info!("analyze true data block sampling";
-        "component" => "tikv",
-        "cf" => CF_WRITE,
-        "input_ranges" => ranges.len(),
-        "original_anchor_count" => original_anchor_count,
-        "anchor_count" => anchors.len(),
-        "dedup_anchor_count" => dedup_anchor_count,
-        "dedup_merged_weight" => dedup_merged_weight,
-        "candidate_ranges" => candidates.len(),
-        "selected_ranges" => selected.len(),
-        "selection_mode" => "weighted_systematic_phase_third",
-        "target_selected_ranges" => sample_count,
-        "sample_rate" => sample_rate,
-        "total_weight" => total_weight,
-        "selected_weight" => selected_weight,
-        "selected_weight_rate" => selected_weight as f64 / total_weight as f64,
-        "scale" => total_weight as f64 / selected_weight as f64,
-        "max_unselected_index_gap" => max_unselected_index_gap,
-        "max_unselected_weight_gap" => max_unselected_weight_gap,
-        "skipped_prefix_gap_count" => skipped_prefix_gap_count,
-        "anchor_load_elapsed_ms" => duration_ms(anchor_load_elapsed),
-        "normalize_elapsed_ms" => duration_ms(normalize_elapsed),
-        "candidate_build_elapsed_ms" => duration_ms(candidate_build_elapsed),
-        "select_elapsed_ms" => duration_ms(select_elapsed),
-        "build_elapsed_ms" => duration_ms(build_start.elapsed()),
-    );
     Ok(Some((
         selected,
         BlockSampleScale {
@@ -408,7 +271,9 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                 block_sample_scale = Some(scale);
             }
         }
-        let mut table_scanner = BatchTableScanExecutor::new(
+        // If no usable block anchors can be built, keep the original ranges and
+        // scan them fully instead of falling back to row-level skip sampling.
+        let table_scanner = BatchTableScanExecutor::new(
             storage,
             Arc::new(EvalConfig::default()),
             columns_info.clone(),
@@ -418,9 +283,6 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             false, // Streaming mode is not supported in Analyze request, always false here
             req.take_primary_prefix_column_ids(),
         )?;
-        if build_singletons && block_sample_scale.is_none() {
-            table_scanner.set_row_sample_rate(ndv_rate);
-        }
         Ok(Self {
             data: table_scanner,
             accumulated_storage_stats: Statistics::default(),
@@ -469,20 +331,12 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
         let mut is_drained = false;
         let mut collector = self.new_collector();
         let mut ctx = EvalContext::default();
-        let scan_start = Instant::now();
-        let mut batch_count = 0_u64;
-        let mut read_bytes = 0_usize;
-        let mut next_batch_elapsed = Duration::ZERO;
-        let mut encode_collect_elapsed = Duration::ZERO;
-        let mut quota_consume_elapsed = Duration::ZERO;
-        let mut quota_delay_total = Duration::ZERO;
         while !is_drained {
             // Use background limiters for both manual and auto analyze so that iops_limiter
             // (and other background quotas) apply to manual analyze as well.
             let mut sample = self.quota_limiter.new_sample(false);
             let mut read_size: usize = 0;
             {
-                let next_batch_start = Instant::now();
                 let result = {
                     let (duration, res) = sample
                         .observe_cpu_async(self.data.next_batch(BATCH_MAX_SIZE))
@@ -490,8 +344,6 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                     sample.add_cpu_time(duration);
                     res
                 };
-                next_batch_elapsed += next_batch_start.elapsed();
-                batch_count += 1;
 
                 // Use request-scoped storage stats for IOPS (like collect_scan_statistics),
                 // and count only RocksDB block reads as an approximation of disk IOPS.
@@ -528,7 +380,6 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                 collector.mut_base().count +=
                     exec_stats.scanned_rows_per_range.into_iter().sum::<usize>() as u64;
 
-                let encode_collect_start = Instant::now();
                 let columns_slice = result.physical_columns.as_slice();
                 let mut column_vals: Vec<Vec<u8>> = vec![vec![]; self.columns_info.len()];
                 let mut collation_key_vals: Vec<Vec<u8>> = vec![vec![]; self.columns_info.len()];
@@ -570,66 +421,22 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                     );
                     collector.collect_column(&column_vals, &collation_key_vals, &self.columns_info);
                 }
-                encode_collect_elapsed += encode_collect_start.elapsed();
             }
 
             sample.add_read_bytes(read_size);
-            read_bytes += read_size;
             // Don't let analyze bandwidth limit the quota limiter, this is already limited
             // in rate limiter.
-            let quota_consume_start = Instant::now();
             let quota_delay = {
                 // Use background limiters for both manual and auto analyze so that iops_limiter
                 // applies to manual analyze as well.
                 self.quota_limiter.consume_sample(sample, false).await
             };
-            quota_consume_elapsed += quota_consume_start.elapsed();
-            quota_delay_total += quota_delay;
 
             if !quota_delay.is_zero() {
                 NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                     .get(ThrottleType::analyze_full_sampling)
                     .inc_by(quota_delay.as_micros() as u64);
             }
-        }
-        debug!("analyze full sampling trace";
-            "component" => "tikv",
-            "phase" => "tikv.scan_full_sampling_table",
-            "event" => "finish",
-            "elapsed_ms" => scan_start.elapsed().as_millis() as u64,
-            "next_batch_elapsed_ms" => duration_ms(next_batch_elapsed),
-            "encode_collect_elapsed_ms" => duration_ms(encode_collect_elapsed),
-            "quota_consume_elapsed_ms" => duration_ms(quota_consume_elapsed),
-            "quota_delay_ms" => duration_ms(quota_delay_total),
-            "batch_count" => batch_count,
-            "scanned_rows" => collector.mut_base().count,
-            "read_bytes" => read_bytes,
-            "columns" => self.columns_info.len(),
-            "column_groups" => self.column_groups.len(),
-            "max_sample_size" => self.max_sample_size,
-            "sample_rate" => self.sample_rate,
-            "is_auto_analyze" => self.is_auto_analyze,
-        );
-        if self.block_sample_scale.is_some() {
-            info!("analyze true data block sampling scan summary";
-                "component" => "tikv",
-                "phase" => "tikv.scan_true_data_block_sampling_table",
-                "event" => "finish",
-                "elapsed_ms" => scan_start.elapsed().as_millis() as u64,
-                "next_batch_elapsed_ms" => duration_ms(next_batch_elapsed),
-                "encode_collect_elapsed_ms" => duration_ms(encode_collect_elapsed),
-                "quota_consume_elapsed_ms" => duration_ms(quota_consume_elapsed),
-                "quota_delay_ms" => duration_ms(quota_delay_total),
-                "batch_count" => batch_count,
-                "scanned_rows" => collector.mut_base().count,
-                "sketch_sample_count" => collector.mut_base().sketch_sample_count,
-                "read_bytes" => read_bytes,
-                "columns" => self.columns_info.len(),
-                "column_groups" => self.column_groups.len(),
-                "max_sample_size" => self.max_sample_size,
-                "sample_rate" => self.sample_rate,
-                "is_auto_analyze" => self.is_auto_analyze,
-            );
         }
         if let Some(scale) = self.block_sample_scale {
             let sampled_rows = collector.mut_base().count;
@@ -648,11 +455,10 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                 "scale" => scale.total_weight as f64 / scale.selected_weight as f64,
             );
         }
-        // Row-level NDV sub-sampling only tallies null_count/total_sizes for
-        // selected rows. Rescale them before the single-column-group copy so
-        // derived columns see corrected values.
+        // NDV sub-sampling only tallies null_count/total_sizes for selected
+        // rows. Rescale them before the single-column-group copy so derived
+        // columns see corrected values.
         collector.mut_base().rescale_null_count_and_total_sizes();
-        let column_group_fixup_start = Instant::now();
         for i in 0..self.column_groups.len() {
             let offsets = self.column_groups[i].get_column_offsets();
             if offsets.len() != 1 {
@@ -678,13 +484,6 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             collector.mut_base().total_sizes[col_group_pos] =
                 collector.mut_base().total_sizes[col_pos];
         }
-        debug!("analyze full sampling trace";
-            "component" => "tikv",
-            "phase" => "tikv.column_group_fixup",
-            "event" => "finish",
-            "elapsed_ms" => duration_ms(column_group_fixup_start.elapsed()),
-            "column_groups" => self.column_groups.len(),
-        );
         Ok(AnalyzeSamplingResult::new(collector))
     }
 }
