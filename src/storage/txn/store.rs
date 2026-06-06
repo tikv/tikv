@@ -527,6 +527,11 @@ impl<S: Snapshot> SnapshotStore<S> {
     }
 
     #[inline]
+    pub fn snapshot(&self) -> &S {
+        &self.snapshot
+    }
+
+    #[inline]
     pub fn set_isolation_level(&mut self, isolation_level: IsolationLevel) {
         self.isolation_level = isolation_level;
     }

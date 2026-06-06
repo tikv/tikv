@@ -2,7 +2,13 @@
 
 use std::fmt::Debug;
 
-use crate::{CfNamesExt, SnapshotMiscExt, iterable::Iterable, peekable::Peekable};
+use crate::{CfNamesExt, Result, SnapshotMiscExt, iterable::Iterable, peekable::Peekable};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataBlockKeyAnchor {
+    pub user_key: Vec<u8>,
+    pub range_size: u64,
+}
 
 /// A consistent read-only view of the database.
 ///
@@ -17,5 +23,14 @@ where
     /// returns false if the in memory engine is disabled.
     fn in_memory_engine_hit(&self) -> bool {
         false
+    }
+
+    fn approximate_key_anchors_cf(
+        &self,
+        _cf: &str,
+        _lower_bound: Option<&[u8]>,
+        _upper_bound: Option<&[u8]>,
+    ) -> Result<Vec<DataBlockKeyAnchor>> {
+        Ok(Vec::new())
     }
 }

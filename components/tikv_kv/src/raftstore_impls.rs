@@ -2,7 +2,7 @@
 
 use std::{num::NonZeroU64, sync::Arc};
 
-use engine_traits::{CfName, IterOptions, Peekable, ReadOptions, Snapshot};
+use engine_traits::{CfName, DataBlockKeyAnchor, IterOptions, Peekable, ReadOptions, Snapshot};
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use pd_client::BucketMeta;
 use raftstore::{
@@ -100,6 +100,37 @@ impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
             "injected error for iter_cf"
         )));
         RegionSnapshot::iter(self, cf, iter_opt).map_err(kv::Error::from)
+    }
+
+    fn approximate_key_anchors_cf(&self, cf: CfName) -> kv::Result<Vec<DataBlockKeyAnchor>> {
+        let lower_bound = keys::enc_start_key(self.get_region());
+        let upper_bound = keys::enc_end_key(self.get_region());
+        let anchors = self
+            .get_snapshot()
+            .approximate_key_anchors_cf(cf, Some(&lower_bound), Some(&upper_bound))
+            .map_err(kv::ErrorInner::from)?;
+        let start_key = self.get_start_key();
+        let end_key = self.get_end_key();
+        let mut result = Vec::with_capacity(anchors.len());
+        for mut anchor in anchors {
+            if !keys::validate_data_key(&anchor.user_key) {
+                continue;
+            }
+            let origin_key = keys::origin_key(&anchor.user_key);
+            let user_key = match Key::truncate_ts_for(origin_key) {
+                Ok(user_key) => user_key,
+                Err(_) => origin_key,
+            };
+            if user_key < start_key {
+                continue;
+            }
+            if !end_key.is_empty() && user_key >= end_key {
+                continue;
+            }
+            anchor.user_key = user_key.to_vec();
+            result.push(anchor);
+        }
+        Ok(result)
     }
 
     #[inline]

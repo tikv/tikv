@@ -33,6 +33,10 @@ impl<S: Store> TikvStorage<S> {
             scan_value_sample_rate: 1.0,
         }
     }
+
+    pub(crate) fn store(&self) -> &S {
+        &self.store
+    }
 }
 
 impl<S: Store> Storage for TikvStorage<S> {
