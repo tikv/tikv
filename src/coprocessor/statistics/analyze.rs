@@ -73,6 +73,12 @@ fn normalize_block_anchor_key(key: Vec<u8>) -> Vec<u8> {
     }
 }
 
+fn percentile_sorted(values: &[u64], numerator: usize, denominator: usize) -> u64 {
+    debug_assert!(!values.is_empty());
+    let idx = values.len().saturating_sub(1).saturating_mul(numerator) / denominator.max(1);
+    values[idx]
+}
+
 fn build_true_block_sample_ranges<S: Snapshot>(
     snapshot: &S,
     ranges: &[KeyRange],
@@ -82,6 +88,7 @@ fn build_true_block_sample_ranges<S: Snapshot>(
         return Ok(None);
     }
     let mut anchors = snapshot.approximate_key_anchors_cf(CF_WRITE)?;
+    let raw_anchor_count = anchors.len();
     if anchors.is_empty() {
         return Ok(None);
     }
@@ -150,6 +157,15 @@ fn build_true_block_sample_ranges<S: Snapshot>(
     if total_weight == 0 {
         return Ok(None);
     }
+    let mut candidate_weights = candidates
+        .iter()
+        .map(|candidate| candidate.weight)
+        .collect::<Vec<_>>();
+    candidate_weights.sort_unstable();
+    let candidate_weight_p50 = percentile_sorted(&candidate_weights, 50, 100);
+    let candidate_weight_p95 = percentile_sorted(&candidate_weights, 95, 100);
+    let candidate_weight_p99 = percentile_sorted(&candidate_weights, 99, 100);
+    let candidate_weight_max = candidate_weights.last().copied().unwrap_or(0);
 
     let sample_count =
         ((candidates.len() as f64 * sample_rate).ceil() as usize).clamp(1, candidates.len());
@@ -171,13 +187,29 @@ fn build_true_block_sample_ranges<S: Snapshot>(
         }
         selected_indices.insert(candidate_idx);
     }
+    let mut max_unselected_index_gap = 0_usize;
+    let mut prev_selected = None;
+    for selected_idx in selected_indices.iter().copied() {
+        let gap = match prev_selected {
+            Some(prev) => selected_idx.saturating_sub(prev + 1),
+            None => selected_idx,
+        };
+        max_unselected_index_gap = max_unselected_index_gap.max(gap);
+        prev_selected = Some(selected_idx);
+    }
+    if let Some(last_selected) = prev_selected {
+        max_unselected_index_gap =
+            max_unselected_index_gap.max(candidates.len().saturating_sub(last_selected + 1));
+    }
     let mut selected = Vec::with_capacity(selected_indices.len());
     let mut selected_weight = 0_u64;
+    let mut selected_weight_max = 0_u64;
     let mut selected_iter = selected_indices.iter().copied().peekable();
     for (idx, candidate) in candidates.iter().enumerate() {
         if matches!(selected_iter.peek(), Some(selected_idx) if *selected_idx == idx) {
             selected_iter.next();
             selected_weight = selected_weight.saturating_add(candidate.weight);
+            selected_weight_max = selected_weight_max.max(candidate.weight);
             selected.push(new_key_range(
                 candidate.start.clone(),
                 candidate.end.clone(),
@@ -187,6 +219,7 @@ fn build_true_block_sample_ranges<S: Snapshot>(
     if selected.is_empty() {
         let candidate = &candidates[0];
         selected_weight = candidate.weight;
+        selected_weight_max = candidate.weight;
         selected.push(new_key_range(
             candidate.start.clone(),
             candidate.end.clone(),
@@ -195,12 +228,33 @@ fn build_true_block_sample_ranges<S: Snapshot>(
     if selected.is_empty() || selected_weight == 0 {
         return Ok(None);
     }
+    let selected_range_count = selected.len();
+    info!("analyze true data block sampling select diagnostic";
+        "component" => "tikv",
+        "raw_anchor_count" => raw_anchor_count,
+        "merged_anchor_count" => anchors.len(),
+        "candidate_count" => candidates.len(),
+        "sample_rate" => sample_rate,
+        "sample_count" => sample_count,
+        "selected_ranges" => selected_range_count,
+        "total_weight" => total_weight,
+        "selected_weight" => selected_weight,
+        "selected_weight_rate" => selected_weight as f64 / total_weight as f64,
+        "candidate_weight_p50" => candidate_weight_p50,
+        "candidate_weight_p95" => candidate_weight_p95,
+        "candidate_weight_p99" => candidate_weight_p99,
+        "candidate_weight_max" => candidate_weight_max,
+        "selected_weight_max" => selected_weight_max,
+        "max_unselected_index_gap" => max_unselected_index_gap,
+    );
 
     Ok(Some((
         selected,
         BlockSampleScale {
             total_weight,
             selected_weight,
+            candidate_count: candidates.len(),
+            selected_range_count,
         },
     )))
 }
@@ -223,12 +277,19 @@ pub(crate) struct RowSampleBuilder<S: Snapshot, F: KvFormat> {
     #[allow(dead_code)] // kept for future use (e.g. priority or reporting)
     is_auto_analyze: bool,
     block_sample_scale: Option<BlockSampleScale>,
+    trueblock_diag_batch_count: u64,
+    trueblock_diag_cumulative_rows: u64,
+    trueblock_diag_cumulative_block_reads: u64,
+    trueblock_diag_cumulative_flow_bytes: u64,
+    trueblock_diag_cumulative_processed_size: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct BlockSampleScale {
     total_weight: u64,
     selected_weight: u64,
+    candidate_count: usize,
+    selected_range_count: usize,
 }
 
 #[derive(Debug)]
@@ -295,6 +356,11 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             quota_limiter,
             is_auto_analyze,
             block_sample_scale,
+            trueblock_diag_batch_count: 0,
+            trueblock_diag_cumulative_rows: 0,
+            trueblock_diag_cumulative_block_reads: 0,
+            trueblock_diag_cumulative_flow_bytes: 0,
+            trueblock_diag_cumulative_processed_size: 0,
         })
     }
 
@@ -357,6 +423,10 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                 let batch_total_ops = batch_stats.data.total_op_count()
                     + batch_stats.lock.total_op_count()
                     + batch_stats.write.total_op_count();
+                let batch_flow_read_bytes = batch_stats.data.flow_stats.read_bytes
+                    + batch_stats.lock.flow_stats.read_bytes
+                    + batch_stats.write.flow_stats.read_bytes;
+                let batch_processed_size = batch_stats.processed_size;
                 sample.add_iops(batch_iops);
                 self.accumulated_storage_stats.add(&batch_stats);
 
@@ -375,6 +445,51 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                     .inc();
                 let _guard = sample.observe_cpu();
                 is_drained = result.is_drained?.stop();
+                if self.block_sample_scale.is_some() {
+                    let batch_rows = result.logical_rows.len() as u64;
+                    self.trueblock_diag_batch_count =
+                        self.trueblock_diag_batch_count.saturating_add(1);
+                    self.trueblock_diag_cumulative_rows = self
+                        .trueblock_diag_cumulative_rows
+                        .saturating_add(batch_rows);
+                    self.trueblock_diag_cumulative_block_reads = self
+                        .trueblock_diag_cumulative_block_reads
+                        .saturating_add(batch_iops as u64);
+                    self.trueblock_diag_cumulative_flow_bytes = self
+                        .trueblock_diag_cumulative_flow_bytes
+                        .saturating_add(batch_flow_read_bytes as u64);
+                    self.trueblock_diag_cumulative_processed_size = self
+                        .trueblock_diag_cumulative_processed_size
+                        .saturating_add(batch_processed_size as u64);
+                    let batch_no = self.trueblock_diag_batch_count;
+                    let abnormal_batch = batch_iops >= 1_000
+                        || batch_flow_read_bytes >= 50 * 1024 * 1024
+                        || batch_processed_size >= 50 * 1024 * 1024
+                        || batch_rows < (BATCH_MAX_SIZE / 16) as u64;
+                    if batch_no <= 5 || abnormal_batch || batch_no.is_multiple_of(100) || is_drained
+                    {
+                        info!("analyze true data block sampling scan diagnostic";
+                            "component" => "tikv",
+                            "batch_no" => batch_no,
+                            "batch_rows" => batch_rows,
+                            "batch_block_read_count" => batch_iops,
+                            "batch_total_ops" => batch_total_ops,
+                            "batch_flow_read_bytes" => batch_flow_read_bytes,
+                            "batch_processed_size" => batch_processed_size,
+                            "write_total_ops" => batch_stats.write.total_op_count(),
+                            "write_processed_keys" => batch_stats.write.processed_keys,
+                            "write_block_read_count" => batch_stats.write.block_read_count,
+                            "data_total_ops" => batch_stats.data.total_op_count(),
+                            "data_processed_keys" => batch_stats.data.processed_keys,
+                            "data_block_read_count" => batch_stats.data.block_read_count,
+                            "cumulative_rows" => self.trueblock_diag_cumulative_rows,
+                            "cumulative_block_read_count" => self.trueblock_diag_cumulative_block_reads,
+                            "cumulative_flow_read_bytes" => self.trueblock_diag_cumulative_flow_bytes,
+                            "cumulative_processed_size" => self.trueblock_diag_cumulative_processed_size,
+                            "is_drained" => is_drained,
+                        );
+                    }
+                }
                 let mut exec_stats = ExecuteStats::new(0);
                 self.data.collect_exec_stats(&mut exec_stats);
                 collector.mut_base().count +=
@@ -452,6 +567,12 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                 "sketch_sample_count" => collector.mut_base().sketch_sample_count,
                 "total_weight" => scale.total_weight,
                 "selected_weight" => scale.selected_weight,
+                "candidate_count" => scale.candidate_count,
+                "selected_range_count" => scale.selected_range_count,
+                "scan_batch_count" => self.trueblock_diag_batch_count,
+                "cumulative_block_read_count" => self.trueblock_diag_cumulative_block_reads,
+                "cumulative_flow_read_bytes" => self.trueblock_diag_cumulative_flow_bytes,
+                "cumulative_processed_size" => self.trueblock_diag_cumulative_processed_size,
                 "scale" => scale.total_weight as f64 / scale.selected_weight as f64,
             );
         }
