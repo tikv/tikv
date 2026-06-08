@@ -116,6 +116,19 @@ pub struct BatchExecutorsRunner<SS> {
     /// sent over the network.
     max_keys_read: Option<u64>,
 
+    /// Byte-budget counterpart of `paging_size`, received from
+    /// `coprocessor.Request.paging_size_bytes`.
+    ///
+    /// When set, the runner stops once the cumulative bytes scanned by the
+    /// bottom-most scan executor (raw key + value lengths, peeked via
+    /// `BatchExecutor::peek_scanned_bytes_sum`) reach this threshold. Like
+    /// `max_keys_read`, the byte count covers every physically scanned KV
+    /// entry before any filtering, aggregation, or projection, so a full scan
+    /// that returns few rows is still truncated by the actual data volume read.
+    /// It is independent of `paging_size` and `max_keys_read`; whichever
+    /// threshold is reached first stops the scan.
+    paging_size_bytes: Option<u64>,
+
     quota_limiter: Arc<QuotaLimiter>,
 
     /// Information for intermediate output channels.
@@ -651,6 +664,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         is_streaming: bool,
         paging_size: Option<u64>,
         max_keys_read: Option<u64>,
+        paging_size_bytes: Option<u64>,
         quota_limiter: Arc<QuotaLimiter>,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
@@ -672,9 +686,13 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             // Required whenever the runner may return a partial result:
             //   - streaming: caller fetches multiple pages
             //   - paging: paging_size limits rows per page
-            //   - max_keys_read: budget limit may stop the scan early
+            //   - max_keys_read: row budget may stop the scan early
+            //   - paging_size_bytes: byte budget may stop the scan early
             // If none of these apply the executor can skip range tracking.
-            is_streaming || paging_size.is_some() || max_keys_read.is_some(),
+            is_streaming
+                || paging_size.is_some()
+                || max_keys_read.is_some()
+                || paging_size_bytes.is_some(),
         )?;
 
         let req_encode_type = req.get_encode_type();
@@ -744,6 +762,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             encode_type,
             paging_size,
             max_keys_read,
+            paging_size_bytes,
             quota_limiter,
             intermediate_channels,
             reserved_intermediate_results: None,
@@ -791,6 +810,9 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         // Running total of physical KV keys scanned (sum of scanned_rows_per_range),
         // used for max_keys_read enforcement.
         let mut scanned_keys_total: u64 = 0;
+        // Running total of MVCC scanned bytes (processed_size) from the storage
+        // layer, peeked via peek_scanned_bytes_sum for paging_size_bytes.
+        let mut scanned_bytes_all: usize = 0;
         let mut intermediate_output_chunks = if self.intermediate_channels.is_empty() {
             vec![]
         } else {
@@ -844,6 +866,12 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 scanned_keys_total = self.out_most_executor.peek_scanned_rows_sum() as u64;
             }
 
+            // Likewise peek the accumulated scanned bytes (raw key + value) for
+            // paging_size_bytes without draining any state.
+            if self.paging_size_bytes.is_some() {
+                scanned_bytes_all = self.out_most_executor.peek_scanned_bytes_sum();
+            }
+
             if chunk.has_rows_data() {
                 chunks.push(chunk);
             }
@@ -851,6 +879,9 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             if drained.stop()
                 || self.paging_size.is_some_and(|p| record_all >= p as usize)
                 || self.max_keys_read.is_some_and(|m| scanned_keys_total >= m)
+                || self
+                    .paging_size_bytes
+                    .is_some_and(|p| scanned_bytes_all >= p as usize)
             {
                 self.out_most_executor
                     .collect_exec_stats(&mut self.exec_stats);
@@ -863,14 +894,16 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 );
                 let range = if drained == BatchExecIsDrain::Drain {
                     None
-                } else {
+                } else if self.paging_size.is_some()
+                    || self.max_keys_read.is_some()
+                    || self.paging_size_bytes.is_some()
+                {
                     // It's not allowed to stop paging when BatchExecIsDrain::PagingDrain.
-                    // Return scanned range for paging or when max_keys_read stopped early.
-                    if self.paging_size.is_some() || self.max_keys_read.is_some() {
-                        Some(self.out_most_executor.take_scanned_range())
-                    } else {
-                        None
-                    }
+                    // Return the scanned range whenever the scan stopped early due to a
+                    // paging row/byte budget or max_keys_read, so the caller can resume.
+                    Some(self.out_most_executor.take_scanned_range())
+                } else {
+                    None
                 };
 
                 let mut sel_resp = SelectResponse::default();
@@ -1371,6 +1404,7 @@ mod tests {
             Deadline::from_now(Duration::from_secs(300)),
             1024,
             false,
+            None,
             None,
             None,
             Arc::new(QuotaLimiter::default()),
@@ -2502,5 +2536,109 @@ mod tests {
             range.is_none(),
             "Range should be None when executor drained before limit"
         );
+    }
+
+    // --- Tests for paging_size_bytes ---
+
+    /// paging_size_bytes stops the scan early once the cumulative scanned bytes
+    /// (peeked via `peek_scanned_bytes_sum`) reach the budget, mirroring
+    /// `max_keys_read` but on a byte budget instead of a row budget.
+    #[test]
+    fn test_paging_size_bytes_stops_early() {
+        let field_types = vec![FieldTypeTp::Long.into()];
+
+        let mut runner = build_simple_runner_for_test();
+        runner.paging_size_bytes = Some(1500);
+
+        let mut mock_executor = MockExecutor::new(
+            field_types,
+            vec![
+                build_n_rows_int_result(0, 1),
+                build_n_rows_int_result(10, 1),
+                // Third batch should NOT be reached.
+                build_n_rows_int_result(100, 1),
+            ],
+        );
+        // 1000 bytes per batch: cumulative 1000, then 2000 (>= 1500 -> stop).
+        mock_executor.set_scanned_bytes_per_batch(vec![1000, 1000, 1000]);
+        mock_executor.scanned_range = Some((b"a".to_vec(), b"z".to_vec()).into());
+        runner.out_most_executor = Box::new(mock_executor);
+
+        let (resp, range) = block_on(runner.handle_request()).unwrap();
+        assert_eq!(
+            2,
+            resp.get_chunks().len(),
+            "Expected 2 chunks before the byte budget was hit"
+        );
+        assert!(
+            range.is_some(),
+            "Expected scanned range when stopped by paging_size_bytes"
+        );
+    }
+
+    /// When the executor drains before the byte budget is reached, all rows are
+    /// returned and the range is None (fully drained, not an early stop).
+    #[test]
+    fn test_paging_size_bytes_natural_drain_before_limit() {
+        let field_types = vec![FieldTypeTp::Long.into()];
+
+        let mut runner = build_simple_runner_for_test();
+        // Budget far higher than the total scanned bytes (300).
+        runner.paging_size_bytes = Some(100_000);
+
+        let mut mock_executor = MockExecutor::new(
+            field_types,
+            vec![
+                build_n_rows_int_result(0, 1),
+                build_n_rows_int_result(10, 2),
+                {
+                    let mut result = build_n_rows_int_result(100, 1);
+                    result.is_drained = Ok(BatchExecIsDrain::Drain);
+                    result
+                },
+            ],
+        );
+        mock_executor.set_scanned_bytes_per_batch(vec![100, 100, 100]);
+        runner.out_most_executor = Box::new(mock_executor);
+
+        let (resp, range) = block_on(runner.handle_request()).unwrap();
+        assert_eq!(
+            3,
+            resp.get_chunks().len(),
+            "All batches should be returned when the budget is not hit"
+        );
+        assert!(
+            range.is_none(),
+            "Range should be None when the executor drained before the budget"
+        );
+    }
+
+    /// paging_size_bytes = None must not limit scanning at all.
+    #[test]
+    fn test_paging_size_bytes_disabled() {
+        let field_types = vec![FieldTypeTp::Long.into()];
+
+        let mut runner = build_simple_runner_for_test();
+        runner.paging_size_bytes = None;
+
+        let mut mock_executor = MockExecutor::new(
+            field_types,
+            vec![build_n_rows_int_result(0, 3), {
+                let mut result = build_n_rows_int_result(10, 2);
+                result.is_drained = Ok(BatchExecIsDrain::Drain);
+                result
+            }],
+        );
+        // Even with large per-batch bytes, a disabled budget never stops early.
+        mock_executor.set_scanned_bytes_per_batch(vec![10_000, 10_000]);
+        runner.out_most_executor = Box::new(mock_executor);
+
+        let (resp, range) = block_on(runner.handle_request()).unwrap();
+        assert_eq!(
+            2,
+            resp.get_chunks().len(),
+            "All batches should be returned when paging_size_bytes is disabled"
+        );
+        assert!(range.is_none(), "Range should be None when fully drained");
     }
 }
