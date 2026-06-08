@@ -54,8 +54,9 @@ use crate::{
     delegate::{post_init_downstream, Delegate, DownstreamId, DownstreamState, ObservedRange},
     endpoint::Deregister,
     metrics::*,
-    old_value::{near_seek_old_value, OldValueCursors},
+    old_value::{near_seek_old_value, new_old_value_cursor, OldValueCursors},
     types::ConnId,
+    Error, Result, Task,
 };
 
 pub(crate) enum KvEntry {

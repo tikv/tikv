@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use collections::{HashMap, HashMapEntry};
 use crossbeam::atomic::AtomicCell;
-use futures::{stream::TryStreamExt, SinkExt};
+use futures::stream::TryStreamExt;
 use grpcio::{DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::{
     cdcpb::{

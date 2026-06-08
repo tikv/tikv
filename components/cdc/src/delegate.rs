@@ -44,6 +44,7 @@ use crate::{
     old_value::{OldValueCache, OldValueCallback},
     txn_source::TxnSource,
     types::ConnId,
+    Error, Result,
 };
 
 static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
