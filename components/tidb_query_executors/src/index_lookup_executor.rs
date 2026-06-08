@@ -221,11 +221,15 @@ where
     ) -> Self {
         let force_no_index_lookup = if config.paging_size.is_some()
             || config.max_keys_read.is_some()
+            || config.paging_size_bytes.is_some()
             || table_task_iter_builder.is_none()
         {
-            // We did not support index lookup when paging or max_keys_read is
-            // enabled due to buffering challenges.
-            // TODO: support paging and max_keys_read
+            // We did not support index lookup when paging, max_keys_read or
+            // paging_size_bytes is enabled due to buffering challenges: the
+            // buffered index-then-table-fetch pipeline only counts the index
+            // side, so the row/byte budgets would under-report the table-lookup
+            // scanning.
+            // TODO: support paging, max_keys_read and paging_size_bytes
             // some times we do not have table_task_iter_builder, such as
             // - CommonHandle
             // TODO: support CommonHandle
@@ -2338,6 +2342,19 @@ pub mod tests {
         // the response range and rows consistent on early stop.
         let mut cfg = EvalConfig::default_for_test();
         cfg.max_keys_read = Some(64);
+        let index_lookup = new_index_lookup_executor_for_test(
+            cfg,
+            build_int_array_results(vec![vec![1]]),
+            Some(MockTableTaskIterBuilder),
+            columns.clone(),
+        );
+        assert!(index_lookup.force_no_index_lookup);
+
+        // paging_size_bytes likewise disables index lookup: the byte budget is
+        // peeked from the index side only, so the buffered table fetch would be
+        // uncounted.
+        let mut cfg = EvalConfig::default_for_test();
+        cfg.paging_size_bytes = Some(4096);
         let index_lookup = new_index_lookup_executor_for_test(
             cfg,
             build_int_array_results(vec![vec![1]]),

@@ -672,6 +672,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut config = EvalConfig::from_request(&req)?;
         config.paging_size = paging_size;
         config.max_keys_read = max_keys_read;
+        config.paging_size_bytes = paging_size_bytes;
         let config = Arc::new(config);
         let intermediate_output_descriptors = req.take_intermediate_output_channels();
         let out_most_executor = build_executors::<_, F>(
