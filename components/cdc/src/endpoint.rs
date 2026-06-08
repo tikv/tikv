@@ -63,6 +63,7 @@ use crate::{
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
     service::{validate_kv_api, Conn, ConnId, FeatureGate},
+    types::ConnId,
     CdcObserver, Error,
 };
 

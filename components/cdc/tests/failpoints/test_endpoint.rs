@@ -746,6 +746,36 @@ fn test_cdc_load_unnecessary_old_value() {
     assert_eq!(stats.next_tombstone, 0);
     assert_eq!(stats.prev_tombstone, 0);
 
-    fail::remove("ts_filter_is_helpful_always_true");
+    // create event feed for all regions
+    let mut req_txs = Vec::with_capacity(region_count);
+    let mut event_feeds = Vec::with_capacity(region_count);
+    let mut receive_events = Vec::with_capacity(region_count);
+    for region in regions.clone() {
+        let (mut req_tx, event_feed, receive_event) =
+            new_event_feed(suite.get_region_cdc_client(region.id));
+        let mut req = suite.new_changedata_request(region.id);
+        req.mut_header().set_ticdc_version("7.0.0".into());
+        req.set_region_epoch(region.get_region_epoch().clone());
+        block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+        req_txs.push(req_tx);
+        event_feeds.push(event_feed);
+        receive_events.push(receive_event);
+    }
+
+    check_unresolved_region_count(&suite.endpoints[&1].scheduler(), region_count);
+
+    // Wait until all initialization finishes and check again.
+    fail::remove("before_schedule_resolver_ready");
+    for receive_event in receive_events {
+        receive_event(false);
+    }
+    check_unresolved_region_count(&suite.endpoints[&1].scheduler(), 0);
+
+    for req_tx in req_txs {
+        drop(req_tx);
+    }
+    for event_feed in event_feeds {
+        drop(event_feed);
+    }
     suite.stop();
 }
