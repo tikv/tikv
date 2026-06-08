@@ -61,6 +61,17 @@ const BACKUP_BATCH_LIMIT: usize = 1024;
 // task yield duration when resource limit is on.
 const TASK_YIELD_DURATION: Duration = Duration::from_millis(10);
 
+pub fn storage_backend_config(config: &BackupConfig) -> BackendConfig {
+    BackendConfig {
+        s3_multi_part_size: config.s3_multi_part_size.0 as usize,
+        gcp_v2_enable: config.gcp_v2_enable,
+        hdfs_config: HdfsConfig {
+            hadoop_home: config.hadoop.home.clone(),
+            linux_user: config.hadoop.linux_user.clone(),
+        },
+    }
+}
+
 #[derive(Clone)]
 struct Request {
     start_key: Vec<u8>,
@@ -236,8 +247,15 @@ async fn save_backup_file_worker<EK: KvEngine>(
 ) {
     while let Ok(msg) = rx.recv().await {
         let files = if msg.files.need_flush_keys() {
-            match with_resource_limiter(msg.files.save(&storage), msg.resource_limiter.clone())
-                .await
+            match with_resource_limiter(
+                msg.files.save(&storage),
+                msg.resource_limiter.clone(),
+                false,
+                false,
+                None,
+                0,
+            )
+            .await
             {
                 Ok(mut split_files) => {
                     let mut has_err = false;
@@ -648,6 +666,10 @@ impl ConfigManager {
     fn set_num_threads(&self, num_threads: usize) {
         self.0.write().unwrap().num_threads = num_threads;
     }
+
+    fn set_gcp_v2_enable(&self, gcp_v2_enable: bool) {
+        self.0.write().unwrap().gcp_v2_enable = gcp_v2_enable;
+    }
 }
 
 /// SoftLimitKeeper can run in the background and adjust the number of threads
@@ -927,20 +949,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
     }
 
     fn get_config(&self) -> BackendConfig {
-        BackendConfig {
-            s3_multi_part_size: self.config_manager.0.read().unwrap().s3_multi_part_size.0 as usize,
-            hdfs_config: HdfsConfig {
-                hadoop_home: self.config_manager.0.read().unwrap().hadoop.home.clone(),
-                linux_user: self
-                    .config_manager
-                    .0
-                    .read()
-                    .unwrap()
-                    .hadoop
-                    .linux_user
-                    .clone(),
-            },
-        }
+        storage_backend_config(&self.config_manager.0.read().unwrap())
     }
 
     fn spawn_backup_worker(
@@ -1066,6 +1075,10 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                                 resource_limiter.clone(),
                             ),
                             resource_limiter.clone(),
+                            false,
+                            false,
+                            None,
+                            0,
                         )
                         .await
                     };
@@ -1575,6 +1588,15 @@ pub mod tests {
             endpoint.config_manager.0.read().unwrap().s3_multi_part_size,
             ReadableSize::mb(5)
         );
+    }
+
+    #[test]
+    fn test_gcp_v2_enable_online_config() {
+        let (_tmp, endpoint) = new_endpoint();
+        assert!(endpoint.get_config().gcp_v2_enable);
+
+        endpoint.config_manager.set_gcp_v2_enable(false);
+        assert!(!endpoint.get_config().gcp_v2_enable);
     }
 
     #[test]

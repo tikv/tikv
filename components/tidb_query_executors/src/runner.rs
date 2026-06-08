@@ -91,6 +91,31 @@ pub struct BatchExecutorsRunner<SS> {
     /// current page.
     paging_size: Option<u64>,
 
+    /// Per-task early-stop limit received from
+    /// `coprocessor.Request.max_keys_read`.
+    ///
+    /// When set, the runner stops after the cumulative physical KV keys scanned
+    /// (tracked via `ExecuteStats.scanned_rows_per_range`, one increment per KV
+    /// entry returned by `RangesScanner`) reaches this threshold.  This is a
+    /// **best-effort early-termination signal** so that TiKV avoids scanning
+    /// and transmitting data that TiDB will discard anyway.
+    ///
+    /// # Counting semantics
+    ///
+    /// The counter increments once per KV entry returned from the storage layer
+    /// by the bottom-most scan executor (table scan or index scan), before
+    /// any filtering, aggregation, or projection is applied.  For an
+    /// index-lookup query, the index scan and the subsequent table-row scan
+    /// are separate coprocessor tasks, so each counts independently.
+    ///
+    /// The **authoritative** global enforcement lives in TiDB's
+    /// `copIterator.Next()` which accumulates `ScanDetail.ProcessedKeys`
+    /// (MVCC-level key counts) across all tasks and returns
+    /// `ErrMaxKeysReadExceeded` when exceeded.  The TiKV-side check here is
+    /// purely an efficiency optimisation: it stops early so fewer bytes are
+    /// sent over the network.
+    max_keys_read: Option<u64>,
+
     quota_limiter: Arc<QuotaLimiter>,
 
     /// Information for intermediate output channels.
@@ -446,14 +471,27 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
                     .collect_vec();
 
                 if partition_by.is_empty() {
-                    Box::new(
-                        BatchLimitExecutor::new(
-                            executor,
-                            d.get_limit() as usize,
-                            is_src_scan_executor,
-                        )?
-                        .collect_summary(summary_slot_index),
-                    )
+                    if !d.get_truncate_key_expr().is_empty() {
+                        Box::new(
+                            BatchLimitExecutor::new_rank_limit(
+                                executor,
+                                d.get_limit() as usize,
+                                is_src_scan_executor,
+                                config.clone(),
+                                d.get_truncate_key_expr().into(),
+                            )?
+                            .collect_summary(summary_slot_index),
+                        )
+                    } else {
+                        Box::new(
+                            BatchLimitExecutor::new(
+                                executor,
+                                d.get_limit() as usize,
+                                is_src_scan_executor,
+                            )?
+                            .collect_summary(summary_slot_index),
+                        )
+                    }
                 } else {
                     Box::new(
                         BatchPartitionTopNExecutor::new(
@@ -612,12 +650,14 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         stream_row_limit: usize,
         is_streaming: bool,
         paging_size: Option<u64>,
+        max_keys_read: Option<u64>,
         quota_limiter: Arc<QuotaLimiter>,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
         let mut config = EvalConfig::from_request(&req)?;
         config.paging_size = paging_size;
+        config.max_keys_read = max_keys_read;
         let config = Arc::new(config);
         let intermediate_output_descriptors = req.take_intermediate_output_channels();
         let out_most_executor = build_executors::<_, F>(
@@ -627,9 +667,14 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             extra_storage_accessor,
             ranges,
             config.clone(),
-            is_streaming || paging_size.is_some(), /* For streaming and paging request,
-                                                    * executors will continue scan from range
-                                                    * end where last scan is finished */
+            // `continuable` = true tells the executor tree to track the scanned
+            // range so that the caller can resume from where scanning stopped.
+            // Required whenever the runner may return a partial result:
+            //   - streaming: caller fetches multiple pages
+            //   - paging: paging_size limits rows per page
+            //   - max_keys_read: budget limit may stop the scan early
+            // If none of these apply the executor can skip range tracking.
+            is_streaming || paging_size.is_some() || max_keys_read.is_some(),
         )?;
 
         let req_encode_type = req.get_encode_type();
@@ -698,6 +743,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             stream_row_limit,
             encode_type,
             paging_size,
+            max_keys_read,
             quota_limiter,
             intermediate_channels,
             reserved_intermediate_results: None,
@@ -742,6 +788,9 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut warnings = self.config.new_eval_warnings();
         let mut ctx = EvalContext::new(self.config.clone());
         let mut record_all = 0;
+        // Running total of physical KV keys scanned (sum of scanned_rows_per_range),
+        // used for max_keys_read enforcement.
+        let mut scanned_keys_total: u64 = 0;
         let mut intermediate_output_chunks = if self.intermediate_channels.is_empty() {
             vec![]
         } else {
@@ -783,11 +832,26 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 record_all += record_len;
             }
 
+            // When max_keys_read is active, peek at accumulated scanned rows without
+            // draining scanner state, so collect_exec_stats can still be called once
+            // at the end of the loop.
+            //
+            // For IndexLookUp pushdown, the buffered index-then-table-fetch
+            // pipeline would make this counter under-report. We dodge that by
+            // disabling IndexLookUp pushdown when max_keys_read is set
+            // (see BatchIndexLookUpExecutor::new force_no_index_lookup guard).
+            if self.max_keys_read.is_some() {
+                scanned_keys_total = self.out_most_executor.peek_scanned_rows_sum() as u64;
+            }
+
             if chunk.has_rows_data() {
                 chunks.push(chunk);
             }
 
-            if drained.stop() || self.paging_size.is_some_and(|p| record_all >= p as usize) {
+            if drained.stop()
+                || self.paging_size.is_some_and(|p| record_all >= p as usize)
+                || self.max_keys_read.is_some_and(|m| scanned_keys_total >= m)
+            {
                 self.out_most_executor
                     .collect_exec_stats(&mut self.exec_stats);
                 tidb_query_common::metrics::record_coprocessor_executor_iterations(
@@ -801,8 +865,12 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                     None
                 } else {
                     // It's not allowed to stop paging when BatchExecIsDrain::PagingDrain.
-                    self.paging_size
-                        .map(|_| self.out_most_executor.take_scanned_range())
+                    // Return scanned range for paging or when max_keys_read stopped early.
+                    if self.paging_size.is_some() || self.max_keys_read.is_some() {
+                        Some(self.out_most_executor.take_scanned_range())
+                    } else {
+                        None
+                    }
                 };
 
                 let mut sel_resp = SelectResponse::default();
@@ -1303,6 +1371,7 @@ mod tests {
             Deadline::from_now(Duration::from_secs(300)),
             1024,
             false,
+            None,
             None,
             Arc::new(QuotaLimiter::default()),
         )
@@ -2256,6 +2325,182 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("invalid parent index: 3, for executor with index: 3, executors len: 5")
+        );
+    }
+
+    #[test]
+    fn test_max_keys_read_stops_early() {
+        // Verify that max_keys_read causes handle_request() to stop early,
+        // similar to paging_size behavior.
+        let field_types = vec![FieldTypeTp::Long.into()];
+
+        let mut runner = build_simple_runner_for_test();
+        // Set max_keys_read to 2: should stop after accumulating >= 2 rows.
+        runner.max_keys_read = Some(2);
+
+        let mut mock_executor = MockExecutor::new(
+            field_types.clone(),
+            vec![
+                // first batch: 1 row
+                build_n_rows_int_result(0, 1),
+                // second batch: 1 row (cumulative = 2, hits limit)
+                build_n_rows_int_result(10, 1),
+                // third batch: 1 row (should NOT be reached)
+                build_n_rows_int_result(100, 1),
+            ],
+        );
+        mock_executor.scanned_range = Some((b"a".to_vec(), b"z".to_vec()).into());
+        runner.out_most_executor = Box::new(mock_executor);
+
+        let (mut resp, range) = block_on(runner.handle_request()).unwrap();
+        // Should have stopped at 2 rows (after second batch).
+        let chunks = resp.take_chunks();
+        assert_eq!(
+            2,
+            chunks.len(),
+            "Expected 2 chunks (1 row each) before limit hit"
+        );
+        // Range should be Some (not drained, stopped early due to max_keys_read).
+        assert!(
+            range.is_some(),
+            "Expected scanned range when stopped by max_keys_read"
+        );
+    }
+
+    #[test]
+    fn test_max_keys_read_zero_means_unlimited() {
+        // max_keys_read = None (disabled) should not limit rows.
+        let field_types = vec![FieldTypeTp::Long.into()];
+
+        let mut runner = build_simple_runner_for_test();
+        runner.max_keys_read = None;
+
+        let mock_executor = MockExecutor::new(
+            field_types.clone(),
+            vec![
+                build_n_rows_int_result(0, 3),
+                build_n_rows_int_result(10, 3),
+                {
+                    // Final batch: mark as drained.
+                    let mut result = build_n_rows_int_result(100, 2);
+                    result.is_drained = Ok(BatchExecIsDrain::Drain);
+                    result
+                },
+            ],
+        );
+        runner.out_most_executor = Box::new(mock_executor);
+
+        let (mut resp, range) = block_on(runner.handle_request()).unwrap();
+        let chunks = resp.take_chunks();
+        // All 3 batches (3 + 3 + 2 = 8 rows) should be returned.
+        assert_eq!(
+            3,
+            chunks.len(),
+            "All batches should be returned when unlimited"
+        );
+        // Range should be None because executor drained.
+        assert!(range.is_none(), "Range should be None when fully drained");
+    }
+
+    #[test]
+    fn test_max_keys_read_large_limit_does_not_affect() {
+        // max_keys_read set very high should not interfere with normal execution.
+        let field_types = vec![FieldTypeTp::Long.into()];
+
+        let mut runner = build_simple_runner_for_test();
+        runner.max_keys_read = Some(1000000);
+
+        let mock_executor = MockExecutor::new(
+            field_types.clone(),
+            vec![build_n_rows_int_result(0, 5), {
+                let mut result = build_n_rows_int_result(10, 3);
+                result.is_drained = Ok(BatchExecIsDrain::Drain);
+                result
+            }],
+        );
+        runner.out_most_executor = Box::new(mock_executor);
+
+        let (mut resp, range) = block_on(runner.handle_request()).unwrap();
+        let chunks = resp.take_chunks();
+        assert_eq!(
+            2,
+            chunks.len(),
+            "All batches should be returned under high limit"
+        );
+        assert!(range.is_none(), "Range should be None when fully drained");
+    }
+
+    #[test]
+    fn test_max_keys_read_exact_limit() {
+        // When row count exactly equals limit, should still stop.
+        let field_types = vec![FieldTypeTp::Long.into()];
+
+        let mut runner = build_simple_runner_for_test();
+        runner.max_keys_read = Some(3);
+
+        let mut mock_executor = MockExecutor::new(
+            field_types.clone(),
+            vec![
+                // 3 rows in first batch - hits limit exactly.
+                build_n_rows_int_result(0, 3),
+                // Should not reach this batch.
+                build_n_rows_int_result(100, 5),
+            ],
+        );
+        mock_executor.scanned_range = Some((b"a".to_vec(), b"z".to_vec()).into());
+        runner.out_most_executor = Box::new(mock_executor);
+
+        let (mut resp, range) = block_on(runner.handle_request()).unwrap();
+        let chunks = resp.take_chunks();
+        assert_eq!(
+            1,
+            chunks.len(),
+            "Should stop after first batch hits limit exactly"
+        );
+        assert!(
+            range.is_some(),
+            "Should return range when stopped by max_keys_read"
+        );
+    }
+
+    #[test]
+    fn test_max_keys_read_natural_drain_before_limit() {
+        // When the executor exhausts all data before reaching max_keys_read,
+        // the runner should return all rows normally and report a None range
+        // (fully drained, not stopped by the limit).
+        let field_types = vec![FieldTypeTp::Long.into()];
+
+        let mut runner = build_simple_runner_for_test();
+        // Limit higher than total row count (1 + 2 + 1 = 4 rows).
+        runner.max_keys_read = Some(10);
+
+        let mock_executor = MockExecutor::new(
+            field_types.clone(),
+            vec![
+                build_n_rows_int_result(0, 1),
+                build_n_rows_int_result(10, 2),
+                {
+                    // Final batch: mark as drained.
+                    let mut result = build_n_rows_int_result(100, 1);
+                    result.is_drained = Ok(BatchExecIsDrain::Drain);
+                    result
+                },
+            ],
+        );
+        runner.out_most_executor = Box::new(mock_executor);
+
+        let (mut resp, range) = block_on(runner.handle_request()).unwrap();
+        let chunks = resp.take_chunks();
+        // All 3 batches (4 rows total) should be returned — limit was not hit.
+        assert_eq!(
+            3,
+            chunks.len(),
+            "All batches should be returned when limit > row count"
+        );
+        // Range should be None because the executor drained naturally.
+        assert!(
+            range.is_none(),
+            "Range should be None when executor drained before limit"
         );
     }
 }

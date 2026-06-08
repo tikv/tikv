@@ -15,7 +15,7 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::PerfLevel;
 use futures::{
     channel::{mpsc, oneshot},
-    future::Either,
+    future::{BoxFuture, Either},
     prelude::*,
 };
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri, metapb};
@@ -272,6 +272,14 @@ impl<E: Engine> Endpoint<E> {
                         0 => None,
                         i => Some(i),
                     };
+                    // max_keys_read = 0 means unlimited (disabled); any positive value
+                    // is a per-task row budget for early termination.  This is independent
+                    // of paging_size — both can be set simultaneously and whichever
+                    // threshold is reached first stops the scan.
+                    let max_keys_read = match req.get_max_keys_read() {
+                        0 => None,
+                        i => Some(i),
+                    };
 
                     let extra_store_accessor =
                         ExtraSnapStoreAccessor::<E>::new(req_ctx.clone(), concurrency_manager);
@@ -285,6 +293,7 @@ impl<E: Engine> Endpoint<E> {
                         is_streaming,
                         req.get_is_cache_enabled(),
                         paging_size,
+                        max_keys_read,
                         quota_limiter,
                     )
                     .data_version(data_version)
@@ -613,7 +622,7 @@ impl<E: Engine> Endpoint<E> {
                 .map(move |res| {
                     let _ = tx.send(res);
                 });
-        let res = self.read_pool_spawn_with_memory_quota_check(
+        let spawn_fut_result = self.read_pool_spawn_with_memory_quota_check(
             allocated_bytes,
             future,
             priority,
@@ -622,7 +631,7 @@ impl<E: Engine> Endpoint<E> {
             resource_limiter,
         );
         async move {
-            res?;
+            spawn_fut_result?.await?;
             rx.map_err(|_| Error::MaxPendingTasksExceeded).await?
         }
     }
@@ -906,7 +915,7 @@ impl<E: Engine> Endpoint<E> {
                     warn!("coprocessor stream send error"; "error" => %e);
                 });
 
-        self.read_pool_spawn_with_memory_quota_check(
+        let spawn_fut = self.read_pool_spawn_with_memory_quota_check(
             allocated_bytes,
             future,
             priority,
@@ -914,7 +923,18 @@ impl<E: Engine> Endpoint<E> {
             metadata,
             resource_limiter,
         )?;
-        Ok(rx)
+        // Transparent to caller: embed admission delay into the stream itself.
+        // On first poll, drives spawn_fut (sleep if delayed, then submit to
+        // yatp). On error yields one error item. Then chains with rx items.
+        let stream = futures::stream::once(Box::pin(async move {
+            spawn_fut
+                .await
+                .err()
+                .map(|_| Err(Error::MaxPendingTasksExceeded))
+        }))
+        .filter_map(futures::future::ready)
+        .chain(rx);
+        Ok(stream)
     }
 
     /// Parses and handles a stream request. Returns a stream that produce each
@@ -954,7 +974,7 @@ impl<E: Engine> Endpoint<E> {
         task_id: u64,
         metadata: TaskMetadata<'_>,
         resource_limiter: Option<Arc<ResourceLimiter>>,
-    ) -> Result<()>
+    ) -> Result<BoxFuture<'static, Result<()>>>
     where
         F: Future<Output = ()> + Send + 'static,
     {
@@ -965,9 +985,11 @@ impl<E: Engine> Endpoint<E> {
             // Release quota after handle completed.
             drop(owned_quota);
         });
-        self.read_pool
+        Ok(self
+            .read_pool
             .spawn(fut, priority, task_id, metadata, resource_limiter)
-            .map_err(|_| Error::MaxPendingTasksExceeded)
+            .map(|r| r.map_err(|_| Error::MaxPendingTasksExceeded))
+            .boxed())
     }
 }
 

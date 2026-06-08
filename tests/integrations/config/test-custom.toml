@@ -694,3 +694,14 @@ split.split-contained-score = 0.5
 [resource-control]
 enabled = false
 priority-ctl-strategy = "aggressive"
+bg-cpu-throttle-threshold = 60.0
+fg-cpu-throttle-threshold = 70.0
+bg-compaction-pressure-threshold = 70.0
+bg-write-io-ceiling = "100GB"
+bg-write-io-floor = "10MB"
+enable-fair-scheduling = false
+enable-read-admission-control = false
+enable-write-admission-control = false
+historical-usage-window-mins = 15
+baseline-burst-pct = 20.0
+admission-max-delayed-count = 10000

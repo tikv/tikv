@@ -2830,6 +2830,96 @@ def RaftAdmin() -> RowPanel:
     layout.row(
         [
             graph_panel(
+                title="Observed region CPU for load-base split",
+                description=(
+                    "Per-region CPU observed before load-fit filtering when "
+                    "load-base split evaluates regions. Unit follows other CPU "
+                    "panels: 100% means one CPU core. This is pre-load-fit "
+                    "decision input; use the tail distribution to tune split "
+                    "thresholds. Use additional_groupby=instance only when "
+                    "drilling into a specific TiKV; keep it as none for large "
+                    "clusters."
+                ),
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_operator(
+                            expr_histogram_quantile(
+                                0.9999,
+                                "tikv_load_base_split_region_load",
+                                label_selectors=['type="cpu_millicores"'],
+                            ),
+                            "/",
+                            "1000",
+                        ),
+                        legend_format="99.99%",
+                        additional_groupby=True,
+                    ),
+                    target(
+                        expr=expr_operator(
+                            expr_histogram_quantile(
+                                0.99,
+                                "tikv_load_base_split_region_load",
+                                label_selectors=['type="cpu_millicores"'],
+                            ),
+                            "/",
+                            "1000",
+                        ),
+                        legend_format="99%",
+                        additional_groupby=True,
+                    ),
+                    target(
+                        expr=expr_operator(
+                            expr_histogram_avg(
+                                "tikv_load_base_split_region_load",
+                                label_selectors=['type="cpu_millicores"'],
+                                by_labels=[],
+                            ),
+                            "/",
+                            "1000",
+                        ),
+                        legend_format="avg",
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+            graph_panel_histogram_quantiles(
+                title="Observed region QPS for load-base split",
+                description=(
+                    "Per-region QPS observed before load-fit filtering when "
+                    "load-base split evaluates regions. This is pre-load-fit "
+                    "decision input; use the tail distribution to tune split "
+                    "thresholds. Use additional_groupby=instance only when "
+                    "drilling into a specific TiKV; keep it as none for large "
+                    "clusters."
+                ),
+                yaxes=yaxes(left_format=UNITS.REQUESTS_PER_SEC),
+                metric="tikv_load_base_split_region_load",
+                label_selectors=['type="qps"'],
+                hide_count=True,
+                additional_groupby=True,
+            ),
+            graph_panel_histogram_quantiles(
+                title="Observed region read bytes for load-base split",
+                description=(
+                    "Per-region read bytes observed before load-fit filtering "
+                    "when load-base split evaluates regions. Unit: KiB. This is "
+                    "pre-load-fit decision input; use the tail distribution to "
+                    "tune split thresholds. Use additional_groupby=instance only "
+                    "when drilling into a specific TiKV; keep it as none for "
+                    "large clusters."
+                ),
+                yaxes=yaxes(left_format=UNITS.KIBI_BYTES),
+                metric="tikv_load_base_split_region_load",
+                label_selectors=['type="bytes_kib"'],
+                hide_count=True,
+                additional_groupby=True,
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
                 title="Peer in Flashback State",
                 targets=[
                     target(
@@ -4261,6 +4351,14 @@ def Snapshot() -> RowPanel:
                             "tikv_raftstore_snapshot_traffic_total",
                             by_labels=["type"],
                         ),
+                        additional_groupby=True,
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_pending_delete_ranges_of_stale_peer",
+                            by_labels=[],
+                        ),
+                        legend_format="pending delete",
                         additional_groupby=True,
                     ),
                 ],
@@ -10530,7 +10628,7 @@ def ResourceControl() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_resource_control_background_task_wait_duration",
-                            by_labels=["instance", "resource_group"],
+                            by_labels=["instance"],
                         ),
                     ),
                 ],
@@ -10596,6 +10694,149 @@ def ResourceControl() -> RowPanel:
                             by_labels=["instance"],
                         ),
                         legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    return layout.row_panel
+
+
+def LoadShedding() -> RowPanel:
+    layout = Layout(title="Load Shedding")
+    # Row 1: RU rates per group
+    layout.row(
+        [
+            graph_panel(
+                title="CPU Utilization % per Resource Group",
+                description="Historical baseline and current CPU utilization % per resource group (100% = 1 core).",
+                yaxes=yaxes(left_format=UNITS.PERCENT_FORMAT),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resource_control_group_ru_historical_rate",
+                            by_labels=["resource_group"],
+                        ).extra(" > 0"),
+                        legend_format="historical-{{resource_group}}",
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_resource_control_group_ru_current_rate",
+                            by_labels=["resource_group"],
+                        ).extra(" > 0"),
+                        legend_format="current-{{resource_group}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Background Resource Utilization",
+                description="Total resource utilization percentage of background tasks.",
+                yaxes=yaxes(left_format=UNITS.PERCENT_FORMAT),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resource_control_bg_resource_utilization",
+                            by_labels=["type"],
+                        ).extra(" > 0"),
+                    ),
+                ],
+            ),
+        ]
+    )
+    # Row 2: Quota limits
+    layout.row(
+        [
+            graph_panel(
+                title="Resource Group Quota Limit",
+                description="Current rate limit per resource group (0 = unlimited, hidden).",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resource_control_group_quota_limit",
+                            by_labels=["resource_group", "type"],
+                        ).extra(" > 0"),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Background Quota Limit",
+                description="Current quota limit for background resource groups.",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resource_control_background_quota_limiter",
+                            by_labels=["resource_group", "type"],
+                        ).extra(" > 0"),
+                    ),
+                ],
+            ),
+        ]
+    )
+    # Row 3: Deprioritized/delayed/rejected + currently delayed
+    layout.row(
+        [
+            graph_panel(
+                title="Deprioritized / Delayed / Rejected Requests",
+                description="Rate of deprioritized (phase 1), delayed, and rejected requests.",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_resource_control_two_phase_throttled_requests_total",
+                            by_labels=["resource_group"],
+                        ).extra(" > 0"),
+                        legend_format="deprioritized-{{resource_group}}",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_resource_control_admission_delayed_requests_total",
+                            by_labels=["resource_group", "is_background"],
+                        ).extra(" > 0"),
+                        legend_format="delayed-{{resource_group}}-{{is_background}}",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_resource_control_admission_rejected_requests_total",
+                            by_labels=["resource_group", "is_background"],
+                        ).extra(" > 0"),
+                        legend_format="rejected-{{resource_group}}-{{is_background}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Currently Delayed Requests",
+                description="Number of requests currently sitting in admission control delay.",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resource_control_admission_currently_delayed",
+                        ).extra(" > 0"),
+                    ),
+                ],
+            ),
+        ]
+    )
+    # Row 4: Delay duration + background wait duration
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Admission Delay Duration",
+                description="Delay duration imposed by foreground admission control.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_resource_control_admission_delay_duration_seconds",
+                label_selectors=['is_background="false"'],
+                by_labels=["resource_group"],
+            ),
+            graph_panel(
+                title="Background Task Wait Duration",
+                description="Total wait duration of background tasks per resource group.",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_resource_control_background_task_wait_duration",
+                            by_labels=["resource_group"],
+                        ).extra(" > 0"),
                     ),
                 ],
             ),
@@ -10739,6 +10980,7 @@ dashboard = Dashboard(
         Memory(),
         # Infrequently Used
         ResourceControl(),
+        LoadShedding(),
         StatusServer(),
         Encryption(),
         TTL(),

@@ -103,6 +103,11 @@ lazy_static! {
     )
     .unwrap();
 
+    pub static ref CDC_CONNECTION_COUNT: IntGauge = register_int_gauge!(
+        "tikv_cdc_grpc_connection_count",
+        "Total number of established grpc connections"
+    ).unwrap();
+
     pub static ref CDC_DROP_TXN_EXTRA_TASKS_COUNT:IntCounter = register_int_counter!(
         "tikv_cdc_drop_txn_extra_task_count",
         "Total count of dropped txn extra tasks"
@@ -232,7 +237,7 @@ lazy_static! {
 
     pub static ref CDC_EVENTS_PENDING_DURATION: Histogram = register_histogram!(
         "tikv_cdc_events_pending_duration",
-        "Pending duration for all events, in milliseconds",
+        "Pending duration for all events",
         exponential_buckets(0.01, 2.0, 17).unwrap(),
     )
     .unwrap();

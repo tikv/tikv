@@ -24,7 +24,7 @@ use kvproto::{
     tikvpb::TikvClient,
 };
 use pd_client::PdClient;
-use protobuf::Message;
+use protobuf::{Message, RepeatedField};
 use raftstore::{
     router::CdcHandle,
     store::{msg::Callback, util::RegionReadProgressRegistry},
@@ -49,6 +49,8 @@ use crate::{TsSource, endpoint::Task, metrics::*};
 pub(crate) const DEFAULT_CHECK_LEADER_TIMEOUT_DURATION: Duration = Duration::from_secs(5); // 5s
 const DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL: usize = 2;
 const DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS: usize = 4096;
+const CHECK_LEADER_REQ_REGIONS_SHRINK_FACTOR: usize = 4;
+const CHECK_LEADER_REQ_REGIONS_MIN_RETAIN_CAPACITY: usize = 1024;
 
 pub struct AdvanceTsWorker {
     pd_client: Arc<dyn PdClient>,
@@ -219,8 +221,7 @@ impl LeadershipResolver {
 
     fn clear(&mut self) {
         for v in self.store_req_map.values_mut() {
-            v.regions.clear();
-            v.ts = 0;
+            reset_check_leader_request(v);
         }
         for v in self.progresses.values_mut() {
             v.clear();
@@ -288,11 +289,7 @@ impl LeadershipResolver {
                         // because performing stale read on learners require it.
                         store_req_map
                             .entry(peer.store_id)
-                            .or_insert_with(|| {
-                                let mut req = CheckLeaderRequest::default();
-                                req.regions = Vec::with_capacity(registry.len()).into();
-                                req
-                            })
+                            .or_default()
                             .regions
                             .push(leader_info.clone());
                         if peer.get_role() != PeerRole::Learner {
@@ -437,6 +434,19 @@ impl LeadershipResolver {
         }
         res
     }
+}
+
+fn reset_check_leader_request(req: &mut CheckLeaderRequest) {
+    let retained_len = req.regions.len();
+    let shrink_threshold = retained_len
+        .saturating_mul(CHECK_LEADER_REQ_REGIONS_SHRINK_FACTOR)
+        .max(CHECK_LEADER_REQ_REGIONS_MIN_RETAIN_CAPACITY);
+    if req.regions.capacity() > shrink_threshold {
+        req.regions = RepeatedField::from_vec(Vec::with_capacity(retained_len));
+    } else {
+        req.regions.clear();
+    }
+    req.ts = 0;
 }
 
 pub async fn resolve_by_raft<T, E>(regions: Vec<u64>, min_ts: TimeStamp, cdc_handle: T) -> Vec<u64>
@@ -600,6 +610,7 @@ mod tests {
     use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder};
     use kvproto::{metapb::Region, tikvpb::Tikv, tikvpb_grpc::create_tikv};
     use pd_client::PdClient;
+    use protobuf::RepeatedField;
     use raftstore::store::util::RegionReadProgress;
     use tikv_util::store::new_peer;
 
@@ -638,6 +649,18 @@ mod tests {
         let channel = ChannelBuilder::new(env).connect(&addr);
         let client = TikvClient::new(channel);
         (server, client, rx)
+    }
+
+    fn new_progress(region_id: u64, remote_store_id: u64) -> Arc<RegionReadProgress> {
+        let mut region = Region::default();
+        region.id = region_id;
+        region.peers.push(new_peer(1, region_id));
+        region
+            .peers
+            .push(new_peer(remote_store_id, region_id + 10_000));
+        let progress = RegionReadProgress::new(&region, 1, 1, region_id);
+        progress.update_leader_info(region_id, 1, &region);
+        Arc::new(progress)
     }
 
     #[tokio::test]
@@ -697,6 +720,91 @@ mod tests {
             .resolve(vec![], TimeStamp::new(1), None)
             .await;
         rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
+
+        let _ = server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_resolve_request_capacity_ignores_registry_size() {
+        let env = Arc::new(EnvBuilder::new().build());
+        let (mut server, tikv_client, rx) = new_rpc_suite(env.clone());
+
+        let mut leader_resolver = LeadershipResolver::new(
+            1, // store id
+            Arc::new(MockPdClient {}),
+            env.clone(),
+            Arc::new(SecurityManager::default()),
+            RegionReadProgressRegistry::new(),
+            Duration::from_secs(1),
+        );
+        leader_resolver
+            .tikv_clients
+            .lock()
+            .await
+            .insert(2 /* store id */, tikv_client);
+        for region_id in 1..=2048 {
+            leader_resolver
+                .region_read_progress
+                .insert(region_id, new_progress(region_id, 2));
+        }
+
+        leader_resolver
+            .resolve(vec![1], TimeStamp::new(1), None)
+            .await;
+        let req = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(req.regions.len(), 1);
+
+        let retained_req = leader_resolver.store_req_map.get(&2).unwrap();
+        assert_eq!(retained_req.regions.len(), 1);
+        assert!(
+            retained_req.regions.capacity() < 64,
+            "unexpected request capacity {} for a single checked region",
+            retained_req.regions.capacity()
+        );
+
+        let _ = server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_resolve_shrinks_oversized_request_buffer_on_reuse() {
+        let env = Arc::new(EnvBuilder::new().build());
+        let (mut server, tikv_client, rx) = new_rpc_suite(env.clone());
+
+        let mut leader_resolver = LeadershipResolver::new(
+            1, // store id
+            Arc::new(MockPdClient {}),
+            env.clone(),
+            Arc::new(SecurityManager::default()),
+            RegionReadProgressRegistry::new(),
+            Duration::from_secs(60),
+        );
+        leader_resolver
+            .tikv_clients
+            .lock()
+            .await
+            .insert(2 /* store id */, tikv_client);
+        leader_resolver
+            .region_read_progress
+            .insert(1, new_progress(1, 2));
+
+        let mut req = CheckLeaderRequest::default();
+        req.regions = RepeatedField::from_vec(Vec::with_capacity(4096));
+        req.regions.push(Default::default());
+        leader_resolver.store_req_map.insert(2, req);
+
+        leader_resolver
+            .resolve(vec![1], TimeStamp::new(1), None)
+            .await;
+        let req = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(req.regions.len(), 1);
+
+        let retained_req = leader_resolver.store_req_map.get(&2).unwrap();
+        assert_eq!(retained_req.regions.len(), 1);
+        assert!(
+            retained_req.regions.capacity() < 64,
+            "oversized request buffer was not shrunk, capacity {}",
+            retained_req.regions.capacity()
+        );
 
         let _ = server.shutdown().await;
     }
