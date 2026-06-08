@@ -256,10 +256,9 @@ impl DownloadSpeedLimitManager {
             let expire_at = if ttl_seconds == 0 {
                 None
             } else {
-                let expire_at = now_instant
-                    .checked_add(Duration::from_secs(ttl_seconds))
-                    .unwrap_or(now_instant);
-                Some(expire_at)
+                // Treat an unrealistically large TTL as non-expiring instead of
+                // immediately expiring the request due to Instant overflow.
+                now_instant.checked_add(Duration::from_secs(ttl_seconds))
             };
             self.task_limits.write().unwrap().tree.insert(
                 task_key.to_owned(),
@@ -2391,6 +2390,10 @@ mod test {
             .is_none()
     }
 
+    fn manager_task_limits_len(manager: &DownloadSpeedLimitManager) -> usize {
+        manager.task_limits.read().unwrap().tree.len()
+    }
+
     #[test]
     fn test_download_speed_limit_manager_compatibility() {
         let manager = DownloadSpeedLimitManager::new();
@@ -2445,5 +2448,36 @@ mod test {
         manager.update_from_request(&old_req_task);
         assert_eq!(manager.limiter().speed_limit(), f64::INFINITY);
         assert!(manager_effective_limit_expire_at_is_none(&manager));
+    }
+
+    #[test]
+    fn test_download_speed_limit_manager_non_expiring_limit_uses_legacy_key() {
+        let manager = DownloadSpeedLimitManager::new();
+
+        let req_task_a = build_download_speed_limit_req("task-a", 128, 0);
+        manager.update_from_request(&req_task_a);
+        assert_eq!(manager.limiter().speed_limit(), 128.0);
+        assert_eq!(manager_task_limits_len(&manager), 1);
+
+        let req_task_b = build_download_speed_limit_req("task-b", 64, 0);
+        manager.update_from_request(&req_task_b);
+        assert_eq!(manager.limiter().speed_limit(), 64.0);
+        assert_eq!(manager_task_limits_len(&manager), 1);
+
+        let req_remove_task_c = build_download_speed_limit_req("task-c", 0, 0);
+        manager.update_from_request(&req_remove_task_c);
+        assert!(manager.limiter().speed_limit().is_infinite());
+        assert_eq!(manager_task_limits_len(&manager), 0);
+    }
+
+    #[test]
+    fn test_download_speed_limit_manager_ttl_overflow_does_not_expire_immediately() {
+        let manager = DownloadSpeedLimitManager::new();
+
+        let req_task_a = build_download_speed_limit_req("task-a", 128, u64::MAX);
+        assert_eq!(manager.update_from_request(&req_task_a), 128.0);
+        assert_eq!(manager.limiter().speed_limit(), 128.0);
+        assert!(manager_effective_limit_expire_at_is_none(&manager));
+        assert_eq!(manager_task_limits_len(&manager), 1);
     }
 }
