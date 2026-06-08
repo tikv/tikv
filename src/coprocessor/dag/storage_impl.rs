@@ -7,7 +7,7 @@ use txn_types::Key;
 
 use crate::{
     coprocessor::Error,
-    storage::{Scanner, Statistics, Store, mvcc::NewerTsCheckState},
+    storage::{Scanner, Statistics, Store, kv::kv_processed_size, mvcc::NewerTsCheckState},
 };
 
 /// A `Storage` implementation over TiKV's storage.
@@ -87,7 +87,7 @@ impl<S: Store> Storage for TikvStorage<S> {
             .map_err(Error::from)?;
         Ok(kv.map(|(k, v)| {
             // Mirror `Statistics::processed_size`: encoded key + value bytes.
-            self.scanned_bytes += k.len() + v.value.len();
+            self.scanned_bytes += kv_processed_size(k.len(), v.value.len());
             OwnedKvPairEntry {
                 key: k.into_raw().unwrap(),
                 value: v.value,
@@ -113,7 +113,7 @@ impl<S: Store> Storage for TikvStorage<S> {
         if let Some(e) = &entry {
             // Mirror `Statistics::processed_size` for point gets: encoded key +
             // value bytes.
-            self.scanned_bytes += encoded_key.len() + e.value.len();
+            self.scanned_bytes += kv_processed_size(encoded_key.len(), e.value.len());
         }
         Ok(entry.map(move |e| OwnedKvPairEntry {
             key,

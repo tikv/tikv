@@ -69,7 +69,7 @@ pub use self::{
     rocksdb_engine::{RocksEngine, RocksSnapshot},
     stats::{
         CfStatistics, FlowStatistics, FlowStatsReporter, LoadDataHint, RAW_VALUE_TOMBSTONE,
-        StageLatencyStats, Statistics, StatisticsSummary,
+        StageLatencyStats, Statistics, StatisticsSummary, kv_processed_size,
     },
 };
 
