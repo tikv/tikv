@@ -374,11 +374,25 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             ));
         }
         Box::new(BernoulliRowSampleCollector::new(
-            self.sample_rate,
+            self.histogram_sample_rate(),
             self.max_fm_sketch_size,
             self.columns_info.len() + self.column_groups.len(),
             self.build_singletons,
         ))
+    }
+
+    fn histogram_sample_rate(&self) -> f64 {
+        let first_stage_sample_rate = self
+            .block_sample_scale
+            .and_then(|scale| {
+                if scale.total_weight > 0 && scale.selected_weight > 0 {
+                    Some(scale.selected_weight as f64 / scale.total_weight as f64)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(1.0);
+        (self.sample_rate / first_stage_sample_rate).min(1.0)
     }
 
     /// Merges accumulated storage statistics into `dest`. Used by the context
