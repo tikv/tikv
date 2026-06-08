@@ -16,6 +16,7 @@ use std::{
 use api_version::{ApiV2, KeyMode, KvFormat};
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
+use futures::future::ok;
 use kvproto::{
     cdcpb::{
         ChangeDataRequestKvApi, Error as EventError, Event, Event_oneof_event, EventEntries,
@@ -188,20 +189,16 @@ impl Downstream {
         }
     }
 
-    // NOTE: it's not allowed to sink `EventError` directly by this function,
-    // because the sink can be also used by an incremental scan. We must ensure
-    // no more events can be pushed to the sink after an `EventError` is sent.
-    pub fn sink_event(&self, mut event: Event, force: bool) -> Result<()> {
-        event.set_request_id(self.req_id.0);
-        if self.sink.is_none() {
-            info!("cdc drop event, no sink";
-                "downstream_id" => ?self.id,
-                "request_id" => ?self.req_id,
-                "conn_id" => ?self.conn_id);
-            return Err(Error::Sink(SendError::Disconnected));
-        }
-        let sink = self.sink.as_ref().unwrap();
-        match sink.unbounded_send(CdcEvent::Event(event), force) {
+    fn sink_cdc_event(&self, event: CdcEvent, force: bool) -> Result<()> {
+        let sink = match self.sink.as_ref() {
+            Some(sink) => sink,
+            None => {
+                info!("cdc drop event, no sink";
+                    "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => ?self.req_id);
+                return Err(Error::Sink(SendError::Disconnected));
+            }
+        };
+        match sink.unbounded_send(event, force) {
             Ok(_) => Ok(()),
             Err(SendError::Disconnected) => {
                 debug!("cdc send event failed, disconnected";
@@ -221,6 +218,15 @@ impl Downstream {
         }
     }
 
+    // NOTE: it's not allowed to sink `EventError` directly by this function,
+    // because the sink can be also used by an incremental scan. We must ensure
+    // no more events can be pushed to the sink after an `EventError` is sent.
+    pub fn sink_event(&self, mut event: Event, force: bool) -> Result<()> {
+        event.set_request_id(self.req_id.0);
+        let event = CdcEvent::Event(event);
+        self.sink_cdc_event(event, force)
+    }
+
     /// EventErrors must be sent by this function. And we must ensure no more
     /// events or ResolvedTs will be sent to the downstream after
     /// `sink_error_event` is called.
@@ -238,6 +244,11 @@ impl Downstream {
         // Try it's best to send error events.
         let force_send = true;
         self.sink_event(change_data_event, force_send)
+    }
+
+    pub fn sink_barrier(&self, barrier: CdcEvent) -> Result<()> {
+        debug_assert!(matches!(barrier, CdcEvent::Barrier(_)));
+        self.sink_cdc_event(barrier, true)
     }
 
     pub fn set_sink(&mut self, sink: Sink) {
