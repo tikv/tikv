@@ -55,7 +55,6 @@ use crate::{
     endpoint::Deregister,
     metrics::*,
     old_value::{near_seek_old_value, OldValueCursors},
-    service::RequestId,
     types::ConnId,
 };
 
