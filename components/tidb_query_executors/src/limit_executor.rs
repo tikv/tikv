@@ -283,12 +283,6 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
         } else {
             scan_rows
         };
-<<<<<<< HEAD
-        let mut result = self.src.next_batch(real_scan_rows).await;
-        if result.logical_rows.len() < self.remaining_rows {
-            self.remaining_rows -= result.logical_rows.len();
-        } else {
-=======
 
         if !self.truncate_keys_exps.is_empty() {
             #[cfg(debug_assertions)]
@@ -311,13 +305,6 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
 
             let mut result = self.src.next_batch(real_scan_rows).await;
 
-            // Limit compute-volume proxy: number of rows observed from child.
-            // (Even if we later truncate, the executor still inspected the batch.)
-            let input_rows_u64 = result.logical_rows.len() as u64;
-            tidb_query_common::metrics::record_executor_work(
-                tidb_query_common::metrics::ExecutorName::batch_limit,
-                input_rows_u64,
-            );
             let total_row_num = result.logical_rows.len();
             if total_row_num == 0 {
                 return result;
@@ -390,7 +377,6 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
                 result.is_drained = Ok(BatchExecIsDrain::Drain);
             }
 
->>>>>>> f0131cba82 (Support rank limit (#19306))
             // We don't need to touch the physical data.
             result.logical_rows.truncate(output_row_num);
             return result;
@@ -402,13 +388,6 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
 
             let mut result = self.src.next_batch(real_scan_rows).await;
 
-            // Limit compute-volume proxy: number of rows observed from child.
-            // (Even if we later truncate, the executor still inspected the batch.)
-            let input_rows_u64 = result.logical_rows.len() as u64;
-            tidb_query_common::metrics::record_executor_work(
-                tidb_query_common::metrics::ExecutorName::batch_limit,
-                input_rows_u64,
-            );
             if result.logical_rows.len() < self.remaining_rows {
                 self.remaining_rows -= result.logical_rows.len();
             } else {
