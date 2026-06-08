@@ -58,6 +58,7 @@ pub(crate) struct RowSampleBuilder<S: Snapshot, F: KvFormat> {
     max_sample_size: usize,
     max_fm_sketch_size: usize,
     sample_rate: f64,
+    ndv_rate: f64,
     // Whether to build per-row singleton sketches (only needed when ndv_rate < 1).
     build_singletons: bool,
     columns_info: Vec<tipb::ColumnInfo>,
@@ -109,6 +110,7 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             max_sample_size,
             max_fm_sketch_size: req.get_sketch_size() as usize,
             sample_rate,
+            ndv_rate,
             build_singletons,
             columns_info,
             column_groups: req.take_column_groups().into(),
@@ -127,11 +129,20 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             ));
         }
         Box::new(BernoulliRowSampleCollector::new(
-            self.sample_rate,
+            self.histogram_sample_rate(),
             self.max_fm_sketch_size,
             self.columns_info.len() + self.column_groups.len(),
             self.build_singletons,
         ))
+    }
+
+    fn histogram_sample_rate(&self) -> f64 {
+        let first_stage_sample_rate = if self.build_singletons {
+            self.ndv_rate
+        } else {
+            1.0
+        };
+        (self.sample_rate / first_stage_sample_rate).min(1.0)
     }
 
     /// Merges accumulated storage statistics into `dest`. Used by the context
