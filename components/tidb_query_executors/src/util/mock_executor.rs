@@ -314,6 +314,10 @@ impl Storage for MockStorage {
     fn collect_statistics(&mut self, _dest: &mut Self::Statistics) {
         unimplemented!()
     }
+
+    fn scanned_bytes(&self) -> usize {
+        unimplemented!()
+    }
 }
 
 #[derive(Default, Debug, Clone)]

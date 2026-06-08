@@ -28,12 +28,6 @@ pub struct RangesScanner<T, F> {
 
     scanned_rows_per_range: Vec<usize>,
 
-    /// Cumulative count of raw bytes (key + value lengths) scanned across all
-    /// ranges. Used as the byte budget for `paging_size_bytes`. Unlike
-    /// `scanned_rows_per_range`, this counter is never drained; it is only
-    /// ever peeked via `peek_scanned_bytes_sum`.
-    scanned_bytes: usize,
-
     // The following fields are only used for calculating scanned range. Scanned range is only
     // useful in streaming mode, where the client need to know the underlying physical data range
     // of each response slice, so that partial retry can be non-overlapping.
@@ -103,7 +97,6 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
             is_key_only,
             load_commit_ts,
             scanned_rows_per_range: Vec::with_capacity(ranges_len),
-            scanned_bytes: 0,
             is_scanned_range_aware,
             current_range: IntervalRange {
                 lower_inclusive: Vec::with_capacity(KEY_BUFFER_CAPACITY),
@@ -175,7 +168,6 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
                 if let Some(r) = self.scanned_rows_per_range.last_mut() {
                     *r += 1;
                 }
-                self.scanned_bytes += row.key.len() + row.value.len();
                 self.rescheduler.check_reschedule(force_check).await;
                 let kv = F::make_kv_pair((row.key, row.value, row.commit_ts.map(|n| n.into())))
                     .map_err(|e| StorageError(anyhow::Error::from(e)))?;
@@ -206,11 +198,12 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
         self.scanned_rows_per_range.iter().sum()
     }
 
-    /// Returns the total number of bytes (raw key + value lengths) scanned so
-    /// far, without modifying internal state. Used as the byte budget for
-    /// `paging_size_bytes`.
+    /// Returns the total number of bytes scanned so far, without modifying
+    /// internal state. Delegates to the underlying storage, which counts the
+    /// same bytes as the MVCC `processed_size` (encoded key + value). Used as
+    /// the byte budget for `paging_size_bytes`.
     pub fn peek_scanned_bytes_sum(&self) -> usize {
-        self.scanned_bytes
+        self.storage.scanned_bytes()
     }
 
     /// Returns scanned range since last call.

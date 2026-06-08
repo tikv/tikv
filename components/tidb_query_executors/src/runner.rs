@@ -120,9 +120,11 @@ pub struct BatchExecutorsRunner<SS> {
     /// `coprocessor.Request.paging_size_bytes`.
     ///
     /// When set, the runner stops once the cumulative bytes scanned by the
-    /// bottom-most scan executor (raw key + value lengths, peeked via
-    /// `BatchExecutor::peek_scanned_bytes_sum`) reach this threshold. Like
-    /// `max_keys_read`, the byte count covers every physically scanned KV
+    /// bottom-most scan executor (peeked via
+    /// `BatchExecutor::peek_scanned_bytes_sum`) reach this threshold. The byte
+    /// count mirrors the MVCC `processed_size` (encoded key + value of every
+    /// returned entry), so the page boundary aligns with the bytes used for RU
+    /// accounting. Like `max_keys_read`, it covers every physically scanned KV
     /// entry before any filtering, aggregation, or projection, so a full scan
     /// that returns few rows is still truncated by the actual data volume read.
     /// It is independent of `paging_size` and `max_keys_read`; whichever
@@ -867,8 +869,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 scanned_keys_total = self.out_most_executor.peek_scanned_rows_sum() as u64;
             }
 
-            // Likewise peek the accumulated scanned bytes (raw key + value) for
-            // paging_size_bytes without draining any state.
+            // Likewise peek the accumulated scanned bytes (MVCC processed_size:
+            // encoded key + value) for paging_size_bytes without draining state.
             if self.paging_size_bytes.is_some() {
                 scanned_bytes_all = self.out_most_executor.peek_scanned_bytes_sum();
             }

@@ -16,6 +16,12 @@ pub struct TikvStorage<S: Store> {
     scanner: Option<S::Scanner>,
     cf_stats_backlog: Statistics,
     met_newer_ts_data_backlog: NewerTsCheckState,
+    /// Cumulative bytes scanned (encoded key + value of every returned entry),
+    /// mirroring `Statistics::processed_size`. Unlike `cf_stats_backlog`, this
+    /// is never drained — it is only peeked via `scanned_bytes` to drive the
+    /// `paging_size_bytes` budget, so RU accounting via `collect_statistics`
+    /// stays on its own path.
+    scanned_bytes: usize,
 }
 
 impl<S: Store> TikvStorage<S> {
@@ -29,6 +35,7 @@ impl<S: Store> TikvStorage<S> {
             } else {
                 NewerTsCheckState::Unknown
             },
+            scanned_bytes: 0,
         }
     }
 }
@@ -78,10 +85,14 @@ impl<S: Store> Storage for TikvStorage<S> {
             .unwrap()
             .next_entry()
             .map_err(Error::from)?;
-        Ok(kv.map(|(k, v)| OwnedKvPairEntry {
-            key: k.into_raw().unwrap(),
-            value: v.value,
-            commit_ts: v.commit_ts.map(|ts| ts.into_inner()),
+        Ok(kv.map(|(k, v)| {
+            // Mirror `Statistics::processed_size`: encoded key + value bytes.
+            self.scanned_bytes += k.len() + v.value.len();
+            OwnedKvPairEntry {
+                key: k.into_raw().unwrap(),
+                value: v.value,
+                commit_ts: v.commit_ts.map(|ts| ts.into_inner()),
+            }
         }))
     }
 
@@ -94,10 +105,16 @@ impl<S: Store> Storage for TikvStorage<S> {
         // TODO: Default CF does not need to be accessed if KeyOnly.
         // TODO: No need to check newer ts data if self.scanner has met newer ts data.
         let key = range.0;
+        let encoded_key = Key::from_raw(&key);
         let entry = self
             .store
-            .incremental_get_entry(&Key::from_raw(&key), load_commit_ts)
+            .incremental_get_entry(&encoded_key, load_commit_ts)
             .map_err(Error::from)?;
+        if let Some(e) = &entry {
+            // Mirror `Statistics::processed_size` for point gets: encoded key +
+            // value bytes.
+            self.scanned_bytes += encoded_key.len() + e.value.len();
+        }
         Ok(entry.map(move |e| OwnedKvPairEntry {
             key,
             value: e.value,
@@ -130,5 +147,10 @@ impl<S: Store> Storage for TikvStorage<S> {
         }
         dest.add(&self.cf_stats_backlog);
         self.cf_stats_backlog = Statistics::default();
+    }
+
+    #[inline]
+    fn scanned_bytes(&self) -> usize {
+        self.scanned_bytes
     }
 }
