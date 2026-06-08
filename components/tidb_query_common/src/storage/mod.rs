@@ -68,6 +68,15 @@ pub trait Storage: Send {
     fn met_uncacheable_data(&self) -> Option<bool>;
 
     fn collect_statistics(&mut self, dest: &mut Self::Statistics);
+
+    /// Returns the cumulative number of bytes scanned so far, without draining
+    /// any statistics. Used as the byte budget for `paging_size_bytes`.
+    ///
+    /// Implementations should count the same bytes that contribute to the MVCC
+    /// `processed_size` (encoded key + value of every returned entry), so the
+    /// page boundary aligns with the bytes used for RU accounting. Test
+    /// storages may approximate this.
+    fn scanned_bytes(&self) -> usize;
 }
 
 impl<T: Storage + ?Sized> Storage for Box<T> {
@@ -102,6 +111,10 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
 
     fn collect_statistics(&mut self, dest: &mut Self::Statistics) {
         (**self).collect_statistics(dest);
+    }
+
+    fn scanned_bytes(&self) -> usize {
+        (**self).scanned_bytes()
     }
 }
 
