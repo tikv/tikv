@@ -3,26 +3,38 @@
 use engine_rocks::RocksSstIterator;
 use engine_traits::Iterator;
 
+const DEFAULT_SEEK_NEXT_LIMIT: usize = 32;
+
 /// DefaultSeekIterator is a lightweight helper for point seek on multiple
 /// default CF SST iterators. It only supports exact seek matching and avoids
-/// merge-iteration logic that is unnecessary for this access pattern.
+/// merge-iteration logic that is unnecessary for this access pattern. The
+/// caller must request keys in non-decreasing order; this iterator does not
+/// validate or repair backward seeks. For ordered requests, it advances
+/// existing iterator positions with `next` before falling back to `seek`.
 pub struct DefaultSeekIterator<'a> {
     sst_iters: Vec<RocksSstIterator<'a>>,
+    initialized: Vec<bool>,
+    valid: Vec<bool>,
     matched_idx: Option<usize>,
 }
 
 impl<'a> DefaultSeekIterator<'a> {
     pub fn new(sst_iters: Vec<RocksSstIterator<'a>>) -> Self {
+        let len = sst_iters.len();
         Self {
             sst_iters,
+            initialized: vec![false; len],
+            valid: vec![false; len],
             matched_idx: None,
         }
     }
 
     pub fn seek_exact(&mut self, key: &[u8]) -> engine_traits::Result<bool> {
         self.matched_idx = None;
+
         for (idx, iter) in self.sst_iters.iter_mut().enumerate() {
-            if !iter.seek(key)? {
+            if !Self::advance_iter_to(iter, &mut self.initialized[idx], &mut self.valid[idx], key)?
+            {
                 continue;
             }
             if iter.key() == key {
@@ -34,6 +46,40 @@ impl<'a> DefaultSeekIterator<'a> {
             }
         }
         Ok(self.matched_idx.is_some())
+    }
+
+    fn advance_iter_to(
+        iter: &mut RocksSstIterator<'a>,
+        initialized: &mut bool,
+        valid: &mut bool,
+        key: &[u8],
+    ) -> engine_traits::Result<bool> {
+        if !*initialized {
+            *initialized = true;
+            *valid = iter.seek(key)?;
+            return Ok(*valid);
+        }
+
+        if !*valid {
+            return Ok(false);
+        }
+
+        if iter.key() >= key {
+            return Ok(true);
+        }
+
+        for _ in 0..DEFAULT_SEEK_NEXT_LIMIT {
+            *valid = iter.next()?;
+            if !*valid {
+                return Ok(false);
+            }
+            if iter.key() >= key {
+                return Ok(true);
+            }
+        }
+
+        *valid = iter.seek(key)?;
+        Ok(*valid)
     }
 
     pub fn key(&self) -> &[u8] {
@@ -148,6 +194,47 @@ impl<'a> BinaryIterator<'a> {
     fn peek(&self) -> usize {
         self.entry_cache[0]
     }
+
+    fn advance_current_key(&mut self) -> engine_traits::Result<()> {
+        if let Some(mut same_from) = self.pop() {
+            // Handle duplicate keys from different SST files.
+            while !self.entry_cache.is_empty() && self.key() == self.sst_iters[same_from].key() {
+                let from = self.pop().unwrap();
+                let iter = &mut self.sst_iters[same_from];
+                if iter.next()? {
+                    self.push(same_from);
+                }
+                same_from = from;
+            }
+
+            let iter = &mut self.sst_iters[same_from];
+            if iter.next()? {
+                self.push(same_from);
+            }
+        }
+        Ok(())
+    }
+
+    fn current_key_has_empty_value(&self) -> bool {
+        if self.entry_cache.is_empty() {
+            return false;
+        }
+
+        let key = self.sst_iters[self.peek()].key();
+        self.entry_cache.iter().any(|idx| {
+            let iter = &self.sst_iters[*idx];
+            iter.key() == key && iter.value().is_empty()
+        })
+    }
+
+    fn skip_empty_value_keys(&mut self) -> engine_traits::Result<bool> {
+        while self.current_key_has_empty_value() {
+            // compact-log-backup encodes physical delete records as empty
+            // values, so any duplicate key group containing one is skipped.
+            self.advance_current_key()?;
+        }
+        Ok(!self.entry_cache.is_empty())
+    }
 }
 
 impl Iterator for BinaryIterator<'_> {
@@ -161,7 +248,7 @@ impl Iterator for BinaryIterator<'_> {
             self.entry_cache.push(i);
         }
         self.heap();
-        Ok(!self.entry_cache.is_empty())
+        self.skip_empty_value_keys()
     }
 
     fn seek_for_prev(&mut self, _key: &[u8]) -> engine_traits::Result<bool> {
@@ -178,7 +265,7 @@ impl Iterator for BinaryIterator<'_> {
             self.entry_cache.push(i);
         }
         self.heap();
-        Ok(!self.entry_cache.is_empty())
+        self.skip_empty_value_keys()
     }
 
     fn seek_to_last(&mut self) -> engine_traits::Result<bool> {
@@ -190,26 +277,8 @@ impl Iterator for BinaryIterator<'_> {
     }
 
     fn next(&mut self) -> engine_traits::Result<bool> {
-        if let Some(mut same_from) = self.pop() {
-            // Handle duplicate keys from different SST files
-            // This ensures deduplication: when multiple SSTs have the same key,
-            // we advance all of them and keep only one value
-            while !self.entry_cache.is_empty() && self.key() == self.sst_iters[same_from].key() {
-                let from = self.pop().unwrap();
-                let iter = &mut self.sst_iters[same_from];
-                if iter.next()? {
-                    self.push(same_from);
-                }
-                same_from = from;
-            }
-
-            // Advance the main iterator
-            let iter = &mut self.sst_iters[same_from];
-            if iter.next()? {
-                self.push(same_from);
-            }
-        }
-        Ok(!self.entry_cache.is_empty())
+        self.advance_current_key()?;
+        self.skip_empty_value_keys()
     }
 
     fn key(&self) -> &[u8] {
@@ -321,6 +390,88 @@ mod tests {
     }
 
     #[test]
+    fn test_binary_iterator_skips_empty_value_key_groups() {
+        let temp = TempDir::new().unwrap();
+        let rocks = TestEngineBuilder::new()
+            .path(temp.path())
+            .cfs([
+                engine_traits::CF_DEFAULT,
+                engine_traits::CF_LOCK,
+                engine_traits::CF_WRITE,
+            ])
+            .build()
+            .unwrap();
+        let db = rocks.get_rocksdb();
+
+        let mk_key = |raw: &[u8], ts: u64| {
+            let mut key = Key::from_encoded(raw.to_vec());
+            key.append_ts_inplace(TimeStamp::new(ts));
+            keys::data_key(key.as_encoded())
+        };
+
+        fn write_entries<E: KvEngine>(db: E, path: &Path, name: &str, entries: &[(&[u8], &[u8])]) {
+            let mut writer = <E as SstExt>::SstWriterBuilder::new()
+                .set_cf(engine_traits::CF_WRITE)
+                .set_db(&db)
+                .set_compression_type(None)
+                .set_compression_level(0)
+                .build(path.join(name).to_str().unwrap())
+                .unwrap();
+            for (k, v) in entries {
+                writer.put(k, v).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+
+        let k1 = mk_key(b"k1", 40);
+        let k2 = mk_key(b"k2", 30);
+        let k3 = mk_key(b"k3", 20);
+        let k4 = mk_key(b"k4", 10);
+
+        write_entries(
+            db.clone(),
+            temp.path(),
+            "w1.sst",
+            &[
+                (k1.as_slice(), b"v1"),
+                (k2.as_slice(), b"v2"),
+                (k4.as_slice(), b""),
+            ],
+        );
+        write_entries(
+            db.clone(),
+            temp.path(),
+            "w2.sst",
+            &[(k1.as_slice(), b""), (k3.as_slice(), b"v3")],
+        );
+
+        let readers = [
+            RocksSstReader::open_with_env(temp.path().join("w1.sst").to_str().unwrap(), None)
+                .unwrap(),
+            RocksSstReader::open_with_env(temp.path().join("w2.sst").to_str().unwrap(), None)
+                .unwrap(),
+        ];
+        let iters: Vec<_> = readers
+            .iter()
+            .map(|reader| reader.iter(IterOptions::default()).unwrap())
+            .collect();
+        let mut iter = BinaryIterator::new(iters);
+
+        assert!(iter.seek_to_first().unwrap());
+        assert_eq!(iter.key(), k2.as_slice());
+        assert_eq!(iter.value(), b"v2");
+        assert!(iter.next().unwrap());
+        assert_eq!(iter.key(), k3.as_slice());
+        assert_eq!(iter.value(), b"v3");
+        assert!(!iter.next().unwrap());
+
+        assert!(iter.seek(&k1).unwrap());
+        assert_eq!(iter.key(), k2.as_slice());
+        assert_eq!(iter.value(), b"v2");
+        assert!(!iter.seek(&k4).unwrap());
+    }
+
+    #[test]
     fn test_default_seek_iterator_seek_exact() {
         let temp = TempDir::new().unwrap();
         let rocks = TestEngineBuilder::new()
@@ -387,13 +538,18 @@ mod tests {
         assert_eq!(seek_iter.key(), k1.as_slice());
         assert_eq!(seek_iter.value(), b"v1");
 
+        // Existing user key, but absent timestamp.
+        let missing_ts = mk_key(b"k1", 40);
+        assert!(!seek_iter.seek_exact(&missing_ts).unwrap());
+
+        let k2 = mk_key(b"k2", 30);
+        assert!(seek_iter.seek_exact(&k2).unwrap());
+        assert_eq!(seek_iter.key(), k2.as_slice());
+        assert_eq!(seek_iter.value(), b"v2");
+
         let k3 = mk_key(b"k3", 20);
         assert!(seek_iter.seek_exact(&k3).unwrap());
         assert_eq!(seek_iter.key(), k3.as_slice());
         assert_eq!(seek_iter.value(), b"v3");
-
-        // Existing user key, but absent timestamp.
-        let missing_ts = mk_key(b"k1", 40);
-        assert!(!seek_iter.seek_exact(&missing_ts).unwrap());
     }
 }
