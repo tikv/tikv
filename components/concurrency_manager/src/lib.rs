@@ -233,32 +233,6 @@ impl ConcurrencyManager {
         let limits = self.max_ts_limit.load();
         let update_limit = limits.max_ts_update_limit(exact_limit_required);
 
-<<<<<<< HEAD
-        // check that new_ts is less than or equal to the limit
-        if !limit.limit.is_zero() && new_ts > limit.limit {
-            let last_update = limit.update_time;
-            let now = self.time_provider.now();
-            let duration_to_last_limit_update = now - last_update;
-
-            if duration_to_last_limit_update < self.limit_valid_duration {
-                // limit is valid
-                let source = source.into_error_source();
-                self.double_check(new_ts, limit.limit, source, false)?;
-            } else {
-                // limit is stale
-                // use an approximate limit to avoid false alerts caused by failed limit updates
-
-                let approximate_limit = TimeStamp::compose(
-                    limit.limit.physical() + duration_to_last_limit_update.as_millis() as u64,
-                    limit.limit.logical(),
-                );
-
-                if new_ts > approximate_limit {
-                    let source = source.into_error_source();
-                    self.double_check(new_ts, approximate_limit, source, true)?;
-                }
-            }
-=======
         if exact_limit_required {
             self.check_exact_max_ts_update_limit(
                 new_ts,
@@ -274,7 +248,6 @@ impl ConcurrencyManager {
                 source,
                 request_origin_for_check,
             )?;
->>>>>>> d9bfe79857 (*: enforce exact max-ts for non-TiDB requests (#19654))
         }
 
         MAX_TS_GAUGE.set(
@@ -1025,27 +998,15 @@ mod tests {
         // Test transition from zero limit.
         assert_eq!(cm.max_ts_limit.load().drifted, 0.into());
         cm.set_max_ts_limit(TimeStamp::new(1000));
-<<<<<<< HEAD
-        assert_eq!(cm.max_ts_limit.load().limit, 1000.into());
+        assert_eq!(cm.max_ts_limit.load().drifted, 1000.into());
 
         // Try to lower from 1000 to 500 - should be ignored
         cm.set_max_ts_limit(TimeStamp::new(500));
-        assert_eq!(cm.max_ts_limit.load().limit, 1000.into());
+        assert_eq!(cm.max_ts_limit.load().drifted, 1000.into());
 
         // Test setting limit to max, should have no effect
         cm.set_max_ts_limit(TimeStamp::max());
-        assert_eq!(cm.max_ts_limit.load().limit, 1000.into());
-=======
-        assert_eq!(cm.max_ts_limit.load().drifted, 12058625000.into());
-
-        // Try to lower from 1000 to 500 - should be ignored
-        cm.set_max_ts_limit(TimeStamp::new(500));
-        assert_eq!(cm.max_ts_limit.load().drifted, 12058625000.into());
-
-        // Test setting limit to max, should have no effect
-        cm.set_max_ts_limit(TimeStamp::max());
-        assert_eq!(cm.max_ts_limit.load().drifted, 12058625000.into());
->>>>>>> d9bfe79857 (*: enforce exact max-ts for non-TiDB requests (#19654))
+        assert_eq!(cm.max_ts_limit.load().drifted, 1000.into());
     }
 
     #[test]
