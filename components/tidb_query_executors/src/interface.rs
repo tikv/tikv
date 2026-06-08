@@ -72,6 +72,11 @@ pub trait BatchExecutor: Send {
     /// state.
     fn peek_scanned_rows_sum(&self) -> usize;
 
+    /// Returns the total number of bytes scanned (sum of raw key and value
+    /// lengths), without modifying internal state. Used as the byte budget for
+    /// `paging_size_bytes`.
+    fn peek_scanned_bytes_sum(&self) -> usize;
+
     /// Collects underlying storage statistics accumulated during execution and
     /// prepares for next collection.
     ///
@@ -133,6 +138,10 @@ impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
         (**self).peek_scanned_rows_sum()
     }
 
+    fn peek_scanned_bytes_sum(&self) -> usize {
+        (**self).peek_scanned_bytes_sum()
+    }
+
     fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
         (**self).collect_storage_stats(dest);
     }
@@ -185,6 +194,10 @@ impl<C: ExecSummaryCollector + Send, T: BatchExecutor> BatchExecutor
 
     fn peek_scanned_rows_sum(&self) -> usize {
         self.inner.peek_scanned_rows_sum()
+    }
+
+    fn peek_scanned_bytes_sum(&self) -> usize {
+        self.inner.peek_scanned_bytes_sum()
     }
 
     fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {

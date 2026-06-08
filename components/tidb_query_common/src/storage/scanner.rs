@@ -28,6 +28,12 @@ pub struct RangesScanner<T, F> {
 
     scanned_rows_per_range: Vec<usize>,
 
+    /// Cumulative count of raw bytes (key + value lengths) scanned across all
+    /// ranges. Used as the byte budget for `paging_size_bytes`. Unlike
+    /// `scanned_rows_per_range`, this counter is never drained; it is only
+    /// ever peeked via `peek_scanned_bytes_sum`.
+    scanned_bytes: usize,
+
     // The following fields are only used for calculating scanned range. Scanned range is only
     // useful in streaming mode, where the client need to know the underlying physical data range
     // of each response slice, so that partial retry can be non-overlapping.
@@ -97,6 +103,7 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
             is_key_only,
             load_commit_ts,
             scanned_rows_per_range: Vec::with_capacity(ranges_len),
+            scanned_bytes: 0,
             is_scanned_range_aware,
             current_range: IntervalRange {
                 lower_inclusive: Vec::with_capacity(KEY_BUFFER_CAPACITY),
@@ -168,6 +175,7 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
                 if let Some(r) = self.scanned_rows_per_range.last_mut() {
                     *r += 1;
                 }
+                self.scanned_bytes += row.key.len() + row.value.len();
                 self.rescheduler.check_reschedule(force_check).await;
                 let kv = F::make_kv_pair((row.key, row.value, row.commit_ts.map(|n| n.into())))
                     .map_err(|e| StorageError(anyhow::Error::from(e)))?;
@@ -196,6 +204,13 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
     /// without clearing the internal state.
     pub fn peek_scanned_rows_sum(&self) -> usize {
         self.scanned_rows_per_range.iter().sum()
+    }
+
+    /// Returns the total number of bytes (raw key + value lengths) scanned so
+    /// far, without modifying internal state. Used as the byte budget for
+    /// `paging_size_bytes`.
+    pub fn peek_scanned_bytes_sum(&self) -> usize {
+        self.scanned_bytes
     }
 
     /// Returns scanned range since last call.
@@ -494,6 +509,40 @@ mod tests {
         scanner.collect_scanned_rows_per_range(&mut scanned_rows_per_range);
         assert_eq!(scanned_rows_per_range, vec![0]);
         scanned_rows_per_range.clear();
+    }
+
+    #[test]
+    fn test_scanned_bytes() {
+        let storage = create_storage();
+
+        // [foo, foo_3a) yields foo->1, foo_2->3, foo_3->5.
+        let ranges: Vec<Range> = vec![IntervalRange::from(("foo", "foo_3a")).into()];
+        let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
+            storage,
+            ranges,
+            scan_backward_in_range: false,
+            is_key_only: false,
+            is_scanned_range_aware: false,
+            load_commit_ts: false,
+        });
+
+        assert_eq!(scanner.peek_scanned_bytes_sum(), 0);
+
+        // "foo" (3) + "1" (1) = 4.
+        assert_eq!(&block_on(scanner.next()).unwrap().unwrap().key(), b"foo");
+        assert_eq!(scanner.peek_scanned_bytes_sum(), 4);
+
+        // "foo_2" (5) + "3" (1) = 6, cumulative 10.
+        assert_eq!(&block_on(scanner.next()).unwrap().unwrap().key(), b"foo_2");
+        assert_eq!(scanner.peek_scanned_bytes_sum(), 10);
+
+        // "foo_3" (5) + "5" (1) = 6, cumulative 16.
+        assert_eq!(&block_on(scanner.next()).unwrap().unwrap().key(), b"foo_3");
+        assert_eq!(scanner.peek_scanned_bytes_sum(), 16);
+
+        // Draining does not change the (non-destructive) peeked total.
+        assert_eq!(block_on(scanner.next()).unwrap(), None);
+        assert_eq!(scanner.peek_scanned_bytes_sum(), 16);
     }
 
     #[test]
