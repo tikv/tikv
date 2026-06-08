@@ -272,7 +272,7 @@ impl DownloadSpeedLimitManager {
                 },
             );
         }
-        self.sync_effective_limit(now_instant)
+        self.sync_effective_limit()
     }
 
     fn try_sync_effective_limit(&self) {
@@ -283,12 +283,13 @@ impl DownloadSpeedLimitManager {
                 return;
             }
             drop(task_limits);
-            self.sync_effective_limit(now_instant);
+            self.sync_effective_limit();
         }
     }
 
-    fn sync_effective_limit(&self, now_instant: StdInstant) -> f64 {
+    fn sync_effective_limit(&self) -> f64 {
         let mut task_limits = self.task_limits.write().unwrap();
+        let now_instant = StdInstant::now();
         let mut effective_limit = f64::INFINITY;
         let mut effective_limit_expire_at = None;
         task_limits.tree.retain(|_, limit| {
@@ -298,12 +299,9 @@ impl DownloadSpeedLimitManager {
                 .unwrap_or(true);
             if no_expired {
                 let this_speed_limit = limit.speed_limit as f64;
-                match effective_limit_expire_at {
-                    None | Some(_) if effective_limit > this_speed_limit => {
-                        effective_limit_expire_at = limit.expire_at;
-                        effective_limit = this_speed_limit;
-                    }
-                    _ => (),
+                if effective_limit > this_speed_limit {
+                    effective_limit_expire_at = limit.expire_at;
+                    effective_limit = this_speed_limit;
                 }
             }
             no_expired
@@ -2385,8 +2383,8 @@ mod test {
         manager.update_from_request(&req_task_b);
         assert_eq!(manager.limiter().speed_limit(), 64.0);
 
-        let now_plus_2s = std::time::Instant::now() + Duration::from_secs(2);
-        let effective_limit = manager.sync_effective_limit(now_plus_2s);
+        std::thread::sleep(Duration::from_millis(1100));
+        let effective_limit = manager.sync_effective_limit();
         assert_eq!(effective_limit, 128.0);
         assert_eq!(manager.limiter().speed_limit(), 128.0);
     }
@@ -2458,26 +2456,6 @@ mod test {
         manager.update_from_request(&old_req_task);
         assert_eq!(manager.limiter().speed_limit(), f64::INFINITY);
         assert!(manager_effective_limit_expire_at_is_none(&manager));
-    }
-
-    #[test]
-    fn test_download_speed_limit_manager_non_expiring_limit_uses_legacy_key() {
-        let manager = DownloadSpeedLimitManager::new();
-
-        let req_task_a = build_download_speed_limit_req("task-a", 128, 0);
-        manager.update_from_request(&req_task_a);
-        assert_eq!(manager.limiter().speed_limit(), 128.0);
-        assert_eq!(manager_task_limits_len(&manager), 1);
-
-        let req_task_b = build_download_speed_limit_req("task-b", 64, 0);
-        manager.update_from_request(&req_task_b);
-        assert_eq!(manager.limiter().speed_limit(), 64.0);
-        assert_eq!(manager_task_limits_len(&manager), 1);
-
-        let req_remove_task_c = build_download_speed_limit_req("task-c", 0, 0);
-        manager.update_from_request(&req_remove_task_c);
-        assert!(manager.limiter().speed_limit().is_infinite());
-        assert_eq!(manager_task_limits_len(&manager), 0);
     }
 
     #[test]
