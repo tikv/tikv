@@ -18,7 +18,7 @@ use hooking::{
 use kvproto::brpb::StorageBackend;
 use tikv_util::config::ReadableSize;
 use tokio::runtime::Handle;
-use tracing::{trace_span, Instrument};
+use tracing::{Instrument, trace_span};
 use tracing_active_tree::{frame, root};
 use txn_types::TimeStamp;
 
@@ -31,10 +31,11 @@ use super::{
     storage::{LoadFromExt, StreamMetaStorage},
 };
 use crate::{
-    compaction::{exec::SubcompactionExecArg, SubcompactionResult},
+    ErrorKind,
+    compaction::{SubcompactionResult, exec::SubcompactionExecArg},
     errors::{Result, TraceResultExt},
     execute::hooking::SubcompactionSkippedCtx,
-    util, ErrorKind,
+    util,
 };
 
 const COMPACTION_V1_PREFIX: &str = "v1/compactions";
@@ -124,6 +125,8 @@ pub struct Execution<DB: SstExt = RocksEngine> {
     pub max_concurrent_subcompaction: u64,
     /// The external storage for input and output.
     pub external_storage: StorageBackend,
+    /// Backend configuration for constructing external storage.
+    pub backend_config: BackendConfig,
     /// The RocksDB instance for creating `SstWriter`.
     /// By design little or no data will be written to the instance, for now
     /// this is only used for loading the user collected properties
@@ -265,7 +268,7 @@ impl Execution {
 
     pub fn run(self, mut hooks: impl ExecHooks) -> Result<()> {
         let storage =
-            external_storage::create_storage(&self.external_storage, BackendConfig::default())?;
+            external_storage::create_storage(&self.external_storage, self.backend_config.clone())?;
         let storage: Arc<dyn ExternalStorage> = Arc::from(storage);
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()

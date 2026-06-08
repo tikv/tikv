@@ -5,14 +5,14 @@ use std::{
     cmp::{max, min},
     collections::HashSet,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
 
 use collections::HashMap;
-use dashmap::{mapref::one::Ref, DashMap};
+use dashmap::{DashMap, mapref::one::Ref};
 use fail::fail_point;
 use kvproto::{
     kvrpcpb::{CommandPri, ResourceControlContext},
@@ -22,7 +22,7 @@ use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
 use tikv_util::{
     config::VersionTrack,
     info,
-    resource_control::{TaskMetadata, TaskPriority, DEFAULT_RESOURCE_GROUP_NAME},
+    resource_control::{DEFAULT_RESOURCE_GROUP_NAME, TaskMetadata, TaskPriority},
     time::Instant,
 };
 use yatp::queue::priority::TaskPriorityProvider;
@@ -163,6 +163,17 @@ impl ResourceGroupManager {
         {
             self.group_count.fetch_add(1, Ordering::Relaxed);
         }
+        self.update_has_background();
+    }
+
+    fn update_has_background(&self) {
+        let any_has_bg = self
+            .resource_groups
+            .iter()
+            .any(|g| !g.background_source_types.is_empty());
+        self.registry.read().iter().for_each(|controller| {
+            controller.set_has_background(any_has_bg);
+        });
     }
 
     fn build_resource_limiter(
@@ -196,6 +207,7 @@ impl ResourceGroupManager {
             info!("remove resource group"; "name"=> name);
             self.group_count.fetch_sub(1, Ordering::Relaxed);
         }
+        self.update_has_background();
     }
 
     pub fn retain(&self, mut f: impl FnMut(&String, &PbResourceGroup) -> bool) {
@@ -442,6 +454,8 @@ pub struct ResourceController {
     last_rest_vt_time: Cell<Instant>,
     // whether the settings is customized by user
     customized: AtomicBool,
+    // whether any resource group has background settings configured
+    has_background: AtomicBool,
 }
 
 // we are ensure to visit the `last_rest_vt_time` by only 1 thread so it's
@@ -459,6 +473,7 @@ impl ResourceController {
             max_ru_quota: Mutex::new(DEFAULT_MAX_RU_QUOTA),
             last_rest_vt_time: Cell::new(Instant::now_coarse()),
             customized: AtomicBool::new(false),
+            has_background: AtomicBool::new(false),
         }
     }
 
@@ -566,7 +581,11 @@ impl ResourceController {
     }
 
     pub fn is_customized(&self) -> bool {
-        self.customized.load(Ordering::Acquire)
+        self.customized.load(Ordering::Acquire) || self.has_background.load(Ordering::Acquire)
+    }
+
+    pub fn set_has_background(&self, has_background: bool) {
+        self.has_background.store(has_background, Ordering::Release);
     }
 
     #[inline]
@@ -636,12 +655,29 @@ impl ResourceController {
     }
 
     pub fn get_priority(&self, name: &[u8], pri: CommandPri) -> u64 {
-        let level = match pri {
-            CommandPri::Low => 2,
-            CommandPri::Normal => 1,
-            CommandPri::High => 0,
+        let level = Self::command_pri_to_level(pri);
+        self.resource_group(name).get_priority(level, None, true)
+    }
+
+    /// Returns the priority for the given task metadata without incrementing
+    /// virtual time. Used for pre-spawn eviction comparison.
+    pub fn peek_priority_of(&self, metadata: &TaskMetadata<'_>, pri: CommandPri) -> u64 {
+        let level = Self::command_pri_to_level(pri);
+        let group = self.resource_group(metadata.group_name());
+        let override_priority = if metadata.override_priority() == 0 {
+            None
+        } else {
+            Some(metadata.override_priority())
         };
-        self.resource_group(name).get_priority(level, None)
+        group.get_priority(level, override_priority, false)
+    }
+
+    fn command_pri_to_level(pri: CommandPri) -> usize {
+        match pri {
+            CommandPri::High => 0,
+            CommandPri::Normal => 1,
+            CommandPri::Low => 2,
+        }
     }
 }
 
@@ -655,6 +691,7 @@ impl TaskPriorityProvider for ResourceController {
             } else {
                 Some(metadata.override_priority())
             },
+            true,
         )
     }
 }
@@ -679,14 +716,18 @@ struct GroupPriorityTracker {
 }
 
 impl GroupPriorityTracker {
-    fn get_priority(&self, level: usize, override_priority: Option<u32>) -> u64 {
+    /// Computes the scheduling priority for a task at the given level.
+    /// When `advance_vt` is true, atomically increments the virtual time
+    /// (used when actually scheduling a task). When false, reads virtual
+    /// time without advancing it (used for priority comparison only).
+    fn get_priority(&self, level: usize, override_priority: Option<u32>, advance_vt: bool) -> u64 {
         let task_extra_priority = TASK_EXTRA_FACTOR_BY_LEVEL[level] * 1000 * self.weight;
-        let vt = (if self.vt_delta_for_get > 0 {
+        let vt = (if advance_vt && self.vt_delta_for_get > 0 {
             self.virtual_time
                 .fetch_add(self.vt_delta_for_get, Ordering::Relaxed)
                 + self.vt_delta_for_get
         } else {
-            self.virtual_time.load(Ordering::Relaxed)
+            self.virtual_time.load(Ordering::Relaxed) + self.vt_delta_for_get
         }) + task_extra_priority;
         let priority = override_priority.unwrap_or(self.group_priority);
         concat_priority_vt(priority, vt)
@@ -1095,7 +1136,7 @@ pub(crate) mod tests {
     #[cfg(feature = "failpoints")]
     #[test]
     fn test_reset_resource_group_vt_overflow() {
-        use rand::{thread_rng, RngCore};
+        use rand::{RngCore, thread_rng};
         let resource_manager = ResourceGroupManager::default();
         let resource_ctl = resource_manager.derive_controller("test_write".into(), false);
         let mut rng = thread_rng();

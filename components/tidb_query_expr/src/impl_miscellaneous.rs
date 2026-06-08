@@ -65,7 +65,7 @@ pub fn any_value_bytes(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
 pub fn inet_aton(addr: BytesRef) -> Result<Option<Int>> {
     let addr = String::from_utf8_lossy(addr);
 
-    if addr.len() == 0 || addr.ends_with('.') {
+    if addr.is_empty() || addr.ends_with('.') {
         return Ok(None);
     }
     let (mut byte_result, mut result, mut dot_count): (u64, u64, usize) = (0, 0, 0);
@@ -452,7 +452,7 @@ mod tests {
             (Some(2063728641), Some(Bytes::from("123.2.0.1"))),
             (Some(0), Some(Bytes::from("0.0.0.0"))),
             (
-                Some(i64::from(u32::max_value())),
+                Some(i64::from(u32::MAX)),
                 Some(Bytes::from("255.255.255.255")),
             ),
             (Some(545460846593), None),

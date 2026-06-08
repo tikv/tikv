@@ -32,10 +32,10 @@ use tikv::{
     config::*,
     import::Config as ImportConfig,
     server::{
+        Config as ServerConfig,
         config::GrpcCompressionType,
         gc_worker::{AutoCompactionConfig, GcConfig},
         lock_manager::Config as PessimisticTxnConfig,
-        Config as ServerConfig,
     },
     storage::config::{
         BlockCacheConfig, Config as StorageConfig, EngineType, FlowControlConfig, IoRateLimitConfig,
@@ -910,6 +910,10 @@ fn test_serde_custom_tikv_config() {
     value.resource_control = ResourceControlConfig {
         enabled: false,
         priority_ctl_strategy: PriorityCtlStrategy::Aggressive,
+        bg_resource_threshold: 70.0,
+        bg_compaction_pressure_threshold: 70.0,
+        bg_write_io_ceiling: ReadableSize::gb(100),
+        bg_write_io_floor: ReadableSize::mb(10),
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");

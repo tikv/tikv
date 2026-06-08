@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use engine_traits::{self, Mutable, Result, WriteBatchExt, WriteOptions};
-use rocksdb::{Writable, WriteBatch as RawWriteBatch, DB};
+use rocksdb::{DB, Writable, WriteBatch as RawWriteBatch};
 
 use crate::{engine::RocksEngine, options::RocksWriteOptions, r2e, util::get_cf_handle};
 
@@ -240,12 +240,12 @@ impl Mutable for RocksWriteBatchVec {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::{Peekable, WriteBatch, CF_DEFAULT};
+    use engine_traits::{CF_DEFAULT, Peekable, WriteBatch};
     use rocksdb::DBOptions as RawDBOptions;
     use tempfile::Builder;
 
     use super::{
-        super::{util::new_engine_opt, RocksDbOptions},
+        super::{RocksDbOptions, util::new_engine_opt},
         *,
     };
     use crate::RocksCfOptions;

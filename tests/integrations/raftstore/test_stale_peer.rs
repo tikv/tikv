@@ -4,13 +4,13 @@
 
 use std::{sync::Arc, thread, time::*};
 
-use engine_traits::{Peekable, CF_RAFT};
+use engine_traits::{CF_RAFT, Peekable};
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use tikv_util::{config::ReadableDuration, HandyRwLock};
+use tikv_util::{HandyRwLock, config::ReadableDuration};
 
 /// A helper function for testing the behaviour of the gc of stale peer
 /// which is out of region.
@@ -26,6 +26,7 @@ use tikv_util::{config::ReadableDuration, HandyRwLock};
 ///     are removed from the cluster or probably destroyed.
 ///   - Meantime, D, E, F would not reach B, Since it's not in the cluster
 ///     anymore.
+///
 /// In this case, Peer B would notice that the leader is missing for a long
 /// time, and it would check with pd to confirm whether it's still a member of
 /// the cluster. If not, it should destroy itself as a stale peer which is
@@ -109,6 +110,7 @@ fn test_server_stale_peer_out_of_region() {
 ///   a single raft AE message. But then it goes through some process like the
 ///   case of `test_stale_peer_out_of_region`, it's removed out of the region
 ///   and wouldn't be contacted anymore.
+///
 /// In both cases, peer B would notice that the leader is missing for a long
 /// time, and it's an initialized peer without any data. It would destroy itself
 /// as stale peer directly and should not impact other region data on the

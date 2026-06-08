@@ -4,21 +4,21 @@ use core::pin::Pin;
 use std::{
     borrow::Borrow,
     cell::RefCell,
-    collections::{hash_map::RandomState, BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, hash_map::RandomState},
     future::Future,
     ops::{Bound, RangeBounds},
     path::Path,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     task::{Context, Waker},
     time::Duration,
 };
 
-use async_compression::{tokio::write::ZstdEncoder, Level};
+use async_compression::{Level, tokio::write::ZstdEncoder};
 use engine_rocks::ReadPerfInstant;
-use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, CfName};
 use futures::{ready, task::Poll};
 use kvproto::{
     brpb::CompressionType,
@@ -27,13 +27,12 @@ use kvproto::{
 };
 use tikv::storage::CfStatistics;
 use tikv_util::{
-    box_err,
+    Either, box_err,
     sys::inspector::{
-        self_thread_inspector, IoStat, ThreadInspector, ThreadInspectorImpl as OsInspector,
+        IoStat, ThreadInspector, ThreadInspectorImpl as OsInspector, self_thread_inspector,
     },
     time::Instant,
     worker::Scheduler,
-    Either,
 };
 use tokio::{
     fs::File,
@@ -43,9 +42,9 @@ use tokio::{
 use txn_types::{Key, Lock, LockType};
 
 use crate::{
+    Task,
     errors::{Error, Result},
     router::TaskSelector,
-    Task,
 };
 
 /// wrap a user key with encoded data key.
@@ -79,6 +78,7 @@ pub fn redact(key: &impl AsRef<[u8]>) -> log_wrappers::Value<'_> {
 pub const BACKUP_META_MIN_BEGIN_TS_PREFIX: char = 'd';
 pub const BACKUP_META_MIN_TS_PREFIX: char = 'l';
 pub const BACKUP_META_MAX_TS_PREFIX: char = 'u';
+pub const BACKUP_META_FLAG_PREFIX: char = 'p';
 
 #[derive(Debug, Clone, Copy)]
 pub struct ParsedBackupMetaFileName {
@@ -87,6 +87,7 @@ pub struct ParsedBackupMetaFileName {
     pub min_begin_ts: u64,
     pub min_ts: u64,
     pub max_ts: u64,
+    pub flags: Option<u64>,
 }
 
 pub fn parse_backupmeta_filename(
@@ -143,15 +144,14 @@ pub fn parse_backupmeta_filename(
         }
         pos += TAG_VALUE_LEN;
     }
+    let get_val_opt = |tag| tagged_values.get(&tag).copied();
     let get_val = |tag| {
-        tagged_values
-            .get(&tag)
-            .copied()
-            .ok_or_else(|| format!("missing '{}' in backupmeta suffix: {name}", tag))
+        get_val_opt(tag).ok_or_else(|| format!("missing '{}' in backupmeta suffix: {name}", tag))
     };
     let min_begin_ts = get_val(BACKUP_META_MIN_BEGIN_TS_PREFIX)?;
     let min_ts = get_val(BACKUP_META_MIN_TS_PREFIX)?;
     let max_ts = get_val(BACKUP_META_MAX_TS_PREFIX)?;
+    let flags = get_val_opt(BACKUP_META_FLAG_PREFIX);
 
     Ok(ParsedBackupMetaFileName {
         flush_ts: parse_hex_u64(name, &prefix[..16], "flush_ts")?,
@@ -159,6 +159,7 @@ pub fn parse_backupmeta_filename(
         min_begin_ts,
         min_ts,
         max_ts,
+        flags,
     })
 }
 
@@ -191,7 +192,7 @@ pub type SlotMap<K, V, S = RandomState> = RwLock<HashMap<K, Slot<V>, S>>;
 /// to DSTs.
 struct RangeToInclusiveRef<'a, T: ?Sized>(&'a T);
 
-impl<'a, T: ?Sized> RangeBounds<T> for RangeToInclusiveRef<'a, T> {
+impl<T: ?Sized> RangeBounds<T> for RangeToInclusiveRef<'_, T> {
     fn start_bound(&self) -> Bound<&T> {
         Bound::Unbounded
     }
@@ -203,7 +204,7 @@ impl<'a, T: ?Sized> RangeBounds<T> for RangeToInclusiveRef<'a, T> {
 
 struct RangeToExclusiveRef<'a, T: ?Sized>(&'a T);
 
-impl<'a, T: ?Sized> RangeBounds<T> for RangeToExclusiveRef<'a, T> {
+impl<T: ?Sized> RangeBounds<T> for RangeToExclusiveRef<'_, T> {
     fn start_bound(&self) -> Bound<&T> {
         Bound::Unbounded
     }
@@ -480,7 +481,7 @@ impl Drop for Work {
 
 pub struct WaitAll<'a>(&'a FutureWaitGroup);
 
-impl<'a> Future for WaitAll<'a> {
+impl Future for WaitAll<'_> {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -792,7 +793,7 @@ pub fn debug_key_range<'ret, 'a: 'ret, 'b: 'ret>(
 
 struct DebugKeyRange<'start, 'end>(&'start [u8], &'end [u8]);
 
-impl<'start, 'end> std::fmt::Debug for DebugKeyRange<'start, 'end> {
+impl std::fmt::Debug for DebugKeyRange<'_, '_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let end_key = if self.1.is_empty() {
             Either::Left("inf")
@@ -821,7 +822,7 @@ pub fn debug_region(r: &Region) -> impl std::fmt::Debug + '_ {
 
 struct DebugRegion<'a>(&'a Region);
 
-impl<'a> std::fmt::Debug for DebugRegion<'a> {
+impl std::fmt::Debug for DebugRegion<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let r = self.0;
         f.debug_struct("Region")
@@ -842,7 +843,7 @@ impl<'a> std::fmt::Debug for DebugRegion<'a> {
 
 struct SlogRegion<'a>(&'a Region);
 
-impl<'a> slog::KV for SlogRegion<'a> {
+impl slog::KV for SlogRegion<'_> {
     fn serialize(
         &self,
         _record: &slog::Record<'_>,
@@ -898,8 +899,8 @@ impl<D: std::fmt::Debug, T: Iterator<Item = D>> std::fmt::Debug for DebugIter<D,
 mod test {
     use std::{
         sync::{
-            atomic::{AtomicUsize, Ordering},
             Arc,
+            atomic::{AtomicUsize, Ordering},
         },
         time::Duration,
     };
@@ -911,8 +912,9 @@ mod test {
     use tokio::io::{AsyncWriteExt, BufReader};
 
     use crate::utils::{
-        is_in_range, parse_backupmeta_filename, FutureWaitGroup, SegmentMap,
-        BACKUP_META_MAX_TS_PREFIX, BACKUP_META_MIN_BEGIN_TS_PREFIX, BACKUP_META_MIN_TS_PREFIX,
+        BACKUP_META_FLAG_PREFIX, BACKUP_META_MAX_TS_PREFIX, BACKUP_META_MIN_BEGIN_TS_PREFIX,
+        BACKUP_META_MIN_TS_PREFIX, FutureWaitGroup, SegmentMap, is_in_range,
+        parse_backupmeta_filename,
     };
 
     #[test]
@@ -999,6 +1001,33 @@ mod test {
         assert_eq!(parsed.min_begin_ts, 0x2);
         assert_eq!(parsed.min_ts, 0x3);
         assert_eq!(parsed.max_ts, 0x4);
+        assert_eq!(parsed.flags, None);
+    }
+
+    #[test]
+    fn test_parse_backupmeta_filename_parses_flags() {
+        let name = format!(
+            "000000000000000A000000000000000B-{}0000000000000002{}0000000000000003{}0000000000000004{}0000000000000001",
+            BACKUP_META_MIN_BEGIN_TS_PREFIX,
+            BACKUP_META_MIN_TS_PREFIX,
+            BACKUP_META_MAX_TS_PREFIX,
+            BACKUP_META_FLAG_PREFIX
+        );
+        let parsed = parse_backupmeta_filename(&name).unwrap();
+        assert_eq!(parsed.flags, Some(1));
+    }
+
+    #[test]
+    fn test_parse_backupmeta_filename_parses_empty_flags() {
+        let name = format!(
+            "000000000000000A000000000000000B-{}0000000000000002{}0000000000000003{}0000000000000004{}0000000000000000",
+            BACKUP_META_MIN_BEGIN_TS_PREFIX,
+            BACKUP_META_MIN_TS_PREFIX,
+            BACKUP_META_MAX_TS_PREFIX,
+            BACKUP_META_FLAG_PREFIX
+        );
+        let parsed = parse_backupmeta_filename(&name).unwrap();
+        assert_eq!(parsed.flags, Some(0));
     }
 
     #[test]
@@ -1106,7 +1135,7 @@ mod test {
 
     #[test]
     fn test_recorder() {
-        use engine_traits::{Iterable, KvEngine, Mutable, WriteBatch, WriteBatchExt, CF_DEFAULT};
+        use engine_traits::{CF_DEFAULT, Iterable, KvEngine, Mutable, WriteBatch, WriteBatchExt};
         use tempfile::TempDir;
 
         let p = TempDir::new().unwrap();

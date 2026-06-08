@@ -12,8 +12,8 @@ use std::{
 };
 
 use engine_traits::{
-    KvEngine, ManualCompactionOptions, Range, TableProperties, TablePropertiesCollection,
-    UserCollectedProperties, CF_DEFAULT, CF_WRITE,
+    CF_DEFAULT, CF_WRITE, KvEngine, ManualCompactionOptions, Range, TableProperties,
+    TablePropertiesCollection, UserCollectedProperties,
 };
 use keys::{enc_end_key, enc_start_key};
 use kvproto::metapb::Region;
@@ -24,9 +24,9 @@ use tikv_util::{box_err, debug, error, info, sys::thread::StdThreadBuildWrapper,
 use txn_types::TimeStamp;
 
 use super::{
+    Error, Result,
     config::{GcConfig, GcWorkerConfigManager},
     gc_worker::GcSafePointProvider,
-    Error, Result,
 };
 
 make_static_metric! {
@@ -294,12 +294,23 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine>
                 tracker.reset_if_needed();
             }
 
-            // Sleep for remaining time in check interval, or start next round immediately
-            if elapsed < check_interval {
-                let remaining_sleep = check_interval - elapsed;
-                if self.sleep_or_stop(remaining_sleep) {
-                    break;
-                }
+            // Sleep for remaining time in check interval, or start next round
+            // immediately. When MVCC-read-aware scoring is enabled, enforce a
+            // minimum gap so the tracker can accumulate meaningful stats after
+            // the reset.
+            const MIN_GAP_BETWEEN_ROUNDS: Duration = Duration::from_secs(20);
+            let remaining_sleep = if elapsed < check_interval {
+                check_interval - elapsed
+            } else {
+                Duration::ZERO
+            };
+            let sleep_duration = if config.auto_compaction.mvcc_read_aware_enabled {
+                remaining_sleep.max(MIN_GAP_BETWEEN_ROUNDS)
+            } else {
+                remaining_sleep
+            };
+            if sleep_duration > Duration::ZERO && self.sleep_or_stop(sleep_duration) {
+                break;
             }
         }
         debug!("compaction-runner stopped");

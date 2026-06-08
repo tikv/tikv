@@ -8,8 +8,8 @@ use std::{
     pin::Pin,
     result,
     sync::{
-        atomic::{AtomicI32, AtomicU8, Ordering},
         Arc, Mutex,
+        atomic::{AtomicI32, AtomicU8, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -17,11 +17,11 @@ use std::{
 use collections::{HashMap, HashSet};
 use crossbeam::queue::ArrayQueue;
 use futures::{
+    Future, Sink,
     channel::oneshot,
     compat::Future01CompatExt,
     ready,
     task::{Context, Poll, Waker},
-    Future, Sink,
 };
 use futures_timer::Delay;
 use grpcio::{
@@ -45,14 +45,14 @@ use tikv_util::{
     timer::GLOBAL_TIMER_HANDLE,
     worker::{Scheduler, Worker},
 };
-use yatp::{task::future::TaskCell, ThreadPool};
+use yatp::{ThreadPool, task::future::TaskCell};
 
 use crate::server::{
+    Config, StoreAddrResolver,
     load_statistics::ThreadLoadPool,
     metrics::*,
     resolve::{Error as ResolveError, Result as ResolveResult},
     snap::Task as SnapTask,
-    Config, StoreAddrResolver,
 };
 
 // Implement health_controller::HealthChecker for HealthChecker to bridge with
@@ -1119,9 +1119,11 @@ where
                 .connections
                 .entry((store_id, conn_id))
                 .or_insert_with(|| {
-                    let queue = Arc::new(Queue::with_capacity(
-                        self.builder.cfg.value().raft_client_queue_size,
-                    ));
+                    let queue_capacity = {
+                        let cfg = self.builder.cfg.value();
+                        cfg.raft_client_queue_size / cfg.grpc_raft_conn_num
+                    };
+                    let queue = Arc::new(Queue::with_capacity(queue_capacity));
                     if need_pause {
                         queue.set_conn_state(ConnState::Paused);
                     }

@@ -6,14 +6,15 @@ use std::{
 };
 
 use collections::HashMap;
+use lazy_static::lazy_static;
 use prometheus::{exponential_buckets, local::LocalIntCounter, *};
 use prometheus_static_metric::*;
 use tikv_util::time::Instant;
 
+use crate::storage::ErrorHeaderKind;
 pub use crate::storage::kv::metrics::{
     GcKeysCF, GcKeysCounterVec, GcKeysCounterVecInner, GcKeysDetail,
 };
-use crate::storage::ErrorHeaderKind;
 
 make_auto_flush_static_metric! {
     pub label_enum GrpcTypeKind {

@@ -4,23 +4,22 @@
 use kvproto::kvrpcpb::ExtraOp;
 use resource_metering::record_network_out_bytes;
 use tikv_kv::Modify;
-use txn_types::{insert_old_value_if_resolved, Key, OldValues, TimeStamp, TxnExtra};
+use txn_types::{Key, OldValues, TimeStamp, TxnExtra, insert_old_value_if_resolved};
 
 use crate::storage::{
+    Error as StorageError, PessimisticLockKeyResult, ProcessResult, Result as StorageResult,
+    Snapshot,
     kv::WriteData,
     lock_manager::{LockManager, WaitTimeout},
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader},
     txn::{
-        acquire_pessimistic_lock,
+        Error, ErrorInner, Result, acquire_pessimistic_lock,
         commands::{
             Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
             WriteCommand, WriteContext, WriteResult, WriteResultLockInfo,
         },
-        Error, ErrorInner, Result,
     },
     types::{PessimisticLockParameters, PessimisticLockResults},
-    Error as StorageError, PessimisticLockKeyResult, ProcessResult, Result as StorageResult,
-    Snapshot,
 };
 
 command! {
@@ -245,6 +244,7 @@ mod tests {
 
     use super::*;
     use crate::storage::{
+        Engine, Statistics, TestEngineBuilder,
         lock_manager::MockLockManager,
         mvcc::tests::must_load_shared_lock,
         txn::{
@@ -256,7 +256,6 @@ mod tests {
             tests::{must_commit, must_rollback},
             txn_status_cache::TxnStatusCache,
         },
-        Engine, Statistics, TestEngineBuilder,
     };
 
     impl PartialEq for PessimisticLockKeyResult {

@@ -4,7 +4,7 @@ use std::{
     collections::hash_map::Entry as MapEntry,
     error::Error as StdError,
     result,
-    sync::{mpsc, Arc, Mutex, RwLock},
+    sync::{Arc, Mutex, RwLock, mpsc},
     thread,
     time::Duration,
 };
@@ -15,11 +15,11 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    CompactExt, Engines, Iterable, ManualCompactionOptions, MiscExt, Mutable, Peekable,
-    RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_RAFT,
+    CF_DEFAULT, CF_RAFT, CompactExt, Engines, Iterable, ManualCompactionOptions, MiscExt, Mutable,
+    Peekable, RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt,
 };
 use file_system::IoRateLimiter;
-use futures::{self, channel::oneshot, executor::block_on, future::BoxFuture, StreamExt};
+use futures::{self, StreamExt, channel::oneshot, executor::block_on, future::BoxFuture};
 use kvproto::{
     errorpb::Error as PbError,
     kvrpcpb::{ApiVersion, Context, DiskFullOpt},
@@ -34,27 +34,26 @@ use kvproto::{
 use pd_client::{BucketStat, PdClient};
 use raft::eraftpb::ConfChangeType;
 use raftstore::{
+    Error, Result,
     router::RaftStoreRouter,
     store::{
         fsm::{
-            create_raft_batch_system,
-            store::{StoreMeta, PENDING_MSG_CAP},
-            ApplyRouter, RaftBatchSystem, RaftRouter,
+            ApplyRouter, RaftBatchSystem, RaftRouter, create_raft_batch_system,
+            store::{PENDING_MSG_CAP, StoreMeta},
         },
         transport::CasualRouter,
         *,
     },
-    Error, Result,
 };
 use resource_control::ResourceGroupManager;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use tikv::{config::TikvConfig, server::Result as ServerResult};
 use tikv_util::{
+    HandyRwLock,
     thread_group::GroupProperties,
     time::{Instant, ThreadReadId},
     worker::LazyWorker,
-    HandyRwLock,
 };
 use txn_types::WriteBatchFlags;
 
@@ -1194,6 +1193,35 @@ impl<T: Simulator> Cluster<T> {
         assert_eq!(status_resp.get_cmd_type(), StatusCmdType::RegionDetail);
         assert!(status_resp.has_region_detail());
         status_resp.take_region_detail()
+    }
+
+    pub fn unstable_entries_stat(&self, region_id: u64, store_id: u64) -> (usize, usize, usize) {
+        let (_, len, cap, size) = self.unstable_entries_state(region_id, store_id);
+        (len, cap, size)
+    }
+
+    pub fn unstable_entries_state(
+        &self,
+        region_id: u64,
+        store_id: u64,
+    ) -> (GroupState, usize, usize, usize) {
+        let router = self.sim.rl().get_router(store_id).unwrap();
+        let (tx, rx) = mpsc::channel();
+        CasualRouter::send(
+            &router,
+            region_id,
+            CasualMessage::AccessPeer(Box::new(move |meta| {
+                tx.send((
+                    meta.group_state,
+                    meta.raft_status.unstable_entries_len,
+                    meta.raft_status.unstable_entries_capacity,
+                    meta.raft_status.unstable_entries_size,
+                ))
+                .unwrap();
+            })),
+        )
+        .unwrap();
+        rx.recv_timeout(Duration::from_secs(5)).unwrap()
     }
 
     pub fn truncated_state(&self, region_id: u64, store_id: u64) -> RaftTruncatedState {

@@ -12,20 +12,20 @@ use std::{
 };
 
 use collections::HashSet;
-use dashmap::{mapref::entry::Entry, DashMap};
+use dashmap::{DashMap, mapref::entry::Entry};
 use encryption::{DataKeyManager, FileEncryptionInfo, MultiMasterKeyBackend};
 use encryption_export::create_async_backend;
-use engine_rocks::{get_env, RocksSstReader};
+use engine_rocks::{RocksSstReader, get_env};
 use engine_traits::{
-    name_to_cf, util::check_key_in_range, CfName, IterOptions, Iterator, KvEngine, RefIterable,
-    SstCompressionType, SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT,
-    CF_WRITE,
+    CF_DEFAULT, CF_WRITE, CfName, IterOptions, Iterator, KvEngine, RefIterable, SstCompressionType,
+    SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder, name_to_cf,
+    util::check_key_in_range,
 };
 use external_storage::{
-    compression_reader_dispatcher, encrypt_wrap_reader, wrap_with_checksum_reader_if_needed,
-    ExternalStorage, RestoreConfig,
+    BackendConfig, ExternalStorage, RestoreConfig, compression_reader_dispatcher,
+    encrypt_wrap_reader, wrap_with_checksum_reader_if_needed,
 };
-use file_system::{get_io_rate_limiter, IoType, OpenOptions};
+use file_system::{IoType, OpenOptions, get_io_rate_limiter};
 use kvproto::{
     brpb::{CipherInfo, StorageBackend},
     encryptionpb::{EncryptionMethod, FileEncryptionInfo_oneof_mode, MasterKey},
@@ -34,6 +34,7 @@ use kvproto::{
     metapb::Region,
 };
 use tikv_util::{
+    Either, HandyRwLock,
     codec::{
         bytes::{decode_bytes_in_place, encode_bytes},
         stream_event::{EventEncoder, EventIterator, Iterator as EIterator},
@@ -41,22 +42,25 @@ use tikv_util::{
     future::RescheduleChecker,
     memory::{MemoryQuota, OwnedAllocated},
     resizable_threadpool::DeamonRuntimeHandle,
-    sys::{thread::ThreadBuildWrapper, SysQuota},
+    sys::{SysQuota, thread::ThreadBuildWrapper},
     time::{Instant, Limiter},
-    Either, HandyRwLock,
 };
 use tokio::{runtime::Runtime, sync::OnceCell};
 use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
-    caching::cache_map::{CacheMap, ShareOwned},
+    Config, ConfigManager as ImportConfigManager, Error, Result,
+    caching::{
+        cache_map::{CacheMap, ShareOwned},
+        storage_cache::StorageBackendFactory,
+    },
     import_file::{ImportDir, ImportFile},
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     import_mode2::{HashRange, ImportModeSwitcherV2},
     metrics::*,
     sst_merge_iter::BinaryIterator,
     sst_writer::{RawSstWriter, TxnSstWriter},
-    util, Config, ConfigManager as ImportConfigManager, Error, Result,
+    util,
 };
 
 pub struct LoadedFile {
@@ -116,10 +120,10 @@ pub enum CacheKvFile {
 /// returns an error on an invalid internal state.
 /// pass the error back to the client side for further debugging.
 fn error(message: impl std::fmt::Display) -> Error {
-    Error::Io(io::Error::new(
-        ErrorKind::Other,
-        format!("internal error in TiKV: {}", message),
-    ))
+    Error::Io(io::Error::other(format!(
+        "internal error in TiKV: {}",
+        message
+    )))
 }
 
 impl CacheKvFile {
@@ -162,7 +166,8 @@ pub struct SstImporter<E: KvEngine> {
     api_version: ApiVersion,
     compression_types: HashMap<CfName, SstCompressionType>,
 
-    cached_storage: CacheMap<StorageBackend>,
+    backend_config: BackendConfig,
+    cached_storage: CacheMap<StorageBackendFactory>,
     // We need to keep reference to the runtime so background tasks won't be dropped.
     _download_rt: Runtime,
     file_locks: Arc<DashMap<String, (CacheKvFile, Instant)>>,
@@ -216,12 +221,17 @@ impl<E: KvEngine> SstImporter<E> {
             switcher,
             api_version,
             compression_types: HashMap::with_capacity(2),
+            backend_config: Default::default(),
             file_locks: Arc::new(DashMap::default()),
             cached_storage,
             _download_rt: download_rt,
             memory_quota: Arc::new(MemoryQuota::new(memory_limit as _)),
             multi_master_keys_backend: MultiMasterKeyBackend::new(),
         })
+    }
+
+    pub fn set_backend_config(&mut self, backend_config: BackendConfig) {
+        self.backend_config = backend_config;
     }
 
     pub fn ranges_enter_import_mode(&self, ranges: Vec<Range>) {
@@ -409,7 +419,6 @@ impl<E: KvEngine> SstImporter<E> {
     ) -> Result<Option<Range>> {
         debug!("download start";
             "meta" => ?meta,
-            "url" => ?backend,
             "name" => name,
             "rewrite_rule" => ?rewrite_rule,
             "speed_limit" => speed_limiter.speed_limit(),
@@ -454,7 +463,6 @@ impl<E: KvEngine> SstImporter<E> {
     ) -> Result<Option<Range>> {
         debug!("download start";
             "metas" => ?basic_meta,
-            "url" => ?backend,
             "rewrite_rule" => ?rewrite_rule,
             "speed_limit" => speed_limiter.speed_limit(),
         );
@@ -602,10 +610,13 @@ impl<E: KvEngine> SstImporter<E> {
         // TODO: pass a config to support hdfs
         let ext_storage = if cache_id.is_empty() {
             EXT_STORAGE_CACHE_COUNT.with_label_values(&["skip"]).inc();
-            let s = external_storage::create_storage(backend, Default::default())?;
+            let s = external_storage::create_storage(backend, self.backend_config.clone())?;
             Arc::from(s)
         } else {
-            self.cached_storage.cached_or_create(cache_id, backend)?
+            let backend_factory =
+                StorageBackendFactory::new(backend.clone(), self.backend_config.clone());
+            self.cached_storage
+                .cached_or_create(cache_id, &backend_factory)?
         };
         Ok(ext_storage)
     }
@@ -2165,18 +2176,17 @@ mod tests {
         io::{self, Cursor},
         ops::Sub,
         sync::{
-            atomic::{AtomicUsize, Ordering},
             Mutex,
+            atomic::{AtomicUsize, Ordering},
         },
-        usize,
     };
 
     use async_compression::tokio::write::ZstdEncoder;
     use encryption::{EncrypterWriter, Iv};
     use engine_rocks::get_env;
     use engine_traits::{
-        collect, Error as TraitError, ExternalSstFileInfo, Iterable, Iterator, RefIterable,
-        SstCompressionType::Zstd, SstReader, SstWriter, CF_DEFAULT, DATA_CFS,
+        CF_DEFAULT, DATA_CFS, Error as TraitError, ExternalSstFileInfo, Iterable, Iterator,
+        RefIterable, SstCompressionType::Zstd, SstReader, SstWriter, collect,
     };
     use external_storage::read_external_storage_info_buff;
     use file_system::Sha256Reader;
@@ -2743,7 +2753,7 @@ mod tests {
 
     #[test]
     fn test_read_external_storage_into_file_timed_out() {
-        use futures_util::stream::{pending, TryStreamExt};
+        use futures_util::stream::{TryStreamExt, pending};
 
         let mut input = pending::<io::Result<&[u8]>>().into_async_read();
         let mut output = Vec::new();
@@ -2830,7 +2840,7 @@ mod tests {
 
     #[test]
     fn test_read_external_storage_info_buff_timed_out() {
-        use futures_util::stream::{pending, TryStreamExt};
+        use futures_util::stream::{TryStreamExt, pending};
 
         let mut input = pending::<io::Result<&[u8]>>().into_async_read();
         let err = block_on_external_io(read_external_storage_info_buff(
@@ -2888,6 +2898,41 @@ mod tests {
             mem_quota_old / 3,
             mem_quota_new
         );
+    }
+
+    #[test]
+    fn test_external_storage_uses_backup_backend_config() {
+        let import_dir = tempfile::tempdir().unwrap();
+        let mut importer = SstImporter::<TestEngine>::new(
+            &Config::default(),
+            import_dir.path(),
+            None,
+            ApiVersion::V1,
+            false,
+        )
+        .unwrap();
+
+        let mut gcs = kvproto::brpb::Gcs::default();
+        gcs.bucket = "test-bucket".to_owned();
+        gcs.endpoint = "http://127.0.0.1:1".to_owned();
+        gcs.credentials_blob = r#"{"type":"external_account"}"#.to_owned();
+        let mut backend = StorageBackend::default();
+        backend.set_gcs(gcs);
+
+        let mut backend_config = BackendConfig::default();
+        backend_config.gcp_v2_enable = true;
+        importer.set_backend_config(backend_config);
+        importer.external_storage_or_cache(&backend, "").unwrap();
+        importer
+            .external_storage_or_cache(&backend, "cached-gcs-v2")
+            .unwrap();
+
+        importer.set_backend_config(BackendConfig::default());
+        match importer.external_storage_or_cache(&backend, "") {
+            Ok(_) => panic!("gcs v1 should reject external_account credentials"),
+            Err(Error::Io(err)) => assert_eq!(err.kind(), io::ErrorKind::InvalidInput),
+            Err(err) => panic!("unexpected error: {err}"),
+        }
     }
 
     #[test]

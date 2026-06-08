@@ -3,7 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::{
     borrow::Cow,
-    sync::{atomic::AtomicUsize, Arc},
+    sync::{Arc, atomic::AtomicUsize},
 };
 
 use crossbeam::channel::{SendError, TrySendError};

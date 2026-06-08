@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{atomic::AtomicBool, mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicBool, mpsc},
     time::Duration,
 };
 
@@ -335,4 +335,51 @@ fn test_async_io_cannot_handle_ready_when_persist_snapshot() {
     fail::remove(raft_before_save_kv_on_store_3_fp);
 
     must_get_equal(&cluster.get_engine(3), b"k29", b"v1");
+}
+
+#[test]
+fn test_async_io_unstable_entries_shrink_after_persist() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.raft_log_gc_threshold = 10_000;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(10_000);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    let peer_1 = find_peer(&region, 1).cloned().unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_1);
+    let before = cluster.unstable_entries_stat(region.get_id(), 3);
+
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+
+    let value = vec![b'v'; 32];
+    for i in 0..600 {
+        let key = format!("k{:04}", i + 1);
+        cluster.must_put(key.as_bytes(), &value);
+    }
+
+    cluster.clear_send_filters();
+    must_get_equal(&cluster.get_engine(3), b"k0600", &value);
+
+    let mut after = cluster.unstable_entries_stat(region.get_id(), 3);
+    for _ in 0..50 {
+        if after.0 == 0 {
+            break;
+        }
+        sleep_ms(100);
+        after = cluster.unstable_entries_stat(region.get_id(), 3);
+    }
+    assert_eq!(
+        after.0, 0,
+        "unstable entries should be fully persisted: {:?}",
+        after
+    );
+    assert!(
+        after.1 <= 128,
+        "unstable entries capacity should shrink after persist, before={:?}, after={:?}",
+        before,
+        after
+    );
 }

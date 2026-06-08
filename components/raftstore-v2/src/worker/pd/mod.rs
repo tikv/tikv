@@ -2,7 +2,7 @@
 
 use std::{
     fmt::{self, Display, Formatter},
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
 };
 
 use causal_ts::CausalTsProviderImpl;
@@ -13,20 +13,19 @@ use health_controller::types::{InspectFactor, LatencyInspector, RaftstoreDuratio
 use kvproto::{metapb, pdpb};
 use pd_client::{BucketStat, PdClient};
 use raftstore::store::{
-    metrics::STORE_INSPECT_DURATION_HISTOGRAM, util::KeysInfoFormatter, AutoSplitController,
-    Config, FlowStatsReporter, PdStatsMonitor, ReadStats, SplitInfo, SplitValidator,
-    StoreStatsReporter, TabletSnapManager, TxnExt, WriteStats,
-    NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
+    AutoSplitController, Config, FlowStatsReporter, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
+    PdStatsMonitor, ReadStats, SplitInfo, SplitValidator, StoreStatsReporter, TabletSnapManager,
+    TxnExt, WriteStats, metrics::STORE_INSPECT_DURATION_HISTOGRAM, util::KeysInfoFormatter,
 };
 use resource_metering::{Collector, CollectorRegHandle, RawRecords};
 use service::service_manager::GrpcServiceManager;
-use slog::{error, warn, Logger};
+use slog::{Logger, error, warn};
 use tikv_util::{
     config::VersionTrack,
     time::{Instant as TiInstant, UnixSecs},
     worker::{Runnable, Scheduler},
 };
-use yatp::{task::future::TaskCell, Remote};
+use yatp::{Remote, task::future::TaskCell};
 
 use crate::{
     batch::StoreRouter,
@@ -216,8 +215,12 @@ where
     // For region.
     region_peers: HashMap<u64, region::PeerStat>,
     region_buckets: HashMap<u64, region::ReportBucket>,
-    // region_id -> total_cpu_time_ms (since last region heartbeat)
-    region_cpu_records: HashMap<u64, u32>,
+    // region_id -> total_cpu_time_ms accumulated for RegionHeartbeat reporting.
+    // This map is consumed/cleared by the region-heartbeat path.
+    region_cpu_records_since_region_heartbeat: HashMap<u64, u32>,
+    // region_id -> total_cpu_time_ms accumulated for StoreHeartbeat peer_stats.
+    // This map is consumed/cleared by real store heartbeats (not fake ones).
+    region_cpu_records_since_store_heartbeat: HashMap<u64, u32>,
     is_hb_receiver_scheduled: bool,
 
     // For update_max_timestamp.
@@ -291,7 +294,8 @@ where
             store_stat: store::StoreStat::default(),
             region_peers: HashMap::default(),
             region_buckets: HashMap::default(),
-            region_cpu_records: HashMap::default(),
+            region_cpu_records_since_region_heartbeat: HashMap::default(),
+            region_cpu_records_since_store_heartbeat: HashMap::default(),
             is_hb_receiver_scheduled: false,
             concurrency_manager,
             causal_ts_provider,
