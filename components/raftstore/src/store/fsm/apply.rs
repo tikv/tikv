@@ -64,11 +64,7 @@ use tikv_util::{
     mpsc::{LooseBoundedSender, Receiver, loose_bounded},
     safe_panic, slow_log,
     store::{find_peer, find_peer_by_id, find_peer_mut, is_learner, remove_peer},
-<<<<<<< HEAD
-    time::{Instant, duration_to_sec},
-=======
-    time::{Instant, Timespec, duration_to_sec, monotonic_raw_now, timespec_to_ns},
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+    time::{Instant, duration_to_sec, monotonic_raw_now, timespec_to_ns},
     warn,
     worker::Scheduler,
 };

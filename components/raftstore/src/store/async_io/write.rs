@@ -43,15 +43,10 @@ use tikv_util::{
     debug, info, slow_log,
     sys::thread::StdThreadBuildWrapper,
     thd_name,
-<<<<<<< HEAD
-    time::{Duration, Instant, duration_to_sec, setup_for_spin_interval, spin_at_least},
-=======
-    thread_name_prefix::STORE_WRITER_THREAD,
     time::{
         Duration, Instant, duration_to_sec, monotonic_raw_now, setup_for_spin_interval,
         spin_at_least, timespec_to_ns,
     },
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
     warn,
 };
 use tracker::TrackerTokenArray;
@@ -723,25 +718,8 @@ where
     message_metrics: RaftSendMessageMetrics,
     perf_context: ER::PerfContext,
     pending_latency_inspect: Vec<(Instant, Vec<LatencyInspector>)>,
-<<<<<<< HEAD
-=======
     last_raft_append_success_at_millis: Arc<AtomicU64>,
     last_kv_sync_success_at_millis: Arc<AtomicU64>,
-
-    // Adaptive batching related fields
-    adaptive_batch_enabled: bool,
-    /// Configurable QPS threshold for high concurrency detection.
-    adaptive_high_qps_threshold: u64,
-    /// Sliding window of QPS samples (one per second).
-    qps_history: VecDeque<u64>,
-    last_adaptive_update: Instant,
-    last_qps_stat: Instant,
-    current_write_tasks: u64,
-    /// Counter for consecutive low batch_ratio periods (< 0.3).
-    consecutive_low_batch_ratio_count: u32,
-    /// Single log throttle timestamp.
-    last_adaptive_log: Option<Instant>,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
 }
 
 impl<EK, ER, N, T> Worker<EK, ER, N, T>
@@ -786,21 +764,8 @@ where
             message_metrics: RaftSendMessageMetrics::default(),
             perf_context,
             pending_latency_inspect: vec![],
-<<<<<<< HEAD
-=======
             last_raft_append_success_at_millis,
             last_kv_sync_success_at_millis,
-
-            // Adaptive batching initialization
-            adaptive_batch_enabled: cfg.value().adaptive_batch_enabled,
-            adaptive_high_qps_threshold: cfg.value().adaptive_high_qps_threshold,
-            qps_history: VecDeque::with_capacity(ADAPTIVE_QPS_HISTORY_SIZE),
-            last_adaptive_update: Instant::now(),
-            last_qps_stat: Instant::now(),
-            current_write_tasks: 0,
-            consecutive_low_batch_ratio_count: 0,
-            last_adaptive_log: None,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
         }
     }
 

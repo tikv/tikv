@@ -64683,7 +64683,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 463,
+          "id": 457,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64726,15 +64726,15 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "histogram_quantile($optional_quantile,(\n    sum(rate(\n    tikv_raftstore_disk_probe_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, disk, outcome, le) \n    \n    \n))  ",
+              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_raftstore_disk_probe_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, disk, outcome, le) \n    \n    \n))  ",
               "format": "time_series",
               "hide": false,
               "instant": false,
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{instance}}-{{disk}}-{{outcome}}-$optional_quantile",
+              "legendFormat": "{{instance}}-{{disk}}-{{outcome}}-0.99",
               "metric": "",
-              "query": "histogram_quantile($optional_quantile,(\n    sum(rate(\n    tikv_raftstore_disk_probe_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, disk, outcome, le) \n    \n    \n))  ",
+              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_raftstore_disk_probe_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, disk, outcome, le) \n    \n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -64816,11 +64816,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 457,
-=======
-          "id": 464,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 458,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64953,11 +64949,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 458,
-=======
-          "id": 465,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 459,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65090,11 +65082,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 459,
-=======
-          "id": 466,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 460,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65227,11 +65215,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 460,
-=======
-          "id": 467,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 461,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65364,7 +65348,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 461,
+          "id": 462,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65500,11 +65484,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 462,
-=======
-      "id": 468,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+      "id": 463,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -65543,11 +65523,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 463,
-=======
-          "id": 469,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 464,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65680,11 +65656,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 464,
-=======
-          "id": 470,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 465,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65817,11 +65789,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 465,
-=======
-          "id": 471,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 466,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65969,11 +65937,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 466,
-=======
-          "id": 472,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 467,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66136,11 +66100,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 467,
-=======
-          "id": 473,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 468,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66273,11 +66233,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 468,
-=======
-          "id": 474,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 469,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66410,11 +66366,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 469,
-=======
-          "id": 475,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 470,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66577,11 +66529,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 470,
-=======
-          "id": 476,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 471,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66729,11 +66677,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 471,
-=======
-          "id": 477,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 472,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66869,11 +66813,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 472,
-=======
-      "id": 478,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+      "id": 473,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -66912,11 +66852,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 473,
-=======
-          "id": 479,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 474,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67049,11 +66985,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 474,
-=======
-          "id": 480,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 475,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67186,11 +67118,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 475,
-=======
-          "id": 481,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 476,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67323,11 +67251,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 476,
-=======
-          "id": 482,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 477,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67460,11 +67384,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 477,
-=======
-          "id": 483,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 478,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67597,11 +67517,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 478,
-=======
-          "id": 484,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 479,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67734,11 +67650,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 479,
-=======
-          "id": 485,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 480,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67871,11 +67783,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 480,
-=======
-          "id": 486,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 481,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68008,11 +67916,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 481,
-=======
-          "id": 487,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 482,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68152,11 +68056,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 482,
-=======
-          "id": 488,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 483,
           "interval": null,
           "legend": {
             "show": false
@@ -68254,11 +68154,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 483,
-=======
-          "id": 489,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 484,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68391,11 +68287,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 484,
-=======
-          "id": 490,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 485,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68543,11 +68435,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 485,
-=======
-          "id": 491,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 486,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68695,11 +68583,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 486,
-=======
-          "id": 492,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 487,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68839,11 +68723,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 487,
-=======
-          "id": 493,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 488,
           "interval": null,
           "legend": {
             "show": false
@@ -68941,11 +68821,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 488,
-=======
-          "id": 494,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 489,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69078,11 +68954,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 489,
-=======
-          "id": 495,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 490,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69218,11 +69090,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 490,
-=======
-      "id": 496,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+      "id": 491,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -69261,11 +69129,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 491,
-=======
-          "id": 497,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 492,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69398,11 +69262,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 492,
-=======
-          "id": 498,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 493,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69565,11 +69425,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 493,
-=======
-          "id": 499,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 494,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69717,11 +69573,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 494,
-=======
-          "id": 500,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 495,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69854,11 +69706,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 495,
-=======
-          "id": 501,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 496,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69998,11 +69846,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 496,
-=======
-          "id": 502,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 497,
           "interval": null,
           "legend": {
             "show": false
@@ -70107,11 +69951,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 497,
-=======
-          "id": 503,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 498,
           "interval": null,
           "legend": {
             "show": false
@@ -70216,11 +70056,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 498,
-=======
-          "id": 504,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 499,
           "interval": null,
           "legend": {
             "show": false
@@ -70318,11 +70154,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 499,
-=======
-          "id": 505,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 500,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -70462,11 +70294,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 500,
-=======
-          "id": 506,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 501,
           "interval": null,
           "legend": {
             "show": false
@@ -70571,11 +70399,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 501,
-=======
-          "id": 507,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 502,
           "interval": null,
           "legend": {
             "show": false
@@ -70680,11 +70504,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 502,
-=======
-          "id": 508,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 503,
           "interval": null,
           "legend": {
             "show": false
@@ -70782,11 +70602,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 503,
-=======
-          "id": 509,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 504,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -70919,11 +70735,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 504,
-=======
-          "id": 510,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 505,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71056,11 +70868,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 505,
-=======
-          "id": 511,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 506,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71200,11 +71008,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 506,
-=======
-          "id": 512,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 507,
           "interval": null,
           "legend": {
             "show": false
@@ -71302,11 +71106,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 507,
-=======
-          "id": 513,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 508,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71442,11 +71242,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 508,
-=======
-      "id": 514,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+      "id": 509,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -71485,11 +71281,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 509,
-=======
-          "id": 515,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 510,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71652,11 +71444,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 510,
-=======
-          "id": 516,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 511,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71789,11 +71577,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 511,
-=======
-          "id": 517,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 512,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71933,11 +71717,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 512,
-=======
-          "id": 518,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 513,
           "interval": null,
           "legend": {
             "show": false
@@ -72042,11 +71822,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 513,
-=======
-          "id": 519,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 514,
           "interval": null,
           "legend": {
             "show": false
@@ -72144,11 +71920,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 514,
-=======
-          "id": 520,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 515,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72303,11 +72075,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 515,
-=======
-          "id": 521,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 516,
           "interval": null,
           "legend": {
             "show": false
@@ -72412,11 +72180,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 516,
-=======
-          "id": 522,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 517,
           "interval": null,
           "legend": {
             "show": false
@@ -72521,11 +72285,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 517,
-=======
-          "id": 523,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 518,
           "interval": null,
           "legend": {
             "show": false
@@ -72623,11 +72383,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 518,
-=======
-          "id": 524,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 519,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72797,11 +72553,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 519,
-=======
-          "id": 525,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 520,
           "interval": null,
           "legend": {
             "show": false
@@ -72899,11 +72651,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 520,
-=======
-          "id": 526,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 521,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73104,11 +72852,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 521,
-=======
-          "id": 527,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 522,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73309,11 +73053,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 522,
-=======
-          "id": 528,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 523,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73446,11 +73186,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 523,
-=======
-          "id": 529,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 524,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73613,11 +73349,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 524,
-=======
-          "id": 530,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 525,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73750,11 +73482,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 525,
-=======
-          "id": 531,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 526,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73887,11 +73615,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 526,
-=======
-          "id": 532,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 527,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -74092,11 +73816,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 527,
-=======
-          "id": 533,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 528,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -74229,11 +73949,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 528,
-=======
-          "id": 534,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 529,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -74373,11 +74089,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 529,
-=======
-          "id": 535,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 530,
           "interval": null,
           "legend": {
             "show": false
@@ -74482,11 +74194,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 530,
-=======
-          "id": 536,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 531,
           "interval": null,
           "legend": {
             "show": false
@@ -74591,11 +74299,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 531,
-=======
-          "id": 537,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 532,
           "interval": null,
           "legend": {
             "show": false
@@ -74700,11 +74404,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 532,
-=======
-          "id": 538,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 533,
           "interval": null,
           "legend": {
             "show": false
@@ -74809,11 +74509,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 533,
-=======
-          "id": 539,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 534,
           "interval": null,
           "legend": {
             "show": false
@@ -74918,11 +74614,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 534,
-=======
-          "id": 540,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 535,
           "interval": null,
           "legend": {
             "show": false
@@ -75027,11 +74719,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 535,
-=======
-          "id": 541,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 536,
           "interval": null,
           "legend": {
             "show": false
@@ -75129,11 +74817,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 536,
-=======
-          "id": 542,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 537,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75281,11 +74965,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 537,
-=======
-          "id": 543,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 538,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75418,11 +75098,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 538,
-=======
-          "id": 544,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 539,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75555,11 +75231,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 539,
-=======
-          "id": 545,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 540,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75707,11 +75379,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 540,
-=======
-          "id": 546,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 541,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -75847,11 +75515,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 541,
-=======
-      "id": 547,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+      "id": 542,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -75902,11 +75566,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 542,
-=======
-          "id": 548,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 543,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -76002,11 +75662,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 543,
-=======
-          "id": 549,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 544,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -76081,11 +75737,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 544,
-=======
-          "id": 550,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 545,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -76160,11 +75812,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 545,
-=======
-          "id": 551,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 546,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -76239,11 +75887,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 546,
-=======
-          "id": 552,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 547,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -76318,11 +75962,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 547,
-=======
-          "id": 553,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 548,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -76397,11 +76037,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 548,
-=======
-          "id": 554,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 549,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -76476,11 +76112,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 549,
-=======
-          "id": 555,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 550,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -76559,11 +76191,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 550,
-=======
-          "id": 556,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 551,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -76696,11 +76324,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 551,
-=======
-          "id": 557,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 552,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -76833,11 +76457,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 552,
-=======
-          "id": 558,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 553,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -76970,11 +76590,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 553,
-=======
-          "id": 559,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 554,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77107,11 +76723,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 554,
-=======
-          "id": 560,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 555,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77244,11 +76856,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 555,
-=======
-          "id": 561,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 556,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77396,11 +77004,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 556,
-=======
-          "id": 562,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 557,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77533,11 +77137,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 557,
-=======
-          "id": 563,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 558,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77670,11 +77270,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 558,
-=======
-          "id": 564,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 559,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -77840,11 +77436,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 559,
-=======
-          "id": 565,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 560,
           "interval": null,
           "legend": {
             "show": false
@@ -77949,11 +77541,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 560,
-=======
-          "id": 566,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 561,
           "interval": null,
           "legend": {
             "show": false
@@ -78058,11 +77646,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 561,
-=======
-          "id": 567,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 562,
           "interval": null,
           "legend": {
             "show": false
@@ -78167,11 +77751,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 562,
-=======
-          "id": 568,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 563,
           "interval": null,
           "legend": {
             "show": false
@@ -78276,11 +77856,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 563,
-=======
-          "id": 569,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 564,
           "interval": null,
           "legend": {
             "show": false
@@ -78385,11 +77961,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 564,
-=======
-          "id": 570,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 565,
           "interval": null,
           "legend": {
             "show": false
@@ -78494,11 +78066,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 565,
-=======
-          "id": 571,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 566,
           "interval": null,
           "legend": {
             "show": false
@@ -78603,11 +78171,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 566,
-=======
-          "id": 572,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 567,
           "interval": null,
           "legend": {
             "show": false
@@ -78705,11 +78269,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 567,
-=======
-          "id": 573,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 568,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78842,11 +78402,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 568,
-=======
-          "id": 574,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 569,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -78979,11 +78535,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 569,
-=======
-          "id": 575,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 570,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79116,11 +78668,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 570,
-=======
-          "id": 576,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 571,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79253,11 +78801,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 571,
-=======
-          "id": 577,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 572,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79390,11 +78934,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 572,
-=======
-          "id": 578,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 573,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79527,11 +79067,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 573,
-=======
-          "id": 579,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 574,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -79637,277 +79173,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-<<<<<<< HEAD
           "description": "",
-=======
-          "description": "The memory usage of buffer file (stores logs about to be flushed to external storage) cache.",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 0,
-            "y": 77
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 580,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum((\n    tikv_log_backup_temp_file_memory_usage\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{instance}}",
-              "metric": "",
-              "query": "sum((\n    tikv_log_backup_temp_file_memory_usage\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Buffer File Cache Mem Usage",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "bytes",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The number of temporary buffer files.",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 8,
-            "y": 77
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 581,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum((\n    tikv_log_backup_temp_file_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{instance}}",
-              "metric": "",
-              "query": "sum((\n    tikv_log_backup_temp_file_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Buffer File Count",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "none",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The total size of buffer files that are swapped out to disk.",
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -79934,11 +79200,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 574,
-=======
-          "id": 582,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 575,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80078,11 +79340,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 575,
-=======
-          "id": 583,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 576,
           "interval": null,
           "legend": {
             "show": false
@@ -80187,11 +79445,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 576,
-=======
-          "id": 584,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 577,
           "interval": null,
           "legend": {
             "show": false
@@ -80289,11 +79543,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 577,
-=======
-          "id": 585,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 578,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80426,11 +79676,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 578,
-=======
-          "id": 586,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 579,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80563,11 +79809,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 579,
-=======
-          "id": 587,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 580,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80700,11 +79942,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 580,
-=======
-          "id": 588,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 581,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -80783,543 +80021,7 @@
           "yaxes": [
             {
               "decimals": null,
-<<<<<<< HEAD
               "format": "s",
-=======
-              "format": "none",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The leader of the region with minimal checkpoint.",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 16,
-            "y": 98
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 589,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_log_backup_store_last_checkpoint_ts\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  / 262144",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{ instance }}",
-              "metric": "",
-              "query": "((\n    tikv_log_backup_store_last_checkpoint_ts\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  / 262144",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Current Last Region Leader Store ID",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "none",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The region with minimal checkpoint of each store.",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 0,
-            "y": 105
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 590,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_log_backup_store_last_checkpoint_region_id\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{ instance }}",
-              "metric": "",
-              "query": "((\n    tikv_log_backup_store_last_checkpoint_region_id\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Current Last Region ID per Store",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "none",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The minimal checkpoint TS of each store.",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 8,
-            "y": 105
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 591,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_log_backup_store_last_checkpoint_ts\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{ instance }}",
-              "metric": "",
-              "query": "((\n    tikv_log_backup_store_last_checkpoint_ts\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Current Last Checkpoint TS per Store",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "ms",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The active progress subscription from each store",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 16,
-            "y": 105
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 592,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_log_backup_active_subscription_number\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{instance}}",
-              "metric": "",
-              "query": "((\n    tikv_log_backup_active_subscription_number\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Active Progress Subscrption Per Store",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "none",
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
               "label": null,
               "logBase": 1,
               "max": null,
@@ -81373,11 +80075,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 581,
-=======
-          "id": 593,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 582,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81510,11 +80208,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 582,
-=======
-          "id": 594,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 583,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81650,11 +80344,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 583,
-=======
-      "id": 595,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+      "id": 584,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -81693,11 +80383,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 584,
-=======
-          "id": 596,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 585,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81845,11 +80531,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 585,
-=======
-          "id": 597,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 586,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -81982,11 +80664,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 586,
-=======
-          "id": 598,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 587,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82119,11 +80797,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 587,
-=======
-          "id": 599,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 588,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82259,11 +80933,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 588,
-=======
-      "id": 600,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+      "id": 589,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -82302,11 +80972,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 589,
-=======
-          "id": 601,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 590,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82439,11 +81105,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 590,
-=======
-          "id": 602,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 591,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82576,11 +81238,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 591,
-=======
-          "id": 603,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 592,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82713,11 +81371,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 592,
-=======
-          "id": 604,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 593,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82850,11 +81504,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 593,
-=======
-          "id": 605,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 594,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -82987,11 +81637,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 594,
-=======
-          "id": 606,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 595,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83127,11 +81773,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 595,
-=======
-      "id": 607,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+      "id": 596,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -83170,11 +81812,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 596,
-=======
-          "id": 608,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 597,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83307,11 +81945,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 597,
-=======
-          "id": 609,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 598,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83411,305 +82045,6 @@
             "align": false,
             "alignLevel": 0
           }
-<<<<<<< HEAD
-=======
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": null,
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 12,
-            "x": 0,
-            "y": 7
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 610,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_analyze_metrics_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",metric=\"read_total_op_count\"}\n    [$__rate_interval]\n)) by (instance) ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "total-op/{{instance}}",
-              "metric": "",
-              "query": "sum(rate(\n    tikv_analyze_metrics_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",metric=\"read_total_op_count\"}\n    [$__rate_interval]\n)) by (instance) ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            },
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_analyze_metrics_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",metric=\"read_iops\"}\n    [$__rate_interval]\n)) by (instance) ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "block-read/{{instance}}",
-              "metric": "",
-              "query": "sum(rate(\n    tikv_analyze_metrics_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",metric=\"read_iops\"}\n    [$__rate_interval]\n)) by (instance) ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            },
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_coprocessor_rocksdb_perf\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",req=\"analyze_full_sampling\",metric=\"block_read_count\"}\n    [$__rate_interval]\n)) by (instance) ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "copr-block-read/{{instance}}",
-              "metric": "",
-              "query": "sum(rate(\n    tikv_coprocessor_rocksdb_perf\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",req=\"analyze_full_sampling\",metric=\"block_read_count\"}\n    [$__rate_interval]\n)) by (instance) ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Analyze read ops per second (total vs block read)",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "ops",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "cacheTimeout": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": null,
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            }
-          },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 12,
-            "x": 12,
-            "y": 7
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 611,
-          "interval": null,
-          "isNew": true,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "maxDataPoints": null,
-          "maxPerRow": null,
-          "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "repeat": null,
-          "repeatDirection": null,
-          "seriesOverrides": [],
-          "span": null,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_analyze_metrics_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",metric=\"next_batch_count\"}\n    [$__rate_interval]\n)) by (instance) ",
-              "format": "time_series",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{instance}}",
-              "metric": "",
-              "query": "sum(rate(\n    tikv_analyze_metrics_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",metric=\"next_batch_count\"}\n    [$__rate_interval]\n)) by (instance) ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Analyze next batch count per second",
-          "tooltip": {
-            "msResolution": true,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "transformations": [],
-          "transparent": false,
-          "type": "graph",
-          "xaxis": {
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "ops",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
         }
       ],
       "repeat": null,
@@ -83746,11 +82081,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 598,
-=======
-      "id": 612,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+      "id": 599,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -83789,11 +82120,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 599,
-=======
-          "id": 613,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 600,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -83994,11 +82321,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 600,
-=======
-          "id": 614,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 601,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -84134,11 +82457,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 601,
-=======
-      "id": 615,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+      "id": 602,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -84177,11 +82496,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 602,
-=======
-          "id": 616,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 603,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -84314,11 +82629,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 603,
-=======
-          "id": 617,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 604,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -84451,11 +82762,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 604,
-=======
-          "id": 618,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 605,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -84588,11 +82895,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 605,
-=======
-          "id": 619,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 606,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -84725,11 +83028,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 606,
-=======
-          "id": 620,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 607,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -84877,11 +83176,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 607,
-=======
-          "id": 621,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 608,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -85085,11 +83380,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 608,
-=======
-      "id": 622,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+      "id": 609,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -85128,11 +83419,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 609,
-=======
-          "id": 623,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 610,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -85265,11 +83552,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 610,
-=======
-          "id": 624,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 611,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -85402,11 +83685,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 611,
-=======
-          "id": 625,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 612,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -85539,11 +83818,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 612,
-=======
-          "id": 626,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 613,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -85676,11 +83951,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 613,
-=======
-          "id": 627,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 614,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -85877,11 +84148,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 614,
-=======
-          "id": 628,
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+          "id": 615,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -85939,519 +84206,6 @@
       "transformations": [],
       "transparent": false,
       "type": "row"
-<<<<<<< HEAD
-=======
-    },
-    {
-      "cacheTimeout": null,
-      "collapsed": true,
-      "datasource": null,
-      "description": null,
-      "editable": true,
-      "error": false,
-      "fieldConfig": {
-        "defaults": {
-          "thresholds": {
-            "mode": "absolute",
-            "steps": []
-          }
-        }
-      },
-      "gridPos": {
-        "h": 7,
-        "w": 24,
-        "x": 0,
-        "y": 0
-      },
-      "height": null,
-      "hideTimeOverride": false,
-      "id": 629,
-      "interval": null,
-      "links": [],
-      "maxDataPoints": 100,
-      "maxPerRow": null,
-      "minSpan": null,
-      "panels": [
-        {
-          "cacheTimeout": null,
-          "color": {
-            "mode": "thresholds"
-          },
-          "columns": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "TiKV RocksDB DB Configuration",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "align": "auto",
-                "displayMode": "auto",
-                "filterable": false
-              },
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Field"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Option"
-                  },
-                  {
-                    "id": "custom.align",
-                    "value": null
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Last (not null)"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Value"
-                  }
-                ]
-              }
-            ]
-          },
-          "fontSize": "100%",
-          "gridPos": {
-            "h": 7,
-            "w": 24,
-            "x": 0,
-            "y": 0
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 630,
-          "interval": null,
-          "links": [],
-          "mappings": [],
-          "maxDataPoints": 100,
-          "maxPerRow": null,
-          "minSpan": null,
-          "options": {
-            "showHeader": true
-          },
-          "repeat": null,
-          "repeatDirection": null,
-          "span": 6,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_config_rocksdb_db\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "table",
-              "hide": false,
-              "instant": true,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": null,
-              "metric": "",
-              "query": "((\n    tikv_config_rocksdb_db\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "RocksDB DB Config",
-          "transformations": [
-            {
-              "id": "organize",
-              "options": {
-                "excludeByName": {
-                  "Time": true,
-                  "__name__": true,
-                  "job": true
-                },
-                "indexByName": {},
-                "renameByName": {
-                  "Time": "",
-                  "Value #A": "Value",
-                  "job": "",
-                  "name": "Option"
-                }
-              }
-            }
-          ],
-          "transparent": false,
-          "type": "table"
-        },
-        {
-          "cacheTimeout": null,
-          "color": {
-            "mode": "thresholds"
-          },
-          "columns": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "TiKV RocksDB CF Configuration",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "align": "auto",
-                "displayMode": "auto",
-                "filterable": false
-              },
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Field"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Option"
-                  },
-                  {
-                    "id": "custom.align",
-                    "value": null
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Last (not null)"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Value"
-                  }
-                ]
-              }
-            ]
-          },
-          "fontSize": "100%",
-          "gridPos": {
-            "h": 7,
-            "w": 24,
-            "x": 0,
-            "y": 7
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 631,
-          "interval": null,
-          "links": [],
-          "mappings": [],
-          "maxDataPoints": 100,
-          "maxPerRow": null,
-          "minSpan": null,
-          "options": {
-            "showHeader": true
-          },
-          "repeat": null,
-          "repeatDirection": null,
-          "span": 6,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_config_rocksdb_cf\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))   or (tikv_config_rocksdb unless tikv_config_rocksdb_cf)",
-              "format": "table",
-              "hide": false,
-              "instant": true,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": null,
-              "metric": "",
-              "query": "((\n    tikv_config_rocksdb_cf\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))   or (tikv_config_rocksdb unless tikv_config_rocksdb_cf)",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "RocksDB CF Config",
-          "transformations": [
-            {
-              "id": "organize",
-              "options": {
-                "excludeByName": {
-                  "Time": true,
-                  "__name__": true,
-                  "job": true
-                },
-                "indexByName": {},
-                "renameByName": {
-                  "Time": "",
-                  "Value #A": "Value",
-                  "job": "",
-                  "name": "Option"
-                }
-              }
-            }
-          ],
-          "transparent": false,
-          "type": "table"
-        },
-        {
-          "cacheTimeout": null,
-          "color": {
-            "mode": "thresholds"
-          },
-          "columns": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "TiKV Flow Control Configuration",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "align": "auto",
-                "displayMode": "auto",
-                "filterable": false
-              },
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Field"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Option"
-                  },
-                  {
-                    "id": "custom.align",
-                    "value": null
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Last (not null)"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Value"
-                  }
-                ]
-              }
-            ]
-          },
-          "fontSize": "100%",
-          "gridPos": {
-            "h": 7,
-            "w": 24,
-            "x": 0,
-            "y": 14
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 632,
-          "interval": null,
-          "links": [],
-          "mappings": [],
-          "maxDataPoints": 100,
-          "maxPerRow": null,
-          "minSpan": null,
-          "options": {
-            "showHeader": true
-          },
-          "repeat": null,
-          "repeatDirection": null,
-          "span": 6,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_config_flow_control\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "table",
-              "hide": false,
-              "instant": true,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": null,
-              "metric": "",
-              "query": "((\n    tikv_config_flow_control\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Flow Control Config",
-          "transformations": [
-            {
-              "id": "organize",
-              "options": {
-                "excludeByName": {
-                  "Time": true,
-                  "__name__": true,
-                  "job": true
-                },
-                "indexByName": {},
-                "renameByName": {
-                  "Time": "",
-                  "Value #A": "Value",
-                  "job": "",
-                  "name": "Option"
-                }
-              }
-            }
-          ],
-          "transparent": false,
-          "type": "table"
-        },
-        {
-          "cacheTimeout": null,
-          "color": {
-            "mode": "thresholds"
-          },
-          "columns": null,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "TiKV Raftstore Configuration",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "align": "auto",
-                "displayMode": "auto",
-                "filterable": false
-              },
-              "thresholds": {
-                "mode": "absolute",
-                "steps": []
-              }
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Field"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Option"
-                  },
-                  {
-                    "id": "custom.align",
-                    "value": null
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Last (not null)"
-                },
-                "properties": [
-                  {
-                    "id": "displayName",
-                    "value": "Value"
-                  }
-                ]
-              }
-            ]
-          },
-          "fontSize": "100%",
-          "gridPos": {
-            "h": 7,
-            "w": 24,
-            "x": 0,
-            "y": 21
-          },
-          "height": null,
-          "hideTimeOverride": false,
-          "id": 633,
-          "interval": null,
-          "links": [],
-          "mappings": [],
-          "maxDataPoints": 100,
-          "maxPerRow": null,
-          "minSpan": null,
-          "options": {
-            "showHeader": true
-          },
-          "repeat": null,
-          "repeatDirection": null,
-          "span": 6,
-          "targets": [
-            {
-              "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_config_raftstore\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "format": "table",
-              "hide": false,
-              "instant": true,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": null,
-              "metric": "",
-              "query": "((\n    tikv_config_raftstore\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
-              "refId": "",
-              "step": 10,
-              "target": ""
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Raftstore Config",
-          "transformations": [
-            {
-              "id": "organize",
-              "options": {
-                "excludeByName": {
-                  "Time": true,
-                  "__name__": true,
-                  "job": true
-                },
-                "indexByName": {},
-                "renameByName": {
-                  "Time": "",
-                  "Value #A": "Value",
-                  "job": "",
-                  "name": "Option"
-                }
-              }
-            }
-          ],
-          "transparent": false,
-          "type": "table"
-        }
-      ],
-      "repeat": null,
-      "repeatDirection": null,
-      "span": null,
-      "targets": [],
-      "timeFrom": null,
-      "timeShift": null,
-      "title": "Config",
-      "transformations": [],
-      "transparent": false,
-      "type": "row"
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
     }
   ],
   "refresh": "1m",

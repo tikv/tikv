@@ -10263,10 +10263,8 @@ def SlowTrendStatistics() -> RowPanel:
                             0.99,
                             "tikv_raftstore_disk_probe_duration_seconds",
                             by_labels=["instance", "disk", "outcome"],
-                            is_optional_quantile=True,
                         ),
-                        legend_format="{{instance}}-{{disk}}-{{outcome}}-"
-                        + OPTIONAL_QUANTILE_INPUT,
+                        legend_format="{{instance}}-{{disk}}-{{outcome}}-0.99",
                     ),
                 ],
             ),

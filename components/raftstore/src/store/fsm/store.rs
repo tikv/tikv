@@ -1740,27 +1740,19 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             None
         };
         let bgworker_remote = background_worker.remote();
-<<<<<<< HEAD
-        let snap_gen_worker = WorkerBuilder::new("snap-generator")
-=======
         let last_raft_append_success_at_millis = Arc::new(AtomicU64::new(0));
         let last_kv_sync_success_at_millis = Arc::new(AtomicU64::new(0));
-        let snap_gen_worker = WorkerBuilder::new(SNAP_GENERATOR_THREAD)
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+        let snap_gen_worker = WorkerBuilder::new("snap-generator")
             .thread_count(cfg.value().snap_generator_pool_size)
             .thread_count_limits(1, SNAP_GENERATOR_MAX_POOL_SIZE)
             .create();
         let mut workers = Workers {
             pd_worker,
             background_worker,
-<<<<<<< HEAD
-            cleanup_worker: Worker::new("cleanup-worker"),
-=======
             fail_fast_check_worker: WorkerBuilder::new("fail-fast-check")
                 .thread_count(1)
                 .create(),
-            cleanup_worker: Worker::new(CLEANUP_WORKER_THREAD),
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
+            cleanup_worker: Worker::new("cleanup-worker"),
             snap_gen_worker,
             region_worker: Worker::new("region-worker"),
             purge_worker,

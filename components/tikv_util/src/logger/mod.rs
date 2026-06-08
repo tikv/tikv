@@ -23,15 +23,10 @@ use slog_async::{Async, AsyncGuard, OverflowStrategy};
 use slog_term::{Decorator, PlainDecorator, RecordDecorator};
 
 use self::file_log::{RotateBySize, RotatingFileLogger, RotatingFileLoggerBuilder};
-<<<<<<< HEAD
-use crate::config::{ReadableDuration, ReadableSize};
-=======
 use crate::{
     config::{ReadableDuration, ReadableSize},
     sys::thread::StdThreadBuildWrapper,
-    thread_name_prefix::SLOGGER_THREAD,
 };
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
 
 // Default is 128.
 // Extended since blocking is set, and we don't want to block very often.

@@ -118,8 +118,6 @@ impl Runnable for Runner {
     }
 }
 
-<<<<<<< HEAD
-=======
 impl Drop for Runner {
     fn drop(&mut self) {
         if let Err(e) = std::fs::remove_file(self.probe.path()) {
@@ -128,7 +126,6 @@ impl Drop for Runner {
     }
 }
 
->>>>>>> a763bd7ba4 (raftstore: fail fast on disk hang (#19613))
 #[cfg(test)]
 mod tests {
     use tikv_util::worker::Builder;
