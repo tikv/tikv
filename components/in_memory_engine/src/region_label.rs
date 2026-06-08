@@ -355,7 +355,7 @@ pub mod tests {
         block_on(async move { meta_client.put(Put::of(key, buf)).await }).unwrap();
     }
 
-    fn delete_region_label_rule(
+    pub(crate) fn delete_region_label_rule(
         meta_client: Checked<Sourced<Arc<RpcClient>>>,
         cluster_id: u64,
         id: &str,
