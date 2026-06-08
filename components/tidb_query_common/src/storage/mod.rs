@@ -42,7 +42,15 @@ pub trait Storage: Send {
         range: IntervalRange,
     ) -> Result<()>;
 
+    fn set_scan_value_sample_rate(&mut self, _sample_rate: f64) -> bool {
+        false
+    }
+
     fn scan_next_entry(&mut self) -> Result<Option<OwnedKvPairEntry>>;
+
+    fn take_scan_skipped_entries(&mut self) -> usize {
+        0
+    }
 
     #[inline]
     fn scan_next(&mut self) -> Result<Option<OwnedKvPair>> {
@@ -83,8 +91,16 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
         (**self).begin_scan(is_backward_scan, is_key_only, load_commit_ts, range)
     }
 
+    fn set_scan_value_sample_rate(&mut self, sample_rate: f64) -> bool {
+        (**self).set_scan_value_sample_rate(sample_rate)
+    }
+
     fn scan_next_entry(&mut self) -> Result<Option<OwnedKvPairEntry>> {
         (**self).scan_next_entry()
+    }
+
+    fn take_scan_skipped_entries(&mut self) -> usize {
+        (**self).take_scan_skipped_entries()
     }
 
     fn get_entry(

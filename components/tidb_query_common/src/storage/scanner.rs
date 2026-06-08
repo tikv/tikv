@@ -25,6 +25,7 @@ pub struct RangesScanner<T, F> {
     scan_backward_in_range: bool,
     is_key_only: bool,
     load_commit_ts: bool,
+    scan_value_sampling_enabled: bool,
 
     scanned_rows_per_range: Vec<usize>,
 
@@ -96,6 +97,7 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
             scan_backward_in_range,
             is_key_only,
             load_commit_ts,
+            scan_value_sampling_enabled: false,
             scanned_rows_per_range: Vec::with_capacity(ranges_len),
             is_scanned_range_aware,
             current_range: IntervalRange {
@@ -163,6 +165,14 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
             if self.is_scanned_range_aware && update_scanned_range {
                 self.update_scanned_range_from_scanned_row(&some_row);
             }
+            if self.scan_value_sampling_enabled {
+                let skipped = self.storage.take_scan_skipped_entries();
+                if skipped > 0 {
+                    if let Some(r) = self.scanned_rows_per_range.last_mut() {
+                        *r += skipped;
+                    }
+                }
+            }
             if let Some(row) = some_row {
                 // Retrieved one row from point range or interval range.
                 if let Some(r) = self.scanned_rows_per_range.last_mut() {
@@ -177,6 +187,17 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
                 self.ranges_iter.notify_drained();
             }
         }
+    }
+
+    pub fn set_scan_value_sample_rate(&mut self, sample_rate: f64) -> bool {
+        if sample_rate.is_finite() {
+            let sample_rate = sample_rate.clamp(0.0, 1.0);
+            let supported = self.storage.set_scan_value_sample_rate(sample_rate);
+            self.scan_value_sampling_enabled = sample_rate < 1.0 && supported;
+            return supported;
+        }
+        self.scan_value_sampling_enabled = false;
+        false
     }
 
     /// Appends storage statistics collected so far to the given container and
