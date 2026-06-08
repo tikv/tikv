@@ -1341,7 +1341,9 @@ mod tests {
 
     use crate::{
         config::{ConfigController, TikvConfig},
-        server::status_server::{CachedRegion, LogLevelRequest, StatusServer, profile::TEST_PROFILE_MUTEX},
+        server::status_server::{
+            CachedRegion, LogLevelRequest, StatusServer, profile::TEST_PROFILE_MUTEX,
+        },
         storage::config::EngineType,
     };
 
