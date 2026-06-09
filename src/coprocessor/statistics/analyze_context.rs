@@ -120,13 +120,27 @@ impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
         Ok(res_data)
     }
 
-    async fn handle_full_sampling(builder: &mut RowSampleBuilder<S, F>) -> Result<Vec<u8>> {
-        let sample_res = builder.collect_column_stats().await?;
-        let res_data = {
-            let res: tipb::AnalyzeColumnsResp = sample_res.into();
-            box_try!(res.write_to_bytes())
-        };
-        Ok(res_data)
+    async fn handle_full_sampling_result(&mut self) -> Result<AnalyzeSamplingResult> {
+        if self.req.get_tp() != AnalyzeType::TypeFullSampling {
+            return Err(Error::Other(
+                "typed analyze result is only supported for full sampling".to_owned(),
+            ));
+        }
+        let col_req = self.req.take_col_req();
+        let storage = self.storage.take().unwrap();
+        let ranges = std::mem::take(&mut self.ranges);
+
+        let mut builder = RowSampleBuilder::<_, F>::new(
+            col_req,
+            storage,
+            ranges,
+            self.quota_limiter.clone(),
+            self.is_auto_analyze,
+        )?;
+
+        let res = builder.collect_column_stats().await;
+        builder.merge_storage_stats_into(&mut self.storage_stats);
+        res
     }
 
     // handle_index is used to handle `AnalyzeIndexReq`,
@@ -272,21 +286,8 @@ impl<S: Snapshot, F: KvFormat> RequestHandler for AnalyzeContext<S, F> {
             }
 
             AnalyzeType::TypeFullSampling => {
-                let col_req = self.req.take_col_req();
-                let storage = self.storage.take().unwrap();
-                let ranges = std::mem::take(&mut self.ranges);
-
-                let mut builder = RowSampleBuilder::<_, F>::new(
-                    col_req,
-                    storage,
-                    ranges,
-                    self.quota_limiter.clone(),
-                    self.is_auto_analyze,
-                )?;
-
-                let res = AnalyzeContext::handle_full_sampling(&mut builder).await;
-                builder.merge_storage_stats_into(&mut self.storage_stats);
-                res
+                let res = self.handle_full_sampling_result().await;
+                res.and_then(AnalyzeSamplingResult::write_to_bytes)
             }
 
             AnalyzeType::TypeSampleIndex => Err(Error::Other(
@@ -307,6 +308,10 @@ impl<S: Snapshot, F: KvFormat> RequestHandler for AnalyzeContext<S, F> {
             }
             Err(e) => Err(e),
         }
+    }
+
+    async fn handle_analyze_full_sampling(&mut self) -> Result<AnalyzeSamplingResult> {
+        self.handle_full_sampling_result().await
     }
 
     fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
