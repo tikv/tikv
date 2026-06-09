@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::{cmp, collections::VecDeque, mem, u64, usize};
+use std::{cmp, collections::VecDeque, mem};
 
 use collections::HashMap;
 use kvproto::{
@@ -10,20 +10,19 @@ use kvproto::{
 };
 use protobuf::Message;
 use tikv_util::{
-    box_err,
-    codec::number::{NumberEncoder, MAX_VAR_U64_LEN},
+    MustConsumeVec, box_err,
+    codec::number::{MAX_VAR_U64_LEN, NumberEncoder},
     debug, error,
     memory::HeapSize,
     time::{duration_to_sec, monotonic_raw_now},
-    MustConsumeVec,
 };
 use time::Timespec;
 use uuid::Uuid;
 
 use super::msg::ErrorCallback;
 use crate::{
-    store::{fsm::apply, metrics::*, Config},
     Result,
+    store::{Config, fsm::apply, metrics::*},
 };
 
 const READ_QUEUE_SHRINK_SIZE: usize = 64;
@@ -125,8 +124,10 @@ impl<C: ErrorCallback> ReadIndexQueue<C> {
     }
     /// Check it's necessary to retry pending read requests or not.
     /// Return true if all such conditions are satisfied:
-    /// 1. more than an election timeout elapsed from the last request push;
-    /// 2. more than an election timeout elapsed from the last retry;
+    /// 1. More than the retry interval (in ticks) has elapsed since the last
+    ///    request push.
+    /// 2. More than the retry interval (in ticks) has elapsed since the last
+    ///    retry.
     /// 3. there are still unresolved requests in the queue.
     pub fn check_needs_retry(&mut self, cfg: &Config) -> bool {
         if self.reads.len() == self.ready_cnt {
@@ -134,7 +135,7 @@ impl<C: ErrorCallback> ReadIndexQueue<C> {
         }
 
         if self.retry_countdown == usize::MAX {
-            self.retry_countdown = cfg.raft_election_timeout_ticks - 1;
+            self.retry_countdown = cfg.raft_read_index_retry_interval_ticks - 1;
             return false;
         }
 
@@ -143,7 +144,7 @@ impl<C: ErrorCallback> ReadIndexQueue<C> {
             return false;
         }
 
-        self.retry_countdown = cfg.raft_election_timeout_ticks;
+        self.retry_countdown = cfg.raft_read_index_retry_interval_ticks;
         true
     }
 

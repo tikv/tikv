@@ -2,13 +2,13 @@
 
 use std::{cmp::Reverse, collections::BinaryHeap, marker::PhantomData, sync::Arc};
 
-use api_version::{keyspace::KvPair, KvFormat};
+use api_version::{KvFormat, keyspace::KvPairEntry};
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use tidb_query_common::storage::{
-    scanner::{RangesScanner, RangesScannerOptions},
     Range,
+    scanner::{RangesScanner, RangesScannerOptions},
 };
 use tidb_query_datatype::codec::{datum::split_datum, table};
 use tidb_query_executors::interface::BatchExecutor;
@@ -19,11 +19,12 @@ use tipb::{self, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 use super::{cmsketch::CmSketch, fmsketch::FmSketch, histogram::Histogram};
 use crate::{
     coprocessor::{
+        MEMTRACE_ANALYZE,
         dag::TikvStorage,
         statistics::analyze::{
             AnalyzeIndexResult, AnalyzeMixedResult, RowSampleBuilder, SampleBuilder,
         },
-        MEMTRACE_ANALYZE, *,
+        *,
     },
     storage::{Snapshot, SnapshotStore, Statistics},
 };
@@ -235,6 +236,7 @@ impl<S: Snapshot, F: KvFormat> RequestHandler for AnalyzeContext<S, F> {
                     scan_backward_in_range: false,
                     is_key_only: true,
                     is_scanned_range_aware: false,
+                    load_commit_ts: false,
                 });
                 let res = AnalyzeContext::handle_index(
                     req,
@@ -305,5 +307,10 @@ impl<S: Snapshot, F: KvFormat> RequestHandler for AnalyzeContext<S, F> {
             }
             Err(e) => Err(e),
         }
+    }
+
+    fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
+        dest.add(&self.storage_stats);
+        self.storage_stats = Statistics::default();
     }
 }

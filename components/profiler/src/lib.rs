@@ -43,6 +43,7 @@
 //!
 //! Also see `examples/prime.rs`.
 
+#![allow(clippy::doc_overindented_list_items)]
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 

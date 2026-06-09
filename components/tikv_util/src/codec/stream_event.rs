@@ -1,10 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
-use std::io::{prelude::*, Cursor};
+use std::io::{Cursor, prelude::*};
 
 use byteorder::ByteOrder;
 use bytes::{Buf, Bytes};
 
-use crate::{codec::Result, Either};
+use crate::{Either, codec::Result};
 
 // Note: maybe allow them to be different lifetime.
 // But not necessary for now, so keep it simple...?
@@ -55,6 +55,16 @@ impl EventIterator<'_> {
             value_len: 0,
             rewrite_rule: Some(Rewrite { from, to }),
         }
+    }
+
+    pub fn get_next(&mut self) -> Result<Option<(&[u8], &[u8])>> {
+        let it = self;
+        if !it.valid() {
+            return Ok(None);
+        }
+        it.next()?;
+
+        Ok(Some((it.key(), it.value())))
     }
 
     fn get_size(&mut self) -> u32 {

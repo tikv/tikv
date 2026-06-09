@@ -8,7 +8,7 @@ use kvproto::{import_sstpb_grpc::ImportSstClient, kvrpcpb::*, tikvpb::TikvClient
 use online_config::ConfigValue;
 use resolved_ts::Task;
 use test_raftstore::*;
-use tikv_util::{config::ReadableDuration, HandyRwLock};
+use tikv_util::{HandyRwLock, config::ReadableDuration};
 use txn_types::TimeStamp;
 
 static INIT: Once = Once::new();
@@ -34,7 +34,6 @@ impl TestSuite {
         // Start resolved ts endpoint.
         cluster.cfg.resolved_ts.enable = true;
         cluster.cfg.resolved_ts.advance_ts_interval = ReadableDuration::millis(10);
-        cluster.run();
 
         TestSuite {
             cluster,
@@ -42,6 +41,10 @@ impl TestSuite {
             tikv_cli: HashMap::default(),
             import_cli: HashMap::default(),
         }
+    }
+
+    pub fn run(&mut self) {
+        self.cluster.run();
     }
 
     pub fn stop(mut self) {

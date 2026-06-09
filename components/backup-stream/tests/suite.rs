@@ -10,47 +10,48 @@ use std::{
 
 use async_compression::futures::write::ZstdDecoder;
 use backup_stream::{
+    BackupStreamGrpcService, BackupStreamResolver, Endpoint, GetCheckpointResult,
+    RegionCheckpointOperation, RegionSet, Task,
     errors::Result,
     metadata::{
+        MetadataClient, StreamTask,
         keys::{KeyValue, MetaKey},
         store::{MetaStore, SlashEtcStore},
-        MetadataClient, StreamTask,
     },
     observer::BackupStreamObserver,
     router::{Router, TaskSelector},
-    utils, BackupStreamGrpcService, BackupStreamResolver, Endpoint, GetCheckpointResult,
-    RegionCheckpointOperation, RegionSet, Task,
+    utils,
 };
 use encryption::{BackupEncryptionManager, MultiMasterKeyBackend};
-use futures::{executor::block_on, AsyncWriteExt, Future, Stream, StreamExt};
+use futures::{AsyncWriteExt, Future, Stream, StreamExt, executor::block_on};
 use grpcio::{ChannelBuilder, Server, ServerBuilder};
 use kvproto::{
     brpb::{CompressionType, Local, Metadata, StorageBackend},
     encryptionpb::EncryptionMethod,
     kvrpcpb::*,
     logbackuppb::{SubscribeFlushEventRequest, SubscribeFlushEventResponse},
-    logbackuppb_grpc::{create_log_backup, LogBackupClient},
+    logbackuppb_grpc::{LogBackupClient, create_log_backup},
     tikvpb::*,
 };
 use pd_client::PdClient;
-use raftstore::{router::CdcRaftRouter, RegionInfoAccessor};
+use raftstore::{RegionInfoAccessor, router::CdcRaftRouter};
 use resolved_ts::LeadershipResolver;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
-use test_raftstore::{new_server_cluster, Cluster, Config, ServerCluster};
+use test_raftstore::{Cluster, Config, ServerCluster, new_server_cluster};
 use test_util::retry;
 use tikv::{
     config::{BackupStreamConfig, ResolvedTsConfig},
     storage::txn::txn_status_cache::TxnStatusCache,
 };
 use tikv_util::{
+    HandyRwLock,
     codec::{
         number::NumberEncoder,
         stream_event::{EventIterator, Iterator},
     },
     debug, info,
     worker::LazyWorker,
-    HandyRwLock,
 };
 use txn_types::{Key, TimeStamp, WriteRef};
 use walkdir::WalkDir;
@@ -384,6 +385,7 @@ impl Suite {
         let regions = sim.region_info_accessors.get(&id).unwrap().clone();
         let ob = self.obs.get(&id).unwrap().clone();
         cfg.enable = true;
+        cfg.gcp_v2_enable = true;
         cfg.temp_path = format!("/{}/{}", self.temp_files.path().display(), id);
         let resolver = LeadershipResolver::new(
             id,
@@ -595,10 +597,31 @@ impl Suite {
         ts
     }
 
+    pub fn for_each_log_backup_cli(&self, mut cb: impl FnMut(u64, &LogBackupClient)) {
+        for (k, v) in self.log_backup_cli.iter() {
+            cb(*k, v)
+        }
+    }
+
     pub fn force_flush_files(&self, task: &str) {
-        // TODO: use the callback to make the test more stable.
-        self.run(|| Task::ForceFlush(task.to_owned()));
-        self.sync();
+        let _ = self.force_flush_files_and_wait(task);
+    }
+
+    pub fn force_flush_files_and_wait(&self, task: &str) -> impl Future<Output = ()> + '_ {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        self.run(|| Task::ForceFlush(TaskSelector::ByName(task.to_owned()), tx.clone()));
+        drop(tx);
+
+        async move {
+            while let Some(res) = tokio::time::timeout(Duration::from_secs(30), rx.recv())
+                .await
+                .expect("flush not finish after 30s")
+            {
+                if let Some(ref err) = res.error {
+                    panic!("failed to flush: {}", err)
+                }
+            }
+        }
     }
 
     pub fn run(&self, mut t: impl FnMut() -> Task) {
@@ -618,9 +641,9 @@ impl Suite {
                     let mut default_segs = vec![];
                     let mut write_segs = vec![];
                     for file in fg.get_data_files_info() {
-                        let v = if file.cf == "default" || file.cf.is_empty() {
+                        let v = if file.cf == "default".into() || file.cf.is_empty() {
                             Some(&mut default_segs)
-                        } else if file.cf == "write" {
+                        } else if file.cf == "write".into() {
                             Some(&mut write_segs)
                         } else {
                             None

@@ -420,6 +420,26 @@ pub(crate) fn remove_thread_name_from_map() {
     THREAD_NAME_HASHMAP.lock().unwrap().remove(&tid);
 }
 
+const LINUX_THREAD_NAME_MAX_LEN: usize = 15;
+
+/// Returns whether `thread_name` belongs to a thread family whose prefix is
+/// `prefix`.
+///
+/// Linux `/proc` thread names are truncated to 15 visible bytes, so callers can
+/// pass either a stable family prefix or the full thread prefix and still match
+/// truncated names such as `unified-read-po`.
+#[inline]
+pub fn matches_thread_name_prefix(thread_name: &str, prefix: &str) -> bool {
+    if thread_name.starts_with(prefix) {
+        return true;
+    }
+    if prefix.len() <= LINUX_THREAD_NAME_MAX_LEN {
+        return false;
+    }
+    // TiKV thread-name prefixes are ASCII constants; byte slicing is safe.
+    thread_name.starts_with(&prefix[..LINUX_THREAD_NAME_MAX_LEN])
+}
+
 impl StdThreadBuildWrapper for std::thread::Builder {
     fn spawn_wrapper<F, T>(self, f: F) -> Result<std::thread::JoinHandle<T>>
     where
@@ -516,6 +536,24 @@ mod tests {
         })
         .join()
         .unwrap();
+    }
+
+    #[test]
+    fn test_matches_thread_name_prefix() {
+        assert!(matches_thread_name_prefix(
+            "unified-read-pool-1",
+            "unified-read"
+        ));
+        assert!(matches_thread_name_prefix(
+            "unified-read-po",
+            "unified-read-pool"
+        ));
+        assert!(matches_thread_name_prefix("sched-worker-pool-1", "sched"));
+        assert!(matches_thread_name_prefix("sched-pool-1", "sched"));
+        assert!(!matches_thread_name_prefix(
+            "foo-unified-read",
+            "unified-read"
+        ));
     }
 
     #[test]

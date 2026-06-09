@@ -5,8 +5,8 @@ use std::{
     collections::{BTreeMap, BinaryHeap},
     fmt,
     sync::{
-        atomic::{AtomicBool, AtomicIsize, Ordering},
         Arc, Mutex as StdMutex,
+        atomic::{AtomicBool, AtomicIsize, Ordering},
     },
     time::Duration,
 };
@@ -35,11 +35,11 @@ use raftstore::{
     router::CdcHandle,
     store::fsm::store::StoreRegionMeta,
 };
-use resolved_ts::{resolve_by_raft, LeadershipResolver};
+use resolved_ts::{LeadershipResolver, resolve_by_raft};
 use security::SecurityManager;
 use tikv::{
     config::{CdcConfig, ResolvedTsConfig},
-    storage::{kv::LocalTablets, Statistics},
+    storage::{Statistics, kv::LocalTablets},
 };
 use tikv_util::{
     debug, defer, error, impl_display_as_debug, info,
@@ -59,13 +59,14 @@ use tokio::{
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler};
 
 use crate::{
+    CdcObserver, Error,
     channel::{CdcEvent, SendError},
-    delegate::{on_init_downstream, Delegate, Downstream, DownstreamId, DownstreamState, MiniLock},
+    delegate::{Delegate, Downstream, DownstreamId, DownstreamState, MiniLock, on_init_downstream},
     initializer::Initializer,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
-    service::{validate_kv_api, Conn, ConnId, FeatureGate, RequestId},
-    CdcObserver, Error,
+    service::{Conn, FeatureGate, RequestId, validate_kv_api},
+    types::ConnId,
 };
 
 const FEATURE_RESOLVED_TS_STORE: Feature = Feature::require(5, 0, 0);
@@ -157,6 +158,7 @@ type InitCallback = Box<dyn FnOnce() + Send>;
 pub enum Validate {
     Region(u64, Box<dyn FnOnce(Option<&Delegate>) + Send>),
     OldValueCache(Box<dyn FnOnce(&OldValueCache) + Send>),
+    UnresolvedRegion(Box<dyn FnOnce(usize) + Send>),
 }
 
 pub enum Task {
@@ -286,6 +288,7 @@ impl fmt::Debug for Task {
             Task::Validate(validate) => match validate {
                 Validate::Region(region_id, _) => de.field("region_id", &region_id).finish(),
                 Validate::OldValueCache(_) => de.finish(),
+                Validate::UnresolvedRegion(_) => de.finish(),
             },
             Task::ChangeConfig(change) => de
                 .field("type", &"change_config")
@@ -638,25 +641,25 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
         // Maybe the cache will be lost due to smaller capacity,
         // but it is acceptable.
-        if change.get("old_value_cache_memory_quota").is_some() {
+        if change.contains_key("old_value_cache_memory_quota") {
             self.old_value_cache
                 .resize(self.config.old_value_cache_memory_quota);
         }
 
         // Maybe the limit will be exceeded for a while after the concurrency becomes
         // smaller, but it is acceptable.
-        if change.get("incremental_scan_concurrency").is_some() {
+        if change.contains_key("incremental_scan_concurrency") {
             self.scan_concurrency_semaphore =
                 Arc::new(Semaphore::new(self.config.incremental_scan_concurrency))
         }
 
-        if change.get("sink_memory_quota").is_some() {
+        if change.contains_key("sink_memory_quota") {
             self.sink_memory_quota
                 .set_capacity(self.config.sink_memory_quota.0 as usize);
             CDC_SINK_CAP.set(self.sink_memory_quota.capacity() as i64);
         }
 
-        if change.get("incremental_scan_speed_limit").is_some() {
+        if change.contains_key("incremental_scan_speed_limit") {
             let new_speed_limit = if self.config.incremental_scan_speed_limit.0 > 0 {
                 self.config.incremental_scan_speed_limit.0 as f64
             } else {
@@ -665,7 +668,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
             self.scan_speed_limiter.set_speed_limit(new_speed_limit);
         }
-        if change.get("incremental_fetch_speed_limit").is_some() {
+        if change.contains_key("incremental_fetch_speed_limit") {
             let new_speed_limit = if self.config.incremental_fetch_speed_limit.0 > 0 {
                 self.config.incremental_fetch_speed_limit.0 as f64
             } else {
@@ -712,19 +715,21 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         fail_point!("cdc_before_handle_deregister", |_| {});
         match deregister {
             Deregister::Conn(conn_id) => {
-                let conn = self.connections.remove(&conn_id).unwrap();
-                conn.iter_downstreams(|_, region_id, downstream_id, _| {
-                    self.deregister_downstream(region_id, downstream_id, None);
-                });
+                if let Some(conn) = self.connections.remove(&conn_id) {
+                    conn.iter_downstreams(|_, region_id, downstream_id, _| {
+                        self.deregister_downstream(region_id, downstream_id, None);
+                    });
+                }
             }
             Deregister::Request {
                 conn_id,
                 request_id,
             } => {
-                let conn = self.connections.get_mut(&conn_id).unwrap();
-                for (region_id, downstream) in conn.unsubscribe_request(request_id) {
-                    let err = Some(Error::Other("region not found".into()));
-                    self.deregister_downstream(region_id, downstream, err);
+                if let Some(conn) = self.connections.get_mut(&conn_id) {
+                    for (region_id, downstream) in conn.unsubscribe_request(request_id) {
+                        let err = Some(Error::Other("region not found".into()));
+                        self.deregister_downstream(region_id, downstream, err);
+                    }
                 }
             }
             Deregister::Region {
@@ -732,10 +737,11 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 request_id,
                 region_id,
             } => {
-                let conn = self.connections.get_mut(&conn_id).unwrap();
-                if let Some(downstream) = conn.unsubscribe(request_id, region_id) {
-                    let err = Some(Error::Other("region not found".into()));
-                    self.deregister_downstream(region_id, downstream, err);
+                if let Some(conn) = self.connections.get_mut(&conn_id) {
+                    if let Some(downstream) = conn.unsubscribe(request_id, region_id) {
+                        let err = Some(Error::Other("region not found".into()));
+                        self.deregister_downstream(region_id, downstream, err);
+                    }
                 }
             }
             Deregister::Downstream {
@@ -1288,6 +1294,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 Validate::OldValueCache(validate) => {
                     validate(&self.old_value_cache);
                 }
+                Validate::UnresolvedRegion(validate) => {
+                    validate(self.unresolved_region_count);
+                }
             },
             Task::ChangeConfig(change) => self.on_change_cfg(change),
         }
@@ -1378,23 +1387,23 @@ mod tests {
     use raftstore::{
         errors::{DiscardReason, Error as RaftStoreError},
         router::{CdcRaftRouter, RaftStoreRouter},
-        store::{fsm::StoreMeta, msg::CasualMessage, PeerMsg, ReadDelegate},
+        store::{PeerMsg, ReadDelegate, fsm::StoreMeta, msg::CasualMessage},
     };
     use test_pd_client::TestPdClient;
     use test_raftstore::MockRaftStoreRouter;
     use tikv::{
         server::DEFAULT_CLUSTER_ID,
-        storage::{kv::Engine, TestEngineBuilder},
+        storage::{TestEngineBuilder, kv::Engine},
     };
     use tikv_util::{
         config::{ReadableDuration, ReadableSize},
-        worker::{dummy_scheduler, ReceiverWrapper},
+        worker::{ReceiverWrapper, dummy_scheduler},
     };
 
     use super::*;
     use crate::{
         channel,
-        delegate::{post_init_downstream, ObservedRange},
+        delegate::{ObservedRange, post_init_downstream},
         recv_timeout,
     };
 

@@ -3,8 +3,8 @@
 use std::{
     mem,
     sync::{
-        atomic::{AtomicIsize, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicIsize, AtomicUsize, Ordering},
     },
 };
 
@@ -86,10 +86,31 @@ impl<T: HeapSize> HeapSize for Vec<T> {
     }
 }
 
-impl<A: HeapSize, B: HeapSize> HeapSize for (A, B) {
+impl<L: HeapSize, R: HeapSize> HeapSize for crate::Either<L, R> {
     fn approximate_heap_size(&self) -> usize {
-        self.0.approximate_heap_size() + self.1.approximate_heap_size()
+        match self {
+            crate::Either::Left(left) => left.approximate_heap_size(),
+            crate::Either::Right(right) => right.approximate_heap_size(),
+        }
     }
+}
+
+macro_rules! impl_tuple_heapsize {
+    ( $( ($($pos:tt),+) => ($($name:tt),+) ),+ $(,)? ) => {
+        $(
+            impl<$( $name: HeapSize ),+> HeapSize for ( $( $name ),+ ) {
+                fn approximate_heap_size(&self) -> usize {
+                    0 $( + self.$pos.approximate_heap_size() )+
+                }
+            }
+        )+
+    }
+}
+
+impl_tuple_heapsize! {
+    // HeapSize implementation for tuples, extend on demand.
+    (0, 1) => (A, B),
+    (0, 1, 2) => (A, B, C),
 }
 
 impl<T: HeapSize> HeapSize for Option<T> {
@@ -164,13 +185,12 @@ impl HeapSize for kvrpcpb::Context {
         self.resolved_locks.capacity() * mem::size_of::<u64>()
             + self.committed_locks.capacity() * mem::size_of::<u64>()
             + self.resource_group_tag.capacity()
-            + self.request_source.as_bytes().len()
+            + self.request_source.len()
             + self
                 .get_resource_control_context()
                 .resource_group_name
-                .as_bytes()
                 .len()
-            + self.get_source_stmt().session_alias.as_bytes().len()
+            + self.get_source_stmt().session_alias.len()
     }
 }
 

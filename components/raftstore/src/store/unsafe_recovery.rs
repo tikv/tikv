@@ -18,8 +18,8 @@ use raft::eraftpb::ConfChangeType;
 use tikv_util::{box_err, error, info, time::Instant as TiInstant, warn};
 
 use super::{
-    fsm::new_admin_request, worker::new_change_peer_v2_request, PeerMsg, RaftRouter,
-    SignificantMsg, SignificantRouter, StoreMsg,
+    PeerMsg, RaftRouter, SignificantMsg, SignificantRouter, StoreMsg, fsm::new_admin_request,
+    worker::new_change_peer_v2_request,
 };
 use crate::Result;
 
@@ -246,6 +246,7 @@ pub fn start_unsafe_recovery_report(
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct UnsafeRecoveryForceLeaderSyncer(Arc<InvokeClosureOnDrop>);
 
 impl UnsafeRecoveryForceLeaderSyncer {
@@ -443,15 +444,23 @@ pub fn demote_failed_voters_request(
         .get_peers()
         .iter()
         .filter_map(|peer| {
-            if failed_voter_ids.contains(&peer.get_id())
-                && peer.get_role() == metapb::PeerRole::Voter
-            {
-                let mut peer_clone = peer.clone();
-                peer_clone.set_role(metapb::PeerRole::Learner);
-                let mut cp = ChangePeer::default();
-                cp.set_change_type(ConfChangeType::AddLearnerNode);
-                cp.set_peer(peer_clone);
-                return Some(cp);
+            if failed_voter_ids.contains(&peer.get_id()) {
+                if peer.get_role() == metapb::PeerRole::Voter {
+                    let mut peer_clone = peer.clone();
+                    peer_clone.set_role(metapb::PeerRole::Learner);
+                    let mut cp = ChangePeer::default();
+                    cp.set_change_type(ConfChangeType::AddLearnerNode);
+                    cp.set_peer(peer_clone);
+                    return Some(cp);
+                } else if peer.get_role() == metapb::PeerRole::Learner {
+                    let mut cp = ChangePeer::default();
+                    cp.set_change_type(ConfChangeType::RemoveNode);
+                    let peer_clone = peer.clone();
+                    let mut cp = ChangePeer::default();
+                    cp.set_change_type(ConfChangeType::RemoveNode);
+                    cp.set_peer(peer_clone);
+                    return Some(cp);
+                }
             }
             None
         })

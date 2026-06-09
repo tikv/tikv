@@ -6,7 +6,7 @@ use tipb::FieldType;
 
 use super::LazyBatchColumn;
 use crate::{
-    codec::{data_type::VectorValue, Result},
+    codec::{Result, data_type::VectorValue},
     expr::EvalContext,
 };
 
@@ -19,12 +19,20 @@ pub struct LazyBatchColumnVec {
     /// For decoded columns, they may be in different types. If the column is in
     /// type `LazyBatchColumn::Raw`, it means that it is not decoded.
     columns: Vec<LazyBatchColumn>,
+
+    /// extra_common_handle_keys is used internally between executors to
+    /// exchange the common handle keys when needed, e.g. for index lookup
+    /// to lookup table rows.
+    extra_common_handle_keys: Option<Vec<Vec<u8>>>,
 }
 
 impl From<Vec<LazyBatchColumn>> for LazyBatchColumnVec {
     #[inline]
     fn from(columns: Vec<LazyBatchColumn>) -> Self {
-        LazyBatchColumnVec { columns }
+        LazyBatchColumnVec {
+            columns,
+            extra_common_handle_keys: None,
+        }
     }
 }
 
@@ -33,6 +41,7 @@ impl From<Vec<VectorValue>> for LazyBatchColumnVec {
     fn from(columns: Vec<VectorValue>) -> Self {
         LazyBatchColumnVec {
             columns: columns.into_iter().map(LazyBatchColumn::from).collect(),
+            extra_common_handle_keys: None,
         }
     }
 }
@@ -47,6 +56,7 @@ impl LazyBatchColumnVec {
     pub fn empty() -> Self {
         Self {
             columns: Vec::new(),
+            extra_common_handle_keys: None,
         }
     }
 
@@ -61,6 +71,10 @@ impl LazyBatchColumnVec {
                 .iter()
                 .map(|c| c.clone_empty(capacity))
                 .collect(),
+            extra_common_handle_keys: self
+                .extra_common_handle_keys
+                .as_ref()
+                .map(|_| Vec::with_capacity(capacity)),
         }
     }
 
@@ -74,7 +88,21 @@ impl LazyBatchColumnVec {
             let column = LazyBatchColumn::raw_with_capacity(0);
             columns.push(column);
         }
-        Self { columns }
+        Self {
+            columns,
+            extra_common_handle_keys: None,
+        }
+    }
+
+    #[inline]
+    pub fn with_columns_and_extra_common_handle_keys(
+        columns: Vec<LazyBatchColumn>,
+        extra_common_handle_keys: Option<Vec<Vec<u8>>>,
+    ) -> Self {
+        LazyBatchColumnVec {
+            columns,
+            extra_common_handle_keys,
+        }
     }
 
     /// Returns the number of columns.
@@ -198,6 +226,31 @@ impl LazyBatchColumnVec {
     /// Returns the inner columns as a mutable slice.
     pub fn as_mut_slice(&mut self) -> &mut [LazyBatchColumn] {
         self.columns.as_mut_slice()
+    }
+
+    #[inline]
+    pub fn mut_extra_common_handle_keys(&mut self) -> &mut Vec<Vec<u8>> {
+        if self.extra_common_handle_keys.is_none() {
+            self.extra_common_handle_keys = Some(vec![]);
+        }
+        self.extra_common_handle_keys.as_mut().unwrap()
+    }
+
+    #[inline]
+    pub fn has_extra_common_handle_keys(&self) -> bool {
+        self.extra_common_handle_keys.is_some()
+    }
+
+    #[inline]
+    pub fn get_extra_common_handle_key(&self, i: usize) -> Option<&[u8]> {
+        self.extra_common_handle_keys
+            .as_ref()
+            .and_then(|v| v.get(i).map(|key| key.as_slice()))
+    }
+
+    #[inline]
+    pub fn take_extra_common_handle_keys(&mut self) -> Option<Vec<Vec<u8>>> {
+        self.extra_common_handle_keys.take()
     }
 }
 

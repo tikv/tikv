@@ -7,7 +7,8 @@ pub enum ServiceEvent {
     // For grpc service.
     PauseGrpc,
     ResumeGrpc,
-    // ...
+    // For graceful shutdown.
+    GracefulShutdown,
     Exit,
 }
 
@@ -16,6 +17,7 @@ impl fmt::Debug for ServiceEvent {
         match self {
             ServiceEvent::PauseGrpc => f.debug_tuple("PauseGrpc").finish(),
             ServiceEvent::ResumeGrpc => f.debug_tuple("ResumeGrpc").finish(),
+            ServiceEvent::GracefulShutdown => f.debug_tuple("GracefulShutdown").finish(),
             ServiceEvent::Exit => f.debug_tuple("Exit").finish(),
         }
     }

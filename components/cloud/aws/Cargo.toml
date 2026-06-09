@@ -23,7 +23,7 @@ aws-smithy-runtime-api = { version = "1", features = [], default-features = fals
 aws-smithy-types = { version = "1", features = ["byte-stream-poll-next"] }
 
 base64 = "0.13.0"
-bytes = "1.0"
+bytes = { workspace = true }
 cloud = { workspace = true }
 fail = "0.5"
 futures = "0.3"
@@ -50,6 +50,7 @@ uuid = { version = "0.8", features = ["v4"] }
 
 [dev-dependencies]
 aws-smithy-runtime = { version = "1.4.0", features = ["test-util", "client"] }
+aws-smithy-types = { version = "1", features = ["hyper-0-14-x", "http-body-0-4-x"] }
 base64 = "0.13"
 futures = "0.3"
 tokio = { version = "1.5", features = ["macros"] }

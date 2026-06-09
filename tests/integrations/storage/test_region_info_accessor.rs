@@ -2,7 +2,7 @@
 
 use std::{
     num::NonZeroUsize,
-    sync::{mpsc::channel, Arc},
+    sync::{Arc, mpsc::channel},
     thread,
     time::Duration,
 };
@@ -12,8 +12,8 @@ use kvproto::metapb::Region;
 use more_asserts::{assert_gt, assert_le};
 use pd_client::{RegionStat, RegionWriteCfCopDetail};
 use raftstore::coprocessor::{
-    region_info_accessor::{RaftStoreEvent, RegionActivity, RegionInfoQuery},
     RegionInfoAccessor, RegionInfoProvider,
+    region_info_accessor::{RaftStoreEvent, RegionActivity, RegionInfoQuery},
 };
 use test_raftstore::*;
 use tikv_util::HandyRwLock;

@@ -4,24 +4,24 @@ use std::{
     fmt::Write,
     path::Path,
     str::FromStr,
-    sync::{mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
     thread,
     time::Duration,
 };
 
 use collections::HashMap;
 use encryption_export::{
-    data_key_manager_from_config, DataKeyManager, FileConfig, MasterKeyConfig,
+    DataKeyManager, FileConfig, MasterKeyConfig, data_key_manager_from_config,
 };
-use engine_rocks::{config::BlobRunMode, RocksEngine, RocksSnapshot, RocksStatistics};
+use engine_rocks::{RocksEngine, RocksSnapshot, RocksStatistics, config::BlobRunMode};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    CfName, CfNamesExt, Engines, Iterable, KvEngine, Peekable, RaftEngineDebug, RaftEngineReadOnly,
-    CF_DEFAULT, CF_RAFT, CF_WRITE,
+    CF_DEFAULT, CF_RAFT, CF_WRITE, CfName, CfNamesExt, Engines, Iterable, KvEngine, Peekable,
+    RaftEngineDebug, RaftEngineReadOnly,
 };
 use fail::fail_point;
 use file_system::IoRateLimiter;
-use futures::{executor::block_on, future::BoxFuture, StreamExt};
+use futures::{StreamExt, executor::block_on, future::BoxFuture};
 use grpcio::{ChannelBuilder, Environment};
 use hybrid_engine::HybridEngine;
 use in_memory_engine::RegionCacheMemoryEngine;
@@ -42,10 +42,11 @@ use pd_client::PdClient;
 use protobuf::RepeatedField;
 use raft::eraftpb::ConfChangeType;
 use raftstore::{
+    RaftRouterCompactedEventSender, RegionInfoAccessor, Result,
+    coprocessor::CoprocessorHost,
     store::{fsm::RaftRouter, *},
-    RaftRouterCompactedEventSender, Result,
 };
-use rand::{seq::SliceRandom, RngCore};
+use rand::{RngCore, seq::SliceRandom};
 use server::common::ConfiguredRaftEngine;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
@@ -54,18 +55,19 @@ use tikv::{
     config::*,
     server::KvEngineFactoryBuilder,
     storage::{
+        Engine, Snapshot,
         kv::{SnapContext, SnapshotExt},
-        point_key_range, Engine, Snapshot,
+        point_key_range,
     },
 };
 pub use tikv_util::store::{find_peer, new_learner_peer, new_peer};
 use tikv_util::{
+    HandyRwLock,
     config::*,
     escape,
     mpsc::future,
     time::{Instant, ThreadReadId},
     worker::LazyWorker,
-    HandyRwLock,
 };
 use txn_types::Key;
 
@@ -673,6 +675,7 @@ pub fn create_test_engine(
     router: Option<RaftRouter<RocksEngine, RaftTestEngine>>,
     limiter: Option<Arc<IoRateLimiter>>,
     cfg: &Config,
+    force_partition_mgr: &ForcePartitionRangeManager,
 ) -> (
     Engines<RocksEngine, RaftTestEngine>,
     Option<Arc<DataKeyManager>>,
@@ -682,7 +685,7 @@ pub fn create_test_engine(
     Option<Arc<RocksStatistics>>,
 ) {
     let dir = test_util::temp_dir("test_cluster", cfg.prefer_mem);
-    start_test_engine(router, limiter, cfg, dir)
+    start_test_engine(router, limiter, cfg, force_partition_mgr, dir)
 }
 
 pub fn start_test_engine(
@@ -690,6 +693,7 @@ pub fn start_test_engine(
     router: Option<RaftRouter<RocksEngine, RaftTestEngine>>,
     limiter: Option<Arc<IoRateLimiter>>,
     cfg: &Config,
+    force_partition_mgr: &ForcePartitionRangeManager,
     dir: TempDir,
 ) -> (
     Engines<RocksEngine, RaftTestEngine>,
@@ -717,8 +721,17 @@ pub fn start_test_engine(
 
     let (raft_engine, raft_statistics) = RaftTestEngine::build(&cfg, &env, &key_manager, &cache);
 
-    let mut builder = KvEngineFactoryBuilder::new(env, &cfg, cache, key_manager.clone())
-        .sst_recovery_sender(Some(scheduler));
+    let mut host: CoprocessorHost<RocksEngine> = CoprocessorHost::default();
+    let accessor = RegionInfoAccessor::new(&mut host, Arc::new(|| true), Box::new(|| 1));
+    let mut builder = KvEngineFactoryBuilder::new(
+        env,
+        &cfg,
+        cache,
+        key_manager.clone(),
+        force_partition_mgr.clone(),
+    )
+    .sst_recovery_sender(Some(scheduler))
+    .region_info_accessor(accessor);
     if let Some(router) = router {
         builder = builder.compaction_event_sender(Arc::new(RaftRouterCompactedEventSender {
             router: Mutex::new(router),
@@ -748,7 +761,9 @@ pub fn configure_for_hibernate(config: &mut Config) {
     // Uses long check interval to make leader keep sleeping during tests.
     config.raft_store.abnormal_leader_missing_duration = ReadableDuration::secs(20);
     config.raft_store.max_leader_missing_duration = ReadableDuration::secs(40);
-    config.raft_store.peer_stale_state_check_interval = ReadableDuration::secs(10);
+    config.raft_store.peer_stale_state_check_interval = ReadableDuration::secs(5);
+    // speed up down peer detection
+    config.raft_store.max_peer_down_duration = ReadableDuration::secs(5);
 }
 
 pub fn configure_for_snapshot(config: &mut Config) {
@@ -977,6 +992,8 @@ pub fn must_kv_read_equal(client: &TikvClient, ctx: Context, key: Vec<u8>, val: 
     assert!(!get_resp.has_error(), "{:?}", get_resp.get_error());
     assert!(!get_resp.get_not_found());
     assert_eq!(get_resp.take_value(), val);
+    // if need_commit_ts is not set, `get_commit_ts()` should always return 0
+    assert_eq!(get_resp.get_commit_ts(), 0);
 }
 
 pub fn must_kv_read_not_found(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) {

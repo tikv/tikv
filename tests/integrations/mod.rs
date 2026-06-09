@@ -3,6 +3,7 @@
 #![feature(test)]
 #![feature(box_patterns)]
 #![feature(custom_test_frameworks)]
+#![feature(assert_matches)]
 #![test_runner(test_util::run_tests)]
 
 extern crate test;

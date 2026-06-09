@@ -1,6 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fmt::Debug, u64};
+use std::fmt::Debug;
 
 /// Represent the duration of all stages of raftstore recorded by one
 /// inspecting.
@@ -54,6 +54,7 @@ impl RaftstoreDuration {
 pub enum InspectFactor {
     RaftDisk = 0,
     KvDisk,
+    Network,
     // TODO: Add more factors, like network io.
 }
 
@@ -62,6 +63,7 @@ impl InspectFactor {
         match *self {
             InspectFactor::RaftDisk => "raft",
             InspectFactor::KvDisk => "kvdb",
+            InspectFactor::Network => "network",
         }
     }
 }

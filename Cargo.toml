@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "8.5.3"
+version = "8.5.7"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -245,7 +245,7 @@ members = [
   "components/cloud/azure",
   "components/cloud/gcp",
   "components/codec",
-  "components/collections",
+  "components/collections", "components/compact-log-backup",
   "components/concurrency_manager",
   "components/coprocessor_plugin_api",
   "components/crossbeam-skiplist",
@@ -368,6 +368,7 @@ external_storage = { path = "components/external_storage" }
 file_system = { path = "components/file_system" }
 crypto = { path = "components/crypto" }
 gcp = { path = "components/cloud/gcp" }
+gcp_v2 = { path = "components/cloud/gcp_v2" }
 health_controller = { path = "components/health_controller" }
 into_other = { path = "components/into_other" }
 keys = { path = "components/keys" }
@@ -429,8 +430,8 @@ grpcio = { version = "0.10.4", default-features = false, features = [
 grpcio-health = { version = "0.10.4", default-features = false, features = [
   "protobuf-codec",
 ] }
-tipb = { git = "https://github.com/pingcap/tipb.git" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+tipb = { git = "https://github.com/pingcap/tipb.git", branch = "release-8.5" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-8.5" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 tokio-executor = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
@@ -449,7 +450,9 @@ tracing = { version = "0.1.39", default-features = false, features = [
 ] }
 openssl = "0.10"
 openssl-sys = "0.9"
+compact-log-backup = { path = "components/compact-log-backup" }
 heck = "0.3"
+bytes = "1.11"
 crossbeam = "0.8"
 crossbeam-channel = "0.5"
 crossbeam-utils = "0.8"

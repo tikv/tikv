@@ -236,6 +236,11 @@ lazy_static! {
         exponential_buckets(0.01, 2.0, 17).unwrap(),
     )
     .unwrap();
+
+    pub static ref CDC_ABORTED_CONNECTIONS: IntCounter = register_int_counter!(
+        "tikv_cdc_aborted_connections",
+        "Total number of aborted connections"
+    ).unwrap();
 }
 
 thread_local! {

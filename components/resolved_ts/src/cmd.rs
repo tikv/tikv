@@ -9,6 +9,7 @@ use kvproto::{
     raft_cmdpb::{AdminCmdType, CmdType, Request},
 };
 use raftstore::coprocessor::{Cmd, CmdBatch, ObserveLevel};
+use tikv_util::Either;
 use txn_types::{
     Key, Lock, LockType, TimeStamp, Value, Write, WriteBatchFlags, WriteRef, WriteType,
 };
@@ -163,16 +164,31 @@ pub(crate) fn decode_write(key: &[u8], value: &[u8], is_apply: bool) -> Option<W
     }
 }
 
+#[cfg_attr(not(debug_assertions), allow(unused_variables))]
 pub(crate) fn decode_lock(key: &[u8], value: &[u8]) -> Option<Lock> {
-    let lock = Lock::parse(value).ok()?;
-    match lock.lock_type {
-        LockType::Put | LockType::Delete => Some(lock),
-        other => {
-            debug!("skip lock record";
-                "type" => ?other,
-                "start_ts" => ?lock.ts,
-                "key" => log_wrappers::Value(key),
-                "for_update_ts" => ?lock.for_update_ts);
+    match txn_types::decode_lock_type(value).ok()? {
+        LockType::Put | LockType::Delete => match txn_types::parse_lock(value).ok()? {
+            Either::Left(lock) => Some(lock),
+            Either::Right(..) => unreachable!("lock type Put/Delete cannot be SharedLocks"),
+        },
+        _ => {
+            #[cfg(debug_assertions)]
+            {
+                match txn_types::parse_lock(value).ok()? {
+                    Either::Left(lock) => {
+                        debug!("skip lock record";
+                            "type" => ?lock.lock_type,
+                            "start_ts" => ?lock.ts,
+                            "key" => log_wrappers::Value(key),
+                            "for_update_ts" => ?lock.for_update_ts);
+                    }
+                    Either::Right(shared_locks) => {
+                        debug!("skip shared locks record";
+                            "key" => log_wrappers::Value(key),
+                            "len" => shared_locks.len());
+                    }
+                };
+            }
             None
         }
     }
@@ -336,18 +352,18 @@ mod tests {
         raft_cmdpb::{CmdType, Request},
     };
     use tikv::storage::{
-        kv::{MockEngineBuilder, TestEngineBuilder},
-        mvcc::{tests::write, Mutation, MvccTxn, SnapshotReader},
-        txn::{
-            commands::one_pc_commit, prewrite, tests::*, CommitKind, TransactionKind,
-            TransactionProperties,
-        },
         Engine,
+        kv::{MockEngineBuilder, TestEngineBuilder},
+        mvcc::{Mutation, MvccTxn, SnapshotReader, tests::write},
+        txn::{
+            CommitKind, TransactionKind, TransactionProperties, commands::one_pc_commit, prewrite,
+            tests::*,
+        },
     };
     use tikv_kv::Modify;
     use txn_types::{Key, LockType, WriteType};
 
-    use super::{group_row_changes, ChangeLog, ChangeRow};
+    use super::{ChangeLog, ChangeRow, group_row_changes};
 
     #[test]
     fn test_cmd_encode() {

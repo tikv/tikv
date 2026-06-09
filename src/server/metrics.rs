@@ -6,14 +6,15 @@ use std::{
 };
 
 use collections::HashMap;
+use lazy_static::lazy_static;
 use prometheus::{exponential_buckets, local::LocalIntCounter, *};
 use prometheus_static_metric::*;
 use tikv_util::time::Instant;
 
+use crate::storage::ErrorHeaderKind;
 pub use crate::storage::kv::metrics::{
     GcKeysCF, GcKeysCounterVec, GcKeysCounterVecInner, GcKeysDetail,
 };
-use crate::storage::ErrorHeaderKind;
 
 make_auto_flush_static_metric! {
     pub label_enum GrpcTypeKind {
@@ -248,6 +249,12 @@ lazy_static! {
         "tikv_grpc_msg_duration_seconds",
         "Bucketed histogram of grpc server messages",
         &["type","priority"],
+        exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
+    )
+    .unwrap();
+    pub static ref GRPC_BATCH_COMMANDS_WAIT_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_grpc_batch_commands_wait_duration_seconds",
+        "Bucketed histogram of grpc server batch commands waiting duration",
         exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
     )
     .unwrap();

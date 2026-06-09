@@ -3,8 +3,8 @@
 use std::{
     fmt::{self, Debug, Formatter},
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     vec::IntoIter,
 };
@@ -20,7 +20,7 @@ use kvproto::{
     raft_serverpb::RaftApplyState,
 };
 use pd_client::RegionStat;
-use raft::{eraftpb, StateRole};
+use raft::{StateRole, eraftpb};
 
 pub mod config;
 mod consistency_check;
@@ -52,9 +52,9 @@ pub use self::{
         RegionInfoProvider, SeekRegionCallback,
     },
     split_check::{
-        get_region_approximate_keys, get_region_approximate_middle, get_region_approximate_size,
         HalfCheckObserver, Host as SplitCheckerHost, KeysCheckObserver, SizeCheckObserver,
-        TableCheckObserver,
+        TableCheckObserver, get_region_approximate_keys, get_region_approximate_middle,
+        get_region_approximate_size,
     },
 };
 pub use crate::store::{Bucket, KeyEntry};
@@ -73,7 +73,7 @@ pub struct ObserverContext<'a> {
     pub bypass: bool,
 }
 
-impl<'a> ObserverContext<'a> {
+impl ObserverContext<'_> {
     pub fn new(region: &Region) -> ObserverContext<'_> {
         ObserverContext {
             region,
@@ -555,6 +555,8 @@ impl CmdBatch {
 
     pub fn size(&self) -> usize {
         let mut cmd_bytes = 0;
+        cmd_bytes += std::mem::size_of::<Self>();
+        cmd_bytes += std::mem::size_of::<Cmd>() * self.cmds.capacity();
         for cmd in self.cmds.iter() {
             let Cmd {
                 ref request,
@@ -562,10 +564,22 @@ impl CmdBatch {
                 ..
             } = cmd;
             if !response.get_header().has_error() && !request.has_admin_request() {
+                cmd_bytes += std::mem::size_of::<kvproto::raft_cmdpb::Request>()
+                    * request.requests.capacity();
                 for req in request.requests.iter() {
-                    let put = req.get_put();
-                    cmd_bytes += put.get_key().len();
-                    cmd_bytes += put.get_value().len();
+                    if req.has_put() {
+                        let put = req.get_put();
+                        cmd_bytes += put.get_cf().len();
+                        cmd_bytes += put.get_key().len();
+                        cmd_bytes += put.get_value().len();
+                        cmd_bytes += std::mem::size_of::<kvproto::raft_cmdpb::PutRequest>();
+                    }
+                    if req.has_delete() {
+                        let delete = req.get_delete();
+                        cmd_bytes += delete.get_cf().len();
+                        cmd_bytes += delete.get_key().len();
+                        cmd_bytes += std::mem::size_of::<kvproto::raft_cmdpb::DeleteRequest>();
+                    }
                 }
             }
         }

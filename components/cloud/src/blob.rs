@@ -3,8 +3,10 @@
 use std::{fmt::Display, io, marker::Unpin, panic::Location, pin::Pin, task::Poll};
 
 use async_trait::async_trait;
-use futures::{future::LocalBoxFuture, io as async_io, io::Cursor, stream::Stream};
+use futures::{future::LocalBoxFuture, stream::Stream};
 use futures_io::AsyncRead;
+use futures_util::{io as async_io, io::Cursor};
+pub use kvproto::brpb::CloudDynamic;
 
 pub trait BlobConfig: 'static + Send + Sync {
     fn name(&self) -> &'static str;
@@ -21,7 +23,7 @@ pub struct PutResource<'a>(pub Box<dyn AsyncRead + Send + Unpin + 'a>);
 
 pub type BlobStream<'a> = Box<dyn AsyncRead + Unpin + Send + 'a>;
 
-impl<'a> AsyncRead for PutResource<'a> {
+impl AsyncRead for PutResource<'_> {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -240,7 +242,7 @@ pub async fn read_to_end<R: AsyncRead>(r: R, v: &mut Vec<u8>) -> std::io::Result
 #[cfg(test)]
 mod tests {
     extern crate test;
-    use futures::AsyncReadExt;
+    use futures_util::AsyncReadExt;
 
     use super::*;
 

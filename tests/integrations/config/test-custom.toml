@@ -86,6 +86,7 @@ end-point-slow-log-threshold = "1s"
 forward-max-connections-per-address = 5
 reject-messages-on-memory-ratio = 0.8
 health-feedback-interval = "2s"
+inspect-network-interval = "222ms"
 
 [server.labels]
 a = "b"
@@ -159,19 +160,14 @@ raft-log-gc-tick-interval = "12s"
 raft-log-gc-threshold = 12
 raft-log-gc-count-limit = 12
 raft-log-gc-size-limit = "1KB"
+raft-read-index-retry-interval-ticks = 123
 raft-log-reserve-max-ticks = 100
 raft-engine-purge-interval = "20m"
 max-manual-flush-rate = 5.0
 raft-entry-cache-life-time = "12s"
 split-region-check-tick-interval = "12s"
 region-split-check-diff = "20MB"
-region-compact-check-interval = "12s"
 clean-stale-peer-delay = "0s"
-region-compact-check-step = 1234
-region-compact-min-tombstones = 999
-region-compact-tombstones-percent = 33
-region-compact-min-redundant-rows = 999
-region-compact-redundant-rows-percent = 33
 pd-heartbeat-tick-interval = "12m"
 pd-store-heartbeat-tick-interval = "12s"
 pd-report-min-resolved-ts-interval = "233ms"
@@ -647,6 +643,10 @@ enable-compaction-filter = false
 compaction-filter-skip-version-check = true
 num-threads = 2
 
+[gc.auto-compaction]
+mvcc-read-aware-enabled = true
+mvcc-scan-threshold = 10000
+
 [pessimistic-txn]
 enabled = false                # test backward compatibility
 wait-for-lock-timeout = "10ms"
@@ -674,6 +674,8 @@ advance-ts-interval = "5s"
 scan-lock-pool-size = 1
 memory-quota = "1MB"
 incremental-scan-concurrency = 7
+memory-quota-active-check-interval = "2s"
+memory-quota-exceeded-backoff-duration = "1s"
 
 [split]
 detect-times = 10
@@ -687,3 +689,7 @@ split.split-contained-score = 0.5
 [resource-control]
 enabled = false
 priority-ctl-strategy = "aggressive"
+bg-resource-threshold = 70.0
+bg-compaction-pressure-threshold = 70.0
+bg-write-io-ceiling = "100GB"
+bg-write-io-floor = "10MB"

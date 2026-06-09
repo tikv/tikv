@@ -2,7 +2,7 @@
 
 use std::{error::Error, net::SocketAddr, sync::Arc};
 
-use hyper::{body, Client, StatusCode, Uri};
+use hyper::{Client, StatusCode, Uri, body};
 use raftstore::store::region_meta::RegionMeta;
 use security::SecurityConfig;
 use service::service_manager::GrpcServiceManager;
@@ -48,6 +48,7 @@ fn test_region_meta_endpoint() {
         None,
         GrpcServiceManager::dummy(),
         None,
+        Default::default(),
     )
     .unwrap();
     let addr = format!("127.0.0.1:{}", test_util::alloc_port());

@@ -22,7 +22,7 @@ pub use utf8mb4_binary::*;
 pub use utf8mb4_general_ci::*;
 pub use utf8mb4_uca::*;
 
-use super::{charset::*, Collator};
+use super::{Collator, charset::*};
 use crate::codec::Result;
 
 pub const PADDING_SPACE: char = 0x20 as char;
@@ -52,7 +52,7 @@ pub(crate) fn next_utf8_char(s: &[u8]) -> Option<(char, &[u8])> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{codec::collation::Collator, match_template_collator, Collation};
+    use crate::{Collation, codec::collation::Collator, match_template_collator};
 
     #[test]
     #[allow(clippy::string_lit_as_bytes)]
@@ -260,6 +260,23 @@ mod tests {
                     Ordering::Less,
                     Ordering::Greater,
                     Ordering::Equal,
+                ],
+            ),
+            (
+                "ʩ".as_bytes(),
+                "F".as_bytes(),
+                [
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Less, // `ʩ` is invalid character in GBK.
+                    Ordering::Less, // `ʩ` is invalid character in GBK.
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
                 ],
             ),
         ];

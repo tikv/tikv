@@ -4,41 +4,44 @@ use std::{
     convert::TryFrom,
     future::Future,
     sync::{
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
         mpsc::SyncSender,
-        Arc, Mutex,
     },
     time::Duration,
 };
 
-use file_system::{set_io_type, IoType};
+use file_system::{IoType, set_io_type};
 use futures::{
     channel::oneshot,
     future::{FutureExt, TryFutureExt},
 };
 use kvproto::{errorpb, kvrpcpb::CommandPri};
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
-use prometheus::{core::Metric, Histogram, IntCounter, IntGauge};
+use prometheus::{Histogram, IntCounter, IntGauge, core::Metric};
 use resource_control::{
-    with_resource_limiter, ControlledFuture, ResourceController, ResourceLimiter, TaskPriority,
+    ControlledFuture, ResourceController, ResourceLimiter, TaskPriority, with_resource_limiter,
 };
 use thiserror::Error;
 use tikv_util::{
-    resource_control::TaskMetadata,
-    sys::{cpu_time::ProcessStat, SysQuota},
+    resource_control::{TaskMetadata, priority_from_task_meta},
+    sys::{SysQuota, cpu_time::ProcessStat, thread::matches_thread_name_prefix},
     time::Instant,
     worker::{Runnable, RunnableWithTimer, Scheduler, Worker},
     yatp_pool::{self, CleanupMethod, FuturePool, PoolTicker, YatpPoolBuilder},
 };
 use tracker::TrackedFuture;
 use yatp::{
-    metrics::MULTILEVEL_LEVEL_ELAPSED, pool::Remote, queue::Extras, task::future::TaskCell,
+    metrics::MULTILEVEL_LEVEL_ELAPSED,
+    pool::Remote,
+    queue::{Extras, TaskCell as TaskCellTrait},
+    task::future::TaskCell,
 };
 
 use self::metrics::*;
 use crate::{
-    config::{UnifiedReadPoolConfig, UNIFIED_READPOOL_MIN_CONCURRENCY},
-    storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter},
+    config::{UNIFIED_READPOOL_MIN_CONCURRENCY, UnifiedReadPoolConfig},
+    storage::kv::{Engine, FlowStatsReporter, destroy_tls_engine, set_tls_engine},
 };
 
 // the duration to check auto-scale unified-thread-pool's thread
@@ -51,6 +54,7 @@ const READ_POOL_THREAD_HIGH_THRESHOLD: f64 = 0.8;
 const READ_POOL_THREAD_LOW_THRESHOLD: f64 = 0.7;
 // avg running tasks per-thread that indicates read-pool is busy
 const RUNNING_TASKS_PER_THREAD_THRESHOLD: i64 = 3;
+const UNIFIED_READ_POOL_THREAD: &str = "unified-read";
 
 pub enum ReadPool {
     FuturePools {
@@ -154,15 +158,45 @@ impl ReadPoolHandle {
                 ..
             } => {
                 let task_priority = TaskPriority::from(metadata.override_priority());
-                let running_tasks = running_tasks[task_priority as usize].clone();
+                let running_task_gauge = running_tasks[task_priority as usize].clone();
                 // Note that the running task number limit is not strict.
                 // If several tasks are spawned at the same time while the running task number
                 // is close to the limit, they may all pass this check and the number of running
                 // tasks may exceed the limit.
-                if running_tasks.get() as usize >= *max_tasks {
-                    return Err(ReadPoolError::UnifiedReadPoolFull);
+                if running_task_gauge.get() as usize >= *max_tasks {
+                    // When resource control is enabled, attempt to evict the
+                    // lowest-priority queued task if the incoming task has
+                    // strictly higher priority. This implements queue fairness:
+                    // important tasks can preempt less important queued tasks
+                    // when the pool is full.
+                    if let Some(ref ctl) = resource_ctl {
+                        let estimated_priority = ctl.peek_priority_of(&metadata, priority);
+                        if let Some(mut evicted) = remote.try_evict_lowest(estimated_priority) {
+                            // Decrement the running_tasks counter for the
+                            // evicted task's priority level. The evicted task's
+                            // future (which contains the running_tasks.dec()
+                            // closure) will be dropped without executing.
+                            let evicted_prio =
+                                priority_from_task_meta(evicted.mut_extras().metadata());
+                            running_tasks[evicted_prio as usize].dec();
+                            UNIFIED_READ_POOL_EVICTED_TASKS.inc();
+                            // Dropping the evicted TaskCell destroys the future
+                            // inside it. That future holds the oneshot::Sender
+                            // used by spawn_handle (or by coprocessor's manual
+                            // channel). When the sender is dropped the
+                            // corresponding receiver gets a Canceled error,
+                            // which callers surface as SchedTooBusy /
+                            // ServerIsBusy back to the client.
+                            drop(evicted);
+                            // Fall through to enqueue the new task below.
+                        } else {
+                            return Err(ReadPoolError::UnifiedReadPoolFull);
+                        }
+                    } else {
+                        return Err(ReadPoolError::UnifiedReadPoolFull);
+                    }
                 }
-                running_tasks.inc();
+                running_task_gauge.inc();
                 let fixed_level = match priority {
                     CommandPri::High => Some(0),
                     CommandPri::Normal => None,
@@ -176,19 +210,20 @@ impl ReadPoolHandle {
                         TrackedFuture::new(with_resource_limiter(
                             ControlledFuture::new(
                                 f.map(move |_| {
-                                    running_tasks.dec();
+                                    running_task_gauge.dec();
                                 }),
                                 resource_ctl.clone(),
                                 group_name,
                             ),
                             resource_limiter,
+                            false,
                         )),
                         extras,
                     )
                 } else {
                     TaskCell::new(
                         TrackedFuture::new(f.map(move |_| {
-                            running_tasks.dec();
+                            running_task_gauge.dec();
                         })),
                         extras,
                     )
@@ -478,7 +513,7 @@ pub fn build_yatp_read_pool_with_name<E: Engine, R: FlowStatsReporter>(
         .cleanup_method(cleanup_method)
         .stack_size(config.stack_size.0 as usize)
         .thread_count(
-            config.min_thread_count,
+            1, // min_thread_count is controlled by readPoolConfigRunner
             config.max_thread_count,
             std::cmp::max(
                 std::cmp::max(
@@ -544,39 +579,107 @@ struct ReadPoolCpuTimeTracker {
     // the total time duration of each thread busy with handling tasks. This time also includes
     // the time when the threads are off-cpu, so it might be much higher than the actual cpu time.
     prev_total_task_handling_time_us: u64,
-    prev_check_time: Instant,
-    prev_cpu_per_sec: f64,
+    prev_thread_check_time: Instant,
+    prev_thread_usage_per_sec: f64,
+    prev_total_cpu_time: u64,
+    prev_cpu_check_time: Instant,
+    prev_cpu_usage_per_second: f64,
 }
 
 impl ReadPoolCpuTimeTracker {
     fn new(pool_name: &str) -> Self {
-        let prev_check_time = Instant::now_coarse();
+        let now = Instant::now_coarse();
         let yatp_total_time_elapsed = MULTILEVEL_LEVEL_ELAPSED
             .get_metric_with_label_values(&[pool_name, "total"])
             .unwrap();
         let prev_total_task_handling_time_us = yatp_total_time_elapsed.get();
+
         Self {
             yatp_total_time_elapsed,
             prev_total_task_handling_time_us,
-            prev_check_time,
-            prev_cpu_per_sec: 0.0,
+            prev_thread_check_time: now,
+            prev_thread_usage_per_sec: 0.0,
+            prev_total_cpu_time: 0,
+            prev_cpu_check_time: now,
+            prev_cpu_usage_per_second: 0.0,
         }
     }
 
-    fn prev_avg_cpu_used(&mut self) -> f64 {
+    /// Get actual CPU usage of unified read pool threads using kernel thread
+    /// stats.
+    fn get_unified_read_pool_cpu(&mut self) -> f64 {
+        #[cfg(test)]
+        {
+            // In test mode, return the manually set value if available
+            if self.prev_cpu_usage_per_second > 0.0 {
+                return self.prev_cpu_usage_per_second;
+            }
+        }
+        use tikv_util::sys::thread::{full_thread_stat, ticks_per_second};
+
         let check_time = Instant::now_coarse();
-        let duration = check_time.saturating_duration_since(self.prev_check_time);
+        let duration = check_time.saturating_duration_since(self.prev_cpu_check_time);
+
+        // Minimum duration check to avoid noise - if too soon, return prev value
+        if duration < Duration::from_millis(500) {
+            return self.prev_cpu_usage_per_second;
+        }
+
+        let mut current_total_cpu_time = 0i64;
+        let pid = tikv_util::sys::thread::process_id();
+        let tids: Vec<_> = tikv_util::sys::thread::thread_ids(pid).unwrap();
+        // Collect CPU stats for each cached read pool worker thread
+        for &tid in &tids {
+            if let Ok(stat) = full_thread_stat(pid, tid) {
+                // Look for unified read pool thread name pattern
+                if matches_thread_name_prefix(&stat.command, UNIFIED_READ_POOL_THREAD) {
+                    // Sum utime + stime (user + system time)
+                    current_total_cpu_time += stat.utime + stat.stime;
+                }
+            }
+        }
+
+        // Calculate CPU time difference since last check
+        let cpu_time_diff = current_total_cpu_time.saturating_sub(self.prev_total_cpu_time as i64);
+
+        let cpu_utilization = if duration.as_secs_f64() > 0.0 && cpu_time_diff > 0 {
+            // Convert CPU time to seconds using ticks_per_second
+            let cpu_seconds = (cpu_time_diff as f64) / (ticks_per_second() as f64);
+            let wall_seconds = duration.as_secs_f64();
+            cpu_seconds / wall_seconds
+        } else {
+            0.0
+        };
+
+        self.prev_total_cpu_time = current_total_cpu_time as u64;
+        self.prev_cpu_check_time = check_time;
+        self.prev_cpu_usage_per_second = cpu_utilization;
+
+        cpu_utilization
+    }
+
+    #[cfg(test)]
+    fn set_test_cpu_utilization(&mut self, cpu: f64) {
+        self.prev_cpu_usage_per_second = cpu;
+    }
+
+    /// Baseline thread usage measurement using yatp metrics (includes off-CPU
+    /// time)
+    fn prev_avg_thread_usage(&mut self) -> f64 {
+        let check_time = Instant::now_coarse();
+        let duration = check_time.saturating_duration_since(self.prev_thread_check_time);
         // if the check duration is too small, just return the latest cached value.
         if duration < Duration::from_millis(100) {
-            return self.prev_cpu_per_sec;
+            return self.prev_thread_usage_per_sec;
         }
-        let total_cpu_time = self.yatp_total_time_elapsed.get();
-        let total_cpu_per_sec = (total_cpu_time - self.prev_total_task_handling_time_us) as f64
+        let total_thread_time = self.yatp_total_time_elapsed.get();
+        let total_thread_usage_per_sec = (total_thread_time - self.prev_total_task_handling_time_us)
+            as f64
             / duration.as_micros() as f64;
-        self.prev_total_task_handling_time_us = total_cpu_time;
-        self.prev_check_time = check_time;
-        self.prev_cpu_per_sec = total_cpu_per_sec;
-        total_cpu_per_sec
+        self.prev_total_task_handling_time_us = total_thread_time;
+        self.prev_thread_check_time = check_time;
+        self.prev_thread_usage_per_sec = total_thread_usage_per_sec;
+        total_thread_usage_per_sec
     }
 }
 struct ReadPoolConfigRunner {
@@ -585,13 +688,17 @@ struct ReadPoolConfigRunner {
     handle: ReadPoolHandle,
     cpu_time_tracker: ReadPoolCpuTimeTracker,
     process_stats: ProcessStat,
-    // configed thread pool size, it's the min thread count to be scale
+    min_thread_count: usize,
+    // configed thread pool size, it's the min thread count to be scale. It is set to
+    // max_thread_count
     core_thread_count: usize,
     // the max thread count can be scaled
     max_thread_count: usize,
     // the current active thread count
     cur_thread_count: usize,
     auto_adjust: bool,
+    // CPU threshold from configuration (0 means disabled, RFC 0114)
+    cpu_threshold: f64,
 }
 
 impl Runnable for ReadPoolConfigRunner {
@@ -617,6 +724,9 @@ impl Runnable for ReadPoolConfigRunner {
             Task::MaxTasksPerWorker(s) => {
                 self.handle.set_max_tasks_per_worker(s);
             }
+            Task::CpuThreshold(s) => {
+                self.cpu_threshold = s;
+            }
         }
     }
 }
@@ -641,15 +751,14 @@ impl ReadPoolConfigRunner {
         }
     }
 
+    // Adjust pool size using based on thread utilization or cpu utilization.
     fn adjust_pool_size(&mut self) {
-        if !self.auto_adjust
-            || (self.cur_thread_count == self.max_thread_count
-                && self.core_thread_count == self.max_thread_count)
-        {
+        if !self.auto_adjust {
             return;
         }
 
-        let read_pool_cpu = self.cpu_time_tracker.prev_avg_cpu_used();
+        let read_pool_cpu = self.cpu_time_tracker.get_unified_read_pool_cpu();
+        let thread_usage = self.cpu_time_tracker.prev_avg_thread_usage();
         let running_tasks = self.running_tasks();
         let process_cpu = match self.process_stats.cpu_usage() {
             Ok(p) => p,
@@ -658,29 +767,45 @@ impl ReadPoolConfigRunner {
                 return;
             }
         };
-        let cpu_quota = SysQuota::cpu_cores_quota();
+        let target_cpu_cores = if self.cpu_threshold > 0.0 {
+            self.cpu_threshold * SysQuota::cpu_cores_quota()
+        } else {
+            SysQuota::cpu_cores_quota()
+        };
 
-        // scale out the thread pool size by 1 iff:
-        // - current thread count is small than the maximum thread count
-        // - process cpu is not overloaded after scaling out one more thread
-        // - all read pool threads are busy handling tasks(thread busy time >= 80%)
-        // - there are enough tasks waiting in the scheduling queue.
-        // scale in the thread pool size by 1 iff:
-        // - current thread count is bigger than the configed thread count
-        // - the average thread usage percent is under the low water mark(70%)
-        // - the running tasks in the scheduling queue is under the threshold
-        let new_thread_count = if self.cur_thread_count < self.max_thread_count
+        // Base scaling conditions (process CPU, thread usage, task queue depth)
+        let busy_thread_scale_out = self.cur_thread_count < self.max_thread_count
             && process_cpu * (self.cur_thread_count as f64 + 1.0) / (self.cur_thread_count as f64)
-                < cpu_quota
-            && read_pool_cpu > self.cur_thread_count as f64 * READ_POOL_THREAD_HIGH_THRESHOLD
-            && running_tasks > self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD
-        {
+                < target_cpu_cores
+            && thread_usage > self.cur_thread_count as f64 * READ_POOL_THREAD_HIGH_THRESHOLD
+            && running_tasks > self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD;
+
+        let busy_thread_scale_in = self.cur_thread_count > self.min_thread_count
+            && thread_usage < (self.cur_thread_count - 1) as f64 * READ_POOL_THREAD_LOW_THRESHOLD
+            && running_tasks < self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD;
+
+        let leeway = 0.1;
+        let busy_cpu_scale_in =
+            self.cpu_threshold > 0.0 && read_pool_cpu > (leeway + 1.0) * target_cpu_cores;
+        let busy_cpu_scale_out = read_pool_cpu < (1.0 - leeway) * target_cpu_cores
+            && self.cur_thread_count < self.core_thread_count;
+
+        let new_thread_count = if busy_cpu_scale_in {
+            // CPU threshold takes precedence over busy thread scaling conditions
+            std::cmp::max(
+                std::cmp::max(
+                    (target_cpu_cores).floor() as usize,
+                    ((self.cur_thread_count as f64) * target_cpu_cores / read_pool_cpu).floor()
+                        as usize,
+                ),
+                1, // minimum 1 running thread
+            )
+        } else if busy_cpu_scale_out {
             self.cur_thread_count + 1
-        } else if self.cur_thread_count > self.core_thread_count
-            && read_pool_cpu < (self.cur_thread_count - 1) as f64 * READ_POOL_THREAD_LOW_THRESHOLD
-            && running_tasks < self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD
-        {
+        } else if busy_thread_scale_in {
             self.cur_thread_count - 1
+        } else if busy_thread_scale_out {
+            self.cur_thread_count + 1
         } else {
             self.cur_thread_count
         };
@@ -704,6 +829,7 @@ enum Task {
     PoolSize(usize),
     AutoAdjust(bool),
     MaxTasksPerWorker(usize),
+    CpuThreshold(f64),
 }
 
 impl std::fmt::Display for Task {
@@ -712,6 +838,7 @@ impl std::fmt::Display for Task {
             Task::PoolSize(s) => write!(f, "PoolSize({})", *s),
             Task::AutoAdjust(s) => write!(f, "AutoAdjust({})", *s),
             Task::MaxTasksPerWorker(s) => write!(f, "MaxTasksPerWorker({})", *s),
+            Task::CpuThreshold(s) => write!(f, "CpuThreshold({})", *s),
         }
     }
 }
@@ -725,23 +852,23 @@ impl ReadPoolConfigManager {
         handle: ReadPoolHandle,
         sender: SyncSender<usize>,
         worker: &Worker,
-        thread_count: usize,
+        min_thread_count: usize,
+        max_thread_count: usize,
         auto_adjust: bool,
+        cpu_threshold: f64,
     ) -> Self {
-        let max_thread_count = std::cmp::max(
-            UNIFIED_READPOOL_MIN_CONCURRENCY,
-            SysQuota::cpu_cores_quota().round() as usize,
-        );
         let runner = ReadPoolConfigRunner {
             interval: READ_POOL_THREAD_CHECK_DURATION,
             sender,
             handle,
             cpu_time_tracker: ReadPoolCpuTimeTracker::new(&get_unified_read_pool_name()),
             process_stats: ProcessStat::cur_proc_stat().unwrap(),
-            core_thread_count: thread_count,
-            cur_thread_count: thread_count,
+            min_thread_count,
+            core_thread_count: max_thread_count,
+            cur_thread_count: max_thread_count,
             max_thread_count,
             auto_adjust,
+            cpu_threshold,
         };
         let scheduler = worker.start_with_timer("read-pool-config-worker", runner);
 
@@ -768,6 +895,10 @@ impl ConfigManager for ReadPoolConfigManager {
                 self.scheduler
                     .schedule(Task::MaxTasksPerWorker(*max_tasks))?;
             }
+            if let Some(ConfigValue::F64(cpu_threshold)) = unified.get("cpu_threshold") {
+                self.scheduler
+                    .schedule(Task::CpuThreshold(*cpu_threshold))?;
+            }
         }
         info!(
             "readpool config changed";
@@ -790,6 +921,7 @@ pub enum ReadPoolError {
 }
 
 mod metrics {
+    use lazy_static::lazy_static;
     use prometheus::*;
 
     lazy_static! {
@@ -803,6 +935,11 @@ mod metrics {
             "tikv_unified_read_pool_thread_count",
             "The number of running threads in the unified read pool",
             &["name"]
+        )
+        .unwrap();
+        pub static ref UNIFIED_READ_POOL_EVICTED_TASKS: IntCounter = register_int_counter!(
+            "tikv_unified_read_pool_evicted_tasks",
+            "Number of tasks evicted from the unified read pool by higher-priority tasks"
         )
         .unwrap();
     }
@@ -1070,6 +1207,108 @@ mod tests {
     }
 
     #[test]
+    fn test_config_validation_cpu_threshold() {
+        use tikv_util::config::ReadableSize;
+        // Valid cpu_threshold
+        let valid_config = UnifiedReadPoolConfig {
+            min_thread_count: 1,
+            max_thread_count: 2,
+            stack_size: ReadableSize::mb(2),
+            max_tasks_per_worker: 2,
+            auto_adjust_pool_size: true,
+            cpu_threshold: 0.7,
+        };
+        // Just verify config can be created
+        assert_eq!(valid_config.cpu_threshold, 0.7);
+
+        // Test disabled threshold (0.0)
+        let disabled_config = UnifiedReadPoolConfig {
+            cpu_threshold: 0.0,
+            ..valid_config
+        };
+        assert_eq!(disabled_config.cpu_threshold, 0.0);
+    }
+
+    #[test]
+    fn test_cpu_threshold_scale_down_and_up() {
+        use tikv_util::worker::Worker;
+
+        let min_thread_count = (0.8 * SysQuota::cpu_cores_quota()) as usize;
+        let max_thread_count = SysQuota::cpu_cores_quota() as usize;
+        let config = UnifiedReadPoolConfig {
+            min_thread_count,
+            max_thread_count,
+            max_tasks_per_worker: 4,
+            cpu_threshold: 0.6, // 60% threshold
+            auto_adjust_pool_size: true,
+            ..Default::default()
+        };
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let pool = build_yatp_read_pool(
+            &config,
+            DummyReporter,
+            engine,
+            None,
+            CleanupMethod::InPlace,
+            false,
+        );
+
+        let handle = pool.handle();
+        let worker = Worker::new("test-worker");
+
+        // Create ReadPoolConfigRunner with a real CPU tracker first
+        let mut runner = ReadPoolConfigRunner {
+            interval: Duration::from_secs(10),
+            sender: std::sync::mpsc::sync_channel(10).0,
+            handle: handle.clone(),
+            cpu_time_tracker: ReadPoolCpuTimeTracker::new("test-pool"),
+            process_stats: ProcessStat::cur_proc_stat().unwrap(),
+            min_thread_count: config.min_thread_count,
+            core_thread_count: config.min_thread_count,
+            cur_thread_count: config.min_thread_count,
+            max_thread_count: config.max_thread_count,
+            auto_adjust: true,
+            cpu_threshold: config.cpu_threshold,
+        };
+
+        assert_eq!(runner.cur_thread_count, min_thread_count);
+
+        // Test 1: Set high CPU utilization using test helper
+        runner
+            .cpu_time_tracker
+            .set_test_cpu_utilization(0.8 * SysQuota::cpu_cores_quota());
+
+        let initial_threads = runner.cur_thread_count;
+        runner.adjust_pool_size(); // Call the REAL adjust_pool_size method
+
+        assert!(
+            runner.cur_thread_count < initial_threads,
+            "Thread count should decrease when CPU usage is high. Before: {}, After: {}",
+            initial_threads,
+            runner.cur_thread_count
+        );
+
+        // Test 2: Set low CPU utilization to test scale up
+        runner
+            .cpu_time_tracker
+            .set_test_cpu_utilization(0.3 * num_cpus::get() as f64);
+        let before_scale_up = runner.cur_thread_count;
+
+        runner.adjust_pool_size();
+
+        // Should not scale down further when CPU is low
+        if before_scale_up < runner.core_thread_count {
+            assert!(
+                runner.cur_thread_count >= before_scale_up,
+                "Thread count should not decrease further when CPU is low"
+            );
+        }
+
+        worker.stop();
+    }
+
+    #[test]
     fn test_yatp_task_poll_duration_metric() {
         let count_metric = |name: &str| -> u64 {
             let mut sum = 0;
@@ -1137,5 +1376,188 @@ mod tests {
             assert_eq!(count_metric(&name), 2);
             drop(pool);
         }
+    }
+
+    // Duplicated from resource_control::resource_group::tests which is
+    // #[cfg(test)] pub(crate) and not accessible from this crate.
+    fn new_resource_group_ru(
+        name: String,
+        ru: u64,
+        group_priority: u32,
+    ) -> kvproto::resource_manager::ResourceGroup {
+        use kvproto::resource_manager::{GroupMode, GroupRequestUnitSettings, ResourceGroup};
+        let mut group = ResourceGroup::new();
+        group.set_name(name);
+        group.set_mode(GroupMode::RuMode);
+        group.set_priority(group_priority);
+        let mut ru_setting = GroupRequestUnitSettings::new();
+        ru_setting.mut_r_u().mut_settings().set_fill_rate(ru);
+        group.set_r_u_settings(ru_setting);
+        group
+    }
+
+    #[test]
+    fn test_yatp_eviction() {
+        // Test that when the read pool is full, a higher-priority incoming task
+        // can evict the lowest-priority queued task.
+        //
+        // Strategy: Use 1 worker thread and max_tasks_per_worker=4 (total=4).
+        // Spawn 1 blocking task to occupy the only worker thread, then spawn
+        // 3 low-priority tasks that will sit in the queue. The pool is now
+        // "full" (4 running_tasks). A high-priority task should evict one of
+        // the queued low-priority tasks.
+        //
+        // Note on the two priority systems:
+        // - `override_priority` (in ResourceControlContext) determines the TaskPriority
+        //   bucket (High/Medium/Low) used for running_tasks counters. Both groups use 0
+        //   here, so all tasks are "medium".
+        // - Resource group priority (1 vs 16) is what peek_priority_of uses for the
+        //   eviction comparison. "high_group" (priority=16) produces a numerically
+        //   smaller value than "low_group" (priority=1), meaning it is scheduled first
+        //   and can evict low_group tasks.
+        let resource_manager = ResourceGroupManager::default();
+        let low_group = new_resource_group_ru("low_group".into(), 5000, 1);
+        resource_manager.add_resource_group(low_group);
+        let high_group = new_resource_group_ru("high_group".into(), 5000, 16);
+        resource_manager.add_resource_group(high_group);
+
+        let name = "test-yatp-eviction";
+        let resource_ctl = resource_manager.derive_controller(name.into(), true);
+
+        let config = UnifiedReadPoolConfig {
+            min_thread_count: 1,
+            max_thread_count: 1,
+            max_tasks_per_worker: 4,
+            ..Default::default()
+        };
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let pool = build_yatp_read_pool_with_name(
+            &config,
+            DummyReporter,
+            engine,
+            Some(resource_ctl),
+            CleanupMethod::InPlace,
+            name.to_owned(),
+            false,
+        );
+
+        let gen_task = || {
+            let (tx, rx) = oneshot::channel::<()>();
+            let task = async move {
+                let _ = rx.await;
+            };
+            (task, tx)
+        };
+
+        let handle = pool.handle();
+
+        let low_ctx = ResourceControlContext {
+            resource_group_name: "low_group".to_string(),
+            override_priority: 0,
+            ..Default::default()
+        };
+
+        // Task 1: synchronously blocks the only worker thread so that it
+        // cannot pop any further tasks from the global priority queue. An
+        // async-only future (oneshot::channel::await) would return Pending
+        // immediately, letting the worker loop back and drain tasks 2-4 from
+        // the queue before the eviction attempt — causing a race.
+        let (block_tx, block_rx) = std::sync::mpsc::channel::<()>();
+        let task1 = async move {
+            let _ = block_rx.recv();
+        };
+        handle
+            .spawn(
+                task1,
+                CommandPri::Normal,
+                1,
+                TaskMetadata::from_ctx(&low_ctx),
+                None,
+            )
+            .unwrap();
+
+        // Wait for task1 to be picked up and block the worker.
+        thread::sleep(Duration::from_millis(300));
+
+        // Tasks 2-4: these will sit in the global queue since the worker is
+        // blocked by task1.
+        let (task2, _tx2) = gen_task();
+        let (task3, _tx3) = gen_task();
+        let (task4, _tx4) = gen_task();
+
+        handle
+            .spawn(
+                task2,
+                CommandPri::Normal,
+                2,
+                TaskMetadata::from_ctx(&low_ctx),
+                None,
+            )
+            .unwrap();
+        handle
+            .spawn(
+                task3,
+                CommandPri::Normal,
+                3,
+                TaskMetadata::from_ctx(&low_ctx),
+                None,
+            )
+            .unwrap();
+        handle
+            .spawn(
+                task4,
+                CommandPri::Normal,
+                4,
+                TaskMetadata::from_ctx(&low_ctx),
+                None,
+            )
+            .unwrap();
+
+        // Verify pool is full: spawning another low-priority task should fail.
+        let (task_low5, _tx_low5) = gen_task();
+        match handle.spawn(
+            task_low5,
+            CommandPri::Normal,
+            5,
+            TaskMetadata::from_ctx(&low_ctx),
+            None,
+        ) {
+            Err(ReadPoolError::UnifiedReadPoolFull) => {}
+            other => panic!(
+                "expected UnifiedReadPoolFull for low-priority task, got {:?}",
+                other.err()
+            ),
+        }
+
+        // Now spawn a high-priority task — should succeed via eviction of a
+        // queued low-priority task.
+        let (task_high, _tx_high) = gen_task();
+        let high_ctx = ResourceControlContext {
+            resource_group_name: "high_group".to_string(),
+            override_priority: 0,
+            ..Default::default()
+        };
+
+        handle
+            .spawn(
+                task_high,
+                CommandPri::High,
+                6,
+                TaskMetadata::from_ctx(&high_ctx),
+                None,
+            )
+            .expect("high-priority task should succeed via eviction");
+
+        // The eviction metric should have been incremented.
+        assert!(
+            UNIFIED_READ_POOL_EVICTED_TASKS.get() >= 1,
+            "eviction counter should be incremented"
+        );
+
+        // Unblock task1 so the worker thread can resume and the pool can
+        // shut down cleanly.
+        let _ = block_tx.send(());
+        thread::sleep(Duration::from_millis(300));
     }
 }

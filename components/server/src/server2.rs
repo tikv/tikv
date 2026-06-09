@@ -17,19 +17,19 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
     sync::{
-        atomic::AtomicU64,
-        mpsc::{self, sync_channel},
         Arc,
+        atomic::{AtomicU32, AtomicU64},
+        mpsc::{self, sync_channel},
     },
     time::Duration,
     u64,
 };
 
-use api_version::{dispatch_api_version, KvFormat};
+use api_version::{KvFormat, dispatch_api_version};
 use backup::disk_snap::Env;
 use backup_stream::{
-    config::BackupStreamConfigManager, metadata::store::PdStore, observer::BackupStreamObserver,
-    BackupStreamResolver,
+    BackupStreamResolver, config::BackupStreamConfigManager, metadata::store::PdStore,
+    observer::BackupStreamObserver,
 };
 use causal_ts::CausalTsProviderImpl;
 use cdc::CdcConfigManager;
@@ -37,9 +37,9 @@ use concurrency_manager::{
     ActionOnInvalidMaxTs, ConcurrencyManager, DEFAULT_MAX_TS_DRIFT_ALLOWANCE,
     DEFAULT_MAX_TS_SYNC_INTERVAL, LIMIT_VALID_TIME_MULTIPLIER,
 };
-use engine_rocks::{from_rocks_compression_type, RocksEngine, RocksStatistics};
-use engine_traits::{Engines, KvEngine, MiscExt, RaftEngine, TabletRegistry, CF_DEFAULT, CF_WRITE};
-use file_system::{get_io_rate_limiter, BytesFetcher, MetricsManager as IoMetricsManager};
+use engine_rocks::{RocksEngine, RocksStatistics, from_rocks_compression_type};
+use engine_traits::{CF_DEFAULT, CF_WRITE, Engines, KvEngine, MiscExt, RaftEngine, TabletRegistry};
+use file_system::{BytesFetcher, MetricsManager as IoMetricsManager, get_io_rate_limiter};
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
 use health_controller::HealthController;
@@ -51,42 +51,44 @@ use kvproto::{
     resource_usage_agent::create_resource_metering_pub_sub,
 };
 use pd_client::{
+    PdClient, RpcClient,
     meta_storage::{Checked, Sourced},
     metrics::STORE_SIZE_EVENT_INT_VEC,
-    PdClient, RpcClient,
 };
 use raft_log_engine::RaftLogEngine;
 use raftstore::{
+    RegionInfoAccessor,
     coprocessor::{
         BoxConsistencyCheckObserver, ConsistencyCheckMethod, CoprocessorHost,
         RawConsistencyCheckObserver,
     },
     store::{
-        config::RaftstoreConfigManager, memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
         AutoSplitController, CheckLeaderRunner, SplitConfigManager, TabletSnapManager,
+        config::RaftstoreConfigManager, memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
     },
-    RegionInfoAccessor,
 };
 use raftstore_v2::{
-    router::{DiskSnapBackupHandle, PeerMsg, RaftRouter},
     StateStorage,
+    router::{DiskSnapBackupHandle, PeerMsg, RaftRouter},
 };
 use resolved_ts::Task;
-use resource_control::{config::ResourceContrlCfgMgr, ResourceGroupManager};
+use resource_control::{ResourceGroupManager, config::ResourceContrlCfgMgr};
 use security::SecurityManager;
 use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use tikv::{
     config::{
-        loop_registry, ConfigController, ConfigurableDb, DbConfigManger, DbType, LogConfigManager,
-        MemoryConfigManager, TikvConfig,
+        ConfigController, ConfigurableDb, DbConfigManger, DbType, LogConfigManager,
+        MemoryConfigManager, TikvConfig, loop_registry,
     },
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
     import::{ImportSstService, SstImporter},
     read_pool::{
-        build_yatp_read_pool, ReadPool, ReadPoolConfigManager, UPDATE_EWMA_TIME_SLICE_INTERVAL,
+        ReadPool, ReadPoolConfigManager, UPDATE_EWMA_TIME_SLICE_INTERVAL, build_yatp_read_pool,
     },
     server::{
+        CPU_CORES_QUOTA_GAUGE, GRPC_THREAD_PREFIX, KvEngineFactoryBuilder, MEMORY_LIMIT_GAUGE,
+        NodeV2, RaftKv2, Server,
         config::{Config as ServerConfig, ServerConfigManager},
         debug::Debugger,
         debug2::DebuggerImplV2,
@@ -96,11 +98,9 @@ use tikv::{
         resolve,
         service::{DebugService, DiagnosticsService},
         status_server::StatusServer,
-        KvEngineFactoryBuilder, NodeV2, RaftKv2, Server, CPU_CORES_QUOTA_GAUGE, GRPC_THREAD_PREFIX,
-        MEMORY_LIMIT_GAUGE,
     },
     storage::{
-        self,
+        self, Engine, Storage,
         config::EngineType,
         config_manager::StorageConfigManger,
         kv::LocalTablets,
@@ -109,24 +109,22 @@ use tikv::{
             flow_controller::{FlowController, TabletFlowController},
             txn_status_cache::TxnStatusCache,
         },
-        Engine, Storage,
     },
 };
 use tikv_alloc::{
     add_thread_memory_accessor, remove_thread_memory_accessor, thread_allocate_exclusive_arena,
 };
 use tikv_util::{
-    check_environment_variables,
+    Either, check_environment_variables,
     config::VersionTrack,
     memory::MemoryQuota,
     mpsc as TikvMpsc,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
-    sys::{disk, path_in_diff_mount_point, register_memory_usage_high_water, SysQuota},
+    sys::{SysQuota, disk, path_in_diff_mount_point, register_memory_usage_high_water},
     thread_group::GroupProperties,
     time::{Instant, Monitor},
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler},
     yatp_pool::CleanupMethod,
-    Either,
 };
 use tokio::runtime::Builder;
 
@@ -153,6 +151,7 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
     // Must be called after `TikvServer::init`.
     let memory_limit = tikv.core.config.memory_usage_limit.unwrap().0;
     let high_water = (tikv.core.config.memory_usage_high_water * memory_limit as f64) as u64;
+    let config_controller = tikv.cfg_controller.clone().unwrap();
     register_memory_usage_high_water(high_water);
 
     tikv.core.check_conflict_addr();
@@ -182,6 +181,7 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
                 None as Option<Engines<RocksEngine, CER>>,
                 kv_statistics,
                 raft_statistics,
+                config_controller,
                 Some(service_event_tx),
             )
         });
@@ -194,6 +194,10 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
                 }
                 ServiceEvent::ResumeGrpc => {
                     tikv.resume();
+                }
+                ServiceEvent::GracefulShutdown => {
+                    tikv.graceful_shutdown();
+                    break;
                 }
                 ServiceEvent::Exit => {
                     break;
@@ -260,6 +264,7 @@ struct TikvServer<ER: RaftEngine> {
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
+    compaction_pending_bytes_ratio: Arc<AtomicU32>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
     resolved_ts_scheduler: Option<Scheduler<Task>>,
@@ -352,6 +357,7 @@ where
             config.quota.enable_auto_tune,
         ));
 
+        let compaction_pending_bytes_ratio = Arc::new(AtomicU32::new(0));
         let resource_manager = if config.resource_control.enabled {
             let mgr = Arc::new(ResourceGroupManager::new(config.resource_control.clone()));
             let io_bandwidth = config.storage.io_rate_limit.max_bytes_per_sec.0;
@@ -360,6 +366,7 @@ where
                 pd_client.clone(),
                 &background_worker,
                 io_bandwidth,
+                compaction_pending_bytes_ratio.clone(),
             );
             Some(mgr)
         } else {
@@ -416,6 +423,7 @@ where
             sst_worker: None,
             quota_limiter,
             resource_manager,
+            compaction_pending_bytes_ratio,
             causal_ts_provider,
             tablet_registry: None,
             resolved_ts_scheduler: None,
@@ -525,6 +533,10 @@ where
         let (recorder_notifier, collector_reg_handle, resource_tag_factory, recorder_worker) =
             resource_metering::init_recorder(
                 self.core.config.resource_metering.precision.as_millis(),
+                self.core
+                    .config
+                    .resource_metering
+                    .enable_network_io_collection,
             );
         self.core.to_stop.push(recorder_worker);
         let (reporter_notifier, data_sink_reg_handle, reporter_worker) =
@@ -649,8 +661,10 @@ where
                     unified_read_pool.as_ref().unwrap().handle(),
                     unified_read_pool_scale_notifier,
                     &self.core.background_worker,
+                    self.core.config.readpool.unified.min_thread_count,
                     self.core.config.readpool.unified.max_thread_count,
                     self.core.config.readpool.unified.auto_adjust_pool_size,
+                    self.core.config.readpool.unified.cpu_threshold,
                 )),
             );
             unified_read_pool_scale_receiver = Some(rx);
@@ -704,10 +718,14 @@ where
         self.core.to_stop.push(cdc_worker);
 
         // Create resolved ts.
+        let rts_memory_quota = Arc::new(MemoryQuota::new(
+            self.core.config.resolved_ts.memory_quota.0 as usize,
+        ));
         if self.core.config.resolved_ts.enable {
             let mut rts_worker = Box::new(LazyWorker::new("resolved-ts"));
             // Register the resolved ts observer
-            let resolved_ts_ob = resolved_ts::Observer::new(rts_worker.scheduler());
+            let resolved_ts_ob =
+                resolved_ts::Observer::new(rts_worker.scheduler(), rts_memory_quota.clone());
             resolved_ts_ob.register_to(self.coprocessor_host.as_mut().unwrap());
             // Register config manager for resolved ts worker
             cfg_controller.register(
@@ -726,6 +744,7 @@ where
                 self.env.clone(),
                 self.security_mgr.clone(),
                 storage.get_scheduler().get_txn_status_cache(),
+                rts_memory_quota,
             );
             self.resolved_ts_scheduler = Some(rts_worker.scheduler());
             rts_worker.start_with_timer(rts_endpoint);
@@ -827,6 +846,7 @@ where
             debug_thread_pool,
             health_controller,
             self.resource_manager.clone(),
+            self.core.background_worker.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
         cfg_controller.register(
@@ -848,6 +868,7 @@ where
             true,
         )
         .unwrap();
+        importer.set_backend_config(backup::storage_backend_config(&self.core.config.backup));
         for (cf_name, compression_type) in &[
             (
                 CF_DEFAULT,
@@ -1030,6 +1051,7 @@ where
             Some(self.router.as_ref().unwrap().store_meta().clone()),
             self.resource_manager.clone(),
             Arc::new(region_info_accessor),
+            Default::default(),
         );
         let import_cfg_mgr = import_service.get_config_manager();
 
@@ -1099,6 +1121,7 @@ where
         let cdc_service = cdc::Service::new(
             self.cdc_scheduler.as_ref().unwrap().clone(),
             self.cdc_memory_quota.as_ref().unwrap().clone(),
+            Arc::new(self.core.background_worker.clone()),
         );
         if servers
             .server
@@ -1378,6 +1401,7 @@ where
                 self.resource_manager.clone(),
                 self.grpc_service_mgr.clone(),
                 None,
+                Default::default(),
             ) {
                 Ok(status_server) => Box::new(status_server),
                 Err(e) => {
@@ -1505,6 +1529,54 @@ where
             );
         }
     }
+
+    fn graceful_shutdown(&mut self) {
+        let now = Instant::now();
+        self.set_state(true);
+        self.wait_for_leader_eviction(now);
+        self.set_state(false);
+        std::thread::sleep(Duration::from_millis(200));
+        info!("Graceful shutdown completed");
+    }
+
+    fn wait_for_leader_eviction(&self, now: Instant) {
+        let timeout = self.core.config.server.graceful_shutdown_timeout.0;
+        let region_info_accessor = self.region_info_accessor.as_ref().unwrap();
+        let check_interval = Duration::from_secs(1);
+
+        loop {
+            let leaders_count = region_info_accessor.region_leaders().read().unwrap().len();
+
+            if leaders_count == 0 {
+                info!("All leaders evicted, completing graceful shutdown");
+                break;
+            }
+
+            if now.saturating_elapsed() >= timeout {
+                warn!(
+                    "Graceful shutdown timeout reached with {} leaders remaining",
+                    leaders_count
+                );
+                break;
+            }
+
+            info!("Waiting for leader eviction"; 
+                  "leaders_count" => leaders_count, 
+                  "elapsed" => ?now.saturating_elapsed());
+            std::thread::sleep(check_interval);
+        }
+    }
+
+    fn set_state(&self, state: bool) {
+        if let Some(node) = self.node.as_ref() {
+            let system = node.system();
+            let task = raftstore_v2::PdTask::GracefulShutdownState { state };
+
+            if let Err(e) = system.pd_scheduler().schedule(task) {
+                warn!("Failed to set graceful shutdown state for PD worker"; "error" => ?e);
+            }
+        }
+    }
 }
 
 impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
@@ -1537,6 +1609,7 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
             &self.core.config,
             block_cache,
             self.core.encryption_key_manager.clone(),
+            Default::default(),
         )
         .sst_recovery_sender(self.init_sst_recovery_sender())
         .flow_listener(flow_listener);
@@ -1581,6 +1654,7 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
             registry,
             raft_engine.as_rocks_engine().cloned(),
             180, // max_samples_to_preserve
+            self.compaction_pending_bytes_ratio.clone(),
         ));
 
         let router = RaftRouter::new(node.id(), router);
@@ -1656,11 +1730,14 @@ fn pre_start() {
 
 #[cfg(test)]
 mod test {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{
+        collections::HashMap,
+        sync::{Arc, atomic::AtomicU32},
+    };
 
     use engine_rocks::raw::Env;
     use engine_traits::{
-        FlowControlFactorsExt, MiscExt, SyncMutable, TabletContext, TabletRegistry, CF_DEFAULT,
+        CF_DEFAULT, FlowControlFactorsExt, MiscExt, SyncMutable, TabletContext, TabletRegistry,
     };
     use tempfile::Builder;
     use tikv::{config::TikvConfig, server::KvEngineFactoryBuilder};
@@ -1672,14 +1749,15 @@ mod test {
     fn test_engines_resource_info_update() {
         let mut config = TikvConfig::default();
         config.rocksdb.defaultcf.disable_auto_compactions = true;
-        config.rocksdb.defaultcf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
-        config.rocksdb.writecf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
-        config.rocksdb.lockcf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
+        config.rocksdb.defaultcf.soft_pending_compaction_bytes_limit = ReadableSize(1);
+        config.rocksdb.writecf.soft_pending_compaction_bytes_limit = ReadableSize(1);
+        config.rocksdb.lockcf.soft_pending_compaction_bytes_limit = ReadableSize(1);
         let env = Arc::new(Env::default());
         let path = Builder::new().prefix("test-update").tempdir().unwrap();
         let cache = config.storage.block_cache.build_shared_cache();
 
-        let factory = KvEngineFactoryBuilder::new(env, &config, cache, None).build();
+        let factory =
+            KvEngineFactoryBuilder::new(env, &config, cache, None, Default::default()).build();
         let reg = TabletRegistry::new(Box::new(factory), path.path().join("tablets")).unwrap();
 
         for i in 1..6 {
@@ -1719,7 +1797,13 @@ mod test {
 
         assert!(old_pending_compaction_bytes > new_pending_compaction_bytes);
 
-        let engines_info = Arc::new(EnginesResourceInfo::new(&config, reg, None, 10));
+        let engines_info = Arc::new(EnginesResourceInfo::new(
+            &config,
+            reg,
+            None,
+            10,
+            Arc::new(AtomicU32::new(0)),
+        ));
 
         let mut cached_latest_tablets = HashMap::default();
         engines_info.update(Instant::now(), &mut cached_latest_tablets);

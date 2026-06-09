@@ -93,7 +93,7 @@ mod tests {
     use std::{cmp::min, slice::from_ref};
 
     use collections::HashMap;
-    use rand::{distributions::Distribution, rngs::StdRng, SeedableRng};
+    use rand::{SeedableRng, distributions::Distribution, rngs::StdRng};
     use tidb_query_datatype::{
         codec::{datum, datum::Datum},
         expr::EvalContext,
@@ -106,7 +106,7 @@ mod tests {
         fn query(&self, bytes: &[u8]) -> u32 {
             let (h1, h2) = CmSketch::hash(bytes);
             let mut vals = vec![0u32; self.depth];
-            let mut min_counter = u32::max_value();
+            let mut min_counter = u32::MAX;
             for (i, row) in self.table.iter().enumerate() {
                 let j = (h1.wrapping_add(h2.wrapping_mul(i as u64)) % self.width as u64) as usize;
                 let noise = (self.count - row[j]) / (self.width as u32 - 1);

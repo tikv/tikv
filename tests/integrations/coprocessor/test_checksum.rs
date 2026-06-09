@@ -2,7 +2,7 @@
 
 use std::u64;
 
-use api_version::{keyspace::KvPair, ApiV1};
+use api_version::{ApiV1, keyspace::KvPairEntry};
 use futures::executor::block_on;
 use kvproto::{
     coprocessor::{KeyRange, Request},
@@ -11,8 +11,8 @@ use kvproto::{
 use protobuf::Message;
 use test_coprocessor::*;
 use tidb_query_common::storage::{
-    scanner::{RangesScanner, RangesScannerOptions},
     Range,
+    scanner::{RangesScanner, RangesScannerOptions},
 };
 use tikv::{
     coprocessor::{dag::TikvStorage, *},
@@ -86,6 +86,7 @@ fn reversed_checksum_crc64_xor<E: Engine>(store: &Store<E>, range: KeyRange) -> 
         scan_backward_in_range: true,
         is_key_only: false,
         is_scanned_range_aware: false,
+        load_commit_ts: false,
     });
 
     let mut checksum = 0;

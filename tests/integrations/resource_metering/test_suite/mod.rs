@@ -5,8 +5,8 @@ mod mock_receiver_server;
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use crossbeam::channel::{unbounded, Receiver, Sender};
-use futures::{channel::oneshot, select, FutureExt};
+use crossbeam::channel::{Receiver, Sender, unbounded};
+use futures::{FutureExt, channel::oneshot, select};
 use grpcio::{ChannelBuilder, ClientSStreamReceiver, Environment};
 use kvproto::{
     kvrpcpb::Context,
@@ -21,8 +21,8 @@ use test_util::alloc_port;
 use tikv::{
     config::{ConfigController, TikvConfig},
     storage::{
-        lock_manager::MockLockManager, RocksEngine, StorageApiV1, TestEngineBuilder,
-        TestStorageBuilderApiV1,
+        RocksEngine, StorageApiV1, TestEngineBuilder, TestStorageBuilderApiV1,
+        lock_manager::MockLockManager,
     },
 };
 use tokio::runtime::{self, Runtime};
@@ -55,7 +55,10 @@ impl TestSuite {
         let cfg_controller = ConfigController::new(tikv_cfg);
 
         let (recorder_notifier, collector_reg_handle, resource_tag_factory, recorder_worker) =
-            resource_metering::init_recorder(cfg.precision.as_millis());
+            resource_metering::init_recorder(
+                cfg.precision.as_millis(),
+                cfg.enable_network_io_collection,
+            );
         let (reporter_notifier, data_sink_reg_handle, reporter_worker) =
             resource_metering::init_reporter(cfg.clone(), collector_reg_handle);
         let env = Arc::new(Environment::new(2));
@@ -155,6 +158,13 @@ impl TestSuite {
         let precision = precision.into();
         self.cfg_controller
             .update_config("resource-metering.precision", &precision)
+            .unwrap();
+    }
+
+    pub fn cfg_enable_network_io_collection(&self, flag: impl Into<String>) {
+        let flag = flag.into();
+        self.cfg_controller
+            .update_config("resource-metering.enable-network-io-collection", &flag)
             .unwrap();
     }
 

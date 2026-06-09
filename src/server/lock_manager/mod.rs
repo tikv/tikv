@@ -8,8 +8,8 @@ pub mod waiter_manager;
 
 use std::{
     sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     thread::JoinHandle,
 };
@@ -33,14 +33,14 @@ use self::{
 };
 use crate::{
     server::{
-        lock_manager::deadlock::RoleChangeNotifier, resolve::StoreAddrResolver, Error, Result,
+        Error, Result, lock_manager::deadlock::RoleChangeNotifier, resolve::StoreAddrResolver,
     },
     storage::{
+        DynamicConfigs as StorageDynamicConfigs,
         lock_manager::{
             CancellationCallback, DiagnosticContext, KeyLockWaitInfo,
             LockManager as LockManagerTrait, LockWaitToken, UpdateWaitForEvent, WaitTimeout,
         },
-        DynamicConfigs as StorageDynamicConfigs,
     },
 };
 
@@ -290,7 +290,10 @@ impl LockManagerTrait for LockManager {
 
         // If it is the first lock the transaction tries to lock, it won't cause
         // deadlock.
-        if !is_first_lock {
+        // The lock waiting for shared lock is not tracked yet, because the shared lock
+        // may grow after this detection. After we implement the shrinking of
+        // shared lock, we can track it then.
+        if !is_first_lock && wait_info.lock_info.lock_type != kvproto::kvrpcpb::Op::SharedLock {
             self.detector_scheduler
                 .detect(start_ts, wait_info, diag_ctx);
         }
@@ -326,7 +329,7 @@ mod tests {
     use raftstore::coprocessor::RegionChangeEvent;
     use security::SecurityConfig;
     use tikv_util::config::{ReadableDuration, ReadableSize};
-    use tracker::{TrackerToken, INVALID_TRACKER_TOKEN};
+    use tracker::{INVALID_TRACKER_TOKEN, TrackerToken};
     use txn_types::Key;
 
     use self::{deadlock::tests::*, metrics::*, waiter_manager::tests::*};

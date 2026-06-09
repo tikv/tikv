@@ -1,22 +1,25 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use protobuf::Message;
+use resource_metering::record_network_out_bytes;
+use tikv_util::Either;
 use txn_types::{Key, Lock, WriteType};
 
 use crate::storage::{
+    ProcessResult, Snapshot,
     kv::WriteData,
     lock_manager::LockManager,
     mvcc::{MvccTxn, OverlappedWrite, ReleasedLock, SnapshotReader, TimeStamp, TxnCommitRecord},
     txn::{
+        Result,
         actions::check_txn_status::{collapse_prev_rollback, make_rollback},
         commands::{
             Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
             WriteCommand, WriteContext, WriteResult,
         },
-        Result,
     },
     types::SecondaryLocksStatus,
-    ProcessResult, Snapshot,
 };
 
 command! {
@@ -158,23 +161,32 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
         );
         let mut released_locks = ReleasedLocks::new();
         let mut result = SecondaryLocksStatus::Locked(Vec::new());
-
+        let mut result_size: u64 = 0;
         for key in self.keys {
             let mut released_lock = None;
             let mut mismatch_lock = None;
             // Checks whether the given secondary lock exists.
             let (status, need_rollback, rollback_overlapped_write) = match reader.load_lock(&key)? {
                 // The lock exists, the lock information is returned.
-                Some(lock) if lock.ts == self.start_ts => {
+                Some(Either::Left(lock)) if lock.ts == self.start_ts => {
                     let (status, need_rollback, rollback_overlapped_write, lock_released) =
                         check_status_from_lock(&mut txn, &mut reader, lock, &key, region_id)?;
                     released_lock = lock_released;
                     (status, need_rollback, rollback_overlapped_write)
                 }
+                // Async commit transactions don't write shared locks, so if we get SharedLocks,
+                // check the write CF for the commit record directly.
+                Some(Either::Right(_)) => check_determined_txn_status(&mut reader, &key)?,
                 // Searches the write CF for the commit record of the lock and returns the commit
                 // timestamp (0 if the lock is not committed).
                 l => {
-                    mismatch_lock = l;
+                    // SharedLocks is already handled by the previous match arm, so this is
+                    // unreachable.
+                    mismatch_lock = l.map(|lock_or_shared_locks| {
+                        lock_or_shared_locks
+                            .left()
+                            .expect("SharedLocks is handled above, should not reach here")
+                    });
                     check_determined_txn_status(&mut reader, &key)?
                 }
             };
@@ -195,7 +207,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
             released_locks.push(released_lock);
             match status {
                 SecondaryLockStatus::Locked(lock) => {
-                    result.push(lock.into_lock_info(key.to_raw()?));
+                    let lock_info = lock.into_lock_info(key.to_raw()?);
+                    result_size += lock_info.compute_size() as u64;
+                    result.push(lock_info);
                 }
                 SecondaryLockStatus::Committed(commit_ts) => {
                     result = SecondaryLocksStatus::Committed(commit_ts);
@@ -208,6 +222,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
             }
         }
 
+        record_network_out_bytes(result_size);
         let write_result_known_txn_status =
             if let SecondaryLocksStatus::Committed(commit_ts) = &result {
                 vec![(self.start_ts, *commit_ts)]
@@ -248,6 +263,7 @@ pub mod tests {
 
     use super::*;
     use crate::storage::{
+        Engine,
         kv::TestEngineBuilder,
         lock_manager::MockLockManager,
         mvcc::tests::*,
@@ -255,7 +271,6 @@ pub mod tests {
             commands::WriteCommand, scheduler::DEFAULT_EXECUTION_DURATION_LIMIT, tests::*,
             txn_status_cache::TxnStatusCache,
         },
-        Engine,
     };
 
     pub fn must_success<E: Engine>(

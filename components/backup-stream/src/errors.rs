@@ -79,7 +79,7 @@ impl ErrorCodeExt for Error {
     }
 }
 
-impl<'a> ErrorCodeExt for &'a Error {
+impl ErrorCodeExt for &Error {
     fn error_code(&self) -> error_code::ErrorCode {
         Error::error_code(*self)
     }
@@ -198,7 +198,7 @@ impl Error {
 mod test {
     extern crate test;
 
-    use std::io::{self, ErrorKind};
+    use std::io;
 
     use error_code::ErrorCodeExt;
 
@@ -206,8 +206,7 @@ mod test {
 
     #[test]
     fn test_contextual_error() {
-        let err = Error::Io(io::Error::new(
-            ErrorKind::Other,
+        let err = Error::Io(io::Error::other(
             "the absence of error messages, is also a kind of error message",
         ));
         let result: Result<()> = Err(err);
@@ -232,8 +231,7 @@ mod test {
     // 2,685 ns/iter (+/- 194)
     fn contextual_add_format_strings_directly(b: &mut test::Bencher) {
         b.iter(|| {
-            let err = Error::Io(io::Error::new(
-                ErrorKind::Other,
+            let err = Error::Io(io::Error::other(
                 "basement, it is the fundamental basement.",
             ));
             let result: Result<()> = Err(err);
@@ -253,8 +251,7 @@ mod test {
     // 1,922 ns/iter (+/- 273)
     fn contextual_add_format_strings(b: &mut test::Bencher) {
         b.iter(|| {
-            let err = Error::Io(io::Error::new(
-                ErrorKind::Other,
+            let err = Error::Io(io::Error::other(
                 "basement, it is the fundamental basement.",
             ));
             let result: Result<()> = Err(err);
@@ -274,8 +271,7 @@ mod test {
     // 1,988 ns/iter (+/- 89)
     fn contextual_add_closure(b: &mut test::Bencher) {
         b.iter(|| {
-            let err = Error::Io(io::Error::new(
-                ErrorKind::Other,
+            let err = Error::Io(io::Error::other(
                 "basement, it is the fundamental basement.",
             ));
             let result: Result<()> = Err(err);
@@ -296,8 +292,7 @@ mod test {
     // 773 ns/iter (+/- 8)
     fn baseline(b: &mut test::Bencher) {
         b.iter(|| {
-            let err = Error::Io(io::Error::new(
-                ErrorKind::Other,
+            let err = Error::Io(io::Error::other(
                 "basement, it is the fundamental basement.",
             ));
             let result: Result<()> = Err(err);

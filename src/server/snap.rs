@@ -5,8 +5,8 @@ use std::{
     io::{Error as IoError, ErrorKind, Read, Write},
     pin::Pin,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant as StdInstant},
 };
@@ -14,7 +14,7 @@ use std::{
 use file_system::{IoType, WithIoType};
 use futures::{
     compat::Future01CompatExt,
-    future::{select, Either, Future, TryFutureExt},
+    future::{Either, Future, TryFutureExt, select},
     pin_mut,
     sink::SinkExt,
     stream::{Stream, StreamExt, TryStreamExt},
@@ -38,16 +38,15 @@ use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
 use security::SecurityManager;
 use tikv_kv::RaftExtension;
 use tikv_util::{
-    box_err,
-    config::{Tracker, VersionTrack, MIB},
+    DeferContext, box_err,
+    config::{MIB, Tracker, VersionTrack},
     time::{Instant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
     worker::Runnable,
-    DeferContext,
 };
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
-use super::{metrics::*, Config, Error, Result};
+use super::{Config, Error, Result, metrics::*};
 use crate::{server::tablet_snap::NoSnapshotCache, tikv_util::sys::thread::ThreadBuildWrapper};
 
 pub type Callback = Box<dyn FnOnce(Result<()>) + Send>;
@@ -530,7 +529,7 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
                     let result = recv_snap(stream, sink, snap_mgr, raft_router).await;
                     recving_count.fetch_sub(1, Ordering::SeqCst);
                     if let Err(e) = result {
-                        error!("failed to recv snapshot"; "err" => %e);
+                        warn!("failed to recv snapshot"; "err" => %e);
                     }
                 };
                 self.pool.spawn(task);
@@ -573,7 +572,7 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
                     .await;
                     recving_count.fetch_sub(1, Ordering::SeqCst);
                     if let Err(e) = result {
-                        error!("failed to recv snapshot"; "err" => %e);
+                        warn!("failed to recv snapshot"; "err" => %e);
                     }
                 };
                 self.pool.spawn(task);
@@ -615,7 +614,7 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
                             cb(Ok(()));
                         }
                         Err(e) => {
-                            error!("failed to send snap"; "to_addr" => addr, "region_id" => region_id, "err" => ?e);
+                            warn!("failed to send snap"; "to_addr" => addr, "region_id" => region_id, "err" => ?e);
                             cb(Err(e));
                         }
                     };

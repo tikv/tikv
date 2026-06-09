@@ -2,6 +2,7 @@
 
 mod test_async_fetch;
 mod test_async_io;
+mod test_auto_compaction;
 mod test_backup;
 mod test_bootstrap;
 mod test_cmd_epoch_checker;

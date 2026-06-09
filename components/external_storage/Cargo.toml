@@ -6,7 +6,7 @@ publish = false
 license = "Apache-2.0"
 
 [dependencies]
-async-compression = { version = "0.4.12", features = ["futures-io", "zstd"] }
+async-compression = { version = "0.4.27", features = ["futures-io", "zstd"] }
 async-trait = "0.1"
 aws = { workspace = true }
 azure = { workspace = true }
@@ -18,6 +18,7 @@ futures = "0.3"
 futures-io = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 gcp = { workspace = true }
+gcp_v2 = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.3"
 openssl = { workspace = true }
@@ -37,10 +38,11 @@ uuid = { version = "0.8", features = ["v4", "serde"] }
 walkdir = "2"
 
 [dev-dependencies]
+hyper = { version = "0.14", features = ["server", "tcp"] }
 rust-ini = "0.14.0"
 structopt = "0.3"
 tempfile = "3.1"
-tokio = { version = "1.5", features = ["macros"] }
+tokio = { version = "1.5", features = ["macros", "rt-multi-thread", "net"] }
 
 [[example]]
 name = "scli"

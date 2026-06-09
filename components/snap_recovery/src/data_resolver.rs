@@ -11,8 +11,8 @@ use std::{
 
 use engine_rocks::{RocksEngine, RocksEngineIterator, RocksWriteBatchVec};
 use engine_traits::{
-    IterOptions, Iterable, Iterator, Mutable, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
-    CF_LOCK, CF_WRITE,
+    CF_DEFAULT, CF_LOCK, CF_WRITE, IterOptions, Iterable, Iterator, Mutable, WriteBatch,
+    WriteBatchExt, WriteOptions,
 };
 use futures::channel::mpsc::UnboundedSender;
 use kvproto::recoverdatapb::ResolveKvDataResponse;
@@ -306,7 +306,7 @@ impl WriteResolverWorker {
 }
 #[cfg(test)]
 mod tests {
-    use engine_traits::{WriteBatch, WriteBatchExt, ALL_CFS, CF_LOCK};
+    use engine_traits::{ALL_CFS, CF_LOCK, WriteBatch, WriteBatchExt};
     use futures::channel::mpsc;
     use tempfile::Builder;
     use txn_types::{Lock, LockType, WriteType};
@@ -424,7 +424,10 @@ mod tests {
         lock_iter.seek_to_first().unwrap();
         let mut remaining_locks = vec![];
         while lock_iter.valid().unwrap() {
-            let lock = Lock::parse(lock_iter.value()).unwrap().to_owned();
+            let lock = txn_types::parse_lock(lock_iter.value())
+                .unwrap()
+                .left()
+                .unwrap();
             let key = lock_iter.key().to_vec();
             lock_iter.next().unwrap();
             remaining_locks.push((key, lock));

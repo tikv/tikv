@@ -4,18 +4,18 @@ use std::str::FromStr;
 
 use async_trait::async_trait;
 use criterion::measurement::Measurement;
-use rand::{seq::SliceRandom, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, seq::SliceRandom};
 use rand_xorshift::XorShiftRng;
 use test_coprocessor::*;
-use tidb_query_common::storage::IntervalRange;
+use tidb_query_common::{Result, storage::IntervalRange};
 use tidb_query_datatype::{
+    FieldTypeTp,
     codec::{
         batch::{LazyBatchColumn, LazyBatchColumnVec},
         data_type::Decimal,
         datum::{Datum, DatumEncoder},
     },
     expr::{EvalContext, EvalWarnings},
-    FieldTypeTp,
 };
 use tidb_query_executors::interface::*;
 use tikv::storage::{RocksEngine, Statistics};
@@ -291,6 +291,20 @@ impl BatchExecutor for BatchFixtureExecutor {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         &self.schema
+    }
+
+    #[inline]
+    fn intermediate_schema(&self, _index: usize) -> Result<&[FieldType]> {
+        unreachable!()
+    }
+
+    #[inline]
+    fn consume_and_fill_intermediate_results(
+        &mut self,
+        _results: &mut [Vec<BatchExecuteResult>],
+    ) -> Result<()> {
+        // Do nothing
+        Ok(())
     }
 
     #[inline]

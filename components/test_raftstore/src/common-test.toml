@@ -73,7 +73,6 @@ store-io-pool-size = 0
 apply-pool-size = 1
 store-pool-size = 1
 snap-generator-pool-size = 2
-skip-manual-compaction-in-clean_up-worker = false
 [coprocessor]
 
 [rocksdb]
@@ -121,3 +120,4 @@ wake-up-delay-duration = "100ms"
 enable = false
 advance-ts-interval = "10ms"
 scan-lock-pool-size = 1
+memory-quota-exceeded-backoff-duration = "1ms"

@@ -67,7 +67,7 @@ impl<T: UnicodeVersion> Collator for CollatorUca<T> {
         let mut an = 0;
         let mut bn = 0;
 
-        while !sa.is_empty() || !sb.is_empty() {
+        loop {
             while an == 0 && !sa.is_empty() {
                 match next_utf8_char(sa) {
                     Some((ch_a, a_next)) => {
@@ -99,15 +99,13 @@ impl<T: UnicodeVersion> Collator for CollatorUca<T> {
             }
 
             while an != 0 && bn != 0 {
-                if (an ^ bn) & 0xFFFF == 0 {
-                    an >>= 16;
-                    bn >>= 16;
-                } else {
+                if (an ^ bn) & 0xFFFF != 0 {
                     return Ok((an & 0xFFFF).cmp(&(bn & 0xFFFF)));
                 }
+                an >>= 16;
+                bn >>= 16;
             }
         }
-        Ok(sa.len().cmp(&sb.len()))
     }
 
     #[inline]

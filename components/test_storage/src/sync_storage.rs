@@ -2,7 +2,7 @@
 
 use std::{
     marker::PhantomData,
-    sync::{atomic::AtomicU64, Arc},
+    sync::{Arc, atomic::AtomicU64},
 };
 
 use api_version::{ApiV1, KvFormat};
@@ -14,14 +14,14 @@ use kvproto::{
     metapb,
 };
 use raftstore::coprocessor::{
-    region_info_accessor::MockRegionInfoProvider, CoprocessorHost, RegionInfoProvider,
+    CoprocessorHost, RegionInfoProvider, region_info_accessor::MockRegionInfoProvider,
 };
 use tikv::{
     server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker},
     storage::{
-        config::Config, kv::RocksEngine, lock_manager::MockLockManager, test_util::GetConsumer,
-        txn::commands, Engine, KvGetStatistics, PrewriteResult, Result, Storage, TestEngineBuilder,
-        TestStorageBuilder, TxnStatus,
+        Engine, KvGetStatistics, PrewriteResult, Result, Storage, TestEngineBuilder,
+        TestStorageBuilder, TxnStatus, config::Config, kv::RocksEngine,
+        lock_manager::MockLockManager, test_util::GetConsumer, txn::commands,
     },
 };
 use tikv_util::time::Instant;
@@ -160,7 +160,18 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
         keys: &[Key],
         start_ts: impl Into<TimeStamp>,
     ) -> Result<(Vec<Result<KvPair>>, KvGetStatistics)> {
-        block_on(self.store.batch_get(ctx, keys.to_owned(), start_ts.into()))
+        block_on(
+            self.store
+                .batch_get(ctx, keys.to_owned(), start_ts.into(), false),
+        )
+        .map(|(list, stats)| {
+            (
+                list.into_iter()
+                    .map(|r| r.map(|(key, entry)| (key, entry.value)))
+                    .collect(),
+                stats,
+            )
+        })
     }
 
     #[allow(clippy::type_complexity)]
@@ -190,7 +201,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
                 .batch_get_command(requests, ids, trackers, p.clone(), Instant::now()),
         )?;
         let mut values = vec![];
-        for value in p.take_data().into_iter() {
+        for value in p.take_values().into_iter() {
             values.push(value?);
         }
         Ok(values)
@@ -397,7 +408,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
         let p = GetConsumer::new();
         block_on(self.store.raw_batch_get_command(requests, ids, p.clone()))?;
         let mut values = vec![];
-        for value in p.take_data().into_iter() {
+        for value in p.take_values().into_iter() {
             values.push(value?);
         }
         Ok(values)

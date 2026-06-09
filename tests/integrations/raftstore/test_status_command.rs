@@ -5,7 +5,7 @@ use raftstore::store::msg::StoreMsg as StoreMsgV1;
 use raftstore_v2::router::StoreMsg as StoreMsgV2;
 use test_raftstore::Simulator as S1;
 use test_raftstore_v2::Simulator as S2;
-use tikv_util::{config::ReadableDuration, time::Instant, HandyRwLock};
+use tikv_util::{HandyRwLock, config::ReadableDuration, time::Instant};
 
 #[test]
 fn test_region_detail() {
@@ -44,7 +44,7 @@ fn test_latency_inspect() {
     {
         // Test send LatencyInspect to V1.
         let (tx, rx) = std::sync::mpsc::sync_channel(10);
-        // Inspect different factors.
+        // Inspect different disk_factors.
         for factor in [InspectFactor::RaftDisk, InspectFactor::KvDisk].iter() {
             let cloned_tx = tx.clone();
             let inspector = LatencyInspector::new(
@@ -89,7 +89,7 @@ fn test_sync_latency_inspect() {
     cluster.run();
     let router = cluster.sim.wl().get_router(1).unwrap();
     let (tx, rx) = std::sync::mpsc::sync_channel(10);
-    // Inspect different factors.
+    // Inspect different disk_factors.
     for factor in [InspectFactor::RaftDisk, InspectFactor::KvDisk].iter() {
         let cloned_tx = tx.clone();
         let inspector = LatencyInspector::new(

@@ -4,8 +4,8 @@ use engine_traits::Result;
 use tikv_util::{
     box_err,
     codec::{
-        number::{self, NumberEncoder},
         Error,
+        number::{self, NumberEncoder},
     },
 };
 
