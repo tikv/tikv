@@ -1061,7 +1061,6 @@ mod tests {
                             vec![Key::from_raw(key)],
                             start_ts.into(),
                             commit_ts.into(),
-                            None,
                             Context::default(),
                         ),
                         Box::new(move |res| tx.send(res.map(|_| ())).unwrap()),
