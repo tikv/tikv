@@ -1073,7 +1073,6 @@ mod tests {
                             vec![Key::from_raw(key)],
                             start_ts.into(),
                             commit_ts.into(),
-                            None,
                             Context::default(),
                         ),
                         Box::new(move |res| tx.send(res.map(|_| ())).unwrap()),
@@ -1113,7 +1112,10 @@ mod tests {
         sched_prewrite_put(tail_key, tail_lock_value, 300).unwrap();
 
         let snap = engine.snapshot(Default::default()).unwrap();
-        let mut old_value_cursors = OldValueCursors::new(&snap);
+        let mut old_value_cursors = OldValueCursors::new(
+            new_old_value_cursor(&snap, CF_WRITE),
+            new_old_value_cursor(&snap, CF_DEFAULT),
+        );
         let mut scanner = ScannerBuilder::new(snap, TimeStamp::max())
             .fill_cache(false)
             .range(Some(Key::from_encoded_slice(b"")), None)
@@ -1128,7 +1130,7 @@ mod tests {
 
         fn resolve_old_value<S: Snapshot>(
             key: &Key,
-            cursors: &mut OldValueCursors<S>,
+            cursors: &mut OldValueCursors<S::Iter>,
             statistics: &mut Statistics,
         ) -> OldValue {
             match near_seek_old_value(
@@ -1153,9 +1155,11 @@ mod tests {
             };
             let key = Key::from_encoded(lock.0.clone()).into_raw().unwrap();
             let old_value = match old_value {
-                OldValue::SeekWrite(key) => {
-                    resolve_old_value(&key, &mut old_value_cursors, &mut old_value_stats)
-                }
+                OldValue::SeekWrite(key) => resolve_old_value::<
+                    <tikv::storage::kv::RocksEngine as Engine>::Snap,
+                >(
+                    &key, &mut old_value_cursors, &mut old_value_stats
+                ),
                 old_value => old_value,
             };
             match key.as_slice() {
@@ -1171,10 +1175,7 @@ mod tests {
                     insert_prewrite_count += 1;
                 }
                 key if key == tail_key.as_slice() => {
-                    let parsed_lock = txn_types::parse_lock(&lock.1)
-                        .unwrap()
-                        .left()
-                        .expect("put lock should be parsed");
+                    let parsed_lock = Lock::parse(&lock.1).expect("put lock should be parsed");
                     assert_eq!(
                         parsed_lock.short_value.as_deref(),
                         Some(tail_lock_value.as_slice())
