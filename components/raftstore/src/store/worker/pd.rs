@@ -2641,7 +2641,7 @@ where
                             .remove(&region_id)
                             .unwrap_or_default();
                         let interval_second =
-                            unix_secs_now.into_inner() - last_report_ts.into_inner();
+                            unix_secs_now.into_inner().saturating_sub(last_report_ts.into_inner());
                         // Keep consistent with the calculation of cpu_usages in a store heartbeat.
                         // See components/tikv_util/src/metrics/threads_linux.rs for more details.
                         if interval_second > 0 {
