@@ -172,6 +172,9 @@ pub struct ExecutionConfig {
     /// Whether to calculate `shift_ts` from backup metadata names before
     /// collecting subcompactions.
     pub calculate_shift_ts: bool,
+    /// Minimal subcompaction input size in bytes. Smaller subcompactions are
+    /// skipped when the skip-small-compaction hook is installed.
+    pub minimal_compaction_size: u64,
     /// Filter out write CF files don't have any record with TS less than this.
     pub from_ts: u64,
     /// Filter out write CF files don't have any record with TS great or equal
@@ -200,6 +203,7 @@ impl slog::KV for ExecutionConfig {
     ) -> slog::Result {
         serializer.emit_u64("shift_ts", self.shift_ts)?;
         serializer.emit_bool("calculate_shift_ts", self.calculate_shift_ts)?;
+        serializer.emit_u64("minimal_compaction_size", self.minimal_compaction_size)?;
         serializer.emit_u64("from_ts", self.from_ts)?;
         serializer.emit_u64("until_ts", self.until_ts)?;
         if let Some(shard) = self.shard {
@@ -298,6 +302,7 @@ impl ExecutionConfig {
         hasher.write(&self.until_ts.to_le_bytes());
         hasher.write(&self.physical_file_cache_capacity.to_le_bytes());
         hasher.write(&[self.calculate_shift_ts as u8]);
+        hasher.write(&self.minimal_compaction_size.to_le_bytes());
         hasher.write(&util::compression_type_to_u8(self.compression).to_le_bytes());
         hasher.write(&self.compression_level.unwrap_or(0).to_le_bytes());
 

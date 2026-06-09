@@ -482,6 +482,7 @@ fn main() {
                 shard,
                 shift_ts: from_ts,
                 calculate_shift_ts: cal_shift_ts,
+                minimal_compaction_size: minimal_compaction_size.0,
                 from_ts,
                 until_ts,
                 prefetch_running_count,

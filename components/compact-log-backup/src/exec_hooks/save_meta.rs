@@ -26,11 +26,14 @@ use crate::{
     ErrorKind,
     compaction::{Input, META_OUT_REL, SST_OUT_REL, Subcompaction, meta::CompactionRunInfoBuilder},
     errors::Result,
-    execute::hooking::{
-        AfterFinishCtx, BeforeStartCtx, CId, ExecHooks, SkipReason, SubcompactionFinishCtx,
-        SubcompactionSkippedCtx, SubcompactionStartCtx,
+    execute::{
+        ExecutionConfig,
+        hooking::{
+            AfterFinishCtx, BeforeStartCtx, CId, ExecHooks, SkipReason, SubcompactionFinishCtx,
+            SubcompactionSkippedCtx, SubcompactionStartCtx,
+        },
     },
-    statistic::CompactLogBackupStatistic,
+    statistic::{CompactLogBackupConfig, CompactLogBackupShard, CompactLogBackupStatistic},
 };
 
 const CHECKPOINT_META_LOAD_CONCURRENCY: usize = 16;
@@ -350,13 +353,25 @@ impl SaveMeta {
         self
     }
 
-    fn comments(&self) -> String {
+    fn comments(&self, cfg: &ExecutionConfig) -> String {
         let now = Local::now();
+        let config = CompactLogBackupConfig {
+            from_ts: cfg.from_ts,
+            until_ts: cfg.until_ts,
+            shift_ts: cfg.shift_ts,
+            cal_shift_ts: cfg.calculate_shift_ts,
+            minimal_compaction_size: cfg.minimal_compaction_size,
+            shard: cfg.shard.map(|shard| CompactLogBackupShard {
+                index: shard.index,
+                total: shard.total,
+            }),
+        };
         let stat = CompactLogBackupStatistic {
             start_time: self.begin,
             end_time: now,
             time_taken: (now - self.begin).to_std().unwrap_or_default(),
             exec_by: tikv_util::sys::hostname().unwrap_or_default(),
+            config,
 
             load_stat: self.stats.load_stat.clone(),
             subcompact_stat: self.stats.compact_stat.clone(),
@@ -442,7 +457,7 @@ impl ExecHooks for SaveMeta {
             0
         };
 
-        let comments = self.comments();
+        let comments = self.comments(&cx.this.cfg);
         let generated_file_sizes = self.generated_file_sizes(generated_cmeta_files_total_size);
         let meta = self.collector.mut_meta();
         meta.set_generated_cmeta_files_total_size(generated_file_sizes.cmeta_files_total_size);

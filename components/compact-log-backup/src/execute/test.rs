@@ -72,6 +72,7 @@ pub fn create_compaction(st: StorageBackend) -> Execution {
             shard: None,
             shift_ts: 0,
             calculate_shift_ts: false,
+            minimal_compaction_size: 0,
             from_ts: 0,
             until_ts: u64::MAX,
             compression: engine_traits::SstCompressionType::Lz4,
@@ -575,6 +576,45 @@ async fn test_filter_out_small_compactions() {
     for c in &cs {
         assert!(c.get_meta().get_size() >= 27800, "{:?}", c.get_meta());
     }
+}
+
+#[tokio::test]
+async fn test_comments_record_execution_config_for_coverage() {
+    let shard = ShardConfig::new(1, 2).unwrap();
+    let store_id = (1..=16)
+        .find(|&store_id| shard.contains_store_id(store_id))
+        .unwrap();
+    let (meta_path, log_path) = store_paths(store_id);
+
+    let st = TmpStorage::create();
+    st.build_flush(&log_path, &meta_path, gen_store_builders(store_id))
+        .await;
+
+    let mut exec = create_compaction(st.backend());
+    exec.cfg.shard = Some(shard);
+    exec.cfg.from_ts = 0x20;
+    exec.cfg.calculate_shift_ts = true;
+    exec.cfg.minimal_compaction_size = 42;
+    exec.out_prefix = exec.cfg.recommended_prefix("comments_config");
+
+    tokio::task::spawn_blocking(move || exec.run(SaveMeta::default()))
+        .await
+        .unwrap()
+        .unwrap();
+
+    let migs = st.load_migrations().await.unwrap();
+    assert_eq!(migs.len(), 1);
+    let comments = migs[0].1.compactions[0].get_comments();
+    let comments: serde_json::Value = serde_json::from_str(comments).unwrap();
+    let config = &comments["config"];
+
+    assert_eq!(config["from-ts"].as_u64(), Some(0x20));
+    assert_eq!(config["until-ts"].as_u64(), Some(u64::MAX));
+    assert_eq!(config["shift-ts"].as_u64(), Some(0x20));
+    assert_eq!(config["cal-shift-ts"].as_bool(), Some(true));
+    assert_eq!(config["minimal-compaction-size"].as_u64(), Some(42));
+    assert_eq!(config["shard"]["index"].as_u64(), Some(1));
+    assert_eq!(config["shard"]["total"].as_u64(), Some(2));
 }
 
 #[tokio::test]
