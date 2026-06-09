@@ -677,9 +677,8 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let deadline = cmd.deadline();
         let sched = self.clone();
         let execution = async move {
-            match unsafe {
-                with_tls_engine(|engine: &mut E| engine.precheck_write_with_ctx(&ctx))
-            } {
+            match unsafe { with_tls_engine(|engine: &mut E| engine.precheck_write_with_ctx(&ctx)) }
+            {
                 // Precheck failed, try to return err early.
                 Err(e) => {
                     let cb = sched.inner.try_own_and_take_cb(cid);
