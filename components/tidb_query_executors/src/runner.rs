@@ -190,6 +190,9 @@ impl BatchExecutorsRunner<()> {
                 ExecType::TypeExpand2 => {
                     return Err(other_err!("Expand2 executor not implemented"));
                 }
+                ExecType::TypeBroadcastQuery => {
+                    return Err(other_err!("TypeBroadcastQuery executor not implemented"));
+                }
             }
         }
 
@@ -437,14 +440,27 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
                     .collect_vec();
 
                 if partition_by.is_empty() {
-                    Box::new(
-                        BatchLimitExecutor::new(
-                            executor,
-                            d.get_limit() as usize,
-                            is_src_scan_executor,
-                        )?
-                        .collect_summary(summary_slot_index),
-                    )
+                    if !d.get_truncate_key_expr().is_empty() {
+                        Box::new(
+                            BatchLimitExecutor::new_rank_limit(
+                                executor,
+                                d.get_limit() as usize,
+                                is_src_scan_executor,
+                                config.clone(),
+                                d.get_truncate_key_expr().into(),
+                            )?
+                            .collect_summary(summary_slot_index),
+                        )
+                    } else {
+                        Box::new(
+                            BatchLimitExecutor::new(
+                                executor,
+                                d.get_limit() as usize,
+                                is_src_scan_executor,
+                            )?
+                            .collect_summary(summary_slot_index),
+                        )
+                    }
                 } else {
                     Box::new(
                         BatchPartitionTopNExecutor::new(
