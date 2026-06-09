@@ -254,7 +254,7 @@ impl ReadPoolHandle {
                         group_name.clone(),
                     );
                     TaskCell::new(
-                        TlsTrackedFuture::new(with_resource_limiter(
+                        TrackedFuture::new(with_resource_limiter(
                             inner,
                             resource_limiter.clone(),
                             true, // skip compaction pressure for foreground jobs

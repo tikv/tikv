@@ -792,8 +792,6 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let request_source_for_spawn = request_source.clone();
         let priority = task.cmd().priority();
         let write_bytes = task.cmd().write_bytes();
-        let future_tracker =
-            TlsFutureTracker::new(task.tracker_token(), task.cmd().tag(), task.cid());
         let execution = async move {
             fail_point!("scheduler_start_execute");
             if sched.check_task_deadline_exceeded(&task, None) {
