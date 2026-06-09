@@ -7764,7 +7764,7 @@ dependencies = [
 [[package]]
 name = "tame-oauth"
 version = "0.9.6"
-source = "git+https://github.com/tikv/tame-oauth?branch=fips-0.9#487e287c0d316b832dc44735cd9b7f7c432a10aa"
+source = "git+https://github.com/tikv/tame-oauth?branch=fips-0.9#adf4c03305561c24d456ef665475f7295eb177a0"
 dependencies = [
  "data-encoding",
  "http 0.2.12",
