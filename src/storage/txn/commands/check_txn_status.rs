@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use concurrency_manager::MaxTsUpdateSource;
 use tikv_util::Either;
 use txn_types::{Key, TimeStamp};
 
@@ -91,12 +92,16 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
         if !self.caller_start_ts.is_max() && self.caller_start_ts > new_max_ts {
             new_max_ts = self.caller_start_ts;
         }
-        context.concurrency_manager.update_max_ts(new_max_ts, || {
-            format!(
-                "check_txn_status-{}-{}-{}",
-                self.lock_ts, self.current_ts, self.caller_start_ts
-            )
-        })?;
+        context.concurrency_manager.update_max_ts(
+            new_max_ts,
+            MaxTsUpdateSource::new(|| {
+                format!(
+                    "check_txn_status-{}-{}-{}",
+                    self.lock_ts, self.current_ts, self.caller_start_ts
+                )
+            })
+            .require_request_origin_check(self.ctx.get_request_origin()),
+        )?;
 
         let mut txn = MvccTxn::new(self.lock_ts, context.concurrency_manager);
         let mut reader = ReaderWithStats::new(
