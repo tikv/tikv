@@ -66,7 +66,7 @@ use std::{
     marker::PhantomData,
     mem,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{self, AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, SystemTime},
@@ -79,7 +79,7 @@ use concurrency_manager::{ConcurrencyManager, KeyHandleGuard, MaxTsUpdateSource}
 use engine_traits::{
     CF_DEFAULT, CF_LOCK, CF_WRITE, CfName, DATA_CFS, DATA_CFS_LEN, raw_ttl::ttl_to_expire_ts,
 };
-use futures::{future::Either as FuturesEither, prelude::*};
+use futures::{channel::oneshot, prelude::*};
 use kvproto::{
     kvrpcpb,
     kvrpcpb::{
@@ -92,7 +92,9 @@ use pd_client::FeatureGate;
 use protobuf::Message;
 use raftstore::store::{ReadStats, TxnExt, WriteStats, util::build_key_range};
 use rand::prelude::*;
-use resource_control::{ResourceController, ResourceGroupManager, ResourceLimiter, TaskMetadata};
+use resource_control::{
+    AdmissionTask, ResourceController, ResourceGroupManager, ResourceLimiter, TaskMetadata,
+};
 use resource_metering::{
     FutureExt, ResourceTagFactory, record_logical_read_bytes, record_network_in_bytes,
     record_network_out_bytes,
@@ -1931,6 +1933,46 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         });
 
         fail_point!("storage_drop_message", |_| Ok(()));
+
+        // Route through the admission pool when one is available.
+        if let Some(rm) = &self.resource_manager {
+            let rc_ctx = cmd.resource_control_ctx();
+            let rg = rc_ctx.get_resource_group_name().to_owned();
+            let request_source = cmd.ctx().request_source.clone();
+            let override_priority = rc_ctx.get_override_priority();
+            if let Some(limiter) = rm.get_resource_limiter(&rg, &request_source, override_priority)
+            {
+                let pool_guard = rm.get_admission_pool();
+                if let Some(ref pool_opt) = pool_guard.as_deref() {
+                    if let Some(pool) = pool_opt.as_ref() {
+                        let priority = rm.admission_priority_for(&rg, cmd.priority());
+                        let cb = T::callback(callback);
+                        let shared_cb = Arc::new(Mutex::new(Some(cb)));
+                        let shared_cb2 = shared_cb.clone();
+                        let sched = self.sched.clone();
+                        pool.submit(AdmissionTask {
+                            priority,
+                            limiter,
+                            is_read: false,
+                            spawn_fn: Box::new(move || {
+                                if let Some(cb) = shared_cb.lock().unwrap().take() {
+                                    sched.run_cmd(cmd, cb);
+                                }
+                            }),
+                            error_fn: Box::new(move || {
+                                if let Some(cb) = shared_cb2.lock().unwrap().take() {
+                                    cb.execute(ProcessResult::Failed {
+                                        err: Error::from(ErrorInner::SchedTooBusy),
+                                    });
+                                }
+                            }),
+                        });
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
         self.sched.run_cmd(cmd, T::callback(callback));
 
         Ok(())
@@ -3373,7 +3415,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         task_id: u64,
         metadata: TaskMetadata<'_>,
         resource_limiter: Option<Arc<ResourceLimiter>>,
-    ) -> impl Future<Output = Result<T>>
+    ) -> futures::future::BoxFuture<'static, Result<T>>
     where
         Fut: Future<Output = Result<T>> + Send + 'static,
         T: Send + 'static,
@@ -3381,17 +3423,72 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         if let Err(busy_err) = self.read_pool.check_busy_threshold(busy_threshold) {
             let mut err = kvproto::errorpb::Error::default();
             err.set_server_is_busy(busy_err);
-            return FuturesEither::Left(future::err(Error::from(ErrorInner::Kv(err.into()))));
+            return future::err(Error::from(ErrorInner::Kv(err.into()))).boxed();
         }
 
         let metadata = metadata.deep_clone();
         let read_pool = self.read_pool.clone();
-        FuturesEither::Right(async move {
+
+        // Route through the admission pool when one is available.
+        if let Some(rm) = &self.resource_manager {
+            if let Some(limiter) = resource_limiter.clone() {
+                let pool_guard = rm.get_admission_pool();
+                if let Some(ref pool_opt) = pool_guard.as_deref() {
+                    if let Some(pool) = pool_opt.as_ref() {
+                        let (tx, rx) = oneshot::channel::<Result<T>>();
+                        let tx = Arc::new(Mutex::new(Some(tx)));
+                        let tx2 = tx.clone();
+                        let rg = String::from_utf8_lossy(metadata.group_name()).into_owned();
+                        let priority_val = rm.admission_priority_for(&rg, priority);
+                        pool.submit(AdmissionTask {
+                            priority: priority_val,
+                            limiter,
+                            is_read: true,
+                            spawn_fn: Box::new(move || {
+                                let res = read_pool.spawn_handle(
+                                    future,
+                                    priority,
+                                    task_id,
+                                    metadata,
+                                    resource_limiter,
+                                );
+                                let tx = tx.lock().unwrap().take();
+                                if let Some(tx) = tx {
+                                    tokio::spawn(async move {
+                                        let result = res
+                                            .await
+                                            .map_err(|_| Error::from(ErrorInner::SchedTooBusy));
+                                        let _ = tx.send(match result {
+                                            Ok(Ok(v)) => Ok(v),
+                                            Ok(Err(e)) => Err(e),
+                                            Err(e) => Err(e),
+                                        });
+                                    });
+                                }
+                            }),
+                            error_fn: Box::new(move || {
+                                if let Some(tx) = tx2.lock().unwrap().take() {
+                                    let _ = tx.send(Err(Error::from(ErrorInner::SchedTooBusy)));
+                                }
+                            }),
+                        });
+                        return rx
+                            .map(|r| {
+                                r.unwrap_or_else(|_| Err(Error::from(ErrorInner::SchedTooBusy)))
+                            })
+                            .boxed();
+                    }
+                }
+            }
+        }
+
+        async move {
             read_pool
                 .spawn_handle(future, priority, task_id, metadata, resource_limiter)
                 .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
                 .await?
-        })
+        }
+        .boxed()
     }
 
     pub fn update_txn_status_cache(
