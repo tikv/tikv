@@ -1934,19 +1934,19 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
         fail_point!("storage_drop_message", |_| Ok(()));
 
-        let limiter_and_priority = self.resource_manager.as_ref().and_then(|rm| {
-            // Only route through admission if write admission control is enabled.
-            rm.admission_pool_for(false).is_some().then(|| {
-                let rc_ctx = cmd.resource_control_ctx();
-                let rg = rc_ctx.get_resource_group_name().to_owned();
-                let request_source = cmd.ctx().request_source.clone();
-                let override_priority = rc_ctx.get_override_priority();
-                let limiter = rm.get_resource_limiter(&rg, &request_source, override_priority)?;
-                let priority = rm.admission_priority_for(&rg, cmd.priority());
-                Some((limiter, priority))
-            })?
+        let admit_info = self.resource_manager.as_ref().and_then(|rm| {
+            if rm.admission_pool_for(false).is_none() {
+                return None;
+            }
+            let rc_ctx = cmd.resource_control_ctx();
+            let rg = rc_ctx.get_resource_group_name().to_owned();
+            let request_source = cmd.ctx().request_source.clone();
+            let override_priority = rc_ctx.get_override_priority();
+            let limiter = rm.get_resource_limiter(&rg, &request_source, override_priority)?;
+            let priority = rm.admission_priority_for(&rg, cmd.priority());
+            Some((limiter, priority))
         });
-        if let Some((limiter, priority)) = limiter_and_priority {
+        if let Some((limiter, priority)) = admit_info {
             let cb = T::callback(callback);
             let shared_cb = Arc::new(Mutex::new(Some(cb)));
             let shared_cb2 = shared_cb.clone();
