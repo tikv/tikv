@@ -19,11 +19,6 @@ use crate::{
     resource_limiter::{ResourceLimiter, ResourceType},
 };
 
-#[inline]
-fn cpu_timer() -> impl FnOnce() -> Duration {
-    let start = std::time::Instant::now();
-    move || start.elapsed()
-}
 
 const MAX_WAIT_DURATION: Duration = Duration::from_secs(10);
 
@@ -177,9 +172,9 @@ impl<F: Future> Future for LimitedFuture<F> {
         } else {
             None
         };
-        let elapsed = cpu_timer();
+        let start = Instant::now();
         let res = this.f.poll(cx);
-        let dur = elapsed();
+        let dur = start.saturating_elapsed();
         let mut io_bytes = io_tracker
             .as_mut()
             .and_then(|tracker| tracker.update())
