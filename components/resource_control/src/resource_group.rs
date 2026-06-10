@@ -6,7 +6,7 @@ use std::{
     collections::HashSet,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicI64, AtomicUsize, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering},
     },
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -23,12 +23,11 @@ use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
 use tikv_util::{
     config::VersionTrack,
     info,
+    mpsc::priority_queue,
     resource_control::{DEFAULT_RESOURCE_GROUP_NAME, TaskMetadata, TaskPriority},
     time::Instant,
 };
 use yatp::queue::priority::TaskPriorityProvider;
-
-use tikv_util::mpsc::priority_queue;
 
 use crate::{
     config::Config,
@@ -317,7 +316,8 @@ impl Drop for DelaySlotGuard {
 /// A task submitted to the admission pool.
 pub struct AdmissionTask {
     /// Encoded priority: encode_two_phase_priority(group_priority, phase, 0).
-    /// Lower numeric value = higher scheduling priority (same encoding as read pool).
+    /// Lower numeric value = higher scheduling priority (same encoding as read
+    /// pool).
     pub priority: u64,
     /// Per-group limiter used to call admission_decision in the worker thread.
     pub limiter: Arc<ResourceLimiter>,
@@ -356,11 +356,7 @@ pub struct AdmissionPool {
 }
 
 impl AdmissionPool {
-    pub fn new(
-        num_threads: usize,
-        max_tasks: usize,
-        mgr: Arc<ResourceGroupManager>,
-    ) -> Self {
+    pub fn new(num_threads: usize, max_tasks: usize, mgr: Arc<ResourceGroupManager>) -> Self {
         let (tx, rx) = priority_queue::unbounded::<AdmissionTask>();
         let outstanding = Arc::new(AtomicUsize::new(0));
         let mut handles = Vec::with_capacity(num_threads);

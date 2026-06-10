@@ -20,8 +20,8 @@ use kvproto::{errorpb, kvrpcpb::CommandPri};
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
 use prometheus::{Histogram, IntCounter, IntGauge, core::Metric};
 use resource_control::{
-    ControlledFuture, ResourceController, ResourceGroupManager, ResourceLimiter,
-    TaskPriority, with_resource_limiter,
+    ControlledFuture, ResourceController, ResourceGroupManager, ResourceLimiter, TaskPriority,
+    with_resource_limiter,
 };
 use thiserror::Error;
 use tikv_util::{
@@ -1030,9 +1030,11 @@ mod tests {
         let (task3, _tx3) = gen_task();
         let (task4, _tx4) = gen_task();
 
-        handle.spawn(task1, CommandPri::Normal, 1, TaskMetadata::default(), None)
+        handle
+            .spawn(task1, CommandPri::Normal, 1, TaskMetadata::default(), None)
             .unwrap();
-        handle.spawn(task2, CommandPri::Normal, 2, TaskMetadata::default(), None)
+        handle
+            .spawn(task2, CommandPri::Normal, 2, TaskMetadata::default(), None)
             .unwrap();
 
         thread::sleep(Duration::from_millis(300));
@@ -1043,7 +1045,8 @@ mod tests {
         tx1.send(()).unwrap();
 
         thread::sleep(Duration::from_millis(300));
-        handle.spawn(task4, CommandPri::Normal, 4, TaskMetadata::default(), None)
+        handle
+            .spawn(task4, CommandPri::Normal, 4, TaskMetadata::default(), None)
             .unwrap();
         assert_eq!(
             UNIFIED_READ_POOL_RUNNING_TASKS
@@ -1089,9 +1092,11 @@ mod tests {
         let (task4, _tx4) = gen_task();
         let (task5, _tx5) = gen_task();
 
-        handle.spawn(task1, CommandPri::Normal, 1, TaskMetadata::default(), None)
+        handle
+            .spawn(task1, CommandPri::Normal, 1, TaskMetadata::default(), None)
             .unwrap();
-        handle.spawn(task2, CommandPri::Normal, 2, TaskMetadata::default(), None)
+        handle
+            .spawn(task2, CommandPri::Normal, 2, TaskMetadata::default(), None)
             .unwrap();
 
         thread::sleep(Duration::from_millis(300));
@@ -1103,7 +1108,8 @@ mod tests {
         handle.scale_pool_size(3);
         assert_eq!(handle.get_normal_pool_size(), 3);
 
-        handle.spawn(task4, CommandPri::Normal, 4, TaskMetadata::default(), None)
+        handle
+            .spawn(task4, CommandPri::Normal, 4, TaskMetadata::default(), None)
             .unwrap();
 
         thread::sleep(Duration::from_millis(300));
@@ -1149,9 +1155,11 @@ mod tests {
         let (task4, _tx4) = gen_task();
         let (task5, _tx5) = gen_task();
 
-        handle.spawn(task1, CommandPri::Normal, 1, TaskMetadata::default(), None)
+        handle
+            .spawn(task1, CommandPri::Normal, 1, TaskMetadata::default(), None)
             .unwrap();
-        handle.spawn(task2, CommandPri::Normal, 2, TaskMetadata::default(), None)
+        handle
+            .spawn(task2, CommandPri::Normal, 2, TaskMetadata::default(), None)
             .unwrap();
 
         thread::sleep(Duration::from_millis(300));
@@ -1176,7 +1184,8 @@ mod tests {
         handle.scale_pool_size(1);
         assert_eq!(handle.get_normal_pool_size(), 1);
 
-        handle.spawn(task4, CommandPri::Normal, 4, TaskMetadata::default(), None)
+        handle
+            .spawn(task4, CommandPri::Normal, 4, TaskMetadata::default(), None)
             .unwrap();
 
         thread::sleep(Duration::from_millis(300));
@@ -1385,9 +1394,11 @@ mod tests {
             let (task1, tx1) = gen_task();
             let (task2, tx2) = gen_task();
 
-            handle.spawn(task1, CommandPri::Normal, 1, TaskMetadata::default(), None)
+            handle
+                .spawn(task1, CommandPri::Normal, 1, TaskMetadata::default(), None)
                 .unwrap();
-            handle.spawn(task2, CommandPri::Normal, 2, TaskMetadata::default(), None)
+            handle
+                .spawn(task2, CommandPri::Normal, 2, TaskMetadata::default(), None)
                 .unwrap();
 
             tx1.send(()).unwrap();
@@ -1489,13 +1500,15 @@ mod tests {
         let task1 = async move {
             let _ = block_rx.recv();
         };
-        handle.spawn(            task1,
-            CommandPri::Normal,
-            1,
-            TaskMetadata::from_ctx(&low_ctx),
-            None,
-        )
-        .unwrap();
+        handle
+            .spawn(
+                task1,
+                CommandPri::Normal,
+                1,
+                TaskMetadata::from_ctx(&low_ctx),
+                None,
+            )
+            .unwrap();
 
         // Wait for task1 to be picked up and block the worker.
         thread::sleep(Duration::from_millis(300));
@@ -1506,31 +1519,38 @@ mod tests {
         let (task3, _tx3) = gen_task();
         let (task4, _tx4) = gen_task();
 
-        handle.spawn(            task2,
-            CommandPri::Normal,
-            2,
-            TaskMetadata::from_ctx(&low_ctx),
-            None,
-        )
-        .unwrap();
-        handle.spawn(            task3,
-            CommandPri::Normal,
-            3,
-            TaskMetadata::from_ctx(&low_ctx),
-            None,
-        )
-        .unwrap();
-        handle.spawn(            task4,
-            CommandPri::Normal,
-            4,
-            TaskMetadata::from_ctx(&low_ctx),
-            None,
-        )
-        .unwrap();
+        handle
+            .spawn(
+                task2,
+                CommandPri::Normal,
+                2,
+                TaskMetadata::from_ctx(&low_ctx),
+                None,
+            )
+            .unwrap();
+        handle
+            .spawn(
+                task3,
+                CommandPri::Normal,
+                3,
+                TaskMetadata::from_ctx(&low_ctx),
+                None,
+            )
+            .unwrap();
+        handle
+            .spawn(
+                task4,
+                CommandPri::Normal,
+                4,
+                TaskMetadata::from_ctx(&low_ctx),
+                None,
+            )
+            .unwrap();
 
         // Verify pool is full: spawning another low-priority task should fail.
         let (task_low5, _tx_low5) = gen_task();
-        match handle.spawn(            task_low5,
+        match handle.spawn(
+            task_low5,
             CommandPri::Normal,
             5,
             TaskMetadata::from_ctx(&low_ctx),
@@ -1552,13 +1572,15 @@ mod tests {
             ..Default::default()
         };
 
-        handle.spawn(            task_high,
-            CommandPri::High,
-            6,
-            TaskMetadata::from_ctx(&high_ctx),
-            None,
-        )
-        .expect("high-priority task should succeed via eviction");
+        handle
+            .spawn(
+                task_high,
+                CommandPri::High,
+                6,
+                TaskMetadata::from_ctx(&high_ctx),
+                None,
+            )
+            .expect("high-priority task should succeed via eviction");
 
         // The eviction metric should have been incremented.
         assert!(

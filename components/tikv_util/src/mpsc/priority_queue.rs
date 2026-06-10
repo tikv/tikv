@@ -161,7 +161,10 @@ impl<T: Send + 'static> Receiver<T> {
     /// Remove and return the lowest-priority item (highest priority value),
     /// or None if the queue is empty. Used for eviction when the queue is full.
     pub fn evict_lowest(&self) -> Option<T> {
-        self.inner.queue.pop_back().map(|e| e.value().take().unwrap())
+        self.inner
+            .queue
+            .pop_back()
+            .map(|e| e.value().take().unwrap())
     }
 
     pub fn len(&self) -> usize {
