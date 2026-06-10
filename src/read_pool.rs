@@ -25,7 +25,7 @@ use resource_control::{
 };
 use thiserror::Error;
 use tikv_util::{
-    resource_control::{TaskMetadata, priority_from_task_meta},
+    resource_control::TaskMetadata,
     sys::{SysQuota, cpu_time::ProcessStat},
     thread_name_prefix::{UNIFIED_READ_POOL_THREAD, matches_thread_name_prefix},
     time::Instant,
@@ -34,10 +34,7 @@ use tikv_util::{
 };
 use tracker::TlsTrackedFuture;
 use yatp::{
-    metrics::MULTILEVEL_LEVEL_ELAPSED,
-    pool::Remote,
-    queue::{Extras, TaskCell as TaskCellTrait},
-    task::future::TaskCell,
+    metrics::MULTILEVEL_LEVEL_ELAPSED, pool::Remote, queue::Extras, task::future::TaskCell,
 };
 
 use self::metrics::*;
@@ -129,31 +126,14 @@ pub enum ReadPoolHandle {
     },
 }
 
-/// Enqueues a task into the yatp pool, evicting the lowest-priority queued
-/// task if the pool is at capacity. Returns an error if the pool is full
-/// and no lower-priority task can be evicted.
 fn enqueue_task(
     gauge: &IntGauge,
     max_tasks: usize,
     remote: &Remote<TaskCell>,
     task_cell: TaskCell,
-    running_tasks: &[IntGauge],
-    resource_ctl: &Option<Arc<ResourceController>>,
-    estimated_priority: u64,
 ) -> Result<(), ReadPoolError> {
     if gauge.get() as usize >= max_tasks {
-        if let Some(ref _resource_ctl) = resource_ctl {
-            if let Some(mut evicted) = remote.try_evict_lowest(estimated_priority) {
-                let evicted_prio = priority_from_task_meta(evicted.mut_extras().metadata());
-                running_tasks[evicted_prio as usize].dec();
-                UNIFIED_READ_POOL_EVICTED_TASKS.inc();
-                drop(evicted);
-            } else {
-                return Err(ReadPoolError::UnifiedReadPoolFull);
-            }
-        } else {
-            return Err(ReadPoolError::UnifiedReadPoolFull);
-        }
+        return Err(ReadPoolError::UnifiedReadPoolFull);
     }
     gauge.inc();
     remote.spawn(task_cell);
@@ -207,9 +187,6 @@ impl ReadPoolHandle {
                     }
                 };
                 let group_name = metadata.group_name().to_owned();
-                let estimated_priority = resource_ctl
-                    .as_ref()
-                    .map_or(u64::MAX, |ctl| ctl.peek_priority_of(&metadata, priority));
                 let mut extras = Extras::new_multilevel(task_id, fixed_level);
                 extras.set_metadata(metadata.to_vec());
                 let gauge_for_spawn = running_task_gauge.clone();
@@ -240,15 +217,7 @@ impl ReadPoolHandle {
                         extras,
                     )
                 };
-                enqueue_task(
-                    &gauge_for_spawn,
-                    *max_tasks,
-                    remote,
-                    task_cell,
-                    running_tasks,
-                    resource_ctl,
-                    estimated_priority,
-                )
+                enqueue_task(&gauge_for_spawn, *max_tasks, remote, task_cell)
             }
         }
     }
@@ -1429,6 +1398,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "eviction now handled by AdmissionPool before tasks reach the read pool"]
     fn test_yatp_eviction() {
         // Test that when the read pool is full, a higher-priority incoming task
         // can evict the lowest-priority queued task.
