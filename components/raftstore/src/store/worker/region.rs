@@ -807,10 +807,14 @@ pub(crate) mod tests {
         time::Duration,
     };
 
-    use engine_test::{ctor::CfOptions, kv::KvTestEngine};
+    use engine_test::{
+        ctor::CfOptions,
+        kv::{KvTestEngine, KvTestSnapshot},
+        raft::RaftTestEngine,
+    };
     use engine_traits::{
-        CF_DEFAULT, CF_WRITE, CompactExt, FlowControlFactorsExt, KvEngine, MiscExt, Mutable,
-        Peekable, RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt,
+        CF_DEFAULT, CF_WRITE, CompactExt, Engines, FlowControlFactorsExt, KvEngine, MiscExt,
+        Mutable, Peekable, RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt,
     };
     use keys::data_key;
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftSnapshotData, RegionLocalState};
@@ -819,7 +823,7 @@ pub(crate) mod tests {
     use tempfile::Builder;
     use tikv_util::{
         config::{ReadableDuration, ReadableSize},
-        worker::{LazyWorker, Worker},
+        worker::{LazyWorker, Scheduler, Worker},
     };
 
     use super::*;
@@ -829,8 +833,8 @@ pub(crate) mod tests {
             ObserverContext,
         },
         store::{
-            CasualMessage, SnapKey, SnapManager,
-            peer_storage::JOB_STATUS_PENDING,
+            CasualMessage, SnapKey, SnapManager, copy_snapshot,
+            peer_storage::{JOB_STATUS_FINISHED, JOB_STATUS_PENDING},
             snap::tests::get_test_db_for_regions,
             worker::{RegionRunner, SnapGenRunner, SnapGenTask},
         },
@@ -847,6 +851,143 @@ pub(crate) mod tests {
         store_cfg.use_delete_range = use_delete_range;
         store_cfg.snap_generator_pool_size = 2;
         Arc::new(VersionTrack::new(store_cfg))
+    }
+
+    fn prepare_empty_snapshot_for_apply(
+        engines: &Engines<KvTestEngine, RaftTestEngine>,
+        snap_mgr: &SnapManager,
+        snap_gen_sched: &Scheduler<SnapGenTask<KvTestSnapshot>>,
+        receiver: &mpsc::Receiver<(u64, CasualMessage<KvTestEngine>)>,
+        region_id: u64,
+    ) {
+        let apply_state: RaftApplyState = engines
+            .kv
+            .get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
+            .unwrap()
+            .unwrap();
+        let idx = apply_state.get_applied_index();
+        let entry = engines.raft.get_entry(region_id, idx).unwrap().unwrap();
+        let (tx, rx) = mpsc::sync_channel(1);
+        snap_gen_sched
+            .schedule(SnapGenTask::Gen {
+                region_id,
+                kv_snap: engines.kv.snapshot(),
+                last_applied_term: entry.get_term(),
+                last_applied_state: apply_state,
+                canceled: Arc::new(AtomicBool::new(false)),
+                notifier: tx,
+                for_balance: false,
+                to_store_id: 0,
+            })
+            .unwrap();
+
+        let snap = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        match receiver.recv_timeout(Duration::from_secs(10)) {
+            Ok((notified_region_id, CasualMessage::SnapshotGenerated)) => {
+                assert_eq!(notified_region_id, region_id);
+            }
+            msg => panic!(
+                "expected {} SnapshotGenerated, but got {:?}",
+                region_id, msg
+            ),
+        }
+
+        let mut data = RaftSnapshotData::default();
+        data.merge_from_bytes(snap.get_data()).unwrap();
+        let key = SnapKey::from_snap(&snap).unwrap();
+        let sending_snap = snap_mgr.get_snapshot_for_sending(&key).unwrap();
+        let receiving_snap = snap_mgr
+            .get_snapshot_for_receiving(&key, data.take_meta())
+            .unwrap();
+        copy_snapshot(sending_snap, receiving_snap).unwrap();
+    }
+
+    fn mark_region_applying(engine: &KvTestEngine, region_id: u64) {
+        let region_key = keys::region_state_key(region_id);
+        let mut region_state = engine
+            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
+            .unwrap()
+            .unwrap();
+        region_state.set_state(PeerState::Applying);
+        let mut wb = engine.write_batch();
+        wb.put_msg_cf(CF_RAFT, &region_key, &region_state).unwrap();
+        wb.write().unwrap();
+    }
+
+    #[bench]
+    fn bench_region_worker_apply_128_empty_snapshots(b: &mut test::Bencher) {
+        const SNAPSHOT_COUNT: u64 = 128;
+
+        let region_ids: Vec<_> = (1..=SNAPSHOT_COUNT).collect();
+        let temp_dir = Builder::new()
+            .prefix("bench_region_worker_apply_empty_snapshots")
+            .tempdir()
+            .unwrap();
+        let engines = get_test_db_for_regions(&temp_dir, None, None, None, &region_ids).unwrap();
+        let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
+        let snap_mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
+        snap_mgr.init().unwrap();
+        let (router, receiver) = mpsc::sync_channel(SNAPSHOT_COUNT as usize * 2);
+
+        let mut snap_gen_worker = LazyWorker::new("bench-snap-generator");
+        let snap_gen_sched = snap_gen_worker.scheduler();
+        let snap_gen_runner = SnapGenRunner::new(
+            engines.kv.clone(),
+            snap_mgr.clone(),
+            router.clone(),
+            Option::<Arc<RpcClient>>::None,
+            snap_gen_worker.pool(),
+        );
+        snap_gen_worker.start(snap_gen_runner);
+        for region_id in &region_ids {
+            prepare_empty_snapshot_for_apply(
+                &engines,
+                &snap_mgr,
+                &snap_gen_sched,
+                &receiver,
+                *region_id,
+            );
+        }
+        snap_gen_worker.stop_worker();
+
+        b.iter(|| {
+            let mut worker = LazyWorker::new("bench-region-worker");
+            let sched = worker.scheduler();
+            let runner = RegionRunner::new(
+                engines.kv.clone(),
+                snap_mgr.clone(),
+                make_raftstore_cfg(false),
+                CoprocessorHost::<KvTestEngine>::default(),
+                router.clone(),
+            );
+            worker.start_with_timer(runner);
+
+            let mut statuses = Vec::with_capacity(SNAPSHOT_COUNT as usize);
+            for region_id in &region_ids {
+                mark_region_applying(&engines.kv, *region_id);
+                let status = Arc::new(AtomicUsize::new(JOB_STATUS_PENDING));
+                sched
+                    .schedule(Task::Apply {
+                        region_id: *region_id,
+                        status: Arc::clone(&status),
+                        peer_id: 1,
+                        create_time: Instant::now(),
+                    })
+                    .unwrap();
+                statuses.push(status);
+            }
+
+            for _ in 0..SNAPSHOT_COUNT {
+                match receiver.recv_timeout(Duration::from_secs(10)) {
+                    Ok((_, CasualMessage::SnapshotApplied { .. })) => {}
+                    msg => panic!("expected SnapshotApplied, but got {:?}", msg),
+                }
+            }
+            for status in statuses {
+                assert_eq!(status.load(Ordering::SeqCst), JOB_STATUS_FINISHED);
+            }
+            worker.stop_worker();
+        });
     }
 
     fn insert_range(
