@@ -110,6 +110,12 @@ ignore = [
     # rand::rng() / thread_rng() during logging, which TiKV does not do.
     # TODO: Upgrade rand to >=0.9.3 or >=0.10.1 when possible.
     "RUSTSEC-2026-0097",
+    # Ignore RUSTSEC-2026-0174, as it does not introduce safety issues, only
+    # violating ASCII invariants. Meanwhile, it only affects the `azure` crate,
+    # which can be upgraded after it fixes the issue.
+    #
+    # See: https://github.com/http-rs/http-types/issues/534
+    "RUSTSEC-2026-0174",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,
