@@ -404,7 +404,6 @@ fn main() {
             name,
             shard,
             cal_shift_ts,
-            replication_status_sub_prefix,
             force_regenerate,
             minimal_compaction_size,
             prefetch_running_count,
@@ -452,15 +451,13 @@ fn main() {
             let until_ts = match until_ts {
                 Some(until_ts) => until_ts,
                 None => {
-                    match runtime.block_on(compact_log::load_until_ts_from_checkpoint(
-                        storage.as_ref(),
-                        replication_status_sub_prefix.as_deref(),
-                    )) {
+                    match runtime
+                        .block_on(compact_log::load_until_ts_from_checkpoint(storage.as_ref()))
+                    {
                         Ok(until_ts) => {
                             tikv_util::info!(
                                 "Loaded compact log backup until-ts from checkpoint.";
                                 "until_ts" => until_ts,
-                                "replication_status_sub_prefix" => ?replication_status_sub_prefix,
                             );
                             until_ts
                         }
@@ -551,8 +548,6 @@ fn main() {
             let checkpoint = Some(checkpoint_hook);
             let with_lock = if until_ts_unspecified {
                 compact_log_hooks::consistency::StorageConsistencyGuard::without_checkpoint_check()
-            } else if let Some(sub_prefix) = replication_status_sub_prefix {
-                compact_log_hooks::consistency::StorageConsistencyGuard::with_replication_status_sub_prefix(sub_prefix)
             } else {
                 compact_log_hooks::consistency::StorageConsistencyGuard::default()
             };

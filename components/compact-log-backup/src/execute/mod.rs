@@ -58,20 +58,12 @@ pub fn create_storage_with_gcp_v2(
     Ok(Arc::from(storage))
 }
 
-pub async fn load_until_ts_from_checkpoint(
-    storage: &dyn ExternalStorage,
-    replication_status_sub_prefix: Option<&str>,
-) -> Result<u64> {
-    if let Some(sub_prefix) = replication_status_sub_prefix {
-        crate::exec_hooks::consistency::load_replication_status_checkpoint(storage, sub_prefix)
-            .await
-    } else {
-        crate::exec_hooks::consistency::load_storage_checkpoint(storage)
-            .await?
-            .ok_or_else(|| {
-                ErrorKind::Other("Cannot load checkpoint from external storage".to_owned()).into()
-            })
-    }
+pub async fn load_until_ts_from_checkpoint(storage: &dyn ExternalStorage) -> Result<u64> {
+    crate::exec_hooks::consistency::load_checkpoint_with_crr_fallback(storage)
+        .await?
+        .ok_or_else(|| {
+            ErrorKind::Other("Cannot load checkpoint from external storage".to_owned()).into()
+        })
 }
 
 /// Sharding configuration for `compact-log-backup`.

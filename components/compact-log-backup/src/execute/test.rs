@@ -436,6 +436,18 @@ async fn put_checkpoint(storage: &dyn ExternalStorage, store: u64, cp: u64) {
     storage.write(&pfx, content.into(), 8).await.unwrap();
 }
 
+async fn put_crr_checkpoint(storage: &dyn ExternalStorage, cp: u64) {
+    let content = format!(r#"{{"last_checkpoint":{}}}"#, cp).into_bytes();
+    storage
+        .write(
+            "crr-checkpoint/resume-state.json",
+            futures::io::Cursor::new(content.clone()).into(),
+            content.len() as u64,
+        )
+        .await
+        .unwrap();
+}
+
 async fn load_locks(storage: &dyn ExternalStorage) -> Vec<String> {
     storage
         .iter_prefix(LOCK_PREFIX)
@@ -443,6 +455,24 @@ async fn load_locks(storage: &dyn ExternalStorage) -> Vec<String> {
         .try_collect::<Vec<_>>()
         .await
         .unwrap()
+}
+
+#[tokio::test]
+async fn test_load_until_ts_from_checkpoint_prefers_crr_checkpoint() {
+    let st = TmpStorage::create();
+    let storage = st.storage().as_ref();
+    put_checkpoint(storage, 1, 42).await;
+
+    assert_eq!(
+        super::load_until_ts_from_checkpoint(storage).await.unwrap(),
+        42
+    );
+
+    put_crr_checkpoint(storage, 40).await;
+    assert_eq!(
+        super::load_until_ts_from_checkpoint(storage).await.unwrap(),
+        40
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -476,6 +506,24 @@ async fn test_consistency_guard() {
     put_checkpoint(strg, 2, 49).await;
     let mut exec = create_compaction(st.backend());
     exec.cfg.until_ts = 43;
+    let c = StorageConsistencyGuard::default();
+    tokio::task::block_in_place(|| exec.run(c).unwrap());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_consistency_guard_prefers_crr_checkpoint() {
+    let st = TmpStorage::create();
+    let strg = st.storage().as_ref();
+    put_checkpoint(strg, 1, 49).await;
+    put_crr_checkpoint(strg, 40).await;
+
+    let mut exec = create_compaction(st.backend());
+    exec.cfg.until_ts = 41;
+    let c = StorageConsistencyGuard::default();
+    tokio::task::block_in_place(|| exec.run(c).unwrap_err());
+
+    let mut exec = create_compaction(st.backend());
+    exec.cfg.until_ts = 39;
     let c = StorageConsistencyGuard::default();
     tokio::task::block_in_place(|| exec.run(c).unwrap());
 }
