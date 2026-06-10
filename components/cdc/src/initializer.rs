@@ -576,8 +576,6 @@ mod tests {
     use tikv::{
         config::DbConfig,
         storage::{
-            Cursor,
-            TestEngineBuilder, TestStorageBuilderApiV1,
             kv::Engine,
             lock_manager::MockLockManager,
             txn::{
@@ -587,6 +585,7 @@ mod tests {
                     must_prewrite_put, must_prewrite_put_with_txn_soucre,
                 },
             },
+            Cursor, TestEngineBuilder, TestStorageBuilderApiV1,
         },
     };
     use tikv_util::{
@@ -1071,13 +1070,8 @@ mod tests {
             default: &mut Cursor<S::Iter>,
             statistics: &mut Statistics,
         ) -> OldValue {
-            match near_seek_old_value(
-                key,
-                write,
-                Either::<&S, _>::Right(default),
-                statistics,
-            )
-            .unwrap()
+            match near_seek_old_value(key, write, Either::<&S, _>::Right(default), statistics)
+                .unwrap()
             {
                 Some(value) => OldValue::value(value),
                 None => OldValue::None,
