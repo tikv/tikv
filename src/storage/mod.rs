@@ -3458,19 +3458,16 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let metadata = metadata.deep_clone();
         let read_pool = self.read_pool.clone();
 
-        // Route through the admission pool when enabled for reads.
-        let should_admit = self
-            .resource_manager
-            .as_ref()
-            .and_then(|rm| resource_limiter.as_ref().map(|_| rm))
-            .map_or(false, |rm| rm.admission_pool_for(true).is_some());
-        if should_admit {
-            let limiter = resource_limiter.clone().unwrap();
+        let admit_info = self.resource_manager.as_ref().and_then(|rm| {
+            if rm.admission_pool_for(true).is_none() {
+                return None;
+            }
+            let limiter = resource_limiter.clone()?;
             let rg = String::from_utf8_lossy(metadata.group_name()).into_owned();
-            let priority_val = self
-                .resource_manager
-                .as_ref()
-                .map_or(u64::MAX, |rm| rm.admission_priority_for(&rg, priority));
+            let priority_val = rm.admission_priority_for(&rg, priority);
+            Some((limiter, priority_val))
+        });
+        if let Some((limiter, priority_val)) = admit_info {
             let (tx, rx) = oneshot::channel::<Result<T>>();
             let tx = Arc::new(Mutex::new(Some(tx)));
             let tx2 = tx.clone();
