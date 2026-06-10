@@ -29,19 +29,25 @@ pub struct Config {
     /// Minimum write IO rate that background tasks are always allowed,
     /// even under maximum compaction pressure.
     pub bg_write_io_floor: ReadableSize,
-    /// When true, enables fair two-phase scheduling for reads: groups whose
-    /// current-minute RU rate exceeds their historical baseline are placed in
-    /// phase 1 (deprioritised in the yatp priority queue) relative to groups
-    /// within their baseline (phase 0). Protects sustained workloads from
-    /// sudden traffic spikes without hard-rejecting requests.
+    /// When true, enables fair two-phase scheduling: groups whose current RU
+    /// rate exceeds their historical baseline are deprioritised in the yatp
+    /// queue (phase 1) relative to groups within their baseline (phase 0).
+    /// When both enable_fair_scheduling and enable_admission_control are set,
+    /// scheduling takes precedence (admission pool is not used).
     pub enable_fair_scheduling: bool,
-    /// When true, enables Tier-1 admission control for reads: high-priority
-    /// read requests from groups that are over their RU baseline are shed
-    /// (SchedTooBusy) when CPU exceeds fg_cpu_throttle_threshold.
+    /// Enable admission control for both reads and writes. Requests from
+    /// over-quota groups are delayed or rejected (SchedTooBusy) via the
+    /// admission pool. Supersedes the deprecated per-direction flags below.
+    pub enable_admission_control: bool,
+    /// Deprecated: use enable_admission_control instead.
+    /// Kept for backwards compatibility; setting this also enables admission
+    /// control for reads (equivalent to enable_admission_control = true).
+    #[serde(alias = "enable-read-admission-control")]
     pub enable_read_admission_control: bool,
-    /// When true, enables Tier-1 admission control for writes: high-priority
-    /// write requests from groups that are over their RU baseline are shed
-    /// (SchedTooBusy) when CPU exceeds fg_cpu_throttle_threshold.
+    /// Deprecated: use enable_admission_control instead.
+    /// Kept for backwards compatibility; setting this also enables admission
+    /// control for writes (equivalent to enable_admission_control = true).
+    #[serde(alias = "enable-write-admission-control")]
     pub enable_write_admission_control: bool,
     /// Size of the sliding window (in minutes) used to compute per-group
     /// historical RU baselines for fair scheduling and admission control.
@@ -83,6 +89,7 @@ impl Default for Config {
             bg_write_io_ceiling: ReadableSize::gb(100),
             bg_write_io_floor: ReadableSize::mb(10),
             enable_fair_scheduling: false,
+            enable_admission_control: false,
             enable_read_admission_control: false,
             enable_write_admission_control: false,
             historical_usage_window_mins: 15,
