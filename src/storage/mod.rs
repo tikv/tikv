@@ -1934,43 +1934,41 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
         fail_point!("storage_drop_message", |_| Ok(()));
 
-        // Route through the admission pool when one is available.
-        if let Some(rm) = &self.resource_manager {
-            let rc_ctx = cmd.resource_control_ctx();
-            let rg = rc_ctx.get_resource_group_name().to_owned();
-            let request_source = cmd.ctx().request_source.clone();
-            let override_priority = rc_ctx.get_override_priority();
-            if let Some(limiter) = rm.get_resource_limiter(&rg, &request_source, override_priority)
-            {
-                let pool_guard = rm.get_admission_pool();
-                if let Some(ref pool_opt) = pool_guard.as_deref() {
-                    if let Some(pool) = pool_opt.as_ref() {
-                        let priority = rm.admission_priority_for(&rg, cmd.priority());
-                        let cb = T::callback(callback);
-                        let shared_cb = Arc::new(Mutex::new(Some(cb)));
-                        let shared_cb2 = shared_cb.clone();
-                        let sched = self.sched.clone();
-                        pool.submit(AdmissionTask {
-                            priority,
-                            limiter,
-                            is_read: false,
-                            spawn_fn: Box::new(move || {
-                                if let Some(cb) = shared_cb.lock().unwrap().take() {
-                                    sched.run_cmd(cmd, cb);
-                                }
-                            }),
-                            error_fn: Box::new(move || {
-                                if let Some(cb) = shared_cb2.lock().unwrap().take() {
-                                    cb.execute(ProcessResult::Failed {
-                                        err: Error::from(ErrorInner::SchedTooBusy),
-                                    });
-                                }
-                            }),
-                        });
-                        return Ok(());
+        let limiter_and_priority = self.resource_manager.as_ref().and_then(|rm| {
+            // Only route through admission if write admission control is enabled.
+            rm.admission_pool_for(false).is_some().then(|| {
+                let rc_ctx = cmd.resource_control_ctx();
+                let rg = rc_ctx.get_resource_group_name().to_owned();
+                let request_source = cmd.ctx().request_source.clone();
+                let override_priority = rc_ctx.get_override_priority();
+                let limiter = rm.get_resource_limiter(&rg, &request_source, override_priority)?;
+                let priority = rm.admission_priority_for(&rg, cmd.priority());
+                Some((limiter, priority))
+            })?
+        });
+        if let Some((limiter, priority)) = limiter_and_priority {
+            let cb = T::callback(callback);
+            let shared_cb = Arc::new(Mutex::new(Some(cb)));
+            let shared_cb2 = shared_cb.clone();
+            let sched = self.sched.clone();
+            self.try_admit(
+                limiter,
+                priority,
+                false,
+                Box::new(move || {
+                    if let Some(cb) = shared_cb.lock().unwrap().take() {
+                        sched.run_cmd(cmd, cb);
                     }
-                }
-            }
+                }),
+                Box::new(move || {
+                    if let Some(cb) = shared_cb2.lock().unwrap().take() {
+                        cb.execute(ProcessResult::Failed {
+                            err: Error::from(ErrorInner::SchedTooBusy),
+                        });
+                    }
+                }),
+            );
+            return Ok(());
         }
 
         self.sched.run_cmd(cmd, T::callback(callback));
@@ -3407,6 +3405,37 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         }
     }
 
+    /// Submit a task to the admission pool if one is active for the given
+    /// direction (read/write). Returns `true` if the task was submitted (caller
+    /// should not dispatch directly), `false` if admission is disabled or no
+    /// pool is running (caller should dispatch directly).
+    fn try_admit(
+        &self,
+        limiter: Arc<ResourceLimiter>,
+        priority: u64,
+        is_read: bool,
+        spawn_fn: Box<dyn FnOnce() + Send>,
+        error_fn: Box<dyn FnOnce() + Send>,
+    ) -> bool {
+        let Some(rm) = &self.resource_manager else {
+            return false;
+        };
+        let Some(pool_guard) = rm.admission_pool_for(is_read) else {
+            return false;
+        };
+        let Some(pool) = pool_guard.as_ref() else {
+            return false;
+        };
+        pool.submit(AdmissionTask {
+            priority,
+            limiter,
+            is_read,
+            spawn_fn,
+            error_fn,
+        });
+        true
+    }
+
     fn read_pool_spawn_with_busy_check<Fut, T>(
         &self,
         busy_threshold: Duration,
@@ -3429,57 +3458,55 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let metadata = metadata.deep_clone();
         let read_pool = self.read_pool.clone();
 
-        // Route through the admission pool when one is available.
-        if let Some(rm) = &self.resource_manager {
-            if let Some(limiter) = resource_limiter.clone() {
-                let pool_guard = rm.get_admission_pool();
-                if let Some(ref pool_opt) = pool_guard.as_deref() {
-                    if let Some(pool) = pool_opt.as_ref() {
-                        let (tx, rx) = oneshot::channel::<Result<T>>();
-                        let tx = Arc::new(Mutex::new(Some(tx)));
-                        let tx2 = tx.clone();
-                        let rg = String::from_utf8_lossy(metadata.group_name()).into_owned();
-                        let priority_val = rm.admission_priority_for(&rg, priority);
-                        pool.submit(AdmissionTask {
-                            priority: priority_val,
-                            limiter,
-                            is_read: true,
-                            spawn_fn: Box::new(move || {
-                                let res = read_pool.spawn_handle(
-                                    future,
-                                    priority,
-                                    task_id,
-                                    metadata,
-                                    resource_limiter,
-                                );
-                                let tx = tx.lock().unwrap().take();
-                                if let Some(tx) = tx {
-                                    tokio::spawn(async move {
-                                        let result = res
-                                            .await
-                                            .map_err(|_| Error::from(ErrorInner::SchedTooBusy));
-                                        let _ = tx.send(match result {
-                                            Ok(Ok(v)) => Ok(v),
-                                            Ok(Err(e)) => Err(e),
-                                            Err(e) => Err(e),
-                                        });
-                                    });
-                                }
-                            }),
-                            error_fn: Box::new(move || {
-                                if let Some(tx) = tx2.lock().unwrap().take() {
-                                    let _ = tx.send(Err(Error::from(ErrorInner::SchedTooBusy)));
-                                }
-                            }),
+        // Route through the admission pool when enabled for reads.
+        let should_admit = self
+            .resource_manager
+            .as_ref()
+            .and_then(|rm| resource_limiter.as_ref().map(|_| rm))
+            .map_or(false, |rm| rm.admission_pool_for(true).is_some());
+        if should_admit {
+            let limiter = resource_limiter.clone().unwrap();
+            let rg = String::from_utf8_lossy(metadata.group_name()).into_owned();
+            let priority_val = self
+                .resource_manager
+                .as_ref()
+                .map_or(u64::MAX, |rm| rm.admission_priority_for(&rg, priority));
+            let (tx, rx) = oneshot::channel::<Result<T>>();
+            let tx = Arc::new(Mutex::new(Some(tx)));
+            let tx2 = tx.clone();
+            self.try_admit(
+                limiter,
+                priority_val,
+                true,
+                Box::new(move || {
+                    let res = read_pool.spawn_handle(
+                        future,
+                        priority,
+                        task_id,
+                        metadata,
+                        resource_limiter,
+                    );
+                    if let Some(tx) = tx.lock().unwrap().take() {
+                        tokio::spawn(async move {
+                            let result =
+                                res.await.map_err(|_| Error::from(ErrorInner::SchedTooBusy));
+                            let _ = tx.send(match result {
+                                Ok(Ok(v)) => Ok(v),
+                                Ok(Err(e)) => Err(e),
+                                Err(e) => Err(e),
+                            });
                         });
-                        return rx
-                            .map(|r| {
-                                r.unwrap_or_else(|_| Err(Error::from(ErrorInner::SchedTooBusy)))
-                            })
-                            .boxed();
                     }
-                }
-            }
+                }),
+                Box::new(move || {
+                    if let Some(tx) = tx2.lock().unwrap().take() {
+                        let _ = tx.send(Err(Error::from(ErrorInner::SchedTooBusy)));
+                    }
+                }),
+            );
+            return rx
+                .map(|r| r.unwrap_or_else(|_| Err(Error::from(ErrorInner::SchedTooBusy))))
+                .boxed();
         }
 
         async move {

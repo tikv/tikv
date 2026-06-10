@@ -552,9 +552,25 @@ impl ResourceGroupManager {
         *self_arc.admission_pool.lock().unwrap() = Some(pool);
     }
 
-    /// Returns a reference to the admission pool, if started.
-    pub fn get_admission_pool(&self) -> Option<std::sync::MutexGuard<'_, Option<AdmissionPool>>> {
-        Some(self.admission_pool.lock().unwrap())
+    /// Returns the admission pool if it is started AND the relevant config flag
+    /// is enabled for the given direction. Returns `None` when admission
+    /// control is disabled so callers can skip the pool without inspecting
+    /// config.
+    pub fn admission_pool_for(
+        &self,
+        is_read: bool,
+    ) -> Option<std::sync::MutexGuard<'_, Option<AdmissionPool>>> {
+        let cfg = self.config.value();
+        let enabled = if is_read {
+            cfg.enable_read_admission_control || cfg.enable_fair_scheduling
+        } else {
+            cfg.enable_write_admission_control
+        };
+        if !enabled {
+            return None;
+        }
+        let guard = self.admission_pool.lock().unwrap();
+        if guard.is_some() { Some(guard) } else { None }
     }
 
     #[inline]
