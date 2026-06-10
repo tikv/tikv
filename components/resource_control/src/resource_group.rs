@@ -552,22 +552,16 @@ impl ResourceGroupManager {
         *self_arc.admission_pool.lock().unwrap() = Some(pool);
     }
 
-    /// Returns the admission pool if it is started AND admission control is
-    /// enabled for the given direction. Returns `None` when disabled.
-    ///
-    /// Precedence: if `enable_fair_scheduling` is set, scheduling is used
-    /// inside yatp — the admission pool is NOT engaged. Otherwise the pool is
-    /// used when `enable_admission_control` is set, or either deprecated
-    /// per-direction flag (`enable_read/write_admission_control`) is set.
+    /// Returns the admission pool if it is started AND at least one admission /
+    /// scheduling flag is enabled. The deprecated per-direction flags are
+    /// treated as aliases for enable_admission_control.
     pub fn admission_pool_for(
         &self,
         is_read: bool,
     ) -> Option<std::sync::MutexGuard<'_, Option<AdmissionPool>>> {
         let cfg = self.config.value();
-        if cfg.enable_fair_scheduling {
-            return None;
-        }
-        let enabled = cfg.enable_admission_control
+        let enabled = cfg.enable_fair_scheduling
+            || cfg.enable_admission_control
             || if is_read {
                 cfg.enable_read_admission_control
             } else {
