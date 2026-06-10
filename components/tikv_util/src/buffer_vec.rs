@@ -87,6 +87,18 @@ impl BufferVec {
         self.data.extend_from_slice(buffer.as_ref());
     }
 
+    /// Appends the bitwise complement of a buffer to the back. Used by the
+    /// index-scan chunk extractor to materialise descending-order index
+    /// columns (pingcap/tidb#2519) in their canonical ASC byte form without
+    /// allocating a temporary `Vec` per cell.
+    #[inline]
+    pub fn push_inverted(&mut self, buffer: impl AsRef<[u8]>) {
+        let buffer = buffer.as_ref();
+        self.offsets.push(self.data.len());
+        self.data.reserve(buffer.len());
+        self.data.extend(buffer.iter().map(|b| !b));
+    }
+
     /// Appends multiple buffer parts together as one buffer to the back.
     #[inline]
     pub fn concat_extend<T, I>(&mut self, buffer_parts: I)
@@ -625,6 +637,20 @@ mod tests {
         assert_eq!(v.total_len(), 4);
         assert!(!v.is_empty());
         assert_eq!(format!("{:?}", v), "[null, ACBB00CC, null]");
+    }
+
+    #[test]
+    fn test_push_inverted() {
+        let mut v = BufferVec::new();
+        v.push_inverted([] as [u8; 0]);
+        v.push_inverted([0x00, 0x55, 0xFF]);
+        v.push([0xAA]);
+
+        assert_eq!(v.len(), 3);
+        assert_eq!(v.total_len(), 4);
+        assert_eq!(v[0], [] as [u8; 0]);
+        assert_eq!(v[1], [0xFF, 0xAA, 0x00]);
+        assert_eq!(v[2], [0xAA]);
     }
 
     #[test]

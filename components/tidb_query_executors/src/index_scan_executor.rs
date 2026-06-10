@@ -504,7 +504,21 @@ impl IndexScanExecutorImpl {
                 return Err(other_err!("{}th column is missing value", i));
             }
             let (value, remaining) = datum::split_datum(datum, false)?;
-            column.mut_raw().push(value);
+            // Descending-order index columns (pingcap/tidb#2519) carry a
+            // bitwise-complemented flag and body. `split_datum` is
+            // auto-detect-aware and returns the correct span, but the
+            // per-type decoders downstream (decode_int_datum,
+            // decode_real_datum, ...) only understand ASC flag bytes. Write
+            // the canonical ASC form directly into `LazyBatchColumn::Raw` —
+            // `push_inverted` complements bytes straight into the destination
+            // buffer, avoiding the per-cell `Vec` allocation that
+            // `un_invert_if_desc` would otherwise incur on this hot path.
+            // `value[0]` is safe: `split_datum` rejects empty input.
+            if datum::is_desc_flag(value[0]) {
+                column.mut_raw().push_inverted(value);
+            } else {
+                column.mut_raw().push(value);
+            }
             *datum = remaining;
         }
         Ok(())
@@ -4262,5 +4276,139 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Regression test for the descending-index chunk path
+    /// (pingcap/tidb#2519): builds a synthetic index payload that mixes one
+    /// ASC column with one DESC column (each column independently encoded
+    /// either via the canonical key encoder or via its bitwise complement),
+    /// runs it through `extract_columns_from_datum_format`, then verifies
+    /// `ensure_decoded` produces the original logical values.
+    ///
+    /// Without `un_invert_if_desc` in the extractor the DESC column would
+    /// reach `decode_int_datum` / `decode_real_datum` as a complemented
+    /// flag byte and the chunk path would fail with
+    /// `Unsupported datum flag NNN for X vector`. Locks in the contract
+    /// that the chunk pipeline never sees DESC bytes.
+    #[test]
+    fn test_extract_columns_from_datum_format_desc_columns() {
+        use tidb_query_datatype::codec::batch::LazyBatchColumn;
+
+        let mut ctx = EvalContext::default();
+
+        // Helper: complement every byte. Mirrors TiDB's
+        // EncodeKeyWithDesc for a single-column key.
+        let to_desc = |bs: Vec<u8>| -> Vec<u8> { bs.into_iter().map(|b| !b).collect() };
+
+        // Two index payloads, each (ASC int = 7, DESC bytes = "abc"):
+        // first column ASC, second column DESC (column-by-column complement).
+        let asc_int = datum::encode_key(&mut ctx, &[Datum::I64(7)]).unwrap();
+        let desc_bytes =
+            to_desc(datum::encode_key(&mut ctx, &[Datum::Bytes(b"abc".to_vec())]).unwrap());
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&asc_int);
+        payload.extend_from_slice(&desc_bytes);
+
+        // Two raw columns, will be filled by the extractor.
+        let mut columns = vec![
+            LazyBatchColumn::raw_with_capacity(1),
+            LazyBatchColumn::raw_with_capacity(1),
+        ];
+
+        let mut slice: &[u8] = &payload;
+        IndexScanExecutorImpl::extract_columns_from_datum_format(&mut slice, &mut columns)
+            .expect("extractor must accept a mixed ASC/DESC payload");
+        assert!(slice.is_empty(), "extractor must consume the whole payload");
+
+        // Decode each column with its declared eval type and assert the
+        // logical value round-trips. The decode pipeline only knows ASC
+        // flag bytes; if extract_columns_from_datum_format had pushed
+        // raw DESC bytes, this would fail with "Unsupported datum flag".
+        let int_ft: FieldType = FieldTypeTp::LongLong.into();
+        let bytes_ft: FieldType = FieldTypeTp::VarChar.into();
+        columns[0]
+            .ensure_all_decoded_for_test(&mut ctx, &int_ft)
+            .expect("ASC int column must decode");
+        columns[1]
+            .ensure_all_decoded_for_test(&mut ctx, &bytes_ft)
+            .expect("DESC bytes column must decode after extractor un-inverts the prefix");
+
+        assert_eq!(
+            columns[0].decoded().to_int_vec(),
+            &[Some(7)],
+            "ASC int column round-trip"
+        );
+        assert_eq!(
+            columns[1].decoded().to_bytes_vec(),
+            &[Some(b"abc".to_vec())],
+            "DESC bytes column must reach the chunk decoder in canonical ASC form"
+        );
+    }
+
+    /// Multi-column DESC chunk: handle column (ASC int) plus three DESC
+    /// columns of differing types — int (8-byte payload), float (8-byte
+    /// payload), bytes (variable-length). Exercises every flag covered by
+    /// `BufferVec::push_inverted` and protects against a regression where
+    /// per-type byte boundaries get conflated on the inverted path.
+    #[test]
+    fn test_extract_columns_from_datum_format_multi_desc_columns() {
+        use tidb_query_datatype::codec::batch::LazyBatchColumn;
+
+        let mut ctx = EvalContext::default();
+        let to_desc = |bs: Vec<u8>| -> Vec<u8> { bs.into_iter().map(|b| !b).collect() };
+
+        let handle_asc = datum::encode_key(&mut ctx, &[Datum::I64(42)]).unwrap();
+        let int_desc = to_desc(datum::encode_key(&mut ctx, &[Datum::I64(-9)]).unwrap());
+        let float_desc = to_desc(datum::encode_key(&mut ctx, &[Datum::F64(7.5)]).unwrap());
+        let bytes_desc = to_desc(
+            datum::encode_key(
+                &mut ctx,
+                &[Datum::Bytes(b"this is longer than nine".to_vec())],
+            )
+            .unwrap(),
+        );
+
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&handle_asc);
+        payload.extend_from_slice(&int_desc);
+        payload.extend_from_slice(&float_desc);
+        payload.extend_from_slice(&bytes_desc);
+
+        let mut columns = vec![
+            LazyBatchColumn::raw_with_capacity(1),
+            LazyBatchColumn::raw_with_capacity(1),
+            LazyBatchColumn::raw_with_capacity(1),
+            LazyBatchColumn::raw_with_capacity(1),
+        ];
+
+        let mut slice: &[u8] = &payload;
+        IndexScanExecutorImpl::extract_columns_from_datum_format(&mut slice, &mut columns)
+            .expect("extractor must accept handle + 3 DESC columns of mixed types");
+        assert!(slice.is_empty(), "extractor must consume the whole payload");
+
+        let int_ft: FieldType = FieldTypeTp::LongLong.into();
+        let double_ft: FieldType = FieldTypeTp::Double.into();
+        let bytes_ft: FieldType = FieldTypeTp::VarChar.into();
+
+        columns[0]
+            .ensure_all_decoded_for_test(&mut ctx, &int_ft)
+            .expect("handle column must decode");
+        columns[1]
+            .ensure_all_decoded_for_test(&mut ctx, &int_ft)
+            .expect("DESC int column must decode");
+        columns[2]
+            .ensure_all_decoded_for_test(&mut ctx, &double_ft)
+            .expect("DESC float column must decode");
+        columns[3]
+            .ensure_all_decoded_for_test(&mut ctx, &bytes_ft)
+            .expect("DESC bytes column must decode");
+
+        assert_eq!(columns[0].decoded().to_int_vec(), &[Some(42)]);
+        assert_eq!(columns[1].decoded().to_int_vec(), &[Some(-9)]);
+        assert_eq!(columns[2].decoded().to_real_vec(), &[Real::new(7.5).ok()]);
+        assert_eq!(
+            columns[3].decoded().to_bytes_vec(),
+            &[Some(b"this is longer than nine".to_vec())]
+        );
     }
 }
