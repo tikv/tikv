@@ -55,20 +55,9 @@ impl<F: Future> Future for ControlledFuture<F> {
     }
 }
 
-// `LimitedFuture` wraps a Future with ResourceLimiter, it will automatically
-// track the cpu time and io bytes consumed by the future.
-//
-// Two modes controlled by `measure_only`:
-//
-// `measure_only = false` (default, used by background jobs like backup/import):
-//   Measures CPU+IO per poll and sleeps proportionally to token-bucket debt.
-//   Pre-delay pays off existing debt before starting; post-delay sleeps after
-//   each pending poll. This throttles the task inside the thread pool.
-//
-// `measure_only = true` (used by read/write pools):
-//   Measures CPU+IO per poll and builds token-bucket debt, but NEVER sleeps.
-//   Throttling is handled pre-pool by `admission_decision` which reads the
-//   accumulated debt before submitting the next request.
+// `LimitedFuture` wraps a Future with ResourceLimiter, it will automically
+// statistics the cpu time and io bytes consumed by the future, and do async
+// waiting according the configuration of the ResourceLimiter.
 #[pin_project]
 pub struct LimitedFuture<F: Future> {
     #[pin]
