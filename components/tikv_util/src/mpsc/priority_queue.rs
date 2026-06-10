@@ -158,6 +158,20 @@ impl<T: Send + 'static> Receiver<T> {
         }
     }
 
+    /// Remove and return the lowest-priority item (highest priority value),
+    /// or None if the queue is empty. Used for eviction when the queue is full.
+    pub fn evict_lowest(&self) -> Option<T> {
+        self.inner.queue.pop_back().map(|e| e.value().take().unwrap())
+    }
+
+    pub fn len(&self) -> usize {
+        self.inner.queue.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.inner.queue.is_empty()
+    }
+
     pub fn recv(&self) -> Result<T, RecvError> {
         let mut spin = SpinWait::new();
         loop {
@@ -184,10 +198,6 @@ impl<T: Send + 'static> Receiver<T> {
                 }
             }
         }
-    }
-
-    fn len(&self) -> usize {
-        self.inner.queue.len()
     }
 }
 

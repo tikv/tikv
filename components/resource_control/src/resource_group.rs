@@ -6,8 +6,9 @@ use std::{
     collections::HashSet,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicUsize, AtomicU64, Ordering},
     },
+    thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -26,6 +27,8 @@ use tikv_util::{
     time::Instant,
 };
 use yatp::queue::priority::TaskPriorityProvider;
+
+use tikv_util::mpsc::priority_queue;
 
 use crate::{
     config::Config,
@@ -311,6 +314,147 @@ impl Drop for DelaySlotGuard {
     }
 }
 
+/// A task submitted to the admission pool.
+pub struct AdmissionTask {
+    /// Encoded priority: encode_two_phase_priority(group_priority, phase, 0).
+    /// Lower numeric value = higher scheduling priority (same encoding as read pool).
+    pub priority: u64,
+    /// Per-group limiter used to call admission_decision in the worker thread.
+    pub limiter: Arc<ResourceLimiter>,
+    /// True for read requests, false for writes.
+    pub is_read: bool,
+    /// Called after admission passes to spawn the request into the read pool
+    /// or scheduler. Wraps the actual future + downstream pool reference.
+    pub spawn_fn: Box<dyn FnOnce() + Send>,
+    /// Called when the request is rejected (SchedTooBusy).
+    pub error_fn: Box<dyn FnOnce() + Send>,
+}
+
+/// Pre-gate thread pool that serializes admission-control decisions and
+/// forwards approved requests to the read pool or scheduler.
+///
+/// All incoming read and write requests pass through here before reaching
+/// the actual execution pools. The pool:
+///   1. Queues tasks ordered by priority (lower value = higher priority).
+///   2. Runs `admission_decision()` — delays or rejects over-quota requests.
+///   3. On Allow/after Delay: calls `spawn_fn` which spawns into read pool /
+///      scheduler and increments the outstanding-request counter.
+///   4. On Reject: calls `error_fn` which returns SchedTooBusy to the client.
+///   5. Tracks `outstanding` requests; `spawn_fn` wraps the future with a
+///      decrement hook so the counter drops when the request completes.
+///
+/// Eviction: when the queue is full, the lowest-priority queued task is
+/// dropped (its `error_fn` is called) before the new task is accepted.
+pub struct AdmissionPool {
+    tx: priority_queue::Sender<AdmissionTask>,
+    rx: priority_queue::Receiver<AdmissionTask>,
+    /// Number of requests currently executing in downstream pools.
+    outstanding: Arc<AtomicUsize>,
+    max_tasks: usize,
+    /// Worker thread handles — kept alive until the pool is dropped.
+    _threads: Vec<thread::JoinHandle<()>>,
+}
+
+impl AdmissionPool {
+    pub fn new(
+        num_threads: usize,
+        max_tasks: usize,
+        mgr: Arc<ResourceGroupManager>,
+    ) -> Self {
+        let (tx, rx) = priority_queue::unbounded::<AdmissionTask>();
+        let outstanding = Arc::new(AtomicUsize::new(0));
+        let mut handles = Vec::with_capacity(num_threads);
+
+        for i in 0..num_threads {
+            let rx2 = rx.clone();
+            let mgr2 = mgr.clone();
+            let outstanding2 = outstanding.clone();
+            let h = thread::Builder::new()
+                .name(format!("admission-pool-{}", i))
+                .spawn(move || {
+                    Self::run_worker(rx2, mgr2, outstanding2);
+                })
+                .expect("failed to spawn admission pool thread");
+            handles.push(h);
+        }
+
+        Self {
+            tx,
+            rx,
+            outstanding,
+            max_tasks,
+            _threads: handles,
+        }
+    }
+
+    fn run_worker(
+        rx: priority_queue::Receiver<AdmissionTask>,
+        mgr: Arc<ResourceGroupManager>,
+        outstanding: Arc<AtomicUsize>,
+    ) {
+        while let Ok(task) = rx.recv() {
+            match mgr.admission_decision(task.is_read, &task.limiter) {
+                AdmissionDecision::Reject => {
+                    (task.error_fn)();
+                }
+                AdmissionDecision::Delay(delay) => {
+                    let mut guard = mgr.delay_slot_guard();
+                    thread::sleep(delay);
+                    guard.release();
+                    outstanding.fetch_add(1, Ordering::Relaxed);
+                    (task.spawn_fn)();
+                }
+                AdmissionDecision::Allow => {
+                    outstanding.fetch_add(1, Ordering::Relaxed);
+                    (task.spawn_fn)();
+                }
+            }
+        }
+    }
+
+    /// Submit a task to the admission pool.
+    ///
+    /// `priority` — encoded priority (encode_two_phase_priority output).
+    ///              Lower numeric value = higher scheduling priority.
+    /// `spawn_fn` — called when the task is admitted; must decrement
+    ///              `outstanding` when the downstream future completes.
+    /// `error_fn` — called when the task is rejected (SchedTooBusy).
+    ///
+    /// When the queue is full, the lowest-priority queued task (highest
+    /// priority value) is evicted to make room, provided the incoming task
+    /// has strictly higher priority (lower value).  If the incoming task is
+    /// itself the lowest priority, it is rejected immediately.
+    pub fn submit(&self, task: AdmissionTask) {
+        if self.rx.len() >= self.max_tasks {
+            match self.rx.evict_lowest() {
+                Some(evicted) if evicted.priority > task.priority => {
+                    // Evicted task had lower priority than incoming — reject it.
+                    metrics::ADMISSION_POOL_EVICTED.inc();
+                    (evicted.error_fn)();
+                }
+                Some(evicted) => {
+                    // Evicted task had equal or higher priority — put it back
+                    // and reject the incoming task instead.
+                    let pri = evicted.priority;
+                    let _ = self.tx.send(evicted, pri);
+                    metrics::ADMISSION_POOL_EVICTED.inc();
+                    (task.error_fn)();
+                    return;
+                }
+                None => {
+                    // Queue was concurrently drained — proceed normally.
+                }
+            }
+        }
+        let priority = task.priority;
+        let _ = self.tx.send(task, priority);
+    }
+
+    pub fn outstanding(&self) -> Arc<AtomicUsize> {
+        self.outstanding.clone()
+    }
+}
+
 /// ResourceGroupManager manages the metadata of each resource group.
 pub struct ResourceGroupManager {
     pub(crate) resource_groups: DashMap<String, ResourceGroup>,
@@ -341,6 +485,9 @@ pub struct ResourceGroupManager {
     // only engages when this flag is set, ensuring background is fully
     // squeezed before foreground traffic is touched.
     bg_cpu_at_floor: AtomicBool,
+    // Pre-gate admission pool. Initialized after construction via
+    // `start_admission_pool` because it needs an Arc<Self>.
+    admission_pool: Mutex<Option<AdmissionPool>>,
 }
 
 impl Default for ResourceGroupManager {
@@ -379,6 +526,7 @@ impl ResourceGroupManager {
             ru_trackers: Default::default(),
             start_secs: RuTracker::now_secs(),
             bg_cpu_at_floor: AtomicBool::new(false),
+            admission_pool: Mutex::new(None),
         };
 
         // init the default resource group by default.
@@ -394,6 +542,23 @@ impl ResourceGroupManager {
         manager.add_resource_group(default_group);
 
         manager
+    }
+
+    /// Construct and start the admission pool. Must be called after the manager
+    /// is wrapped in an `Arc` (which is why it can't live in `new`).
+    pub fn start_admission_pool(self_arc: &Arc<Self>) {
+        let cfg = self_arc.config.value().clone();
+        let pool = AdmissionPool::new(
+            cfg.admission_pool_threads,
+            cfg.admission_pool_max_tasks,
+            self_arc.clone(),
+        );
+        *self_arc.admission_pool.lock().unwrap() = Some(pool);
+    }
+
+    /// Returns a reference to the admission pool, if started.
+    pub fn get_admission_pool(&self) -> Option<std::sync::MutexGuard<'_, Option<AdmissionPool>>> {
+        Some(self.admission_pool.lock().unwrap())
     }
 
     #[inline]
@@ -921,6 +1086,24 @@ impl ResourceGroupManager {
             DEFAULT_RESOURCE_GROUP_NAME
         };
         Some(self.get_foreground_group_limiter(group_name))
+    }
+
+    /// Computes the admission-pool priority for a resource group.
+    ///
+    /// Uses group_priority + CommandPri level as the tag (no VT), which is
+    /// appropriate for the admission pool queue ordering.
+    pub fn admission_priority_for(&self, rg: &str, pri: CommandPri) -> u64 {
+        let tag = match pri {
+            CommandPri::High => 0u64,
+            CommandPri::Normal => 1u64,
+            CommandPri::Low => 2u64,
+        };
+        if let Some(group) = self.resource_groups.get(rg) {
+            let group_priority = group.group.get_priority();
+            encode_two_phase_priority(group_priority, PriorityPhase::WithinBaseline, tag)
+        } else {
+            u64::MAX
+        }
     }
 
     // return a ResourceLimiter for background tasks only.

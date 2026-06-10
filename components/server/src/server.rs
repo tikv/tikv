@@ -411,6 +411,7 @@ where
                 io_bandwidth,
                 compaction_pending_bytes_ratio.clone(),
             );
+            ResourceGroupManager::start_admission_pool(&mgr);
             Some(mgr)
         } else {
             None

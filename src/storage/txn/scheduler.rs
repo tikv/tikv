@@ -46,7 +46,7 @@ use kvproto::{
 use parking_lot::{Mutex, MutexGuard, RwLockWriteGuard};
 use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
-use resource_control::{ResourceController, ResourceGroupManager, TaskMetadata};
+use resource_control::{AdmissionTask, ResourceController, ResourceGroupManager, TaskMetadata};
 use resource_metering::{
     FutureExt, ResourceTagFactory, record_logical_read_bytes, record_logical_write_bytes,
     record_network_in_bytes,
@@ -578,17 +578,59 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
     pub(in crate::storage) fn run_cmd(&self, cmd: Command, callback: StorageCallback) {
         let tag = cmd.tag();
-        // write flow control
-        //
-        // TODO: Consider deprecating this write flow control. Reasons being:
-        // 1) The flow_controller accomplishes the same task, and
-        // 2) The "admission control" functionality has been superseded by memory quota.
         if cmd.need_flow_control() && self.inner.too_busy(cmd.ctx().region_id) {
             Self::fail_with_busy(tag, callback.into());
             return;
         }
-        // Admission control before latch acquisition so a delayed command does
-        // not block concurrent writers sharing the same keys.
+
+        // Route through the admission pool when one is available.
+        if let Some(rm) = &self.inner.resource_manager {
+            let pool_guard = rm.get_admission_pool();
+            if let Some(ref pool_opt) = pool_guard.as_deref() {
+                if let Some(pool) = pool_opt.as_ref() {
+                    let rc_ctx = cmd.resource_control_ctx();
+                    let rg = rc_ctx.get_resource_group_name().to_owned();
+                    let request_source = cmd.ctx().request_source.clone();
+                    let override_priority = rc_ctx.get_override_priority();
+                    if let Some(limiter) =
+                        rm.get_resource_limiter(&rg, &request_source, override_priority)
+                    {
+                        let priority = rm.admission_priority_for(&rg, cmd.priority());
+                        // Wrap callback in Arc<Mutex<Option>> so it's reachable from
+                        // both spawn_fn and error_fn (only one will run).
+                        let shared_cb = Arc::new(std::sync::Mutex::new(Some(
+                            SchedulerTaskCallback::from(callback),
+                        )));
+                        let shared_cb2 = shared_cb.clone();
+                        let sched = self.clone();
+                        let mem_quota = self.inner.memory_quota.clone();
+                        pool.submit(AdmissionTask {
+                            priority,
+                            limiter,
+                            is_read: false,
+                            spawn_fn: Box::new(move || {
+                                if let Some(cb) = shared_cb.lock().unwrap().take() {
+                                    let cid = sched.inner.gen_id();
+                                    if let Ok(task) = Task::allocate(cid, cmd, mem_quota) {
+                                        sched.schedule_command(task, cb, None);
+                                    } else {
+                                        Self::fail_with_busy(tag, cb);
+                                    }
+                                }
+                            }),
+                            error_fn: Box::new(move || {
+                                if let Some(cb) = shared_cb2.lock().unwrap().take() {
+                                    Self::fail_with_busy(tag, cb);
+                                }
+                            }),
+                        });
+                        return;
+                    }
+                }
+            }
+        }
+
+        // Inline admission control fallback when no admission pool is configured.
         match self.apply_admission_control(&cmd) {
             Some(resource_control::AdmissionDecision::Reject) => {
                 Self::fail_with_busy(tag, callback.into());

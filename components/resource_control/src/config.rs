@@ -61,6 +61,15 @@ pub struct Config {
     /// (SchedTooBusy) rather than delayed. Set to 0 to disable the limit
     /// (unlimited delayed requests). Default: 10_000.
     pub admission_max_delayed_count: u64,
+    /// Number of threads in the admission thread pool. These threads run
+    /// admission-control decisions (delay/reject) and then forward requests
+    /// to the read pool or scheduler. Default: 2.
+    #[online_config(skip)]
+    pub admission_pool_threads: usize,
+    /// Maximum number of requests that can be queued in the admission pool
+    /// waiting for a thread to process them. Requests beyond this limit are
+    /// rejected immediately (SchedTooBusy). Default: 10_000.
+    pub admission_pool_max_tasks: usize,
 }
 
 impl Default for Config {
@@ -79,6 +88,8 @@ impl Default for Config {
             historical_usage_window_mins: 15,
             baseline_burst_pct: 20.0,
             admission_max_delayed_count: 10_000,
+            admission_pool_threads: 2,
+            admission_pool_max_tasks: 10_000,
         }
     }
 }
