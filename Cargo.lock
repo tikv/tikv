@@ -4501,7 +4501,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/0xTars/rust-rocksdb.git?branch=copper/analyze-data-block-anchors#b007c1e68a2ef76a7f124e9421c50109bcaf882f"
+source = "git+https://github.com/0xTars/rust-rocksdb.git?branch=copper/analyze-data-block-anchors#34fce8e02ab01a291bff3622c2d5cb2500fedd79"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -4520,7 +4520,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/0xTars/rust-rocksdb.git?branch=copper/analyze-data-block-anchors#b007c1e68a2ef76a7f124e9421c50109bcaf882f"
+source = "git+https://github.com/0xTars/rust-rocksdb.git?branch=copper/analyze-data-block-anchors#34fce8e02ab01a291bff3622c2d5cb2500fedd79"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -6718,7 +6718,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/0xTars/rust-rocksdb.git?branch=copper/analyze-data-block-anchors#b007c1e68a2ef76a7f124e9421c50109bcaf882f"
+source = "git+https://github.com/0xTars/rust-rocksdb.git?branch=copper/analyze-data-block-anchors#34fce8e02ab01a291bff3622c2d5cb2500fedd79"
 dependencies = [
  "libc 0.2.176",
  "librocksdb_sys",
