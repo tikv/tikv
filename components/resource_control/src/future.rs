@@ -19,7 +19,6 @@ use crate::{
     resource_limiter::{ResourceLimiter, ResourceType},
 };
 
-
 const MAX_WAIT_DURATION: Duration = Duration::from_secs(10);
 
 #[pin_project]
