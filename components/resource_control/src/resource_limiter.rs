@@ -37,7 +37,7 @@ impl fmt::Debug for ResourceType {
 }
 
 pub struct ResourceLimiter {
-    _name: String,
+    name: String,
     version: u64,
     limiters: [QuotaLimiter; ResourceType::COUNT],
     // Dedicated write-only IO limiter for compaction pressure throttling.
@@ -78,13 +78,17 @@ impl ResourceLimiter {
             None
         };
         Self {
-            _name: name,
+            name,
             version,
             limiters: [cpu_limiter, io_limiter],
             write_io_limiter: QuotaLimiter::new(f64::INFINITY),
             is_background,
             wait_histogram,
         }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     pub fn is_background(&self) -> bool {
@@ -113,6 +117,27 @@ impl ResourceLimiter {
             h.observe(wait_dur.as_secs_f64());
         }
         wait_dur
+    }
+
+    /// Returns the current token-bucket debt the caller should wait before
+    /// entering the thread pool. Reads accumulated debt via `consume(0, ...)`
+    /// which returns the existing debt when the rate limit is finite, without
+    /// adding new token consumption.
+    ///
+    /// For write requests (`is_read = false`), the write-specific IO limiter
+    /// debt is also considered alongside CPU and combined IO debt.
+    ///
+    /// Note: `write_io_limiter` and the combined IO limiter are only rate-set
+    /// for background limiters (via `do_adjust`); for foreground per-group
+    /// limiters their rates remain at `f64::INFINITY`, so their debt is
+    /// always zero and only CPU debt drives the delay in practice.
+    pub fn admission_delay(&self, is_read: bool) -> Duration {
+        self.consume(
+            Duration::ZERO,
+            IoBytes::default(),
+            true,
+            is_read, // skip_compaction_pressure = true for reads (skip write_io_limiter)
+        )
     }
 
     pub async fn async_consume(
@@ -205,7 +230,7 @@ impl QuotaLimiter {
     }
 
     fn consume(&self, value: u64, wait: bool) -> Duration {
-        if value == 0 {
+        if value == 0 && self.limiter.speed_limit().is_infinite() {
             return Duration::ZERO;
         }
         let mut dur = self.limiter.consume_duration(value as usize);

@@ -14,13 +14,14 @@ use std::{
 use file_system::{IoType, set_io_type};
 use futures::{
     channel::oneshot,
-    future::{FutureExt, TryFutureExt},
+    future::{BoxFuture, FutureExt, TryFutureExt},
 };
 use kvproto::{errorpb, kvrpcpb::CommandPri};
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
 use prometheus::{Histogram, IntCounter, IntGauge, core::Metric};
 use resource_control::{
-    ControlledFuture, ResourceController, ResourceLimiter, TaskPriority, with_resource_limiter,
+    AdmissionDecision, ControlledFuture, ResourceController, ResourceGroupManager, ResourceLimiter,
+    TaskPriority, with_resource_limiter,
 };
 use thiserror::Error;
 use tikv_util::{
@@ -69,6 +70,7 @@ pub enum ReadPool {
         max_tasks: usize,
         pool_size: usize,
         resource_ctl: Option<Arc<ResourceController>>,
+        resource_manager: Option<Arc<ResourceGroupManager>>,
         time_slice_inspector: Arc<TimeSliceInspector>,
     },
 }
@@ -92,6 +94,7 @@ impl ReadPool {
                 max_tasks,
                 pool_size,
                 resource_ctl,
+                resource_manager,
                 time_slice_inspector,
             } => ReadPoolHandle::Yatp {
                 remote: pool.remote().clone(),
@@ -100,6 +103,7 @@ impl ReadPool {
                 max_tasks: *max_tasks,
                 pool_size: *pool_size,
                 resource_ctl: resource_ctl.clone(),
+                resource_manager: resource_manager.clone(),
                 time_slice_inspector: time_slice_inspector.clone(),
             },
         }
@@ -120,8 +124,68 @@ pub enum ReadPoolHandle {
         max_tasks: usize,
         pool_size: usize,
         resource_ctl: Option<Arc<ResourceController>>,
+        resource_manager: Option<Arc<ResourceGroupManager>>,
         time_slice_inspector: Arc<TimeSliceInspector>,
     },
+}
+
+/// Runs admission control then, if the task is allowed through, enqueues it.
+/// Admission is checked before the capacity/eviction check so that a rejected
+/// or timed-out delayed task never causes an already-queued task to be dropped.
+async fn admission_and_enqueue(
+    resource_manager: Option<Arc<ResourceGroupManager>>,
+    resource_limiter: Option<Arc<ResourceLimiter>>,
+    task_priority: TaskPriority,
+    gauge: IntGauge,
+    max_tasks: usize,
+    remote: Remote<TaskCell>,
+    task_cell: TaskCell,
+    running_tasks: Vec<IntGauge>,
+    resource_ctl: Option<Arc<ResourceController>>,
+    estimated_priority: u64,
+) -> Result<(), ReadPoolError> {
+    // Admission control runs before any eviction so that a rejected or
+    // timed-out delayed task never causes an already-queued task to be dropped.
+    let delay = match (resource_manager.as_deref(), resource_limiter.as_deref()) {
+        (Some(rm), Some(limiter)) => match rm.admission_decision(true, limiter) {
+            AdmissionDecision::Reject => return Err(ReadPoolError::Rejected),
+            AdmissionDecision::Delay(d) => {
+                if task_priority == TaskPriority::High {
+                    warn!("admission delay on high-priority read task";
+                          "group" => limiter.name(),
+                          "delay" => ?d);
+                }
+                Some((d, resource_manager))
+            }
+            AdmissionDecision::Allow => None,
+        },
+        _ => None,
+    };
+    if let Some((d, slot)) = delay {
+        let mut _guard = slot.as_ref().map(|rm| rm.delay_slot_guard());
+        futures_timer::Delay::new(d).await;
+        if let Some(guard) = _guard.as_mut() {
+            guard.release();
+        }
+    }
+    // After admission (and any sleep), check pool capacity and evict if needed.
+    if gauge.get() as usize >= max_tasks {
+        if let Some(ref _resource_ctl) = resource_ctl {
+            if let Some(mut evicted) = remote.try_evict_lowest(estimated_priority) {
+                let evicted_prio = priority_from_task_meta(evicted.mut_extras().metadata());
+                running_tasks[evicted_prio as usize].dec();
+                UNIFIED_READ_POOL_EVICTED_TASKS.inc();
+                drop(evicted);
+            } else {
+                return Err(ReadPoolError::UnifiedReadPoolFull);
+            }
+        } else {
+            return Err(ReadPoolError::UnifiedReadPoolFull);
+        }
+    }
+    gauge.inc();
+    remote.spawn(task_cell);
+    Ok(())
 }
 
 impl ReadPoolHandle {
@@ -132,7 +196,7 @@ impl ReadPoolHandle {
         task_id: u64,
         metadata: TaskMetadata<'_>,
         resource_limiter: Option<Arc<ResourceLimiter>>,
-    ) -> Result<(), ReadPoolError>
+    ) -> BoxFuture<'static, Result<(), ReadPoolError>>
     where
         F: Future<Output = ()> + Send + 'static,
     {
@@ -147,76 +211,56 @@ impl ReadPoolHandle {
                     CommandPri::Normal => read_pool_normal,
                     CommandPri::Low => read_pool_low,
                 };
-
-                pool.spawn(f)?;
+                let res = pool.spawn(f).map_err(ReadPoolError::from);
+                futures::future::ready(res).boxed()
             }
             ReadPoolHandle::Yatp {
                 remote,
                 running_tasks,
                 max_tasks,
                 resource_ctl,
+                resource_manager,
                 ..
             } => {
                 let task_priority = TaskPriority::from(metadata.override_priority());
                 let running_task_gauge = running_tasks[task_priority as usize].clone();
-                // Note that the running task number limit is not strict.
-                // If several tasks are spawned at the same time while the running task number
-                // is close to the limit, they may all pass this check and the number of running
-                // tasks may exceed the limit.
-                if running_task_gauge.get() as usize >= *max_tasks {
-                    // When resource control is enabled, attempt to evict the
-                    // lowest-priority queued task if the incoming task has
-                    // strictly higher priority. This implements queue fairness:
-                    // important tasks can preempt less important queued tasks
-                    // when the pool is full.
-                    if let Some(ref ctl) = resource_ctl {
-                        let estimated_priority = ctl.peek_priority_of(&metadata, priority);
-                        if let Some(mut evicted) = remote.try_evict_lowest(estimated_priority) {
-                            // Decrement the running_tasks counter for the
-                            // evicted task's priority level. The evicted task's
-                            // future (which contains the running_tasks.dec()
-                            // closure) will be dropped without executing.
-                            let evicted_prio =
-                                priority_from_task_meta(evicted.mut_extras().metadata());
-                            running_tasks[evicted_prio as usize].dec();
-                            UNIFIED_READ_POOL_EVICTED_TASKS.inc();
-                            // Dropping the evicted TaskCell destroys the future
-                            // inside it. That future holds the oneshot::Sender
-                            // used by spawn_handle (or by coprocessor's manual
-                            // channel). When the sender is dropped the
-                            // corresponding receiver gets a Canceled error,
-                            // which callers surface as SchedTooBusy /
-                            // ServerIsBusy back to the client.
-                            drop(evicted);
-                            // Fall through to enqueue the new task below.
-                        } else {
-                            return Err(ReadPoolError::UnifiedReadPoolFull);
-                        }
-                    } else {
-                        return Err(ReadPoolError::UnifiedReadPoolFull);
+
+                let is_background = resource_limiter.as_ref().is_some_and(|l| l.is_background());
+                let fixed_level = if is_background {
+                    // Background tasks always run at low priority in the pool.
+                    Some(2)
+                } else {
+                    match priority {
+                        CommandPri::High => Some(0),
+                        CommandPri::Normal => None,
+                        CommandPri::Low => Some(2),
                     }
-                }
-                running_task_gauge.inc();
-                let fixed_level = match priority {
-                    CommandPri::High => Some(0),
-                    CommandPri::Normal => None,
-                    CommandPri::Low => Some(2),
                 };
                 let group_name = metadata.group_name().to_owned();
+                let estimated_priority = resource_ctl
+                    .as_ref()
+                    .map_or(u64::MAX, |ctl| ctl.peek_priority_of(&metadata, priority));
                 let mut extras = Extras::new_multilevel(task_id, fixed_level);
                 extras.set_metadata(metadata.to_vec());
+                // Clone gauge: one for inc (after admission), one inside the
+                // future for dec (when the task completes).
+                let gauge_for_spawn = running_task_gauge.clone();
                 let task_cell = if let Some(resource_ctl) = resource_ctl {
+                    let inner = ControlledFuture::new(
+                        f.map(move |_| {
+                            running_task_gauge.dec();
+                        }),
+                        resource_ctl.clone(),
+                        group_name.clone(),
+                    );
                     TaskCell::new(
                         TrackedFuture::new(with_resource_limiter(
-                            ControlledFuture::new(
-                                f.map(move |_| {
-                                    running_task_gauge.dec();
-                                }),
-                                resource_ctl.clone(),
-                                group_name,
-                            ),
-                            resource_limiter,
-                            false,
+                            inner,
+                            resource_limiter.clone(),
+                            true, // skip compaction pressure for foreground jobs
+                            true, // measure-only: build debt, never sleep inside pool
+                            resource_manager.clone(),
+                            0, // read path: no write bytes
                         )),
                         extras,
                     )
@@ -228,10 +272,21 @@ impl ReadPoolHandle {
                         extras,
                     )
                 };
-                remote.spawn(task_cell);
+                admission_and_enqueue(
+                    resource_manager.clone(),
+                    resource_limiter,
+                    task_priority,
+                    gauge_for_spawn,
+                    *max_tasks,
+                    remote.clone(),
+                    task_cell,
+                    running_tasks.to_vec(),
+                    resource_ctl.clone(),
+                    estimated_priority,
+                )
+                .boxed()
             }
         }
-        Ok(())
     }
 
     pub fn spawn_handle<F, T>(
@@ -247,7 +302,7 @@ impl ReadPoolHandle {
         T: Send + 'static,
     {
         let (tx, rx) = oneshot::channel::<T>();
-        let res = self.spawn(
+        let spawn_fut = self.spawn(
             f.map(move |res| {
                 let _ = tx.send(res);
             }),
@@ -257,7 +312,7 @@ impl ReadPoolHandle {
             resource_limiter,
         );
         async move {
-            res?;
+            spawn_fut.await?;
             rx.map_err(ReadPoolError::from).await
         }
     }
@@ -483,6 +538,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     reporter: R,
     engine: E,
     resource_ctl: Option<Arc<ResourceController>>,
+    resource_manager: Option<Arc<ResourceGroupManager>>,
     cleanup_method: CleanupMethod,
     enable_task_wait_metrics: bool,
 ) -> ReadPool {
@@ -492,6 +548,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
         reporter,
         engine,
         resource_ctl,
+        resource_manager,
         cleanup_method,
         unified_read_pool_name,
         enable_task_wait_metrics,
@@ -503,6 +560,7 @@ pub fn build_yatp_read_pool_with_name<E: Engine, R: FlowStatsReporter>(
     reporter: R,
     engine: E,
     resource_ctl: Option<Arc<ResourceController>>,
+    resource_manager: Option<Arc<ResourceGroupManager>>,
     cleanup_method: CleanupMethod,
     unified_read_pool_name: String,
     enable_task_wait_metrics: bool,
@@ -556,6 +614,7 @@ pub fn build_yatp_read_pool_with_name<E: Engine, R: FlowStatsReporter>(
             .saturating_mul(config.max_thread_count),
         pool_size: config.max_thread_count,
         resource_ctl,
+        resource_manager,
         time_slice_inspector,
     }
 }
@@ -916,6 +975,9 @@ pub enum ReadPoolError {
     #[error("Unified read pool is full")]
     UnifiedReadPoolFull,
 
+    #[error("Request rejected by admission control")]
+    Rejected,
+
     #[error("{0}")]
     Canceled(#[from] oneshot::Canceled),
 }
@@ -983,6 +1045,7 @@ mod tests {
             DummyReporter,
             engine,
             None,
+            None,
             CleanupMethod::InPlace,
             name.to_owned(),
             false,
@@ -1002,23 +1065,20 @@ mod tests {
         let (task3, _tx3) = gen_task();
         let (task4, _tx4) = gen_task();
 
-        handle
-            .spawn(task1, CommandPri::Normal, 1, TaskMetadata::default(), None)
+        block_on(handle.spawn(task1, CommandPri::Normal, 1, TaskMetadata::default(), None))
             .unwrap();
-        handle
-            .spawn(task2, CommandPri::Normal, 2, TaskMetadata::default(), None)
+        block_on(handle.spawn(task2, CommandPri::Normal, 2, TaskMetadata::default(), None))
             .unwrap();
 
         thread::sleep(Duration::from_millis(300));
-        match handle.spawn(task3, CommandPri::Normal, 3, TaskMetadata::default(), None) {
+        match block_on(handle.spawn(task3, CommandPri::Normal, 3, TaskMetadata::default(), None)) {
             Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
         tx1.send(()).unwrap();
 
         thread::sleep(Duration::from_millis(300));
-        handle
-            .spawn(task4, CommandPri::Normal, 4, TaskMetadata::default(), None)
+        block_on(handle.spawn(task4, CommandPri::Normal, 4, TaskMetadata::default(), None))
             .unwrap();
         assert_eq!(
             UNIFIED_READ_POOL_RUNNING_TASKS
@@ -1044,6 +1104,7 @@ mod tests {
             DummyReporter,
             engine,
             None,
+            None,
             CleanupMethod::InPlace,
             false,
         );
@@ -1063,15 +1124,13 @@ mod tests {
         let (task4, _tx4) = gen_task();
         let (task5, _tx5) = gen_task();
 
-        handle
-            .spawn(task1, CommandPri::Normal, 1, TaskMetadata::default(), None)
+        block_on(handle.spawn(task1, CommandPri::Normal, 1, TaskMetadata::default(), None))
             .unwrap();
-        handle
-            .spawn(task2, CommandPri::Normal, 2, TaskMetadata::default(), None)
+        block_on(handle.spawn(task2, CommandPri::Normal, 2, TaskMetadata::default(), None))
             .unwrap();
 
         thread::sleep(Duration::from_millis(300));
-        match handle.spawn(task3, CommandPri::Normal, 3, TaskMetadata::default(), None) {
+        match block_on(handle.spawn(task3, CommandPri::Normal, 3, TaskMetadata::default(), None)) {
             Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
@@ -1079,12 +1138,11 @@ mod tests {
         handle.scale_pool_size(3);
         assert_eq!(handle.get_normal_pool_size(), 3);
 
-        handle
-            .spawn(task4, CommandPri::Normal, 4, TaskMetadata::default(), None)
+        block_on(handle.spawn(task4, CommandPri::Normal, 4, TaskMetadata::default(), None))
             .unwrap();
 
         thread::sleep(Duration::from_millis(300));
-        match handle.spawn(task5, CommandPri::Normal, 5, TaskMetadata::default(), None) {
+        match block_on(handle.spawn(task5, CommandPri::Normal, 5, TaskMetadata::default(), None)) {
             Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
@@ -1106,6 +1164,7 @@ mod tests {
             DummyReporter,
             engine,
             None,
+            None,
             CleanupMethod::InPlace,
             false,
         );
@@ -1125,15 +1184,13 @@ mod tests {
         let (task4, _tx4) = gen_task();
         let (task5, _tx5) = gen_task();
 
-        handle
-            .spawn(task1, CommandPri::Normal, 1, TaskMetadata::default(), None)
+        block_on(handle.spawn(task1, CommandPri::Normal, 1, TaskMetadata::default(), None))
             .unwrap();
-        handle
-            .spawn(task2, CommandPri::Normal, 2, TaskMetadata::default(), None)
+        block_on(handle.spawn(task2, CommandPri::Normal, 2, TaskMetadata::default(), None))
             .unwrap();
 
         thread::sleep(Duration::from_millis(300));
-        match handle.spawn(task3, CommandPri::Normal, 3, TaskMetadata::default(), None) {
+        match block_on(handle.spawn(task3, CommandPri::Normal, 3, TaskMetadata::default(), None)) {
             Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
@@ -1154,12 +1211,11 @@ mod tests {
         handle.scale_pool_size(1);
         assert_eq!(handle.get_normal_pool_size(), 1);
 
-        handle
-            .spawn(task4, CommandPri::Normal, 4, TaskMetadata::default(), None)
+        block_on(handle.spawn(task4, CommandPri::Normal, 4, TaskMetadata::default(), None))
             .unwrap();
 
         thread::sleep(Duration::from_millis(300));
-        match handle.spawn(task5, CommandPri::Normal, 5, TaskMetadata::default(), None) {
+        match block_on(handle.spawn(task5, CommandPri::Normal, 5, TaskMetadata::default(), None)) {
             Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
@@ -1250,6 +1306,7 @@ mod tests {
             DummyReporter,
             engine,
             None,
+            None,
             CleanupMethod::InPlace,
             false,
         );
@@ -1322,12 +1379,12 @@ mod tests {
 
         for control in [false, true] {
             let name = format!("test_yatp_task_poll_duration_metric_{}", control);
-            let resource_manager = if control {
-                let resource_manager = ResourceGroupManager::default();
-                let resource_ctl = resource_manager.derive_controller(name.clone(), true);
-                Some(resource_ctl)
+            let (resource_ctl, resource_manager) = if control {
+                let rm = Arc::new(ResourceGroupManager::default());
+                let ctl = rm.derive_controller(name.clone(), true);
+                (Some(ctl), Some(rm))
             } else {
-                None
+                (None, None)
             };
             let config = UnifiedReadPoolConfig {
                 min_thread_count: 1,
@@ -1342,6 +1399,7 @@ mod tests {
                 &config,
                 DummyReporter,
                 engine,
+                resource_ctl,
                 resource_manager,
                 CleanupMethod::InPlace,
                 name.clone(),
@@ -1362,11 +1420,9 @@ mod tests {
             let (task1, tx1) = gen_task();
             let (task2, tx2) = gen_task();
 
-            handle
-                .spawn(task1, CommandPri::Normal, 1, TaskMetadata::default(), None)
+            block_on(handle.spawn(task1, CommandPri::Normal, 1, TaskMetadata::default(), None))
                 .unwrap();
-            handle
-                .spawn(task2, CommandPri::Normal, 2, TaskMetadata::default(), None)
+            block_on(handle.spawn(task2, CommandPri::Normal, 2, TaskMetadata::default(), None))
                 .unwrap();
 
             tx1.send(()).unwrap();
@@ -1415,7 +1471,7 @@ mod tests {
         //   eviction comparison. "high_group" (priority=16) produces a numerically
         //   smaller value than "low_group" (priority=1), meaning it is scheduled first
         //   and can evict low_group tasks.
-        let resource_manager = ResourceGroupManager::default();
+        let resource_manager = Arc::new(ResourceGroupManager::default());
         let low_group = new_resource_group_ru("low_group".into(), 5000, 1);
         resource_manager.add_resource_group(low_group);
         let high_group = new_resource_group_ru("high_group".into(), 5000, 16);
@@ -1437,6 +1493,7 @@ mod tests {
             DummyReporter,
             engine,
             Some(resource_ctl),
+            Some(resource_manager),
             CleanupMethod::InPlace,
             name.to_owned(),
             false,
@@ -1467,15 +1524,14 @@ mod tests {
         let task1 = async move {
             let _ = block_rx.recv();
         };
-        handle
-            .spawn(
-                task1,
-                CommandPri::Normal,
-                1,
-                TaskMetadata::from_ctx(&low_ctx),
-                None,
-            )
-            .unwrap();
+        block_on(handle.spawn(
+            task1,
+            CommandPri::Normal,
+            1,
+            TaskMetadata::from_ctx(&low_ctx),
+            None,
+        ))
+        .unwrap();
 
         // Wait for task1 to be picked up and block the worker.
         thread::sleep(Duration::from_millis(300));
@@ -1486,43 +1542,40 @@ mod tests {
         let (task3, _tx3) = gen_task();
         let (task4, _tx4) = gen_task();
 
-        handle
-            .spawn(
-                task2,
-                CommandPri::Normal,
-                2,
-                TaskMetadata::from_ctx(&low_ctx),
-                None,
-            )
-            .unwrap();
-        handle
-            .spawn(
-                task3,
-                CommandPri::Normal,
-                3,
-                TaskMetadata::from_ctx(&low_ctx),
-                None,
-            )
-            .unwrap();
-        handle
-            .spawn(
-                task4,
-                CommandPri::Normal,
-                4,
-                TaskMetadata::from_ctx(&low_ctx),
-                None,
-            )
-            .unwrap();
+        block_on(handle.spawn(
+            task2,
+            CommandPri::Normal,
+            2,
+            TaskMetadata::from_ctx(&low_ctx),
+            None,
+        ))
+        .unwrap();
+        block_on(handle.spawn(
+            task3,
+            CommandPri::Normal,
+            3,
+            TaskMetadata::from_ctx(&low_ctx),
+            None,
+        ))
+        .unwrap();
+        block_on(handle.spawn(
+            task4,
+            CommandPri::Normal,
+            4,
+            TaskMetadata::from_ctx(&low_ctx),
+            None,
+        ))
+        .unwrap();
 
         // Verify pool is full: spawning another low-priority task should fail.
         let (task_low5, _tx_low5) = gen_task();
-        match handle.spawn(
+        match block_on(handle.spawn(
             task_low5,
             CommandPri::Normal,
             5,
             TaskMetadata::from_ctx(&low_ctx),
             None,
-        ) {
+        )) {
             Err(ReadPoolError::UnifiedReadPoolFull) => {}
             other => panic!(
                 "expected UnifiedReadPoolFull for low-priority task, got {:?}",
@@ -1539,15 +1592,14 @@ mod tests {
             ..Default::default()
         };
 
-        handle
-            .spawn(
-                task_high,
-                CommandPri::High,
-                6,
-                TaskMetadata::from_ctx(&high_ctx),
-                None,
-            )
-            .expect("high-priority task should succeed via eviction");
+        block_on(handle.spawn(
+            task_high,
+            CommandPri::High,
+            6,
+            TaskMetadata::from_ctx(&high_ctx),
+            None,
+        ))
+        .expect("high-priority task should succeed via eviction");
 
         // The eviction metric should have been incremented.
         assert!(
