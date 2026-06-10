@@ -176,15 +176,10 @@ impl ReadPoolHandle {
                 let task_priority = TaskPriority::from(metadata.override_priority());
                 let running_task_gauge = running_tasks[task_priority as usize].clone();
 
-                let is_background = resource_limiter.as_ref().is_some_and(|l| l.is_background());
-                let fixed_level = if is_background {
-                    Some(2)
-                } else {
-                    match priority {
-                        CommandPri::High => Some(0),
-                        CommandPri::Normal => None,
-                        CommandPri::Low => Some(2),
-                    }
+                let fixed_level = match priority {
+                    CommandPri::High => Some(0),
+                    CommandPri::Normal => None,
+                    CommandPri::Low => Some(2),
                 };
                 let group_name = metadata.group_name().to_owned();
                 let mut extras = Extras::new_multilevel(task_id, fixed_level);
