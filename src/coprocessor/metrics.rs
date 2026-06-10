@@ -54,6 +54,8 @@ make_auto_flush_static_metric! {
         seek_tombstone,
         seek_for_prev_tombstone,
         raw_value_tombstone,
+        hit_missing_range,
+        cache_missing_range,
     }
 
     pub label_enum WaitType {
@@ -251,6 +253,8 @@ impl From<GcKeysDetail> for ScanKind {
             GcKeysDetail::seek_tombstone => ScanKind::seek_tombstone,
             GcKeysDetail::seek_for_prev_tombstone => ScanKind::seek_for_prev_tombstone,
             GcKeysDetail::raw_value_tombstone => ScanKind::raw_value_tombstone,
+            GcKeysDetail::hit_missing_range => ScanKind::hit_missing_range,
+            GcKeysDetail::cache_missing_range => ScanKind::cache_missing_range,
         }
     }
 }
