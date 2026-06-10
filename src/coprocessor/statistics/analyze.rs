@@ -102,7 +102,7 @@ fn build_true_block_sample_ranges<S: Snapshot>(
         anchor.range_size = anchor.range_size.max(1);
         if let Some(last) = merged_anchors.last_mut() {
             if last.user_key == anchor.user_key {
-                last.range_size = last.range_size.saturating_add(anchor.range_size);
+                last.range_size = last.range_size.max(anchor.range_size);
                 continue;
             }
         }
