@@ -985,11 +985,10 @@ impl<E: Engine> Endpoint<E> {
             // Release quota after handle completed.
             drop(owned_quota);
         });
-        Ok(self
-            .read_pool
+        self.read_pool
             .spawn(fut, priority, task_id, metadata, resource_limiter)
-            .map(|r| r.map_err(|_| Error::MaxPendingTasksExceeded))
-            .boxed())
+            .map_err(|_| Error::MaxPendingTasksExceeded)?;
+        Ok(futures::future::ready(Ok(())).boxed())
     }
 }
 

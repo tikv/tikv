@@ -7,8 +7,8 @@ use pd_client::RpcClient;
 
 mod resource_group;
 pub use resource_group::{
-    AdmissionDecision, DelaySlotGuard, MIN_PRIORITY_UPDATE_INTERVAL, ResourceConsumeType,
-    ResourceController, ResourceGroupManager,
+    AdmissionDecision, AdmissionPool, AdmissionTask, DelaySlotGuard, MIN_PRIORITY_UPDATE_INTERVAL,
+    ResourceConsumeType, ResourceController, ResourceGroupManager,
 };
 pub use tikv_util::resource_control::*;
 
