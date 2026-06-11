@@ -453,6 +453,7 @@ fn assert_seek<E: Engine>(
         snapshot.iter(cf, IterOptions::default()).unwrap(),
         ScanMode::Mixed,
         false,
+        false,
     );
     let mut statistics = CfStatistics::default();
     cursor.seek(&Key::from_raw(key), &mut statistics).unwrap();
@@ -532,6 +533,7 @@ fn seek<E: Engine>(ctx: SnapContext<'_>, engine: &mut E) {
         snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
         ScanMode::Mixed,
         false,
+        false,
     );
     let mut statistics = CfStatistics::default();
     assert!(
@@ -550,6 +552,7 @@ fn near_seek<E: Engine>(ctx: SnapContext<'_>, engine: &mut E) {
     let mut cursor = Cursor::new(
         snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
         ScanMode::Mixed,
+        false,
         false,
     );
     assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
