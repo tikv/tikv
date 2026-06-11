@@ -45,6 +45,7 @@ use crate::{
 };
 
 const CLEANUP_MAX_REGION_COUNT: usize = 64;
+const SNAP_APPLY_MAX_BATCH_SIZE: usize = 128;
 
 struct ApplyingSnapRegistration {
     snap_mgr: SnapManager,
@@ -580,25 +581,14 @@ where
 
     /// Tries to apply the snapshot of the specified Region. It calls
     /// `apply_snap` to do the actual work.
-    fn handle_apply(&mut self, region_id: u64, peer_id: u64, status: Arc<AtomicUsize>) {
-        let _ = status.compare_exchange(
-            JOB_STATUS_PENDING,
-            JOB_STATUS_RUNNING,
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-        );
-        SNAP_COUNTER.apply.start.inc();
-
-        let start = Instant::now();
-
-        let result = self
-            .prepare_snap(region_id, peer_id, Arc::clone(&status))
-            .map(|app| self.apply_snap(vec![app]))
-            .and_then(|mut applied| {
-                let applied = applied.pop().unwrap();
-                debug_assert_eq!(applied.snap_key.region_id, region_id);
-                applied.result
-            });
+    fn finish_apply(
+        &self,
+        region_id: u64,
+        peer_id: u64,
+        status: Arc<AtomicUsize>,
+        start: Instant,
+        result: Result<()>,
+    ) {
         let tombstone = match result {
             Ok(()) => {
                 status.swap(JOB_STATUS_FINISHED, Ordering::SeqCst);
@@ -637,6 +627,34 @@ where
             region_id,
             CasualMessage::SnapshotApplied { peer_id, tombstone },
         );
+    }
+
+    fn handle_applies(&mut self, tasks: Vec<(u64, u64, Arc<AtomicUsize>)>) {
+        let mut metas = Vec::with_capacity(tasks.len());
+        let mut applies = Vec::with_capacity(tasks.len());
+        for (region_id, peer_id, status) in tasks {
+            let _ = status.compare_exchange(
+                JOB_STATUS_PENDING,
+                JOB_STATUS_RUNNING,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            );
+            SNAP_COUNTER.apply.start.inc();
+
+            let start = Instant::now();
+            match self.prepare_snap(region_id, peer_id, Arc::clone(&status)) {
+                Ok(apply) => {
+                    metas.push((region_id, peer_id, status, start));
+                    applies.push(apply);
+                }
+                Err(err) => self.finish_apply(region_id, peer_id, status, start, Err(err)),
+            }
+        }
+        let applied = self.apply_snap(applies);
+        for ((region_id, peer_id, status, start), applied) in metas.into_iter().zip(applied) {
+            debug_assert_eq!(applied.snap_key.region_id, region_id);
+            self.finish_apply(region_id, peer_id, status, start, applied.result);
+        }
     }
 
     /// Tries to clean up files in pending ranges overlapping with the given
@@ -916,9 +934,10 @@ where
     }
 
     /// Tries to apply pending tasks if there is some.
-    fn handle_pending_applies(&mut self, is_timeout: bool) {
+    fn handle_pending_applies(&mut self, is_timeout: bool, batch: bool) {
         fail_point!("apply_pending_snapshot", |_| {});
         let mut new_batch = true;
+        let mut batch_applies = Vec::new();
         while !self.pending_applies.is_empty() {
             // should not handle too many applies than the number of files that can be
             // ingested. check level 0 every time because we can not make sure
@@ -949,10 +968,21 @@ where
                     SNAP_APPLY_WAIT_DURATION_HISTOGRAM
                         .observe(create_time.saturating_elapsed_secs());
                     new_batch = false;
-                    self.handle_apply(region_id, peer_id, status);
-                    self.mgr.set_pending_apply_count(self.pending_applies.len());
+                    if batch {
+                        batch_applies.push((region_id, peer_id, status));
+                        if batch_applies.len() >= SNAP_APPLY_MAX_BATCH_SIZE {
+                            break;
+                        }
+                    } else {
+                        self.handle_applies(vec![(region_id, peer_id, status)]);
+                        self.mgr.set_pending_apply_count(self.pending_applies.len());
+                    }
                 }
             }
+        }
+        if !batch_applies.is_empty() {
+            self.handle_applies(batch_applies);
+            self.mgr.set_pending_apply_count(self.pending_applies.len());
         }
         SNAP_PENDING_APPLIES_GAUGE.set(self.pending_applies.len() as i64);
     }
@@ -976,9 +1006,14 @@ where
     R: CasualRouter<EK> + Send + Clone + 'static,
 {
     fn run_batch(&mut self, tasks: Vec<Task>) {
+        let mut has_apply = false;
+        let mut had_pending_applies = false;
         for task in tasks {
             match task {
                 task @ Task::Apply { .. } => {
+                    if !has_apply {
+                        had_pending_applies = !self.pending_applies.is_empty();
+                    }
                     fail_point!("on_region_worker_apply", true, |_| {});
                     if self.coprocessor_host.should_pre_apply_snapshot() {
                         let _ = self.pre_apply_snapshot(&task);
@@ -987,23 +1022,34 @@ where
                     // to makes sure applying snapshots in order.
                     self.pending_applies.push_back(task);
                     self.mgr.set_pending_apply_count(self.pending_applies.len());
-                    self.handle_pending_applies(false);
-                    if !self.pending_applies.is_empty() {
-                        // delay the apply and retry later
-                        SNAP_COUNTER.apply.delay.inc()
-                    }
+                    has_apply = true;
                 }
                 Task::Destroy {
                     region_id,
                     start_key,
                     end_key,
                 } => {
+                    if has_apply {
+                        self.handle_pending_applies(false, !had_pending_applies);
+                        if !self.pending_applies.is_empty() {
+                            // delay the apply and retry later
+                            SNAP_COUNTER.apply.delay.inc()
+                        }
+                        has_apply = false;
+                    }
                     fail_point!("on_region_worker_destroy", true, |_| {});
                     // try to delay the range deletion because
                     // there might be a coprocessor request related to this range
                     self.insert_pending_delete_range(region_id, start_key, end_key);
                     self.clean_stale_ranges();
                 }
+            }
+        }
+        if has_apply {
+            self.handle_pending_applies(false, !had_pending_applies);
+            if !self.pending_applies.is_empty() {
+                // delay the apply and retry later
+                SNAP_COUNTER.apply.delay.inc()
             }
         }
     }
@@ -1015,7 +1061,7 @@ where
     R: CasualRouter<EK> + Send + Clone + 'static,
 {
     fn on_timeout(&mut self) {
-        self.handle_pending_applies(true);
+        self.handle_pending_applies(true, false);
         self.clean_stale_tick += 1;
         if self.clean_stale_tick >= self.clean_stale_ranges_tick {
             self.clean_stale_ranges();
@@ -1136,15 +1182,17 @@ pub(crate) mod tests {
         copy_snapshot(sending_snap, receiving_snap).unwrap();
     }
 
-    fn mark_region_applying(engine: &KvTestEngine, region_id: u64) {
-        let region_key = keys::region_state_key(region_id);
-        let mut region_state = engine
-            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
-            .unwrap()
-            .unwrap();
-        region_state.set_state(PeerState::Applying);
+    fn mark_regions_applying(engine: &KvTestEngine, region_ids: &[u64]) {
         let mut wb = engine.write_batch();
-        wb.put_msg_cf(CF_RAFT, &region_key, &region_state).unwrap();
+        for region_id in region_ids {
+            let region_key = keys::region_state_key(*region_id);
+            let mut region_state = engine
+                .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
+                .unwrap()
+                .unwrap();
+            region_state.set_state(PeerState::Applying);
+            wb.put_msg_cf(CF_RAFT, &region_key, &region_state).unwrap();
+        }
         wb.write().unwrap();
     }
 
@@ -1162,6 +1210,10 @@ pub(crate) mod tests {
         let snap_mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         snap_mgr.init().unwrap();
         let (router, receiver) = mpsc::sync_channel(SNAPSHOT_COUNT as usize * 2);
+        let test_key = data_key(b"akey");
+        for cf in SNAPSHOT_CFS {
+            engines.kv.delete_cf(cf, &test_key).unwrap();
+        }
 
         let mut snap_gen_worker = LazyWorker::new("bench-snap-generator");
         let snap_gen_sched = snap_gen_worker.scheduler();
@@ -1184,8 +1236,9 @@ pub(crate) mod tests {
         }
         snap_gen_worker.stop_worker();
 
+        let bg_worker = Worker::new("bench-region-worker");
         b.iter(|| {
-            let mut worker = LazyWorker::new("bench-region-worker");
+            let mut worker = bg_worker.lazy_build("bench-region-worker");
             let sched = worker.scheduler();
             let runner = RegionRunner::new(
                 engines.kv.clone(),
@@ -1194,11 +1247,9 @@ pub(crate) mod tests {
                 CoprocessorHost::<KvTestEngine>::default(),
                 router.clone(),
             );
-            worker.start_with_timer(runner);
-
             let mut statuses = Vec::with_capacity(SNAPSHOT_COUNT as usize);
+            mark_regions_applying(&engines.kv, &region_ids);
             for region_id in &region_ids {
-                mark_region_applying(&engines.kv, *region_id);
                 let status = Arc::new(AtomicUsize::new(JOB_STATUS_PENDING));
                 sched
                     .schedule(Task::Apply {
@@ -1210,6 +1261,7 @@ pub(crate) mod tests {
                     .unwrap();
                 statuses.push(status);
             }
+            worker.start_batch_with_timer(runner);
 
             for _ in 0..SNAPSHOT_COUNT {
                 match receiver.recv_timeout(Duration::from_secs(10)) {
@@ -1220,8 +1272,9 @@ pub(crate) mod tests {
             for status in statuses {
                 assert_eq!(status.load(Ordering::SeqCst), JOB_STATUS_FINISHED);
             }
-            worker.stop_worker();
+            worker.stop();
         });
+        bg_worker.stop();
     }
 
     fn insert_range(
