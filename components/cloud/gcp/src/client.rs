@@ -264,3 +264,51 @@ impl RetryError for RequestError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, SystemTime};
+
+    use tame_oauth::{
+        token_cache::{TokenCache, TokenOrRequestReason},
+        Token,
+    };
+
+    fn token_expiring_after(duration: Duration) -> Token {
+        Token {
+            access_token: "token".to_owned(),
+            refresh_token: String::new(),
+            token_type: "Bearer".to_owned(),
+            expires_in: Some(duration.as_secs() as i64),
+            expires_in_timestamp: Some(SystemTime::now() + duration),
+        }
+    }
+
+    #[test]
+    fn tame_oauth_refreshes_cached_access_tokens_within_refresh_window() {
+        let cache = TokenCache::new();
+        let scope_hash = 1;
+
+        cache
+            .insert(token_expiring_after(Duration::from_secs(60)), scope_hash)
+            .unwrap();
+        assert!(matches!(
+            cache.get(scope_hash).unwrap(),
+            TokenOrRequestReason::RequestReason(_)
+        ));
+    }
+
+    #[test]
+    fn tame_oauth_reuses_cached_access_tokens_outside_refresh_window() {
+        let cache = TokenCache::new();
+        let scope_hash = 1;
+
+        cache
+            .insert(token_expiring_after(Duration::from_secs(601)), scope_hash)
+            .unwrap();
+        assert!(matches!(
+            cache.get(scope_hash).unwrap(),
+            TokenOrRequestReason::Token(_)
+        ));
+    }
+}
