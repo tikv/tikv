@@ -119,7 +119,7 @@ pub struct BatchExecutorsRunner<SS> {
     /// Byte-budget counterpart of `paging_size`, received from
     /// `coprocessor.Request.paging_size_bytes`.
     ///
-    /// When set, the runner stops once the cumulative bytes scanned by the
+    /// When accepted, the runner stops once the cumulative bytes scanned by the
     /// bottom-most scan executor (peeked via
     /// `BatchExecutor::peek_scanned_bytes_sum`) reach this threshold. The byte
     /// count mirrors the MVCC `processed_size` (encoded key + value of every
@@ -129,6 +129,12 @@ pub struct BatchExecutorsRunner<SS> {
     /// that returns few rows is still truncated by the actual data volume read.
     /// It is independent of `paging_size` and `max_keys_read`; whichever
     /// threshold is reached first stops the scan.
+    ///
+    /// This is enabled only for executor trees that can be resumed by scanned
+    /// range alone. Stateful/blocking executors such as aggregation or TopN can
+    /// consume rows into internal state before producing output; stopping
+    /// outside those executors would drop that state between pages and
+    /// corrupt results.
     paging_size_bytes: Option<u64>,
 
     quota_limiter: Arc<QuotaLimiter>,
@@ -286,6 +292,28 @@ fn is_executor_under_parent_tp<'a>(
         left_executors = &left_executors[parent_idx + 1..];
     }
     Ok(false)
+}
+
+/// Returns whether the executor tree can safely continue execution from only
+/// a scanned key range. Assumes the first descriptor in the DAG plan is the
+/// leaf scan executor (TableScan or IndexScan), which is the standard
+/// leaf-to-root ordering used by TiDB.
+fn can_resume_by_scanned_range_only(exec_descriptors: &[tipb::Executor]) -> bool {
+    let Some((scan, rest)) = exec_descriptors.split_first() else {
+        return false;
+    };
+    if !matches!(
+        scan.get_tp(),
+        ExecType::TypeTableScan | ExecType::TypeIndexScan
+    ) {
+        return false;
+    }
+    rest.iter().all(|ed| {
+        matches!(
+            ed.get_tp(),
+            ExecType::TypeSelection | ExecType::TypeProjection
+        )
+    })
 }
 
 #[allow(clippy::explicit_counter_loop)]
@@ -671,6 +699,31 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
+        let paging_size_bytes = if paging_size_bytes.is_some()
+            && !can_resume_by_scanned_range_only(req.get_executors())
+        {
+            // Coprocessor paging resumes with only a scanned key range. That
+            // is sufficient for scan plus stateless operators, but not for
+            // executors with cross-batch state (aggregation, StreamAgg, TopN,
+            // partition TopN, Limit, IndexLookUp, etc.). If byte-budget paging stopped
+            // outside such an executor, rows already consumed into in-memory
+            // state could be lost when the next page rebuilds the executor
+            // tree from only the returned range.
+            //
+            // Be conservative here: new executor types are unsafe until they
+            // explicitly prove that range-only continuation preserves results.
+            // A future executor-aware paging protocol may relax this by
+            // letting stateful executors flush or serialize their continuation
+            // state before a byte-budget boundary.
+            //
+            // TODO(@JmPotato): add a metric (and/or a log) when the byte budget
+            // is dropped here, so the caller can tell "task drained naturally"
+            // apart from "budget ignored by capability gating" when debugging
+            // RU pre-charging.
+            None
+        } else {
+            paging_size_bytes
+        };
         let mut config = EvalConfig::from_request(&req)?;
         config.paging_size = paging_size;
         config.max_keys_read = max_keys_read;
@@ -1379,6 +1432,20 @@ mod tests {
         exec
     }
 
+    fn aggregation_descriptor() -> Executor {
+        let mut exec = Executor::default();
+        exec.set_tp(ExecType::TypeAggregation);
+        exec.set_aggregation(Aggregation::default());
+        exec
+    }
+
+    fn top_n_descriptor() -> Executor {
+        let mut exec = Executor::default();
+        exec.set_tp(ExecType::TypeTopN);
+        exec.set_top_n(TopN::default());
+        exec
+    }
+
     fn column_with_type(col_id: i64, tp: FieldTypeTp) -> ColumnInfo {
         let mut col = ColumnInfo::default();
         col.set_column_id(col_id);
@@ -1399,6 +1466,13 @@ mod tests {
     }
 
     fn build_runner_for_test(req: DagRequest) -> Result<BatchExecutorsRunner<()>> {
+        build_runner_for_test_with_paging_size_bytes(req, None)
+    }
+
+    fn build_runner_for_test_with_paging_size_bytes(
+        req: DagRequest,
+        paging_size_bytes: Option<u64>,
+    ) -> Result<BatchExecutorsRunner<()>> {
         BatchExecutorsRunner::from_request::<_, ApiV1>(
             req,
             vec![],
@@ -1409,7 +1483,7 @@ mod tests {
             false,
             None,
             None,
-            None,
+            paging_size_bytes,
             Arc::new(QuotaLimiter::default()),
         )
     }
@@ -1426,6 +1500,111 @@ mod tests {
         dag.set_output_offsets(vec![0]);
         dag.set_encode_type(EncodeType::TypeChunk);
         build_runner_for_test(dag).unwrap()
+    }
+
+    #[test]
+    fn test_paging_size_bytes_range_only_resume_capability() {
+        let table_scan = table_scan_descriptor(1, vec![column_with_type(1, FieldTypeTp::Long)]);
+        let selection = selection_descriptor(vec![
+            ExprDefBuilder::column_ref(0, FieldTypeTp::Long).build(),
+        ]);
+        let projection = projection_descriptor(vec![
+            ExprDefBuilder::column_ref(0, FieldTypeTp::Long).build(),
+        ]);
+
+        assert!(can_resume_by_scanned_range_only(&[
+            table_scan.clone(),
+            selection,
+            projection
+        ]));
+        assert!(can_resume_by_scanned_range_only(&[index_scan_descriptor(
+            1,
+            2,
+            vec![column_with_type(1, FieldTypeTp::Long)]
+        ),]));
+        assert!(!can_resume_by_scanned_range_only(&[]));
+        assert!(!can_resume_by_scanned_range_only(&[selection_descriptor(
+            vec![ExprDefBuilder::column_ref(0, FieldTypeTp::Long).build()]
+        )]));
+        assert!(!can_resume_by_scanned_range_only(&[
+            table_scan.clone(),
+            index_scan_descriptor(1, 2, vec![column_with_type(1, FieldTypeTp::Long)]),
+        ]));
+
+        for unsafe_executor in [
+            limit_descriptor(1),
+            aggregation_descriptor(),
+            top_n_descriptor(),
+            index_lookup_descriptor(vec![]),
+        ] {
+            assert!(!can_resume_by_scanned_range_only(&[
+                table_scan.clone(),
+                unsafe_executor
+            ]));
+        }
+    }
+
+    #[test]
+    fn test_paging_size_bytes_disabled_for_non_range_resumable_plan() {
+        let mut dag = DagRequest::default();
+        dag.set_executors(
+            vec![
+                table_scan_descriptor(1, vec![column_with_type(1, FieldTypeTp::Long)]),
+                limit_descriptor(10),
+            ]
+            .into(),
+        );
+        dag.set_output_offsets(vec![0]);
+        dag.set_encode_type(EncodeType::TypeChunk);
+
+        let mut runner = build_runner_for_test_with_paging_size_bytes(dag, Some(1500)).unwrap();
+        assert_eq!(runner.paging_size_bytes, None);
+        assert_eq!(runner.config.paging_size_bytes, None);
+
+        let mut mock_executor = MockExecutor::new(
+            vec![FieldTypeTp::Long.into()],
+            vec![
+                build_n_rows_int_result(0, 1),
+                build_n_rows_int_result(10, 1),
+                {
+                    let mut result = build_n_rows_int_result(100, 1);
+                    result.is_drained = Ok(BatchExecIsDrain::Drain);
+                    result
+                },
+            ],
+        );
+        mock_executor.set_scanned_bytes_per_batch(vec![1000, 1000, 1000]);
+        mock_executor.scanned_range = Some((b"a".to_vec(), b"z".to_vec()).into());
+        runner.out_most_executor = Box::new(mock_executor);
+
+        let (resp, range) = block_on(runner.handle_request()).unwrap();
+        assert_eq!(
+            3,
+            resp.get_chunks().len(),
+            "unsafe plans must not stop early by paging_size_bytes"
+        );
+        assert!(
+            range.is_none(),
+            "unsafe plans must drain normally instead of returning a byte-budget range"
+        );
+    }
+
+    #[test]
+    fn test_paging_size_bytes_kept_for_range_resumable_plan() {
+        let mut dag = DagRequest::default();
+        dag.set_executors(
+            vec![table_scan_descriptor(
+                1,
+                vec![column_with_type(1, FieldTypeTp::Long)],
+            )]
+            .into(),
+        );
+        dag.set_output_offsets(vec![0]);
+        dag.set_encode_type(EncodeType::TypeChunk);
+
+        let runner = build_runner_for_test_with_paging_size_bytes(dag, Some(1500)).unwrap();
+        assert_eq!(runner.paging_size_bytes, Some(1500));
+        assert_eq!(runner.config.paging_size_bytes, Some(1500));
     }
 
     fn build_simple_result_for_test(cols: Vec<VectorValue>) -> BatchExecuteResult {
