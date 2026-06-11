@@ -48,14 +48,6 @@ version = 2
 yanked = "deny"
 unmaintained = 'workspace'
 ignore = [
-    # Ignore time 0.1 RUSTSEC-2020-0071 as 1) we have taken measures (see
-    # clippy.toml) to mitigate the issue and 2) time 0.1 has no fix availble.
-    #
-    # NB: Upgrading to time 0.3 do fix the issue but it's an imcompatible
-    # versoin which removes some necessary APIs (`time::precise_time_ns`) that
-    # are required by TiKV.
-    # See https://github.com/time-rs/time/blob/8067540c/CHANGELOG.md#L703
-    "RUSTSEC-2020-0071",
     # Ignore RUSTSEC-2023-0072 as we ban the unsound `X509StoreRef::objects`.
     #
     # NB: Upgrading rust-openssl the latest version do fix the issue but it
