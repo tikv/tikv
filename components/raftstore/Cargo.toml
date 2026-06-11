@@ -23,7 +23,7 @@ test-engines-panic = ["engine_test/test-engines-panic"]
 batch-system = { workspace = true }
 bitflags = "1.0.1"
 byteorder = "1.2"
-bytes = "1.0"
+bytes = { workspace = true }
 causal_ts = { workspace = true }
 chrono = { workspace = true }
 codec = { workspace = true }
