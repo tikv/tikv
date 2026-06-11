@@ -16,8 +16,8 @@ mod metrics;
 mod pool;
 
 pub use pool::{
-    Builder, LazyWorker, ReceiverWrapper, Runnable, RunnableWithTimer, ScheduleError, Scheduler,
-    Worker, dummy_scheduler,
+    BatchRunnable, Builder, LazyWorker, ReceiverWrapper, Runnable, RunnableWithTimer,
+    ScheduleError, Scheduler, Worker, dummy_scheduler,
 };
 
 pub use self::future::{

@@ -1781,7 +1781,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .start("snap-generator", snap_gen_runner);
         let region_scheduler = workers
             .region_worker
-            .start_with_timer("region-worker", region_runner);
+            .start_batch_with_timer("region-worker", region_runner);
         // Same as split_check_scheduler, region worker also runs a infinite
         // loop, that will not stop when shutting down the threadpool, causing the
         // reference to the kv engine inside the scheduler to be dangle. So we need

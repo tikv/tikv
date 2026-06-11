@@ -72,6 +72,15 @@ pub trait Runnable: Send {
     fn shutdown(&mut self) {}
 }
 
+pub trait BatchRunnable: Runnable {
+    /// Runs a batch of tasks.
+    fn run_batch(&mut self, tasks: Vec<Self::Task>) {
+        for task in tasks {
+            self.run(task);
+        }
+    }
+}
+
 pub trait RunnableWithTimer: Runnable {
     fn on_timeout(&mut self);
     fn get_interval(&self) -> Duration;
@@ -90,6 +99,20 @@ impl<R: Runnable + 'static> Drop for RunnableWrapper<R> {
 enum Msg<T: Display + Send> {
     Task(T),
     Timeout,
+}
+
+fn drain_task_batch<T: Display + Send>(
+    first_task: T,
+    receiver: &mut UnboundedReceiver<Msg<T>>,
+) -> (Vec<T>, bool) {
+    let mut tasks = vec![first_task];
+    loop {
+        match receiver.try_next() {
+            Ok(Some(Msg::Task(task))) => tasks.push(task),
+            Ok(Some(Msg::Timeout)) => return (tasks, true),
+            Ok(None) | Err(_) => return (tasks, false),
+        }
+    }
 }
 
 // A wrapper of Runnable that implements RunnableWithTimer with no timeout.
@@ -112,6 +135,12 @@ impl<T: Runnable> RunnableWithTimer for NoTimeoutRunnableWrapper<T> {
     fn on_timeout(&mut self) {}
     fn get_interval(&self) -> Duration {
         Duration::ZERO
+    }
+}
+
+impl<T: BatchRunnable> BatchRunnable for NoTimeoutRunnableWrapper<T> {
+    fn run_batch(&mut self, tasks: Vec<Self::Task>) {
+        self.0.run_batch(tasks)
     }
 }
 
@@ -212,12 +241,34 @@ impl<T: Display + Send + 'static> LazyWorker<T> {
         self.start_with_timer(no_timeout_runner)
     }
 
+    pub fn start_batch<R: 'static + BatchRunnable<Task = T>>(&mut self, runner: R) -> bool {
+        let no_timeout_runner = NoTimeoutRunnableWrapper(runner);
+        self.start_batch_with_timer(no_timeout_runner)
+    }
+
     pub fn start_with_timer<R: 'static + RunnableWithTimer<Task = T>>(
         &mut self,
         runner: R,
     ) -> bool {
         if let Some(receiver) = self.receiver.take() {
             self.worker.start_with_timer_impl(
+                runner,
+                self.scheduler.sender.clone(),
+                receiver,
+                self.metrics_pending_task_count.clone(),
+                self.metrics_handled_task_count.clone(),
+            );
+            return true;
+        }
+        false
+    }
+
+    pub fn start_batch_with_timer<R: 'static + BatchRunnable<Task = T> + RunnableWithTimer>(
+        &mut self,
+        runner: R,
+    ) -> bool {
+        if let Some(receiver) = self.receiver.take() {
+            self.worker.start_batch_with_timer_impl(
                 runner,
                 self.scheduler.sender.clone(),
                 receiver,
@@ -380,6 +431,15 @@ impl Worker {
         self.start_with_timer(name, no_timeout_runner)
     }
 
+    pub fn start_batch<R: BatchRunnable + 'static, S: Into<String>>(
+        &self,
+        name: S,
+        runner: R,
+    ) -> Scheduler<R::Task> {
+        let no_timeout_runner = NoTimeoutRunnableWrapper(runner);
+        self.start_batch_with_timer(name, no_timeout_runner)
+    }
+
     pub fn start_with_timer<R: RunnableWithTimer + 'static, S: Into<String>>(
         &self,
         name: S,
@@ -390,6 +450,33 @@ impl Worker {
         let metrics_pending_task_count = WORKER_PENDING_TASK_VEC.with_label_values(&[&name]);
         let metrics_handled_task_count = WORKER_HANDLED_TASK_VEC.with_label_values(&[&name]);
         self.start_with_timer_impl(
+            runner,
+            tx.clone(),
+            rx,
+            metrics_pending_task_count.clone(),
+            metrics_handled_task_count,
+        );
+        Scheduler::new(
+            tx,
+            self.counter.clone(),
+            self.pending_capacity,
+            metrics_pending_task_count,
+        )
+    }
+
+    pub fn start_batch_with_timer<
+        R: BatchRunnable + RunnableWithTimer + 'static,
+        S: Into<String>,
+    >(
+        &self,
+        name: S,
+        runner: R,
+    ) -> Scheduler<R::Task> {
+        let (tx, rx) = unbounded();
+        let name = name.into();
+        let metrics_pending_task_count = WORKER_PENDING_TASK_VEC.with_label_values(&[&name]);
+        let metrics_handled_task_count = WORKER_HANDLED_TASK_VEC.with_label_values(&[&name]);
+        self.start_batch_with_timer_impl(
             runner,
             tx.clone(),
             rx,
@@ -543,6 +630,49 @@ impl Worker {
             }
         });
     }
+
+    fn start_batch_with_timer_impl<R>(
+        &self,
+        runner: R,
+        tx: UnboundedSender<Msg<R::Task>>,
+        mut receiver: UnboundedReceiver<Msg<R::Task>>,
+        metrics_pending_task_count: IntGauge,
+        metrics_handled_task_count: IntCounter,
+    ) where
+        R: BatchRunnable + RunnableWithTimer + 'static,
+    {
+        let counter = self.counter.clone();
+        let timeout = runner.get_interval();
+        let tx = if !timeout.is_zero() { Some(tx) } else { None };
+        Self::delay_notify(tx.clone(), timeout);
+        let _ = self.pool.spawn(async move {
+            let mut handle = RunnableWrapper { inner: runner };
+            while let Some(msg) = receiver.next().await {
+                match msg {
+                    Msg::Task(task) => {
+                        let (tasks, timeout_elapsed) = drain_task_batch(task, &mut receiver);
+                        let task_count = tasks.len();
+                        handle.inner.run_batch(tasks);
+                        counter.fetch_sub(task_count, Ordering::SeqCst);
+                        for _ in 0..task_count {
+                            metrics_pending_task_count.dec();
+                            metrics_handled_task_count.inc();
+                        }
+                        if timeout_elapsed {
+                            handle.inner.on_timeout();
+                            let timeout = handle.inner.get_interval();
+                            Self::delay_notify(tx.clone(), timeout);
+                        }
+                    }
+                    Msg::Timeout => {
+                        handle.inner.on_timeout();
+                        let timeout = handle.inner.get_interval();
+                        Self::delay_notify(tx.clone(), timeout);
+                    }
+                }
+            }
+        });
+    }
 }
 
 mod tests {
@@ -586,6 +716,22 @@ mod tests {
 
         fn get_interval(&self) -> Duration {
             self.timeout_duration
+        }
+    }
+
+    #[test]
+    fn test_drain_task_batch_stops_at_timeout() {
+        let (tx, mut rx) = unbounded();
+        tx.unbounded_send(Msg::Task(2)).unwrap();
+        tx.unbounded_send(Msg::Timeout).unwrap();
+        tx.unbounded_send(Msg::Task(3)).unwrap();
+
+        let (tasks, timeout_elapsed) = drain_task_batch(1, &mut rx);
+        assert_eq!(tasks, vec![1, 2]);
+        assert!(timeout_elapsed);
+        match rx.try_next().unwrap() {
+            Some(Msg::Task(3)) => {}
+            msg => panic!("expected task after timeout, got {:?}", msg.map(|_| ())),
         }
     }
 
