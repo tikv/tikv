@@ -139,6 +139,3 @@ exceptions = [
 unknown-git = "deny"
 unknown-registry = "deny"
 allow-org = { github = ["tikv", "pingcap", "rust-lang"] }
-# Temporary fork for the co-developed kvproto change, see the `[patch]` section
-# in Cargo.toml. Remove this once the kvproto PR is merged.
-allow-git = ["https://github.com/JmPotato/kvproto"]
