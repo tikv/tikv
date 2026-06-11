@@ -25,8 +25,11 @@ use raftstore::{
     },
 };
 use slog::{Logger, debug};
-use tikv_util::{Either, box_err, codec::number::decode_u64, time::monotonic_raw_now};
-use time::Timespec;
+use tikv_util::{
+    Either, box_err,
+    codec::number::decode_u64,
+    time::{Timespec, monotonic_raw_now},
+};
 use tracker::{GLOBAL_TRACKERS, get_tls_tracker_token};
 use txn_types::WriteBatchFlags;
 

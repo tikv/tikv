@@ -9,8 +9,9 @@ deny = [
     # computting object's md5.
     { name = "md5", wrappers = ["aws", "google-cloud-storage"] },
     { name = "md-5", wrappers = ["aws-smithy-checksums"]},
-    { name = "sha1", wrappers = ["aws-smithy-checksums"]},
     { name = "sha-1" },
+    # time 0.2 pulls sha1 through stdweb's proc-macro on wasm-only targets.
+    { name = "sha1", wrappers = ["aws-smithy-checksums", "stdweb-internal-macros"]},
     { name = "sha2", wrappers = ["oauth2", "aws-sigv4", "aws-smithy-checksums", "aws-sdk-s3", "google-cloud-storage"] },
     { name = "sha3" },
     # Symmetric encryption

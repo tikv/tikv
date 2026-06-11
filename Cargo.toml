@@ -216,6 +216,9 @@ fs2 = { git = "https://github.com/tikv/fs2-rs", branch = "tikv" }
 cmake = { git = "https://github.com/rust-lang/cmake-rs" }
 
 sysinfo = { git = "https://github.com/tikv/sysinfo", branch = "0.26-fix-cpu" }
+
+# tempdir pulls in remove_dir_all 0.5.x via the benchmark-only perfcnt stack.
+tempdir = { path = "patches/tempdir" }
 # When you modify TiKV cooperatively with kvproto, this will be useful to submit the PR to TiKV and the PR to
 # kvproto at the same time.
 # After the PR to kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.
@@ -411,7 +414,7 @@ tikv_alloc = { path = "components/tikv_alloc" }
 tikv_kv = { path = "components/tikv_kv", default-features = false }
 tikv_util = { path = "components/tikv_util" }
 tipb_helper = { path = "components/tipb_helper" }
-time = { version = "0.1" }
+time = { version = "0.2.23" }
 tracker = { path = "components/tracker" }
 txn_types = { path = "components/txn_types" }
 # External libs
