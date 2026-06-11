@@ -103,6 +103,9 @@ ignore = [
     # custom logger, while TiKV's logger implementations don't use rand. Keep the
     # release branch change minimal until dependencies can be upgraded safely.
     "RUSTSEC-2026-0097",
+    # Ignore RUSTSEC-2026-0174 as it has no available fix currently and the 
+    # Authorization issue don't affect the usage in tikv.
+    "RUSTSEC-2026-0174",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,
