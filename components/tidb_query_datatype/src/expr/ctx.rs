@@ -73,7 +73,6 @@ pub struct EvalConfig {
 
     pub paging_size: Option<u64>,
     pub max_keys_read: Option<u64>,
-    pub paging_size_bytes: Option<u64>,
     pub div_precision_increment: u8,
     pub is_test: bool,
 }
@@ -116,7 +115,6 @@ impl EvalConfig {
             sql_mode: SqlMode::empty(),
             paging_size: None,
             max_keys_read: None,
-            paging_size_bytes: None,
             div_precision_increment: DEFAULT_DIV_FRAC_INCR,
             is_test: false,
         }

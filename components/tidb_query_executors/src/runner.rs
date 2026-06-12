@@ -710,6 +710,12 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             // state could be lost when the next page rebuilds the executor
             // tree from only the returned range.
             //
+            // For IndexLookUp this deliberately differs from paging_size and
+            // max_keys_read, which keep their budgets and degrade the pushdown
+            // via force_no_index_lookup: the byte budget is dropped and the
+            // pushdown is kept, so IndexLookUp plans do not participate in
+            // paging_size_bytes at all.
+            //
             // Be conservative here: new executor types are unsafe until they
             // explicitly prove that range-only continuation preserves results.
             // A future executor-aware paging protocol may relax this by
@@ -727,7 +733,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut config = EvalConfig::from_request(&req)?;
         config.paging_size = paging_size;
         config.max_keys_read = max_keys_read;
-        config.paging_size_bytes = paging_size_bytes;
         let config = Arc::new(config);
         let intermediate_output_descriptors = req.take_intermediate_output_channels();
         let out_most_executor = build_executors::<_, F>(
@@ -1559,7 +1564,6 @@ mod tests {
 
         let mut runner = build_runner_for_test_with_paging_size_bytes(dag, Some(1500)).unwrap();
         assert_eq!(runner.paging_size_bytes, None);
-        assert_eq!(runner.config.paging_size_bytes, None);
 
         let mut mock_executor = MockExecutor::new(
             vec![FieldTypeTp::Long.into()],
@@ -1604,7 +1608,6 @@ mod tests {
 
         let runner = build_runner_for_test_with_paging_size_bytes(dag, Some(1500)).unwrap();
         assert_eq!(runner.paging_size_bytes, Some(1500));
-        assert_eq!(runner.config.paging_size_bytes, Some(1500));
     }
 
     fn build_simple_result_for_test(cols: Vec<VectorValue>) -> BatchExecuteResult {
