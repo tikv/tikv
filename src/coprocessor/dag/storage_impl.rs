@@ -154,3 +154,71 @@ impl<S: Store> Storage for TikvStorage<S> {
         self.scanned_bytes
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use txn_types::ValueEntry;
+
+    use super::*;
+    use crate::storage::txn::FixtureStore;
+
+    /// `scanned_bytes` accumulates `kv_processed_size` (encoded key + value)
+    /// for both the interval-scan and the point-get paths, never resets, and
+    /// stays independent of the draining `collect_statistics` path.
+    #[test]
+    fn test_scanned_bytes_accumulation() {
+        let rows: &[(&[u8], &[u8])] = &[
+            (b"row_a", b"value_1"),
+            (b"row_b", b"v2"),
+            (b"row_c", b"another_value"),
+        ];
+        let data: BTreeMap<_, _> = rows
+            .iter()
+            .map(|(k, v)| (Key::from_raw(k), Ok(ValueEntry::from_value(v.to_vec()))))
+            .collect();
+        let mut storage = TikvStorage::new(FixtureStore::new(data), false);
+
+        assert_eq!(storage.scanned_bytes(), 0);
+
+        // Interval scan: every returned entry adds encoded key + value bytes.
+        storage
+            .begin_scan(
+                false,
+                false,
+                false,
+                IntervalRange::from(("row_a", "row_z")),
+            )
+            .unwrap();
+        let mut expected = 0;
+        for _ in 0..rows.len() {
+            let entry = storage.scan_next_entry().unwrap().unwrap();
+            expected += kv_processed_size(Key::from_raw(&entry.key).len(), entry.value.len());
+            assert_eq!(storage.scanned_bytes(), expected);
+        }
+        assert!(storage.scan_next_entry().unwrap().is_none());
+        assert_eq!(storage.scanned_bytes(), expected);
+
+        // Point get: a hit adds encoded key + value bytes, a miss adds
+        // nothing.
+        let hit = storage
+            .get_entry(false, false, PointRange::from("row_b"))
+            .unwrap()
+            .unwrap();
+        expected += kv_processed_size(Key::from_raw(b"row_b").len(), hit.value.len());
+        assert_eq!(storage.scanned_bytes(), expected);
+        assert!(
+            storage
+                .get_entry(false, false, PointRange::from("row_x"))
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(storage.scanned_bytes(), expected);
+
+        // Draining statistics must not reset the cumulative counter.
+        let mut stats = Statistics::default();
+        storage.collect_statistics(&mut stats);
+        assert_eq!(storage.scanned_bytes(), expected);
+    }
+}
