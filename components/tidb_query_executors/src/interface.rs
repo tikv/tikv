@@ -72,9 +72,8 @@ pub trait BatchExecutor: Send {
     /// state.
     fn peek_scanned_rows_sum(&self) -> usize;
 
-    /// Returns the total number of bytes scanned (sum of encoded/mem-comparable
-    /// key and value lengths), without modifying internal state. Used as the
-    /// byte budget for `paging_size_bytes`.
+    /// Returns the total number of bytes scanned (key and value lengths of
+    /// every returned entry), without modifying internal state.
     fn peek_scanned_bytes_sum(&self) -> usize;
 
     /// Collects underlying storage statistics accumulated during execution and
