@@ -1273,7 +1273,10 @@ mod tests {
     use api_version::ApiV1;
     use futures::executor::block_on;
     use kvproto::metapb::Region;
-    use tidb_query_common::execute_stats::ExecSummaryCollectorEnabled;
+    use tidb_query_common::{
+        execute_stats::ExecSummaryCollectorEnabled,
+        storage::{StubAccessor, test_fixture::FixtureStorage},
+    };
     use tidb_query_datatype::{
         FieldTypeTp,
         codec::{
@@ -1549,17 +1552,14 @@ mod tests {
         }
     }
 
-    /// `from_request` applies the range-only-resume gating to
-    /// `paging_size_bytes`: a plan containing a non-resumable executor
-    /// silently drops the byte budget (its runtime behavior is then the
-    /// "disabled" case of `test_paging_size_bytes_stop_conditions`), while a
-    /// range-resumable plan keeps it and gets a fully wired executor tree —
-    /// scanned-range tracking enabled (`take_scanned_range` would panic
-    /// otherwise) and the byte/row peeks flowing through the real
-    /// Projection -> Selection -> TableScan -> RangesScanner -> Storage
-    /// chain.
     #[test]
     fn test_paging_size_bytes_gating_in_from_request() {
+        // from_request applies the range-only-resume gating to
+        // paging_size_bytes: a plan containing a non-resumable executor
+        // silently drops the byte budget (its runtime behavior is then the
+        // "disabled" case of test_paging_size_bytes_stop_conditions), while a
+        // range-resumable plan keeps it and gets a fully wired executor tree.
+
         // A non-resumable executor (Limit) drops the byte budget.
         let mut dag = DagRequest::default();
         dag.set_executors(
@@ -1574,8 +1574,10 @@ mod tests {
         let runner = build_runner_for_test_with_paging_size_bytes(dag, Some(1500)).unwrap();
         assert_eq!(runner.paging_size_bytes, None);
 
-        // A range-resumable plan keeps the budget and is built ready to
-        // resume by scanned range.
+        // A range-resumable plan keeps the budget; the tree must be built
+        // scanned-range aware (take_scanned_range would panic otherwise) and
+        // the byte/row peeks must flow through the real Projection ->
+        // Selection -> TableScan -> RangesScanner -> Storage chain.
         let mut dag = DagRequest::default();
         dag.set_executors(
             vec![
@@ -1596,8 +1598,8 @@ mod tests {
         let mut runner = BatchExecutorsRunner::from_request::<_, ApiV1>(
             dag,
             vec![],
-            tidb_query_common::storage::test_fixture::FixtureStorage::from(data),
-            tidb_query_common::storage::StubAccessor::none(),
+            FixtureStorage::from(data),
+            StubAccessor::none(),
             Deadline::from_now(Duration::from_secs(300)),
             1024,
             false,
@@ -2731,12 +2733,12 @@ mod tests {
 
     // --- Tests for paging_size_bytes ---
 
-    /// One matrix over the budget stop conditions of the `handle_request`
-    /// loop: which budget (row, byte, or none) stops the scan first, and
-    /// whether a resumable range is returned. The budgets are independent —
-    /// whichever threshold is reached first wins.
     #[test]
     fn test_paging_size_bytes_stop_conditions() {
+        // One matrix over the budget stop conditions of the handle_request
+        // loop: which budget (row, byte, or none) stops the scan first, and
+        // whether a resumable range is returned. The budgets are independent
+        // — whichever threshold is reached first wins.
         fn run_case(
             paging_size: Option<u64>,
             paging_size_bytes: Option<u64>,
@@ -2777,7 +2779,7 @@ mod tests {
             vec![1000, 1000, 1000],
             2,
             true,
-            "the byte budget should stop the scan first",
+            "The byte budget should stop the scan first",
         );
         // Both budgets set: the first batch already returns 1 >= 1 rows while
         // the byte budget is far away.
@@ -2787,7 +2789,7 @@ mod tests {
             vec![100, 100, 100],
             1,
             true,
-            "the row budget should stop the scan first",
+            "The row budget should stop the scan first",
         );
         // Byte budget present but not reached: natural drain returns no range.
         run_case(
@@ -2796,7 +2798,7 @@ mod tests {
             vec![100, 100, 100],
             3,
             false,
-            "natural drain before the byte budget must not return a range",
+            "Natural drain before the byte budget must not return a range",
         );
         // Byte budget disabled: large increments must not stop the scan.
         run_case(
@@ -2805,8 +2807,7 @@ mod tests {
             vec![10_000, 10_000, 10_000],
             3,
             false,
-            "a disabled byte budget must not limit scanning",
+            "A disabled byte budget must not limit scanning",
         );
     }
-
 }
