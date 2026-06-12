@@ -224,7 +224,13 @@ where
             || table_task_iter_builder.is_none()
         {
             // We did not support index lookup when paging or max_keys_read is
-            // enabled due to buffering challenges.
+            // enabled due to buffering challenges: the buffered
+            // index-then-table-fetch pipeline only counts the index side, so
+            // the row budgets would under-report the table-lookup scanning.
+            // There is no paging_size_bytes condition here: the runner's
+            // range-resumable gating (can_resume_by_scanned_range_only) drops
+            // the byte budget for any plan containing IndexLookUp, so it can
+            // never reach this builder.
             // TODO: support paging and max_keys_read
             // some times we do not have table_task_iter_builder, such as
             // - CommonHandle
@@ -555,6 +561,11 @@ where
     #[inline]
     fn peek_scanned_rows_sum(&self) -> usize {
         self.src.peek_scanned_rows_sum()
+    }
+
+    #[inline]
+    fn peek_scanned_bytes_sum(&self) -> usize {
+        self.src.peek_scanned_bytes_sum()
     }
 
     #[inline]

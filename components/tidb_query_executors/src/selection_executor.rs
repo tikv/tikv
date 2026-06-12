@@ -245,6 +245,11 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
     }
 
     #[inline]
+    fn peek_scanned_bytes_sum(&self) -> usize {
+        self.src.peek_scanned_bytes_sum()
+    }
+
+    #[inline]
     fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
         self.src.collect_storage_stats(dest);
     }

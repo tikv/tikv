@@ -116,6 +116,27 @@ pub struct BatchExecutorsRunner<SS> {
     /// sent over the network.
     max_keys_read: Option<u64>,
 
+    /// Byte-budget counterpart of `paging_size`, received from
+    /// `coprocessor.Request.paging_size_bytes`.
+    ///
+    /// When accepted, the runner stops once the cumulative bytes scanned by the
+    /// bottom-most scan executor (peeked via
+    /// `BatchExecutor::peek_scanned_bytes_sum`) reach this threshold. The byte
+    /// count mirrors the MVCC `processed_size` (encoded key + value of every
+    /// returned entry), so the page boundary aligns with the bytes used for RU
+    /// accounting. Like `max_keys_read`, it covers every physically scanned KV
+    /// entry before any filtering, aggregation, or projection, so a full scan
+    /// that returns few rows is still truncated by the actual data volume read.
+    /// It is independent of `paging_size` and `max_keys_read`; whichever
+    /// threshold is reached first stops the scan.
+    ///
+    /// This is enabled only for executor trees that can be resumed by scanned
+    /// range alone. Stateful/blocking executors such as aggregation or TopN can
+    /// consume rows into internal state before producing output; stopping
+    /// outside those executors would drop that state between pages and
+    /// corrupt results.
+    paging_size_bytes: Option<u64>,
+
     quota_limiter: Arc<QuotaLimiter>,
 
     /// Information for intermediate output channels.
@@ -271,6 +292,28 @@ fn is_executor_under_parent_tp<'a>(
         left_executors = &left_executors[parent_idx + 1..];
     }
     Ok(false)
+}
+
+/// Returns whether the executor tree can safely continue execution from only
+/// a scanned key range. Assumes the first descriptor in the DAG plan is the
+/// leaf scan executor (TableScan or IndexScan), which is the standard
+/// leaf-to-root ordering used by TiDB.
+fn can_resume_by_scanned_range_only(exec_descriptors: &[tipb::Executor]) -> bool {
+    let Some((scan, rest)) = exec_descriptors.split_first() else {
+        return false;
+    };
+    if !matches!(
+        scan.get_tp(),
+        ExecType::TypeTableScan | ExecType::TypeIndexScan
+    ) {
+        return false;
+    }
+    rest.iter().all(|ed| {
+        matches!(
+            ed.get_tp(),
+            ExecType::TypeSelection | ExecType::TypeProjection
+        )
+    })
 }
 
 #[allow(clippy::explicit_counter_loop)]
@@ -651,10 +694,42 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         is_streaming: bool,
         paging_size: Option<u64>,
         max_keys_read: Option<u64>,
+        paging_size_bytes: Option<u64>,
         quota_limiter: Arc<QuotaLimiter>,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
+        let paging_size_bytes = if paging_size_bytes.is_some()
+            && !can_resume_by_scanned_range_only(req.get_executors())
+        {
+            // Coprocessor paging resumes with only a scanned key range. That
+            // is sufficient for scan plus stateless operators, but not for
+            // executors with cross-batch state (aggregation, StreamAgg, TopN,
+            // partition TopN, Limit, IndexLookUp, etc.). If byte-budget paging stopped
+            // outside such an executor, rows already consumed into in-memory
+            // state could be lost when the next page rebuilds the executor
+            // tree from only the returned range.
+            //
+            // For IndexLookUp this deliberately differs from paging_size and
+            // max_keys_read, which keep their budgets and degrade the pushdown
+            // via force_no_index_lookup: the byte budget is dropped and the
+            // pushdown is kept, so IndexLookUp plans do not participate in
+            // paging_size_bytes at all.
+            //
+            // Be conservative here: new executor types are unsafe until they
+            // explicitly prove that range-only continuation preserves results.
+            // A future executor-aware paging protocol may relax this by
+            // letting stateful executors flush or serialize their continuation
+            // state before a byte-budget boundary.
+            //
+            // TODO(@JmPotato): add a metric (and/or a log) when the byte budget
+            // is dropped here, so the caller can tell "task drained naturally"
+            // apart from "budget ignored by capability gating" when debugging
+            // RU pre-charging.
+            None
+        } else {
+            paging_size_bytes
+        };
         let mut config = EvalConfig::from_request(&req)?;
         config.paging_size = paging_size;
         config.max_keys_read = max_keys_read;
@@ -672,9 +747,13 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             // Required whenever the runner may return a partial result:
             //   - streaming: caller fetches multiple pages
             //   - paging: paging_size limits rows per page
-            //   - max_keys_read: budget limit may stop the scan early
+            //   - max_keys_read: row budget may stop the scan early
+            //   - paging_size_bytes: byte budget may stop the scan early
             // If none of these apply the executor can skip range tracking.
-            is_streaming || paging_size.is_some() || max_keys_read.is_some(),
+            is_streaming
+                || paging_size.is_some()
+                || max_keys_read.is_some()
+                || paging_size_bytes.is_some(),
         )?;
 
         let req_encode_type = req.get_encode_type();
@@ -744,6 +823,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             encode_type,
             paging_size,
             max_keys_read,
+            paging_size_bytes,
             quota_limiter,
             intermediate_channels,
             reserved_intermediate_results: None,
@@ -791,6 +871,9 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         // Running total of physical KV keys scanned (sum of scanned_rows_per_range),
         // used for max_keys_read enforcement.
         let mut scanned_keys_total: u64 = 0;
+        // Running total of MVCC scanned bytes (processed_size) from the storage
+        // layer, peeked via peek_scanned_bytes_sum for paging_size_bytes.
+        let mut scanned_bytes_all: usize = 0;
         let mut intermediate_output_chunks = if self.intermediate_channels.is_empty() {
             vec![]
         } else {
@@ -844,6 +927,12 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 scanned_keys_total = self.out_most_executor.peek_scanned_rows_sum() as u64;
             }
 
+            // Likewise peek the accumulated scanned bytes (MVCC processed_size:
+            // encoded key + value) for paging_size_bytes without draining state.
+            if self.paging_size_bytes.is_some() {
+                scanned_bytes_all = self.out_most_executor.peek_scanned_bytes_sum();
+            }
+
             if chunk.has_rows_data() {
                 chunks.push(chunk);
             }
@@ -851,6 +940,9 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             if drained.stop()
                 || self.paging_size.is_some_and(|p| record_all >= p as usize)
                 || self.max_keys_read.is_some_and(|m| scanned_keys_total >= m)
+                || self
+                    .paging_size_bytes
+                    .is_some_and(|p| scanned_bytes_all >= p as usize)
             {
                 self.out_most_executor
                     .collect_exec_stats(&mut self.exec_stats);
@@ -863,14 +955,16 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 );
                 let range = if drained == BatchExecIsDrain::Drain {
                     None
-                } else {
+                } else if self.paging_size.is_some()
+                    || self.max_keys_read.is_some()
+                    || self.paging_size_bytes.is_some()
+                {
                     // It's not allowed to stop paging when BatchExecIsDrain::PagingDrain.
-                    // Return scanned range for paging or when max_keys_read stopped early.
-                    if self.paging_size.is_some() || self.max_keys_read.is_some() {
-                        Some(self.out_most_executor.take_scanned_range())
-                    } else {
-                        None
-                    }
+                    // Return the scanned range whenever the scan stopped early due to a
+                    // paging row/byte budget or max_keys_read, so the caller can resume.
+                    Some(self.out_most_executor.take_scanned_range())
+                } else {
+                    None
                 };
 
                 let mut sel_resp = SelectResponse::default();
@@ -1179,7 +1273,10 @@ mod tests {
     use api_version::ApiV1;
     use futures::executor::block_on;
     use kvproto::metapb::Region;
-    use tidb_query_common::execute_stats::ExecSummaryCollectorEnabled;
+    use tidb_query_common::{
+        execute_stats::ExecSummaryCollectorEnabled,
+        storage::{StubAccessor, test_fixture::FixtureStorage},
+    };
     use tidb_query_datatype::{
         FieldTypeTp,
         codec::{
@@ -1343,6 +1440,20 @@ mod tests {
         exec
     }
 
+    fn aggregation_descriptor() -> Executor {
+        let mut exec = Executor::default();
+        exec.set_tp(ExecType::TypeAggregation);
+        exec.set_aggregation(Aggregation::default());
+        exec
+    }
+
+    fn top_n_descriptor() -> Executor {
+        let mut exec = Executor::default();
+        exec.set_tp(ExecType::TypeTopN);
+        exec.set_top_n(TopN::default());
+        exec
+    }
+
     fn column_with_type(col_id: i64, tp: FieldTypeTp) -> ColumnInfo {
         let mut col = ColumnInfo::default();
         col.set_column_id(col_id);
@@ -1363,6 +1474,13 @@ mod tests {
     }
 
     fn build_runner_for_test(req: DagRequest) -> Result<BatchExecutorsRunner<()>> {
+        build_runner_for_test_with_paging_size_bytes(req, None)
+    }
+
+    fn build_runner_for_test_with_paging_size_bytes(
+        req: DagRequest,
+        paging_size_bytes: Option<u64>,
+    ) -> Result<BatchExecutorsRunner<()>> {
         BatchExecutorsRunner::from_request::<_, ApiV1>(
             req,
             vec![],
@@ -1373,6 +1491,7 @@ mod tests {
             false,
             None,
             None,
+            paging_size_bytes,
             Arc::new(QuotaLimiter::default()),
         )
     }
@@ -1389,6 +1508,114 @@ mod tests {
         dag.set_output_offsets(vec![0]);
         dag.set_encode_type(EncodeType::TypeChunk);
         build_runner_for_test(dag).unwrap()
+    }
+
+    #[test]
+    fn test_paging_size_bytes_range_only_resume_capability() {
+        let table_scan = table_scan_descriptor(1, vec![column_with_type(1, FieldTypeTp::Long)]);
+        let selection = selection_descriptor(vec![
+            ExprDefBuilder::column_ref(0, FieldTypeTp::Long).build(),
+        ]);
+        let projection = projection_descriptor(vec![
+            ExprDefBuilder::column_ref(0, FieldTypeTp::Long).build(),
+        ]);
+
+        assert!(can_resume_by_scanned_range_only(&[
+            table_scan.clone(),
+            selection,
+            projection
+        ]));
+        assert!(can_resume_by_scanned_range_only(&[index_scan_descriptor(
+            1,
+            2,
+            vec![column_with_type(1, FieldTypeTp::Long)]
+        ),]));
+        assert!(!can_resume_by_scanned_range_only(&[]));
+        assert!(!can_resume_by_scanned_range_only(&[selection_descriptor(
+            vec![ExprDefBuilder::column_ref(0, FieldTypeTp::Long).build()]
+        )]));
+        assert!(!can_resume_by_scanned_range_only(&[
+            table_scan.clone(),
+            index_scan_descriptor(1, 2, vec![column_with_type(1, FieldTypeTp::Long)]),
+        ]));
+
+        for unsafe_executor in [
+            limit_descriptor(1),
+            aggregation_descriptor(),
+            top_n_descriptor(),
+            index_lookup_descriptor(vec![]),
+        ] {
+            assert!(!can_resume_by_scanned_range_only(&[
+                table_scan.clone(),
+                unsafe_executor
+            ]));
+        }
+    }
+
+    #[test]
+    fn test_paging_size_bytes_gating_in_from_request() {
+        // from_request applies the range-only-resume gating to
+        // paging_size_bytes: a plan containing a non-resumable executor
+        // silently drops the byte budget (its runtime behavior is then the
+        // "disabled" case of test_paging_size_bytes_stop_conditions), while a
+        // range-resumable plan keeps it and gets a fully wired executor tree.
+
+        // A non-resumable executor (Limit) drops the byte budget.
+        let mut dag = DagRequest::default();
+        dag.set_executors(
+            vec![
+                table_scan_descriptor(1, vec![column_with_type(1, FieldTypeTp::Long)]),
+                limit_descriptor(10),
+            ]
+            .into(),
+        );
+        dag.set_output_offsets(vec![0]);
+        dag.set_encode_type(EncodeType::TypeChunk);
+        let runner = build_runner_for_test_with_paging_size_bytes(dag, Some(1500)).unwrap();
+        assert_eq!(runner.paging_size_bytes, None);
+
+        // A range-resumable plan keeps the budget; the tree must be built
+        // scanned-range aware (take_scanned_range would panic otherwise) and
+        // the byte/row peeks must flow through the real Projection ->
+        // Selection -> TableScan -> RangesScanner -> Storage chain.
+        let mut dag = DagRequest::default();
+        dag.set_executors(
+            vec![
+                table_scan_descriptor(1, vec![column_with_type(1, FieldTypeTp::Long)]),
+                selection_descriptor(vec![
+                    ExprDefBuilder::column_ref(0, FieldTypeTp::Long).build(),
+                ]),
+                projection_descriptor(vec![
+                    ExprDefBuilder::column_ref(0, FieldTypeTp::Long).build(),
+                ]),
+            ]
+            .into(),
+        );
+        dag.set_output_offsets(vec![0]);
+        dag.set_encode_type(EncodeType::TypeChunk);
+
+        let data: &[(&'static [u8], &'static [u8])] = &[];
+        let mut runner = BatchExecutorsRunner::from_request::<_, ApiV1>(
+            dag,
+            vec![],
+            FixtureStorage::from(data),
+            StubAccessor::none(),
+            Deadline::from_now(Duration::from_secs(300)),
+            1024,
+            false,
+            None,
+            None,
+            Some(1500),
+            Arc::new(QuotaLimiter::default()),
+        )
+        .unwrap();
+        assert_eq!(runner.paging_size_bytes, Some(1500));
+        // Peeks flow through the real executor chain; nothing scanned yet.
+        assert_eq!(runner.out_most_executor.peek_scanned_bytes_sum(), 0);
+        assert_eq!(runner.out_most_executor.peek_scanned_rows_sum(), 0);
+        // Must not panic: range tracking has to be enabled when only the
+        // byte budget is set.
+        let _ = runner.out_most_executor.take_scanned_range();
     }
 
     fn build_simple_result_for_test(cols: Vec<VectorValue>) -> BatchExecuteResult {
@@ -2501,6 +2728,86 @@ mod tests {
         assert!(
             range.is_none(),
             "Range should be None when executor drained before limit"
+        );
+    }
+
+    // --- Tests for paging_size_bytes ---
+
+    #[test]
+    fn test_paging_size_bytes_stop_conditions() {
+        // One matrix over the budget stop conditions of the handle_request
+        // loop: which budget (row, byte, or none) stops the scan first, and
+        // whether a resumable range is returned. The budgets are independent
+        // — whichever threshold is reached first wins.
+        fn run_case(
+            paging_size: Option<u64>,
+            paging_size_bytes: Option<u64>,
+            bytes_per_batch: Vec<usize>,
+            expected_chunks: usize,
+            expect_range: bool,
+            case: &str,
+        ) {
+            let mut runner = build_simple_runner_for_test();
+            runner.paging_size = paging_size;
+            runner.paging_size_bytes = paging_size_bytes;
+            let mut mock_executor = MockExecutor::new(
+                vec![FieldTypeTp::Long.into()],
+                vec![
+                    build_n_rows_int_result(0, 1),
+                    build_n_rows_int_result(10, 1),
+                    {
+                        let mut result = build_n_rows_int_result(100, 1);
+                        result.is_drained = Ok(BatchExecIsDrain::Drain);
+                        result
+                    },
+                ],
+            );
+            mock_executor.set_scanned_bytes_per_batch(bytes_per_batch);
+            mock_executor.scanned_range = Some((b"a".to_vec(), b"z".to_vec()).into());
+            runner.out_most_executor = Box::new(mock_executor);
+
+            let (resp, range) = block_on(runner.handle_request()).unwrap();
+            assert_eq!(expected_chunks, resp.get_chunks().len(), "{}", case);
+            assert_eq!(expect_range, range.is_some(), "{}", case);
+        }
+
+        // Both budgets set: 1000 + 1000 bytes >= 1500 stops the second batch
+        // while only 2 of the 100 budgeted rows are returned.
+        run_case(
+            Some(100),
+            Some(1500),
+            vec![1000, 1000, 1000],
+            2,
+            true,
+            "The byte budget should stop the scan first",
+        );
+        // Both budgets set: the first batch already returns 1 >= 1 rows while
+        // the byte budget is far away.
+        run_case(
+            Some(1),
+            Some(1_000_000),
+            vec![100, 100, 100],
+            1,
+            true,
+            "The row budget should stop the scan first",
+        );
+        // Byte budget present but not reached: natural drain returns no range.
+        run_case(
+            None,
+            Some(100_000),
+            vec![100, 100, 100],
+            3,
+            false,
+            "Natural drain before the byte budget must not return a range",
+        );
+        // Byte budget disabled: large increments must not stop the scan.
+        run_case(
+            None,
+            None,
+            vec![10_000, 10_000, 10_000],
+            3,
+            false,
+            "A disabled byte budget must not limit scanning",
         );
     }
 }
