@@ -1549,8 +1549,18 @@ mod tests {
         }
     }
 
+    /// `from_request` applies the range-only-resume gating to
+    /// `paging_size_bytes`: a plan containing a non-resumable executor
+    /// silently drops the byte budget (its runtime behavior is then the
+    /// "disabled" case of `test_paging_size_bytes_stop_conditions`), while a
+    /// range-resumable plan keeps it and gets a fully wired executor tree —
+    /// scanned-range tracking enabled (`take_scanned_range` would panic
+    /// otherwise) and the byte/row peeks flowing through the real
+    /// Projection -> Selection -> TableScan -> RangesScanner -> Storage
+    /// chain.
     #[test]
-    fn test_paging_size_bytes_disabled_for_non_range_resumable_plan() {
+    fn test_paging_size_bytes_gating_in_from_request() {
+        // A non-resumable executor (Limit) drops the byte budget.
         let mut dag = DagRequest::default();
         dag.set_executors(
             vec![
@@ -1561,53 +1571,49 @@ mod tests {
         );
         dag.set_output_offsets(vec![0]);
         dag.set_encode_type(EncodeType::TypeChunk);
-
-        let mut runner = build_runner_for_test_with_paging_size_bytes(dag, Some(1500)).unwrap();
+        let runner = build_runner_for_test_with_paging_size_bytes(dag, Some(1500)).unwrap();
         assert_eq!(runner.paging_size_bytes, None);
 
-        let mut mock_executor = MockExecutor::new(
-            vec![FieldTypeTp::Long.into()],
-            vec![
-                build_n_rows_int_result(0, 1),
-                build_n_rows_int_result(10, 1),
-                {
-                    let mut result = build_n_rows_int_result(100, 1);
-                    result.is_drained = Ok(BatchExecIsDrain::Drain);
-                    result
-                },
-            ],
-        );
-        mock_executor.set_scanned_bytes_per_batch(vec![1000, 1000, 1000]);
-        mock_executor.scanned_range = Some((b"a".to_vec(), b"z".to_vec()).into());
-        runner.out_most_executor = Box::new(mock_executor);
-
-        let (resp, range) = block_on(runner.handle_request()).unwrap();
-        assert_eq!(
-            3,
-            resp.get_chunks().len(),
-            "unsafe plans must not stop early by paging_size_bytes"
-        );
-        assert!(
-            range.is_none(),
-            "unsafe plans must drain normally instead of returning a byte-budget range"
-        );
-    }
-
-    #[test]
-    fn test_paging_size_bytes_kept_for_range_resumable_plan() {
+        // A range-resumable plan keeps the budget and is built ready to
+        // resume by scanned range.
         let mut dag = DagRequest::default();
         dag.set_executors(
-            vec![table_scan_descriptor(
-                1,
-                vec![column_with_type(1, FieldTypeTp::Long)],
-            )]
+            vec![
+                table_scan_descriptor(1, vec![column_with_type(1, FieldTypeTp::Long)]),
+                selection_descriptor(vec![
+                    ExprDefBuilder::column_ref(0, FieldTypeTp::Long).build(),
+                ]),
+                projection_descriptor(vec![
+                    ExprDefBuilder::column_ref(0, FieldTypeTp::Long).build(),
+                ]),
+            ]
             .into(),
         );
         dag.set_output_offsets(vec![0]);
         dag.set_encode_type(EncodeType::TypeChunk);
 
-        let runner = build_runner_for_test_with_paging_size_bytes(dag, Some(1500)).unwrap();
+        let data: &[(&'static [u8], &'static [u8])] = &[];
+        let mut runner = BatchExecutorsRunner::from_request::<_, ApiV1>(
+            dag,
+            vec![],
+            tidb_query_common::storage::test_fixture::FixtureStorage::from(data),
+            tidb_query_common::storage::StubAccessor::none(),
+            Deadline::from_now(Duration::from_secs(300)),
+            1024,
+            false,
+            None,
+            None,
+            Some(1500),
+            Arc::new(QuotaLimiter::default()),
+        )
+        .unwrap();
         assert_eq!(runner.paging_size_bytes, Some(1500));
+        // Peeks flow through the real executor chain; nothing scanned yet.
+        assert_eq!(runner.out_most_executor.peek_scanned_bytes_sum(), 0);
+        assert_eq!(runner.out_most_executor.peek_scanned_rows_sum(), 0);
+        // Must not panic: range tracking has to be enabled when only the
+        // byte budget is set.
+        let _ = runner.out_most_executor.take_scanned_range();
     }
 
     fn build_simple_result_for_test(cols: Vec<VectorValue>) -> BatchExecuteResult {
@@ -2725,204 +2731,82 @@ mod tests {
 
     // --- Tests for paging_size_bytes ---
 
-    /// paging_size_bytes stops the scan early once the cumulative scanned bytes
-    /// (peeked via `peek_scanned_bytes_sum`) reach the budget, mirroring
-    /// `max_keys_read` but on a byte budget instead of a row budget.
+    /// One matrix over the budget stop conditions of the `handle_request`
+    /// loop: which budget (row, byte, or none) stops the scan first, and
+    /// whether a resumable range is returned. The budgets are independent —
+    /// whichever threshold is reached first wins.
     #[test]
-    fn test_paging_size_bytes_stops_early() {
-        let field_types = vec![FieldTypeTp::Long.into()];
+    fn test_paging_size_bytes_stop_conditions() {
+        fn run_case(
+            paging_size: Option<u64>,
+            paging_size_bytes: Option<u64>,
+            bytes_per_batch: Vec<usize>,
+            expected_chunks: usize,
+            expect_range: bool,
+            case: &str,
+        ) {
+            let mut runner = build_simple_runner_for_test();
+            runner.paging_size = paging_size;
+            runner.paging_size_bytes = paging_size_bytes;
+            let mut mock_executor = MockExecutor::new(
+                vec![FieldTypeTp::Long.into()],
+                vec![
+                    build_n_rows_int_result(0, 1),
+                    build_n_rows_int_result(10, 1),
+                    {
+                        let mut result = build_n_rows_int_result(100, 1);
+                        result.is_drained = Ok(BatchExecIsDrain::Drain);
+                        result
+                    },
+                ],
+            );
+            mock_executor.set_scanned_bytes_per_batch(bytes_per_batch);
+            mock_executor.scanned_range = Some((b"a".to_vec(), b"z".to_vec()).into());
+            runner.out_most_executor = Box::new(mock_executor);
 
-        let mut runner = build_simple_runner_for_test();
-        runner.paging_size_bytes = Some(1500);
+            let (resp, range) = block_on(runner.handle_request()).unwrap();
+            assert_eq!(expected_chunks, resp.get_chunks().len(), "{}", case);
+            assert_eq!(expect_range, range.is_some(), "{}", case);
+        }
 
-        let mut mock_executor = MockExecutor::new(
-            field_types,
-            vec![
-                build_n_rows_int_result(0, 1),
-                build_n_rows_int_result(10, 1),
-                // Third batch should NOT be reached.
-                build_n_rows_int_result(100, 1),
-            ],
-        );
-        // 1000 bytes per batch: cumulative 1000, then 2000 (>= 1500 -> stop).
-        mock_executor.set_scanned_bytes_per_batch(vec![1000, 1000, 1000]);
-        mock_executor.scanned_range = Some((b"a".to_vec(), b"z".to_vec()).into());
-        runner.out_most_executor = Box::new(mock_executor);
-
-        let (resp, range) = block_on(runner.handle_request()).unwrap();
-        assert_eq!(
-            2,
-            resp.get_chunks().len(),
-            "Expected 2 chunks before the byte budget was hit"
-        );
-        assert!(
-            range.is_some(),
-            "Expected scanned range when stopped by paging_size_bytes"
-        );
-    }
-
-    /// When the executor drains before the byte budget is reached, all rows are
-    /// returned and the range is None (fully drained, not an early stop).
-    #[test]
-    fn test_paging_size_bytes_natural_drain_before_limit() {
-        let field_types = vec![FieldTypeTp::Long.into()];
-
-        let mut runner = build_simple_runner_for_test();
-        // Budget far higher than the total scanned bytes (300).
-        runner.paging_size_bytes = Some(100_000);
-
-        let mut mock_executor = MockExecutor::new(
-            field_types,
-            vec![
-                build_n_rows_int_result(0, 1),
-                build_n_rows_int_result(10, 2),
-                {
-                    let mut result = build_n_rows_int_result(100, 1);
-                    result.is_drained = Ok(BatchExecIsDrain::Drain);
-                    result
-                },
-            ],
-        );
-        mock_executor.set_scanned_bytes_per_batch(vec![100, 100, 100]);
-        runner.out_most_executor = Box::new(mock_executor);
-
-        let (resp, range) = block_on(runner.handle_request()).unwrap();
-        assert_eq!(
-            3,
-            resp.get_chunks().len(),
-            "All batches should be returned when the budget is not hit"
-        );
-        assert!(
-            range.is_none(),
-            "Range should be None when the executor drained before the budget"
-        );
-    }
-
-    /// paging_size_bytes = None must not limit scanning at all.
-    #[test]
-    fn test_paging_size_bytes_disabled() {
-        let field_types = vec![FieldTypeTp::Long.into()];
-
-        let mut runner = build_simple_runner_for_test();
-        runner.paging_size_bytes = None;
-
-        let mut mock_executor = MockExecutor::new(
-            field_types,
-            vec![build_n_rows_int_result(0, 3), {
-                let mut result = build_n_rows_int_result(10, 2);
-                result.is_drained = Ok(BatchExecIsDrain::Drain);
-                result
-            }],
-        );
-        // Even with large per-batch bytes, a disabled budget never stops early.
-        mock_executor.set_scanned_bytes_per_batch(vec![10_000, 10_000]);
-        runner.out_most_executor = Box::new(mock_executor);
-
-        let (resp, range) = block_on(runner.handle_request()).unwrap();
-        assert_eq!(
-            2,
-            resp.get_chunks().len(),
-            "All batches should be returned when paging_size_bytes is disabled"
-        );
-        assert!(range.is_none(), "Range should be None when fully drained");
-    }
-
-    /// When only the byte budget is set, the executor tree must still be
-    /// built scanned-range aware (otherwise `take_scanned_range` would panic
-    /// on the first byte-budget stop), and the byte peek must flow through
-    /// the real executor chain down to the storage.
-    #[test]
-    fn test_paging_size_bytes_enables_scanned_range_tracking() {
-        let mut dag = DagRequest::default();
-        dag.set_executors(
-            vec![
-                table_scan_descriptor(1, vec![column_with_type(1, FieldTypeTp::Long)]),
-                selection_descriptor(vec![
-                    ExprDefBuilder::column_ref(0, FieldTypeTp::Long).build(),
-                ]),
-                projection_descriptor(vec![
-                    ExprDefBuilder::column_ref(0, FieldTypeTp::Long).build(),
-                ]),
-            ]
-            .into(),
-        );
-        dag.set_output_offsets(vec![0]);
-        dag.set_encode_type(EncodeType::TypeChunk);
-
-        let data: &[(&'static [u8], &'static [u8])] = &[];
-        let mut runner = BatchExecutorsRunner::from_request::<_, ApiV1>(
-            dag,
-            vec![],
-            tidb_query_common::storage::test_fixture::FixtureStorage::from(data),
-            tidb_query_common::storage::StubAccessor::none(),
-            Deadline::from_now(Duration::from_secs(300)),
-            1024,
-            false,
-            None,
-            None,
+        // Both budgets set: 1000 + 1000 bytes >= 1500 stops the second batch
+        // while only 2 of the 100 budgeted rows are returned.
+        run_case(
+            Some(100),
             Some(1500),
-            Arc::new(QuotaLimiter::default()),
-        )
-        .unwrap();
-        assert_eq!(runner.paging_size_bytes, Some(1500));
-
-        // Peeks flow through the real Projection -> Selection -> TableScan ->
-        // RangesScanner -> Storage chain; nothing is scanned yet.
-        assert_eq!(runner.out_most_executor.peek_scanned_bytes_sum(), 0);
-        assert_eq!(runner.out_most_executor.peek_scanned_rows_sum(), 0);
-        // Must not panic: build_executors has to enable range tracking when
-        // only paging_size_bytes is set.
-        let _ = runner.out_most_executor.take_scanned_range();
-    }
-
-    /// paging_size and paging_size_bytes are independent budgets: whichever
-    /// threshold is reached first stops the scan.
-    #[test]
-    fn test_paging_size_bytes_with_row_paging_whichever_first() {
-        // Byte budget trips before the row budget.
-        let mut runner = build_simple_runner_for_test();
-        runner.paging_size = Some(100);
-        runner.paging_size_bytes = Some(1500);
-        let mut mock_executor = MockExecutor::new(
-            vec![FieldTypeTp::Long.into()],
-            vec![
-                build_n_rows_int_result(0, 1),
-                build_n_rows_int_result(10, 1),
-                build_n_rows_int_result(100, 1),
-            ],
-        );
-        mock_executor.set_scanned_bytes_per_batch(vec![1000, 1000, 1000]);
-        mock_executor.scanned_range = Some((b"a".to_vec(), b"z".to_vec()).into());
-        runner.out_most_executor = Box::new(mock_executor);
-        let (resp, range) = block_on(runner.handle_request()).unwrap();
-        assert_eq!(
+            vec![1000, 1000, 1000],
             2,
-            resp.get_chunks().len(),
-            "the byte budget should stop the scan first"
+            true,
+            "the byte budget should stop the scan first",
         );
-        assert!(range.is_some());
-
-        // Row budget trips before the byte budget.
-        let mut runner = build_simple_runner_for_test();
-        runner.paging_size = Some(1);
-        runner.paging_size_bytes = Some(1_000_000);
-        let mut mock_executor = MockExecutor::new(
-            vec![FieldTypeTp::Long.into()],
-            vec![
-                build_n_rows_int_result(0, 1),
-                build_n_rows_int_result(10, 1),
-                build_n_rows_int_result(100, 1),
-            ],
-        );
-        mock_executor.set_scanned_bytes_per_batch(vec![100, 100, 100]);
-        mock_executor.scanned_range = Some((b"a".to_vec(), b"z".to_vec()).into());
-        runner.out_most_executor = Box::new(mock_executor);
-        let (resp, range) = block_on(runner.handle_request()).unwrap();
-        assert_eq!(
+        // Both budgets set: the first batch already returns 1 >= 1 rows while
+        // the byte budget is far away.
+        run_case(
+            Some(1),
+            Some(1_000_000),
+            vec![100, 100, 100],
             1,
-            resp.get_chunks().len(),
-            "the row budget should stop the scan first"
+            true,
+            "the row budget should stop the scan first",
         );
-        assert!(range.is_some());
+        // Byte budget present but not reached: natural drain returns no range.
+        run_case(
+            None,
+            Some(100_000),
+            vec![100, 100, 100],
+            3,
+            false,
+            "natural drain before the byte budget must not return a range",
+        );
+        // Byte budget disabled: large increments must not stop the scan.
+        run_case(
+            None,
+            None,
+            vec![10_000, 10_000, 10_000],
+            3,
+            false,
+            "a disabled byte budget must not limit scanning",
+        );
     }
+
 }
