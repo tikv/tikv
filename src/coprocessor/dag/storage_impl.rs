@@ -164,11 +164,11 @@ mod tests {
     use super::*;
     use crate::storage::txn::FixtureStore;
 
-    /// `scanned_bytes` accumulates `kv_processed_size` (encoded key + value)
-    /// for both the interval-scan and the point-get paths, never resets, and
-    /// stays independent of the draining `collect_statistics` path.
     #[test]
     fn test_scanned_bytes_accumulation() {
+        // scanned_bytes accumulates kv_processed_size (encoded key + value)
+        // for both the interval-scan and the point-get paths, never resets,
+        // and stays independent of the draining collect_statistics path.
         let rows: &[(&[u8], &[u8])] = &[
             (b"row_a", b"value_1"),
             (b"row_b", b"v2"),
@@ -184,12 +184,7 @@ mod tests {
 
         // Interval scan: every returned entry adds encoded key + value bytes.
         storage
-            .begin_scan(
-                false,
-                false,
-                false,
-                IntervalRange::from(("row_a", "row_z")),
-            )
+            .begin_scan(false, false, false, IntervalRange::from(("row_a", "row_z")))
             .unwrap();
         let mut expected = 0;
         for _ in 0..rows.len() {
