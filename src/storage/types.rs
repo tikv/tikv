@@ -8,11 +8,11 @@ use kvproto::kvrpcpb;
 use txn_types::{Key, LastChange, Value};
 
 use crate::storage::{
+    Callback, Result,
     errors::SharedError,
     lock_manager::WaitTimeout,
     mvcc::{Lock, LockType, TimeStamp, Write, WriteType},
     txn::ProcessResult,
-    Callback, Result,
 };
 
 /// `MvccInfo` stores all mvcc information of given key.
@@ -74,6 +74,7 @@ impl MvccInfo {
                 LockType::Delete => kvrpcpb::Op::Del,
                 LockType::Lock => kvrpcpb::Op::Lock,
                 LockType::Pessimistic => kvrpcpb::Op::PessimisticLock,
+                LockType::Shared => kvrpcpb::Op::SharedLock,
             };
             lock_info.set_type(op);
             lock_info.set_start_ts(lock.ts.into_inner());
@@ -396,6 +397,33 @@ impl PessimisticLockResults {
             }
             _ => unreachable!(),
         }
+    }
+
+    pub fn estimate_resp_size(&self) -> u64 {
+        AsRef::<Vec<PessimisticLockKeyResult>>::as_ref(&self.0)
+            .iter()
+            .map(|res| {
+                match res {
+                    PessimisticLockKeyResult::Empty => 1,
+                    PessimisticLockKeyResult::Value(v) => v.as_ref().map_or(0, |v| v.len() as u64),
+                    PessimisticLockKeyResult::Existence(_) => {
+                        2 // type + bool
+                    }
+                    PessimisticLockKeyResult::LockedWithConflict {
+                        value,
+                        conflict_ts: _,
+                    } => {
+                        10 + value.as_ref().map_or(0, |v| v.len() as u64) // 10 stands for type + bool + conflict_ts
+                    }
+                    PessimisticLockKeyResult::Waiting => {
+                        1 // for test only 
+                    }
+                    PessimisticLockKeyResult::Failed(_) => {
+                        1 // type, ignoring error message
+                    }
+                }
+            })
+            .sum::<u64>()
     }
 }
 

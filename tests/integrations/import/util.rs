@@ -61,6 +61,8 @@ pub fn open_cluster_and_tikv_import_client(
         let cleanup_interval = Duration::from_millis(CLEANUP_SST_MILLIS);
         config.raft_store.cleanup_import_sst_interval.0 = cleanup_interval;
         config.server.grpc_concurrency = 1;
+        config.rocksdb.defaultcf.enable_compaction_guard = Some(true);
+        config.rocksdb.writecf.enable_compaction_guard = Some(true);
         config
     });
 

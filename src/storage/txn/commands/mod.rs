@@ -46,8 +46,8 @@ pub use compare_and_swap::RawCompareAndSwap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 pub use flashback_to_version::FlashbackToVersion;
 pub use flashback_to_version_read_phase::{
-    new_flashback_rollback_lock_cmd, new_flashback_write_cmd, FlashbackToVersionReadPhase,
-    FlashbackToVersionState,
+    FlashbackToVersionReadPhase, FlashbackToVersionState, new_flashback_rollback_lock_cmd,
+    new_flashback_write_cmd,
 };
 pub use flush::Flush;
 use kvproto::kvrpcpb::*;
@@ -56,30 +56,30 @@ pub use mvcc_by_start_ts::MvccByStartTs;
 pub use pause::Pause;
 pub use pessimistic_rollback::PessimisticRollback;
 pub use pessimistic_rollback_read_phase::PessimisticRollbackReadPhase;
-pub use prewrite::{one_pc_commit, Prewrite, PrewritePessimistic};
-pub use resolve_lock::{ResolveLock, RESOLVE_LOCK_BATCH_SIZE};
+pub use prewrite::{Prewrite, PrewritePessimistic, one_pc_commit};
+pub use resolve_lock::{RESOLVE_LOCK_BATCH_SIZE, ResolveLock};
 pub use resolve_lock_lite::ResolveLockLite;
 pub use resolve_lock_readphase::ResolveLockReadPhase;
 pub use rollback::Rollback;
-use tikv_util::{deadline::Deadline, memory::HeapSize};
+use tikv_util::{Either, deadline::Deadline, memory::HeapSize};
 use tracker::RequestType;
 pub use txn_heart_beat::TxnHeartBeat;
 use txn_types::{Key, TimeStamp, Value, Write};
 
 use crate::storage::{
+    Result as StorageResult, Snapshot, Statistics,
     kv::WriteData,
     lock_manager::{
-        self, lock_wait_context::LockWaitContextSharedState, LockManager, LockWaitToken,
-        WaitTimeout,
+        self, LockManager, LockWaitToken, WaitTimeout,
+        lock_wait_context::LockWaitContextSharedState,
     },
     metrics,
     mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotReader},
-    txn::{latch, txn_status_cache::TxnStatusCache, ProcessResult, Result},
+    txn::{ProcessResult, Result, latch, txn_status_cache::TxnStatusCache},
     types::{
         MvccInfo, PessimisticLockParameters, PessimisticLockResults, PrewriteResult,
         SecondaryLocksStatus, StorageCallbackType, TxnStatus,
     },
-    Result as StorageResult, Snapshot, Statistics,
 };
 
 /// Store Transaction scheduler commands.
@@ -217,9 +217,10 @@ impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLock
             .take_mutations()
             .into_iter()
             .map(|x| match x.get_op() {
-                Op::PessimisticLock => (
+                Op::PessimisticLock | Op::SharedPessimisticLock => (
                     Key::from_raw(x.get_key()),
                     x.get_assertion() == Assertion::NotExist,
+                    x.get_op() == Op::SharedPessimisticLock,
                 ),
                 _ => panic!("mismatch Op in pessimistic lock mutations"),
             })
@@ -500,6 +501,8 @@ pub struct WriteResultLockInfo {
     pub lock_info_pb: LockInfo,
     pub parameters: PessimisticLockParameters,
     pub hash_for_latch: u64,
+    /// Whether the pending request is trying to acquire a shared lock.
+    pub is_shared_lock_request: bool,
     /// If a request is woken up after waiting for some lock, and it encounters
     /// another lock again after resuming, this field will carry the token
     /// that was already allocated before.
@@ -515,6 +518,7 @@ impl WriteResultLockInfo {
         parameters: PessimisticLockParameters,
         key: Key,
         should_not_exist: bool,
+        is_shared_lock_request: bool,
     ) -> Self {
         let lock = lock_manager::LockDigest {
             ts: lock_info_pb.get_lock_version().into(),
@@ -528,6 +532,7 @@ impl WriteResultLockInfo {
             lock_info_pb,
             parameters,
             hash_for_latch,
+            is_shared_lock_request,
             lock_wait_token: LockWaitToken(None),
             req_states: None,
         }
@@ -574,7 +579,15 @@ fn find_mvcc_infos_by_key<S: Snapshot>(
 ) -> Result<LockWritesVals> {
     let mut writes = vec![];
     let mut values = vec![];
-    let lock = reader.load_lock(key)?;
+    let lock = reader.load_lock(key)?.and_then(|lock| match lock {
+        Either::Left(lock) => Some(lock),
+        // For SharedLocks, we return the first lock for debug purposes.
+        // This function is only used for collecting MVCC info for debugging.
+        Either::Right(mut shared_locks) => {
+            let first_ts = shared_locks.iter_ts().next().cloned();
+            first_ts.and_then(|ts| shared_locks.get_lock(&ts).ok().flatten().cloned())
+        }
+    });
     loop {
         let opt = reader.seek_write(key, ts)?;
         match opt {
@@ -657,7 +670,7 @@ impl<'a, S: Snapshot> ReaderWithStats<'a, S> {
     }
 }
 
-impl<'a, S: Snapshot> Deref for ReaderWithStats<'a, S> {
+impl<S: Snapshot> Deref for ReaderWithStats<'_, S> {
     type Target = SnapshotReader<S>;
 
     fn deref(&self) -> &Self::Target {
@@ -665,13 +678,13 @@ impl<'a, S: Snapshot> Deref for ReaderWithStats<'a, S> {
     }
 }
 
-impl<'a, S: Snapshot> DerefMut for ReaderWithStats<'a, S> {
+impl<S: Snapshot> DerefMut for ReaderWithStats<'_, S> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.reader
     }
 }
 
-impl<'a, S: Snapshot> Drop for ReaderWithStats<'a, S> {
+impl<S: Snapshot> Drop for ReaderWithStats<'_, S> {
     fn drop(&mut self) {
         self.statistics.add(&self.reader.take_statistics())
     }
@@ -910,9 +923,9 @@ pub mod test_util {
 
     use super::*;
     use crate::storage::{
+        Engine, MockLockManager,
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{Error, ErrorInner, Result},
-        Engine, MockLockManager,
     };
 
     // Some utils for tests that may be used in multiple source code files.
@@ -1125,6 +1138,54 @@ pub mod test_util {
         let ctx = Context::default();
         engine.write(&ctx, ret.to_be_write).unwrap();
         Ok(())
+    }
+
+    pub fn pessimistic_lock<E: Engine>(
+        engine: &mut E,
+        statistics: &mut Statistics,
+        keys: Vec<(&[u8], bool)>,
+        primary: Vec<u8>,
+        start_ts: u64,
+        for_update_ts: u64,
+        return_values: bool,
+    ) -> PessimisticLockResults {
+        let ctx = Context::default();
+        let snap = engine.snapshot(Default::default()).unwrap();
+        let concurrency_manager = ConcurrencyManager::new(start_ts.into());
+        let cmd = AcquirePessimisticLock::new(
+            keys.into_iter()
+                .map(|key| (Key::from_raw(key.0), key.1, false))
+                .collect(),
+            primary,
+            TimeStamp::from(start_ts),
+            0,
+            false,
+            TimeStamp::from(for_update_ts),
+            None,
+            return_values,
+            TimeStamp::zero(),
+            false,
+            false,
+            false,
+            ctx,
+        );
+        let context = WriteContext {
+            lock_mgr: &MockLockManager::new(),
+            concurrency_manager,
+            extra_op: ExtraOp::Noop,
+            statistics,
+            async_apply_prewrite: false,
+            raw_ext: None,
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+        };
+
+        let ret = cmd.cmd.process_write(snap, context).unwrap();
+        let ctx = Context::default();
+        engine.write(&ctx, ret.to_be_write).unwrap();
+        match ret.pr {
+            ProcessResult::PessimisticLockRes { res } => res.unwrap(),
+            _ => unreachable!(),
+        }
     }
 
     pub fn gen_ts_provider(api_version: ApiVersion) -> Option<Arc<CausalTsProviderImpl>> {

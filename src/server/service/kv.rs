@@ -4,8 +4,8 @@
 use std::{
     mem,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -24,28 +24,29 @@ use grpcio::{
 };
 use health_controller::HealthController;
 use kvproto::{coprocessor::*, kvrpcpb::*, mpp::*, raft_serverpb::*, tikvpb::*};
-use protobuf::RepeatedField;
+use protobuf::{Message, RepeatedField};
 use raft::eraftpb::MessageType;
 use raftstore::{
+    Error as RaftStoreError, Result as RaftStoreResult,
     store::{
-        get_memory_usage_entry_cache,
+        CheckLeaderTask, get_memory_usage_entry_cache,
         memory::{MEMTRACE_APPLYS, MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES},
         metrics::MESSAGE_RECV_BY_STORE,
-        CheckLeaderTask,
     },
-    Error as RaftStoreError, Result as RaftStoreResult,
 };
 use resource_control::ResourceGroupManager;
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::{RaftExtension, StageLatencyStats};
 use tikv_util::{
     future::{paired_future_callback, poll_future_notify},
-    mpsc::future::{unbounded, BatchReceiver, Sender, WakePolicy},
+    mpsc::future::{BatchReceiver, Sender, WakePolicy, unbounded},
     sys::memory_usage_reaches_high_water,
     time::Instant,
     worker::Scheduler,
 };
-use tracker::{set_tls_tracker_token, RequestInfo, RequestType, Tracker, GLOBAL_TRACKERS};
+use tracker::{
+    GLOBAL_TRACKERS, RequestInfo, RequestType, Tracker, set_tls_tracker_token, with_tls_tracker,
+};
 use txn_types::{self, Key};
 
 use super::batch::{BatcherBuilder, ReqBatcher};
@@ -53,18 +54,18 @@ use crate::{
     coprocessor::Endpoint,
     coprocessor_v2, forward_duplex, forward_unary, log_net_error,
     server::{
-        gc_worker::GcWorker, load_statistics::ThreadLoadPool, metrics::*, snap::Task as SnapTask,
-        Error, MetadataSourceStoreId, Proxy, Result as ServerResult,
+        Error, MetadataSourceStoreId, Proxy, Result as ServerResult, gc_worker::GcWorker,
+        load_statistics::ThreadLoadPool, metrics::*, snap::Task as SnapTask,
     },
     storage::{
-        self,
+        self, SecondaryLocksStatus, Storage, TxnStatus,
         errors::{
             extract_committed, extract_key_error, extract_key_errors, extract_kv_pairs,
-            extract_region_error, extract_region_error_from_error, map_kv_pairs,
+            extract_region_error, extract_region_error_from_error, map_kv_pair_entries,
+            map_kv_pairs,
         },
         kv::Engine,
         lock_manager::LockManager,
-        SecondaryLocksStatus, Storage, TxnStatus,
     },
 };
 
@@ -778,7 +779,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             let status = match res.await {
                 Err(e) => {
                     let msg = format!("{:?}", e);
-                    error!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
+                    warn!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
                     RpcStatus::with_message(RpcStatusCode::UNKNOWN, msg)
                 }
                 Ok(_) => RpcStatus::new(RpcStatusCode::UNKNOWN),
@@ -836,14 +837,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                 Err(e) => {
                     fail_point!("on_batch_raft_stream_drop_by_err");
                     let msg = format!("{:?}", e);
-                    error!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
+                    warn!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
                     RpcStatus::with_message(RpcStatusCode::UNKNOWN, msg)
                 }
                 Ok(_) => RpcStatus::new(RpcStatusCode::UNKNOWN),
             };
             let _ = sink
                 .fail(status)
-                .map_err(|e| error!("KvService::batch_raft send response fail"; "err" => ?e))
+                .map_err(|e| warn!("KvService::batch_raft send response fail"; "err" => ?e))
                 .await;
         });
     }
@@ -1034,7 +1035,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             }
             future::ok(())
         });
-        ctx.spawn(request_handler.unwrap_or_else(|e| error!("batch_commands error"; "err" => %e)));
+        ctx.spawn(request_handler.unwrap_or_else(|e| warn!("batch_commands error"; "err" => %e)));
 
         let grpc_thread_load = Arc::clone(&self.grpc_thread_load);
         let response_retriever = BatchReceiver::new(
@@ -1261,13 +1262,13 @@ fn response_batch_commands_request<F, T>(
             Ok(resp) => {
                 let task = MeasuredSingleResponse::new(id, resp, measure, None);
                 if let Err(e) = tx.send_with(task, WakePolicy::Immediately) {
-                    error!("KvService response batch commands fail"; "err" => ?e);
+                    warn!("KvService response batch commands fail"; "err" => ?e);
                 }
             }
             Err(server_err @ Error::ClusterIDMisMatch { .. }) => {
                 let task = MeasuredSingleResponse::new(id, T::default(), measure, Some(server_err));
                 if let Err(e) = tx.send_with(task, WakePolicy::Immediately) {
-                    error!("KvService response batch commands fail"; "err" => ?e);
+                    warn!("KvService response batch commands fail"; "err" => ?e);
                 }
             }
             _ => {}
@@ -1501,6 +1502,7 @@ fn handle_measures_for_batch_commands(measures: &mut MeasuredBatchResponse) {
             .get(label)
             .get(resource_priority)
             .observe(elapsed.as_secs_f64());
+        GRPC_BATCH_COMMANDS_WAIT_HISTOGRAM.observe(wait.as_secs_f64());
         record_request_source_metrics(source, elapsed);
         let exec_details = resp.cmd.as_mut().and_then(|cmd| match cmd {
             Get(resp) => Some(resp.mut_exec_details_v2()),
@@ -1558,11 +1560,15 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
         req.get_version(),
     )));
     set_tls_tracker_token(tracker);
+    with_tls_tracker(|tracker| {
+        tracker.metrics.grpc_req_size = req.compute_size() as u64;
+    });
     let start = Instant::now();
-    let v = storage.get(
+    let v = storage.get_entry(
         req.take_context(),
         Key::from_raw(req.get_key()),
         req.get_version().into(),
+        req.get_need_commit_ts(),
     );
 
     async move {
@@ -1584,7 +1590,12 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
                     });
                     set_time_detail(exec_detail_v2, duration, &stats.latency_stats);
                     match val {
-                        Some(val) => resp.set_value(val),
+                        Some(val) => {
+                            resp.set_value(val.value);
+                            if let Some(commit_ts) = val.commit_ts {
+                                resp.set_commit_ts(commit_ts.into_inner());
+                            }
+                        }
                         None => resp.set_not_found(true),
                     }
                 }
@@ -1629,6 +1640,9 @@ fn future_scan<E: Engine, L: LockManager, F: KvFormat>(
         req.get_version(),
     )));
     set_tls_tracker_token(tracker);
+    with_tls_tracker(|tracker| {
+        tracker.metrics.grpc_req_size = req.compute_size() as u64;
+    });
     let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
 
     let v = storage.scan(
@@ -1678,8 +1692,16 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
     )));
     set_tls_tracker_token(tracker);
     let start = Instant::now();
+    with_tls_tracker(|tracker| {
+        tracker.metrics.grpc_req_size = req.compute_size() as u64;
+    });
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
-    let v = storage.batch_get(req.take_context(), keys, req.get_version().into());
+    let v = storage.batch_get(
+        req.take_context(),
+        keys,
+        req.get_version().into(),
+        req.get_need_commit_ts(),
+    );
 
     async move {
         let v = v.await;
@@ -1690,7 +1712,7 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
         } else {
             match v {
                 Ok((kv_res, stats)) => {
-                    let pairs = map_kv_pairs(kv_res);
+                    let pairs = map_kv_pair_entries(kv_res);
                     let exec_detail_v2 = resp.mut_exec_details_v2();
                     stats
                         .stats
@@ -1727,6 +1749,9 @@ fn future_buffer_batch_get<E: Engine, L: LockManager, F: KvFormat>(
         req.get_version(),
     )));
     set_tls_tracker_token(tracker);
+    with_tls_tracker(|tracker| {
+        tracker.metrics.grpc_req_size = req.compute_size() as u64;
+    });
     let start = Instant::now();
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
     let v = storage.buffer_batch_get(req.take_context(), keys, req.get_version().into());
@@ -1771,6 +1796,9 @@ fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat>(
         req.get_max_version(),
     )));
     set_tls_tracker_token(tracker);
+    with_tls_tracker(|tracker| {
+        tracker.metrics.grpc_req_size = req.compute_size() as u64;
+    });
     let start_key = Key::from_raw_maybe_unbounded(req.get_start_key());
     let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
 
@@ -1798,10 +1826,10 @@ fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat>(
     }
 }
 
-async fn future_gc(_: GcRequest) -> ServerResult<GcResponse> {
-    Err(Error::Grpc(GrpcError::RpcFailure(RpcStatus::new(
+fn future_gc(_: GcRequest) -> impl Future<Output = ServerResult<GcResponse>> {
+    std::future::ready(Err(Error::Grpc(GrpcError::RpcFailure(RpcStatus::new(
         RpcStatusCode::UNIMPLEMENTED,
-    ))))
+    )))))
 }
 
 fn future_delete_range<E: Engine, L: LockManager, F: KvFormat>(
@@ -2333,6 +2361,9 @@ macro_rules! txn_command_future {
                 0,
             )));
             set_tls_tracker_token($tracker);
+            with_tls_tracker(|tracker| {
+                tracker.metrics.grpc_req_size = $req.compute_size() as u64;
+            });
             let (cb, f) = paired_future_callback();
             let res = storage.sched_txn_command($req.into(), cb);
 
@@ -2692,6 +2723,7 @@ impl HealthFeedbackAttacher {
         feedback.set_store_id(self.store_id);
         feedback.set_feedback_seq_no(self.seq.fetch_add(1, Ordering::Relaxed));
         feedback.set_slow_score(self.health_controller.get_raftstore_slow_score() as i32);
+        // TODO: set network slow score?
         feedback
     }
 }

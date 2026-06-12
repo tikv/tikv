@@ -22,7 +22,7 @@ pub const DEFAULT_BIG_REGION_BYTE_THRESHOLD: usize = 100 * 1024 * 1024;
 // We get balance score by
 // abs(sample.left-sample.right)/(sample.right+sample.left). It will be used to
 // measure left and right balance
-const DEFAULT_SPLIT_BALANCE_SCORE: f64 = 0.25;
+const DEFAULT_SPLIT_BALANCE_SCORE: f64 = 0.8;
 // We get contained score by
 // sample.contained/(sample.right+sample.left+sample.contained). It will be used
 // to avoid to split regions requested by range.
@@ -39,14 +39,14 @@ const DEFAULT_SPLIT_CONTAINED_SCORE: f64 = 0.5;
 // `REGION_CPU_OVERLOAD_THRESHOLD_RATIO` are exceeded to prevent from increasing
 // the gRPC poll CPU usage.
 const DEFAULT_GRPC_THREAD_CPU_OVERLOAD_THRESHOLD_RATIO: f64 = 0.5;
-// When the Unified Read Poll thread CPU usage is higher than Unified Read Poll
+// When the Unified Read Pool thread CPU usage is higher than Unified Read Pool
 // thread count *
 // `DEFAULT_UNIFIED_READ_POOL_THREAD_CPU_OVERLOAD_THRESHOLD_RATIO`,
 // the CPU-based split will try to check and record the top hot CPU region.
-const DEFAULT_UNIFIED_READ_POOL_THREAD_CPU_OVERLOAD_THRESHOLD_RATIO: f64 = 0.8;
-// When the Unified Read Poll is hot and the region's CPU usage reaches
+const DEFAULT_UNIFIED_READ_POOL_THREAD_CPU_OVERLOAD_THRESHOLD_RATIO: f64 = 0.4;
+// When the Unified Read Pool is hot and the region's CPU usage reaches
 // `REGION_CPU_OVERLOAD_THRESHOLD_RATIO` as a percentage of the Unified Read
-// Poll, it will be added into the hot region list and may be split later as the
+// Pool, it will be added into the hot region list and may be split later as the
 // top hot CPU region.
 pub const REGION_CPU_OVERLOAD_THRESHOLD_RATIO: f64 = 0.25;
 pub const BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO: f64 = 0.75;
@@ -235,8 +235,8 @@ mod tests {
     use tikv_util::config::VersionTrack;
 
     use crate::store::{
-        worker::split_config::{get_sample_num, DEFAULT_SAMPLE_NUM},
         SplitConfig, SplitConfigManager,
+        worker::split_config::{DEFAULT_SAMPLE_NUM, get_sample_num},
     };
 
     #[test]

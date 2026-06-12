@@ -17,24 +17,23 @@ use tikv_util::{
     box_err, debug, info, memory::MemoryQuota, sys::thread::ThreadBuildWrapper, time::Instant,
     warn, worker::Scheduler,
 };
-use tokio::sync::mpsc::{channel, error::SendError, Receiver, Sender, WeakSender};
+use tokio::sync::mpsc::{Receiver, Sender, WeakSender, channel, error::SendError};
 use tracing::instrument;
 use tracing_active_tree::root;
 use txn_types::TimeStamp;
 
 use crate::{
-    annotate,
+    Task, annotate,
     endpoint::{BackupStreamResolver, ObserveOp},
     errors::{Error, ReportableResult, Result},
     event_loader::InitialDataLoader,
     future,
-    metadata::{store::MetaStore, CheckpointProvider, MetadataClient},
+    metadata::{CheckpointProvider, MetadataClient, store::MetaStore},
     metrics,
     router::{Router, TaskSelector},
     subscription_track::{CheckpointType, Ref, RefMut, ResolveResult, SubscriptionTracer},
     try_send,
     utils::{self, FutureWaitGroup, Work},
-    Task,
 };
 
 type ScanPool = tokio::runtime::Runtime;
@@ -236,7 +235,7 @@ async fn scan_executor_loop(init: impl InitialScan, mut cmds: Receiver<ScanCmd>)
 /// spawn the executors to some runtime.
 #[cfg(test)]
 fn spawn_executors_to(
-    init: impl InitialScan + Send + Sync + 'static,
+    init: impl InitialScan + 'static,
     handle: &tokio::runtime::Handle,
 ) -> ScanPoolHandle {
     let (tx, rx) = tokio::sync::mpsc::channel(MESSAGE_BUFFER_SIZE);
@@ -247,10 +246,7 @@ fn spawn_executors_to(
 }
 
 /// spawn the executors in the scan pool.
-fn spawn_executors(
-    init: impl InitialScan + Send + Sync + 'static,
-    number: usize,
-) -> ScanPoolHandle {
+fn spawn_executors(init: impl InitialScan + 'static, number: usize) -> ScanPoolHandle {
     let (tx, rx) = tokio::sync::mpsc::channel(MESSAGE_BUFFER_SIZE);
     let pool = create_scan_pool(number);
     let handle = pool.handle().clone();
@@ -284,6 +280,14 @@ impl ScanPoolHandle {
 
 /// The default channel size.
 const MESSAGE_BUFFER_SIZE: usize = 32768;
+
+fn message_buffer_size() -> usize {
+    fail::fail_point!("log_backup_region_operator_buffer_size", |v| {
+        v.and_then(|x| x.parse::<usize>().ok())
+            .unwrap_or(MESSAGE_BUFFER_SIZE)
+    });
+    MESSAGE_BUFFER_SIZE
+}
 
 /// The operator for region subscription.
 /// It make a queue for operations over the `SubscriptionTracer`, generally,
@@ -348,7 +352,7 @@ where
         HInit: CdcHandle<E> + Sync + 'static,
         HChkLd: CdcHandle<E> + 'static,
     {
-        let (tx, rx) = channel(MESSAGE_BUFFER_SIZE);
+        let (tx, rx) = channel(message_buffer_size());
         let scan_pool_handle = spawn_executors(initial_loader.clone(), scan_pool_size);
         let op = Self {
             regions,
@@ -400,9 +404,9 @@ where
                 info!("backup stream: on_modify_observe"; "op" => ?op);
             }
             match op {
-                ObserveOp::Start { region, handle } => {
+                ObserveOp::Start { region } => {
                     fail::fail_point!("delay_on_start_observe");
-                    self.start_observe(region, handle).await;
+                    self.start_observe(region, ObserveHandle::new()).await;
                     metrics::INITIAL_SCAN_REASON
                         .with_label_values(&["leader-changed"])
                         .inc();
@@ -530,16 +534,11 @@ where
             "mem_usage" => %self.memory_manager.used_ratio(),
             "mem_max" => %self.memory_manager.capacity());
         if let Some(region) = act_region {
-            self.schedule_start_observe(delay, region, None);
+            self.schedule_start_observe(delay, region);
         }
     }
 
-    fn schedule_start_observe(
-        &self,
-        backoff: Duration,
-        region: Region,
-        handle: Option<ObserveHandle>,
-    ) {
+    fn schedule_start_observe(&self, backoff: Duration, region: Region) {
         let tx = self.messenger.upgrade();
         let region_id = region.id;
         if tx.is_none() {
@@ -551,11 +550,10 @@ where
         let tx = tx.unwrap();
         // tikv_util::Instant cannot be converted to std::time::Instant :(
         let start = tokio::time::Instant::now();
-        debug!("Scheduing subscription."; utils::slog_region(&region), "after" => ?backoff, "handle" => ?handle);
+        debug!("Scheduing subscription."; utils::slog_region(&region), "after" => ?backoff);
         let scheduled = async move {
             tokio::time::sleep_until(start + backoff).await;
-            let handle = handle.unwrap_or_else(|| ObserveHandle::new());
-            if let Err(err) = tx.send(ObserveOp::Start { region, handle }).await {
+            if let Err(err) = tx.send(ObserveOp::Start { region }).await {
                 warn!("log backup failed to schedule start observe."; "err" => %err);
             }
         };
@@ -744,7 +742,7 @@ where
             warn!("give up retry retion."; utils::slog_region(&region), "handle" => ?handle);
             return Ok(false);
         }
-        self.schedule_start_observe(backoff_for_start_observe(failure_count), region, None);
+        self.schedule_start_observe(backoff_for_start_observe(failure_count), region);
         metrics::INITIAL_SCAN_REASON
             .with_label_values(&["retry"])
             .inc();
@@ -825,8 +823,8 @@ mod test {
     use std::{
         collections::HashMap,
         sync::{
-            atomic::{AtomicBool, Ordering},
             Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
         },
         time::Duration,
     };
@@ -839,27 +837,27 @@ mod test {
         metapb::{Region, RegionEpoch},
     };
     use raftstore::{
+        RegionInfo,
         coprocessor::{ObserveHandle, RegionInfoCallback, RegionInfoProvider},
         router::{CdcRaftRouter, ServerRaftStoreRouter},
-        RegionInfo,
     };
     use tikv::{
         config::BackupStreamConfig,
-        storage::{txn::txn_status_cache::TxnStatusCache, Statistics},
+        storage::{Statistics, txn::txn_status_cache::TxnStatusCache},
     };
     use tikv_util::{box_err, info, memory::MemoryQuota, worker::dummy_scheduler};
     use tokio::{sync::mpsc::Sender, task::JoinHandle};
     use txn_types::TimeStamp;
 
-    use super::{spawn_executors_to, InitialScan, RegionSubscriptionManager};
+    use super::{InitialScan, RegionSubscriptionManager, spawn_executors_to};
     use crate::{
+        BackupStreamResolver, ObserveOp, Task,
         errors::Error,
-        metadata::{store::SlashEtcStore, MetadataClient, StreamTask},
+        metadata::{MetadataClient, StreamTask, store::SlashEtcStore},
         router::{Router, RouterInner},
         subscription_manager::{OOM_BACKOFF_BASE, OOM_BACKOFF_JITTER_SECS},
         subscription_track::{CheckpointType, SubscriptionTracer},
         utils::FutureWaitGroup,
-        BackupStreamResolver, ObserveOp, Task,
     };
 
     #[derive(Clone, Copy)]
@@ -1039,9 +1037,14 @@ mod test {
             );
             let memory_manager = Arc::new(MemoryQuota::new(1024));
             let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+            let tmp = std::env::temp_dir().join(format!("br-stream-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&tmp).unwrap();
+            let mut bs_cfg = BackupStreamConfig::default();
+            bs_cfg.temp_path = tmp.to_string_lossy().into_owned();
+            bs_cfg.gcp_v2_enable = true;
             let router = RouterInner::new(
                 scheduler.clone(),
-                BackupStreamConfig::default().into(),
+                crate::router::Config::from_backup_stream_config(bs_cfg),
                 BackupEncryptionManager::default(),
             );
             let mut task = StreamBackupTaskInfo::new();
@@ -1144,10 +1147,7 @@ mod test {
         }
 
         fn start_region(&self, region: Region) {
-            self.run(ObserveOp::Start {
-                region,
-                handle: ObserveHandle::new(),
-            })
+            self.run(ObserveOp::Start { region })
         }
 
         fn insert_region(&self, region: Region) {

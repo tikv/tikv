@@ -1,10 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp::{min, Ordering},
+    cmp::{Ordering, min},
     collections::{BinaryHeap, HashSet},
     slice::{Iter, IterMut},
-    sync::{mpsc::Receiver, Arc},
+    sync::{Arc, mpsc::Receiver},
     time::{Duration, SystemTime},
 };
 
@@ -21,7 +21,8 @@ use tikv_util::{
     config::Tracker,
     debug, info,
     metrics::ThreadInfoStatistics,
-    store::{is_read_query, QueryStats},
+    store::{QueryStats, is_read_query},
+    sys::thread::matches_thread_name_prefix,
     time::Instant,
     warn,
 };
@@ -29,11 +30,16 @@ use tikv_util::{
 use crate::store::{
     metrics::*,
     util::build_key_range,
-    worker::{split_config::get_sample_num, FlowStatistics, SplitConfig, SplitConfigManager},
+    worker::{
+        FlowStatistics, SplitConfig, SplitConfigManager, SplitValidator,
+        split_config::get_sample_num,
+    },
 };
 
 const DEFAULT_MAX_SAMPLE_LOOP_COUNT: usize = 10000;
 pub const TOP_N: usize = 10;
+const GRPC_SERVER_THREAD: &str = "grpc-server";
+const UNIFIED_READ_POOL_THREAD: &str = "unified-read";
 
 // It will return prefix sum of the given iter,
 // `read` is a function to process the item from the iter.
@@ -226,6 +232,8 @@ impl Samples {
             LOAD_BASE_SPLIT_SAMPLE_VEC
                 .with_label_values(&["balance_score"])
                 .observe(balance_score);
+            let contained_score = sample.contained as f64 / evaluated_key_num;
+            let final_score = balance_score + contained_score;
             if balance_score >= split_balance_score {
                 LOAD_BASE_SPLIT_EVENT.no_balance_key.inc();
                 continue;
@@ -234,7 +242,6 @@ impl Samples {
             // The contained score is the ratio of a sample key that are contained in the
             // requested key. The larger the contained score, the more RPCs the
             // cluster will receive after this splitting.
-            let contained_score = sample.contained as f64 / evaluated_key_num;
             LOAD_BASE_SPLIT_SAMPLE_VEC
                 .with_label_values(&["contained_score"])
                 .observe(contained_score);
@@ -246,7 +253,6 @@ impl Samples {
             // We try to find a split key that has the smallest balance score and the
             // smallest contained score to make the splitting keep the load
             // balanced while not increasing too many RPCs.
-            let final_score = balance_score + contained_score;
             if final_score < best_score {
                 best_index = index as i32;
                 best_score = final_score;
@@ -744,7 +750,7 @@ impl AutoSplitController {
         thread_stats
             .get_cpu_usages()
             .iter()
-            .filter(|(thread_name, _)| thread_name.contains(name))
+            .filter(|(thread_name, _)| matches_thread_name_prefix(thread_name, name))
             .fold(0, |cpu_usage_sum, (_, cpu_usage)| {
                 // `cpu_usage` is in [0, 100].
                 cpu_usage_sum + cpu_usage
@@ -760,6 +766,7 @@ impl AutoSplitController {
         read_stats_receiver: &Receiver<ReadStats>,
         cpu_stats_receiver: &Receiver<Arc<RawRecords>>,
         thread_stats: &mut ThreadInfoStatistics,
+        split_validator: &SplitValidator,
     ) -> (Vec<usize>, Vec<SplitInfo>) {
         let mut top_cpu_usage = vec![];
         let mut top_qps = BinaryHeap::with_capacity(TOP_N);
@@ -768,8 +775,8 @@ impl AutoSplitController {
         // Prepare some diagnostic info.
         thread_stats.record();
         let (grpc_thread_usage, unified_read_pool_thread_usage) = (
-            Self::collect_thread_usage(thread_stats, "grpc-server"),
-            Self::collect_thread_usage(thread_stats, "unified-read-po"),
+            Self::collect_thread_usage(thread_stats, GRPC_SERVER_THREAD),
+            Self::collect_thread_usage(thread_stats, UNIFIED_READ_POOL_THREAD),
         );
         // Update first before calculating the latest average gRPC poll CPU usage.
         self.update_grpc_thread_usage(grpc_thread_usage);
@@ -790,17 +797,30 @@ impl AutoSplitController {
 
         // Start to record the read stats info.
         let mut split_infos = vec![];
+        let region_cpu_histogram =
+            LOAD_BASE_SPLIT_REGION_LOAD_VEC.with_label_values(&["cpu_millicores"]);
+        let region_qps_histogram = LOAD_BASE_SPLIT_REGION_LOAD_VEC.with_label_values(&["qps"]);
+        let region_bytes_histogram =
+            LOAD_BASE_SPLIT_REGION_LOAD_VEC.with_label_values(&["bytes_kib"]);
         for (region_id, region_infos) in region_infos_map {
+            if split_validator.is_disabled(region_id) {
+                continue;
+            }
             let qps_prefix_sum = prefix_sum(region_infos.iter(), RegionInfo::get_read_qps);
             // region_infos is not empty, so it's safe to unwrap here.
             let qps = *qps_prefix_sum.last().unwrap();
             let byte = region_infos
                 .iter()
                 .fold(0, |flow, region_info| flow + region_info.flow.read_bytes);
-            let (cpu_usage, hottest_key_range) = region_cpu_map
-                .get(&region_id)
-                .map(|(cpu_usage, key_range)| (*cpu_usage, key_range.clone()))
-                .unwrap_or((0.0, None));
+            region_qps_histogram.observe(qps as f64);
+            region_bytes_histogram.observe(byte as f64 / 1024.0);
+            let (cpu_usage, hottest_key_range) =
+                if let Some((cpu_usage, key_range)) = region_cpu_map.get(&region_id) {
+                    region_cpu_histogram.observe(cpu_usage * 1000.0);
+                    (*cpu_usage, key_range.clone())
+                } else {
+                    (0.0, None)
+                };
             let is_region_busy = self.is_region_busy(unified_read_pool_thread_usage, cpu_usage);
             debug!("load base split params";
                 "region_id" => region_id,
@@ -868,9 +888,19 @@ impl AutoSplitController {
                     ));
                     LOAD_BASE_SPLIT_EVENT.ready_to_split.inc();
                     self.recorders.remove(&region_id);
-                } else if is_unified_read_pool_busy && is_region_busy {
-                    LOAD_BASE_SPLIT_EVENT.cpu_load_fit.inc();
-                    top_cpu_usage.push(region_id);
+                } else {
+                    LOAD_BASE_SPLIT_EVENT.normal_key_failed.inc();
+                    if !is_unified_read_pool_busy {
+                        LOAD_BASE_SPLIT_EVENT.cpu_fallback_unified_not_busy.inc();
+                    } else if !is_region_busy {
+                        LOAD_BASE_SPLIT_EVENT.cpu_fallback_region_not_busy.inc();
+                    } else {
+                        LOAD_BASE_SPLIT_EVENT.cpu_load_fit.inc();
+                        if is_grpc_poll_busy {
+                            LOAD_BASE_SPLIT_EVENT.cpu_fallback_grpc_busy.inc();
+                        }
+                        top_cpu_usage.push(region_id);
+                    }
                 }
             } else {
                 LOAD_BASE_SPLIT_EVENT.not_ready_to_split.inc();
@@ -1330,6 +1360,7 @@ mod tests {
                 &read_stats_receiver,
                 &cpu_stats_receiver,
                 &mut ThreadInfoStatistics::default(),
+                &SplitValidator::new(),
             );
             if (i + 1) % hub.cfg.detect_times != 0 {
                 continue;
@@ -1369,6 +1400,7 @@ mod tests {
                 &read_stats_receiver,
                 &cpu_stats_receiver,
                 &mut ThreadInfoStatistics::default(),
+                &SplitValidator::new(),
             );
             if (i + 1) % hub.cfg.detect_times != 0 {
                 continue;
@@ -1409,7 +1441,7 @@ mod tests {
                 region_id,
                 peer_id: 0,
                 key_ranges: vec![(key_range.start_key.clone(), key_range.end_key.clone())],
-                extra_attachment: vec![],
+                extra_attachment: Arc::new(vec![]),
             });
             raw_records.records.insert(
                 key_range_tag.clone(),
@@ -1417,6 +1449,11 @@ mod tests {
                     cpu_time: cpu_times[idx],
                     read_keys: 0,
                     write_keys: 0,
+                    network_in_bytes: 0,
+                    network_out_bytes: 0,
+                    logical_read_bytes: 0,
+                    logical_write_bytes: 0,
+                    ..Default::default()
                 },
             );
         }
@@ -1461,6 +1498,7 @@ mod tests {
                 &read_stats_receiver,
                 &cpu_stats_receiver,
                 &mut ThreadInfoStatistics::default(),
+                &SplitValidator::new(),
             );
         }
 
@@ -1482,6 +1520,7 @@ mod tests {
             &read_stats_receiver,
             &cpu_stats_receiver,
             &mut ThreadInfoStatistics::default(),
+            &SplitValidator::new(),
         );
     }
 
@@ -1840,14 +1879,14 @@ mod tests {
             region_id: 1,
             peer_id: 0,
             key_ranges: vec![(b"a".to_vec(), b"b".to_vec())],
-            extra_attachment: vec![],
+            extra_attachment: Arc::new(vec![]),
         });
         let cd_key_range_tag = Arc::new(TagInfos {
             store_id: 0,
             region_id: 1,
             peer_id: 0,
             key_ranges: vec![(b"c".to_vec(), b"d".to_vec())],
-            extra_attachment: vec![],
+            extra_attachment: Arc::new(vec![]),
         });
         let multiple_key_ranges_tag = Arc::new(TagInfos {
             store_id: 0,
@@ -1857,14 +1896,14 @@ mod tests {
                 (b"a".to_vec(), b"b".to_vec()),
                 (b"c".to_vec(), b"d".to_vec()),
             ],
-            extra_attachment: vec![],
+            extra_attachment: Arc::new(vec![]),
         });
         let empty_key_range_tag = Arc::new(TagInfos {
             store_id: 0,
             region_id: 1,
             peer_id: 0,
             key_ranges: vec![],
-            extra_attachment: vec![],
+            extra_attachment: Arc::new(vec![]),
         });
 
         let test_cases = vec![
@@ -1891,6 +1930,11 @@ mod tests {
                     cpu_time: test_case.0,
                     read_keys: 0,
                     write_keys: 0,
+                    network_in_bytes: 0,
+                    network_out_bytes: 0,
+                    logical_read_bytes: 0,
+                    logical_write_bytes: 0,
+                    ..Default::default()
                 },
             );
             // ["c", "d"] with (test_case.1)ms CPU time.
@@ -1900,6 +1944,11 @@ mod tests {
                     cpu_time: test_case.1,
                     read_keys: 0,
                     write_keys: 0,
+                    network_in_bytes: 0,
+                    network_out_bytes: 0,
+                    logical_read_bytes: 0,
+                    logical_write_bytes: 0,
+                    ..Default::default()
                 },
             );
             // Multiple key ranges with (test_case.2)ms CPU time.
@@ -1909,6 +1958,11 @@ mod tests {
                     cpu_time: test_case.2,
                     read_keys: 0,
                     write_keys: 0,
+                    network_in_bytes: 0,
+                    network_out_bytes: 0,
+                    logical_read_bytes: 0,
+                    logical_write_bytes: 0,
+                    ..Default::default()
                 },
             );
             // Empty key range with (test_case.3)ms CPU time.
@@ -1918,6 +1972,11 @@ mod tests {
                     cpu_time: test_case.3,
                     read_keys: 0,
                     write_keys: 0,
+                    network_in_bytes: 0,
+                    network_out_bytes: 0,
+                    logical_read_bytes: 0,
+                    logical_write_bytes: 0,
+                    ..Default::default()
                 },
             );
 
@@ -2040,6 +2099,7 @@ mod tests {
                 &read_stats_receiver,
                 &cpu_stats_receiver,
                 &mut threads,
+                &SplitValidator::new(),
             );
         });
     }

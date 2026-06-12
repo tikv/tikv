@@ -12,6 +12,7 @@ use api_version::ApiV1;
 use criterion::{black_box, measurement::Measurement};
 use kvproto::coprocessor::KeyRange;
 use test_coprocessor::*;
+use tidb_query_common::storage::StubAccessor;
 use tikv::{
     coprocessor::RequestHandler,
     storage::{RocksEngine, Store as TxnStore},
@@ -42,10 +43,11 @@ pub fn build_dag_handler<TargetTxnStore: TxnStore + 'static>(
     let mut dag = DagRequest::default();
     dag.set_executors(executors.to_vec().into());
 
-    tikv::coprocessor::dag::DagHandlerBuilder::<_, ApiV1>::new(
+    tikv::coprocessor::dag::DagHandlerBuilder::<_, _, ApiV1>::new(
         black_box(dag),
         black_box(ranges.to_vec()),
         black_box(ToTxnStore::<TargetTxnStore>::to_store(store)),
+        StubAccessor::none(),
         tikv_util::deadline::Deadline::from_now(std::time::Duration::from_secs(10)),
         64,
         false,

@@ -3,9 +3,9 @@
 use std::{cell::RefCell, collections::HashMap, sync::Arc, time::Duration};
 
 use futures::{
+    FutureExt, SinkExt, StreamExt,
     channel::mpsc::{self as async_mpsc, Receiver, Sender},
     future::BoxFuture,
-    FutureExt, SinkExt, StreamExt,
 };
 use grpcio::{RpcStatus, RpcStatusCode, WriteFlags};
 use kvproto::{
@@ -20,13 +20,13 @@ use txn_types::TimeStamp;
 use uuid::Uuid;
 
 use crate::{
-    annotate,
+    RegionCheckpointOperation, Task, annotate,
     errors::{Error, Result},
     future,
-    metadata::{store::MetaStore, Checkpoint, CheckpointProvider, MetadataClient},
+    metadata::{Checkpoint, CheckpointProvider, MetadataClient, store::MetaStore},
     metrics,
     subscription_track::ResolveResult,
-    try_send, RegionCheckpointOperation, Task,
+    try_send,
 };
 
 /// A manager for maintaining the last flush ts.
@@ -53,7 +53,6 @@ impl std::fmt::Debug for CheckpointManager {
 enum SubscriptionOp {
     Add(Subscription),
     Emit(Box<[FlushEvent]>),
-    #[cfg(test)]
     Inspect(Box<dyn FnOnce(&SubscriptionManager) + Send>),
 }
 
@@ -76,7 +75,6 @@ impl SubscriptionManager {
                 SubscriptionOp::Emit(events) => {
                     self.emit_events(events).await;
                 }
-                #[cfg(test)]
                 SubscriptionOp::Inspect(f) => {
                     f(&self);
                 }
@@ -274,7 +272,9 @@ impl CheckpointManager {
         e.and_modify(|old_cp| {
             let old_ver = old_cp.region.get_region_epoch().get_version();
             let checkpoint_is_newer = old_cp.checkpoint < checkpoint;
-            if !checkpoint_is_newer {
+            // Shouldn't log when checkpoint is the same or it can be really verbose when
+            // checkpoint stuck due to pending txn...
+            if !checkpoint_is_newer && old_cp.checkpoint != checkpoint {
                 warn!("received older checkpoint, maybe region merge.";
                     "region_id" => old_cp.region.get_id(),
                     "old_ver" => old_ver,
@@ -383,6 +383,10 @@ impl CheckpointManager {
         GetCheckpointResult::ok(checkpoint.region.clone(), checkpoint.checkpoint)
     }
 
+    pub fn checkpoint_count(&self) -> usize {
+        self.checkpoint_ts.len()
+    }
+
     /// get all checkpoints stored.
     pub fn get_all(&self) -> Vec<LastFlushTsOfRegion> {
         self.checkpoint_ts.values().cloned().collect()
@@ -392,8 +396,7 @@ impl CheckpointManager {
         self.resolved_ts.values().map(|x| x.checkpoint).min()
     }
 
-    #[cfg(test)]
-    fn sync_with_subs_mgr<T: Send + 'static>(
+    pub fn sync_with_subs_mgr<T: Send + 'static>(
         &mut self,
         f: impl FnOnce(&SubscriptionManager) -> T + Send + 'static,
     ) -> T {
@@ -612,7 +615,7 @@ pub mod tests {
         time::Duration,
     };
 
-    use futures::{future::ok, Sink};
+    use futures::{Sink, future::ok};
     use grpcio::{RpcStatus, RpcStatusCode};
     use kvproto::{logbackuppb::SubscribeFlushEventResponse, metapb::*};
     use pd_client::{PdClient, PdFuture};
@@ -620,8 +623,8 @@ pub mod tests {
 
     use super::{BasicFlushObserver, FlushObserver, RegionIdWithVersion};
     use crate::{
-        subscription_track::{CheckpointType, ResolveResult},
         GetCheckpointResult,
+        subscription_track::{CheckpointType, ResolveResult},
     };
 
     fn region(id: u64, version: u64, conf_version: u64) -> Region {

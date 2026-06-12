@@ -13,10 +13,10 @@ use std::{fmt, str::FromStr, sync::atomic::Ordering};
 
 use atomic::Atomic;
 use protobuf::atomic_flags::{
-    set_redact_level as proto_set_redact_level, RedactLevel, DEFAULT_REDACT_MARKER_HEAD,
-    DEFAULT_REDACT_MARKER_TAIL,
+    DEFAULT_REDACT_MARKER_HEAD, DEFAULT_REDACT_MARKER_TAIL, RedactLevel,
+    set_redact_level as proto_set_redact_level,
 };
-use serde::{de, Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer, de};
 
 pub use crate::hex::*;
 
@@ -109,7 +109,7 @@ impl<'de> Deserialize<'de> for RedactOption {
     {
         struct RedactOptionVisitor;
 
-        impl<'de> de::Visitor<'de> for RedactOptionVisitor {
+        impl de::Visitor<'_> for RedactOptionVisitor {
             type Value = RedactOption;
 
             fn expecting(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -156,6 +156,7 @@ pub fn set_redact_info_log(config: RedactOption) {
     proto_set_redact_level(level);
 }
 
+#[derive(Clone, Copy)]
 pub struct Value<'a>(pub &'a [u8]);
 
 impl<'a> Value<'a> {
@@ -168,7 +169,7 @@ impl<'a> Value<'a> {
     }
 }
 
-impl<'a> slog::Value for Value<'a> {
+impl slog::Value for Value<'_> {
     #[inline]
     fn serialize(
         &self,
@@ -194,7 +195,7 @@ impl<'a> slog::Value for Value<'a> {
     }
 }
 
-impl<'a> fmt::Display for Value<'a> {
+impl fmt::Display for Value<'_> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match REDACT_INFO_LOG.load(Ordering::Relaxed) {
@@ -218,7 +219,7 @@ impl<'a> fmt::Display for Value<'a> {
     }
 }
 
-impl<'a> fmt::Debug for Value<'a> {
+impl fmt::Debug for Value<'_> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(self, f)

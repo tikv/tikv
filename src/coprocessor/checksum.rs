@@ -1,12 +1,12 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use api_version::{keyspace::KvPair, ApiV1};
+use api_version::{ApiV1, keyspace::KvPairEntry};
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use tidb_query_common::storage::{
-    scanner::{RangesScanner, RangesScannerOptions},
     Range,
+    scanner::{RangesScanner, RangesScannerOptions},
 };
 use tikv_alloc::trace::MemoryTraceGuard;
 use tipb::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse};
@@ -48,6 +48,7 @@ impl<S: Snapshot> ChecksumContext<S> {
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: false,
+            load_commit_ts: false,
         });
         Ok(Self { req, scanner })
     }

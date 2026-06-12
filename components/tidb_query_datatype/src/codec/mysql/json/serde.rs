@@ -6,10 +6,13 @@ use serde::{
     de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor},
     ser::{Error as SerError, Serialize, SerializeMap, SerializeTuple, Serializer},
 };
-use serde_json::Serializer as JsonSerializer;
+use serde_json::{
+    Serializer as JsonSerializer,
+    ser::{CompactFormatter, Formatter as _},
+};
 
 use super::{Json, JsonRef, JsonType};
-use crate::codec::Error;
+use crate::codec::{Error, convert::ToStringValue};
 
 /// MySQL formatter follows the implementation in TiDB
 /// https://github.com/pingcap/tidb/blob/master/types/json/binary.go
@@ -49,6 +52,22 @@ impl serde_json::ser::Formatter for MySqlFormatter {
             writer.write_all(b", ")
         }
     }
+
+    #[inline]
+    fn write_f32<W>(&mut self, writer: &mut W, value: f32) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        write_mysql_finite_float(writer, value as f64)
+    }
+
+    #[inline]
+    fn write_f64<W>(&mut self, writer: &mut W, value: f64) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        write_mysql_finite_float(writer, value)
+    }
 }
 
 impl MySqlFormatter {
@@ -57,10 +76,24 @@ impl MySqlFormatter {
     }
 }
 
-impl<'a> ToString for JsonRef<'a> {
+fn write_mysql_finite_float<W>(writer: &mut W, value: f64) -> std::io::Result<()>
+where
+    W: ?Sized + std::io::Write,
+{
+    let mut formatted = Vec::with_capacity(32);
+    CompactFormatter.write_f64(&mut formatted, value)?;
+    if let Some(pos) = formatted.windows(2).position(|window| window == b"e+") {
+        writer.write_all(&formatted[..=pos])?;
+        writer.write_all(&formatted[(pos + 2)..])
+    } else {
+        writer.write_all(&formatted)
+    }
+}
+
+impl ToStringValue for JsonRef<'_> {
     /// This function is a simple combination and rewrite of serde_json's
     /// `to_writer_pretty`
-    fn to_string(&self) -> String {
+    fn to_string_value(&self) -> String {
         let mut writer = Vec::with_capacity(128);
         let mut ser = JsonSerializer::with_formatter(&mut writer, MySqlFormatter::new());
         self.serialize(&mut ser).unwrap();
@@ -71,7 +104,7 @@ impl<'a> ToString for JsonRef<'a> {
     }
 }
 
-impl<'a> Serialize for JsonRef<'a> {
+impl Serialize for JsonRef<'_> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -144,9 +177,9 @@ impl<'a> Serialize for JsonRef<'a> {
     }
 }
 
-impl ToString for Json {
-    fn to_string(&self) -> String {
-        self.as_ref().to_string()
+impl ToStringValue for Json {
+    fn to_string_value(&self) -> String {
+        self.as_ref().to_string_value()
     }
 }
 
@@ -255,7 +288,7 @@ mod tests {
     fn test_from_str_for_object() {
         let jstr1 = r#"{"a": [1, "2", {"aa": "bb"}, 4.0, null], "c": null,"b": true}"#;
         let j1: Json = jstr1.parse().unwrap();
-        let jstr2 = j1.to_string();
+        let jstr2 = j1.to_string_value();
         let expect_str = r#"{"a": [1, "2", {"aa": "bb"}, 4.0, null], "b": true, "c": null}"#;
         assert_eq!(jstr2, expect_str);
     }
@@ -336,7 +369,7 @@ mod tests {
         ];
 
         for (json, json_str) in legal_cases {
-            assert_eq!(json.to_string(), json_str);
+            assert_eq!(json.to_string_value(), json_str);
         }
     }
 }

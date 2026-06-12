@@ -3,7 +3,7 @@ use std::{fmt, sync::Arc};
 
 use online_config::{ConfigManager, ConfigValue, OnlineConfig};
 use serde::{Deserialize, Serialize};
-use tikv_util::config::VersionTrack;
+use tikv_util::config::{ReadableSize, VersionTrack};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
@@ -12,6 +12,55 @@ pub struct Config {
     #[online_config(skip)]
     pub enabled: bool,
     pub priority_ctl_strategy: PriorityCtlStrategy,
+    /// CPU utilization percentage at which background task throttling begins.
+    /// Background budget scales linearly from full down to zero between this
+    /// value and fg_cpu_throttle_threshold.
+    pub bg_cpu_throttle_threshold: f64,
+    /// CPU utilization percentage at which foreground task protection kicks in:
+    /// background tasks are fully throttled to their minimum floor and the
+    /// background utilization limit is capped here.
+    pub fg_cpu_throttle_threshold: f64,
+    /// Compaction pressure percentage at which background write IO throttling
+    /// begins. Dynamically configurable at runtime.
+    pub bg_compaction_pressure_threshold: f64,
+    /// Maximum write IO rate allowed for background tasks when
+    /// compaction pressure is lower than the threshold.
+    pub bg_write_io_ceiling: ReadableSize,
+    /// Minimum write IO rate that background tasks are always allowed,
+    /// even under maximum compaction pressure.
+    pub bg_write_io_floor: ReadableSize,
+    /// When true, enables fair two-phase scheduling for reads: groups whose
+    /// current-minute RU rate exceeds their historical baseline are placed in
+    /// phase 1 (deprioritised in the yatp priority queue) relative to groups
+    /// within their baseline (phase 0). Protects sustained workloads from
+    /// sudden traffic spikes without hard-rejecting requests.
+    pub enable_fair_scheduling: bool,
+    /// When true, enables Tier-1 admission control for reads: high-priority
+    /// read requests from groups that are over their RU baseline are shed
+    /// (SchedTooBusy) when CPU exceeds fg_cpu_throttle_threshold.
+    pub enable_read_admission_control: bool,
+    /// When true, enables Tier-1 admission control for writes: high-priority
+    /// write requests from groups that are over their RU baseline are shed
+    /// (SchedTooBusy) when CPU exceeds fg_cpu_throttle_threshold.
+    pub enable_write_admission_control: bool,
+    /// Size of the sliding window (in minutes) used to compute per-group
+    /// historical RU baselines for fair scheduling and admission control.
+    /// The window is divided into 30-second buckets (2 per minute). Minimum 2,
+    /// maximum 60. Not hot-reloadable; changing requires a restart.
+    #[online_config(skip)]
+    pub historical_usage_window_mins: u64,
+    /// Percentage of headroom above the historical RU baseline before a group
+    /// is considered "over baseline" for two-phase scheduling and CPU
+    /// utilization throttling. For example, 20.0 means a group must exceed
+    /// 1.2× its historical rate to be deprioritized or rate-limited.
+    /// Default: 20.0 (20%).
+    pub baseline_burst_pct: f64,
+    /// Maximum number of requests that can concurrently sit in the admission
+    /// control delay phase (reads and writes combined). When this limit is
+    /// reached, additional over-baseline requests are rejected immediately
+    /// (SchedTooBusy) rather than delayed. Set to 0 to disable the limit
+    /// (unlimited delayed requests). Default: 10_000.
+    pub admission_max_delayed_count: u64,
 }
 
 impl Default for Config {
@@ -19,6 +68,17 @@ impl Default for Config {
         Self {
             enabled: true,
             priority_ctl_strategy: PriorityCtlStrategy::Moderate,
+            bg_cpu_throttle_threshold: 60.0,
+            fg_cpu_throttle_threshold: 70.0,
+            bg_compaction_pressure_threshold: 70.0,
+            bg_write_io_ceiling: ReadableSize::gb(100),
+            bg_write_io_floor: ReadableSize::mb(10),
+            enable_fair_scheduling: false,
+            enable_read_admission_control: false,
+            enable_write_admission_control: false,
+            historical_usage_window_mins: 15,
+            baseline_burst_pct: 20.0,
+            admission_max_delayed_count: 10_000,
         }
     }
 }

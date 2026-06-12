@@ -1045,6 +1045,21 @@ def gRPC() -> RowPanel:
                     ),
                 ],
             ),
+            graph_panel(
+                title=r"gRPC batch commands wait duration",
+                description=r"The 99.99% wait time of gRPC batch commands",
+                yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.9999,
+                            "tikv_grpc_batch_commands_wait_duration_seconds",
+                        ),
+                        legend_format="P9999",
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
         ]
     )
     layout.row(
@@ -2744,6 +2759,96 @@ def RaftAdmin() -> RowPanel:
     layout.row(
         [
             graph_panel(
+                title="Observed region CPU for load-base split",
+                description=(
+                    "Per-region CPU observed before load-fit filtering when "
+                    "load-base split evaluates regions. Unit follows other CPU "
+                    "panels: 100% means one CPU core. This is pre-load-fit "
+                    "decision input; use the tail distribution to tune split "
+                    "thresholds. Use additional_groupby=instance only when "
+                    "drilling into a specific TiKV; keep it as none for large "
+                    "clusters."
+                ),
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_operator(
+                            expr_histogram_quantile(
+                                0.9999,
+                                "tikv_load_base_split_region_load",
+                                label_selectors=['type="cpu_millicores"'],
+                            ),
+                            "/",
+                            "1000",
+                        ),
+                        legend_format="99.99%",
+                        additional_groupby=True,
+                    ),
+                    target(
+                        expr=expr_operator(
+                            expr_histogram_quantile(
+                                0.99,
+                                "tikv_load_base_split_region_load",
+                                label_selectors=['type="cpu_millicores"'],
+                            ),
+                            "/",
+                            "1000",
+                        ),
+                        legend_format="99%",
+                        additional_groupby=True,
+                    ),
+                    target(
+                        expr=expr_operator(
+                            expr_histogram_avg(
+                                "tikv_load_base_split_region_load",
+                                label_selectors=['type="cpu_millicores"'],
+                                by_labels=[],
+                            ),
+                            "/",
+                            "1000",
+                        ),
+                        legend_format="avg",
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+            graph_panel_histogram_quantiles(
+                title="Observed region QPS for load-base split",
+                description=(
+                    "Per-region QPS observed before load-fit filtering when "
+                    "load-base split evaluates regions. This is pre-load-fit "
+                    "decision input; use the tail distribution to tune split "
+                    "thresholds. Use additional_groupby=instance only when "
+                    "drilling into a specific TiKV; keep it as none for large "
+                    "clusters."
+                ),
+                yaxes=yaxes(left_format=UNITS.REQUESTS_PER_SEC),
+                metric="tikv_load_base_split_region_load",
+                label_selectors=['type="qps"'],
+                hide_count=True,
+                additional_groupby=True,
+            ),
+            graph_panel_histogram_quantiles(
+                title="Observed region read bytes for load-base split",
+                description=(
+                    "Per-region read bytes observed before load-fit filtering "
+                    "when load-base split evaluates regions. Unit: KiB. This is "
+                    "pre-load-fit decision input; use the tail distribution to "
+                    "tune split thresholds. Use additional_groupby=instance only "
+                    "when drilling into a specific TiKV; keep it as none for "
+                    "large clusters."
+                ),
+                yaxes=yaxes(left_format=UNITS.KIBI_BYTES),
+                metric="tikv_load_base_split_region_load",
+                label_selectors=['type="bytes_kib"'],
+                hide_count=True,
+                additional_groupby=True,
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
                 title="Peer in Flashback State",
                 targets=[
                     target(
@@ -3038,6 +3143,20 @@ def YatpPool(
                 yaxis=yaxis(format=UNITS.SECONDS),
                 metric="tikv_yatp_pool_schedule_wait_duration_bucket",
                 label_selectors=[f'name=~"{pool_name_prefix}.*"'],
+            ),
+            graph_panel(
+                title="Running threads",
+                description="The number of concurrently running threads in the yatp thread pool.",
+                targets=[
+                    target(
+                        expr=expr_sum_aggr_over_time(
+                            "tikv_unified_read_pool_thread_count",
+                            "avg",
+                            "1m",
+                        ),
+                        additional_groupby=True,
+                    ),
+                ],
             ),
         ]
     )
@@ -3565,13 +3684,25 @@ def SchedulerCommands() -> RowPanel:
     layout.row(
         [
             graph_panel_histogram_quantiles(
-                title="Scheduler command read duration",
-                description="The time consumed on reading when executing commit command",
+                title="Scheduler command process duration",
+                description="The time consumed on processing command",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 metric="tikv_scheduler_processing_read_duration_seconds",
                 label_selectors=['type="$command"'],
                 hide_count=True,
             ),
+            graph_panel_histogram_quantiles(
+                title="Scheduler command block read duration",
+                description="The time consumed on rocksdb block read while processing command",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_scheduler_block_read_duration_seconds",
+                label_selectors=['type="$command"'],
+                hide_count=True,
+            ),
+        ]
+    )
+    layout.row(
+        [
             heatmap_panel(
                 title="Check memory locks duration",
                 description="The time consumed on checking memory locks",
@@ -3695,6 +3826,12 @@ def Scheduler() -> RowPanel:
                 title="Txn Scheduler Pool Wait Duration",
                 yaxis=yaxis(format=UNITS.SECONDS),
                 metric="tikv_yatp_pool_schedule_wait_duration_bucket",
+                label_selectors=['name=~"sched-worker.*"'],
+            ),
+            heatmap_panel(
+                title="Txn Scheduler Pool Exec Duration",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_yatp_pool_schedule_exec_duration_bucket",
                 label_selectors=['name=~"sched-worker.*"'],
             ),
         ]
@@ -4011,6 +4148,75 @@ def GC() -> RowPanel:
             ),
         ]
     )
+    # Auto Compaction panels
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Auto Compaction Duration",
+                description="Time spent on auto compaction operations by type",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_auto_compaction_duration_seconds",
+                by_labels=["type"],
+                hide_count=True,
+            ),
+            graph_panel(
+                title="Auto Compaction Regions Status",
+                description="Number of regions meeting compaction threshold and pending candidates",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_auto_compaction_regions_meet_threshold",
+                        ),
+                        legend_format="regions meet threshold",
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_auto_compaction_pending_candidates",
+                        ),
+                        legend_format="pending candidates",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Auto Compaction Num Tombstones",
+                description="Histogram of number of tombstones in compaction candidates",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                metric="tikv_auto_compaction_num_tombstones",
+                hide_count=True,
+            ),
+            graph_panel_histogram_quantiles(
+                title="Auto Compaction Num Discardable",
+                description="Histogram of number of discardable MVCC versions in compaction candidates",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                metric="tikv_auto_compaction_num_discardable",
+                hide_count=True,
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Auto Compaction MVCC Versions Scanned",
+                description="Histogram of average MVCC versions scanned per request for compaction candidates",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                metric="tikv_auto_compaction_mvcc_versions_scanned",
+                hide_count=True,
+            ),
+            graph_panel_histogram_quantiles(
+                title="Auto Compaction Score",
+                description="Histogram of compaction scores for candidates",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                metric="tikv_auto_compaction_score",
+                hide_count=True,
+            ),
+        ]
+    )
+
     return layout.row_panel
 
 
@@ -4333,6 +4539,7 @@ def CoprocessorOverview() -> RowPanel:
         [
             graph_panel(
                 title="KV Cursor Operations",
+                yaxes=yaxes(left_format=UNITS.SHORT),
                 targets=[
                     target(
                         expr=expr_sum_rate(
@@ -4536,7 +4743,7 @@ def CoprocessorDetail() -> RowPanel:
             ),
             graph_panel(
                 title="Total Ops Details by CF (Index Scan)",
-                yaxes=yaxes(left_format=UNITS.OPS_PER_MIN),
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
                 targets=[
                     target(
                         expr=expr_sum_rate(
@@ -4559,6 +4766,34 @@ def CoprocessorDetail() -> RowPanel:
             yaxis_format=UNITS.SECONDS,
             metric="tikv_coprocessor_mem_lock_check_duration_seconds",
         ),
+    )
+    layout.row(
+        heatmap_panel_graph_panel_histogram_quantile_pairs(
+            heatmap_title="Semaphore waiting duration",
+            heatmap_description="The time consumed on waiting for semaphore permits for heavy coprocessor requests",
+            graph_title="Semaphore waiting duration",
+            graph_description="The time consumed on waiting for semaphore permits for heavy coprocessor requests",
+            yaxis_format=UNITS.SECONDS,
+            metric="tikv_coprocessor_semaphore_wait_time_duration_seconds",
+        ),
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Semaphore waiting tasks count",
+                description="The number of cop tasks waiting for semaphore permits.",
+                targets=[
+                    target(
+                        expr=expr_sum_aggr_over_time(
+                            "tikv_coprocessor_waiting_for_semaphore",
+                            "avg",
+                            "30s",
+                        ),
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+        ]
     )
     return layout.row_panel
 
@@ -10018,6 +10253,21 @@ def SlowTrendStatistics() -> RowPanel:
                     ),
                 ],
             ),
+            graph_panel(
+                title="Disk Probe Duration",
+                description="The fail-fast disk probe duration by disk and outcome.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_raftstore_disk_probe_duration_seconds",
+                            by_labels=["instance", "disk", "outcome"],
+                        ),
+                        legend_format="{{instance}}-{{disk}}-{{outcome}}-0.99",
+                    ),
+                ],
+            ),
         ]
     )
     layout.row(
@@ -10074,6 +10324,25 @@ def SlowTrendStatistics() -> RowPanel:
             ),
         ]
     )
+    layout.row(
+        [
+            graph_panel(
+                title="Inspected network duration per server",
+                description="The duration that recorded by inspecting network. Note: it will be collected only when duration is greater than 100ms, to avoid collect too many metrics.",
+                yaxes=yaxes(left_format=UNITS.MILLI_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.8,
+                            "tikv_raftstore_inspect_network_duration_seconds",
+                            by_labels=["source", "type"],
+                        ),
+                        legend_format="{{source}}-{{target}}",
+                    ),
+                ],
+            ),
+        ]
+    )
     return layout.row_panel
 
 
@@ -10120,7 +10389,7 @@ def ResourceControl() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_resource_control_background_task_wait_duration",
-                            by_labels=["instance", "resource_group"],
+                            by_labels=["instance"],
                         ),
                     ),
                 ],
@@ -10134,6 +10403,271 @@ def ResourceControl() -> RowPanel:
                         expr=expr_sum(
                             "tikv_resource_control_priority_quota_limit",
                             by_labels=["instance", "priority"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Analyze read ops per second (total vs block read)",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_analyze_metrics_total",
+                            label_selectors=['metric="read_total_op_count"'],
+                            by_labels=["instance"],
+                        ),
+                        legend_format="total-op/{{instance}}",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_analyze_metrics_total",
+                            label_selectors=['metric="read_iops"'],
+                            by_labels=["instance"],
+                        ),
+                        legend_format="block-read/{{instance}}",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_coprocessor_rocksdb_perf",
+                            label_selectors=[
+                                'req="analyze_full_sampling"',
+                                'metric="block_read_count"',
+                            ],
+                            by_labels=["instance"],
+                        ),
+                        legend_format="copr-block-read/{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Analyze next batch count per second",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_analyze_metrics_total",
+                            label_selectors=['metric="next_batch_count"'],
+                            by_labels=["instance"],
+                        ),
+                        legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    return layout.row_panel
+
+
+def LoadShedding() -> RowPanel:
+    layout = Layout(title="Load Shedding")
+    # Row 1: RU rates per group
+    layout.row(
+        [
+            graph_panel(
+                title="CPU Utilization % per Resource Group",
+                description="Historical baseline and current CPU utilization % per resource group (100% = 1 core).",
+                yaxes=yaxes(left_format=UNITS.PERCENT_FORMAT),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resource_control_group_ru_historical_rate",
+                            by_labels=["resource_group"],
+                        ).extra(" > 0"),
+                        legend_format="historical-{{resource_group}}",
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_resource_control_group_ru_current_rate",
+                            by_labels=["resource_group"],
+                        ).extra(" > 0"),
+                        legend_format="current-{{resource_group}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Background Resource Utilization",
+                description="Total resource utilization percentage of background tasks.",
+                yaxes=yaxes(left_format=UNITS.PERCENT_FORMAT),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resource_control_bg_resource_utilization",
+                            by_labels=["type"],
+                        ).extra(" > 0"),
+                    ),
+                ],
+            ),
+        ]
+    )
+    # Row 2: Quota limits
+    layout.row(
+        [
+            graph_panel(
+                title="Resource Group Quota Limit",
+                description="Current rate limit per resource group (0 = unlimited, hidden).",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resource_control_group_quota_limit",
+                            by_labels=["resource_group", "type"],
+                        ).extra(" > 0"),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Background Quota Limit",
+                description="Current quota limit for background resource groups.",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resource_control_background_quota_limiter",
+                            by_labels=["resource_group", "type"],
+                        ).extra(" > 0"),
+                    ),
+                ],
+            ),
+        ]
+    )
+    # Row 3: Deprioritized/delayed/rejected + currently delayed
+    layout.row(
+        [
+            graph_panel(
+                title="Deprioritized / Delayed / Rejected Requests",
+                description="Rate of deprioritized (phase 1), delayed, and rejected requests.",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_resource_control_two_phase_throttled_requests_total",
+                            by_labels=["resource_group"],
+                        ).extra(" > 0"),
+                        legend_format="deprioritized-{{resource_group}}",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_resource_control_admission_delayed_requests_total",
+                            by_labels=["resource_group", "is_background"],
+                        ).extra(" > 0"),
+                        legend_format="delayed-{{resource_group}}-{{is_background}}",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_resource_control_admission_rejected_requests_total",
+                            by_labels=["resource_group", "is_background"],
+                        ).extra(" > 0"),
+                        legend_format="rejected-{{resource_group}}-{{is_background}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Currently Delayed Requests",
+                description="Number of requests currently sitting in admission control delay.",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resource_control_admission_currently_delayed",
+                        ).extra(" > 0"),
+                    ),
+                ],
+            ),
+        ]
+    )
+    # Row 4: Delay duration + background wait duration
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Admission Delay Duration",
+                description="Delay duration imposed by foreground admission control.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_resource_control_admission_delay_duration_seconds",
+                label_selectors=['is_background="false"'],
+                by_labels=["resource_group"],
+            ),
+            graph_panel(
+                title="Background Task Wait Duration",
+                description="Total wait duration of background tasks per resource group.",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_resource_control_background_task_wait_duration",
+                            by_labels=["resource_group"],
+                        ).extra(" > 0"),
+                    ),
+                ],
+            ),
+        ]
+    )
+    return layout.row_panel
+
+
+def TikvConfig() -> RowPanel:
+    layout = Layout(title="Config")
+    # RocksDB DB Configuration Table
+    layout.row(
+        [
+            table_panel(
+                title="RocksDB DB Config",
+                description="TiKV RocksDB DB Configuration",
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_config_rocksdb_db",
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    # RocksDB CF Configuration Table
+    layout.row(
+        [
+            table_panel(
+                title="RocksDB CF Config",
+                description="TiKV RocksDB CF Configuration",
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_config_rocksdb_cf",
+                        ).extra(
+                            " or (tikv_config_rocksdb unless tikv_config_rocksdb_cf)"
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    # Flow Control Configuration Table
+    layout.row(
+        [
+            table_panel(
+                title="Flow Control Config",
+                description="TiKV Flow Control Configuration",
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_config_flow_control",
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    # Raftstore Configuration Table
+    layout.row(
+        [
+            table_panel(
+                title="Raftstore Config",
+                description="TiKV Raftstore Configuration",
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_config_raftstore",
                         ),
                     ),
                 ],
@@ -10207,6 +10741,7 @@ dashboard = Dashboard(
         Memory(),
         # Infrequently Used
         ResourceControl(),
+        LoadShedding(),
         StatusServer(),
         Encryption(),
         TTL(),

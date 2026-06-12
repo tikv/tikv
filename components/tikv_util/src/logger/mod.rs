@@ -8,20 +8,25 @@ use std::{
     io::{self, BufWriter},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Mutex,
+        atomic::{AtomicUsize, Ordering},
+        mpsc::channel,
     },
     thread,
+    time::Duration,
 };
 
 use log::{self, SetLoggerError};
-use slog::{self, slog_o, Drain, FnValue, Key, OwnedKVList, PushFnValue, Record, KV};
+use slog::{self, Drain, FnValue, KV, Key, OwnedKVList, PushFnValue, Record, slog_o};
 pub use slog::{FilterFn, Level};
 use slog_async::{Async, AsyncGuard, OverflowStrategy};
 use slog_term::{Decorator, PlainDecorator, RecordDecorator};
 
 use self::file_log::{RotateBySize, RotatingFileLogger, RotatingFileLoggerBuilder};
-use crate::config::{ReadableDuration, ReadableSize};
+use crate::{
+    config::{ReadableDuration, ReadableSize},
+    sys::thread::StdThreadBuildWrapper,
+};
 
 // Default is 128.
 // Extended since blocking is set, and we don't want to block very often.
@@ -31,7 +36,7 @@ const SLOG_CHANNEL_SIZE: usize = 10240;
 const SLOG_CHANNEL_OVERFLOW_STRATEGY: OverflowStrategy = OverflowStrategy::Drop;
 const TIMESTAMP_FORMAT: &str = "%Y/%m/%d %H:%M:%S%.3f %:z";
 
-static LOG_LEVEL: AtomicUsize = AtomicUsize::new(usize::max_value());
+static LOG_LEVEL: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 pub fn init_log<D>(
     drain: D,
@@ -144,6 +149,26 @@ pub fn exit_process_gracefully(code: i32) -> ! {
     // force async logger to flush by dropping its guard.
     *ASYNC_LOGGER_GUARD.lock().unwrap() = None;
     std::process::exit(code);
+}
+
+/// Best-effort flushes the async logger, but never waits forever.
+///
+/// This is intended for crash paths such as fail-fast. It gives the async
+/// logger a brief window to drain outstanding messages, then panics so the
+/// normal panic hook can emit a fatal log before the process crashes.
+pub fn panic_after_best_effort_flush(timeout: Duration, message: &str) -> ! {
+    let guard = ASYNC_LOGGER_GUARD.lock().unwrap().take();
+    if let Some(guard) = guard {
+        let (done_tx, done_rx) = channel();
+        let _ = thread::Builder::new()
+            .name("async-log-flush".to_owned())
+            .spawn_wrapper(move || {
+                drop(guard);
+                let _ = done_tx.send(());
+            });
+        let _ = done_rx.recv_timeout(timeout);
+    }
+    panic!("{}", message);
 }
 
 /// Constructs a new file writer which outputs log to a file at the specified
@@ -673,11 +698,7 @@ impl<'a> Serializer<'a> {
     fn finish(self) {}
 }
 
-impl<'a> Drop for Serializer<'a> {
-    fn drop(&mut self) {}
-}
-
-impl<'a> slog::Serializer for Serializer<'a> {
+impl slog::Serializer for Serializer<'_> {
     fn emit_none(&mut self, key: Key) -> slog::Result {
         self.emit_arguments(key, &format_args!("None"))
     }
@@ -838,7 +859,7 @@ mod tests {
 
     #[test]
     fn test_log_format_json() {
-        use serde_json::{from_str, Value};
+        use serde_json::{Value, from_str};
         let buffer: Arc<Mutex<Vec<u8>>> = Arc::default();
         let drain = Mutex::new(json_format(TestWriter(buffer.clone()), true)).map(slog::Fuse);
         let drain = ThreadIDrain(drain);

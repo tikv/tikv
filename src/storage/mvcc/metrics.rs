@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use lazy_static::lazy_static;
 use prometheus::*;
 use prometheus_static_metric::*;
 
@@ -19,6 +20,7 @@ make_static_metric! {
         commit,
         rollback,
         acquire_pessimistic_lock,
+        acquire_pessimistic_lock_shared,
     }
 
     pub label_enum MvccCheckTxnStatusKind {

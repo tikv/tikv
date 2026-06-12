@@ -2,41 +2,39 @@
 
 use std::{
     cmp::Ordering,
-    collections::BinaryHeap,
+    collections::{BTreeMap, BinaryHeap},
     fmt::{self, Display, Formatter},
     mem,
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 use engine_traits::{
-    CfName, CompactedEvent, IterOptions, Iterable, Iterator, KvEngine, TabletRegistry, CF_WRITE,
-    LARGE_CFS,
+    CF_WRITE, CfName, CompactedEvent, IterOptions, Iterable, Iterator, KvEngine, LARGE_CFS,
+    TabletRegistry,
 };
 use file_system::{IoType, WithIoType};
 use itertools::Itertools;
 use kvproto::{
     metapb::{Region, RegionEpoch},
-    pdpb::CheckPolicy,
+    pdpb::{CheckPolicy, SplitReason},
 };
 use online_config::{ConfigChange, OnlineConfig};
 use pd_client::{BucketMeta, BucketStat};
 use tikv_util::{
-    box_err, debug, error, info, keybuilder::KeyBuilder, warn, worker::Runnable, Either,
+    Either, box_err, debug, error, info, keybuilder::KeyBuilder, warn, worker::Runnable,
 };
 use txn_types::Key;
 
 use super::metrics::*;
 use crate::{
-    coprocessor::{
-        dispatcher::StoreHandle,
-        split_observer::{is_valid_split_key, strip_timestamp_if_exists},
-        Config, CoprocessorHost, SplitCheckerHost,
-    },
-    store::{
-        fsm::StoreMeta,
-        metrics::{COMPACTION_DECLINED_BYTES, COMPACTION_RELATED_REGION_COUNT},
-    },
     Result,
+    coprocessor::{
+        Config, CoprocessorHost, SplitCheckerHost,
+        dispatcher::StoreHandle,
+        region_info_accessor::RegionInfoProvider,
+        split_observer::{is_valid_split_key, strip_timestamp_if_exists},
+    },
+    store::metrics::{COMPACTION_DECLINED_BYTES, COMPACTION_RELATED_REGION_COUNT},
 };
 
 #[derive(PartialEq, Eq)]
@@ -378,7 +376,7 @@ where
         region: Region,
         start_key: Option<Vec<u8>>,
         end_key: Option<Vec<u8>>,
-        auto_split: bool,
+        split_reason: SplitReason,
         policy: CheckPolicy,
         bucket_ranges: Option<Vec<BucketRange>>,
     },
@@ -407,7 +405,11 @@ where
             region,
             start_key: None,
             end_key: None,
-            auto_split,
+            split_reason: if auto_split {
+                SplitReason::Size
+            } else {
+                SplitReason::Admin
+            },
             policy,
             bucket_ranges,
         }
@@ -417,7 +419,7 @@ where
         region: Region,
         start_key: Option<Vec<u8>>,
         end_key: Option<Vec<u8>>,
-        auto_split: bool,
+        split_reason: SplitReason,
         policy: CheckPolicy,
         bucket_ranges: Option<Vec<BucketRange>>,
     ) -> Self {
@@ -425,7 +427,7 @@ where
             region,
             start_key,
             end_key,
-            auto_split,
+            split_reason,
             policy,
             bucket_ranges,
         }
@@ -442,15 +444,15 @@ where
                 region,
                 start_key,
                 end_key,
-                auto_split,
+                split_reason,
                 ..
             } => write!(
                 f,
-                "[split check worker] Split Check Task for {}, start_key: {:?}, end_key: {:?}, auto_split: {:?}",
+                "[split check worker] Split Check Task for {}, start_key: {:?}, end_key: {:?}, split_reason: {:?}",
                 region.get_id(),
                 start_key,
                 end_key,
-                auto_split
+                split_reason
             ),
             Task::ChangeConfig(_) => write!(f, "[split check worker] Change Config Task"),
             Task::CompactedEvent { .. } => {
@@ -464,40 +466,40 @@ where
 }
 
 pub struct Runner<EK: KvEngine, S> {
-    store_meta: Option<Arc<Mutex<StoreMeta>>>,
     // We can't just use `TabletRegistry` here, otherwise v1 may create many
     // invalid records and cause other problems.
     engine: Either<EK, TabletRegistry<EK>>,
     router: S,
     coprocessor: CoprocessorHost<EK>,
+    region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
 }
 
 impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
     pub fn new(
-        store_meta: Option<Arc<Mutex<StoreMeta>>>,
         engine: EK,
         router: S,
         coprocessor: CoprocessorHost<EK>,
+        region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Runner<EK, S> {
         Runner {
-            store_meta,
             engine: Either::Left(engine),
             router,
             coprocessor,
+            region_info_provider,
         }
     }
 
     pub fn with_registry(
-        store_meta: Option<Arc<Mutex<StoreMeta>>>,
         registry: TabletRegistry<EK>,
         router: S,
         coprocessor: CoprocessorHost<EK>,
+        region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Runner<EK, S> {
         Runner {
-            store_meta,
             engine: Either::Right(registry),
             router,
             coprocessor,
+            region_info_provider,
         }
     }
 
@@ -604,7 +606,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         region: &Region,
         start_key: Option<Vec<u8>>,
         end_key: Option<Vec<u8>>,
-        auto_split: bool,
+        reason: SplitReason,
         policy: CheckPolicy,
         bucket_ranges: Option<Vec<BucketRange>>,
     ) {
@@ -646,7 +648,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         CHECK_SPILT_COUNTER.all.inc();
         let mut host = self
             .coprocessor
-            .new_split_checker_host(region, tablet, auto_split, policy);
+            .new_split_checker_host(region, tablet, reason, policy);
 
         if host.skip() {
             debug!("skip split check";
@@ -748,8 +750,13 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             );
 
             let region_epoch = region.get_region_epoch().clone();
+            let source = match reason {
+                SplitReason::Size => "split_checker_by_size",
+                SplitReason::Load => "split_checker_by_load",
+                _ => "split_checker_by_admin",
+            };
             self.router
-                .ask_split(region_id, region_epoch, split_keys, "split checker".into());
+                .ask_split(region_id, region_epoch, split_keys, source.into());
             CHECK_SPILT_COUNTER.success.inc();
         } else {
             debug!(
@@ -908,7 +915,9 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
     }
 
     fn on_compaction_finished(&self, event: EK::CompactedEvent, region_split_check_diff: u64) {
-        if self.store_meta.is_none() || event.is_size_declining_trivial(region_split_check_diff) {
+        if self.region_info_provider.is_none()
+            || event.is_size_declining_trivial(region_split_check_diff)
+        {
             return;
         }
 
@@ -917,15 +926,25 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             .with_label_values(&[&output_level_str])
             .observe(event.total_bytes_declined() as f64);
 
-        // region_split_check_diff / 16 is an experienced value.
         let mut region_declined_bytes = {
-            // TODO: Optimize performance for large numbers of regions.
-            // The current implementation locks store_meta for the duration of the
-            // calculation, which could become a bottleneck when there are many
-            // regions.
-            let store_meta = self.store_meta.clone().unwrap();
-            let meta = store_meta.lock().unwrap();
-            event.calc_ranges_declined_bytes(&meta.region_ranges, region_split_check_diff / 16)
+            // Get the target regions and convert the corresponding ranges into
+            // the target format. Then, calculate the influenced ranges.
+            let (start_key, end_key) = event.get_key_range();
+            if let Ok(regions) = self
+                .region_info_provider
+                .as_ref()
+                .unwrap()
+                .get_regions_in_range(&start_key, &end_key)
+            {
+                let mut ranges = BTreeMap::<Vec<u8>, u64>::new();
+                regions.iter().for_each(|r| {
+                    ranges.insert(keys::enc_end_key(r), r.id);
+                });
+                // region_split_check_diff / 16 is an experienced value.
+                event.calc_ranges_declined_bytes(&ranges, region_split_check_diff / 16)
+            } else {
+                vec![]
+            }
         };
 
         COMPACTION_RELATED_REGION_COUNT
@@ -963,14 +982,14 @@ where
                 region,
                 start_key,
                 end_key,
-                auto_split,
+                split_reason,
                 policy,
                 bucket_ranges,
             } => self.check_split_and_bucket(
                 &region,
                 start_key,
                 end_key,
-                auto_split,
+                split_reason,
                 policy,
                 bucket_ranges,
             ),
@@ -994,7 +1013,10 @@ where
                     let mut host = self.coprocessor.new_split_checker_host(
                         &region,
                         tablet,
-                        false,
+                        // Only estimates and refreshes region bucket information.
+                        // No split keys are generated and no split is triggered.
+                        // Treated as an Admin operation.
+                        SplitReason::Admin,
                         CheckPolicy::Approximate,
                     );
                     if let Err(e) = self.approximate_check_bucket(tablet, &region, &mut host, None)

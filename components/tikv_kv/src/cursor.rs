@@ -2,7 +2,7 @@
 
 use std::{cell::Cell, cmp::Ordering, ops::Bound};
 
-use engine_traits::{CfName, IterOptions, DATA_KEY_PREFIX_LEN};
+use engine_traits::{CfName, DATA_KEY_PREFIX_LEN, IterOptions};
 use tikv_util::{
     keybuilder::KeyBuilder, metrics::CRITICAL_ERROR, panic_when_unexpected_key_or_data,
     set_panic_mark,
@@ -10,8 +10,8 @@ use tikv_util::{
 use txn_types::{Key, TimeStamp};
 
 use crate::{
+    CfStatistics, Error, Iterator, Result, SEEK_BOUND, ScanMode, Snapshot,
     stats::{StatsCollector, StatsKind},
-    CfStatistics, Error, Iterator, Result, ScanMode, Snapshot, SEEK_BOUND,
 };
 
 pub struct Cursor<I: Iterator> {
@@ -27,6 +27,14 @@ pub struct Cursor<I: Iterator> {
     // `value()` don't need to have `&mut self`.
     cur_key_has_read: Cell<bool>,
     cur_value_has_read: Cell<bool>,
+
+    // Optional cache for repeated forward seek misses. When enabled for Mixed
+    // cursors, a seek landing at `upper` records that `[lower, upper)` has no
+    // entry. Later `seek`/`near_seek` calls inside the missing range can keep the
+    // cursor at `upper` instead of taking the mixed-mode `prev` path, while
+    // preserving the "first key >= target" semantics.
+    missing_range: bool,
+    missing_range_cache: Option<(Vec<u8>, Vec<u8>)>,
 }
 
 macro_rules! near_loop {
@@ -43,7 +51,7 @@ macro_rules! near_loop {
 }
 
 impl<I: Iterator> Cursor<I> {
-    pub fn new(iter: I, mode: ScanMode, prefix_seek: bool) -> Self {
+    pub fn new(iter: I, mode: ScanMode, prefix_seek: bool, missing_range: bool) -> Self {
         Self {
             iter,
             scan_mode: mode,
@@ -53,7 +61,63 @@ impl<I: Iterator> Cursor<I> {
 
             cur_key_has_read: Cell::new(false),
             cur_value_has_read: Cell::new(false),
+
+            missing_range: missing_range && mode == ScanMode::Mixed && !prefix_seek,
+            missing_range_cache: None,
         }
+    }
+
+    #[inline]
+    fn cache_missing_range(&mut self, key: &Key, statistics: &mut CfStatistics) -> Result<()> {
+        if !self.missing_range {
+            return Ok(());
+        }
+
+        if !self.valid()? {
+            self.missing_range_cache = None;
+            return Ok(());
+        }
+
+        let cursor_key = self.key(statistics);
+        if cursor_key <= key.as_encoded().as_slice() {
+            self.missing_range_cache = None;
+            return Ok(());
+        }
+
+        self.missing_range_cache = Some((key.as_encoded().to_vec(), cursor_key.to_vec()));
+        statistics.cache_missing_range += 1;
+        Ok(())
+    }
+
+    #[inline]
+    fn hit_missing_range(&mut self, key: &Key, statistics: &mut CfStatistics) -> Result<bool> {
+        if !self.missing_range {
+            return Ok(false);
+        }
+
+        let Some((lower, upper)) = self.missing_range_cache.as_ref() else {
+            return Ok(false);
+        };
+        let encoded_key = key.as_encoded().as_slice();
+        if encoded_key < lower.as_slice() || encoded_key >= upper.as_slice() {
+            return Ok(false);
+        }
+
+        if !self.valid()? || self.key(statistics) != upper.as_slice() {
+            // This cache is tied to both the missing range and the iterator
+            // position: [lower, upper) is known to be empty only while the
+            // cursor still points at `upper`, the first key >= the original
+            // seek target. If another seek/next/prev has invalidated the
+            // iterator or moved it away from `upper`, the cache is out of sync
+            // with the current iterator state. Reusing it could incorrectly
+            // skip the normal seek path and break seek's "first key >= target"
+            // contract.
+            self.missing_range_cache = None;
+            return Ok(false);
+        }
+
+        statistics.hit_missing_range += 1;
+        Ok(true)
     }
 
     /// Mark key and value as unread. It will be invoked once cursor is moved.
@@ -83,11 +147,7 @@ impl<I: Iterator> Cursor<I> {
         });
 
         assert_ne!(self.scan_mode, ScanMode::Backward);
-        if self
-            .max_key
-            .as_ref()
-            .map_or(false, |k| k <= key.as_encoded())
-        {
+        if self.max_key.as_ref().is_some_and(|k| k <= key.as_encoded()) {
             self.iter.validate_key(key)?;
             return Ok(false);
         }
@@ -96,6 +156,10 @@ impl<I: Iterator> Cursor<I> {
             && self.valid()?
             && self.key(statistics) >= key.as_encoded().as_slice()
         {
+            return Ok(true);
+        }
+
+        if self.hit_missing_range(key, statistics)? {
             return Ok(true);
         }
 
@@ -112,6 +176,7 @@ impl<I: Iterator> Cursor<I> {
             }
             return Ok(false);
         }
+        self.cache_missing_range(key, statistics)?;
         Ok(true)
     }
 
@@ -130,15 +195,14 @@ impl<I: Iterator> Cursor<I> {
         {
             return Ok(true);
         }
-        if self
-            .max_key
-            .as_ref()
-            .map_or(false, |k| k <= key.as_encoded())
-        {
+        if self.max_key.as_ref().is_some_and(|k| k <= key.as_encoded()) {
             self.iter.validate_key(key)?;
             return Ok(false);
         }
         if ord == Ordering::Greater {
+            if self.hit_missing_range(key, statistics)? {
+                return Ok(true);
+            }
             near_loop!(
                 self.prev(statistics) && self.key(statistics) > key.as_encoded().as_slice(),
                 self.seek(key, statistics),
@@ -178,6 +242,7 @@ impl<I: Iterator> Cursor<I> {
             }
             return Ok(false);
         }
+        self.cache_missing_range(key, statistics)?;
         Ok(true)
     }
 
@@ -201,11 +266,7 @@ impl<I: Iterator> Cursor<I> {
 
     pub fn seek_for_prev(&mut self, key: &Key, statistics: &mut CfStatistics) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Forward);
-        if self
-            .min_key
-            .as_ref()
-            .map_or(false, |k| k >= key.as_encoded())
-        {
+        if self.min_key.as_ref().is_some_and(|k| k >= key.as_encoded()) {
             self.iter.validate_key(key)?;
             return Ok(false);
         }
@@ -238,11 +299,7 @@ impl<I: Iterator> Cursor<I> {
             return Ok(true);
         }
 
-        if self
-            .min_key
-            .as_ref()
-            .map_or(false, |k| k >= key.as_encoded())
-        {
+        if self.min_key.as_ref().is_some_and(|k| k >= key.as_encoded()) {
             self.iter.validate_key(key)?;
             return Ok(false);
         }
@@ -447,6 +504,7 @@ pub struct CursorBuilder<'a, S: Snapshot> {
     hint_max_ts: Option<Bound<TimeStamp>>,
     key_only: bool,
     max_skippable_internal_keys: u64,
+    missing_range: bool,
 }
 
 impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
@@ -465,6 +523,7 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
             hint_max_ts: None,
             key_only: false,
             max_skippable_internal_keys: 0,
+            missing_range: false,
         }
     }
 
@@ -544,6 +603,13 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
         self
     }
 
+    #[inline]
+    #[must_use]
+    pub fn missing_range(mut self, enabled: bool) -> Self {
+        self.missing_range = enabled;
+        self
+    }
+
     /// Build `Cursor` from the current configuration.
     pub fn build(self) -> Result<Cursor<S::Iter>> {
         let l_bound = if let Some(b) = self.lower_bound {
@@ -578,6 +644,7 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
             self.snapshot.iter(self.cf, iter_opt)?,
             self.scan_mode,
             self.prefix_seek,
+            self.missing_range,
         ))
     }
 }
@@ -585,17 +652,17 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
 #[cfg(test)]
 mod tests {
     use engine_rocks::{
-        util::{new_engine_opt, FixedPrefixSliceTransform},
         RocksCfOptions, RocksDbOptions, RocksEngine, RocksSnapshot,
+        util::{FixedPrefixSliceTransform, new_engine_opt},
     };
-    use engine_traits::{IterOptions, SyncMutable, CF_DEFAULT};
+    use engine_traits::{CF_DEFAULT, IterOptions, SyncMutable};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
     use raftstore::store::RegionSnapshot;
     use tempfile::Builder;
     use txn_types::Key;
 
-    use crate::{CfStatistics, Cursor, ScanMode};
+    use crate::{CfStatistics, Cursor, CursorBuilder, ScanMode};
 
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 
@@ -645,7 +712,7 @@ mod tests {
         iter_opt.use_prefix_seek();
         iter_opt.set_prefix_same_as_start(true);
         let it = snap.iter(CF_DEFAULT, iter_opt).unwrap();
-        let mut iter = Cursor::new(it, ScanMode::Mixed, true);
+        let mut iter = Cursor::new(it, ScanMode::Mixed, true, false);
 
         assert!(
             !iter
@@ -673,6 +740,429 @@ mod tests {
     }
 
     #[test]
+    fn test_missing_range_cache_seek_and_near_seek_cases() {
+        let path = Builder::new()
+            .prefix("test_missing_range_cache_seek_and_near_seek_cases")
+            .tempdir()
+            .unwrap();
+        let engine = new_engine_opt(
+            path.path().to_str().unwrap(),
+            RocksDbOptions::default(),
+            vec![(CF_DEFAULT, RocksCfOptions::default())],
+        )
+        .unwrap();
+
+        let (region, _) = load_default_dataset(engine.clone());
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(engine, region);
+
+        #[derive(Clone, Copy, Debug)]
+        enum Op {
+            Seek,
+            NearSeek,
+        }
+
+        #[derive(Clone, Copy)]
+        struct Step {
+            op: Op,
+            key: &'static [u8],
+            found: bool,
+            current: Option<(&'static [u8], &'static [u8])>,
+        }
+
+        #[derive(Clone, Copy)]
+        struct ExpectedStats {
+            hit_missing_range: usize,
+            cache_missing_range: usize,
+            seek: usize,
+            prev: usize,
+            next: usize,
+        }
+
+        struct Case {
+            name: &'static str,
+            steps: &'static [Step],
+            stats_without_missing_range: ExpectedStats,
+            stats_with_missing_range: ExpectedStats,
+        }
+
+        let cases = [
+            Case {
+                name: "near_seek keeps first key after a cached missing range",
+                steps: &[
+                    Step {
+                        op: Op::NearSeek,
+                        key: b"a4",
+                        found: true,
+                        current: Some((b"a5", b"v5")),
+                    },
+                    Step {
+                        op: Op::NearSeek,
+                        key: b"a4x",
+                        found: true,
+                        current: Some((b"a5", b"v5")),
+                    },
+                ],
+                stats_without_missing_range: ExpectedStats {
+                    hit_missing_range: 0,
+                    cache_missing_range: 0,
+                    seek: 1,
+                    prev: 1,
+                    next: 1,
+                },
+                stats_with_missing_range: ExpectedStats {
+                    hit_missing_range: 1,
+                    cache_missing_range: 1,
+                    seek: 1,
+                    prev: 0,
+                    next: 0,
+                },
+            },
+            Case {
+                name: "seek reuses a cached missing range",
+                steps: &[
+                    Step {
+                        op: Op::NearSeek,
+                        key: b"a4",
+                        found: true,
+                        current: Some((b"a5", b"v5")),
+                    },
+                    Step {
+                        op: Op::Seek,
+                        key: b"a4x",
+                        found: true,
+                        current: Some((b"a5", b"v5")),
+                    },
+                ],
+                stats_without_missing_range: ExpectedStats {
+                    hit_missing_range: 0,
+                    cache_missing_range: 0,
+                    seek: 2,
+                    prev: 0,
+                    next: 0,
+                },
+                stats_with_missing_range: ExpectedStats {
+                    hit_missing_range: 1,
+                    cache_missing_range: 1,
+                    seek: 1,
+                    prev: 0,
+                    next: 0,
+                },
+            },
+            Case {
+                name: "cached missing range includes its lower bound",
+                steps: &[
+                    Step {
+                        op: Op::NearSeek,
+                        key: b"a4",
+                        found: true,
+                        current: Some((b"a5", b"v5")),
+                    },
+                    Step {
+                        op: Op::Seek,
+                        key: b"a4",
+                        found: true,
+                        current: Some((b"a5", b"v5")),
+                    },
+                ],
+                stats_without_missing_range: ExpectedStats {
+                    hit_missing_range: 0,
+                    cache_missing_range: 0,
+                    seek: 2,
+                    prev: 0,
+                    next: 0,
+                },
+                stats_with_missing_range: ExpectedStats {
+                    hit_missing_range: 1,
+                    cache_missing_range: 1,
+                    seek: 1,
+                    prev: 0,
+                    next: 0,
+                },
+            },
+            Case {
+                name: "key below cached missing range lower does not hit",
+                steps: &[
+                    Step {
+                        op: Op::NearSeek,
+                        key: b"a4",
+                        found: true,
+                        current: Some((b"a5", b"v5")),
+                    },
+                    Step {
+                        op: Op::NearSeek,
+                        key: b"a3x",
+                        found: true,
+                        current: Some((b"a5", b"v5")),
+                    },
+                ],
+                stats_without_missing_range: ExpectedStats {
+                    hit_missing_range: 0,
+                    cache_missing_range: 0,
+                    seek: 1,
+                    prev: 1,
+                    next: 1,
+                },
+                stats_with_missing_range: ExpectedStats {
+                    hit_missing_range: 0,
+                    cache_missing_range: 2,
+                    seek: 1,
+                    prev: 1,
+                    next: 1,
+                },
+            },
+            Case {
+                name: "missing range does not hide its upper bound key",
+                steps: &[
+                    Step {
+                        op: Op::NearSeek,
+                        key: b"a4",
+                        found: true,
+                        current: Some((b"a5", b"v5")),
+                    },
+                    Step {
+                        op: Op::Seek,
+                        key: b"a5",
+                        found: true,
+                        current: Some((b"a5", b"v5")),
+                    },
+                ],
+                stats_without_missing_range: ExpectedStats {
+                    hit_missing_range: 0,
+                    cache_missing_range: 0,
+                    seek: 2,
+                    prev: 0,
+                    next: 0,
+                },
+                stats_with_missing_range: ExpectedStats {
+                    hit_missing_range: 0,
+                    cache_missing_range: 1,
+                    seek: 2,
+                    prev: 0,
+                    next: 0,
+                },
+            },
+            Case {
+                name: "key above cached missing range upper does not hit",
+                steps: &[
+                    Step {
+                        op: Op::NearSeek,
+                        key: b"a4",
+                        found: true,
+                        current: Some((b"a5", b"v5")),
+                    },
+                    Step {
+                        op: Op::NearSeek,
+                        key: b"a5x",
+                        found: false,
+                        current: None,
+                    },
+                ],
+                stats_without_missing_range: ExpectedStats {
+                    hit_missing_range: 0,
+                    cache_missing_range: 0,
+                    seek: 1,
+                    prev: 0,
+                    next: 1,
+                },
+                stats_with_missing_range: ExpectedStats {
+                    hit_missing_range: 0,
+                    cache_missing_range: 1,
+                    seek: 1,
+                    prev: 0,
+                    next: 1,
+                },
+            },
+            Case {
+                name: "range end miss is still handled by max_key",
+                steps: &[
+                    Step {
+                        op: Op::NearSeek,
+                        key: b"a6",
+                        found: false,
+                        current: None,
+                    },
+                    Step {
+                        op: Op::NearSeek,
+                        key: b"a6x",
+                        found: false,
+                        current: None,
+                    },
+                ],
+                stats_without_missing_range: ExpectedStats {
+                    hit_missing_range: 0,
+                    cache_missing_range: 0,
+                    seek: 1,
+                    prev: 0,
+                    next: 0,
+                },
+                stats_with_missing_range: ExpectedStats {
+                    hit_missing_range: 0,
+                    cache_missing_range: 0,
+                    seek: 1,
+                    prev: 0,
+                    next: 0,
+                },
+            },
+            Case {
+                name: "invalid cursor clears stale missing range",
+                steps: &[
+                    Step {
+                        op: Op::NearSeek,
+                        key: b"a4",
+                        found: true,
+                        current: Some((b"a5", b"v5")),
+                    },
+                    Step {
+                        op: Op::NearSeek,
+                        key: b"a6",
+                        found: false,
+                        current: None,
+                    },
+                    Step {
+                        op: Op::NearSeek,
+                        key: b"a4x",
+                        found: true,
+                        current: Some((b"a5", b"v5")),
+                    },
+                ],
+                stats_without_missing_range: ExpectedStats {
+                    hit_missing_range: 0,
+                    cache_missing_range: 0,
+                    seek: 2,
+                    prev: 0,
+                    next: 1,
+                },
+                stats_with_missing_range: ExpectedStats {
+                    hit_missing_range: 0,
+                    cache_missing_range: 2,
+                    seek: 2,
+                    prev: 0,
+                    next: 1,
+                },
+            },
+            Case {
+                name: "moved cursor does not hit a stale missing range",
+                steps: &[
+                    Step {
+                        op: Op::NearSeek,
+                        key: b"a4",
+                        found: true,
+                        current: Some((b"a5", b"v5")),
+                    },
+                    Step {
+                        op: Op::Seek,
+                        key: b"a3",
+                        found: true,
+                        current: Some((b"a3", b"v3")),
+                    },
+                    Step {
+                        op: Op::NearSeek,
+                        key: b"a4x",
+                        found: true,
+                        current: Some((b"a5", b"v5")),
+                    },
+                ],
+                stats_without_missing_range: ExpectedStats {
+                    hit_missing_range: 0,
+                    cache_missing_range: 0,
+                    seek: 2,
+                    prev: 0,
+                    next: 1,
+                },
+                stats_with_missing_range: ExpectedStats {
+                    hit_missing_range: 0,
+                    cache_missing_range: 2,
+                    seek: 2,
+                    prev: 0,
+                    next: 1,
+                },
+            },
+        ];
+
+        for case in cases {
+            for (missing_range, expected_stats) in [
+                (false, case.stats_without_missing_range),
+                (true, case.stats_with_missing_range),
+            ] {
+                let mut cursor = CursorBuilder::new(&snap, CF_DEFAULT)
+                    .scan_mode(ScanMode::Mixed)
+                    .missing_range(missing_range)
+                    .build()
+                    .unwrap();
+                let mut statistics = CfStatistics::default();
+
+                for step in case.steps {
+                    let found = match step.op {
+                        Op::Seek => cursor
+                            .seek(&Key::from_encoded_slice(step.key), &mut statistics)
+                            .unwrap(),
+                        Op::NearSeek => cursor
+                            .near_seek(&Key::from_encoded_slice(step.key), &mut statistics)
+                            .unwrap(),
+                    };
+                    assert_eq!(
+                        found, step.found,
+                        "case={} missing_range={} op={:?} key={:?}",
+                        case.name, missing_range, step.op, step.key
+                    );
+
+                    match step.current {
+                        Some((key, value)) => {
+                            assert_eq!(
+                                cursor.key(&mut statistics),
+                                key,
+                                "case={} missing_range={} op={:?} key={:?}",
+                                case.name,
+                                missing_range,
+                                step.op,
+                                step.key
+                            );
+                            assert_eq!(
+                                cursor.value(&mut statistics),
+                                value,
+                                "case={} missing_range={} op={:?} key={:?}",
+                                case.name,
+                                missing_range,
+                                step.op,
+                                step.key
+                            );
+                        }
+                        None => assert!(
+                            !cursor.valid().unwrap(),
+                            "case={} missing_range={} op={:?} key={:?}",
+                            case.name,
+                            missing_range,
+                            step.op,
+                            step.key
+                        ),
+                    }
+                }
+
+                assert_eq!(
+                    (
+                        statistics.hit_missing_range,
+                        statistics.cache_missing_range,
+                        statistics.seek,
+                        statistics.prev,
+                        statistics.next,
+                    ),
+                    (
+                        expected_stats.hit_missing_range,
+                        expected_stats.cache_missing_range,
+                        expected_stats.seek,
+                        expected_stats.prev,
+                        expected_stats.next,
+                    ),
+                    "case={} missing_range={} statistics={:?}",
+                    case.name,
+                    missing_range,
+                    statistics
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_reverse_iterate() {
         let path = Builder::new()
             .prefix("test_reverse_iterate")
@@ -690,7 +1180,7 @@ mod tests {
         let snap = RegionSnapshot::<RocksSnapshot>::from_raw(engine.clone(), region);
         let mut statistics = CfStatistics::default();
         let it = snap.iter(CF_DEFAULT, IterOptions::default()).unwrap();
-        let mut iter = Cursor::new(it, ScanMode::Mixed, false);
+        let mut iter = Cursor::new(it, ScanMode::Mixed, false, false);
         assert!(
             !iter
                 .reverse_seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
@@ -744,7 +1234,7 @@ mod tests {
         region.mut_peers().push(Peer::default());
         let snap = RegionSnapshot::<RocksSnapshot>::from_raw(engine, region);
         let it = snap.iter(CF_DEFAULT, IterOptions::default()).unwrap();
-        let mut iter = Cursor::new(it, ScanMode::Mixed, false);
+        let mut iter = Cursor::new(it, ScanMode::Mixed, false, false);
         assert!(
             !iter
                 .reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics)

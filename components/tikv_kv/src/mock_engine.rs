@@ -19,12 +19,17 @@ pub struct MockEngine {
     base: RocksEngine,
     expected_modifies: Option<Arc<ExpectedWriteList>>,
     last_modifies: Arc<Mutex<Vec<Vec<Modify>>>>,
+    pre_async_snapshot: Option<Arc<Box<dyn Fn(&SnapContext<'_>) + Send + Sync + 'static>>>,
 }
 
 impl MockEngine {
     pub fn take_last_modifies(&self) -> Vec<Vec<Modify>> {
         let mut last_modifies = self.last_modifies.lock().unwrap();
         std::mem::take(&mut last_modifies)
+    }
+
+    pub fn rocks_engine(&self) -> &RocksEngine {
+        &self.base
     }
 }
 
@@ -164,6 +169,9 @@ impl Engine for MockEngine {
 
     type SnapshotRes = <RocksEngine as Engine>::SnapshotRes;
     fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes {
+        if let Some(f) = self.pre_async_snapshot.as_ref() {
+            f(&ctx);
+        }
         self.base.async_snapshot(ctx)
     }
 
@@ -199,6 +207,7 @@ impl Engine for MockEngine {
 pub struct MockEngineBuilder {
     base: RocksEngine,
     expected_modifies: Option<LinkedList<ExpectedWrite>>,
+    pre_async_snapshot: Option<Arc<Box<dyn Fn(&SnapContext<'_>) + Send + Sync + 'static>>>,
 }
 
 impl MockEngineBuilder {
@@ -206,6 +215,7 @@ impl MockEngineBuilder {
         Self {
             base: rocks_engine,
             expected_modifies: None,
+            pre_async_snapshot: None,
         }
     }
 
@@ -222,6 +232,15 @@ impl MockEngineBuilder {
         self
     }
 
+    #[must_use]
+    pub fn set_pre_async_snapshot<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&SnapContext<'_>) + Send + Sync + 'static,
+    {
+        self.pre_async_snapshot = Some(Arc::new(Box::new(f)));
+        self
+    }
+
     pub fn build(self) -> MockEngine {
         MockEngine {
             base: self.base,
@@ -229,6 +248,7 @@ impl MockEngineBuilder {
                 .expected_modifies
                 .map(|m| Arc::new(ExpectedWriteList(Mutex::new(m)))),
             last_modifies: Arc::new(Mutex::new(Vec::new())),
+            pre_async_snapshot: self.pre_async_snapshot,
         }
     }
 }

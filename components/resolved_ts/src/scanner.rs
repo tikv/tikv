@@ -3,12 +3,12 @@
 use std::{marker::PhantomData, sync::Arc, time::Duration};
 
 use engine_traits::KvEngine;
-use futures::{channel::oneshot::Receiver, compat::Future01CompatExt, FutureExt};
+use futures::{FutureExt, channel::oneshot::Receiver, compat::Future01CompatExt};
 use kvproto::metapb::Region;
 use raftstore::{
     coprocessor::ObserveHandle,
     router::CdcHandle,
-    store::{fsm::ChangeObserver, msg::Callback, RegionSnapshot},
+    store::{RegionSnapshot, fsm::ChangeObserver, msg::Callback},
 };
 use tikv::storage::{
     kv::{ScanMode as MvccScanMode, Snapshot},
@@ -24,9 +24,9 @@ use tokio::{
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
 use crate::{
+    Task,
     errors::{Error, Result},
     metrics::*,
-    Task,
 };
 
 const DEFAULT_SCAN_BATCH_SIZE: usize = 128;
@@ -235,6 +235,17 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
                 DEFAULT_SCAN_BATCH_SIZE,
             )
             .map_err(|e| Error::Other(box_err!("{:?}", e)))?;
-        Ok((locks, has_remaining))
+        Ok((
+            locks
+                .into_iter()
+                .map(|(key, lock)| {
+                    (
+                        key,
+                        lock.left().expect("only put/delete lock should be here"),
+                    )
+                })
+                .collect(),
+            has_remaining,
+        ))
     }
 }

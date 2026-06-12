@@ -5,7 +5,7 @@ use std::{path::PathBuf, str::FromStr, sync::Arc};
 use encryption::DataKeyManager;
 use kvproto::import_sstpb::SstMeta;
 
-use crate::{errors::Result, RefIterable};
+use crate::{RefIterable, errors::Result};
 
 #[derive(Clone, Debug)]
 pub struct SstMetaInfo {
@@ -55,7 +55,7 @@ pub trait ExternalSstFileReader: std::io::Read + Send {
 }
 
 // compression type used for write sst file
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum SstCompressionType {
     Lz4,
     Snappy,

@@ -2,18 +2,19 @@
 use std::{
     collections::BTreeMap,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
 
 use api_version::ApiV2;
 use crossbeam::atomic::AtomicCell;
-use engine_rocks::{ReadPerfContext, ReadPerfInstant, PROP_MAX_TS};
+use engine_rocks::{PROP_MAX_TS, ReadPerfContext, ReadPerfInstant};
 use engine_traits::{
-    IterOptions, KvEngine, Range, Snapshot as EngineSnapshot, TablePropertiesCollection,
-    TablePropertiesExt, UserCollectedProperties, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN,
+    CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN, IterOptions, KvEngine, Range,
+    Snapshot as EngineSnapshot, TableProperties, TablePropertiesCollection,
+    UserCollectedProperties,
 };
 use fail::fail_point;
 use keys::{data_end_key, data_key};
@@ -31,36 +32,36 @@ use raftstore::{
     },
 };
 use tikv::storage::{
+    Statistics,
     kv::Snapshot,
     mvcc::{DeltaScanner, MvccReader, ScannerBuilder},
     raw::raw_mvcc::{RawMvccIterator, RawMvccSnapshot},
     txn::{TxnEntry, TxnEntryScanner},
-    Statistics,
 };
 use tikv_kv::{Iterator, ScanMode};
 use tikv_util::{
-    box_err,
+    Either, box_err,
     codec::number,
     debug, defer, error, info,
-    sys::inspector::{self_thread_inspector, ThreadInspector},
-    time::{duration_to_sec, Instant, Limiter},
+    sys::inspector::{ThreadInspector, self_thread_inspector},
+    time::{Instant, Limiter, duration_to_sec},
     warn,
     worker::Scheduler,
-    Either,
 };
 use tokio::sync::Semaphore;
 use txn_types::{Key, KvPair, LockType, OldValue, TimeStamp};
 
 use crate::{
+    Error, Result, Task,
     channel::CdcEvent,
     delegate::{
-        post_init_downstream, Delegate, DownstreamId, DownstreamState, MiniLock, ObservedRange,
+        Delegate, DownstreamId, DownstreamState, MiniLock, ObservedRange, post_init_downstream,
     },
     endpoint::Deregister,
     metrics::*,
-    old_value::{near_seek_old_value, OldValueCursors},
-    service::{ConnId, RequestId},
-    Error, Result, Task,
+    old_value::{OldValueCursors, near_seek_old_value},
+    service::RequestId,
+    types::ConnId,
 };
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -248,7 +249,6 @@ impl<E: KvEngine> Initializer<E> {
         }
 
         self.observed_range.update_region_key_range(&region);
-
         // Be compatible with old TiCDC clients, which won't give `observed_range`.
         let (start_key, end_key): (Key, Key);
         if self.observed_range.start_key_encoded.as_encoded() <= &region.start_key {
@@ -285,12 +285,14 @@ impl<E: KvEngine> Initializer<E> {
                 reader.scan_locks_from_storage(None, None, |_, _| true, 0)?;
             assert!(!has_remain);
             let mut locks = BTreeMap::<Key, MiniLock>::new();
-            for (key, lock) in key_locks {
-                // When `decode_lock`, only consider `Put` and `Delete`
-                if matches!(lock.lock_type, LockType::Put | LockType::Delete) {
-                    let mini_lock = MiniLock::new(lock.ts, lock.txn_source, lock.generation);
-                    locks.insert(key, mini_lock);
-                }
+            for (key, lock_or_shared_locks) in key_locks {
+                if let Either::Left(lock) = lock_or_shared_locks {
+                    // When `decode_lock`, only consider `Put` and `Delete`
+                    if matches!(lock.lock_type, LockType::Put | LockType::Delete) {
+                        let mini_lock = MiniLock::new(lock.ts, lock.txn_source);
+                        locks.insert(key, mini_lock);
+                    }
+                };
             }
             self.finish_scan_locks(region, locks);
         };
@@ -606,12 +608,15 @@ impl<E: KvEngine> Initializer<E> {
 
         let hint_min_ts = self.checkpoint_ts.into_inner();
         let (mut total_count, mut filtered_count, mut tables) = (0, 0, 0);
-        collection.iter_user_collected_properties(|prop| {
+        collection.iter_table_properties(|table_prop| {
+            let prop = table_prop.get_user_collected_properties();
             tables += 1;
             if let Some((_, keys)) = prop.approximate_size_and_keys(&start_key, &end_key) {
                 total_count += keys;
-                if Self::parse_u64_prop(prop, PROP_MAX_TS)
-                    .map_or(false, |max_ts| max_ts < hint_min_ts)
+                if prop
+                    .get(PROP_MAX_TS.as_bytes())
+                    .and_then(|mut x| number::decode_u64(&mut x).ok())
+                    .is_some_and(|max_ts| max_ts < hint_min_ts)
                 {
                     filtered_count += keys;
                 }
@@ -629,14 +634,6 @@ impl<E: KvEngine> Initializer<E> {
             "tables" => tables);
         use_ts_filter
     }
-
-    fn parse_u64_prop(
-        prop: &<<E as TablePropertiesExt>::TablePropertiesCollection as TablePropertiesCollection>::UserCollectedProperties,
-        field: &str,
-    ) -> Option<u64> {
-        prop.get(field.as_bytes())
-            .and_then(|mut x| number::decode_u64(&mut x).ok())
-    }
 }
 
 #[cfg(test)]
@@ -645,31 +642,36 @@ mod tests {
         collections::BTreeMap,
         fmt::Display,
         sync::{
-            atomic::AtomicBool,
-            mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, Sender},
             Arc,
+            atomic::AtomicBool,
+            mpsc::{Receiver, RecvTimeoutError, Sender, channel, sync_channel},
         },
         time::Duration,
     };
 
     use engine_rocks::{BlobRunMode, RocksEngine};
-    use engine_traits::{MiscExt, CF_WRITE};
-    use futures::{executor::block_on, StreamExt};
+    use engine_traits::{CF_WRITE, MiscExt};
+    use futures::{StreamExt, executor::block_on};
     use kvproto::{
-        cdcpb::{EventLogType, Event_oneof_event},
+        cdcpb::{Event_oneof_event, EventLogType},
         errorpb::Error as ErrorHeader,
+        kvrpcpb::{AssertionLevel, Context},
     };
     use raftstore::{coprocessor::ObserveHandle, router::CdcRaftRouter};
     use test_raftstore::MockRaftStoreRouter;
     use tikv::{
         config::DbConfig,
         storage::{
+            TestEngineBuilder, TestStorageBuilderApiV1,
             kv::Engine,
-            txn::tests::{
-                must_acquire_pessimistic_lock, must_commit, must_prewrite_delete,
-                must_prewrite_put, must_prewrite_put_with_txn_soucre,
+            lock_manager::MockLockManager,
+            txn::{
+                commands,
+                tests::{
+                    must_acquire_pessimistic_lock, must_commit, must_prewrite_delete,
+                    must_prewrite_put, must_prewrite_put_with_txn_soucre,
+                },
             },
-            TestEngineBuilder,
         },
     };
     use tikv_util::{
@@ -679,6 +681,7 @@ mod tests {
         worker::{LazyWorker, Runnable},
     };
     use tokio::runtime::{Builder, Runtime};
+    use txn_types::Mutation;
 
     use super::*;
     use crate::txn_source::TxnSource;
@@ -1012,6 +1015,178 @@ mod tests {
             .flush_cf(CF_WRITE, false)
             .unwrap();
         check_handling_old_value_seek_write(&mut engine, v_suffix); // For TxnEntry::Commit.
+    }
+
+    #[test]
+    fn test_old_value_missing_range_cache_avoids_prev() {
+        const INSERT_LOCK_COUNT: usize = 64;
+
+        let mut engine = TestEngineBuilder::new().build_without_cache().unwrap();
+        let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(
+            engine.clone(),
+            MockLockManager::new(),
+        )
+        .build()
+        .unwrap();
+        let sched_prewrite_put =
+            |key: &[u8], value: &[u8], start_ts: u64| -> tikv::storage::Result<()> {
+                let (tx, rx) = channel();
+                storage
+                    .sched_txn_command(
+                        commands::Prewrite::new(
+                            vec![Mutation::make_put(Key::from_raw(key), value.to_vec())],
+                            key.to_vec(),
+                            start_ts.into(),
+                            0,
+                            false,
+                            0,
+                            TimeStamp::zero(),
+                            TimeStamp::zero(),
+                            None,
+                            false,
+                            AssertionLevel::Off,
+                            Context::default(),
+                        ),
+                        Box::new(move |res| tx.send(res.map(|_| ())).unwrap()),
+                    )
+                    .unwrap();
+                rx.recv().unwrap()
+            };
+        let sched_commit =
+            |key: &[u8], start_ts: u64, commit_ts: u64| -> tikv::storage::Result<()> {
+                let (tx, rx) = channel();
+                storage
+                    .sched_txn_command(
+                        commands::Commit::new(
+                            vec![Key::from_raw(key)],
+                            start_ts.into(),
+                            commit_ts.into(),
+                            Context::default(),
+                        ),
+                        Box::new(move |res| tx.send(res.map(|_| ())).unwrap()),
+                    )
+                    .unwrap();
+                rx.recv().unwrap()
+            };
+        let checkpoint_ts = TimeStamp::new(150);
+        let tail_key = b"zz-old-value-tail";
+        let tail_old_value = b"tail-old-value";
+        let tail_lock_value = b"tail-lock-value";
+
+        // The committed write is intentionally after every insert-like lock key in
+        // user-key order. It is older than checkpoint_ts and flushed to SST, so the
+        // incremental scanner enables the write-CF ts filter and returns
+        // OldValue::SeekWrite for lock keys whose old writes may have been filtered.
+        sched_prewrite_put(tail_key, tail_old_value, 80).unwrap();
+        sched_commit(tail_key, 80, 90).unwrap();
+        engine
+            .kv_engine()
+            .unwrap()
+            .flush_cf(CF_WRITE, true)
+            .unwrap();
+
+        let insert_lock_keys: Vec<Vec<u8>> = (0..INSERT_LOCK_COUNT)
+            .map(|i| format!("za-insert-miss-{i:03}").into_bytes())
+            .collect();
+        for (i, key) in insert_lock_keys.iter().enumerate() {
+            // Use Storage scheduler prewrite commands to leave insert-like Put locks.
+            // These keys have no committed old write; old-value lookup should miss.
+            sched_prewrite_put(key, format!("lock-value-{i:03}").as_bytes(), 200 + i as u64)
+                .unwrap();
+        }
+        // Also leave an update lock exactly on the cached missing range upper user key.
+        // This covers the correctness side: a missing_range hit must keep the old-value
+        // cursor on the boundary write and still load the real old value.
+        sched_prewrite_put(tail_key, tail_lock_value, 300).unwrap();
+
+        let snap = engine.snapshot(Default::default()).unwrap();
+        let mut old_value_cursors = OldValueCursors::new(&snap);
+        let mut scanner = ScannerBuilder::new(snap, TimeStamp::max())
+            .fill_cache(false)
+            .range(Some(Key::from_encoded_slice(b"")), None)
+            // Force the same old-value lookup path used by incremental scan
+            // when the write-CF ts filter is enabled.
+            .hint_min_ts(Some(checkpoint_ts))
+            .build_delta_scanner(checkpoint_ts, TxnExtraOp::ReadOldValue)
+            .unwrap();
+        let mut old_value_stats = Statistics::default();
+        let mut insert_prewrite_count = 0;
+        let mut tail_prewrite_count = 0;
+
+        fn resolve_old_value<S: Snapshot>(
+            key: &Key,
+            cursors: &mut OldValueCursors<S>,
+            statistics: &mut Statistics,
+        ) -> OldValue {
+            match near_seek_old_value(
+                key,
+                &mut cursors.write,
+                Either::<&S, _>::Right(&mut cursors.default),
+                statistics,
+            )
+            .unwrap()
+            {
+                Some(value) => OldValue::value(value),
+                None => OldValue::None,
+            }
+        }
+
+        while let Some(entry) = scanner.next_entry().unwrap() {
+            let TxnEntry::Prewrite {
+                lock, old_value, ..
+            } = entry
+            else {
+                continue;
+            };
+            let key = Key::from_encoded(lock.0.clone()).into_raw().unwrap();
+            let old_value = match old_value {
+                OldValue::SeekWrite(key) => {
+                    resolve_old_value(&key, &mut old_value_cursors, &mut old_value_stats)
+                }
+                old_value => old_value,
+            };
+            match key.as_slice() {
+                key if insert_lock_keys
+                    .iter()
+                    .any(|insert_key| key == insert_key.as_slice()) =>
+                {
+                    assert!(
+                        matches!(old_value, OldValue::None),
+                        "insert-like lock should have no old value: key={:?}",
+                        key
+                    );
+                    insert_prewrite_count += 1;
+                }
+                key if key == tail_key.as_slice() => {
+                    let parsed_lock = txn_types::parse_lock(&lock.1)
+                        .unwrap()
+                        .left()
+                        .expect("put lock should be parsed");
+                    assert_eq!(
+                        parsed_lock.short_value.as_deref(),
+                        Some(tail_lock_value.as_slice())
+                    );
+                    assert_eq!(old_value, OldValue::value(tail_old_value.to_vec()));
+                    tail_prewrite_count += 1;
+                }
+                _ => {}
+            }
+        }
+
+        assert_eq!(insert_prewrite_count, INSERT_LOCK_COUNT);
+        assert_eq!(tail_prewrite_count, 1);
+        assert_eq!(
+            old_value_stats.write.prev, 0,
+            "missing range cache should prevent repeated old-value cursor prev after the first miss leaves the cursor on {tail_key:?}"
+        );
+        assert_eq!(
+            old_value_stats.write.hit_missing_range, INSERT_LOCK_COUNT,
+            "later monotonic insert-like lock misses and the boundary update lock should hit the cached missing range"
+        );
+        assert_eq!(
+            old_value_stats.write.cache_missing_range, 1,
+            "the first insert-like lock miss should cache the missing range before the tail write"
+        );
     }
 
     #[test]

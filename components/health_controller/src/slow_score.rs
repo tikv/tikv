@@ -9,10 +9,28 @@ use ordered_float::OrderedFloat;
 
 /// Interval for updating the slow score.
 const UPDATE_INTERVALS: Duration = Duration::from_secs(10);
-/// Recovery intervals for the slow score.
+/// Disk recovery intervals for the disk slow score.
 /// If the score has reached 100 and there is no timeout inspecting requests
 /// during this interval, the score will go back to 1 after 5min.
-const RECOVERY_INTERVALS: Duration = Duration::from_secs(60 * 5);
+pub const DISK_RECOVERY_INTERVALS: Duration = Duration::from_secs(60 * 5);
+/// Network recovery intervals for the network slow score.
+/// If the score has reached 100 and there is no timeout inspecting requests
+/// during this interval, the score will go back to 1 after 10min.
+pub const NETWORK_RECOVERY_INTERVALS: Duration = Duration::from_secs(60 * 10);
+/// After every DISK_ROUND_TICKS, the disk's slow score will be updated.
+pub const DISK_ROUND_TICKS: u64 = 30;
+/// After every NETWORK_ROUND_TICKS, the network's slow score will be updated.
+pub const NETWORK_ROUND_TICKS: u64 = 3;
+/// DISK_TIMEOUT_RATIO_THRESHOLD is the maximal tolerated timeout ratio
+/// for disk inspecting requests. If the timeout ratio is larger than this
+/// threshold, the disk's slow score will be multiplied by 2.
+pub const DISK_TIMEOUT_RATIO_THRESHOLD: f64 = 0.1;
+/// NETWORK_TIMEOUT_RATIO_THRESHOLD is the maximal tolerated timeout ratio
+/// for network inspecting requests. If the timeout ratio is larger than this
+/// threshold, the network's slow score will be multiplied by 2.
+pub const NETWORK_TIMEOUT_RATIO_THRESHOLD: f64 = 1.0;
+/// The timeout threshold for network inspecting requests.
+pub const NETWORK_TIMEOUT_THRESHOLD: Duration = Duration::from_secs(1);
 // Slow score is a value that represents the speed of a store and ranges in [1,
 // 100]. It is maintained in the AIMD way.
 // If there are some inspecting requests timeout during a round, by default the
@@ -27,7 +45,7 @@ pub struct SlowScore {
     timeout_requests: usize,
     total_requests: usize,
 
-    inspect_interval: Duration,
+    timeout_threshold: Duration,
     // The maximal tolerated timeout ratio.
     ratio_thresh: OrderedFloat<f64>,
     // Minimal time that the score could be decreased from 100 to 1.
@@ -42,19 +60,24 @@ pub struct SlowScore {
 }
 
 impl SlowScore {
-    pub fn new(inspect_interval: Duration) -> SlowScore {
+    pub fn new(
+        timeout_threshold: Duration,
+        ratio_thresh: f64,
+        round_ticks: u64,
+        recovery_interval: Duration,
+    ) -> SlowScore {
         SlowScore {
             value: OrderedFloat(1.0),
 
             timeout_requests: 0,
             total_requests: 0,
 
-            inspect_interval,
-            ratio_thresh: OrderedFloat(0.1),
-            min_ttr: RECOVERY_INTERVALS,
+            timeout_threshold,
+            ratio_thresh: OrderedFloat(ratio_thresh),
+            min_ttr: recovery_interval,
             last_record_time: Instant::now(),
             last_update_time: Instant::now(),
-            round_ticks: 30,
+            round_ticks,
             last_tick_id: 0,
             last_tick_finished: true,
         }
@@ -68,9 +91,9 @@ impl SlowScore {
             timeout_requests: 0,
             total_requests: 0,
 
-            inspect_interval,
+            timeout_threshold: inspect_interval,
             ratio_thresh: OrderedFloat(timeout_ratio),
-            min_ttr: RECOVERY_INTERVALS,
+            min_ttr: DISK_RECOVERY_INTERVALS,
             last_record_time: Instant::now(),
             last_update_time: Instant::now(),
             // The minimal round ticks is 1 for kvdb.
@@ -83,6 +106,14 @@ impl SlowScore {
         }
     }
 
+    pub fn set_last_tick_id(&mut self, id: u64) {
+        self.last_tick_id = id;
+    }
+
+    pub fn get_last_tick_id(&self) -> u64 {
+        self.last_tick_id
+    }
+
     pub fn record(&mut self, id: u64, duration: Duration, not_busy: bool) {
         self.last_record_time = Instant::now();
         if id != self.last_tick_id {
@@ -90,7 +121,7 @@ impl SlowScore {
         }
         self.last_tick_finished = true;
         self.total_requests += 1;
-        if not_busy && duration >= self.inspect_interval {
+        if not_busy && duration >= self.timeout_threshold {
             self.timeout_requests += 1;
         }
     }
@@ -126,7 +157,6 @@ impl SlowScore {
             let value = self.value * (OrderedFloat(1.0) + near_thresh);
             self.value = cmp::min(OrderedFloat(100.0), value);
         }
-
         self.total_requests = 0;
         self.timeout_requests = 0;
         self.last_update_time = Instant::now();
@@ -135,10 +165,6 @@ impl SlowScore {
 
     pub fn should_force_report_slow_store(&self) -> bool {
         self.value >= OrderedFloat(100.0) && (self.last_tick_id % self.round_ticks == 0)
-    }
-
-    pub fn get_inspect_interval(&self) -> Duration {
-        self.inspect_interval
     }
 
     pub fn last_tick_finished(&self) -> bool {
@@ -172,6 +198,7 @@ impl SlowScore {
     }
 }
 
+#[derive(Default, Debug)]
 pub struct SlowScoreTickResult {
     pub tick_id: u64,
     // None if skipped in this tick
@@ -186,7 +213,12 @@ mod tests {
 
     #[test]
     fn test_slow_score() {
-        let mut slow_score = SlowScore::new(Duration::from_millis(500));
+        let mut slow_score = SlowScore::new(
+            Duration::from_millis(500),
+            DISK_TIMEOUT_RATIO_THRESHOLD,
+            DISK_ROUND_TICKS,
+            DISK_RECOVERY_INTERVALS,
+        );
         slow_score.timeout_requests = 5;
         slow_score.total_requests = 100;
         assert_eq!(

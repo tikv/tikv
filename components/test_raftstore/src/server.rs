@@ -2,14 +2,14 @@
 
 use std::{
     path::Path,
-    sync::{atomic::AtomicU64, mpsc::Receiver, Arc, Mutex, RwLock},
+    sync::{Arc, Mutex, RwLock, atomic::AtomicU64, mpsc::Receiver},
     thread,
     time::Duration,
     usize,
 };
 
 use ::server::common::build_hybrid_engine;
-use api_version::{dispatch_api_version, KvFormat};
+use api_version::{KvFormat, dispatch_api_version};
 use causal_ts::CausalTsProviderImpl;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
@@ -26,7 +26,7 @@ use hybrid_engine::observer::{
 use in_memory_engine::{InMemoryEngineConfig, InMemoryEngineContext, RegionCacheMemoryEngine};
 use kvproto::{
     deadlock::create_deadlock,
-    debugpb::{create_debug, DebugClient},
+    debugpb::{DebugClient, create_debug},
     import_sstpb::create_import_sst,
     kvrpcpb::{ApiVersion, Context},
     metapb,
@@ -36,17 +36,17 @@ use kvproto::{
 };
 use pd_client::PdClient;
 use raftstore::{
+    Result,
     coprocessor::{CoprocessorHost, RegionInfoAccessor},
     errors::Error as RaftError,
     router::{CdcRaftRouter, LocalReadRouter, RaftStoreRouter, ReadContext, ServerRaftStoreRouter},
     store::{
-        fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
+        AutoSplitController, Callback, CheckLeaderRunner, DiskCheckRunner,
+        ForcePartitionRangeManager, LocalReader, RegionSnapshot, SnapManager, SnapManagerBuilder,
+        SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
+        fsm::{ApplyRouter, RaftBatchSystem, RaftRouter, store::StoreMeta},
         msg::RaftCmdExtraOpts,
-        AutoSplitController, Callback, CheckLeaderRunner, DiskCheckRunner, LocalReader,
-        RegionSnapshot, SnapManager, SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
-        StoreMetaDelegate,
     },
-    Result,
 };
 use resource_control::ResourceGroupManager;
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
@@ -61,6 +61,8 @@ use tikv::{
     import::{ImportSstService, SstImporter},
     read_pool::ReadPool,
     server::{
+        ConnectionBuilder, Error, MultiRaftServer, PdStoreAddrResolver, RaftClient, RaftKv,
+        Result as ServerResult, Server, ServerTransport,
         debug::DebuggerImpl,
         gc_worker::GcWorker,
         load_statistics::ThreadLoadPool,
@@ -69,26 +71,24 @@ use tikv::{
         resolve::{self, StoreAddrResolver},
         service::DebugService,
         tablet_snap::NoSnapshotCache,
-        ConnectionBuilder, Error, MultiRaftServer, PdStoreAddrResolver, RaftClient, RaftKv,
-        Result as ServerResult, Server, ServerTransport,
     },
     storage::{
-        self,
+        self, Engine, Storage,
         kv::{FakeExtension, LocalTablets, SnapContext},
         txn::{
             flow_controller::{EngineFlowController, FlowController},
             txn_status_cache::TxnStatusCache,
         },
-        Engine, Storage,
     },
 };
 use tikv_util::{
+    HandyRwLock,
     config::VersionTrack,
+    memory::MemoryQuota,
     quota_limiter::QuotaLimiter,
     sys::thread::ThreadBuildWrapper,
     time::ThreadReadId,
-    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler},
-    HandyRwLock,
+    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
 };
 use tokio::runtime::Builder as TokioBuilder;
 use txn_types::TxnExtraScheduler;
@@ -175,6 +175,7 @@ pub struct ServerCluster {
     pub causal_ts_providers: HashMap<u64, Arc<CausalTsProviderImpl>>,
     pub encryption: Option<Arc<DataKeyManager>>,
     pub in_memory_engines: HashMap<u64, Option<HybridEngineImpl>>,
+    pub gc_safe_point: Arc<AtomicU64>,
 }
 
 impl ServerCluster {
@@ -221,6 +222,7 @@ impl ServerCluster {
             txn_extra_schedulers: HashMap::default(),
             causal_ts_providers: HashMap::default(),
             encryption: None,
+            gc_safe_point: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -253,7 +255,10 @@ impl ServerCluster {
         cfg: &resource_metering::Config,
     ) -> (ResourceTagFactory, CollectorRegHandle, Box<dyn FnOnce()>) {
         let (_, collector_reg_handle, resource_tag_factory, recorder_worker) =
-            resource_metering::init_recorder(cfg.precision.as_millis());
+            resource_metering::init_recorder(
+                cfg.precision.as_millis(),
+                cfg.enable_network_io_collection,
+            );
         let (_, data_sink_reg_handle, reporter_worker) =
             resource_metering::init_reporter(cfg.clone(), collector_reg_handle.clone());
         let (_, single_target_worker) = resource_metering::init_single_target(
@@ -283,6 +288,7 @@ impl ServerCluster {
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
         resource_manager: &Option<Arc<ResourceGroupManager>>,
+        force_partition_mgr: &ForcePartitionRangeManager,
     ) -> ServerResult<u64> {
         self.encryption = key_manager.clone();
 
@@ -376,6 +382,7 @@ impl ServerCluster {
         let mut raft_kv = RaftKv::new(
             sim_router.clone(),
             engines.kv.clone(),
+            Some(region_info_accessor.clone()),
             region_info_accessor.region_leaders(),
         );
 
@@ -406,11 +413,22 @@ impl ServerCluster {
         );
         gc_worker.start(node_id, coprocessor_host.clone()).unwrap();
 
+        if let Err(e) =
+            gc_worker.start_auto_compaction(self.pd_client.clone(), region_info_accessor.clone())
+        {
+            warn!("failed to start auto_compaction: {}", e);
+        } else {
+            info!("Auto compaction started successfully for node {}", node_id);
+        }
+
         let txn_status_cache = Arc::new(TxnStatusCache::new_for_test());
         let rts_worker = if cfg.resolved_ts.enable {
             // Resolved ts worker
+            let rts_memory_quota =
+                Arc::new(MemoryQuota::new(cfg.resolved_ts.memory_quota.0 as usize));
             let mut rts_worker = LazyWorker::new("resolved-ts");
-            let rts_ob = resolved_ts::Observer::new(rts_worker.scheduler());
+            let rts_ob =
+                resolved_ts::Observer::new(rts_worker.scheduler(), rts_memory_quota.clone());
             rts_ob.register_to(&mut coprocessor_host);
             // resolved ts endpoint needs store id.
             store_meta.lock().unwrap().store_id = Some(node_id);
@@ -425,6 +443,7 @@ impl ServerCluster {
                 self.env.clone(),
                 self.security_mgr.clone(),
                 txn_status_cache.clone(),
+                rts_memory_quota,
             );
             // Start the worker
             rts_worker.start(rts_endpoint);
@@ -514,6 +533,7 @@ impl ServerCluster {
             None,
             resource_manager.clone(),
             Arc::new(region_info_accessor.clone()),
+            force_partition_mgr.clone(),
         );
 
         // Create deadlock service.
@@ -617,6 +637,7 @@ impl ServerCluster {
                 debug_thread_pool.clone(),
                 health_controller.clone(),
                 resource_manager.clone(),
+                Worker::new("test-background-worker"),
             )
             .unwrap();
             svr.register_service(create_import_sst(import_service.clone()));
@@ -657,10 +678,10 @@ impl ServerCluster {
         let pessimistic_txn_cfg = cfg.tikv.pessimistic_txn;
 
         let split_check_runner = SplitCheckRunner::new(
-            Some(store_meta.clone()),
             engines.kv.clone(),
             router.clone(),
             coprocessor_host.clone(),
+            Some(Arc::new(region_info_accessor.clone())),
         );
         let split_check_scheduler = bg_worker.start("split-check", split_check_runner);
         let split_config_manager =
@@ -688,7 +709,7 @@ impl ServerCluster {
             causal_ts_provider,
             DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
-            Arc::new(AtomicU64::new(0)),
+            self.gc_safe_point.clone(),
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
@@ -733,7 +754,12 @@ impl ServerCluster {
         self.concurrency_managers
             .insert(node_id, concurrency_manager);
 
-        let client = RaftClient::new(node_id, self.conn_builder.clone());
+        let client = RaftClient::new(
+            node_id,
+            self.conn_builder.clone(),
+            Duration::from_millis(10),
+            Worker::new("test-worker"),
+        );
         self.raft_clients.insert(node_id, client);
         Ok(node_id)
     }
@@ -766,6 +792,7 @@ impl Simulator for ServerCluster {
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
         resource_manager: &Option<Arc<ResourceGroupManager>>,
+        force_partition_mgr: &ForcePartitionRangeManager,
     ) -> ServerResult<u64> {
         dispatch_api_version!(
             cfg.storage.api_version(),
@@ -778,6 +805,7 @@ impl Simulator for ServerCluster {
                 router,
                 system,
                 resource_manager,
+                force_partition_mgr,
             )
         )
     }
@@ -916,7 +944,7 @@ impl Cluster<ServerCluster> {
             ctx.set_peer(leader);
             ctx.set_region_epoch(epoch);
 
-            let mut storage = self.sim.rl().storages.get(&store_id).unwrap().clone();
+            let mut storage = self.must_get_raft_engine(store_id);
             let snap_ctx = SnapContext {
                 pb_ctx: &ctx,
                 ..snap_ctx.clone()
@@ -930,6 +958,10 @@ impl Cluster<ServerCluster> {
             thread::sleep(Duration::from_millis(200));
         }
         panic!("failed to get snapshot of region {}", region_id);
+    }
+
+    pub fn must_get_raft_engine(&self, store_id: u64) -> SimulateEngine {
+        self.sim.rl().storages.get(&store_id).unwrap().clone()
     }
 
     pub fn raft_extension(&self, node_id: u64) -> SimulateRaftExtension {

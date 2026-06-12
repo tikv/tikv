@@ -8,20 +8,18 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::{KvEngine, ManualCompactionOptions, RangeStats, CF_LOCK, CF_WRITE};
+use engine_traits::{KvEngine, ManualCompactionOptions};
 use fail::fail_point;
 use futures_util::compat::Future01CompatExt;
 use thiserror::Error;
 use tikv_util::{
-    box_try, config::Tracker, debug, error, info, time::Instant, timer::GLOBAL_TIMER_HANDLE, warn,
-    worker::Runnable,
+    box_try, debug, error, info, time::Instant, timer::GLOBAL_TIMER_HANDLE, worker::Runnable,
 };
 use yatp::Remote;
 
 use super::metrics::{
     COMPACT_RANGE_CF, FULL_COMPACT, FULL_COMPACT_INCREMENTAL, FULL_COMPACT_PAUSE,
 };
-use crate::store::Config;
 
 type Key = Vec<u8>;
 
@@ -39,15 +37,6 @@ pub enum Task {
         start_key: Option<Key>,       // None means smallest key
         end_key: Option<Key>,         // None means largest key
         bottommost_level_force: bool, // Whether force the bottommost level to compact
-    },
-
-    CheckAndCompact {
-        // Column families need to compact
-        cf_names: Vec<String>,
-        // Ranges need to check
-        ranges: Vec<Key>,
-        // The minimum RocksDB tombstones/duplicate versions a range that need compacting has
-        compact_threshold: CompactThreshold,
     },
 }
 
@@ -109,30 +98,6 @@ impl FullCompactController {
     }
 }
 
-#[derive(Debug)]
-pub struct CompactThreshold {
-    pub tombstones_num_threshold: u64,
-    pub tombstones_percent_threshold: u64,
-    pub redundant_rows_threshold: u64,
-    pub redundant_rows_percent_threshold: u64,
-}
-
-impl CompactThreshold {
-    pub fn new(
-        tombstones_num_threshold: u64,
-        tombstones_percent_threshold: u64,
-        redundant_rows_threshold: u64,
-        redundant_rows_percent_threshold: u64,
-    ) -> Self {
-        Self {
-            tombstones_num_threshold,
-            tombstones_percent_threshold,
-            redundant_rows_percent_threshold,
-            redundant_rows_threshold,
-        }
-    }
-}
-
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
@@ -172,37 +137,6 @@ impl Display for Task {
                 )
                 .field("bottommost_level_force", bottommost_level_force)
                 .finish(),
-            Task::CheckAndCompact {
-                ref cf_names,
-                ref ranges,
-                ref compact_threshold,
-            } => f
-                .debug_struct("CheckAndCompact")
-                .field("cf_names", cf_names)
-                .field(
-                    "ranges",
-                    &(
-                        ranges.first().as_ref().map(|k| log_wrappers::Value::key(k)),
-                        ranges.last().as_ref().map(|k| log_wrappers::Value::key(k)),
-                    ),
-                )
-                .field(
-                    "tombstones_num_threshold",
-                    &compact_threshold.tombstones_num_threshold,
-                )
-                .field(
-                    "tombstones_percent_threshold",
-                    &compact_threshold.tombstones_percent_threshold,
-                )
-                .field(
-                    "redundant_rows_threshold",
-                    &compact_threshold.redundant_rows_threshold,
-                )
-                .field(
-                    "redundant_rows_percent_threshold",
-                    &compact_threshold.redundant_rows_percent_threshold,
-                )
-                .finish(),
         }
     }
 }
@@ -216,27 +150,14 @@ pub enum Error {
 pub struct Runner<E> {
     engine: E,
     remote: Remote<yatp::task::future::TaskCell>,
-    cfg_tracker: Tracker<Config>,
-    // Whether to skip the manual compaction of write and default comlumn family.
-    skip_compact: bool,
 }
 
 impl<E> Runner<E>
 where
     E: KvEngine,
 {
-    pub fn new(
-        engine: E,
-        remote: Remote<yatp::task::future::TaskCell>,
-        cfg_tracker: Tracker<Config>,
-        skip_compact: bool,
-    ) -> Runner<E> {
-        Runner {
-            engine,
-            remote,
-            cfg_tracker,
-            skip_compact,
-        }
+    pub fn new(engine: E, remote: Remote<yatp::task::future::TaskCell>) -> Runner<E> {
+        Runner { engine, remote }
     }
 
     /// Periodic full compaction.
@@ -323,9 +244,6 @@ where
     ) -> Result<(), Error> {
         fail_point!("on_compact_range_cf");
         let timer = Instant::now();
-        let compact_range_timer = COMPACT_RANGE_CF
-            .with_label_values(&[cf_name])
-            .start_coarse_timer();
         let compact_options = ManualCompactionOptions::new(false, 1, bottommost_level_force);
         box_try!(self.engine.compact_range_cf(
             cf_name,
@@ -333,7 +251,6 @@ where
             end_key,
             compact_options.clone()
         ));
-        compact_range_timer.observe_duration();
         info!(
             "compact range finished";
             "range_start" => start_key.map(::log_wrappers::Value::key),
@@ -384,21 +301,9 @@ where
                 bottommost_level_force,
             } => {
                 let cf = &cf_name;
-                if cf != CF_LOCK {
-                    // check whether the config changed for ignoring manual compaction
-                    if let Some(incoming) = self.cfg_tracker.any_new() {
-                        self.skip_compact = incoming.skip_manual_compaction_in_clean_up_worker;
-                    }
-                    if self.skip_compact {
-                        info!(
-                            "skip compact range";
-                            "range_start" => start_key.as_ref().map(|k| log_wrappers::Value::key(k)),
-                            "range_end" => end_key.as_ref().map(|k|log_wrappers::Value::key(k)),
-                            "cf" => cf_name,
-                        );
-                        return;
-                    }
-                }
+                let compact_range_timer = COMPACT_RANGE_CF
+                    .with_label_values(&[cf])
+                    .start_coarse_timer();
                 if let Err(e) = self.compact_range_cf(
                     cf,
                     start_key.as_deref(),
@@ -407,101 +312,10 @@ where
                 ) {
                     error!("execute compact range failed"; "cf" => cf, "err" => %e);
                 }
-            }
-            Task::CheckAndCompact {
-                cf_names,
-                ranges,
-                compact_threshold,
-            } => match collect_ranges_need_compact(&self.engine, ranges, compact_threshold) {
-                Ok(mut ranges) => {
-                    for (start, end) in ranges.drain(..) {
-                        for cf in &cf_names {
-                            if let Err(e) =
-                                self.compact_range_cf(cf, Some(&start), Some(&end), false)
-                            {
-                                error!(
-                                    "compact range failed";
-                                    "range_start" => log_wrappers::Value::key(&start),
-                                    "range_end" => log_wrappers::Value::key(&end),
-                                    "cf" => cf,
-                                    "err" => %e,
-                                );
-                            }
-                        }
-                        fail_point!("raftstore::compact::CheckAndCompact:AfterCompact");
-                    }
-                }
-                Err(e) => warn!("check ranges need reclaim failed"; "err" => %e),
-            },
-        }
-    }
-}
-
-pub fn need_compact(range_stats: &RangeStats, compact_threshold: &CompactThreshold) -> bool {
-    if range_stats.num_entries < range_stats.num_versions {
-        return false;
-    }
-
-    // We trigger region compaction when their are to many tombstones as well as
-    // redundant keys, both of which can severly impact scan operation:
-    let estimate_num_del = range_stats.num_entries - range_stats.num_versions;
-    let redundant_keys = range_stats.redundant_keys();
-    (redundant_keys >= compact_threshold.redundant_rows_threshold
-        && redundant_keys * 100
-            >= compact_threshold.redundant_rows_percent_threshold * range_stats.num_entries)
-        || (estimate_num_del >= compact_threshold.tombstones_num_threshold
-            && estimate_num_del * 100
-                >= compact_threshold.tombstones_percent_threshold * range_stats.num_entries)
-}
-
-fn collect_ranges_need_compact(
-    engine: &impl KvEngine,
-    ranges: Vec<Key>,
-    compact_threshold: CompactThreshold,
-) -> Result<VecDeque<(Key, Key)>, Error> {
-    // Check the SST properties for each range, and TiKV will compact a range if the
-    // range contains too many RocksDB tombstones. TiKV will merge multiple
-    // neighboring ranges that need compacting into a single range.
-    let mut ranges_need_compact = VecDeque::new();
-    let mut compact_start = None;
-    let mut compact_end = None;
-    for range in ranges.windows(2) {
-        // Get total entries and total versions in this range and checks if it needs to
-        // be compacted.
-        if let Some(range_stats) = box_try!(engine.get_range_stats(CF_WRITE, &range[0], &range[1]))
-        {
-            if need_compact(&range_stats, &compact_threshold) {
-                if compact_start.is_none() {
-                    // The previous range doesn't need compacting.
-                    compact_start = Some(range[0].clone());
-                }
-                compact_end = Some(range[1].clone());
-                // Move to next range.
-                continue;
+                compact_range_timer.observe_duration();
             }
         }
-
-        // Current range doesn't need compacting, save previous range that need
-        // compacting.
-        if compact_start.is_some() {
-            assert!(compact_end.is_some());
-        }
-        if let (Some(cs), Some(ce)) = (compact_start, compact_end) {
-            ranges_need_compact.push_back((cs, ce));
-        }
-        compact_start = None;
-        compact_end = None;
     }
-
-    // Save the last range that needs to be compacted.
-    if compact_start.is_some() {
-        assert!(compact_end.is_some());
-    }
-    if let (Some(cs), Some(ce)) = (compact_start, compact_end) {
-        ranges_need_compact.push_back((cs, ce));
-    }
-
-    Ok(ranges_need_compact)
 }
 
 #[cfg(test)]
@@ -510,11 +324,11 @@ mod tests {
 
     use engine_test::{
         ctor::{CfOptions, DbOptions},
-        kv::{new_engine, new_engine_opt, KvTestEngine},
+        kv::{KvTestEngine, new_engine, new_engine_opt},
     };
     use engine_traits::{
-        CompactExt, MiscExt, Mutable, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK,
-        CF_RAFT, CF_WRITE,
+        CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, CompactExt, MiscExt, Mutable, SyncMutable,
+        WriteBatch, WriteBatchExt,
     };
     use keys::data_key;
     use tempfile::Builder;
@@ -528,10 +342,7 @@ mod tests {
         E: KvEngine,
     {
         let pool = YatpPoolBuilder::new(DefaultTicker::default()).build_future_pool();
-        (
-            pool.clone(),
-            Runner::new(engine, pool.remote().clone(), Tracker::default(), false),
-        )
+        (pool.clone(), Runner::new(engine, pool.remote().clone()))
     }
 
     #[test]
@@ -671,106 +482,6 @@ mod tests {
     }
 
     #[test]
-    fn test_check_space_redundancy() {
-        let tmp_dir = Builder::new().prefix("test").tempdir().unwrap();
-        let engine = open_db(tmp_dir.path().to_str().unwrap());
-
-        // mvcc_put 0..5
-        for i in 0..5 {
-            let (k, v) = (format!("k{}", i), format!("value{}", i));
-            mvcc_put(&engine, k.as_bytes(), v.as_bytes(), 1.into(), 2.into());
-            mvcc_put(&engine, k.as_bytes(), v.as_bytes(), 3.into(), 4.into());
-        }
-        engine.flush_cf(CF_WRITE, true).unwrap();
-
-        // gc 0..5
-        for i in 0..5 {
-            let k = format!("k{}", i);
-            delete(&engine, k.as_bytes(), 4.into());
-        }
-        engine.flush_cf(CF_WRITE, true).unwrap();
-
-        let (start, end) = (data_key(b"k0"), data_key(b"k5"));
-        let range_stats = engine
-            .get_range_stats(CF_WRITE, &start, &end)
-            .unwrap()
-            .unwrap();
-        assert_eq!(range_stats.num_entries, 15);
-        assert_eq!(range_stats.num_versions, 10);
-        assert_eq!(range_stats.num_rows, 5);
-
-        // mvcc_put 5..10
-        for i in 5..10 {
-            let (k, v) = (format!("k{}", i), format!("value{}", i));
-            mvcc_put(&engine, k.as_bytes(), v.as_bytes(), 1.into(), 2.into());
-        }
-        for i in 5..8 {
-            let (k, v) = (format!("k{}", i), format!("value{}", i));
-            mvcc_put(&engine, k.as_bytes(), v.as_bytes(), 3.into(), 4.into());
-        }
-        engine.flush_cf(CF_WRITE, true).unwrap();
-
-        let (s, e) = (data_key(b"k5"), data_key(b"k9"));
-        let range_stats = engine.get_range_stats(CF_WRITE, &s, &e).unwrap().unwrap();
-        assert_eq!(range_stats.num_entries, 8);
-        assert_eq!(range_stats.num_versions, 8);
-        assert_eq!(range_stats.num_rows, 5);
-
-        // tombstone triggers compaction
-        let ranges_need_to_compact = collect_ranges_need_compact(
-            &engine,
-            vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
-            CompactThreshold::new(4, 30, 100, 100),
-        )
-        .unwrap();
-        let (s, e) = (data_key(b"k0"), data_key(b"k5"));
-        let mut expected_ranges = VecDeque::new();
-        expected_ranges.push_back((s, e));
-        assert_eq!(ranges_need_to_compact, expected_ranges);
-
-        // duplicated mvcc triggers compaction
-        let ranges_need_to_compact = collect_ranges_need_compact(
-            &engine,
-            vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
-            CompactThreshold::new(100, 100, 5, 50),
-        )
-        .unwrap();
-        assert_eq!(ranges_need_to_compact, expected_ranges);
-
-        // gc 5..8
-        for i in 5..8 {
-            let k = format!("k{}", i);
-            delete(&engine, k.as_bytes(), 4.into());
-        }
-        engine.flush_cf(CF_WRITE, true).unwrap();
-
-        let (s, e) = (data_key(b"k5"), data_key(b"k9"));
-        let range_stats = engine.get_range_stats(CF_WRITE, &s, &e).unwrap().unwrap();
-        assert_eq!(range_stats.num_entries, 11);
-        assert_eq!(range_stats.num_versions, 8);
-        assert_eq!(range_stats.num_rows, 5);
-
-        let ranges_need_to_compact = collect_ranges_need_compact(
-            &engine,
-            vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
-            CompactThreshold::new(3, 25, 100, 100),
-        )
-        .unwrap();
-        let (s, e) = (data_key(b"k0"), data_key(b"k9"));
-        let mut expected_ranges = VecDeque::new();
-        expected_ranges.push_back((s, e));
-        assert_eq!(ranges_need_to_compact, expected_ranges);
-
-        let ranges_need_to_compact = collect_ranges_need_compact(
-            &engine,
-            vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
-            CompactThreshold::new(100, 100, 3, 35),
-        )
-        .unwrap();
-        assert_eq!(ranges_need_to_compact, expected_ranges);
-    }
-
-    #[test]
     fn test_full_compact_deletes() {
         let tmp_dir = Builder::new().prefix("test").tempdir().unwrap();
         let engine = open_db(tmp_dir.path().to_str().unwrap());
@@ -869,44 +580,5 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(stats.num_entries - stats.num_versions, 0);
-    }
-
-    #[test]
-    fn test_need_compact() {
-        // many tombstone case
-        let range_stats = RangeStats {
-            num_entries: 1000,
-            num_versions: 200,
-            num_deletes: 0,
-            num_rows: 200,
-        };
-        assert!(need_compact(
-            &range_stats,
-            &CompactThreshold::new(10, 30, 100, 100)
-        ));
-
-        // many mvcc put case
-        let range_stats = RangeStats {
-            num_entries: 1000,
-            num_versions: 1000,
-            num_deletes: 0,
-            num_rows: 200,
-        };
-        assert!(need_compact(
-            &range_stats,
-            &CompactThreshold::new(100, 100, 100, 30)
-        ));
-
-        // many mvcc delete case
-        let range_stats = RangeStats {
-            num_entries: 1000,
-            num_versions: 1000,
-            num_deletes: 800,
-            num_rows: 1000,
-        };
-        assert!(need_compact(
-            &range_stats,
-            &CompactThreshold::new(100, 100, 100, 30)
-        ));
     }
 }

@@ -4,14 +4,14 @@ use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{self, RaftCmdRequest, RaftCmdResponse};
 use pd_client::INVALID_ID;
 use raftstore::{
+    Error,
     store::{
-        cmd_resp,
+        Config, ReadIndexContext, ReadIndexRequest, cmd_resp,
         fsm::apply::notify_stale_req,
         metrics::RAFT_READ_INDEX_PENDING_COUNT,
         msg::{ErrorCallback, ReadCallback},
-        propose_read_index, Config, ReadIndexContext, ReadIndexRequest,
+        propose_read_index,
     },
-    Error,
 };
 use slog::debug;
 use tikv_util::time::monotonic_raw_now;
@@ -100,11 +100,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         for (req, ch, _) in read_index_req.take_cmds().drain(..) {
             ch.read_tracker().map(|tracker| {
                 GLOBAL_TRACKERS.with_tracker(tracker, |t| {
-                    t.metrics.read_index_confirm_wait_nanos = (time - read_index_req.propose_time)
-                        .to_std()
-                        .unwrap()
-                        .as_nanos()
-                        as u64;
+                    t.metrics.read_index_confirm_wait_nanos =
+                        std::time::Duration::try_from(time - read_index_req.propose_time)
+                            .unwrap()
+                            .as_nanos() as u64;
                 })
             });
 
@@ -145,11 +144,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         for (_, ch, _) in read_index_req.take_cmds().drain(..) {
             ch.read_tracker().map(|tracker| {
                 GLOBAL_TRACKERS.with_tracker(tracker, |t| {
-                    t.metrics.read_index_confirm_wait_nanos = (time - read_index_req.propose_time)
-                        .to_std()
-                        .unwrap()
-                        .as_nanos()
-                        as u64;
+                    t.metrics.read_index_confirm_wait_nanos =
+                        std::time::Duration::try_from(time - read_index_req.propose_time)
+                            .unwrap()
+                            .as_nanos() as u64;
                 })
             });
             ch.report_error(response.clone());

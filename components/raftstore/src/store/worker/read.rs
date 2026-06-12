@@ -6,8 +6,8 @@ use std::{
     fmt::{self, Display, Formatter},
     ops::Deref,
     sync::{
-        atomic::{self, AtomicU64, Ordering},
         Arc, Mutex,
+        atomic::{self, AtomicU64, Ordering},
     },
 };
 
@@ -26,25 +26,23 @@ use tikv_util::{
     debug, error,
     lru::LruCache,
     store::find_peer_by_id,
-    time::{monotonic_raw_now, ThreadReadId},
+    time::{ThreadReadId, Timespec, monotonic_raw_now},
 };
-use time::Timespec;
 use tracker::GLOBAL_TRACKERS;
 use txn_types::{TimeStamp, WriteBatchFlags};
 
 use super::metrics::*;
 use crate::{
+    Error, Result,
     coprocessor::CoprocessorHost,
     errors::RAFTSTORE_IS_BUSY,
     router::ReadContext,
     store::{
-        cmd_resp,
+        Callback, CasualMessage, CasualRouter, Peer, ProposalRouter, RaftCommand, ReadCallback,
+        ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy, TxnExt, cmd_resp,
         fsm::store::StoreMeta,
         util::{self, LeaseState, RegionReadProgress, RemoteLease},
-        Callback, CasualMessage, CasualRouter, Peer, ProposalRouter, RaftCommand, ReadCallback,
-        ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy, TxnExt,
     },
-    Error, Result,
 };
 
 /// #[RaftstoreCommon]
@@ -1115,7 +1113,7 @@ where
                                 // local peer is a valid leader.
                                 let allow_fallback_leader_read = inspector
                                     .inspect(&req)
-                                    .map_or(false, |r| r == RequestPolicy::ReadLocal);
+                                    .is_ok_and(|r| r == RequestPolicy::ReadLocal);
                                 if !allow_fallback_leader_read {
                                     cb.set_result(ReadResponse {
                                         response: err_resp,
@@ -1249,7 +1247,7 @@ struct Inspector<'r> {
     delegate: &'r ReadDelegate,
 }
 
-impl<'r> RequestInspector for Inspector<'r> {
+impl RequestInspector for Inspector<'_> {
     fn has_applied_to_current_term(&mut self) -> bool {
         if self.delegate.applied_term == self.delegate.term {
             true
@@ -1286,7 +1284,7 @@ mod tests {
 
     use crossbeam::channel::TrySendError;
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
-    use engine_traits::{MiscExt, Peekable, SyncMutable, ALL_CFS};
+    use engine_traits::{ALL_CFS, MiscExt, Peekable, SyncMutable};
     use kvproto::{metapb::RegionEpoch, raft_cmdpb::*};
     use tempfile::{Builder, TempDir};
     use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
@@ -1294,7 +1292,7 @@ mod tests {
     use txn_types::WriteBatchFlags;
 
     use super::*;
-    use crate::store::{util::Lease, Callback};
+    use crate::store::{Callback, util::Lease};
 
     struct MockRouter {
         p_router: SyncSender<RaftCommand<KvTestSnapshot>>,
@@ -1382,7 +1380,7 @@ mod tests {
             })),
         );
         assert_eq!(
-            rx.recv_timeout(Duration::seconds(5).to_std().unwrap())
+            rx.recv_timeout(std::time::Duration::try_from(Duration::seconds(5)).unwrap())
                 .unwrap()
                 .request,
             cmd
@@ -1458,7 +1456,7 @@ mod tests {
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.cache_miss.get()),
             1
         );
-        assert!(reader.local_reader.delegates.get(&1).is_none());
+        assert!(!reader.local_reader.delegates.contains_key(&1));
 
         // Register region 1
         lease.renew(monotonic_raw_now());
@@ -1521,7 +1519,7 @@ mod tests {
         must_not_redirect(&mut reader, &rx, task);
 
         // Wait for expiration.
-        thread::sleep(Duration::seconds(1).to_std().unwrap());
+        thread::sleep(std::time::Duration::try_from(Duration::seconds(1)).unwrap());
         must_redirect(&mut reader, &rx, cmd.clone());
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.lease_expire.get()),
@@ -1664,7 +1662,7 @@ mod tests {
             })),
         );
         assert_eq!(
-            rx.recv_timeout(Duration::seconds(5).to_std().unwrap())
+            rx.recv_timeout(std::time::Duration::try_from(Duration::seconds(5)).unwrap())
                 .unwrap()
                 .request,
             cmd9

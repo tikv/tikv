@@ -8,24 +8,25 @@ use pd_client::PdClient;
 use test_storage::SyncTestStorageApiV1;
 use tidb_query_datatype::{
     codec::{
+        Datum,
         data_type::ScalarValue,
         datum,
         row::v2::encoder_for_test::{Column as ColumnV2, RowEncoder},
-        table, Datum,
+        table,
     },
     expr::EvalContext,
 };
 use tikv::{
     server::gc_worker::GcConfig,
     storage::{
+        SnapshotStore, StorageApiV1, TestStorageBuilderApiV1,
         kv::{Engine, RocksEngine},
         lock_manager::MockLockManager,
         txn::FixtureStore,
-        SnapshotStore, StorageApiV1, TestStorageBuilderApiV1,
     },
 };
 use tikv_util::future::block_on_timeout;
-use txn_types::{Key, Mutation, TimeStamp};
+use txn_types::{Key, Mutation, TimeStamp, ValueEntry};
 
 use super::*;
 
@@ -238,6 +239,7 @@ impl<E: Engine> Store<E> {
     }
 
     pub fn delete(&mut self, ctx: Context, mut keys: Vec<Vec<u8>>) {
+        keys.dedup();
         self.handles.extend(keys.clone());
         let pk = keys[0].clone();
         let mutations = keys
@@ -315,7 +317,7 @@ impl<E: Engine> Store<E> {
         let data = self
             .export()
             .into_iter()
-            .map(|(key, value)| (Key::from_raw(&key), Ok(value)))
+            .map(|(key, value)| (Key::from_raw(&key), Ok(ValueEntry::from_value(value))))
             .collect();
         FixtureStore::new(data)
     }

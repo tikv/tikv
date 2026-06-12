@@ -7,10 +7,11 @@ use std::{cell::RefCell, mem, sync::Arc};
 use collections::HashMap;
 use engine_traits::{PerfContext, PerfContextExt, PerfContextKind, PerfLevel};
 use kvproto::{kvrpcpb::KeyRange, metapb, pdpb::QueryKind};
+use lazy_static::lazy_static;
 use pd_client::{BucketMeta, RegionWriteCfCopDetail};
 use prometheus::*;
 use prometheus_static_metric::*;
-use raftstore::store::{util::build_key_range, ReadStats};
+use raftstore::store::{ReadStats, util::build_key_range};
 use tikv_kv::Engine;
 use tracker::get_tls_tracker_token;
 
@@ -217,6 +218,8 @@ make_auto_flush_static_metric! {
         seek_tombstone,
         seek_for_prev_tombstone,
         raw_value_tombstone,
+        hit_missing_range,
+        cache_missing_range,
     }
 
     pub label_enum CheckMemLockResult {
@@ -311,6 +314,8 @@ impl From<ServerGcKeysDetail> for GcKeysDetail {
             ServerGcKeysDetail::seek_tombstone => GcKeysDetail::seek_tombstone,
             ServerGcKeysDetail::seek_for_prev_tombstone => GcKeysDetail::seek_for_prev_tombstone,
             ServerGcKeysDetail::raw_value_tombstone => GcKeysDetail::raw_value_tombstone,
+            ServerGcKeysDetail::hit_missing_range => GcKeysDetail::hit_missing_range,
+            ServerGcKeysDetail::cache_missing_range => GcKeysDetail::cache_missing_range,
         }
     }
 }
@@ -531,13 +536,15 @@ lazy_static! {
     .unwrap();
     pub static ref SCHED_PROCESSING_READ_HISTOGRAM_STATIC: ProcessingReadVec =
         auto_flush_from!(SCHED_PROCESSING_READ_HISTOGRAM_VEC, ProcessingReadVec);
-    pub static ref SCHED_PROCESSING_WRITE_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
-        "tikv_scheduler_processing_write_duration_seconds",
-        "Bucketed histogram of processing write duration",
+    pub static ref SCHED_BLOCK_READ_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_scheduler_block_read_duration_seconds",
+        "Bucketed histogram of block read duration while processing read",
         &["type"],
-        exponential_buckets(0.00001, 2.0, 26).unwrap()
+        exponential_buckets(0.001, 2.0, 18).unwrap()
     )
     .unwrap();
+    pub static ref SCHED_BLOCK_READ_HISTOGRAM_VEC_STATIC: ProcessingReadVec =
+        auto_flush_from!(SCHED_BLOCK_READ_HISTOGRAM_VEC, ProcessingReadVec);
     pub static ref SCHED_TOO_BUSY_COUNTER: IntCounterVec = register_int_counter_vec!(
         "tikv_scheduler_too_busy_total",
         "Total count of scheduler too busy",

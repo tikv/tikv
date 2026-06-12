@@ -1,16 +1,16 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
     thread, time,
 };
 
-use engine_traits::{CfName, IterOptions, CF_DEFAULT};
+use engine_traits::{CF_DEFAULT, CfName, IterOptions};
 use futures::executor::block_on;
 use kvproto::kvrpcpb::{Context, KeyRange};
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
-use tikv::storage::{kv::*, CfStatistics};
-use tikv_util::{codec::bytes, HandyRwLock};
+use tikv::storage::{CfStatistics, kv::*};
+use tikv_util::{HandyRwLock, codec::bytes};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
 #[test]
@@ -454,6 +454,7 @@ fn assert_seek<E: Engine>(
         snapshot.iter(cf, IterOptions::default()).unwrap(),
         ScanMode::Mixed,
         false,
+        false,
     );
     let mut statistics = CfStatistics::default();
     cursor.seek(&Key::from_raw(key), &mut statistics).unwrap();
@@ -533,6 +534,7 @@ fn seek<E: Engine>(ctx: SnapContext<'_>, engine: &mut E) {
         snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
         ScanMode::Mixed,
         false,
+        false,
     );
     let mut statistics = CfStatistics::default();
     assert!(
@@ -551,6 +553,7 @@ fn near_seek<E: Engine>(ctx: SnapContext<'_>, engine: &mut E) {
     let mut cursor = Cursor::new(
         snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
         ScanMode::Mixed,
+        false,
         false,
     );
     assert_near_seek(&mut cursor, b"x", (b"x", b"1"));

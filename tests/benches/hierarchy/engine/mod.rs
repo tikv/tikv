@@ -1,12 +1,12 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use criterion::{black_box, BatchSize, Bencher, Criterion};
+use criterion::{BatchSize, Bencher, Criterion, black_box};
 use kvproto::kvrpcpb::Context;
 use test_util::KvGenerator;
 use tikv::storage::kv::{Engine, Snapshot};
 use txn_types::{Key, Value};
 
-use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS, DEFAULT_KV_GENERATOR_SEED};
+use super::{BenchConfig, DEFAULT_ITERATIONS, DEFAULT_KV_GENERATOR_SEED, EngineFactory};
 
 fn bench_engine_put<E: Engine, F: EngineFactory<E>>(
     bencher: &mut Bencher<'_>,

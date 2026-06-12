@@ -15,8 +15,8 @@ use raft::SnapshotStatus;
 use raftstore::{
     router::RaftStoreRouter,
     store::{
-        region_meta::{RaftStateRole, RegionMeta},
         CasualMessage,
+        region_meta::{RaftStateRole, RegionMeta},
     },
 };
 use tikv_util::future::paired_future_callback;
@@ -95,8 +95,9 @@ where
             .router
             .report_snapshot_status(region_id, to_peer_id, status)
         {
-            error!(?e;
-                "report snapshot to peer failes";
+            warn!(
+                "report snapshot to peer fails";
+                "err" => ?e,
                 "to_peer_id" => to_peer_id,
                 "status" => ?status,
                 "region_id" => region_id,
