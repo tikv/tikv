@@ -494,6 +494,8 @@ fn test_backup_raw_meta() {
 }
 
 #[test]
+// this test relies on file permissions which are ignored when run in docker under the root
+#[cfg(not(feature = "docker_test"))]
 fn test_invalid_external_storage() {
     let mut suite = TestSuite::new(1, 144 * 1024 * 1024, ApiVersion::V1);
     // Put some data.
