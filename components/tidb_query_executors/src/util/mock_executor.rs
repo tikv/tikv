@@ -46,7 +46,7 @@ pub struct MockExecutor {
     /// unaffected.
     scanned_bytes_per_batch: std::vec::IntoIter<usize>,
     /// Cumulative scanned bytes peeked via `peek_scanned_bytes_sum`; never
-    /// drained, mirroring `RangesScanner::scanned_bytes`.
+    /// drained, mirroring `Storage::scanned_bytes`.
     scanned_bytes: usize,
 }
 
