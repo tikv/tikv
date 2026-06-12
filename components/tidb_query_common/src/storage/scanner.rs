@@ -198,10 +198,9 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
         self.scanned_rows_per_range.iter().sum()
     }
 
-    /// Returns the total number of bytes scanned so far, without modifying
-    /// internal state. Delegates to the underlying storage, which counts the
-    /// same bytes as the MVCC `processed_size` (encoded key + value). Used as
-    /// the byte budget for `paging_size_bytes`.
+    /// Returns the total number of bytes scanned so far (key plus value of
+    /// every returned entry), without modifying internal state. Delegates to
+    /// the underlying storage; see `Storage::scanned_bytes`.
     pub fn peek_scanned_bytes_sum(&self) -> usize {
         self.storage.scanned_bytes()
     }

@@ -206,10 +206,10 @@ impl CfStatistics {
 /// contributes to [`Statistics::processed_size`]: the (mem-comparable) key
 /// length plus the value length.
 ///
-/// This is the single definition shared by the MVCC readers that accumulate
-/// `processed_size` and by the coprocessor storage that tracks scanned bytes
-/// for `paging_size_bytes`, so the paging byte budget always stays aligned
-/// with the RU-accounted byte volume.
+/// This is the single definition of the per-entry formula: every site that
+/// accumulates `processed_size`, or needs to mirror its accounting, should
+/// call this helper instead of spelling the formula out, so the call sites
+/// never drift from each other.
 #[inline]
 pub fn kv_processed_size(key_len: usize, value_len: usize) -> usize {
     key_len + value_len

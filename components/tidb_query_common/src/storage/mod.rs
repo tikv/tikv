@@ -69,13 +69,13 @@ pub trait Storage: Send {
 
     fn collect_statistics(&mut self, dest: &mut Self::Statistics);
 
-    /// Returns the cumulative number of bytes scanned so far, without draining
-    /// any statistics. Used as the byte budget for `paging_size_bytes`.
+    /// Returns the cumulative number of bytes scanned so far, counting the
+    /// key and value of every returned entry. Unlike `collect_statistics`,
+    /// this is a non-draining read: the total keeps growing monotonically
+    /// across calls.
     ///
-    /// Implementations should count the same bytes that contribute to the MVCC
-    /// `processed_size` (encoded key + value of every returned entry), so the
-    /// page boundary aligns with the bytes used for RU accounting. Test
-    /// storages may approximate this.
+    /// How the key bytes are measured (e.g. raw or encoded form) is up to the
+    /// implementation.
     fn scanned_bytes(&self) -> usize;
 }
 
