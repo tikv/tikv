@@ -109,6 +109,12 @@ ignore = [
     # RUSTSEC-2026-0097 (unsound with custom logger). Upstream dependency
     # constraints prevent upgrading at the moment.
     "RUSTSEC-2026-0097",
+    # Ignore RUSTSEC-2026-0174, as it does not introduce safety issues, only
+    # violating ASCII invariants. Meanwhile, it only affects the `azure` crate,
+    # which can be upgraded after it fixes the issue.
+    #
+    # See: https://github.com/http-rs/http-types/issues/534
+    "RUSTSEC-2026-0174",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,
