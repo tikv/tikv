@@ -2826,4 +2826,103 @@ mod tests {
         );
         assert!(range.is_none(), "Range should be None when fully drained");
     }
+
+    /// When only the byte budget is set, the executor tree must still be
+    /// built scanned-range aware (otherwise `take_scanned_range` would panic
+    /// on the first byte-budget stop), and the byte peek must flow through
+    /// the real executor chain down to the storage.
+    #[test]
+    fn test_paging_size_bytes_enables_scanned_range_tracking() {
+        let mut dag = DagRequest::default();
+        dag.set_executors(
+            vec![
+                table_scan_descriptor(1, vec![column_with_type(1, FieldTypeTp::Long)]),
+                selection_descriptor(vec![
+                    ExprDefBuilder::column_ref(0, FieldTypeTp::Long).build(),
+                ]),
+                projection_descriptor(vec![
+                    ExprDefBuilder::column_ref(0, FieldTypeTp::Long).build(),
+                ]),
+            ]
+            .into(),
+        );
+        dag.set_output_offsets(vec![0]);
+        dag.set_encode_type(EncodeType::TypeChunk);
+
+        let data: &[(&'static [u8], &'static [u8])] = &[];
+        let mut runner = BatchExecutorsRunner::from_request::<_, ApiV1>(
+            dag,
+            vec![],
+            tidb_query_common::storage::test_fixture::FixtureStorage::from(data),
+            tidb_query_common::storage::StubAccessor::none(),
+            Deadline::from_now(Duration::from_secs(300)),
+            1024,
+            false,
+            None,
+            None,
+            Some(1500),
+            Arc::new(QuotaLimiter::default()),
+        )
+        .unwrap();
+        assert_eq!(runner.paging_size_bytes, Some(1500));
+
+        // Peeks flow through the real Projection -> Selection -> TableScan ->
+        // RangesScanner -> Storage chain; nothing is scanned yet.
+        assert_eq!(runner.out_most_executor.peek_scanned_bytes_sum(), 0);
+        assert_eq!(runner.out_most_executor.peek_scanned_rows_sum(), 0);
+        // Must not panic: build_executors has to enable range tracking when
+        // only paging_size_bytes is set.
+        let _ = runner.out_most_executor.take_scanned_range();
+    }
+
+    /// paging_size and paging_size_bytes are independent budgets: whichever
+    /// threshold is reached first stops the scan.
+    #[test]
+    fn test_paging_size_bytes_with_row_paging_whichever_first() {
+        // Byte budget trips before the row budget.
+        let mut runner = build_simple_runner_for_test();
+        runner.paging_size = Some(100);
+        runner.paging_size_bytes = Some(1500);
+        let mut mock_executor = MockExecutor::new(
+            vec![FieldTypeTp::Long.into()],
+            vec![
+                build_n_rows_int_result(0, 1),
+                build_n_rows_int_result(10, 1),
+                build_n_rows_int_result(100, 1),
+            ],
+        );
+        mock_executor.set_scanned_bytes_per_batch(vec![1000, 1000, 1000]);
+        mock_executor.scanned_range = Some((b"a".to_vec(), b"z".to_vec()).into());
+        runner.out_most_executor = Box::new(mock_executor);
+        let (resp, range) = block_on(runner.handle_request()).unwrap();
+        assert_eq!(
+            2,
+            resp.get_chunks().len(),
+            "the byte budget should stop the scan first"
+        );
+        assert!(range.is_some());
+
+        // Row budget trips before the byte budget.
+        let mut runner = build_simple_runner_for_test();
+        runner.paging_size = Some(1);
+        runner.paging_size_bytes = Some(1_000_000);
+        let mut mock_executor = MockExecutor::new(
+            vec![FieldTypeTp::Long.into()],
+            vec![
+                build_n_rows_int_result(0, 1),
+                build_n_rows_int_result(10, 1),
+                build_n_rows_int_result(100, 1),
+            ],
+        );
+        mock_executor.set_scanned_bytes_per_batch(vec![100, 100, 100]);
+        mock_executor.scanned_range = Some((b"a".to_vec(), b"z".to_vec()).into());
+        runner.out_most_executor = Box::new(mock_executor);
+        let (resp, range) = block_on(runner.handle_request()).unwrap();
+        assert_eq!(
+            1,
+            resp.get_chunks().len(),
+            "the row budget should stop the scan first"
+        );
+        assert!(range.is_some());
+    }
 }

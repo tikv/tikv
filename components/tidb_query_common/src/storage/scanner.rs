@@ -507,8 +507,13 @@ mod tests {
     fn test_scanned_bytes() {
         let storage = create_storage();
 
-        // [foo, foo_3a) yields foo->1, foo_2->3, foo_3->5.
-        let ranges: Vec<Range> = vec![IntervalRange::from(("foo", "foo_3a")).into()];
+        // [foo, foo_3a) yields foo->1, foo_2->3, foo_3->5; the trailing point
+        // ranges exercise the get path with a hit and a miss.
+        let ranges: Vec<Range> = vec![
+            IntervalRange::from(("foo", "foo_3a")).into(),
+            PointRange::from("bar_2").into(),
+            PointRange::from("bar_3").into(),
+        ];
         let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
             storage,
             ranges,
@@ -532,9 +537,14 @@ mod tests {
         assert_eq!(&block_on(scanner.next()).unwrap().unwrap().key(), b"foo_3");
         assert_eq!(scanner.peek_scanned_bytes_sum(), 16);
 
-        // Draining does not change the (non-destructive) peeked total.
+        // Point-range hit: "bar_2" (5) + "4" (1) = 6, cumulative 22.
+        assert_eq!(&block_on(scanner.next()).unwrap().unwrap().key(), b"bar_2");
+        assert_eq!(scanner.peek_scanned_bytes_sum(), 22);
+
+        // Point-range miss adds nothing, and draining does not change the
+        // (non-destructive) peeked total.
         assert_eq!(block_on(scanner.next()).unwrap(), None);
-        assert_eq!(scanner.peek_scanned_bytes_sum(), 16);
+        assert_eq!(scanner.peek_scanned_bytes_sum(), 22);
     }
 
     #[test]
