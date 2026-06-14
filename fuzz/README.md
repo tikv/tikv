@@ -33,7 +33,7 @@ See [honggfuzz-rs documentation](https://github.com/rust-fuzz/honggfuzz-rs).
 cargo install afl
 ```
 
-For more details, see [the fuzz.rs book](https://fuzz.rs/book/afl/setup.html).
+For more details, see [the Rust Fuzz Book](https://rust-fuzz.github.io/book/afl/setup.html).
 
 ### Seeds(optional)
 
