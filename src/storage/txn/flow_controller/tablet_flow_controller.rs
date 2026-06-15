@@ -41,6 +41,16 @@ impl<EK: Clone> TabletFlowFactorStore<EK> {
             .and_then(|mut c| c.latest().and_then(|t| f(t).ok().flatten()))
             .unwrap_or(0)
     }
+
+    fn query_opt(
+        &self,
+        region_id: u64,
+        f: impl Fn(&EK) -> engine_traits::Result<Option<u64>>,
+    ) -> Option<u64> {
+        self.registry
+            .get(region_id)
+            .and_then(|mut c| c.latest().and_then(|t| f(t).ok().flatten()))
+    }
 }
 
 impl<EK: CfNamesExt + FlowControlFactorsExt + Clone> FlowControlFactorStore
@@ -60,6 +70,9 @@ impl<EK: CfNamesExt + FlowControlFactorsExt + Clone> FlowControlFactorStore
     }
     fn pending_compaction_bytes(&self, region_id: u64, cf: &str) -> u64 {
         self.query(region_id, |t| t.get_cf_pending_compaction_bytes(cf))
+    }
+    fn base_level(&self, region_id: u64, cf: &str) -> Option<u64> {
+        self.query_opt(region_id, |t| t.get_cf_base_level(cf))
     }
 }
 
@@ -175,6 +188,10 @@ impl FlowInfoDispatcher {
                             }
                             let mut checkers = flow_checkers.as_ref().write().unwrap();
                             if let Some(checker) = checkers.get_mut(&region_id) {
+                                let base_level_changed = checker.on_base_level_change(&cf);
+                                if base_level_changed {
+                                    pending_compaction_checker.mark_base_level_change(&cf);
+                                }
                                 let current_pending_bytes =
                                     checker.on_pending_compaction_bytes_change(cf.clone());
                                 pending_compaction_checker.report_pending_compaction_bytes(
@@ -440,6 +457,10 @@ impl<E: FlowControlFactorStore + Send + 'static> CompactionPendingBytesChecker<E
         self.checker
             .on_pending_compaction_bytes_change_cf(self.total_pending_compaction_bytes(&cf), cf);
     }
+
+    pub fn mark_base_level_change(&mut self, cf: &str) {
+        self.checker.mark_base_level_change(cf);
+    }
 }
 
 #[cfg(test)]
@@ -635,5 +656,30 @@ mod tests {
             &tx,
             region_id,
         );
+    }
+
+    #[test]
+    fn test_tablet_flow_controller_pending_compaction_bytes_base_level_change_spike() {
+        let (_dir, flow_controller, tx, reg) = create_tablet_flow_controller();
+        let region_id = 5_u64;
+        let tablet_suffix = 5_u64;
+        let tablet_context = TabletContext::with_infinite_region(region_id, Some(tablet_suffix));
+        let mut cached = reg.load(tablet_context, false).unwrap();
+        let stub = cached.latest().unwrap().clone();
+        tx.send(FlowInfo::Created(region_id)).unwrap();
+
+        stub.0.base_level.store(1, Ordering::Relaxed);
+        stub.0
+            .pending_compaction_bytes
+            .store(100 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        send_flow_info(&tx, region_id);
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+
+        stub.0.base_level.store(2, Ordering::Relaxed);
+        stub.0
+            .pending_compaction_bytes
+            .store(1_000_000 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        send_flow_info(&tx, region_id);
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
     }
 }
