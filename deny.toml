@@ -99,6 +99,12 @@ ignore = [
     # rand::rng() / thread_rng() during logging, which TiKV does not do.
     # TODO: Upgrade rand to >=0.9.3 or >=0.10.1 when possible.
     "RUSTSEC-2026-0097",
+    # Ignore RUSTSEC-2026-0174 temporarily. This advisory comes from the Azure
+    # SDK dependency chain pulling in the unmaintained http-types crate through
+    # azure_core, and the advisory does not provide a safe upgrade path.
+    # TODO: Upgrade Azure SDK dependencies when they no longer depend on
+    # http-types.
+    "RUSTSEC-2026-0174",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,
