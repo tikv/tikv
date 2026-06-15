@@ -168,6 +168,12 @@ lazy_static! {
         exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
     .unwrap();
+    pub static ref SNAP_APPLY_BATCH_SIZE_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_raftstore_snapshot_apply_batch_size",
+        "Bucketed histogram of raftstore snapshot apply task batch size",
+        exponential_buckets(1.0, 2.0, 8).unwrap()
+    )
+    .unwrap();
     pub static ref SNAP_PENDING_APPLIES_GAUGE: IntGauge = register_int_gauge!(
         "tikv_raftstore_snapshot_pending_applies",
         "Total number of snapshots that are waiting to be applied",

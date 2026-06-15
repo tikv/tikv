@@ -630,6 +630,8 @@ where
     }
 
     fn handle_applies(&mut self, tasks: Vec<(u64, u64, Arc<AtomicUsize>)>) {
+        SNAP_APPLY_BATCH_SIZE_HISTOGRAM.observe(tasks.len() as f64);
+
         let mut metas = Vec::with_capacity(tasks.len());
         let mut applies = Vec::with_capacity(tasks.len());
         for (region_id, peer_id, status) in tasks {
