@@ -189,10 +189,8 @@ impl FlowInfoDispatcher {
                             let mut checkers = flow_checkers.as_ref().write().unwrap();
                             if let Some(checker) = checkers.get_mut(&region_id) {
                                 let base_level_changed = checker.on_base_level_change(&cf);
-                                if base_level_changed
-                                    && !checker.has_l0_or_memtable_pressure(&cf, &config.value())
-                                {
-                                    pending_compaction_checker.mark_base_level_transition(&cf);
+                                if base_level_changed {
+                                    pending_compaction_checker.mark_base_level_change(&cf);
                                 }
                                 let current_pending_bytes =
                                     checker.on_pending_compaction_bytes_change(cf.clone());
@@ -460,8 +458,8 @@ impl<E: FlowControlFactorStore + Send + 'static> CompactionPendingBytesChecker<E
             .on_pending_compaction_bytes_change_cf(self.total_pending_compaction_bytes(&cf), cf);
     }
 
-    pub fn mark_base_level_transition(&mut self, cf: &str) {
-        self.checker.mark_base_level_transition(cf);
+    pub fn mark_base_level_change(&mut self, cf: &str) {
+        self.checker.mark_base_level_change(cf);
     }
 }
 
@@ -661,7 +659,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tablet_flow_controller_pending_compaction_bytes_base_level_transition_spike() {
+    fn test_tablet_flow_controller_pending_compaction_bytes_base_level_change_spike() {
         let (_dir, flow_controller, tx, reg) = create_tablet_flow_controller();
         let region_id = 5_u64;
         let tablet_suffix = 5_u64;

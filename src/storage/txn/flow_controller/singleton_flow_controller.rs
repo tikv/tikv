@@ -37,6 +37,8 @@ const MAX_THROTTLE_SPEED: f64 = 200.0 * 1024.0 * 1024.0; // 200MB
 
 const EMA_FACTOR: f64 = 0.6; // EMA stands for Exponential Moving Average
 const PENDING_BYTES_JUMP_THRESHOLD: f64 = 2.0;
+const BASE_LEVEL_CHANGE_PENDING_BYTES_JUMP_THRESHOLD_SECS: f64 =
+    SMOOTHER_STALE_RECORD_THRESHOLD as f64;
 
 /// Flow controller is used to throttle the write rate at scheduler level,
 /// aiming to substitute the write stall mechanism of RocksDB. It features in
@@ -240,8 +242,8 @@ struct CfFlowChecker {
     long_term_pending_bytes:
         Option<Smoother<f64, 1024, SMOOTHER_STALE_RECORD_THRESHOLD, SMOOTHER_TIME_RANGE_THRESHOLD>>,
     pending_bytes_before_unsafe_destroy_range: Option<f64>,
-    pending_bytes_before_base_level_transition: Option<f64>,
-    pending_bytes_base_level_jump_detected: bool,
+    pending_bytes_before_base_level_change: Option<(f64, Instant)>,
+    pending_bytes_base_level_jump_baseline: Option<f64>,
     last_base_level: Option<u64>,
 
     // On start related markers. Because after restart, the memtable, l0 files
@@ -280,8 +282,8 @@ impl CfFlowChecker {
                 None
             },
             pending_bytes_before_unsafe_destroy_range: None,
-            pending_bytes_before_base_level_transition: None,
-            pending_bytes_base_level_jump_detected: false,
+            pending_bytes_before_base_level_change: None,
+            pending_bytes_base_level_jump_baseline: None,
             last_base_level: None,
             on_start_memtable: true,
             on_start_l0_files: true,
@@ -620,55 +622,11 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
             // 0.log2() == -inf, which is not expected and may lead to sum always be NaN
             num = 0.0;
         }
-        let has_l0_or_memtable_pressure = self.has_l0_or_memtable_pressure(&cf, &control_cfg);
-        let checker = self.cf_checkers.get_mut(&cf).unwrap();
-        let ignore_base_level_transition = if let Some(before) =
-            checker.pending_bytes_before_base_level_transition
-        {
-            if checker.on_start_pending_bytes || has_l0_or_memtable_pressure {
-                checker.pending_bytes_before_base_level_transition = None;
-                checker.pending_bytes_base_level_jump_detected = false;
-                false
-            } else if num <= before {
-                if checker.pending_bytes_base_level_jump_detected {
-                    info!(
-                        "pending compaction bytes is back to normal after base level transition";
-                        "cf" => &cf,
-                        "pending_compaction_bytes" => num,
-                        "before" => before,
-                    );
-                }
-                checker.pending_bytes_before_base_level_transition = None;
-                checker.pending_bytes_base_level_jump_detected = false;
-                false
-            } else if checker.pending_bytes_base_level_jump_detected
-                || (num >= soft && num >= before + PENDING_BYTES_JUMP_THRESHOLD)
-            {
-                checker.pending_bytes_base_level_jump_detected = true;
-                SCHED_THROTTLE_ACTION_COUNTER
-                    .with_label_values(&[&cf, "pending_bytes_base_level_jump"])
-                    .inc();
-                info!(
-                    "ignore pending compaction bytes jump after base level transition";
-                    "cf" => &cf,
-                    "pending_compaction_bytes" => num,
-                    "before" => before,
-                    "soft_limit" => soft,
-                );
-                true
-            } else {
-                checker.pending_bytes_before_base_level_transition = None;
-                checker.pending_bytes_base_level_jump_detected = false;
-                false
-            }
-        } else {
-            false
-        };
-
-        if ignore_base_level_transition {
+        if self.should_skip_base_level_pending_bytes_jump(&cf, num, soft) {
             return;
         }
 
+        let checker = self.cf_checkers.get_mut(&cf).unwrap();
         // only be called by v1
         if let Some(long_term_pending_bytes) = checker.long_term_pending_bytes.as_mut() {
             long_term_pending_bytes.observe(num);
@@ -750,7 +708,7 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         checker.last_base_level = current_base_level;
         if let (Some(last), Some(current)) = (previous_base_level, current_base_level) {
             if last != current {
-                self.mark_base_level_transition(cf);
+                self.mark_base_level_change(cf);
                 info!(
                     "rocksdb base level changed";
                     "cf" => cf,
@@ -763,7 +721,7 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         false
     }
 
-    pub(super) fn mark_base_level_transition(&mut self, cf: &str) {
+    pub(super) fn mark_base_level_change(&mut self, cf: &str) {
         let soft = (self
             .config_tracker
             .value()
@@ -774,22 +732,90 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         if let Some(long_term_pending_bytes) = checker.long_term_pending_bytes.as_ref() {
             let pending_compaction_bytes = long_term_pending_bytes.get_recent();
             if long_term_pending_bytes.get_count() > 0 && pending_compaction_bytes < soft {
-                checker.pending_bytes_before_base_level_transition = Some(pending_compaction_bytes);
-                checker.pending_bytes_base_level_jump_detected = false;
+                checker.pending_bytes_before_base_level_change =
+                    Some((pending_compaction_bytes, Instant::now_coarse()));
+                checker.pending_bytes_base_level_jump_baseline = None;
             }
         }
     }
 
-    pub(super) fn has_l0_or_memtable_pressure(
-        &self,
+    fn should_skip_base_level_pending_bytes_jump(
+        &mut self,
         cf: &str,
-        control_cfg: &FlowControlConfig,
+        pending_compaction_bytes: f64,
+        soft: f64,
     ) -> bool {
-        let checker = self.cf_checkers.get(cf).unwrap();
-        checker.long_term_num_l0_files.get_recent() > control_cfg.l0_files_threshold
-            || checker.long_term_num_l0_files.get_avg() > control_cfg.l0_files_threshold as f64
-            || checker.last_num_memtables.get_recent() > control_cfg.memtables_threshold
-            || checker.last_num_memtables.get_avg() > control_cfg.memtables_threshold as f64
+        let checker = self.cf_checkers.get_mut(cf).unwrap();
+        if checker.on_start_pending_bytes {
+            checker.pending_bytes_before_base_level_change = None;
+            checker.pending_bytes_base_level_jump_baseline = None;
+            return false;
+        }
+
+        if let Some(baseline) = checker.pending_bytes_base_level_jump_baseline {
+            if pending_compaction_bytes <= baseline {
+                info!(
+                    "pending compaction bytes is back to normal after base level change";
+                    "cf" => cf,
+                    "pending_compaction_bytes" => pending_compaction_bytes,
+                    "baseline" => baseline,
+                );
+                checker.pending_bytes_base_level_jump_baseline = None;
+                return false;
+            }
+
+            SCHED_THROTTLE_ACTION_COUNTER
+                .with_label_values(&[cf, "pending_bytes_base_level_jump"])
+                .inc();
+            info!(
+                "skip pending compaction bytes jump after base level change";
+                "cf" => cf,
+                "pending_compaction_bytes" => pending_compaction_bytes,
+                "baseline" => baseline,
+                "soft_limit" => soft,
+            );
+            return true;
+        }
+
+        let Some((baseline, base_level_change_time)) =
+            checker.pending_bytes_before_base_level_change
+        else {
+            return false;
+        };
+        if base_level_change_time.saturating_elapsed_secs()
+            > BASE_LEVEL_CHANGE_PENDING_BYTES_JUMP_THRESHOLD_SECS
+        {
+            checker.pending_bytes_before_base_level_change = None;
+            return false;
+        }
+        if pending_compaction_bytes < soft {
+            return false;
+        }
+        checker.pending_bytes_before_base_level_change = None;
+        let previous_pending_compaction_bytes = checker
+            .long_term_pending_bytes
+            .as_ref()
+            .map_or(0.0, |pending_bytes| pending_bytes.get_recent());
+        if pending_compaction_bytes < baseline + PENDING_BYTES_JUMP_THRESHOLD
+            || pending_compaction_bytes
+                < previous_pending_compaction_bytes + PENDING_BYTES_JUMP_THRESHOLD
+        {
+            return false;
+        }
+
+        checker.pending_bytes_base_level_jump_baseline = Some(baseline);
+        SCHED_THROTTLE_ACTION_COUNTER
+            .with_label_values(&[cf, "pending_bytes_base_level_jump"])
+            .inc();
+        info!(
+            "start pending compaction bytes jump control after base level change";
+            "cf" => cf,
+            "pending_compaction_bytes" => pending_compaction_bytes,
+            "baseline" => baseline,
+            "previous_pending_compaction_bytes" => previous_pending_compaction_bytes,
+            "soft_limit" => soft,
+        );
+        true
     }
 
     fn on_memtable_change(&mut self, cf: &str) {
@@ -1456,7 +1482,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn test_flow_controller_pending_compaction_bytes_base_level_transition_spike() {
+    fn test_flow_controller_pending_compaction_bytes_base_level_change_spike() {
         let region_id = 0;
         let stub = EngineStub::new();
         let (tx, rx) = mpsc::sync_channel(0);
@@ -1477,6 +1503,12 @@ pub(super) mod tests {
         stub.0.base_level.store(2, Ordering::Relaxed);
         stub.0
             .pending_compaction_bytes
+            .store(120 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        send_flow_info(&tx, region_id);
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+
+        stub.0
+            .pending_compaction_bytes
             .store(1_000_000 * 1024 * 1024 * 1024, Ordering::Relaxed);
         send_flow_info(&tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
@@ -1491,7 +1523,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn test_flow_controller_pending_compaction_bytes_base_level_transition_recover() {
+    fn test_flow_controller_pending_compaction_bytes_base_level_change_recover() {
         let region_id = 0;
         let stub = EngineStub::new();
         let (tx, rx) = mpsc::sync_channel(0);
@@ -1523,17 +1555,40 @@ pub(super) mod tests {
             .store(100 * 1024 * 1024 * 1024, Ordering::Relaxed);
         send_flow_info(&tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+    }
 
-        stub.0.base_level.store(3, Ordering::Relaxed);
+    #[test]
+    fn test_flow_controller_pending_compaction_bytes_base_level_change_without_jump() {
+        let region_id = 0;
+        let stub = EngineStub::new();
+        let (tx, rx) = mpsc::sync_channel(0);
+        let flow_controller =
+            EngineFlowController::new(&FlowControlConfig::default(), stub.clone(), rx);
+        let flow_controller = FlowController::Singleton(flow_controller);
+
+        stub.0.base_level.store(1, Ordering::Relaxed);
         stub.0
             .pending_compaction_bytes
             .store(100 * 1024 * 1024 * 1024, Ordering::Relaxed);
         send_flow_info(&tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
 
+        stub.0.base_level.store(2, Ordering::Relaxed);
         stub.0
             .pending_compaction_bytes
-            .store(1_000_000 * 1024 * 1024 * 1024, Ordering::Relaxed);
+            .store(150 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        send_flow_info(&tx, region_id);
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+
+        stub.0
+            .pending_compaction_bytes
+            .store(250 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        send_flow_info(&tx, region_id);
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+
+        stub.0
+            .pending_compaction_bytes
+            .store(1000 * 1024 * 1024 * 1024, Ordering::Relaxed);
         send_flow_info(&tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) > f64::EPSILON);
     }
