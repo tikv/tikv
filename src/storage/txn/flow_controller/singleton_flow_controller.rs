@@ -36,9 +36,6 @@ const MIN_THROTTLE_SPEED: f64 = 16.0 * 1024.0; // 16KB
 const MAX_THROTTLE_SPEED: f64 = 200.0 * 1024.0 * 1024.0; // 200MB
 
 const EMA_FACTOR: f64 = 0.6; // EMA stands for Exponential Moving Average
-const PENDING_BYTES_JUMP_THRESHOLD: f64 = 2.0;
-const BASE_LEVEL_CHANGE_PENDING_BYTES_JUMP_THRESHOLD_SECS: f64 =
-    SMOOTHER_STALE_RECORD_THRESHOLD as f64;
 
 /// Flow controller is used to throttle the write rate at scheduler level,
 /// aiming to substitute the write stall mechanism of RocksDB. It features in
@@ -242,7 +239,7 @@ struct CfFlowChecker {
     long_term_pending_bytes:
         Option<Smoother<f64, 1024, SMOOTHER_STALE_RECORD_THRESHOLD, SMOOTHER_TIME_RANGE_THRESHOLD>>,
     pending_bytes_before_unsafe_destroy_range: Option<f64>,
-    pending_bytes_before_base_level_change: Option<(f64, Instant)>,
+    pending_bytes_before_base_level_change: Option<f64>,
     pending_bytes_base_level_jump_baseline: Option<f64>,
     last_base_level: Option<u64>,
 
@@ -426,8 +423,7 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
             }
             Ok(FlowInfo::Compaction(cf, ..)) => {
                 if current_cfg.enable {
-                    self.on_base_level_change(&cf);
-                    self.on_pending_compaction_bytes_change(cf);
+                    self.on_compaction_flow_info(cf);
                 }
             }
             Ok(FlowInfo::BeforeUnsafeDestroyRange(..)) => {
@@ -600,10 +596,19 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         (rate, cf_throttle_flags)
     }
 
-    pub fn on_pending_compaction_bytes_change(&mut self, cf: String) -> u64 {
-        let pending_compaction_bytes = self.engine.pending_compaction_bytes(self.region_id, &cf);
+    pub(super) fn pending_compaction_bytes(&self, cf: &str) -> u64 {
+        self.engine.pending_compaction_bytes(self.region_id, cf)
+    }
+
+    pub(super) fn on_compaction_flow_info(&mut self, cf: String) -> (u64, bool) {
+        let mut base_level_changed = self.on_base_level_change(&cf);
+        let mut pending_compaction_bytes = self.pending_compaction_bytes(&cf);
+        if self.on_base_level_change(&cf) {
+            base_level_changed = true;
+            pending_compaction_bytes = self.pending_compaction_bytes(&cf);
+        }
         self.on_pending_compaction_bytes_change_cf(pending_compaction_bytes, cf);
-        pending_compaction_bytes
+        (pending_compaction_bytes, base_level_changed)
     }
 
     pub fn on_pending_compaction_bytes_change_cf(
@@ -621,9 +626,6 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         if !num.is_finite() {
             // 0.log2() == -inf, which is not expected and may lead to sum always be NaN
             num = 0.0;
-        }
-        if self.should_skip_base_level_pending_bytes_jump(&cf, num, soft) {
-            return;
         }
 
         let checker = self.cf_checkers.get_mut(&cf).unwrap();
@@ -666,7 +668,15 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
                 } else {
                     false
                 };
-            let ignore = ignore_unsafe_destroy_range;
+            let ignore_base_level_pending_bytes_jump =
+                Self::should_ignore_base_level_pending_bytes_jump(
+                    checker,
+                    &cf,
+                    pending_compaction_bytes,
+                    num,
+                    soft,
+                );
+            let ignore = ignore_unsafe_destroy_range || ignore_base_level_pending_bytes_jump;
 
             for checker in self.cf_checkers.values() {
                 if let Some(long_term_pending_bytes) = checker.long_term_pending_bytes.as_ref() {
@@ -729,29 +739,27 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
             .0 as f64)
             .log2();
         let checker = self.cf_checkers.get_mut(cf).unwrap();
+        if checker.on_start_pending_bytes
+            || checker.pending_bytes_base_level_jump_baseline.is_some()
+        {
+            return;
+        }
         if let Some(long_term_pending_bytes) = checker.long_term_pending_bytes.as_ref() {
-            let pending_compaction_bytes = long_term_pending_bytes.get_recent();
+            let pending_compaction_bytes = long_term_pending_bytes.get_avg();
             if long_term_pending_bytes.get_count() > 0 && pending_compaction_bytes < soft {
-                checker.pending_bytes_before_base_level_change =
-                    Some((pending_compaction_bytes, Instant::now_coarse()));
+                checker.pending_bytes_before_base_level_change = Some(pending_compaction_bytes);
                 checker.pending_bytes_base_level_jump_baseline = None;
             }
         }
     }
 
-    fn should_skip_base_level_pending_bytes_jump(
-        &mut self,
+    fn should_ignore_base_level_pending_bytes_jump(
+        checker: &mut CfFlowChecker,
         cf: &str,
         pending_compaction_bytes: f64,
+        current_pending_compaction_bytes: f64,
         soft: f64,
     ) -> bool {
-        let checker = self.cf_checkers.get_mut(cf).unwrap();
-        if checker.on_start_pending_bytes {
-            checker.pending_bytes_before_base_level_change = None;
-            checker.pending_bytes_base_level_jump_baseline = None;
-            return false;
-        }
-
         if let Some(baseline) = checker.pending_bytes_base_level_jump_baseline {
             if pending_compaction_bytes <= baseline {
                 info!(
@@ -777,29 +785,10 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
             return true;
         }
 
-        let Some((baseline, base_level_change_time)) =
-            checker.pending_bytes_before_base_level_change
-        else {
+        let Some(baseline) = checker.pending_bytes_before_base_level_change.take() else {
             return false;
         };
-        if base_level_change_time.saturating_elapsed_secs()
-            > BASE_LEVEL_CHANGE_PENDING_BYTES_JUMP_THRESHOLD_SECS
-        {
-            checker.pending_bytes_before_base_level_change = None;
-            return false;
-        }
-        if pending_compaction_bytes < soft {
-            return false;
-        }
-        checker.pending_bytes_before_base_level_change = None;
-        let previous_pending_compaction_bytes = checker
-            .long_term_pending_bytes
-            .as_ref()
-            .map_or(0.0, |pending_bytes| pending_bytes.get_recent());
-        if pending_compaction_bytes < baseline + PENDING_BYTES_JUMP_THRESHOLD
-            || pending_compaction_bytes
-                < previous_pending_compaction_bytes + PENDING_BYTES_JUMP_THRESHOLD
-        {
+        if current_pending_compaction_bytes < soft && pending_compaction_bytes < soft {
             return false;
         }
 
@@ -812,7 +801,6 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
             "cf" => cf,
             "pending_compaction_bytes" => pending_compaction_bytes,
             "baseline" => baseline,
-            "previous_pending_compaction_bytes" => previous_pending_compaction_bytes,
             "soft_limit" => soft,
         );
         true
@@ -1503,18 +1491,13 @@ pub(super) mod tests {
         stub.0.base_level.store(2, Ordering::Relaxed);
         stub.0
             .pending_compaction_bytes
-            .store(120 * 1024 * 1024 * 1024, Ordering::Relaxed);
-        send_flow_info(&tx, region_id);
-        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
-
-        stub.0
-            .pending_compaction_bytes
             .store(1_000_000 * 1024 * 1024 * 1024, Ordering::Relaxed);
         send_flow_info(&tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
 
-        // Raw pending bytes returns to normal. The average is still polluted by
-        // the spike, so it should stay ignored until it drains.
+        // Raw pending bytes returns to normal. The spike sample has been
+        // observed by the smoother, so it should stay ignored until the
+        // long-term average drains.
         stub.0
             .pending_compaction_bytes
             .store(100 * 1024 * 1024 * 1024, Ordering::Relaxed);
@@ -1535,7 +1518,9 @@ pub(super) mod tests {
         stub.0
             .pending_compaction_bytes
             .store(100 * 1024 * 1024 * 1024, Ordering::Relaxed);
-        send_flow_info(&tx, region_id);
+        for _ in 0..2 {
+            send_flow_info(&tx, region_id);
+        }
         assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
 
         stub.0.base_level.store(2, Ordering::Relaxed);
