@@ -191,7 +191,8 @@ impl FlowInfoDispatcher {
                                 let (current_pending_bytes, base_level_changed) =
                                     checker.on_compaction_flow_info(cf.clone());
                                 if base_level_changed {
-                                    pending_compaction_checker.mark_base_level_change(&cf);
+                                    pending_compaction_checker
+                                        .record_base_level_change_baseline(&cf);
                                 }
                                 pending_compaction_checker.report_pending_compaction_bytes(
                                     region_id,
@@ -457,8 +458,8 @@ impl<E: FlowControlFactorStore + Send + 'static> CompactionPendingBytesChecker<E
             .on_pending_compaction_bytes_change_cf(self.total_pending_compaction_bytes(&cf), cf);
     }
 
-    pub fn mark_base_level_change(&mut self, cf: &str) {
-        self.checker.mark_base_level_change(cf);
+    pub fn record_base_level_change_baseline(&mut self, cf: &str) {
+        self.checker.record_base_level_change_baseline(cf);
     }
 }
 

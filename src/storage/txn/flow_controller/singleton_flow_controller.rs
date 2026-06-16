@@ -601,9 +601,11 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
     }
 
     pub(super) fn on_compaction_flow_info(&mut self, cf: String) -> (u64, bool) {
-        let mut base_level_changed = self.on_base_level_change(&cf);
+        // Check the base level around pending bytes so a RocksDB version switch
+        // during the pending bytes read is not missed.
+        let mut base_level_changed = self.detect_base_level_change(&cf);
         let mut pending_compaction_bytes = self.pending_compaction_bytes(&cf);
-        if self.on_base_level_change(&cf) {
+        if self.detect_base_level_change(&cf) {
             base_level_changed = true;
             pending_compaction_bytes = self.pending_compaction_bytes(&cf);
         }
@@ -714,14 +716,14 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         }
     }
 
-    pub(super) fn on_base_level_change(&mut self, cf: &str) -> bool {
+    pub(super) fn detect_base_level_change(&mut self, cf: &str) -> bool {
         let current_base_level = self.engine.base_level(self.region_id, cf);
         let checker = self.cf_checkers.get_mut(cf).unwrap();
         let previous_base_level = checker.last_base_level;
         checker.last_base_level = current_base_level;
         if let (Some(last), Some(current)) = (previous_base_level, current_base_level) {
             if last != current {
-                self.mark_base_level_change(cf);
+                self.record_base_level_change_baseline(cf);
                 info!(
                     "rocksdb base level changed";
                     "cf" => cf,
@@ -734,7 +736,7 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         false
     }
 
-    pub(super) fn mark_base_level_change(&mut self, cf: &str) {
+    pub(super) fn record_base_level_change_baseline(&mut self, cf: &str) {
         let soft = (self
             .config_tracker
             .value()
