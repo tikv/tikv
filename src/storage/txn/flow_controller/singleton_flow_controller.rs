@@ -622,16 +622,16 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         // Because pending compaction bytes changes dramatically, take the
         // logarithm of pending compaction bytes to make the values fall into
         // a relative small range
-        let mut num = (pending_compaction_bytes as f64).log2();
-        if !num.is_finite() {
+        let mut recent_pending_compaction_bytes = (pending_compaction_bytes as f64).log2();
+        if !recent_pending_compaction_bytes.is_finite() {
             // 0.log2() == -inf, which is not expected and may lead to sum always be NaN
-            num = 0.0;
+            recent_pending_compaction_bytes = 0.0;
         }
 
         let checker = self.cf_checkers.get_mut(&cf).unwrap();
         // only be called by v1
         if let Some(long_term_pending_bytes) = checker.long_term_pending_bytes.as_mut() {
-            long_term_pending_bytes.observe(num);
+            long_term_pending_bytes.observe(recent_pending_compaction_bytes);
             SCHED_PENDING_COMPACTION_BYTES_GAUGE
                 .with_label_values(&[&cf])
                 .set((long_term_pending_bytes.get_avg() * RATIO_SCALE_FACTOR as f64) as i64);
@@ -639,7 +639,9 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
             // do special check on start, see the comment of the variable definition for
             // detail.
             if checker.on_start_pending_bytes {
-                if num < soft || long_term_pending_bytes.trend() == Trend::Increasing {
+                if recent_pending_compaction_bytes < soft
+                    || long_term_pending_bytes.trend() == Trend::Increasing
+                {
                     // the write is accumulating, still need to throttle
                     checker.on_start_pending_bytes = false;
                 } else {
@@ -648,48 +650,49 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
                 }
             }
 
-            let pending_compaction_bytes = long_term_pending_bytes.get_avg();
-            let ignore_unsafe_destroy_range =
-                if let Some(before) = checker.pending_bytes_before_unsafe_destroy_range {
-                    // It assumes that the long term average will eventually come down below the
-                    // soft limit. If the general traffic flow increases during destroy, the long
-                    // term average may never come down and the flow control will be turned off for
-                    // a long time, which would be a rather rare case, so just ignore it.
-                    if pending_compaction_bytes <= before && !self.wait_for_destroy_range_finish {
-                        info!(
-                            "pending compaction bytes is back to normal";
-                            "cf" => &cf,
-                            "pending_compaction_bytes" => pending_compaction_bytes,
-                            "before" => before
-                        );
-                        checker.pending_bytes_before_unsafe_destroy_range = None;
-                    }
-                    true
-                } else {
-                    false
-                };
+            let avg_pending_compaction_bytes = long_term_pending_bytes.get_avg();
+            let ignore_unsafe_destroy_range = if let Some(before) =
+                checker.pending_bytes_before_unsafe_destroy_range
+            {
+                // It assumes that the long term average will eventually come down below the
+                // soft limit. If the general traffic flow increases during destroy, the long
+                // term average may never come down and the flow control will be turned off for
+                // a long time, which would be a rather rare case, so just ignore it.
+                if avg_pending_compaction_bytes <= before && !self.wait_for_destroy_range_finish {
+                    info!(
+                        "pending compaction bytes is back to normal";
+                        "cf" => &cf,
+                        "avg_pending_compaction_bytes" => avg_pending_compaction_bytes,
+                        "before" => before
+                    );
+                    checker.pending_bytes_before_unsafe_destroy_range = None;
+                }
+                true
+            } else {
+                false
+            };
             let ignore_base_level_pending_bytes_jump =
                 Self::should_ignore_base_level_pending_bytes_jump(
                     checker,
                     &cf,
-                    pending_compaction_bytes,
-                    num,
+                    avg_pending_compaction_bytes,
+                    recent_pending_compaction_bytes,
                     soft,
                 );
             let ignore = ignore_unsafe_destroy_range || ignore_base_level_pending_bytes_jump;
 
             for checker in self.cf_checkers.values() {
                 if let Some(long_term_pending_bytes) = checker.long_term_pending_bytes.as_ref() {
-                    if num < long_term_pending_bytes.get_recent() {
+                    if recent_pending_compaction_bytes < long_term_pending_bytes.get_recent() {
                         return;
                     }
                 }
             }
 
-            let mut ratio = if pending_compaction_bytes < soft || ignore {
+            let mut ratio = if avg_pending_compaction_bytes < soft || ignore {
                 0
             } else {
-                let new_ratio = (pending_compaction_bytes - soft) / (hard - soft);
+                let new_ratio = (avg_pending_compaction_bytes - soft) / (hard - soft);
                 let old_ratio = self.discard_ratio.load(Ordering::Relaxed);
 
                 // Because pending compaction bytes changes up and down, so using
@@ -745,9 +748,9 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
             return;
         }
         if let Some(long_term_pending_bytes) = checker.long_term_pending_bytes.as_ref() {
-            let pending_compaction_bytes = long_term_pending_bytes.get_avg();
-            if long_term_pending_bytes.get_count() > 0 && pending_compaction_bytes < soft {
-                checker.pending_bytes_before_base_level_change = Some(pending_compaction_bytes);
+            let avg_pending_compaction_bytes = long_term_pending_bytes.get_avg();
+            if long_term_pending_bytes.get_count() > 0 && avg_pending_compaction_bytes < soft {
+                checker.pending_bytes_before_base_level_change = Some(avg_pending_compaction_bytes);
                 checker.pending_bytes_base_level_jump_baseline = None;
             }
         }
@@ -756,16 +759,17 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
     fn should_ignore_base_level_pending_bytes_jump(
         checker: &mut CfFlowChecker,
         cf: &str,
-        pending_compaction_bytes: f64,
-        current_pending_compaction_bytes: f64,
+        avg_pending_compaction_bytes: f64,
+        recent_pending_compaction_bytes: f64,
         soft: f64,
     ) -> bool {
         if let Some(baseline) = checker.pending_bytes_base_level_jump_baseline {
-            if pending_compaction_bytes <= baseline {
+            if avg_pending_compaction_bytes <= baseline && recent_pending_compaction_bytes < soft {
                 info!(
                     "pending compaction bytes is back to normal after base level change";
                     "cf" => cf,
-                    "pending_compaction_bytes" => pending_compaction_bytes,
+                    "avg_pending_compaction_bytes" => avg_pending_compaction_bytes,
+                    "recent_pending_compaction_bytes" => recent_pending_compaction_bytes,
                     "baseline" => baseline,
                 );
                 checker.pending_bytes_base_level_jump_baseline = None;
@@ -778,7 +782,8 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
             info!(
                 "skip pending compaction bytes jump after base level change";
                 "cf" => cf,
-                "pending_compaction_bytes" => pending_compaction_bytes,
+                "avg_pending_compaction_bytes" => avg_pending_compaction_bytes,
+                "recent_pending_compaction_bytes" => recent_pending_compaction_bytes,
                 "baseline" => baseline,
                 "soft_limit" => soft,
             );
@@ -788,7 +793,7 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         let Some(baseline) = checker.pending_bytes_before_base_level_change.take() else {
             return false;
         };
-        if current_pending_compaction_bytes < soft && pending_compaction_bytes < soft {
+        if recent_pending_compaction_bytes < soft && avg_pending_compaction_bytes < soft {
             return false;
         }
 
@@ -799,7 +804,8 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         info!(
             "start pending compaction bytes jump control after base level change";
             "cf" => cf,
-            "pending_compaction_bytes" => pending_compaction_bytes,
+            "avg_pending_compaction_bytes" => avg_pending_compaction_bytes,
+            "recent_pending_compaction_bytes" => recent_pending_compaction_bytes,
             "baseline" => baseline,
             "soft_limit" => soft,
         );
@@ -1467,6 +1473,63 @@ pub(super) mod tests {
         send_flow_info(&tx, region_id);
         send_flow_info(&tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) > f64::EPSILON);
+    }
+
+    #[test]
+    fn test_flow_controller_pending_compaction_bytes_base_level_change_keeps_high_current() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+
+        let config = FlowControlConfig::default();
+        let soft = (config.soft_pending_compaction_bytes_limit.0 as f64).log2();
+        let stub = EngineStub::new();
+        let discard_ratio = Arc::new(AtomicU32::new(0));
+        let mut checker = FlowChecker::new(
+            Arc::new(VersionTrack::new(config)),
+            stub,
+            discard_ratio.clone(),
+            Arc::new(Limiter::new(f64::INFINITY)),
+        );
+
+        let high_pending_bytes = 555 * GIB;
+        let high_pending_bytes_log = (high_pending_bytes as f64).log2();
+        let before_target = ((41 * GIB) as f64).log2();
+        let low_pending_bytes_log = (before_target * 1024.0 - high_pending_bytes_log) / 1023.0;
+        let baseline;
+        {
+            let cf_checker = checker.cf_checkers.get_mut("default").unwrap();
+            cf_checker.on_start_pending_bytes = false;
+
+            let long_term_pending_bytes = cf_checker.long_term_pending_bytes.as_mut().unwrap();
+            long_term_pending_bytes.observe(high_pending_bytes_log);
+            for _ in 1..1024 {
+                long_term_pending_bytes.observe(low_pending_bytes_log);
+            }
+
+            baseline = long_term_pending_bytes.get_avg();
+            assert!(baseline < soft);
+            assert!(long_term_pending_bytes.get_recent() < soft);
+            cf_checker.pending_bytes_base_level_jump_baseline = Some(baseline);
+        }
+
+        checker.on_pending_compaction_bytes_change_cf(high_pending_bytes, "default".to_string());
+        {
+            let cf_checker = checker.cf_checkers.get("default").unwrap();
+            let long_term_pending_bytes = cf_checker.long_term_pending_bytes.as_ref().unwrap();
+            assert!(long_term_pending_bytes.get_avg() <= baseline + f64::EPSILON);
+            assert!(long_term_pending_bytes.get_recent() >= soft);
+            assert!(cf_checker.pending_bytes_base_level_jump_baseline.is_some());
+        }
+        assert_eq!(discard_ratio.load(Ordering::Relaxed), 0);
+
+        checker.on_pending_compaction_bytes_change_cf(GIB, "default".to_string());
+        assert!(
+            checker
+                .cf_checkers
+                .get("default")
+                .unwrap()
+                .pending_bytes_base_level_jump_baseline
+                .is_none()
+        );
     }
 
     #[test]
