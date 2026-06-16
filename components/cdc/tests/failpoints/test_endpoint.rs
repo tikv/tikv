@@ -2,7 +2,7 @@
 
 use std::{
     sync::{mpsc, Arc},
-    thread, time,
+    thread,
     time::Duration,
 };
 
