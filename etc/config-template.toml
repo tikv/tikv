@@ -620,9 +620,12 @@
 ## When storage.engine is "partitioned-raft-kv", default value is 0.
 # stats-dump-period = "10m"
 
-## Refer to: https://github.com/facebook/rocksdb/wiki/RocksDB-FAQ
-## If you want to use RocksDB on multi disks or spinning disks, you should set value at least 2MB.
-# compaction-readahead-size = 0
+## RocksDB 8.x compaction no longer relies on the old setup-time file hint path,
+## so TiKV keeps compaction readahead enabled by default instead of forcing it
+## to 0. Refer to: https://github.com/facebook/rocksdb/wiki/RocksDB-FAQ
+## If you want to use RocksDB on multi disks or spinning disks, you should set
+## value at least 2MB.
+# compaction-readahead-size = "2MB"
 
 ## Max buffer size that is used by WritableFileWrite.
 # writable-file-max-buffer-size = "1MB"
@@ -1092,7 +1095,9 @@
 ## Do not set this config the same as `rocksdb.wal-dir`.
 # wal-dir = ""
 
-# compaction-readahead-size = 0
+## Keep compaction readahead enabled by default for the same reason as
+## `rocksdb.compaction-readahead-size`.
+# compaction-readahead-size = "2MB"
 # writable-file-max-buffer-size = "1MB"
 # use-direct-io-for-flush-and-compaction = false
 # enable-pipelined-write = true
