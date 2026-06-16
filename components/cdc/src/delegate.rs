@@ -42,8 +42,8 @@ use crate::{
     initializer::KvEntry,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
-    service::ConnId,
     txn_source::TxnSource,
+    types::ConnId,
     Error, Result,
 };
 
