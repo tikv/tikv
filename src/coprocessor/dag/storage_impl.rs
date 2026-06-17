@@ -17,9 +17,11 @@ pub struct TikvStorage<S: Store> {
     cf_stats_backlog: Statistics,
     met_newer_ts_data_backlog: NewerTsCheckState,
     /// Cumulative scanned bytes (encoded key + value of every returned entry),
-    /// mirroring `Statistics::processed_size`. Never drained — only peeked via
-    /// `scanned_bytes` for the `paging_size_bytes` budget, separate from the
-    /// `collect_statistics` path.
+    /// mirroring `Statistics::processed_size`: counts only visible returned
+    /// entries, not skipped MVCC versions (old versions/tombstones/write
+    /// records) — i.e. processed_size, not physical MVCC scanned bytes. Never
+    /// drained; only peeked via `scanned_bytes` for the `paging_size_bytes`
+    /// budget, separate from the `collect_statistics` path.
     scanned_bytes: usize,
 }
 

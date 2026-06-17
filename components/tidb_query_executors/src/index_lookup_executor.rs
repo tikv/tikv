@@ -562,6 +562,10 @@ where
 
     #[inline]
     fn peek_scanned_bytes_sum(&self) -> usize {
+        // Only the index-scan side (src); table-lookup bytes are not counted, so
+        // this undercounts for IndexLookUp. Safe only because byte-budget paging
+        // is gated off for any IndexLookUp plan (can_resume_by_scanned_range_only)
+        // and never reaches here — revisit before enabling the byte budget.
         self.src.peek_scanned_bytes_sum()
     }
 
