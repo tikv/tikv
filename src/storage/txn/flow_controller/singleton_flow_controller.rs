@@ -683,6 +683,9 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
                 );
             let ignore = ignore_unsafe_destroy_range || ignore_base_level_pending_bytes_jump;
 
+            // The discard ratio is global. Let the CF with the largest recent
+            // pending bytes sample update it, so a less pressured CF does not
+            // overwrite the ratio chosen by the current bottleneck.
             for checker in self.cf_checkers.values() {
                 if let Some(long_term_pending_bytes) = checker.long_term_pending_bytes.as_ref() {
                     if recent_pending_compaction_bytes < long_term_pending_bytes.get_recent() {
