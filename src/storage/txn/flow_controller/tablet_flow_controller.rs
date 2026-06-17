@@ -188,9 +188,9 @@ impl FlowInfoDispatcher {
                             }
                             let mut checkers = flow_checkers.as_ref().write().unwrap();
                             if let Some(checker) = checkers.get_mut(&region_id) {
-                                let (current_pending_bytes, base_level_changed) =
+                                let (current_pending_bytes, base_level_increased) =
                                     checker.on_pending_compaction_bytes_change(cf.clone());
-                                if base_level_changed {
+                                if base_level_increased {
                                     pending_compaction_checker
                                         .record_base_level_change_baseline(&cf);
                                 }
@@ -681,5 +681,78 @@ mod tests {
             .store(1_000_000 * 1024 * 1024 * 1024, Ordering::Relaxed);
         send_flow_info(&tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_tablet_flow_controller_pending_compaction_bytes_base_level_change_keeps_pressure() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+
+        let (_dir, flow_controller, tx, reg) = create_tablet_flow_controller();
+        let region_id = 5_u64;
+        let tablet_suffix = 5_u64;
+        let tablet_context = TabletContext::with_infinite_region(region_id, Some(tablet_suffix));
+        let mut cached = reg.load(tablet_context, false).unwrap();
+        let stub = cached.latest().unwrap().clone();
+        tx.send(FlowInfo::Created(region_id)).unwrap();
+
+        stub.0.base_level.store(1, Ordering::Relaxed);
+        stub.0
+            .pending_compaction_bytes
+            .store(100 * GIB, Ordering::Relaxed);
+        for _ in 0..10 {
+            send_flow_info(&tx, region_id);
+        }
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+
+        // Pending bytes is already above the soft limit before the base-level
+        // change, but the long-term average is still below it.
+        stub.0
+            .pending_compaction_bytes
+            .store(555 * GIB, Ordering::Relaxed);
+        send_flow_info(&tx, region_id);
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+
+        stub.0.base_level.store(2, Ordering::Relaxed);
+        send_flow_info(&tx, region_id);
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+
+        for _ in 0..10 {
+            send_flow_info(&tx, region_id);
+        }
+        assert!(flow_controller.discard_ratio(region_id) > f64::EPSILON);
+    }
+
+    #[test]
+    fn test_tablet_flow_controller_pending_compaction_bytes_base_level_decrease() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+
+        let (_dir, flow_controller, tx, reg) = create_tablet_flow_controller();
+        let region_id = 5_u64;
+        let tablet_suffix = 5_u64;
+        let tablet_context = TabletContext::with_infinite_region(region_id, Some(tablet_suffix));
+        let mut cached = reg.load(tablet_context, false).unwrap();
+        let stub = cached.latest().unwrap().clone();
+        tx.send(FlowInfo::Created(region_id)).unwrap();
+
+        stub.0.base_level.store(2, Ordering::Relaxed);
+        stub.0
+            .pending_compaction_bytes
+            .store(100 * GIB, Ordering::Relaxed);
+        for _ in 0..10 {
+            send_flow_info(&tx, region_id);
+        }
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+
+        stub.0.base_level.store(1, Ordering::Relaxed);
+        stub.0
+            .pending_compaction_bytes
+            .store(555 * GIB, Ordering::Relaxed);
+        send_flow_info(&tx, region_id);
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+
+        for _ in 0..10 {
+            send_flow_info(&tx, region_id);
+        }
+        assert!(flow_controller.discard_ratio(region_id) > f64::EPSILON);
     }
 }

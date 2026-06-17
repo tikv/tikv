@@ -603,14 +603,14 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
     pub(super) fn on_pending_compaction_bytes_change(&mut self, cf: String) -> (u64, bool) {
         // Check the base level around pending bytes so a RocksDB version switch
         // during the pending bytes read is not missed.
-        let mut base_level_changed = self.detect_base_level_change(&cf);
+        let mut base_level_increased = self.detect_base_level_increase(&cf);
         let mut pending_compaction_bytes = self.pending_compaction_bytes(&cf);
-        if self.detect_base_level_change(&cf) {
-            base_level_changed = true;
+        if self.detect_base_level_increase(&cf) {
+            base_level_increased = true;
             pending_compaction_bytes = self.pending_compaction_bytes(&cf);
         }
         self.on_pending_compaction_bytes_change_cf(pending_compaction_bytes, cf);
-        (pending_compaction_bytes, base_level_changed)
+        (pending_compaction_bytes, base_level_increased)
     }
 
     pub fn on_pending_compaction_bytes_change_cf(
@@ -719,21 +719,37 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         }
     }
 
-    pub(super) fn detect_base_level_change(&mut self, cf: &str) -> bool {
+    pub(super) fn detect_base_level_increase(&mut self, cf: &str) -> bool {
         let current_base_level = self.engine.base_level(self.region_id, cf);
         let checker = self.cf_checkers.get_mut(cf).unwrap();
         let previous_base_level = checker.last_base_level;
         checker.last_base_level = current_base_level;
         if let (Some(last), Some(current)) = (previous_base_level, current_base_level) {
             if last != current {
-                self.record_base_level_change_baseline(cf);
+                // With dynamic level bytes, RocksDB starts an empty CF with the base
+                // level at the last level. In TiKV's usual L0..L6 layout, the base
+                // level begins at L6, then moves toward lower-numbered levels as
+                // data grows: 6 -> 5 -> 4 -> 3 -> 2 -> 1.
+                //
+                // A base-level decrease is usually not the problematic direction.
+                // It makes more levels active and lets RocksDB spread the LSM over
+                // a wider target-size ladder. The suspicious direction is a
+                // base-level increase, such as 1 -> 2. It means the active LSM has
+                // one fewer level, so level targets around the old base can be
+                // recomputed downward. That can make RocksDB's estimated pending
+                // compaction bytes jump even when raw bytes did not really grow.
+                let base_level_increased = current > last;
+                if base_level_increased {
+                    self.record_base_level_change_baseline(cf);
+                }
                 info!(
                     "rocksdb base level changed";
                     "cf" => cf,
                     "last_base_level" => last,
                     "current_base_level" => current,
+                    "base_level_increased" => base_level_increased,
                 );
-                return true;
+                return base_level_increased;
             }
         }
         false
@@ -754,7 +770,11 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         }
         if let Some(long_term_pending_bytes) = checker.long_term_pending_bytes.as_ref() {
             let avg_pending_compaction_bytes = long_term_pending_bytes.get_avg();
-            if long_term_pending_bytes.get_count() > 0 && avg_pending_compaction_bytes < soft {
+            let last_observed_pending_compaction_bytes = long_term_pending_bytes.get_recent();
+            if long_term_pending_bytes.get_count() > 0
+                && avg_pending_compaction_bytes < soft
+                && last_observed_pending_compaction_bytes < soft
+            {
                 checker.pending_bytes_before_base_level_change = Some(avg_pending_compaction_bytes);
                 checker.pending_bytes_base_level_jump_baseline = None;
             }
@@ -1530,6 +1550,110 @@ pub(super) mod tests {
                 .pending_bytes_base_level_jump_baseline
                 .is_none()
         );
+    }
+
+    #[test]
+    fn test_flow_controller_pending_compaction_bytes_base_level_change_keeps_existing_pressure() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+
+        let config = FlowControlConfig::default();
+        let soft = (config.soft_pending_compaction_bytes_limit.0 as f64).log2();
+        let stub = EngineStub::new();
+        let discard_ratio = Arc::new(AtomicU32::new(0));
+        let mut checker = FlowChecker::new(
+            Arc::new(VersionTrack::new(config)),
+            stub.clone(),
+            discard_ratio.clone(),
+            Arc::new(Limiter::new(f64::INFINITY)),
+        );
+
+        stub.0.base_level.store(1, Ordering::Relaxed);
+        assert!(!checker.detect_base_level_increase("default"));
+
+        let low_pending_bytes_log = ((100 * GIB) as f64).log2();
+        let high_pending_bytes = 555 * GIB;
+        let high_pending_bytes_log = (high_pending_bytes as f64).log2();
+        {
+            let cf_checker = checker.cf_checkers.get_mut("default").unwrap();
+            cf_checker.on_start_pending_bytes = false;
+
+            let long_term_pending_bytes = cf_checker.long_term_pending_bytes.as_mut().unwrap();
+            for _ in 0..10 {
+                long_term_pending_bytes.observe(low_pending_bytes_log);
+            }
+            long_term_pending_bytes.observe(high_pending_bytes_log);
+
+            assert!(long_term_pending_bytes.get_avg() < soft);
+            assert!(long_term_pending_bytes.get_recent() >= soft);
+        }
+
+        stub.0.base_level.store(2, Ordering::Relaxed);
+        assert!(checker.detect_base_level_increase("default"));
+        assert!(
+            checker
+                .cf_checkers
+                .get("default")
+                .unwrap()
+                .pending_bytes_before_base_level_change
+                .is_none()
+        );
+
+        for _ in 0..10 {
+            checker
+                .on_pending_compaction_bytes_change_cf(high_pending_bytes, "default".to_string());
+        }
+        assert!(discard_ratio.load(Ordering::Relaxed) > 0);
+    }
+
+    #[test]
+    fn test_flow_controller_pending_compaction_bytes_base_level_decrease_does_not_ignore_jump() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+
+        let config = FlowControlConfig::default();
+        let soft = (config.soft_pending_compaction_bytes_limit.0 as f64).log2();
+        let stub = EngineStub::new();
+        let discard_ratio = Arc::new(AtomicU32::new(0));
+        let mut checker = FlowChecker::new(
+            Arc::new(VersionTrack::new(config)),
+            stub.clone(),
+            discard_ratio.clone(),
+            Arc::new(Limiter::new(f64::INFINITY)),
+        );
+
+        stub.0.base_level.store(2, Ordering::Relaxed);
+        assert!(!checker.detect_base_level_increase("default"));
+
+        let low_pending_bytes_log = ((100 * GIB) as f64).log2();
+        let high_pending_bytes = 555 * GIB;
+        {
+            let cf_checker = checker.cf_checkers.get_mut("default").unwrap();
+            cf_checker.on_start_pending_bytes = false;
+
+            let long_term_pending_bytes = cf_checker.long_term_pending_bytes.as_mut().unwrap();
+            for _ in 0..10 {
+                long_term_pending_bytes.observe(low_pending_bytes_log);
+            }
+
+            assert!(long_term_pending_bytes.get_avg() < soft);
+            assert!(long_term_pending_bytes.get_recent() < soft);
+        }
+
+        stub.0.base_level.store(1, Ordering::Relaxed);
+        assert!(!checker.detect_base_level_increase("default"));
+        assert!(
+            checker
+                .cf_checkers
+                .get("default")
+                .unwrap()
+                .pending_bytes_before_base_level_change
+                .is_none()
+        );
+
+        for _ in 0..10 {
+            checker
+                .on_pending_compaction_bytes_change_cf(high_pending_bytes, "default".to_string());
+        }
+        assert!(discard_ratio.load(Ordering::Relaxed) > 0);
     }
 
     #[test]
