@@ -116,25 +116,12 @@ pub struct BatchExecutorsRunner<SS> {
     /// sent over the network.
     max_keys_read: Option<u64>,
 
-    /// Byte-budget counterpart of `paging_size`, received from
-    /// `coprocessor.Request.paging_size_bytes`.
-    ///
-    /// When accepted, the runner stops once the cumulative bytes scanned by the
-    /// bottom-most scan executor (peeked via
-    /// `BatchExecutor::peek_scanned_bytes_sum`) reach this threshold. The byte
-    /// count mirrors the MVCC `processed_size` (encoded key + value of every
-    /// returned entry), so the page boundary aligns with the bytes used for RU
-    /// accounting. Like `max_keys_read`, it covers every physically scanned KV
-    /// entry before any filtering, aggregation, or projection, so a full scan
-    /// that returns few rows is still truncated by the actual data volume read.
-    /// It is independent of `paging_size` and `max_keys_read`; whichever
-    /// threshold is reached first stops the scan.
-    ///
-    /// This is enabled only for executor trees that can be resumed by scanned
-    /// range alone. Stateful/blocking executors such as aggregation or TopN can
-    /// consume rows into internal state before producing output; stopping
-    /// outside those executors would drop that state between pages and
-    /// corrupt results.
+    /// Byte-budget counterpart of `paging_size` (from
+    /// `coprocessor.Request.paging_size_bytes`): stop once the scanned bytes
+    /// reach this threshold. Counts MVCC `processed_size` (encoded key + value)
+    /// of every physically scanned entry, before any filtering, independent of
+    /// `paging_size`/`max_keys_read`. Only set for range-resumable trees; see
+    /// the gating in `from_request`.
     paging_size_bytes: Option<u64>,
 
     quota_limiter: Arc<QuotaLimiter>,
@@ -702,30 +689,18 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let paging_size_bytes = if paging_size_bytes.is_some()
             && !can_resume_by_scanned_range_only(req.get_executors())
         {
-            // Coprocessor paging resumes with only a scanned key range. That
-            // is sufficient for scan plus stateless operators, but not for
-            // executors with cross-batch state (aggregation, StreamAgg, TopN,
-            // partition TopN, Limit, IndexLookUp, etc.). If byte-budget paging stopped
-            // outside such an executor, rows already consumed into in-memory
-            // state could be lost when the next page rebuilds the executor
-            // tree from only the returned range.
+            // Range-only resume is safe for scan + stateless operators, but not
+            // for executors with cross-batch state (aggregation, TopN, Limit,
+            // IndexLookUp, etc.): stopping outside one would drop rows already
+            // buffered into in-memory state when the next page rebuilds the tree
+            // from the returned range. Treat unknown executor types as unsafe.
+            // (Unlike paging_size/max_keys_read, which degrade IndexLookUp via
+            // force_no_index_lookup; here we just drop the budget and keep the
+            // pushdown.)
             //
-            // For IndexLookUp this deliberately differs from paging_size and
-            // max_keys_read, which keep their budgets and degrade the pushdown
-            // via force_no_index_lookup: the byte budget is dropped and the
-            // pushdown is kept, so IndexLookUp plans do not participate in
-            // paging_size_bytes at all.
-            //
-            // Be conservative here: new executor types are unsafe until they
-            // explicitly prove that range-only continuation preserves results.
-            // A future executor-aware paging protocol may relax this by
-            // letting stateful executors flush or serialize their continuation
-            // state before a byte-budget boundary.
-            //
-            // TODO(@JmPotato): add a metric (and/or a log) when the byte budget
-            // is dropped here, so the caller can tell "task drained naturally"
-            // apart from "budget ignored by capability gating" when debugging
-            // RU pre-charging.
+            // TODO(@JmPotato): emit a metric/log when the budget is dropped, to
+            // tell "drained naturally" from "gated off" when debugging RU
+            // pre-charging.
             None
         } else {
             paging_size_bytes
@@ -1554,11 +1529,9 @@ mod tests {
 
     #[test]
     fn test_paging_size_bytes_gating_in_from_request() {
-        // from_request applies the range-only-resume gating to
-        // paging_size_bytes: a plan containing a non-resumable executor
-        // silently drops the byte budget (its runtime behavior is then the
-        // "disabled" case of test_paging_size_bytes_stop_conditions), while a
-        // range-resumable plan keeps it and gets a fully wired executor tree.
+        // from_request gates paging_size_bytes on range-only resumability: a
+        // non-resumable plan (Limit) drops the byte budget, a resumable one
+        // keeps it and gets a fully wired executor tree.
 
         // A non-resumable executor (Limit) drops the byte budget.
         let mut dag = DagRequest::default();

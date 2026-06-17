@@ -223,14 +223,11 @@ where
             || config.max_keys_read.is_some()
             || table_task_iter_builder.is_none()
         {
-            // We did not support index lookup when paging or max_keys_read is
-            // enabled due to buffering challenges: the buffered
-            // index-then-table-fetch pipeline only counts the index side, so
-            // the row budgets would under-report the table-lookup scanning.
-            // There is no paging_size_bytes condition here: the runner's
-            // range-resumable gating (can_resume_by_scanned_range_only) drops
-            // the byte budget for any plan containing IndexLookUp, so it can
-            // never reach this builder.
+            // No index lookup under paging or max_keys_read: the buffered
+            // index-then-table-fetch pipeline only counts the index side, so the
+            // row budgets would under-report the table lookup. paging_size_bytes
+            // needs no condition here — the runner already gates it off
+            // (can_resume_by_scanned_range_only) for any plan with IndexLookUp.
             // TODO: support paging and max_keys_read
             // some times we do not have table_task_iter_builder, such as
             // - CommonHandle

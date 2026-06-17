@@ -16,11 +16,10 @@ pub struct TikvStorage<S: Store> {
     scanner: Option<S::Scanner>,
     cf_stats_backlog: Statistics,
     met_newer_ts_data_backlog: NewerTsCheckState,
-    /// Cumulative bytes scanned (encoded key + value of every returned entry),
-    /// mirroring `Statistics::processed_size`. Unlike `cf_stats_backlog`, this
-    /// is never drained — it is only peeked via `scanned_bytes` to drive the
-    /// `paging_size_bytes` budget, so RU accounting via `collect_statistics`
-    /// stays on its own path.
+    /// Cumulative scanned bytes (encoded key + value of every returned entry),
+    /// mirroring `Statistics::processed_size`. Never drained — only peeked via
+    /// `scanned_bytes` for the `paging_size_bytes` budget, separate from the
+    /// `collect_statistics` path.
     scanned_bytes: usize,
 }
 

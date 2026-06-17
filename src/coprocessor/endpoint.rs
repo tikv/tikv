@@ -280,10 +280,8 @@ impl<E: Engine> Endpoint<E> {
                         0 => None,
                         i => Some(i),
                     };
-                    // paging_size_bytes is the byte-budget counterpart of paging_size:
-                    // 0 means disabled, otherwise the scan stops once accumulated MVCC
-                    // scanned bytes reach the limit. It is independent of both paging_size
-                    // and max_keys_read.
+                    // Byte-budget counterpart of paging_size: 0 disables it,
+                    // otherwise the scan stops once scanned bytes reach the limit.
                     let paging_size_bytes = match req.get_paging_size_bytes() {
                         0 => None,
                         i => Some(i),
