@@ -17,6 +17,8 @@ pub struct CompactLogBackupStatistic {
     pub time_taken: Duration,
     /// From which host we executed this compaction?
     pub exec_by: String,
+    /// Execution config that determines the TS interval covered by this run.
+    pub config: CompactLogBackupConfig,
 
     // Summary of statistics.
     pub load_stat: LoadStatistic,
@@ -24,6 +26,34 @@ pub struct CompactLogBackupStatistic {
     pub collect_subcompactions_stat: CollectSubcompactionStatistic,
     pub subcompact_stat: SubcompactStatistic,
     pub prometheus: prom::SerAll,
+}
+
+/// The config fields embedded into compaction comments.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct CompactLogBackupConfig {
+    /// Lower bound of the requested TS interval.
+    pub from_ts: u64,
+    /// Upper bound of the requested TS interval.
+    pub until_ts: u64,
+    /// Lower bound actually used for default CF compaction.
+    pub shift_ts: u64,
+    /// Whether `shift_ts` was calculated from backup metadata.
+    pub cal_shift_ts: bool,
+    /// Minimal subcompaction input size in bytes.
+    pub minimal_compaction_size: u64,
+    /// The shard compacted by this run. `None` means the run is unsharded.
+    pub shard: Option<CompactLogBackupShard>,
+}
+
+/// Shard identity embedded into compaction comments.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct CompactLogBackupShard {
+    /// Shard index, 1-based.
+    pub index: u64,
+    /// Total shard count.
+    pub total: u64,
 }
 
 /// The statistic of loading metadata of compactions' source files.

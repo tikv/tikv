@@ -674,15 +674,6 @@ pub enum Cmd {
         )]
         until_ts: Option<u64>,
         #[structopt(
-            long = "replication-status-sub-prefix",
-            help(
-                "subdirectory in external storage that contains resume-state.json. \
-                When --until is not specified, compact-log-backup reads \
-                last_checkpoint from this file as the until timestamp."
-            )
-        )]
-        replication_status_sub_prefix: Option<String>,
-        #[structopt(
             long = "cal-shift-ts",
             help(
                 "extend the default CF scan lower bound to the minimum min_begin_default_ts in \
@@ -968,7 +959,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_log_backup_replication_status_sub_prefix_allows_omitting_until() {
+    fn compact_log_backup_allows_omitting_until() {
         let opt = Opt::from_iter_safe([
             "tikv-ctl",
             "compact-log-backup",
@@ -976,22 +967,12 @@ mod tests {
             "1",
             "--storage-base64",
             "AA==",
-            "--replication-status-sub-prefix",
-            "replication/status",
         ])
         .unwrap();
 
         match opt.cmd.unwrap() {
-            Cmd::CompactLogBackup {
-                until_ts,
-                replication_status_sub_prefix,
-                ..
-            } => {
+            Cmd::CompactLogBackup { until_ts, .. } => {
                 assert_eq!(until_ts, None);
-                assert_eq!(
-                    replication_status_sub_prefix.as_deref(),
-                    Some("replication/status")
-                );
             }
             cmd => panic!("unexpected command: {:?}", std::mem::discriminant(&cmd)),
         }
