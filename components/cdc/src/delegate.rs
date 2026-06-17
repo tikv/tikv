@@ -46,8 +46,9 @@ use crate::{
     initializer::KvEntry,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
-    service::{Conn, ConnId, FeatureGate, RequestId},
+    service::{Conn, FeatureGate, RequestId},
     txn_source::TxnSource,
+    types::ConnId,
 };
 
 static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);

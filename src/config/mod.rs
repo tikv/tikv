@@ -1356,6 +1356,9 @@ pub struct DbConfig {
     pub enable_statistics: bool,
     #[online_config(skip)]
     pub stats_dump_period: Option<ReadableDuration>,
+    // RocksDB 8.x compaction no longer relies on the old setup-time file hint
+    // path, so keep compaction readahead enabled by default instead of forcing
+    // it to 0 from TiKV config.
     pub compaction_readahead_size: ReadableSize,
     #[doc(hidden)]
     #[serde(skip_serializing)]
@@ -1452,7 +1455,7 @@ impl Default for DbConfig {
             max_open_files: 40960,
             enable_statistics: true,
             stats_dump_period: None,
-            compaction_readahead_size: ReadableSize::kb(0),
+            compaction_readahead_size: ReadableSize::mb(2),
             info_log_max_size: ReadableSize::gb(1),
             info_log_roll_time: ReadableDuration::secs(0),
             info_log_keep_log_file_num: 10,
@@ -2017,6 +2020,9 @@ pub struct RaftDbConfig {
     pub enable_statistics: bool,
     #[online_config(skip)]
     pub stats_dump_period: ReadableDuration,
+    // RocksDB 8.x compaction no longer relies on the old setup-time file hint
+    // path, so keep compaction readahead enabled by default instead of forcing
+    // it to 0 from TiKV config.
     pub compaction_readahead_size: ReadableSize,
     #[doc(hidden)]
     #[serde(skip_serializing)]
@@ -2082,7 +2088,7 @@ impl Default for RaftDbConfig {
             max_open_files: 40960,
             enable_statistics: true,
             stats_dump_period: ReadableDuration::minutes(10),
-            compaction_readahead_size: ReadableSize::kb(0),
+            compaction_readahead_size: ReadableSize::mb(2),
             info_log_max_size: ReadableSize::gb(1),
             info_log_roll_time: ReadableDuration::secs(0),
             info_log_keep_log_file_num: 10,

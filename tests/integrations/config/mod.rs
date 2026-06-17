@@ -964,6 +964,13 @@ fn test_readpool_default_config() {
 }
 
 #[test]
+fn test_compaction_readahead_default_config() {
+    let cfg = TikvConfig::default();
+    assert_eq!(cfg.rocksdb.compaction_readahead_size, ReadableSize::mb(2));
+    assert_eq!(cfg.raftdb.compaction_readahead_size, ReadableSize::mb(2));
+}
+
+#[test]
 fn test_do_not_use_unified_readpool_with_legacy_config() {
     let content = r#"
         [readpool.storage]
