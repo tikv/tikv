@@ -60,7 +60,7 @@ use tikv_util::{
     store::{find_peer, find_peer_by_id, is_learner, region_on_same_stores},
     sys::disk::DiskUsage,
     time::{Instant as TiInstant, SlowTimer, monotonic_raw_now},
-    trace, warn,
+    trace, warn, warn_or_debug,
     worker::{ScheduleError, Scheduler},
 };
 use tracker::GLOBAL_TRACKERS;
@@ -715,12 +715,34 @@ where
                     if !self.ctx.coprocessor_host.on_raft_message(&msg.msg) {
                         continue;
                     }
+                    let msg_region_id = msg.msg.get_region_id();
+                    let msg_type = msg.msg.get_message().get_msg_type();
+                    let from_peer_id = msg.msg.get_from_peer().get_id();
+                    let from_store_id = msg.msg.get_from_peer().get_store_id();
+                    let to_peer_id = msg.msg.get_to_peer().get_id();
+                    let to_store_id = msg.msg.get_to_peer().get_store_id();
                     if let Err(e) = self.on_raft_message(msg) {
-                        warn!(
+                        // StepLocalMsg is a benign, high-frequency no-op: a local-type
+                        // message received over the network (e.g. the MsgUnreachable echo
+                        // of a memory-pressure rejected append). Downgrade it to DEBUG
+                        // with a metric; all other errors stay at WARN.
+                        let is_step_local = matches!(&e, Error::Raft(raft::Error::StepLocalMsg));
+                        if is_step_local {
+                            self.ctx.raft_metrics.message_dropped.step_local_msg.inc();
+                        }
+                        warn_or_debug!(
+                            !is_step_local;
                             "handle raft message err";
                             "err" => ?e,
+                            "error_code" => %e.error_code(),
                             "region_id" => self.fsm.region_id(),
                             "peer_id" => self.fsm.peer_id(),
+                            "msg_region_id" => msg_region_id,
+                            "msg_type" => ?msg_type,
+                            "from_peer_id" => from_peer_id,
+                            "from_store_id" => from_store_id,
+                            "to_peer_id" => to_peer_id,
+                            "to_store_id" => to_store_id,
                         );
                     }
                 }
