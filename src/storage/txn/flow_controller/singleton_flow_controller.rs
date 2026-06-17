@@ -784,20 +784,15 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
             SCHED_THROTTLE_ACTION_COUNTER
                 .with_label_values(&[cf, "pending_bytes_base_level_jump"])
                 .inc();
-            info!(
-                "skip pending compaction bytes jump after base level change";
-                "cf" => cf,
-                "avg_pending_compaction_bytes" => avg_pending_compaction_bytes,
-                "recent_pending_compaction_bytes" => recent_pending_compaction_bytes,
-                "baseline" => baseline,
-                "soft_limit" => soft,
-            );
             return true;
         }
 
         let Some(baseline) = checker.pending_bytes_before_base_level_change.take() else {
             return false;
         };
+        // RocksDB computes base level and estimated pending bytes in the same
+        // VersionStorageInfo. If this post-change sample is still below the soft
+        // limit, later jumps should not be attributed to this transition.
         if recent_pending_compaction_bytes < soft && avg_pending_compaction_bytes < soft {
             return false;
         }
