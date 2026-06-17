@@ -423,7 +423,7 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
             }
             Ok(FlowInfo::Compaction(cf, ..)) => {
                 if current_cfg.enable {
-                    self.on_compaction_flow_info(cf);
+                    self.on_pending_compaction_bytes_change(cf);
                 }
             }
             Ok(FlowInfo::BeforeUnsafeDestroyRange(..)) => {
@@ -600,7 +600,7 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         self.engine.pending_compaction_bytes(self.region_id, cf)
     }
 
-    pub(super) fn on_compaction_flow_info(&mut self, cf: String) -> (u64, bool) {
+    pub(super) fn on_pending_compaction_bytes_change(&mut self, cf: String) -> (u64, bool) {
         // Check the base level around pending bytes so a RocksDB version switch
         // during the pending bytes read is not missed.
         let mut base_level_changed = self.detect_base_level_change(&cf);

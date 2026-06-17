@@ -189,7 +189,7 @@ impl FlowInfoDispatcher {
                             let mut checkers = flow_checkers.as_ref().write().unwrap();
                             if let Some(checker) = checkers.get_mut(&region_id) {
                                 let (current_pending_bytes, base_level_changed) =
-                                    checker.on_compaction_flow_info(cf.clone());
+                                    checker.on_pending_compaction_bytes_change(cf.clone());
                                 if base_level_changed {
                                     pending_compaction_checker
                                         .record_base_level_change_baseline(&cf);
