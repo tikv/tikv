@@ -4501,7 +4501,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#a6b0bb0483986cbcec14530064f53b7f14facfa2"
+source = "git+https://github.com/tikv/rust-rocksdb.git#1c17b59dcb506302ed4684b3628c4a7165e0b86d"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -4520,7 +4520,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#a6b0bb0483986cbcec14530064f53b7f14facfa2"
+source = "git+https://github.com/tikv/rust-rocksdb.git#1c17b59dcb506302ed4684b3628c4a7165e0b86d"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -6718,7 +6718,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#a6b0bb0483986cbcec14530064f53b7f14facfa2"
+source = "git+https://github.com/tikv/rust-rocksdb.git#1c17b59dcb506302ed4684b3628c4a7165e0b86d"
 dependencies = [
  "libc 0.2.176",
  "librocksdb_sys",
@@ -8666,9 +8666,9 @@ dependencies = [
 
 [[package]]
 name = "tikv-jemalloc-ctl"
-version = "0.5.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e37706572f4b151dff7a0146e040804e9c26fe3a3118591112f05cf12a4216c1"
+checksum = "661f1f6a57b3a36dc9174a2c10f19513b4866816e13425d3e418b11cc37bc24c"
 dependencies = [
  "libc 0.2.176",
  "paste",
@@ -8677,20 +8677,19 @@ dependencies = [
 
 [[package]]
 name = "tikv-jemalloc-sys"
-version = "0.5.0+5.3.0"
+version = "0.6.1+5.3.0-1-ge13ca993e8ccb9ba9847cc330696e02839f328f7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aeab4310214fe0226df8bfeb893a291a58b19682e8a07e1e1d4483ad4200d315"
+checksum = "cd8aa5b2ab86a2cefa406d889139c162cbb230092f7d1d7cbc1716405d852a3b"
 dependencies = [
  "cc",
- "fs_extra",
  "libc 0.2.176",
 ]
 
 [[package]]
 name = "tikv-jemallocator"
-version = "0.5.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20612db8a13a6c06d57ec83953694185a367e16945f66565e8028d2c0bd76979"
+checksum = "0359b4327f954e0567e69fb191cf1436617748813819c94b8cd4a431422d053a"
 dependencies = [
  "libc 0.2.176",
  "tikv-jemalloc-sys",
