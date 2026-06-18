@@ -48,6 +48,7 @@ use tikv_alloc::{Id, MemoryTrace, MemoryTraceGuard, mem_trace};
 use tikv_util::{deadline::Deadline, memory::HeapSize, time::Duration};
 use txn_types::TsSet;
 
+use self::statistics::analyze::AnalyzeSamplingResult;
 pub use self::{
     endpoint::Endpoint,
     error::{Error, Result},
@@ -68,6 +69,15 @@ pub trait RequestHandler: Send {
     /// Processes current request and produces a response.
     async fn handle_request(&mut self) -> Result<MemoryTraceGuard<coppb::Response>> {
         panic!("unary request is not supported for this handler");
+    }
+
+    /// Processes an analyze full-sampling request and keeps the typed sampling
+    /// result alive for callers that need to merge several region results
+    /// before protobuf serialization.
+    async fn handle_analyze_full_sampling(&mut self) -> Result<AnalyzeSamplingResult> {
+        Err(Error::Other(
+            "analyze full sampling is not supported for this handler".to_owned(),
+        ))
     }
 
     /// Processes current request and produces streaming responses.

@@ -47,8 +47,12 @@ use tokio::sync::Semaphore;
 use super::config_manager::CopConfigManager;
 use crate::{
     coprocessor::{
-        cache::CachedRequestHandler, interceptors::*, metrics::*,
-        statistics::analyze_context::AnalyzeContext, tracker::Tracker, *,
+        cache::CachedRequestHandler,
+        interceptors::*,
+        metrics::*,
+        statistics::{analyze::AnalyzeSamplingResult, analyze_context::AnalyzeContext},
+        tracker::Tracker,
+        *,
     },
     read_pool::ReadPoolHandle,
     server::Config,
@@ -65,6 +69,106 @@ use crate::{
 /// light ones, which means they don't need a permit from the semaphore before
 /// execution.
 const LIGHT_TASK_THRESHOLD: Duration = Duration::from_millis(5);
+
+fn is_analyze_full_sampling_batch_request(req: &coppb::Request) -> bool {
+    if req.get_tp() != REQ_TYPE_ANALYZE || req.get_tasks().is_empty() {
+        return false;
+    }
+    let mut analyze = AnalyzeReq::default();
+    let merge_res = Message::merge_from_bytes(&mut analyze, req.get_data());
+    if merge_res.is_err() {
+        return false;
+    }
+    analyze.get_tp() == AnalyzeType::TypeFullSampling && analyze.has_col_req()
+}
+
+fn response_has_error(resp: &coppb::Response) -> bool {
+    resp.has_region_error() || resp.has_locked() || !resp.get_other_error().is_empty()
+}
+
+fn record_coprocessor_response_size(resp_size: u64) {
+    COPR_RESP_SIZE.inc_by(resp_size);
+    record_network_out_bytes(resp_size);
+    with_tls_tracker(|tracker| {
+        tracker.metrics.coprocessor_response_bytes = tracker
+            .metrics
+            .coprocessor_response_bytes
+            .saturating_add(resp_size);
+    });
+}
+
+struct AnalyzeFullSamplingTaskResult {
+    response: coppb::Response,
+    sampling_result: Option<AnalyzeSamplingResult>,
+}
+
+struct AnalyzeFullSamplingBatchTaskResult {
+    task_id: u64,
+    response: coppb::Response,
+    sampling_result: Option<AnalyzeSamplingResult>,
+}
+
+fn set_analyze_sampling_response_data(
+    resp: &mut coppb::Response,
+    sampling_result: AnalyzeSamplingResult,
+) -> Result<()> {
+    let data = sampling_result.write_to_bytes()?;
+    record_coprocessor_response_size(data.len() as u64);
+    resp.set_data(data);
+    Ok(())
+}
+
+fn analyze_full_sampling_batch_response(
+    mut output: AnalyzeFullSamplingBatchTaskResult,
+) -> Result<coppb::StoreBatchTaskResponse> {
+    if let Some(sampling_result) = output.sampling_result.take() {
+        set_analyze_sampling_response_data(&mut output.response, sampling_result)?;
+    }
+
+    let mut response = coppb::StoreBatchTaskResponse::new();
+    response.set_task_id(output.task_id);
+    response.set_data(output.response.take_data());
+    if let Some(err) = output.response.region_error.take() {
+        response.set_region_error(err);
+    }
+    if let Some(lock_info) = output.response.locked.take() {
+        response.set_locked(lock_info);
+    }
+    response.set_other_error(output.response.take_other_error());
+    response.set_exec_details_v2(output.response.take_exec_details_v2());
+    Ok(response)
+}
+
+fn finish_analyze_full_sampling_batch_response(
+    mut top: AnalyzeFullSamplingTaskResult,
+    mut batch_outputs: Vec<AnalyzeFullSamplingBatchTaskResult>,
+) -> Result<coppb::Response> {
+    let can_reduce = !response_has_error(&top.response)
+        && top.sampling_result.is_some()
+        && batch_outputs.iter().all(|output| {
+            !response_has_error(&output.response) && output.sampling_result.is_some()
+        });
+
+    if can_reduce {
+        let mut merged = top.sampling_result.take().unwrap();
+        for output in &mut batch_outputs {
+            merged.merge_from(output.sampling_result.take().unwrap())?;
+        }
+        set_analyze_sampling_response_data(&mut top.response, merged)?;
+        top.response.set_batch_responses(Default::default());
+        return Ok(top.response);
+    }
+
+    if let Some(sampling_result) = top.sampling_result.take() {
+        set_analyze_sampling_response_data(&mut top.response, sampling_result)?;
+    }
+    let mut batch_responses = Vec::with_capacity(batch_outputs.len());
+    for output in batch_outputs {
+        batch_responses.push(analyze_full_sampling_batch_response(output)?);
+    }
+    top.response.set_batch_responses(batch_responses.into());
+    Ok(top.response)
+}
 
 /// A pool to build and run Coprocessor request handlers.
 #[derive(Clone)]
@@ -547,14 +651,7 @@ impl<E: Engine> Endpoint<E> {
         let mut resp = match result {
             Ok(resp) => {
                 let resp_size = resp.data.len() as u64;
-                COPR_RESP_SIZE.inc_by(resp_size);
-                record_network_out_bytes(resp_size);
-                with_tls_tracker(|tracker| {
-                    tracker.metrics.coprocessor_response_bytes = tracker
-                        .metrics
-                        .coprocessor_response_bytes
-                        .saturating_add(resp_size);
-                });
+                record_coprocessor_response_size(resp_size);
                 resp
             }
             Err(e) => {
@@ -574,6 +671,90 @@ impl<E: Engine> Endpoint<E> {
         resp.set_exec_details_v2(exec_details_v2);
         resp.set_latest_buckets_version(buckets_version);
         Ok(resp)
+    }
+
+    async fn handle_analyze_full_sampling_request_impl(
+        semaphore: Option<Arc<Semaphore>>,
+        mut tracker: Box<Tracker<E>>,
+        handler_builder: RequestHandlerBuilder<E::IMSnap>,
+    ) -> Result<AnalyzeFullSamplingTaskResult> {
+        with_tls_tracker(|tracker1| {
+            record_network_in_bytes(tracker1.metrics.grpc_req_size);
+        });
+        tracker.on_scheduled();
+        tracker.req_ctx.deadline.check()?;
+
+        // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
+        // exists.
+        let snapshot = unsafe { Self::get_snapshot_with_timeout(&tracker.req_ctx).await }?;
+
+        let latest_buckets = snapshot.ext().get_buckets();
+        let region_cache_snap = snapshot.ext().in_memory_engine_hit();
+        tracker.adjust_snapshot_type(region_cache_snap);
+
+        if let Some(ref buckets) = latest_buckets {
+            if buckets.version > tracker.req_ctx.context.buckets_version
+                && tracker.req_ctx.context.buckets_version != 0
+            {
+                let mut bucket_not_match = errorpb::BucketVersionNotMatch::default();
+                bucket_not_match.set_version(buckets.version);
+                bucket_not_match.set_keys(buckets.keys.clone().into());
+                let mut err = errorpb::Error::default();
+                err.set_bucket_version_not_match(bucket_not_match);
+                return Err(Error::Region(err));
+            }
+        }
+
+        tracker.on_snapshot_finished();
+        tracker.req_ctx.deadline.check()?;
+        tracker.buckets = latest_buckets;
+        let buckets_version = tracker.buckets.as_ref().map_or(0, |b| b.version);
+
+        let mut handler = handler_builder(snapshot, &tracker.req_ctx)?;
+        tracker.on_begin_all_items();
+
+        let deadline = tracker.req_ctx.deadline;
+        let handle_request_future =
+            check_deadline(handler.handle_analyze_full_sampling(), deadline);
+        let handle_request_future = track(handle_request_future, tracker.as_mut());
+
+        let deadline_res = if let Some(semaphore) = &semaphore {
+            limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await
+        } else {
+            handle_request_future.await
+        };
+        let result = deadline_res.map_err(Error::from).and_then(|res| res);
+
+        let mut exec_summary = ExecSummary::default();
+        handler.collect_scan_summary(&mut exec_summary);
+        tracker.collect_scan_process_time(exec_summary);
+        let mut storage_stats = Statistics::default();
+        handler.collect_scan_statistics(&mut storage_stats);
+        tracker.collect_storage_statistics(storage_stats);
+
+        let (mut resp, sampling_result) = match result {
+            Ok(sampling_result) => (coppb::Response::default(), Some(sampling_result)),
+            Err(e) => {
+                if let Error::DefaultNotFound(errmsg) = &e {
+                    error!("default not found in coprocessor request processing";
+                        "err" => errmsg,
+                        "reqCtx" => ?&tracker.req_ctx,
+                    );
+                }
+                (make_error_response(e), None)
+            }
+        };
+
+        let (exec_details, exec_details_v2) = tracker.get_exec_details();
+        tracker.on_finish_all_items();
+        record_logical_read_bytes(exec_details_v2.get_scan_detail_v2().processed_versions_size);
+        resp.set_exec_details(exec_details);
+        resp.set_exec_details_v2(exec_details_v2);
+        resp.set_latest_buckets_version(buckets_version);
+        Ok(AnalyzeFullSamplingTaskResult {
+            response: resp,
+            sampling_result,
+        })
     }
 
     /// Handle a unary request and run on the read pool.
@@ -636,6 +817,115 @@ impl<E: Engine> Endpoint<E> {
         }
     }
 
+    fn handle_analyze_full_sampling_request(
+        &self,
+        r: ParseCopRequestResult<E::IMSnap>,
+    ) -> impl Future<Output = Result<AnalyzeFullSamplingTaskResult>> {
+        let req_ctx = r.req_ctx;
+        let priority = req_ctx.context.get_priority();
+        let task_id = req_ctx.build_task_id();
+        let key_ranges: Vec<_> = req_ctx
+            .ranges
+            .iter()
+            .map(|key_range| (key_range.get_start().to_vec(), key_range.get_end().to_vec()))
+            .collect();
+        let resource_tag = self
+            .resource_tag_factory
+            .new_tag_with_key_ranges(&req_ctx.context, key_ranges);
+        let mut allocated_bytes = resource_tag.approximate_heap_size();
+
+        let metadata = TaskMetadata::from_ctx(req_ctx.context.get_resource_control_context());
+        let resource_limiter = self.resource_ctl.as_ref().and_then(|r| {
+            r.get_resource_limiter(
+                req_ctx
+                    .context
+                    .get_resource_control_context()
+                    .get_resource_group_name(),
+                req_ctx.context.get_request_source(),
+                req_ctx
+                    .context
+                    .get_resource_control_context()
+                    .get_override_priority(),
+            )
+        });
+        let tracker = Box::new(Tracker::new(req_ctx, r.req_tag, self.slow_log_threshold));
+        allocated_bytes += tracker.approximate_mem_size();
+
+        let (tx, rx) = oneshot::channel();
+        let future = Self::handle_analyze_full_sampling_request_impl(
+            self.semaphore.clone(),
+            tracker,
+            r.handler_builder,
+        )
+        .in_resource_metering_tag(resource_tag)
+        .map(move |res| {
+            let _ = tx.send(res);
+        });
+        let spawn_fut_result = self.read_pool_spawn_with_memory_quota_check(
+            allocated_bytes,
+            future,
+            priority,
+            task_id,
+            metadata,
+            resource_limiter,
+        );
+        async move {
+            spawn_fut_result?.await?;
+            rx.map_err(|_| Error::MaxPendingTasksExceeded).await?
+        }
+    }
+
+    fn parse_and_handle_analyze_full_sampling_batch_request(
+        &self,
+        mut req: coppb::Request,
+        peer: Option<String>,
+        tracker: ::tracker::TrackerToken,
+    ) -> impl Future<Output = MemoryTraceGuard<coppb::Response>> {
+        let result_of_batch = self.process_analyze_full_sampling_batch_tasks(&mut req, &peer);
+        set_tls_tracker_token(tracker);
+        with_tls_tracker(|tracker| {
+            tracker.metrics.grpc_req_size = req.compute_size() as u64;
+        });
+        let result_of_future = self
+            .parse_request_and_check_memory_locks(req, peer, false)
+            .map(|r| self.handle_analyze_full_sampling_request(r));
+        with_tls_tracker(|tracker| {
+            tracker.metrics.grpc_process_nanos =
+                tracker.req_info.begin.saturating_elapsed().as_nanos() as u64;
+        });
+
+        async move {
+            let mut res = match result_of_future {
+                Err(e) => {
+                    let top = AnalyzeFullSamplingTaskResult {
+                        response: make_error_response(e),
+                        sampling_result: None,
+                    };
+                    let batch_outputs = result_of_batch.await;
+                    finish_analyze_full_sampling_batch_response(top, batch_outputs)
+                        .unwrap_or_else(make_error_response)
+                }
+                Ok(handle_fut) => {
+                    let (handle_res, batch_outputs) = futures::join!(handle_fut, result_of_batch);
+                    let top = handle_res.unwrap_or_else(|e| AnalyzeFullSamplingTaskResult {
+                        response: make_error_response(e),
+                        sampling_result: None,
+                    });
+                    finish_analyze_full_sampling_batch_response(top, batch_outputs)
+                        .unwrap_or_else(make_error_response)
+                }
+            };
+            GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                let exec_detail_v2 = res.mut_exec_details_v2();
+                tracker.write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
+                tracker.merge_time_detail(exec_detail_v2.mut_time_detail_v2());
+            });
+            GLOBAL_TRACKERS.remove(tracker);
+            let memory_size = res.data.capacity();
+            MEMTRACE_ANALYZE.trace_guard(res, memory_size)
+        }
+    }
+
     /// Parses and handles a unary request. Returns a future that will never
     /// fail. If there are errors during parsing or handling, they will be
     /// converted into a `Response` as the success result of the future.
@@ -659,6 +949,11 @@ impl<E: Engine> Endpoint<E> {
             pb_error.set_server_is_busy(busy_err);
             let resp = make_error_response(Error::Region(pb_error));
             return Either::Left(async move { resp.into() });
+        }
+
+        if is_analyze_full_sampling_batch_request(&req) {
+            let fut = self.parse_and_handle_analyze_full_sampling_batch_request(req, peer, tracker);
+            return Either::Right(Either::Left(fut));
         }
 
         let result_of_batch = self.process_batch_tasks(&mut req, &peer);
@@ -696,7 +991,7 @@ impl<E: Engine> Endpoint<E> {
             GLOBAL_TRACKERS.remove(tracker);
             res
         };
-        Either::Right(fut)
+        Either::Right(Either::Right(fut))
     }
 
     // process_batch_tasks process the input batched coprocessor tasks if any,
@@ -771,6 +1066,73 @@ impl<E: Engine> Endpoint<E> {
                 Err(e) => batch_futs.push(future::Either::Right(async move {
                     make_error_batch_response(&mut response, e);
                     response
+                })),
+            }
+        }
+        stream::FuturesOrdered::from_iter(batch_futs).collect()
+    }
+
+    fn process_analyze_full_sampling_batch_tasks(
+        &self,
+        req: &mut coppb::Request,
+        peer: &Option<String>,
+    ) -> impl Future<Output = Vec<AnalyzeFullSamplingBatchTaskResult>> {
+        let mut batch_futs = Vec::with_capacity(req.tasks.len());
+        let batch_reqs: Vec<(coppb::Request, u64)> = req
+            .take_tasks()
+            .iter_mut()
+            .map(|task| {
+                let mut new_req = req.clone();
+                new_req.is_cache_enabled = false;
+                new_req.ranges = task.take_ranges();
+                let new_context = new_req.mut_context();
+                new_context.set_region_id(task.get_region_id());
+                new_context.set_region_epoch(task.take_region_epoch());
+                new_context.set_peer(task.take_peer());
+                (new_req, task.get_task_id())
+            })
+            .collect();
+        for (cur_req, task_id) in batch_reqs.into_iter() {
+            let request_info = RequestInfo::new(
+                cur_req.get_context(),
+                RequestType::Unknown,
+                cur_req.start_ts,
+            );
+            match self.parse_request_and_check_memory_locks(cur_req, peer.clone(), false) {
+                Ok(r) => {
+                    let cur_tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(request_info));
+                    set_tls_tracker_token(cur_tracker);
+                    let fut = self.handle_analyze_full_sampling_request(r);
+                    let fut = async move {
+                        let mut output = match fut.await {
+                            Ok(output) => AnalyzeFullSamplingBatchTaskResult {
+                                task_id,
+                                response: output.response,
+                                sampling_result: output.sampling_result,
+                            },
+                            Err(e) => AnalyzeFullSamplingBatchTaskResult {
+                                task_id,
+                                response: make_error_response(e),
+                                sampling_result: None,
+                            },
+                        };
+                        GLOBAL_TRACKERS.with_tracker(cur_tracker, |tracker| {
+                            tracker.write_scan_detail(
+                                output.response.mut_exec_details_v2().mut_scan_detail_v2(),
+                            );
+                        });
+                        GLOBAL_TRACKERS.remove(cur_tracker);
+                        output
+                    };
+
+                    batch_futs.push(future::Either::Left(fut));
+                }
+                Err(e) => batch_futs.push(future::Either::Right(async move {
+                    AnalyzeFullSamplingBatchTaskResult {
+                        task_id,
+                        response: make_error_response(e),
+                        sampling_result: None,
+                    }
                 })),
             }
         }

@@ -6,8 +6,8 @@ use std::{
 };
 
 use engine_traits::{
-    CF_DEFAULT, CfNamesExt, IterOptions, Iterable, KvEngine, Peekable, ReadOptions,
-    RegionCacheEngine, Result, Snapshot, SnapshotMiscExt, is_data_cf,
+    CF_DEFAULT, CfNamesExt, DataBlockKeyAnchor, IterOptions, Iterable, KvEngine, Peekable,
+    ReadOptions, RegionCacheEngine, Result, Snapshot, SnapshotMiscExt, is_data_cf,
 };
 use in_memory_engine::RegionCacheMemoryEngine;
 use raftstore::coprocessor::ObservedSnapshot;
@@ -80,6 +80,16 @@ where
 {
     fn in_memory_engine_hit(&self) -> bool {
         self.region_cache_snap.is_some()
+    }
+
+    fn approximate_key_anchors_cf(
+        &self,
+        cf: &str,
+        lower_bound: Option<&[u8]>,
+        upper_bound: Option<&[u8]>,
+    ) -> Result<Vec<DataBlockKeyAnchor>> {
+        self.disk_snap
+            .approximate_key_anchors_cf(cf, lower_bound, upper_bound)
     }
 }
 

@@ -518,6 +518,13 @@ pub trait Snapshot: Sync + Send + Clone {
 
     fn iter(&self, cf: CfName, iter_opt: IterOptions) -> Result<Self::Iter>;
 
+    fn approximate_key_anchors_cf(
+        &self,
+        _cf: CfName,
+    ) -> Result<Vec<engine_traits::DataBlockKeyAnchor>> {
+        Ok(Vec::new())
+    }
+
     // The minimum key this snapshot can retrieve.
     #[inline]
     fn lower_bound(&self) -> Option<&[u8]> {

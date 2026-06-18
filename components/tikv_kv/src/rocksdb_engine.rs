@@ -17,7 +17,8 @@ use engine_rocks::{
     RocksCfOptions, RocksDbOptions, RocksEngine as BaseRocksEngine, RocksEngineIterator, get_env,
 };
 use engine_traits::{
-    CfName, Engines, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions,
+    CfName, DataBlockKeyAnchor, Engines, IterOptions, Iterable, Iterator, KvEngine, Peekable,
+    ReadOptions, Snapshot as EngineSnapshot,
 };
 use file_system::IoRateLimiter;
 use futures::{
@@ -370,6 +371,15 @@ impl Snapshot for Arc<RocksSnapshot> {
     fn iter(&self, cf: CfName, iter_opt: IterOptions) -> Result<Self::Iter> {
         trace!("RocksSnapshot: create cf iterator");
         Ok(self.iterator_opt(cf, iter_opt)?)
+    }
+
+    fn approximate_key_anchors_cf(&self, cf: CfName) -> Result<Vec<DataBlockKeyAnchor>> {
+        Ok(EngineSnapshot::approximate_key_anchors_cf(
+            self.as_ref(),
+            cf,
+            None,
+            None,
+        )?)
     }
 
     fn ext(&self) -> DummySnapshotExt {
