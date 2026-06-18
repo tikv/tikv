@@ -8657,6 +8657,7 @@ dependencies = [
  "structopt",
  "tempfile",
  "tikv",
+ "tikv_alloc",
  "tikv_util",
  "time 0.2.27",
  "tokio",
