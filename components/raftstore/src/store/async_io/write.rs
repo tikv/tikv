@@ -10,7 +10,10 @@
 use std::{
     collections::VecDeque,
     fmt, mem,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     thread::{self, JoinHandle},
 };
 
@@ -40,7 +43,10 @@ use tikv_util::{
     debug, info, slow_log,
     sys::thread::StdThreadBuildWrapper,
     thd_name,
-    time::{Duration, Instant, duration_to_sec, setup_for_spin_interval, spin_at_least},
+    time::{
+        Duration, Instant, duration_to_sec, monotonic_raw_now, setup_for_spin_interval,
+        spin_at_least, timespec_to_ns,
+    },
     warn,
 };
 use tracker::TrackerTokenArray;
@@ -712,6 +718,8 @@ where
     message_metrics: RaftSendMessageMetrics,
     perf_context: ER::PerfContext,
     pending_latency_inspect: Vec<(Instant, Vec<LatencyInspector>)>,
+    last_raft_append_success_at_millis: Arc<AtomicU64>,
+    last_kv_sync_success_at_millis: Arc<AtomicU64>,
 }
 
 impl<EK, ER, N, T> Worker<EK, ER, N, T>
@@ -730,6 +738,8 @@ where
         notifier: N,
         trans: T,
         cfg: &Arc<VersionTrack<Config>>,
+        last_raft_append_success_at_millis: Arc<AtomicU64>,
+        last_kv_sync_success_at_millis: Arc<AtomicU64>,
     ) -> Self {
         let batch = WriteTaskBatch::new(
             raft_engine.log_batch(RAFT_WB_DEFAULT_SIZE),
@@ -754,6 +764,8 @@ where
             message_metrics: RaftSendMessageMetrics::default(),
             perf_context,
             pending_latency_inspect: vec![],
+            last_raft_append_success_at_millis,
+            last_kv_sync_success_at_millis,
         }
     }
 
@@ -882,6 +894,13 @@ where
                         store_id, tag, e
                     );
                 });
+                // Record this sync-backed kv progress so fail-fast can veto a
+                // kv probe timeout when the same disk is still completing real
+                // sync writes.
+                self.last_kv_sync_success_at_millis.fetch_max(
+                    timespec_to_ns(monotonic_raw_now()) / 1_000_000,
+                    Ordering::Relaxed,
+                );
                 if kv_wb.data_size() > KV_WB_SHRINK_SIZE {
                     *kv_wb = self
                         .kv_engine
@@ -927,6 +946,14 @@ where
             self.perf_context.report_metrics(&trackers);
             write_raft_time = duration_to_sec(now.saturating_elapsed());
             STORE_WRITE_RAFTDB_DURATION_HISTOGRAM.observe(write_raft_time);
+            // Record the last confirmed raft-log append progress on a monotonic
+            // raw clock. Fail-fast reads this timestamp later to answer a very
+            // specific question: "even if the dedicated disk probe is slow, are
+            // real raft appends still succeeding recently?"
+            self.last_raft_append_success_at_millis.fetch_max(
+                timespec_to_ns(monotonic_raw_now()) / 1_000_000,
+                Ordering::Relaxed,
+            );
             debug!("raft log is persisted";
                 "req_info" => TrackerTokenArray::new(trackers.as_slice()));
         }
@@ -1063,6 +1090,8 @@ where
     pub transfer: T,
     pub notifier: N,
     pub cfg: Arc<VersionTrack<Config>>,
+    pub last_raft_append_success_at_millis: Arc<AtomicU64>,
+    pub last_kv_sync_success_at_millis: Arc<AtomicU64>,
 }
 
 #[derive(Clone)]
@@ -1105,6 +1134,8 @@ where
         notifier: &N,
         trans: &T,
         cfg: &Arc<VersionTrack<Config>>,
+        last_raft_append_success_at_millis: Arc<AtomicU64>,
+        last_kv_sync_success_at_millis: Arc<AtomicU64>,
     ) -> Result<()> {
         let pool_size = cfg.value().store_io_pool_size;
         if pool_size > 0 {
@@ -1117,6 +1148,8 @@ where
                     kv_engine,
                     transfer: trans.clone(),
                     cfg: cfg.clone(),
+                    last_raft_append_success_at_millis,
+                    last_kv_sync_success_at_millis,
                 },
             )?;
         }
@@ -1184,6 +1217,8 @@ where
                         writer_meta.notifier.clone(),
                         writer_meta.transfer.clone(),
                         &writer_meta.cfg,
+                        writer_meta.last_raft_append_success_at_millis.clone(),
+                        writer_meta.last_kv_sync_success_at_millis.clone(),
                     );
                     info!("starting store writer {}", i);
                     let t =

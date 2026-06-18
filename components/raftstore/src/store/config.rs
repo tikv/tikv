@@ -22,6 +22,8 @@ use time::Duration as TimeDuration;
 use super::worker::{RaftStoreBatchComponent, RefreshConfigTask};
 use crate::{Result, coprocessor::config::RAFTSTORE_V2_SPLIT_SIZE};
 
+const DISK_HANG_TIMEOUT_MIN: ReadableDuration = ReadableDuration::secs(30);
+
 lazy_static! {
     pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec!(
         "tikv_config_raftstore",
@@ -104,6 +106,13 @@ pub struct Config {
     pub raft_log_reserve_max_ticks: usize,
     // Old logs in Raft engine needs to be purged peridically.
     pub raft_engine_purge_interval: ReadableDuration,
+    /// If set, TiKV exits when a disk probe cannot complete for this long.
+    ///
+    /// This applies to both raft and kv disks (depending on whether they are
+    /// deployed on different mount points). The default is 1 minute. Set it
+    /// to `0s` to disable fail-fast disk hang detection explicitly. Any
+    /// non-zero value must be at least 30 seconds.
+    pub disk_hang_timeout: Option<ReadableDuration>,
     #[doc(hidden)]
     #[online_config(hidden)]
     pub max_manual_flush_rate: f64,
@@ -532,6 +541,7 @@ impl Default for Config {
             follower_read_max_log_gap: 100,
             raft_log_reserve_max_ticks: 6,
             raft_engine_purge_interval: ReadableDuration::secs(10),
+            disk_hang_timeout: Some(ReadableDuration::minutes(1)),
             max_manual_flush_rate: 3.0,
             raft_entry_cache_life_time: ReadableDuration::secs(30),
             raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
@@ -853,6 +863,15 @@ impl Config {
 
         if self.merge_check_tick_interval.as_millis() == 0 {
             return Err(box_err!("raftstore.merge-check-tick-interval can't be 0."));
+        }
+
+        if let Some(timeout) = self.disk_hang_timeout {
+            if !timeout.is_zero() && timeout < DISK_HANG_TIMEOUT_MIN {
+                return Err(box_err!(
+                    "raftstore.disk-hang-timeout must be at least {} ms",
+                    DISK_HANG_TIMEOUT_MIN.as_millis()
+                ));
+            }
         }
 
         let stale_state_check = self.peer_stale_state_check_interval.as_millis();
@@ -1475,6 +1494,30 @@ mod tests {
         cfg.optimize_for(false);
         cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
+
+        cfg = Config::new();
+        cfg.disk_hang_timeout = Some(ReadableDuration::millis(999));
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap_err();
+
+        cfg = Config::new();
+        cfg.disk_hang_timeout = Some(ReadableDuration::secs(0));
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap();
+
+        cfg = Config::new();
+        cfg.disk_hang_timeout = Some(ReadableDuration::secs(29));
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap_err();
+
+        cfg = Config::new();
+        cfg.disk_hang_timeout = Some(ReadableDuration::secs(30));
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap();
 
         cfg = Config::new();
         cfg.raft_base_tick_interval = ReadableDuration::secs(1);
