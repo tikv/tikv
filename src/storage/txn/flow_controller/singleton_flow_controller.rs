@@ -629,18 +629,24 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
                 }
             }
 
-            let pending_compaction_bytes = long_term_pending_bytes.get_avg();
+            let avg_pending_bytes = long_term_pending_bytes.get_avg();
             let ignore = if let Some(before) = checker.pending_bytes_before_unsafe_destroy_range {
-                // It assumes that the long term average will eventually come down below the
-                // soft limit. If the general traffic flow increases during destroy, the long
-                // term average may never come down and the flow control will be turned off for
-                // a long time, which would be a rather rare case, so just ignore it.
-                if pending_compaction_bytes <= before && !self.wait_for_destroy_range_finish {
+                // Only clear destroy-range jump control after both the long-term
+                // average returns to the pre-destroy level and the current sample
+                // is below the soft limit. The average alone can hide a current
+                // compaction debt spike.
+                let back_to_normal = avg_pending_bytes <= before
+                    && num < soft
+                    && !self.wait_for_destroy_range_finish;
+                if back_to_normal {
                     info!(
                         "pending compaction bytes is back to normal";
                         "cf" => &cf,
-                        "pending_compaction_bytes" => pending_compaction_bytes,
-                        "before" => before
+                        "current_pending_compaction_bytes" => pending_compaction_bytes,
+                        "current_pending_compaction_bytes_log2" => num,
+                        "avg_pending_compaction_bytes_log2" => avg_pending_bytes,
+                        "before_log2" => before,
+                        "soft_limit_log2" => soft
                     );
                     checker.pending_bytes_before_unsafe_destroy_range = None;
                 }
@@ -657,10 +663,10 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
                 }
             }
 
-            let mut ratio = if pending_compaction_bytes < soft || ignore {
+            let mut ratio = if avg_pending_bytes < soft || ignore {
                 0
             } else {
-                let new_ratio = (pending_compaction_bytes - soft) / (hard - soft);
+                let new_ratio = (avg_pending_bytes - soft) / (hard - soft);
                 let old_ratio = self.discard_ratio.load(Ordering::Relaxed);
 
                 // Because pending compaction bytes changes up and down, so using
@@ -1334,5 +1340,76 @@ pub(super) mod tests {
         send_flow_info(&tx, region_id);
         send_flow_info(&tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) > f64::EPSILON);
+    }
+
+    #[test]
+    fn test_flow_controller_destroy_range_jump_control_checks_current_pending_bytes() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+
+        let region_id = 0;
+        let cf = "default".to_string();
+        let stub = EngineStub::new();
+        let config = Arc::new(VersionTrack::new(FlowControlConfig::default()));
+        let discard_ratio = Arc::new(AtomicU32::new(0));
+        let limiter = Arc::new(Limiter::new(f64::INFINITY));
+        let mut checker = FlowChecker::new(config, stub.clone(), discard_ratio, limiter);
+
+        let soft = (FlowControlConfig::default()
+            .soft_pending_compaction_bytes_limit
+            .0 as f64)
+            .log2();
+
+        for _ in 0..10 {
+            checker.on_pending_compaction_bytes_change_cf(64 * GIB, cf.clone());
+        }
+
+        checker.on_flow_info_msg(Ok(FlowInfo::BeforeUnsafeDestroyRange(region_id)));
+        let before = checker
+            .cf_checkers
+            .get(&cf)
+            .unwrap()
+            .pending_bytes_before_unsafe_destroy_range
+            .unwrap();
+        assert!(before < soft);
+
+        for _ in 0..20 {
+            checker.on_pending_compaction_bytes_change_cf(GIB, cf.clone());
+        }
+
+        let high_pending_bytes = 512 * GIB;
+        stub.0
+            .pending_compaction_bytes
+            .store(high_pending_bytes, Ordering::Relaxed);
+        checker.on_flow_info_msg(Ok(FlowInfo::AfterUnsafeDestroyRange(region_id)));
+        assert!(
+            checker
+                .cf_checkers
+                .get(&cf)
+                .unwrap()
+                .pending_bytes_before_unsafe_destroy_range
+                .is_some(),
+            "jump control should remain while current pending bytes exceeds soft limit"
+        );
+
+        checker.on_pending_compaction_bytes_change_cf(high_pending_bytes, cf.clone());
+        assert!(
+            checker
+                .cf_checkers
+                .get(&cf)
+                .unwrap()
+                .pending_bytes_before_unsafe_destroy_range
+                .is_some(),
+            "avg alone must not clear jump control when current pending bytes is still high"
+        );
+
+        checker.on_pending_compaction_bytes_change_cf(GIB, cf.clone());
+        assert!(
+            checker
+                .cf_checkers
+                .get(&cf)
+                .unwrap()
+                .pending_bytes_before_unsafe_destroy_range
+                .is_none()
+        );
     }
 }
