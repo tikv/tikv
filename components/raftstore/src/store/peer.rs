@@ -1463,10 +1463,70 @@ where
         &self.region_buckets_info
     }
 
+    fn is_peer_heartbeat_timeout(
+        &self,
+        peer_id: u64,
+        heartbeat_timeout_duration: Duration,
+    ) -> bool {
+        if let Some(instant) = self.peer_heartbeats.get(&peer_id) {
+            let elapsed = instant.saturating_elapsed();
+            return elapsed >= heartbeat_timeout_duration;
+        }
+        true // If no heartbeat record, consider it as timeout.
+    }
+
+    pub fn current_down_peer_ids(&self, max_duration: Duration) -> Vec<u64> {
+        self.region()
+            .get_peers()
+            .iter()
+            .filter_map(|peer| {
+                let peer_id = peer.get_id();
+                if peer_id == self.peer.get_id() {
+                    return None;
+                }
+                self.peer_heartbeats.get(&peer_id).and_then(|instant| {
+                    (instant.saturating_elapsed() >= max_duration).then_some(peer_id)
+                })
+            })
+            .collect()
+    }
+
+    /// Checks if all peers that have not sent a hibernate vote are unreachable.
+    /// If one peer is unreachable, it must be in probe state and encounter
+    /// heartbeat timeout.
+    pub fn all_non_hibernate_vote_peers_unreachable(
+        &self,
+        hibernate_vote_peer_ids: &[u64],
+        heartbeat_timeout_duration: Duration,
+    ) -> bool {
+        let status = self.raft_group.status();
+        let progress = match status.progress {
+            Some(progress) => progress,
+            None => return false,
+        };
+        // Check each peer in the raft group
+        for (id, pr) in progress.iter() {
+            if *id == self.peer.get_id() {
+                continue;
+            }
+            if !hibernate_vote_peer_ids.contains(id) {
+                if pr.state != ProgressState::Probe {
+                    // Found a non-hibernate-vote peer not in probe state, return false
+                    return false;
+                }
+                if !self.is_peer_heartbeat_timeout(*id, heartbeat_timeout_duration) {
+                    // Found a non-hibernate-vote peer not in heartbeat timeout, return false
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     /// Check whether the peer can be hibernated.
     ///
     /// This should be used with `check_after_tick` to get a correct conclusion.
-    pub fn check_before_tick(&self, cfg: &Config) -> CheckTickResult {
+    pub fn check_before_tick(&self, cfg: &Config, down_peer_ids: &[u64]) -> CheckTickResult {
         let mut res = CheckTickResult::default();
         if !self.is_leader() {
             return res;
@@ -1477,17 +1537,29 @@ where
         }
         let status = self.raft_group.status();
         let last_index = self.raft_group.raft.raft_log.last_index();
+        let mut matched_peer_ids = HashSet::default();
+        matched_peer_ids.insert(self.peer.get_id());
         for (id, pr) in status.progress.unwrap().iter() {
-            // Even a recent inactive node is also considered. If we put leader into sleep,
-            // followers or learners may not sync its logs for a long time and become
-            // unavailable. We choose availability instead of performance in this case.
+            // Leader can sleep when every alive peer is in sync and all alive peers reach
+            // majority. If we put leader into sleep when some alive peer lags,
+            // followers or learners may not sync its logs for a long time and
+            // become unavailable. We choose availability instead of performance in this
+            // case.
             if *id == self.peer.get_id() {
                 continue;
             }
-            if pr.matched != last_index {
+            if pr.matched != last_index && !down_peer_ids.contains(id) {
+                // Prevent leader from sleeping when some alive peer is still replicating logs.
                 res.reason = "replication";
                 return res;
             }
+            if pr.matched == last_index {
+                matched_peer_ids.insert(*id);
+            }
+        }
+        if !self.raft_group.raft.prs().has_quorum(&matched_peer_ids) {
+            res.reason = "not enough matched peers";
+            return res;
         }
         if self.raft_group.raft.pending_read_count() > 0 {
             res.reason = "pending read";
@@ -1984,22 +2056,22 @@ where
     /// Collects all down peers.
     pub fn collect_down_peers<T>(&mut self, ctx: &PollContext<EK, ER, T>) -> Vec<PeerStats> {
         let max_duration = ctx.cfg.max_peer_down_duration.0;
+        let down_peer_ids = self.current_down_peer_ids(max_duration);
+        let down_peer_id_set: HashSet<_> = down_peer_ids.iter().copied().collect();
         let mut down_peers = Vec::new();
-        let mut down_peer_ids = Vec::new();
         for p in self.region().get_peers() {
-            if p.get_id() == self.peer.get_id() {
+            if !down_peer_id_set.contains(&p.get_id()) {
                 continue;
             }
-            if let Some(instant) = self.peer_heartbeats.get(&p.get_id()) {
-                let elapsed = instant.saturating_elapsed();
-                if elapsed >= max_duration {
-                    let mut stats = PeerStats::default();
-                    stats.set_peer(p.clone());
-                    stats.set_down_seconds(elapsed.as_secs());
-                    down_peers.push(stats);
-                    down_peer_ids.push(p.get_id());
-                }
-            }
+            let elapsed = self
+                .peer_heartbeats
+                .get(&p.get_id())
+                .unwrap()
+                .saturating_elapsed();
+            let mut stats = PeerStats::default();
+            stats.set_peer(p.clone());
+            stats.set_down_seconds(elapsed.as_secs());
+            down_peers.push(stats);
         }
         self.down_peer_ids = down_peer_ids;
         if !self.down_peer_ids.is_empty() {
