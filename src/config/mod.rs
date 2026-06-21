@@ -3856,6 +3856,9 @@ impl TikvConfig {
         let data_dir = data_dir.unwrap_or(&self.storage.data_dir);
         config::canonicalize_sub_path(data_dir, DEFAULT_ROCKSDB_SUB_DIR)
     }
+    fn should_warn_in_memory_peer_size_limit(&self) -> bool {
+        self.pessimistic_txn.in_memory_peer_size_limit.0 > self.raft_store.raft_entry_max_size.0 / 2
+    }
 
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         // Setting up data paths.
@@ -4042,6 +4045,19 @@ impl TikvConfig {
             warn!(
                 "raftstore.hibernate-regions was enabled but cdc.hibernate-regions-compatible \
                 was disabled, hibernate regions may be broken up if you want to deploy a cdc cluster"
+            );
+        }
+        if self.should_warn_in_memory_peer_size_limit() {
+            let peer_limit = self.pessimistic_txn.in_memory_peer_size_limit.0;
+            let raft_max = self.raft_store.raft_entry_max_size.0;
+            warn!(
+                "pessimistic-txn.in-memory-peer-size-limit ({}) exceeds half of \
+                 raftstore.raft-entry-max-size ({}); flushing in-memory pessimistic locks during \
+                 leader transfer, region split, or region merge may produce an oversized \
+                 Raft entry; and cause 'entry is too large' errors. Consider reducing \
+                 in-memory-peer-size or increasing raft-entry-max-size",
+                ReadableSize(peer_limit),
+                ReadableSize(raft_max),
             );
         }
 
@@ -8328,5 +8344,54 @@ mod tests {
             .unwrap();
         cfg.in_memory_engine.enable = true;
         check_cfg(&cfg);
+    }
+
+    #[test]
+    fn test_in_memory_peer_size_limit_warning_threshold() {
+        let config = r#"
+        [pessimistic-txn]
+        in-memory-peer-size-limit = "4MiB"
+
+        [raftstore]
+        raft-entry-max-size = "8MiB"
+        "#;
+        let mut cfg: TikvConfig = toml::from_str(config).unwrap();
+        assert!(!cfg.should_warn_in_memory_peer_size_limit());
+
+        cfg.pessimistic_txn.in_memory_peer_size_limit.0 =
+            cfg.raft_store.raft_entry_max_size.0 / 2 + 1;
+        assert!(cfg.should_warn_in_memory_peer_size_limit());
+
+        cfg.pessimistic_txn.in_memory_peer_size_limit.0 = cfg.raft_store.raft_entry_max_size.0;
+        assert!(cfg.should_warn_in_memory_peer_size_limit());
+    }
+
+    #[test]
+    fn test_online_config_in_memory_peer_size_limit_warning_threshold() {
+        let (cfg, _dir) = TikvConfig::with_tmp().unwrap();
+        let cfg_controller = ConfigController::new(cfg);
+        assert!(
+            !cfg_controller
+                .get_current()
+                .should_warn_in_memory_peer_size_limit()
+        );
+
+        cfg_controller
+            .update_config("pessimistic-txn.in-memory-peer-size-limit", "5MiB")
+            .unwrap();
+        assert!(
+            cfg_controller
+                .get_current()
+                .should_warn_in_memory_peer_size_limit()
+        );
+
+        cfg_controller
+            .update_config("raftstore.raft-entry-max-size", "16MiB")
+            .unwrap();
+        assert!(
+            !cfg_controller
+                .get_current()
+                .should_warn_in_memory_peer_size_limit()
+        );
     }
 }
