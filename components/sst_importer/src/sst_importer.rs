@@ -16,7 +16,7 @@ use collections::HashSet;
 use dashmap::{DashMap, mapref::entry::Entry};
 use encryption::{DataKeyManager, FileEncryptionInfo, MultiMasterKeyBackend};
 use encryption_export::create_async_backend;
-use engine_rocks::{RocksSstReader, get_env};
+use engine_rocks::{RocksInMemoryFile, RocksInMemorySst, RocksSstReader, get_env};
 use engine_traits::{
     CF_DEFAULT, CF_WRITE, CfName, ExternalSstFileInfo, IterOptions, Iterator, KvEngine,
     RefIterable, SstCompressionType, SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder,
@@ -98,6 +98,46 @@ pub struct DownloadFilesExtResult {
     pub ssts: Vec<SstMeta>,
 }
 
+#[derive(Clone, Debug)]
+pub enum DownloadedSstFile {
+    Disk(String),
+    Mem(Arc<DownloadedInMemorySst>),
+}
+
+#[derive(Debug)]
+pub struct DownloadedInMemorySst {
+    sst: RocksInMemorySst,
+    _permit: OwnedAllocated,
+}
+
+struct DownloadedSstReader {
+    reader: RocksSstReader,
+    _file: DownloadedSstFile,
+}
+
+impl DownloadedSstFile {
+    fn open_reader(&self, key_manager: Option<Arc<DataKeyManager>>) -> Result<DownloadedSstReader> {
+        let reader = match self {
+            DownloadedSstFile::Disk(path) => {
+                let env = get_env(key_manager, get_io_rate_limiter())?;
+                RocksSstReader::open_with_env(path, Some(env))?
+            }
+            DownloadedSstFile::Mem(sst) => sst.sst.open_reader()?,
+        };
+        reader.verify_checksum()?;
+        Ok(DownloadedSstReader {
+            reader,
+            _file: self.clone(),
+        })
+    }
+}
+
+impl DownloadedSstReader {
+    fn reader(&self) -> &RocksSstReader {
+        &self.reader
+    }
+}
+
 impl<'a> DownloadExt<'a> {
     pub fn cache_key(mut self, key: &'a str) -> Self {
         self.cache_key = Some(key);
@@ -120,9 +160,10 @@ pub enum CacheKvFile {
     /// the key range affected by the download operation.
     State(Arc<(SstMeta, OnceCell<Option<Range>>)>),
     /// Tracks raw file download to prevent duplicate downloads of the same SST
-    /// file. The `meta` stores SST metadata, while `OnceCell<String>` holds
-    /// the download result (file path) once the download completes.
-    Download(Arc<(SstMeta, OnceCell<String>)>),
+    /// file. The `meta` stores SST metadata, while
+    /// `OnceCell<DownloadedSstFile>` holds the downloaded disk path or
+    /// in-memory SST once the download completes.
+    Download(Arc<(SstMeta, OnceCell<DownloadedSstFile>)>),
 }
 
 /// returns an error on an invalid internal state.
@@ -132,6 +173,18 @@ fn error(message: impl std::fmt::Display) -> Error {
         "internal error in TiKV: {}",
         message
     )))
+}
+
+fn restore_config_from_crypter(crypter: Option<CipherInfo>, cipher_iv: &[u8]) -> RestoreConfig {
+    let file_crypter = crypter.map(|c| FileEncryptionInfo {
+        method: c.cipher_type,
+        key: c.cipher_key,
+        iv: cipher_iv.to_owned(),
+    });
+    RestoreConfig {
+        file_crypter,
+        ..Default::default()
+    }
 }
 
 impl CacheKvFile {
@@ -219,7 +272,6 @@ impl<E: KvEngine> SstImporter<E> {
             "ratio" => cfg.memory_use_ratio,
             "size" => ?memory_limit,
         );
-
         let dir = ImportDir::new(import_dir)?;
 
         Ok(SstImporter {
@@ -479,7 +531,7 @@ impl<E: KvEngine> SstImporter<E> {
         };
         for (name, meta) in metas {
             let path = self.dir.join_for_write(meta)?;
-            let dst_file_name = self
+            let downloaded = self
                 .do_download_sst_file(
                     &path,
                     meta,
@@ -488,16 +540,14 @@ impl<E: KvEngine> SstImporter<E> {
                     crypter.clone(),
                     &speed_limiter,
                     ext.cache_key.unwrap_or(""),
+                    false,
                 )
                 .await?;
-            // now validate the SST file.
-            let env = get_env(self.key_manager.clone(), get_io_rate_limiter())?;
-            // Use abstracted SstReader after Env is abstracted.
-            let sst_reader = RocksSstReader::open_with_env(&dst_file_name, Some(env))?;
-            sst_reader.verify_checksum()?;
-
+            if matches!(&downloaded, DownloadedSstFile::Disk(_)) {
+                clean_paths.lock().unwrap().push(path.temp);
+            }
+            let sst_reader = downloaded.open_reader(self.key_manager.clone())?;
             sst_readers.push(sst_reader);
-            clean_paths.lock().unwrap().push(path.temp);
         }
 
         fail::fail_point!("download_files_ext_after_download", |msg| {
@@ -509,7 +559,7 @@ impl<E: KvEngine> SstImporter<E> {
         iter_option.set_fill_cache(false);
         let mut sst_iters = Vec::with_capacity(sst_readers.len());
         for sst_reader in &sst_readers {
-            let sst_iter = sst_reader.iter(iter_option.clone())?;
+            let sst_iter = sst_reader.reader().iter(iter_option.clone())?;
             sst_iters.push(sst_iter);
         }
         let mut sst_iter = BinaryIterator::new(sst_iters);
@@ -567,7 +617,7 @@ impl<E: KvEngine> SstImporter<E> {
         let mut readers_with_cf_name = Vec::with_capacity(metas.len());
         for (name, meta) in metas {
             let path = self.dir.join_for_write(meta)?;
-            let dst_file_name = self
+            let downloaded = self
                 .do_download_sst_file(
                     &path,
                     meta,
@@ -576,14 +626,14 @@ impl<E: KvEngine> SstImporter<E> {
                     crypter.clone(),
                     &speed_limiter,
                     ext.cache_key.unwrap_or(""),
+                    true,
                 )
                 .await?;
-            let env = get_env(self.key_manager.clone(), get_io_rate_limiter())?;
-            let sst_reader = RocksSstReader::open_with_env(&dst_file_name, Some(env))?;
-            sst_reader.verify_checksum()?;
-
-            readers_with_cf_name.push((sst_reader, meta.get_cf_name()));
-            clean_paths.lock().unwrap().push(path.temp);
+            if matches!(&downloaded, DownloadedSstFile::Disk(_)) {
+                clean_paths.lock().unwrap().push(path.temp);
+            }
+            let reader = downloaded.open_reader(self.key_manager.clone())?;
+            readers_with_cf_name.push((reader, meta.get_cf_name().to_owned()));
         }
 
         fail::fail_point!("download_files_ext_after_download", |msg| {
@@ -596,7 +646,7 @@ impl<E: KvEngine> SstImporter<E> {
         let mut write_sst_iters = Vec::new();
         let mut default_sst_iters = Vec::new();
         for (reader, cf_name) in &readers_with_cf_name {
-            let sst_iter = reader.iter(iter_option.clone())?;
+            let sst_iter = reader.reader().iter(iter_option.clone())?;
 
             match name_to_cf(cf_name) {
                 Some(CF_WRITE) => write_sst_iters.push(sst_iter),
@@ -937,6 +987,21 @@ impl<E: KvEngine> SstImporter<E> {
         }
     }
 
+    fn request_download_sst_cache(&self, size: u64) -> Option<OwnedAllocated> {
+        if self.download_to_disk_only() {
+            return None;
+        }
+        let size = usize::try_from(size).ok()?;
+        let mut permit = OwnedAllocated::new(self.memory_quota.clone());
+        if permit.alloc(size).is_err() {
+            CACHE_EVENT.with_label_values(&["out-of-quota"]).inc();
+            None
+        } else {
+            CACHE_EVENT.with_label_values(&["add"]).inc();
+            Some(permit)
+        }
+    }
+
     async fn download_kv_file_to_mem_buf(
         &self,
         meta: &KvMeta,
@@ -1070,14 +1135,15 @@ impl<E: KvEngine> SstImporter<E> {
         }
     }
 
-    async fn download_kv_files_from_external_storage_to_mem(
+    async fn download_file_from_external_storage_to_writer<W: std::io::Write + Send>(
         &self,
         file_length: u64,
         file_name: &str,
         ext_storage: Arc<dyn ExternalStorage>,
         speed_limiter: &Limiter,
+        output: W,
         restore_config: RestoreConfig,
-    ) -> Result<Vec<u8>> {
+    ) -> Result<()> {
         let RestoreConfig {
             range,
             compression_type,
@@ -1086,7 +1152,7 @@ impl<E: KvEngine> SstImporter<E> {
             opt_encrypted_file_checksum,
         } = restore_config;
 
-        let (mut reader, opt_hasher) = {
+        let (reader, opt_hasher) = {
             let inner = if let Some((off, len)) = range {
                 ext_storage.read_part(file_name, off, len)
             } else {
@@ -1108,8 +1174,9 @@ impl<E: KvEngine> SstImporter<E> {
             )
         };
 
-        let r = external_storage::read_external_storage_info_buff(
-            &mut reader,
+        let r = external_storage::read_external_storage_into_file(
+            reader,
+            output,
             speed_limiter,
             file_length,
             expected_sha256,
@@ -1119,13 +1186,34 @@ impl<E: KvEngine> SstImporter<E> {
         )
         .await;
         let url = ext_storage.url()?.to_string();
-        let buff = r.map_err(|e| Error::CannotReadExternalStorage {
+        r.map_err(|e| Error::CannotReadExternalStorage {
             url: url.to_string(),
             name: file_name.to_string(),
             err: e,
             local_path: PathBuf::default(),
         })?;
 
+        Ok(())
+    }
+
+    async fn download_kv_files_from_external_storage_to_mem(
+        &self,
+        file_length: u64,
+        file_name: &str,
+        ext_storage: Arc<dyn ExternalStorage>,
+        speed_limiter: &Limiter,
+        restore_config: RestoreConfig,
+    ) -> Result<Vec<u8>> {
+        let mut buff = Vec::with_capacity(usize::try_from(file_length).unwrap_or_default());
+        self.download_file_from_external_storage_to_writer(
+            file_length,
+            file_name,
+            ext_storage,
+            speed_limiter,
+            &mut buff,
+            restore_config,
+        )
+        .await?;
         Ok(buff)
     }
 
@@ -1524,17 +1612,6 @@ impl<E: KvEngine> SstImporter<E> {
         engine: E,
         ext: DownloadExt<'_>,
     ) -> Result<Option<Range>> {
-        let file_crypter = crypter.map(|c| FileEncryptionInfo {
-            method: c.cipher_type,
-            key: c.cipher_key,
-            iv: meta.cipher_iv.to_owned(),
-        });
-
-        let restore_config = RestoreConfig {
-            file_crypter,
-            ..Default::default()
-        };
-
         self.async_download_file_from_external_storage(
             meta.length,
             name,
@@ -1542,7 +1619,7 @@ impl<E: KvEngine> SstImporter<E> {
             backend,
             speed_limiter,
             ext.cache_key.unwrap_or(""),
-            restore_config,
+            restore_config_from_crypter(crypter, meta.cipher_iv.as_ref()),
         )
         .await?;
 
@@ -2049,6 +2126,45 @@ impl<'a> KeyspaceKeyRewriteScratch<'a> {
 }
 
 impl<E: KvEngine> SstImporter<E> {
+    async fn download_sst_file_to_mem_after_lock_check(
+        &self,
+        meta: &SstMeta,
+        backend: &StorageBackend,
+        name: &str,
+        crypter: Option<CipherInfo>,
+        speed_limiter: &Limiter,
+        cache_key: &str,
+    ) -> Result<Option<DownloadedSstFile>> {
+        let Some(permit) = self.request_download_sst_cache(meta.length) else {
+            return Ok(None);
+        };
+        let ext_storage = self.external_storage_or_cache(backend, cache_key)?;
+        let in_memory_path = Path::new(name)
+            .file_name()
+            .and_then(|file_name| file_name.to_str())
+            .unwrap_or("downloaded.sst");
+        let mut file = RocksInMemoryFile::new(in_memory_path)?;
+        self.download_file_from_external_storage_to_writer(
+            meta.length,
+            name,
+            ext_storage,
+            speed_limiter,
+            &mut file,
+            restore_config_from_crypter(crypter, meta.cipher_iv.as_ref()),
+        )
+        .await?;
+        IMPORTER_DOWNLOAD_BYTES.observe(meta.length as _);
+
+        let sst = file.finish()?;
+        debug!("downloaded sst into memory"; "name" => name);
+        Ok(Some(DownloadedSstFile::Mem(Arc::new(
+            DownloadedInMemorySst {
+                sst,
+                _permit: permit,
+            },
+        ))))
+    }
+
     async fn do_download_sst_file(
         &self,
         path: &crate::import_file::ImportPath,
@@ -2058,7 +2174,8 @@ impl<E: KvEngine> SstImporter<E> {
         crypter: Option<CipherInfo>,
         speed_limiter: &Limiter,
         cache_key: &str,
-    ) -> Result<String> {
+        try_memory: bool,
+    ) -> Result<DownloadedSstFile> {
         let path_str = path.temp.to_string_lossy().to_string();
 
         // Check if this file is already being downloaded
@@ -2094,17 +2211,21 @@ impl<E: KvEngine> SstImporter<E> {
         let result = res
             .1
             .get_or_try_init(|| async {
-                let file_crypter = crypter.map(|c| FileEncryptionInfo {
-                    method: c.cipher_type,
-                    key: c.cipher_key,
-                    iv: meta.cipher_iv.to_owned(),
-                });
-
-                let restore_config = RestoreConfig {
-                    file_crypter,
-                    ..Default::default()
-                };
-
+                if try_memory {
+                    if let Some(downloaded) = self
+                        .download_sst_file_to_mem_after_lock_check(
+                            meta,
+                            backend,
+                            name,
+                            crypter.clone(),
+                            speed_limiter,
+                            cache_key,
+                        )
+                        .await?
+                    {
+                        return Ok(downloaded);
+                    }
+                }
                 self.async_download_file_from_external_storage(
                     meta.length,
                     name,
@@ -2112,7 +2233,7 @@ impl<E: KvEngine> SstImporter<E> {
                     backend,
                     speed_limiter,
                     cache_key,
-                    restore_config,
+                    restore_config_from_crypter(crypter, meta.cipher_iv.as_ref()),
                 )
                 .await?;
 
@@ -2120,7 +2241,7 @@ impl<E: KvEngine> SstImporter<E> {
 
                 debug!("downloaded file"; "meta" => ?meta, "name" => name, "path" => dst_file_name);
 
-                Ok::<String, Error>(dst_file_name.to_string())
+                Ok::<DownloadedSstFile, Error>(DownloadedSstFile::Disk(dst_file_name.to_string()))
             })
             .await?;
 
@@ -2844,6 +2965,21 @@ mod tests {
         })
     }
 
+    fn check_downloaded_sample_sst_file(downloaded: &DownloadedSstFile) {
+        let reader = downloaded.open_reader(None).unwrap();
+        let mut iter = reader.reader().iter(IterOptions::default()).unwrap();
+        iter.seek_to_first().unwrap();
+        assert_eq!(
+            collect(iter),
+            vec![
+                (b"zt123_r01".to_vec(), b"abc".to_vec()),
+                (b"zt123_r04".to_vec(), b"xyz".to_vec()),
+                (b"zt123_r07".to_vec(), b"pqrst".to_vec()),
+                (b"zt123_r13".to_vec(), b"www".to_vec()),
+            ]
+        );
+    }
+
     fn create_sample_external_kv_file() -> Result<(TempDir, StorageBackend, KvMeta, Vec<u8>)> {
         create_sample_external_kv_file_with_optional_encryption(
             None,
@@ -3333,6 +3469,99 @@ mod tests {
         let mut cfg_mgr = ImportConfigManager::new(cfg, Arc::downgrade(&threads_clone));
         let r = cfg_mgr.dispatch(change);
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn test_sst_reader_from_mem() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let sst_path = temp_dir.path().join("sample.sst");
+        let mut writer = new_sst_writer(sst_path.to_str().unwrap());
+        writer.put(b"k1", b"v1").unwrap();
+        writer.finish().unwrap();
+
+        let content = std::fs::read(&sst_path).unwrap();
+        let reader = RocksSstReader::open_in_memory("sample.sst", &content).unwrap();
+        reader.verify_checksum().unwrap();
+
+        let mut iter = reader.iter(IterOptions::default()).unwrap();
+        assert!(iter.seek_to_first().unwrap());
+        assert_eq!(iter.key(), b"k1");
+        assert_eq!(iter.value(), b"v1");
+        assert!(!iter.next().unwrap());
+    }
+
+    #[test]
+    fn test_do_download_sst_file_try_memory_uses_mem() {
+        let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file().unwrap();
+        let importer_dir = tempfile::tempdir().unwrap();
+        let importer = SstImporter::<TestEngine>::new(
+            &Config::default(),
+            &importer_dir,
+            None,
+            ApiVersion::V1,
+            false,
+        )
+        .unwrap();
+        assert!(!importer.download_to_disk_only());
+
+        let path = importer.dir.join_for_write(&meta).unwrap();
+        let downloaded = importer
+            ._download_rt
+            .block_on(importer.do_download_sst_file(
+                &path,
+                &meta,
+                &backend,
+                "sample.sst",
+                None,
+                &Limiter::new(f64::INFINITY),
+                "",
+                true,
+            ))
+            .unwrap();
+
+        assert!(
+            matches!(&downloaded, DownloadedSstFile::Mem(_)),
+            "{:?}",
+            downloaded
+        );
+        assert!(!path.temp.exists());
+        check_downloaded_sample_sst_file(&downloaded);
+    }
+
+    #[test]
+    fn test_do_download_sst_file_try_memory_falls_back_to_disk() {
+        let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file().unwrap();
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config {
+            memory_use_ratio: 0.0,
+            ..Default::default()
+        };
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
+        assert!(importer.download_to_disk_only());
+
+        let path = importer.dir.join_for_write(&meta).unwrap();
+        let downloaded = importer
+            ._download_rt
+            .block_on(importer.do_download_sst_file(
+                &path,
+                &meta,
+                &backend,
+                "sample.sst",
+                None,
+                &Limiter::new(f64::INFINITY),
+                "",
+                true,
+            ))
+            .unwrap();
+
+        match &downloaded {
+            DownloadedSstFile::Disk(file) => assert_eq!(file, path.temp.to_str().unwrap()),
+            DownloadedSstFile::Mem(_) => panic!("expected disk fallback, got {:?}", downloaded),
+        }
+        assert!(path.temp.exists());
+        check_downloaded_sample_sst_file(&downloaded);
     }
 
     #[test]
@@ -5241,7 +5470,11 @@ mod tests {
 
         let mut metas = HashMap::new();
         metas.insert("sample_0.sst".to_string(), meta0.clone());
-        metas.insert("sample_1.sst".to_string(), meta1);
+        metas.insert("sample_1.sst".to_string(), meta1.clone());
+        let temp_paths = vec![
+            importer.dir.join_for_write(&meta0).unwrap().temp,
+            importer.dir.join_for_write(&meta1).unwrap().temp,
+        ];
 
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let result = runtime.block_on(importer.download_files_ext_with_ssts(
@@ -5257,6 +5490,13 @@ mod tests {
 
         // Should fail due to invalid SST file
         result.unwrap_err();
+        for path in temp_paths {
+            assert!(
+                !path.exists(),
+                "temporary download file {:?} should be cleaned up",
+                path
+            );
+        }
     }
 
     #[test]
