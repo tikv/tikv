@@ -105,6 +105,9 @@ ignore = [
     #
     # See: https://github.com/http-rs/http-types/issues/534
     "RUSTSEC-2026-0174",
+    # The structopt crate is only used in tikv-ctl and does not affect the server, 
+    # so it's safe to ignore this advisory.
+    "RUSTSEC-2022-0104",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,
