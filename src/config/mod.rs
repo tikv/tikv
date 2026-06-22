@@ -4054,8 +4054,8 @@ impl TikvConfig {
                 "pessimistic-txn.in-memory-peer-size-limit ({}) exceeds half of \
                  raftstore.raft-entry-max-size ({}); flushing in-memory pessimistic locks during \
                  leader transfer, region split, or region merge may produce an oversized \
-                 Raft entry; and cause 'entry is too large' errors. Consider reducing \
-                 in-memory-peer-size or increasing raft-entry-max-size",
+                 Raft entry and cause 'entry is too large' errors. Consider reducing \
+                 pessimistic-txn.in-memory-peer-size-limit or increasing raftstore.raft-entry-max-size",
                 ReadableSize(peer_limit),
                 ReadableSize(raft_max),
             );
