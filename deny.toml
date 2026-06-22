@@ -107,7 +107,6 @@ ignore = [
     "RUSTSEC-2026-0174",
     # Ignore RUSTSEC-2022-0104 because structopt is only used by tikv-ctl and
     # does not affect the server runtime. This is safe to ignore.
-    # so it's safe to ignore this advisory.
     "RUSTSEC-2022-0104",
 ]
 
