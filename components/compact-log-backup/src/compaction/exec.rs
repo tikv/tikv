@@ -7,8 +7,8 @@ use std::{
 
 use engine_rocks::RocksEngine;
 use engine_traits::{
-    CF_WRITE, ExternalSstFileInfo, SstCompressionType, SstExt, SstWriter, SstWriterBuilder,
-    DATA_KEY_PREFIX_LEN,
+    CF_WRITE, DATA_KEY_PREFIX_LEN, ExternalSstFileInfo, SstCompressionType, SstExt, SstWriter,
+    SstWriterBuilder,
 };
 use external_storage::{ExternalStorage, UnpinReader};
 use file_system::Sha256Reader;
@@ -24,7 +24,7 @@ use crate::{
     compaction::SST_OUT_REL,
     errors::{OtherErrExt, Result, TraceResultExt},
     source::{Record, Source},
-    statistic::{prom::*, LoadStatistic, SubcompactStatistic},
+    statistic::{LoadStatistic, SubcompactStatistic, prom::*},
     storage::DEFAULT_COMPACTION_OUT_PREFIX,
     util::{self, Cooperate, ExecuteAllExt},
 };
@@ -482,7 +482,7 @@ mod test {
         source::Record,
         storage::{Epoch, MetaFile},
         test_util::{
-            gen_step, save_many_log_files, CompactInMem, KvGen, LogFileBuilder, TmpStorage,
+            CompactInMem, KvGen, LogFileBuilder, TmpStorage, gen_step, save_many_log_files,
         },
     };
 
