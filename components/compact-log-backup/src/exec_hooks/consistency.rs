@@ -3,65 +3,37 @@
 pub use engine_traits::SstCompressionType;
 use external_storage::{ExternalStorage, locking::RemoteLock};
 use futures::{io::AsyncReadExt, stream::TryStreamExt};
-use tikv_util::warn;
+use tikv_util::{info, warn};
 
 use crate::{
-    ErrorKind, OtherErrExt, TraceResultExt,
+    ErrorKind, TraceResultExt,
     errors::Result,
     execute::hooking::{AbortedCtx, AfterFinishCtx, BeforeStartCtx, ExecHooks},
     storage::LOCK_PREFIX,
     util::storage_url,
 };
 
-#[derive(Default)]
-enum CheckpointSource {
-    #[default]
-    Storage,
-    ReplicationStatus {
-        sub_prefix: String,
-    },
-}
+const STORAGE_CHECKPOINT_PREFIX: &str = "v1/global_checkpoint/";
+const CRR_CHECKPOINT_PATH: &str = "crr-checkpoint/resume-state.json";
 
 #[derive(Default)]
 pub struct StorageConsistencyGuard {
     lock: Option<RemoteLock>,
-    checkpoint_source: CheckpointSource,
     skip_checkpoint_check: bool,
 }
 
 impl StorageConsistencyGuard {
-    pub fn with_replication_status_sub_prefix(sub_prefix: String) -> Self {
-        Self {
-            lock: None,
-            checkpoint_source: CheckpointSource::ReplicationStatus { sub_prefix },
-            skip_checkpoint_check: false,
-        }
-    }
-
     pub fn without_checkpoint_check() -> Self {
         Self {
             lock: None,
-            checkpoint_source: CheckpointSource::Storage,
             skip_checkpoint_check: true,
-        }
-    }
-
-    async fn load_checkpoint(&self, storage: &dyn ExternalStorage) -> Result<Option<u64>> {
-        match &self.checkpoint_source {
-            CheckpointSource::Storage => load_storage_checkpoint(storage).await,
-            CheckpointSource::ReplicationStatus { sub_prefix } => {
-                load_replication_status_checkpoint(storage, sub_prefix)
-                    .await
-                    .map(Some)
-            }
         }
     }
 }
 
 pub async fn load_storage_checkpoint(storage: &dyn ExternalStorage) -> Result<Option<u64>> {
-    let path = "v1/global_checkpoint/";
     storage
-        .iter_prefix(path)
+        .iter_prefix(STORAGE_CHECKPOINT_PREFIX)
         .err_into()
         .try_fold(None, |i, v| async move {
             if !v.key.ends_with(".ts") {
@@ -88,40 +60,58 @@ pub async fn load_storage_checkpoint(storage: &dyn ExternalStorage) -> Result<Op
         .await
 }
 
-pub async fn load_replication_status_checkpoint(
+pub async fn load_checkpoint_with_crr_fallback(
     storage: &dyn ExternalStorage,
-    sub_prefix: &str,
-) -> Result<u64> {
-    let sub_prefix_trimmed = sub_prefix.trim_matches('/');
-    let path = if sub_prefix_trimmed.is_empty() {
-        "resume-state.json".to_owned()
-    } else {
-        format!("{}/resume-state.json", sub_prefix_trimmed)
-    };
+) -> Result<Option<u64>> {
+    if let Some(checkpoint) = load_crr_resume_checkpoint(storage).await? {
+        info!(
+            "Loaded compact log backup checkpoint from CRR resume state.";
+            "path" => CRR_CHECKPOINT_PATH,
+            "checkpoint" => checkpoint,
+        );
+        return Ok(Some(checkpoint));
+    }
+
+    info!(
+        "CRR resume state checkpoint does not exist, fallback to storage checkpoint.";
+        "path" => CRR_CHECKPOINT_PATH,
+        "fallback_path" => STORAGE_CHECKPOINT_PREFIX,
+    );
+    load_storage_checkpoint(storage).await
+}
+
+async fn load_crr_resume_checkpoint(storage: &dyn ExternalStorage) -> Result<Option<u64>> {
     let mut content = Vec::new();
-    storage
-        .read(&path)
+    match storage
+        .read(CRR_CHECKPOINT_PATH)
         .read_to_end(&mut content)
         .await
-        .adapt_err()
-        .annotate(format!(
-            "failed to read replication status checkpoint {path}"
-        ))?;
-    let value: serde_json::Value = serde_json::from_slice(&content)
-        .map_err(|err| ErrorKind::Other(format!("failed to parse {path}: {err}")))?;
-    match value.get("last_checkpoint") {
-        Some(value) => {
-            if let Some(ts) = value.as_u64() {
-                return Ok(ts);
-            }
-            Err(ErrorKind::Other(format!(
-                "`last_checkpoint` in {path} must be a u64"
-            )))?
+    {
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(ErrorKind::Io(err).into()).annotate(format!(
+                "failed to read CRR checkpoint {CRR_CHECKPOINT_PATH}"
+            ));
         }
-        None => Err(ErrorKind::Other(format!(
-            "`last_checkpoint` is missing in {path}"
-        )))?,
     }
+
+    let value: serde_json::Value = serde_json::from_slice(&content)
+        .map_err(|err| ErrorKind::Other(format!("failed to parse {CRR_CHECKPOINT_PATH}: {err}")))?;
+    let checkpoint = match value.get("last_checkpoint") {
+        Some(value) => value,
+        None => Err(ErrorKind::Other(format!(
+            "`last_checkpoint` is missing in {CRR_CHECKPOINT_PATH}"
+        )))?,
+    };
+
+    if let Some(ts) = checkpoint.as_u64() {
+        return Ok(Some(ts));
+    }
+
+    Err(ErrorKind::Other(format!(
+        "`last_checkpoint` in {CRR_CHECKPOINT_PATH} must be a u64"
+    )))?
 }
 
 impl ExecHooks for StorageConsistencyGuard {
@@ -129,8 +119,7 @@ impl ExecHooks for StorageConsistencyGuard {
         use external_storage::locking::LockExt;
 
         if !self.skip_checkpoint_check {
-            let cp = self
-                .load_checkpoint(cx.storage)
+            let cp = load_checkpoint_with_crr_fallback(cx.storage)
                 .await
                 .annotate("failed to load checkpoint")?;
             match cp {

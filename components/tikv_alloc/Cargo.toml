@@ -36,17 +36,18 @@ optional = true
 features = ["bundled"]
 
 [dependencies.tikv-jemalloc-ctl]
-version = "0.6.0"
+version = "0.6.1"
 optional = true
 features = ["stats"]
 
 [dependencies.tikv-jemalloc-sys]
-version = "0.6.0"
+version = "0.6.1"
 optional = true
 features = ["stats"]
 
 [dependencies.tikv-jemallocator]
 version = "0.6.0"
+version = "0.6.1"
 optional = true
 features = ["unprefixed_malloc_on_supported_platforms", "stats"]
 

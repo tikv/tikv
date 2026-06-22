@@ -6020,6 +6020,80 @@ mod tests {
     }
 
     #[test]
+    fn test_download_files_ext_skips_empty_write_value_key_group() {
+        use engine_traits::CF_WRITE;
+
+        let ext_sst_dir = tempfile::tempdir().unwrap();
+        let files = vec![
+            (
+                "sample_0.sst",
+                vec![
+                    (
+                        get_encoded_key(b"t123_r01", 1),
+                        get_write_value(WriteType::Put, 1, Some(b"v1".to_vec())),
+                    ),
+                    (
+                        get_encoded_key(b"t123_r02", 1),
+                        get_write_value(WriteType::Put, 1, Some(b"deleted".to_vec())),
+                    ),
+                    (
+                        get_encoded_key(b"t123_r04", 1),
+                        get_write_value(WriteType::Put, 1, Some(b"v4".to_vec())),
+                    ),
+                ],
+            ),
+            (
+                "sample_1.sst",
+                vec![
+                    (get_encoded_key(b"t123_r02", 1), Vec::new()),
+                    (
+                        get_encoded_key(b"t123_r03", 1),
+                        get_write_value(WriteType::Put, 1, Some(b"v3".to_vec())),
+                    ),
+                ],
+            ),
+        ];
+
+        let mut file_metas = Vec::new();
+        for (file_name, entries) in files {
+            let mut sst_writer =
+                new_sst_writer(ext_sst_dir.path().join(file_name).to_str().unwrap());
+            for (key, value) in entries {
+                sst_writer.put(&key, &value).unwrap();
+            }
+            let sst_info = sst_writer.finish().unwrap();
+
+            let mut meta = SstMeta::default();
+            meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+            meta.set_cf_name(CF_WRITE.to_owned());
+            meta.set_length(sst_info.file_size());
+            meta.set_region_id(4);
+            meta.mut_region_epoch().set_conf_ver(5);
+            meta.mut_region_epoch().set_version(6);
+
+            file_metas.push((file_name.to_owned(), meta));
+        }
+
+        let backend = external_storage::make_local_backend(ext_sst_dir.path());
+        let (collected, range) =
+            run_download_files_ext_test(file_metas, &backend, &RewriteRule::default(), None)
+                .unwrap();
+
+        let expected_start = Key::from_raw(b"t123_r01")
+            .append_ts(TimeStamp::new(1))
+            .into_encoded();
+        let expected_end = Key::from_raw(b"t123_r04")
+            .append_ts(TimeStamp::new(1))
+            .into_encoded();
+        assert_eq!(range.get_start(), &expected_start);
+        assert_eq!(range.get_end(), &expected_end);
+        assert_eq!(collected.len(), 3);
+        assert_eq!(collected[0].0, get_encoded_key(b"t123_r01", 1));
+        assert_eq!(collected[1].0, get_encoded_key(b"t123_r03", 1));
+        assert_eq!(collected[2].0, get_encoded_key(b"t123_r04", 1));
+    }
+
+    #[test]
     fn test_download_files_ext_deduplication_rawkv() {
         // Test BinaryIterator's deduplication in RawKV mode.
         // RawKV keys don't have timestamps, so deduplication is purely based on key
@@ -6213,6 +6287,108 @@ mod tests {
         assert_eq!(def_kvs.len(), 2);
         assert_eq!(def_kvs[0].1, b"va");
         assert_eq!(def_kvs[1].1, b"vb");
+    }
+
+    #[test]
+    fn test_download_files_ext_write_default_merged_skips_empty_write_value() {
+        use engine_traits::CF_WRITE;
+
+        let ext_sst_dir = tempfile::tempdir().unwrap();
+        let uuid = Uuid::new_v4();
+
+        let mut base_meta = SstMeta::default();
+        base_meta.set_uuid(uuid.as_bytes().to_vec());
+        base_meta.set_region_id(4);
+        base_meta.mut_region_epoch().set_conf_ver(5);
+        base_meta.mut_region_epoch().set_version(6);
+
+        let write_path = ext_sst_dir.path().join("w.sst");
+        let mut ww = new_sst_writer(write_path.to_str().unwrap());
+        ww.put(&get_encoded_key(b"tmerge_a", 300), b"").unwrap();
+        ww.put(
+            &get_encoded_key(b"tmerge_a", 200),
+            &get_write_value(WriteType::Rollback, 50, None),
+        )
+        .unwrap();
+        ww.put(
+            &get_encoded_key(b"tmerge_a", 100),
+            &get_write_value(WriteType::Put, 50, Some(b"short-a".to_vec())),
+        )
+        .unwrap();
+        ww.put(&get_encoded_key(b"tmerge_b", 30), b"").unwrap();
+        ww.put(
+            &get_encoded_key(b"tmerge_b", 10),
+            &get_write_value(WriteType::Put, 3, Some(b"short-b".to_vec())),
+        )
+        .unwrap();
+        let w_info = ww.finish().unwrap();
+
+        let mut write_meta = base_meta.clone();
+        write_meta.set_cf_name(CF_WRITE.to_owned());
+        write_meta.set_length(w_info.file_size());
+
+        let write_dup_path = ext_sst_dir.path().join("w_dup.sst");
+        let mut dup_ww = new_sst_writer(write_dup_path.to_str().unwrap());
+        dup_ww.put(&get_encoded_key(b"tmerge_a", 300), b"").unwrap();
+        dup_ww.put(&get_encoded_key(b"tmerge_b", 30), b"").unwrap();
+        let dup_w_info = dup_ww.finish().unwrap();
+
+        let mut write_dup_meta = base_meta.clone();
+        write_dup_meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+        write_dup_meta.set_cf_name(CF_WRITE.to_owned());
+        write_dup_meta.set_length(dup_w_info.file_size());
+
+        let mut metas = HashMap::new();
+        metas.insert("w.sst".to_owned(), write_meta.clone());
+        metas.insert("w_dup.sst".to_owned(), write_dup_meta);
+
+        let backend = external_storage::make_local_backend(ext_sst_dir.path());
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
+        let db = create_sst_test_engine().unwrap();
+        let basic_meta = write_meta;
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let result = runtime
+            .block_on(importer.download_files_ext_with_latest_mvcc(
+                &basic_meta,
+                &metas,
+                &backend,
+                &RewriteRule::default(),
+                None,
+                Limiter::new(f64::INFINITY),
+                db,
+                DownloadExt::default().req_type(DownloadRequestType::Keyspace),
+            ))
+            .unwrap()
+            .unwrap();
+
+        let expected_start = Key::from_raw(b"tmerge_a")
+            .append_ts(TimeStamp::new(100))
+            .into_encoded();
+        let expected_end = Key::from_raw(b"tmerge_b")
+            .append_ts(TimeStamp::new(10))
+            .into_encoded();
+        assert_eq!(result.range.get_start(), &expected_start);
+        assert_eq!(result.range.get_end(), &expected_end);
+        assert_eq!(result.ssts.len(), 1);
+
+        let mut wm = basic_meta.clone();
+        wm.set_cf_name(CF_WRITE.to_owned());
+        let write_out = importer.dir.join_for_read(&wm).unwrap().save;
+        let write_reader = new_sst_reader(write_out.to_str().unwrap(), None);
+        let mut w_iter = write_reader.iter(IterOptions::default()).unwrap();
+        w_iter.seek_to_first().unwrap();
+        let write_kvs = collect(w_iter);
+        assert_eq!(write_kvs.len(), 2);
+        assert_eq!(write_kvs[0].0, get_encoded_key(b"tmerge_a", 100));
+        assert_eq!(write_kvs[1].0, get_encoded_key(b"tmerge_b", 10));
+        let w0 = WriteRef::parse(&write_kvs[0].1).unwrap();
+        assert_eq!(w0.short_value, Some(b"short-a".as_ref()));
+        let w1 = WriteRef::parse(&write_kvs[1].1).unwrap();
+        assert_eq!(w1.short_value, Some(b"short-b".as_ref()));
     }
 
     #[test]
