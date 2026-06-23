@@ -1050,6 +1050,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                     req.get_storage_backend(),
                     req.get_name(),
                     req.get_rewrite_rule(),
+                    req.get_resolved_ts(),
                     cipher,
                     limiter,
                     tablet.into_owned(),
