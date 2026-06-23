@@ -12,11 +12,11 @@ use aws_sdk_kms::{
     types::DataKeySpec,
 };
 use aws_sdk_s3::config::HttpClient;
+use aws_smithy_types::error::metadata::ProvideErrorMetadata;
 use cloud::{
     error::{Error, KmsError, OtherError, Result},
     kms::{Config, CryptographyType, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey},
 };
-use aws_smithy_types::error::metadata::ProvideErrorMetadata;
 use futures::executor::block_on;
 
 use crate::util::{self, SdkError, is_retryable};

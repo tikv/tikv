@@ -15,6 +15,7 @@ use aws_sdk_s3::{
     operation::get_object::GetObjectError,
     types::{CompletedMultipartUpload, CompletedPart},
 };
+use aws_smithy_types::error::metadata::ProvideErrorMetadata;
 use bytes::Bytes;
 use cloud::{
     blob::{
@@ -40,8 +41,6 @@ use tikv_util::{
 };
 use tokio::time::{sleep, timeout};
 use tokio_util::io::ReaderStream;
-
-use aws_smithy_types::error::metadata::ProvideErrorMetadata;
 
 use crate::util::{self, SdkError, retry_and_count};
 
