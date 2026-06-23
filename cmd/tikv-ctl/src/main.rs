@@ -75,6 +75,25 @@ fn main() {
 
     let opt = Opt::from_args();
 
+    if opt.cmd.is_none() {
+        // Handle local operations before initializing runtime subsystems.
+        if let Some(hex) = opt.hex_to_escaped.as_deref() {
+            println!("{}", escape(&from_hex(hex).unwrap()));
+        } else if let Some(escaped) = opt.escaped_to_hex.as_deref() {
+            println!("{}", hex::encode_upper(unescape(escaped)));
+        } else if let Some(encoded) = opt.decode.as_deref() {
+            match Key::from_encoded(unescape(encoded)).into_raw() {
+                Ok(k) => println!("{}", escape(&k)),
+                Err(e) => println!("decode meets error: {}", e),
+            };
+        } else if let Some(decoded) = opt.encode.as_deref() {
+            println!("{}", Key::from_raw(&unescape(decoded)));
+        } else {
+            Opt::clap().print_help().ok();
+        }
+        return;
+    }
+
     // Initialize logger.
     init_ctl_logger(&opt.log_level, &opt.log_format);
 
@@ -98,27 +117,9 @@ fn main() {
     );
     let mgr = new_security_mgr(&opt);
 
-    let cmd = match opt.cmd {
-        Some(cmd) => cmd,
-        None => {
-            // Deal with arguments about key utils.
-            if let Some(hex) = opt.hex_to_escaped.as_deref() {
-                println!("{}", escape(&from_hex(hex).unwrap()));
-            } else if let Some(escaped) = opt.escaped_to_hex.as_deref() {
-                println!("{}", hex::encode_upper(unescape(escaped)));
-            } else if let Some(encoded) = opt.decode.as_deref() {
-                match Key::from_encoded(unescape(encoded)).into_raw() {
-                    Ok(k) => println!("{}", escape(&k)),
-                    Err(e) => println!("decode meets error: {}", e),
-                };
-            } else if let Some(decoded) = opt.encode.as_deref() {
-                println!("{}", Key::from_raw(&unescape(decoded)));
-            } else {
-                Opt::clap().print_help().ok();
-            }
-            return;
-        }
-    };
+    let cmd = opt
+        .cmd
+        .expect("no-command path returned before initialization");
 
     match cmd {
         Cmd::External(args) => {

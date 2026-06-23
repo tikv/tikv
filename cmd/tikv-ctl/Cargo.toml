@@ -74,6 +74,9 @@ tokio = { version = "1.5", features = ["rt-multi-thread", "time"] }
 toml = "0.5"
 txn_types = { workspace = true }
 
+[dev-dependencies]
+tikv_alloc = { workspace = true }
+
 [build-dependencies]
 cc = "1.0"
 time = { workspace = true }
