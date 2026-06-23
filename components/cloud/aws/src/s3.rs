@@ -860,6 +860,8 @@ mod tests {
 
     use super::*;
 
+    static MULTI_PART_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     #[test]
     fn test_s3_get_content_md5() {
         // base64 encode md5sum "helloworld"
@@ -905,6 +907,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_s3_storage_multi_part() {
+        let _guard = MULTI_PART_TEST_LOCK.lock().await;
         let magic_contents = "567890";
 
         let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
@@ -1027,6 +1030,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_s3_storage_multi_part_abort() {
+        let _guard = MULTI_PART_TEST_LOCK.lock().await;
         let magic_contents = "567890";
 
         let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
