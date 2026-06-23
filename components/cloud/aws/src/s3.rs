@@ -860,7 +860,7 @@ mod tests {
 
     use super::*;
 
-    // Serialize multipart-related test because they assert deltas on the global
+    // Serialize multipart-related tests because they assert deltas on the global
     // metric CLOUD_REQUEST_HISTOGRAM_VEC, which is shared across tests.
     static MULTI_PART_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
