@@ -38,9 +38,9 @@ uuid = { version = "0.8", features = ["v4", "serde"] }
 walkdir = "2"
 
 [dev-dependencies]
+clap = { version = "3.1.6", default-features = false, features = ["std", "derive"] }
 hyper = { version = "0.14", features = ["server", "tcp"] }
 rust-ini = "0.14.0"
-structopt = "0.3"
 tempfile = "3.1"
 tokio = { version = "1.5", features = ["macros", "rt-multi-thread", "net"] }
 

@@ -2324,6 +2324,7 @@ version = "0.0.1"
 dependencies = [
  "aws",
  "azure",
+ "clap 3.1.6",
  "cloud",
  "encryption",
  "file_system",
@@ -2334,7 +2335,6 @@ dependencies = [
  "rust-ini",
  "slog",
  "slog-global",
- "structopt",
  "tikv_util",
 ]
 
@@ -2615,6 +2615,7 @@ dependencies = [
  "aws",
  "azure",
  "chrono",
+ "clap 3.1.6",
  "cloud",
  "encryption",
  "file_system",
@@ -2634,7 +2635,6 @@ dependencies = [
  "serde_json",
  "slog",
  "slog-global",
- "structopt",
  "tempfile",
  "tikv_alloc",
  "tikv_util",
@@ -2973,9 +2973,9 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "cargo_metadata",
+ "clap 3.1.6",
  "lazy_static",
  "regex",
- "structopt",
 ]
 
 [[package]]
@@ -7591,30 +7591,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
-name = "structopt"
-version = "0.3.20"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "126d630294ec449fae0b16f964e35bf3c74f940da9dca17ee9b905f7b3112eb8"
-dependencies = [
- "clap 2.33.0",
- "lazy_static",
- "structopt-derive",
-]
-
-[[package]]
-name = "structopt-derive"
-version = "0.4.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "65e51c492f9e23a220534971ff5afc14037289de430e3c83f9daf6a1b6ae91e8"
-dependencies = [
- "heck 0.3.1",
- "proc-macro-error",
- "proc-macro2",
- "quote",
- "syn 1.0.103",
-]
-
-[[package]]
 name = "strum"
 version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8553,7 +8529,7 @@ dependencies = [
  "api_version",
  "base64 0.13.0",
  "cc",
- "clap 2.33.0",
+ "clap 3.1.6",
  "collections",
  "compact-log-backup",
  "crypto",
@@ -8582,7 +8558,6 @@ dependencies = [
  "server",
  "slog",
  "slog-global",
- "structopt",
  "tempfile",
  "tikv",
  "tikv_util",
