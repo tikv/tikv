@@ -4645,9 +4645,11 @@ mod tests {
             ),
         ];
         for case in downloads {
+            let mut case_meta = meta.clone();
+            case_meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
             let _ = importer
                 .download(
-                    &meta,
+                    &case_meta,
                     &backend,
                     "sample_default.sst",
                     &case.0,
@@ -4660,7 +4662,7 @@ mod tests {
 
             // verifies that the file is saved to the correct place.
             // (the file size may be changed, so not going to check the file size)
-            let sst_file_path = importer.dir.join_for_read(&meta).unwrap().save;
+            let sst_file_path = importer.dir.join_for_read(&case_meta).unwrap().save;
             assert!(sst_file_path.is_file());
 
             // verifies the SST content is correct.
@@ -4785,9 +4787,11 @@ mod tests {
             ),
         ];
         for case in downloads {
+            let mut case_meta = meta.clone();
+            case_meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
             let _ = importer
                 .download(
-                    &meta,
+                    &case_meta,
                     &backend,
                     "sample_write.sst",
                     &case.0,
@@ -4800,7 +4804,7 @@ mod tests {
 
             // verifies that the file is saved to the correct place.
             // (the file size may be changed, so not going to check the file size)
-            let sst_file_path = importer.dir.join_for_read(&meta).unwrap().save;
+            let sst_file_path = importer.dir.join_for_read(&case_meta).unwrap().save;
             assert!(sst_file_path.is_file());
 
             // verifies the SST content is correct.
