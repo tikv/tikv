@@ -11,10 +11,10 @@ use aws_config::{
     provider_config::ProviderConfig,
 };
 use aws_credential_types::provider::{ProvideCredentials, error::CredentialsError};
-use aws_smithy_types::error::metadata::ProvideErrorMetadata;
 use aws_sdk_kms::config::SharedHttpClient;
 use aws_sdk_s3::config::HttpClient;
 use aws_smithy_runtime::client::http::hyper_014::HyperClientBuilder;
+use aws_smithy_types::error::metadata::ProvideErrorMetadata;
 use cloud::metrics;
 use futures::{Future, TryFutureExt};
 use hyper::Client;
@@ -77,8 +77,7 @@ pub fn is_retryable<T: ProvideErrorMetadata>(error: &SdkError<T>) -> bool {
         }
         SdkError::ServiceError(service_err) => {
             let code = service_err.raw().status();
-            if code.is_server_error()
-                || code.as_u16() == http::StatusCode::REQUEST_TIMEOUT.as_u16()
+            if code.is_server_error() || code.as_u16() == http::StatusCode::REQUEST_TIMEOUT.as_u16()
             {
                 return true;
             }
@@ -320,8 +319,7 @@ mod tests {
         // the XML body. Verify all three throttling codes are retryable at
         // status 200.
         for code in &["SlowDown", "RequestThrottled", "RequestTimeout"] {
-            let response =
-                HttpResponse::new(StatusCode::try_from(200).unwrap(), SdkBody::empty());
+            let response = HttpResponse::new(StatusCode::try_from(200).unwrap(), SdkBody::empty());
             let err = SdkError::service_error(TestError::with_code(code), response);
             assert!(
                 is_retryable(&err),
