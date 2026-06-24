@@ -442,13 +442,21 @@ impl Default for MaxTsConfig {
 impl MaxTsConfig {
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         if self.max_drift <= self.cache_sync_interval {
-            return Err(format!(
+            let msg = format!(
                 "storage.max-ts.max-drift {:?} is smaller than or equal to storage.max-ts.cache-sync-interval {:?}",
                 self.max_drift, self.cache_sync_interval,
-            )
-            .into());
+            );
+            error!("{}", msg);
+            return Err(msg.into());
         }
-        ActionOnInvalidMaxTs::try_from(self.action_on_invalid_update.as_str())?;
+        if let Err(e) = ActionOnInvalidMaxTs::try_from(self.action_on_invalid_update.as_str()) {
+            error!(
+                "storage.max-ts.action-on-invalid-update is set to an invalid value {}, \
+                reject config change",
+                self.action_on_invalid_update,
+            );
+            return Err(e.into());
+        }
         Ok(())
     }
 }
