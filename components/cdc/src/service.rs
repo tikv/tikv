@@ -1,13 +1,19 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
+use std::{
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
 };
 
 use collections::{HashMap, HashMapEntry};
 use crossbeam::atomic::AtomicCell;
-use futures::stream::TryStreamExt;
+use futures::{
+    compat::Stream01CompatExt,
+    stream::{StreamExt, TryStreamExt},
+};
 use grpcio::{DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::{
     cdcpb::{
@@ -16,25 +22,23 @@ use kvproto::{
     },
     kvrpcpb::ApiVersion,
 };
-use tikv_util::{error, info, memory::MemoryQuota, warn, worker::*};
+use tikv_util::{error, info, memory::MemoryQuota, timer::GLOBAL_TIMER_HANDLE, warn, worker::*};
 
 use crate::{
     channel::{channel, Sink, CDC_CHANNLE_CAPACITY},
     delegate::{Downstream, DownstreamId, DownstreamState, ObservedRange},
     endpoint::{Deregister, Task},
+    metrics::CDC_ABORTED_CONNECTIONS,
 };
 
 static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
-<<<<<<< HEAD
-=======
 // CDC connection monitoring constants in seconds
 const CDC_WATCHDOG_CHECK_INTERVAL_SECS: u64 = 2;
 const CDC_IDLE_WARNING_THRESHOLD_SECS: u64 = 60;
 const CDC_IDLE_DEREGISTER_THRESHOLD_SECS: u64 = 60 * 20; // 20 minutes
 const CDC_MEMORY_QUOTA_ABORT_THRESHOLD: f64 = 0.999;
 
->>>>>>> acf70fc980 (cdc: also consider the memory quota usage when abort idle connection (#18914))
 pub fn validate_kv_api(kv_api: ChangeDataRequestKvApi, api_version: ApiVersion) -> bool {
     kv_api == ChangeDataRequestKvApi::TiDb
         || (kv_api == ChangeDataRequestKvApi::RawKv && api_version == ApiVersion::V2)
@@ -254,16 +258,22 @@ impl EventFeedHeaders {
 pub struct Service {
     scheduler: Scheduler<Task>,
     memory_quota: Arc<MemoryQuota>,
+    pool: Arc<Worker>,
 }
 
 impl Service {
     /// Create a ChangeData service.
     ///
     /// It requires a scheduler of an `Endpoint` in order to schedule tasks.
-    pub fn new(scheduler: Scheduler<Task>, memory_quota: Arc<MemoryQuota>) -> Service {
+    pub fn new(
+        scheduler: Scheduler<Task>,
+        memory_quota: Arc<MemoryQuota>,
+        pool: Arc<Worker>,
+    ) -> Service {
         Service {
             scheduler,
             memory_quota,
+            pool,
         }
     }
 
@@ -438,7 +448,8 @@ impl Service {
             };
             explicit_features = headers.features;
         }
-        info!("cdc connection created"; "downstream" => ctx.peer(), "features" => ?explicit_features);
+        info!("cdc connection created"; "downstream" => ctx.peer(),
+         "conn_id" => ?conn_id,"features" => ?explicit_features);
 
         if let Err(e) = self.scheduler.schedule(Task::OpenConn { conn }) {
             let peer = ctx.peer();
@@ -483,16 +494,24 @@ impl Service {
             }
         });
 
+        let last_flush_time = Arc::new(AtomicCell::new(Instant::now()));
+        let last_flush_time_for_forward = last_flush_time.clone();
+        let last_flush_time_for_watchdog = last_flush_time;
+        let peer_for_watchdog = ctx.peer();
+
         let peer = ctx.peer();
+        let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
+
+        // Create cancelCh for eventDrain.forward exit signal
+        let (forward_exit_tx, forward_exit_rx) = tokio::sync::oneshot::channel::<()>();
+
         ctx.spawn(async move {
             #[cfg(feature = "failpoints")]
             sleep_before_drain_change_event().await;
-<<<<<<< HEAD
             if let Err(e) = event_drain.forward(&mut sink).await {
                 warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
             } else {
                 info!("cdc send closed"; "downstream" => peer, "conn_id" => ?conn_id);
-=======
             tokio::select! {
                 _ = &mut cancel_rx => {
                     warn!("cdc send cancelled"; "downstream" => peer, "conn_id" => ?conn_id);
@@ -598,7 +617,6 @@ impl Service {
                         }
                     }
                 }
->>>>>>> acf70fc980 (cdc: also consider the memory quota usage when abort idle connection (#18914))
             }
         });
     }
@@ -626,9 +644,6 @@ impl ChangeData for Service {
 
 #[cfg(feature = "failpoints")]
 async fn sleep_before_drain_change_event() {
-    use std::time::{Duration, Instant};
-
-    use tikv_util::timer::GLOBAL_TIMER_HANDLE;
     let should_sleep = || {
         fail::fail_point!("cdc_sleep_before_drain_change_event", |_| true);
         false
@@ -654,8 +669,9 @@ mod tests {
 
     fn new_rpc_suite(capacity: usize) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
         let memory_quota = Arc::new(MemoryQuota::new(capacity));
+        let pool = Arc::new(Builder::new("cdc-watchdog-test").thread_count(1).create());
         let (scheduler, rx) = dummy_scheduler();
-        let cdc_service = Service::new(scheduler, memory_quota);
+        let cdc_service = Service::new(scheduler, memory_quota, pool);
         let env = Arc::new(EnvBuilder::new().build());
         let builder =
             ServerBuilder::new(env.clone()).register_service(create_change_data(cdc_service));
