@@ -81,9 +81,10 @@ work:
 - The bridge is `src/server/raftkv2`, the runtime bootstrap is
   `components/server/src/server2.rs`, and the replica implementation is
   `components/raftstore-v2`.
-- This guide set intentionally does not document `components/raftstore-v2`
-  itself yet, but maintainers still need to ask whether a server/storage fix is
-  path-agnostic or requires a matching `RaftKv2` audit.
+- This guide set includes a maintainer-map guide for `components/raftstore-v2`
+  under `doc/maintenance-guides/components/raftstore-v2.md`, but maintainers
+  still need to ask whether a server/storage fix is path-agnostic or requires a
+  matching `RaftKv2` audit.
 
 ### Compute pushdown
 
