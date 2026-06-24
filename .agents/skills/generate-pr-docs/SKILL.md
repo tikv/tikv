@@ -30,6 +30,8 @@ paste into GitHub.
 2. Determine the PR scope from real evidence
    - Prefer the user-provided summary, diff, branch, or changed-file list.
    - Otherwise inspect the current repository state.
+   - Distinguish staged-only, unstaged-only, and full-worktree scopes instead of
+     collapsing them together implicitly.
    - When the user asks for the current worktree scope, inspect `git status`
      style evidence and include tracked modifications, staged changes, and
      untracked files that belong to the intended change.

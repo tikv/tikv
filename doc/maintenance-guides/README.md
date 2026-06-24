@@ -126,10 +126,33 @@ short, but they should still be present.
 
 ## Current Scope
 
+- The guide set currently includes:
+  - `repo-overview.md`
+  - `components/raftstore.md`
+  - `components/raftstore-v2.md`
+  - `components/resource_control.md`
+  - `components/hybrid_engine.md`
+  - `components/in_memory_engine.md`
+  - `components/batch-system.md`
+  - `components/server.md`
+  - `components/service.md`
+  - `src/coprocessor.md`
+  - `src/coprocessor_v2.md`
+  - `src/server.md`
+  - `src/storage.md`
 - The guide set now covers both the classic `raftstore` path and the
   `RaftKv2` / `raftstore-v2` path at maintainer-map granularity.
 - The guides focus on maintenance and review, not on external deployment or SQL
   semantics.
+- The repository overview discusses additional subsystems for cross-component
+  reasoning, but these do not yet have dedicated subsystem guides:
+  - `components/cdc`
+  - `components/backup`
+  - `components/backup-stream`
+  - `components/engine_rocks`
+  - `components/pd_client`
+  - `components/sst_importer`
+  - `src/import`
 
 ## External Reference Links
 

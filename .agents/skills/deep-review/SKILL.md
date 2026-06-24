@@ -109,6 +109,13 @@ Produce a production-critical review for TiKV that:
      - cognitive load and maintainability
 
 8. Run TiKV static validation from `./Makefile`
+   - If the review target is docs-only, use a docs-only fast path:
+     - docs-only means the diff is confined to `doc/`, `.agents/`, or
+       repository documentation files such as `README.md` and
+       `CONTRIBUTING.md`
+     - skip `make format` and `make clippy`
+     - record both checks as skipped due to docs-only scope
+     - do not claim the code paths passed static validation
    - Run `make format` from the repository root.
    - Then run `make clippy` from the repository root.
    - Treat the `Makefile` behavior as part of the review:
