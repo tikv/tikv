@@ -37,6 +37,7 @@ static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 const CDC_WATCHDOG_CHECK_INTERVAL_SECS: u64 = 2;
 const CDC_IDLE_WARNING_THRESHOLD_SECS: u64 = 60;
 const CDC_IDLE_DEREGISTER_THRESHOLD_SECS: u64 = 60 * 20; // 20 minutes
+const CDC_MEMORY_QUOTA_ABORT_THRESHOLD: f64 = 0.999;
 
 pub fn validate_kv_api(kv_api: ChangeDataRequestKvApi, api_version: ApiVersion) -> bool {
     kv_api == ChangeDataRequestKvApi::TiDb
@@ -507,6 +508,11 @@ impl Service {
         ctx.spawn(async move {
             #[cfg(feature = "failpoints")]
             sleep_before_drain_change_event().await;
+            if let Err(e) = event_drain.forward(&mut sink).await {
+                warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
+            } else {
+                info!("cdc send closed"; "downstream" => peer, "conn_id" => ?conn_id);
+            }
             tokio::select! {
                 _ = &mut cancel_rx => {
                     warn!("cdc send cancelled"; "downstream" => peer, "conn_id" => ?conn_id);
@@ -529,11 +535,12 @@ impl Service {
         // Start watchdog to monitor connection activity
         Self::start_connection_watchdog(
             self.pool.clone(),
-            last_flush_time_for_watchdog,
-            peer_for_watchdog,
+            last_flush_time_for_watchdog.clone(),
+            peer_for_watchdog.clone(),
             conn_id,
             cancel_tx,
             forward_exit_rx,
+            self.memory_quota.clone(),
         );
     }
 
@@ -549,7 +556,11 @@ impl Service {
         conn_id: ConnId,
         cancel_tx: tokio::sync::oneshot::Sender<()>,
         mut forward_exit_rx: tokio::sync::oneshot::Receiver<()>,
+        memory_quota: Arc<MemoryQuota>,
     ) {
+        let last_flush_time_clone = last_flush_time.clone();
+        let peer_clone = peer.clone();
+
         // Create a custom interval task that can be stopped
         let _ = pool.pool().spawn(async move {
             let mut interval = GLOBAL_TIMER_HANDLE
@@ -566,12 +577,12 @@ impl Service {
                         break;
                     }
                     _ = interval.next() => {
-                        let elapsed = last_flush_time.load().elapsed();
+                        let elapsed = last_flush_time_clone.load().elapsed();
 
                         // Check if last flush was more than the warning threshold
                         if elapsed > Duration::from_secs(CDC_IDLE_WARNING_THRESHOLD_SECS) {
                             warn!("cdc connection idle too long";
-                                  "downstream" => peer.clone(),
+                                  "downstream" => peer_clone.clone(),
                                   "conn_id" => ?conn_id,
                                   "seconds_since_last_flush" => elapsed.as_secs());
                         }
@@ -592,9 +603,13 @@ impl Service {
                         };
 
                         // Check if last flush was more than the deregister threshold
-                        if elapsed > Duration::from_secs(_idle_threshold) {
+                        // To prevent the case that the connection idle since there are a lot of
+                        // incremental scan tasks queueing so won't send events, also check on the
+                        // memory usage, if the memory quota is almost used up, we abort the connection.
+                        if elapsed > Duration::from_secs(_idle_threshold)
+                            && memory_quota.used_ratio() >= CDC_MEMORY_QUOTA_ABORT_THRESHOLD {
                             error!("cdc connection idle for too long, aborting connection";
-                                   "downstream" => peer.clone(),
+                                   "downstream" => peer_clone.clone(),
                                    "conn_id" => ?conn_id,
                                    "seconds_since_last_flush" => elapsed.as_secs());
                             // Cancel the gRPC connection
