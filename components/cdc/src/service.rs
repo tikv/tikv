@@ -512,6 +512,7 @@ impl Service {
                 warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
             } else {
                 info!("cdc send closed"; "downstream" => peer, "conn_id" => ?conn_id);
+            }
             tokio::select! {
                 _ = &mut cancel_rx => {
                     warn!("cdc send cancelled"; "downstream" => peer, "conn_id" => ?conn_id);
