@@ -32,9 +32,7 @@ use backup_stream::{
 };
 use causal_ts::CausalTsProviderImpl;
 use cdc::CdcConfigManager;
-use concurrency_manager::{
-    ConcurrencyManager, DEFAULT_MAX_TS_SYNC_INTERVAL, LIMIT_VALID_TIME_MULTIPLIER,
-};
+use concurrency_manager::{ConcurrencyManager, LIMIT_VALID_TIME_MULTIPLIER};
 use engine_rocks::{
     RocksCompactedEvent, RocksEngine, RocksStatistics, from_rocks_compression_type,
 };
@@ -1220,7 +1218,7 @@ where
         let cm = self.concurrency_manager.clone();
         let pd_client = self.pd_client.clone();
 
-        let max_ts_sync_interval = DEFAULT_MAX_TS_SYNC_INTERVAL;
+        let max_ts_sync_interval = self.core.config.storage.max_ts.cache_sync_interval.into();
         self.core
             .background_worker
             .spawn_interval_async_task(max_ts_sync_interval, move || {
