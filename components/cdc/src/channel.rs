@@ -428,6 +428,21 @@ impl<'a> Drain {
     }
 }
 
+#[cfg(feature = "failpoints")]
+async fn sleep_after_sink_flush() {
+    let should_sleep = || {
+        fail::fail_point!("cdc_sleep_after_sink_flush", |_| true);
+        false
+    };
+    if !should_sleep() {
+        return;
+    }
+    info!("inside sleep_after_sink_flush failpoint, sleep 30 seconds!");
+    let dur = Duration::from_secs(30);
+    let timer = tikv_util::timer::GLOBAL_TIMER_HANDLE.delay(std::time::Instant::now() + dur);
+    let _ = futures::compat::Compat01As03::new(timer).await;
+}
+
 impl Drop for Drain {
     fn drop(&mut self) {
         self.bounded_receiver.close();
@@ -573,7 +588,7 @@ mod tests {
             let (mut tx, mut rx) = unbounded();
             let runtime = tokio::runtime::Runtime::new().unwrap();
             runtime.spawn(async move {
-                drain.forward(&mut tx).await.unwrap();
+                drain.forward(&mut tx, None).await.unwrap();
             });
             let timeout = Duration::from_millis(100);
             assert!(recv_timeout(&mut rx, timeout).unwrap().is_some());
