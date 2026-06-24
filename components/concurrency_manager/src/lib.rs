@@ -571,6 +571,10 @@ impl ConcurrencyManager {
         self.action_on_invalid_max_ts.store(action);
     }
 
+    pub fn action_on_invalid_max_ts(&self) -> ActionOnInvalidMaxTs {
+        self.action_on_invalid_max_ts.load()
+    }
+
     pub fn set_max_ts_drift_allowance(&self, allowance: Duration) {
         self.max_ts_drift_allowance_ms
             .store(allowance.as_millis() as u64, Ordering::SeqCst);

@@ -313,6 +313,18 @@
 ## Set to 0 to disable this feature if you want to panic immediately when encountering such an error.
 # background-error-recovery-window = "1h"
 
+[storage.max-ts]
+## Maximum max_ts deviation allowed from PD TSO.
+# max-drift = "60s"
+
+## How often to refresh the max_ts limit from PD. It is not dynamically configurable.
+# cache-sync-interval = "15s"
+
+## What TiKV does when it confirms an invalid max_ts update.
+## Available values are "error", "log", and "panic". The default "error" rejects
+## the bad request without panicking TiKV and can be changed online if needed.
+# action-on-invalid-update = "error"
+
 ## Block cache is used by RocksDB to cache uncompressed blocks. Big block cache can speed up read.
 ## It is recommended to turn on shared block cache. Since only the total cache size need to be
 ## set, it is easier to config. In most cases it should be able to auto-balance cache usage

@@ -5641,6 +5641,7 @@ mod tests {
         incoming.gc.max_write_bytes_per_sec = ReadableSize::mb(100);
         incoming.rocksdb.defaultcf.block_cache_size = Some(ReadableSize::mb(500));
         incoming.storage.io_rate_limit.import_priority = file_system::IoPriority::High;
+        incoming.storage.max_ts.action_on_invalid_update = "log".to_owned();
         let diff = old.diff(&incoming);
         let mut change = HashMap::new();
         change.insert(
@@ -5655,6 +5656,10 @@ mod tests {
         change.insert(
             "storage.io-rate-limit.import-priority".to_owned(),
             "high".to_owned(),
+        );
+        change.insert(
+            "storage.max-ts.action-on-invalid-update".to_owned(),
+            "log".to_owned(),
         );
         let res = to_config_change(change).unwrap();
         assert_eq!(diff, res);
@@ -7654,6 +7659,10 @@ mod tests {
             (
                 "raftstore.raft_store_max_leader_lease",
                 "raft_store.raft_store_max_leader_lease",
+            ),
+            (
+                "storage.max-ts.action-on-invalid-update",
+                "storage.max_ts.action_on_invalid_update",
             ),
         ];
 

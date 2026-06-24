@@ -4,6 +4,9 @@
 
 use std::{borrow::ToOwned, cmp::max, error::Error, path::Path};
 
+use concurrency_manager::{
+    ActionOnInvalidMaxTs, DEFAULT_MAX_TS_DRIFT_ALLOWANCE, DEFAULT_MAX_TS_SYNC_INTERVAL,
+};
 use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
 use file_system::{IoPriority, IoRateLimitMode, IoRateLimiter, IoType};
 use kvproto::kvrpcpb::ApiVersion;
@@ -61,6 +64,8 @@ const DEFAULT_TXN_STATUS_CACHE_CAPACITY: usize = 40_000 * 128;
 // occur in tests.
 const FALLBACK_BLOCK_CACHE_CAPACITY: ReadableSize = ReadableSize::mb(128);
 
+pub const DEFAULT_ACTION_ON_INVALID_MAX_TS_UPDATE: &str = "error";
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum EngineType {
@@ -111,6 +116,8 @@ pub struct Config {
     pub block_cache: BlockCacheConfig,
     #[online_config(submodule)]
     pub io_rate_limit: IoRateLimitConfig,
+    #[online_config(submodule)]
+    pub max_ts: MaxTsConfig,
 }
 
 impl Default for Config {
@@ -138,6 +145,7 @@ impl Default for Config {
             flow_control: FlowControlConfig::default(),
             block_cache: BlockCacheConfig::default(),
             io_rate_limit: IoRateLimitConfig::default(),
+            max_ts: MaxTsConfig::default(),
             background_error_recovery_window: ReadableDuration::hours(1),
             memory_quota: DEFAULT_TXN_MEMORY_QUOTA_CAPACITY,
         }
@@ -210,6 +218,7 @@ impl Config {
             );
         }
         self.io_rate_limit.validate()?;
+        self.max_ts.validate()?;
         if self.memory_quota < self.scheduler_pending_write_threshold {
             warn!(
                 "scheduler.memory-quota {:?} is smaller than scheduler.scheduler-pending-write-threshold, \
@@ -407,6 +416,43 @@ impl Default for IoRateLimitConfig {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct MaxTsConfig {
+    /// Maximum max_ts deviation allowed from PD TSO.
+    pub max_drift: ReadableDuration,
+    /// How often to refresh the max_ts limit from PD.
+    #[online_config(skip)]
+    pub cache_sync_interval: ReadableDuration,
+    /// What TiKV does when it confirms an invalid max_ts update.
+    pub action_on_invalid_update: String,
+}
+
+impl Default for MaxTsConfig {
+    fn default() -> Self {
+        Self {
+            max_drift: ReadableDuration(DEFAULT_MAX_TS_DRIFT_ALLOWANCE),
+            cache_sync_interval: ReadableDuration(DEFAULT_MAX_TS_SYNC_INTERVAL),
+            action_on_invalid_update: DEFAULT_ACTION_ON_INVALID_MAX_TS_UPDATE.to_owned(),
+        }
+    }
+}
+
+impl MaxTsConfig {
+    fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+        if self.max_drift <= self.cache_sync_interval {
+            return Err(format!(
+                "storage.max-ts.max-drift {:?} is smaller than or equal to storage.max-ts.cache-sync-interval {:?}",
+                self.max_drift, self.cache_sync_interval,
+            )
+            .into());
+        }
+        ActionOnInvalidMaxTs::try_from(self.action_on_invalid_update.as_str())?;
+        Ok(())
+    }
+}
+
 impl IoRateLimitConfig {
     pub fn build(&self, enable_statistics: bool) -> IoRateLimiter {
         let limiter = IoRateLimiter::new(self.mode, self.strict, enable_statistics);
@@ -477,6 +523,31 @@ mod tests {
         cfg.validate().unwrap_err();
 
         cfg.scheduler_worker_pool_size = max_pool_size + 1;
+        cfg.validate().unwrap_err();
+    }
+
+    #[test]
+    fn test_max_ts_config_defaults_to_error() {
+        let cfg = MaxTsConfig::default();
+        assert_eq!(cfg.action_on_invalid_update, "error");
+        assert_ne!(cfg.action_on_invalid_update, "panic");
+        assert!(ActionOnInvalidMaxTs::try_from(cfg.action_on_invalid_update.as_str()).is_ok());
+    }
+
+    #[test]
+    fn test_validate_max_ts_config() {
+        for action in ["error", "log", "panic"] {
+            let mut cfg = MaxTsConfig::default();
+            cfg.action_on_invalid_update = action.to_owned();
+            cfg.validate().unwrap();
+        }
+
+        let mut cfg = MaxTsConfig::default();
+        cfg.action_on_invalid_update = "invalid".to_owned();
+        cfg.validate().unwrap_err();
+
+        let mut cfg = MaxTsConfig::default();
+        cfg.max_drift = cfg.cache_sync_interval;
         cfg.validate().unwrap_err();
     }
 

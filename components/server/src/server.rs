@@ -33,8 +33,7 @@ use backup_stream::{
 use causal_ts::CausalTsProviderImpl;
 use cdc::CdcConfigManager;
 use concurrency_manager::{
-    ActionOnInvalidMaxTs, ConcurrencyManager, DEFAULT_MAX_TS_DRIFT_ALLOWANCE,
-    DEFAULT_MAX_TS_SYNC_INTERVAL, LIMIT_VALID_TIME_MULTIPLIER,
+    ConcurrencyManager, DEFAULT_MAX_TS_SYNC_INTERVAL, LIMIT_VALID_TIME_MULTIPLIER,
 };
 use engine_rocks::{
     RocksCompactedEvent, RocksEngine, RocksStatistics, from_rocks_compression_type,
@@ -427,10 +426,16 @@ where
         let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
         let concurrency_manager = ConcurrencyManager::new_with_config(
             latest_ts,
-            DEFAULT_MAX_TS_SYNC_INTERVAL * LIMIT_VALID_TIME_MULTIPLIER,
-            ActionOnInvalidMaxTs::Log,
+            (config.storage.max_ts.cache_sync_interval * LIMIT_VALID_TIME_MULTIPLIER).into(),
+            config
+                .storage
+                .max_ts
+                .action_on_invalid_update
+                .as_str()
+                .try_into()
+                .unwrap(),
             Some(pd_client.clone()),
-            DEFAULT_MAX_TS_DRIFT_ALLOWANCE,
+            config.storage.max_ts.max_drift.0,
         );
 
         // use different quota for front-end and back-end requests
