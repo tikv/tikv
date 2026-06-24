@@ -18,7 +18,6 @@ use regex::Regex;
 use tempfile::NamedTempFile;
 #[cfg(not(test))]
 use tikv_alloc::dump_prof;
-use tikv_util::defer;
 
 #[cfg(test)]
 pub use self::test_utils::TEST_PROFILE_MUTEX;
@@ -26,8 +25,8 @@ pub use self::test_utils::TEST_PROFILE_MUTEX;
 use self::test_utils::dump_prof;
 
 lazy_static! {
-    // If it's some it means there are already a CPU profiling.
-    static ref CPU_PROFILE_ACTIVE: Mutex<Option<()>> = Mutex::new(None);
+    // If it's true it means there is already an active CPU profiling request.
+    static ref CPU_PROFILE_ACTIVE: Mutex<bool> = Mutex::new(false);
 
     // To normalize thread names.
     static ref THREAD_NAME_RE: Regex =
@@ -37,7 +36,27 @@ lazy_static! {
 
 type OnEndFn<I, T> = Box<dyn FnOnce(I) -> Result<T, String> + Send + 'static>;
 
+struct CpuProfileActiveGuard;
+
+impl CpuProfileActiveGuard {
+    fn new() -> Result<Self, String> {
+        let mut active = CPU_PROFILE_ACTIVE.lock().unwrap();
+        if *active {
+            return Err("Already in CPU Profiling".to_owned());
+        }
+        *active = true;
+        Ok(Self)
+    }
+}
+
+impl Drop for CpuProfileActiveGuard {
+    fn drop(&mut self) {
+        *CPU_PROFILE_ACTIVE.lock().unwrap() = false;
+    }
+}
+
 struct ProfileRunner<I, T> {
+    active_guard: Option<CpuProfileActiveGuard>,
     item: Option<I>,
     on_end: Option<OnEndFn<I, T>>,
     end: BoxFuture<'static, Result<(), String>>,
@@ -55,8 +74,10 @@ impl<I, T> ProfileRunner<I, T> {
         F1: FnOnce() -> Result<I, String>,
         F2: FnOnce(I) -> Result<T, String> + Send + 'static,
     {
+        let active_guard = CpuProfileActiveGuard::new()?;
         let item = on_start()?;
         Ok(ProfileRunner {
+            active_guard: Some(active_guard),
             item: Some(item),
             on_end: Some(Box::new(on_end) as OnEndFn<I, T>),
             end,
@@ -75,6 +96,7 @@ impl<I, T> Future for ProfileRunner<I, T> {
                     (Ok(_), r) => r,
                     (Err(errmsg), _) => Err(errmsg),
                 };
+                drop(self.active_guard.take());
                 Poll::Ready(r)
             }
             Poll::Pending => Poll::Pending,
@@ -99,14 +121,7 @@ pub async fn start_one_cpu_profile<F>(
 where
     F: Future<Output = Result<(), String>> + Send + 'static,
 {
-    if CPU_PROFILE_ACTIVE.lock().unwrap().is_some() {
-        return Err("Already in CPU Profiling".to_owned());
-    }
-
     let on_start = || {
-        let mut activate = CPU_PROFILE_ACTIVE.lock().unwrap();
-        assert!(activate.is_none());
-        *activate = Some(());
         let guard = pprof::ProfilerGuardBuilder::default()
             .frequency(frequency)
             .blocklist(&["libc", "libgcc", "pthread", "vdso"])
@@ -116,9 +131,6 @@ where
     };
 
     let on_end = move |guard: pprof::ProfilerGuard<'static>| {
-        defer! {
-            *CPU_PROFILE_ACTIVE.lock().unwrap() = None
-        }
         let report = guard
             .report()
             .frames_post_processor(move |frames| {
@@ -221,6 +233,8 @@ mod test_utils {
 
 #[cfg(test)]
 mod tests {
+    use std::{sync::mpsc::sync_channel, task::Poll};
+
     use futures::executor::block_on;
     use tikv_util::thread_name_prefix::{GRPC_SERVER_THREAD, RAFTSTORE_THREAD, SNAP_SENDER_THREAD};
     use tokio::runtime;
@@ -264,5 +278,37 @@ mod tests {
 
         drop(tx1);
         block_on(res1).unwrap().unwrap_err();
+    }
+
+    #[test]
+    fn test_profile_runner_clears_active_state_after_abort() {
+        use futures::TryFutureExt;
+
+        let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
+        let rt = runtime::Builder::new_multi_thread()
+            .worker_threads(4)
+            .build()
+            .unwrap();
+
+        let (tx, rx) = sync_channel(1);
+        let mut tx = Some(tx);
+        let end = futures::future::poll_fn(move |_| {
+            if let Some(tx) = tx.take() {
+                tx.send(()).unwrap();
+            }
+            Poll::Pending
+        });
+
+        let res = rt.spawn(start_one_cpu_profile(end, 99, false));
+        rx.recv().unwrap();
+        res.abort();
+        assert!(block_on(res).unwrap_err().is_cancelled());
+        assert!(!*CPU_PROFILE_ACTIVE.lock().unwrap());
+
+        let (tx, rx) = futures::channel::oneshot::channel();
+        let rx = rx.map_err(|_| "channel canceled".to_owned());
+        let res = rt.spawn(start_one_cpu_profile(rx, 99, false));
+        drop(tx);
+        assert_eq!(block_on(res).unwrap().unwrap_err(), "channel canceled");
     }
 }

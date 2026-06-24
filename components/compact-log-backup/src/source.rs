@@ -7,7 +7,7 @@ use std::{
 use async_compression::futures::write::ZstdDecoder;
 use external_storage::ExternalStorage;
 use futures::io::{AsyncWriteExt, Cursor};
-use futures_io::AsyncWrite;
+use futures_io::{AsyncRead, AsyncWrite};
 use kvproto::brpb;
 use prometheus::core::{Atomic, AtomicU64};
 use tikv_util::{
@@ -17,17 +17,34 @@ use tikv_util::{
 use txn_types::Key;
 
 use super::{statistic::LoadStatistic, util::Cooperate};
-use crate::{compaction::Input, errors::Result};
+use crate::{
+    cache::{PhysicalFileCache, PhysicalFileCacheRefGuard},
+    compaction::Input,
+    errors::Result,
+};
 
 /// The manager of fetching log files from remote for compacting.
 #[derive(Clone)]
 pub struct Source {
     inner: Arc<dyn ExternalStorage>,
+    physical_file_cache: Option<Arc<PhysicalFileCache>>,
 }
 
 impl Source {
-    pub fn new(inner: Arc<dyn ExternalStorage>) -> Self {
-        Self { inner }
+    pub fn new(
+        inner: Arc<dyn ExternalStorage>,
+        physical_file_cache: Option<Arc<PhysicalFileCache>>,
+    ) -> Self {
+        Self {
+            inner,
+            physical_file_cache,
+        }
+    }
+
+    pub(crate) fn cache_input_refs(&self, inputs: &[Input]) -> Option<PhysicalFileCacheRefGuard> {
+        self.physical_file_cache
+            .as_ref()
+            .map(|cache| PhysicalFileCacheRefGuard::new(Arc::clone(cache), inputs))
     }
 }
 
@@ -53,7 +70,7 @@ impl Record {
 impl Source {
     /// Load the content of an input.
     #[tracing::instrument(skip_all)]
-    pub async fn load_remote(
+    pub(crate) async fn load_remote(
         &self,
         input: Input,
         stat: &mut Option<&mut LoadStatistic>,
@@ -64,17 +81,25 @@ impl Source {
             .with_fail_hook(move |_: &JustRetry<std::io::Error>| counter.inc_by(1));
         let fetch = || {
             let storage = self.inner.clone();
+            let physical_file_cache = self.physical_file_cache.clone();
             let id = input.id.clone();
             let compression = input.compression;
+            let file_real_size = input.file_real_size;
             async move {
-                let mut content = Vec::with_capacity(id.length as _);
-                let item = pin!(Cursor::new(&mut content));
-                let mut decompress = decompress(compression, item)?;
+                if let Some(cache) = physical_file_cache {
+                    if let Some((content, physical_bytes_in)) = cache
+                        .load_part(storage.clone(), &id.name, id.offset, id.length)
+                        .await?
+                    {
+                        let (content, _) =
+                            load_compressed(compression, Cursor::new(content), file_real_size)
+                                .await?;
+                        return std::io::Result::Ok((content, physical_bytes_in));
+                    }
+                }
+
                 let source = storage.read_part(&id.name, id.offset, id.length);
-                let n = futures::io::copy(source, &mut decompress).await?;
-                decompress.flush().await?;
-                drop(decompress);
-                std::io::Result::Ok((content, n))
+                load_compressed(compression, source, file_real_size).await
             }
         };
         let (content, size) = retry_all_ext(fetch, ext).await?;
@@ -85,9 +110,8 @@ impl Source {
         Ok(content)
     }
 
-    /// Load key value pairs from remote.
     #[tracing::instrument(skip_all, fields(id=?input.id))]
-    pub async fn load(
+    pub(crate) async fn load(
         &self,
         input: Input,
         mut stat: Option<&mut LoadStatistic>,
@@ -113,6 +137,20 @@ impl Source {
     }
 }
 
+async fn load_compressed(
+    compression: brpb::CompressionType,
+    source: impl AsyncRead + Unpin,
+    file_real_size: u64,
+) -> std::io::Result<(Vec<u8>, u64)> {
+    let mut content = Vec::with_capacity(file_real_size as usize);
+    let item = pin!(Cursor::new(&mut content));
+    let mut decompress = decompress(compression, item)?;
+    let n = futures::io::copy(source, &mut decompress).await?;
+    decompress.close().await?;
+    drop(decompress);
+    Ok((content, n))
+}
+
 fn decompress(
     compression: brpb::CompressionType,
     input: Pin<&mut (impl AsyncWrite + Send)>,
@@ -128,11 +166,16 @@ fn decompress(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use protobuf::Chars;
+
     use super::Source;
     use crate::{
+        cache::{PhysicalFileCache, PhysicalFileCacheRefGuard, RegisterPhysicalFileResult},
         compaction::{Input, Subcompaction},
         statistic::LoadStatistic,
-        storage::{LogFile, MetaFile},
+        storage::{LogFile, LogFileId, MetaFile},
         test_util::{KvGen, LogFileBuilder, TmpStorage, gen_adjacent_with_ts},
     };
 
@@ -174,12 +217,50 @@ mod tests {
         Subcompaction::singleton(l.clone()).inputs.pop().unwrap()
     }
 
+    fn input_of_physical_file(name: &Chars) -> Input {
+        Input {
+            id: LogFileId {
+                name: name.clone(),
+                offset: 0,
+                length: 0,
+            },
+            file_real_size: 0,
+            compression: kvproto::brpb::CompressionType::Zstd,
+            crc64xor: 0,
+            key_value_size: 0,
+            num_of_entries: 0,
+        }
+    }
+
+    #[test]
+    fn test_cached_input_refs_releases_remaining_refs_on_drop() {
+        let cache = Arc::new(PhysicalFileCache::new(10));
+        let name = Chars::from("physical.log");
+        assert!(matches!(
+            cache.register_physical_file(&name, 10, 2),
+            RegisterPhysicalFileResult::Registered
+        ));
+
+        let input = input_of_physical_file(&name);
+        let refs = PhysicalFileCacheRefGuard::new(Arc::clone(&cache), &[input.clone(), input]);
+        assert!(matches!(
+            cache.register_physical_file(&Chars::from("another.log"), 10, 1),
+            RegisterPhysicalFileResult::Full(_)
+        ));
+
+        drop(refs);
+        assert!(matches!(
+            cache.register_physical_file(&Chars::from("another.log"), 10, 1),
+            RegisterPhysicalFileResult::Registered
+        ));
+    }
+
     #[tokio::test]
     async fn test_loading() {
         let st = TmpStorage::create();
         let m = construct_storage(&st).await;
 
-        let so = Source::new(st.storage().clone());
+        let so = Source::new(st.storage().clone(), None);
         for epoch in 0..NUM_FLUSH {
             for seg in 0..NUM_REGION {
                 let input = as_input(&m[epoch].physical_files[0].files[seg]);

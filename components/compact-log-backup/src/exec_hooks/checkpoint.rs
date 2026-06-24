@@ -5,7 +5,9 @@ use std::collections::HashSet;
 use external_storage::ExternalStorage;
 use tikv_util::{info, time::Instant};
 
-use super::save_meta::{CheckpointedSubcompaction, load_checkpointed_subcompactions};
+use super::save_meta::{
+    CheckpointedFileSizes, CheckpointedSubcompaction, load_checkpointed_subcompactions,
+};
 use crate::{
     Result,
     compaction::META_OUT_REL,
@@ -15,15 +17,21 @@ use crate::{
 #[derive(Default)]
 pub struct Checkpoint {
     loaded: HashSet<CheckpointedSubcompaction>,
+    file_sizes: CheckpointedFileSizes,
 }
 
 impl Checkpoint {
+    pub fn file_sizes(&self) -> CheckpointedFileSizes {
+        self.file_sizes.clone()
+    }
+
     async fn load(&mut self, storage: &dyn ExternalStorage, dir: &str) -> Result<()> {
         let begin = Instant::now();
         info!("Checkpoint: start loading."; "current" => %self.loaded.len());
 
-        self.loaded
-            .extend(load_checkpointed_subcompactions(storage, dir).await?);
+        let loaded = load_checkpointed_subcompactions(storage, dir).await?;
+        self.file_sizes.set(&loaded);
+        self.loaded.extend(loaded.subcompactions);
         info!("Checkpoint: loaded finished tasks."; "current" => %self.loaded.len(), "take" => ?begin.saturating_elapsed());
         Ok(())
     }

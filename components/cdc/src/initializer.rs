@@ -60,7 +60,8 @@ use crate::{
     endpoint::Deregister,
     metrics::*,
     old_value::{OldValueCursors, near_seek_old_value},
-    service::{ConnId, RequestId},
+    service::RequestId,
+    types::ConnId,
 };
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -257,7 +258,6 @@ impl<E: KvEngine> Initializer<E> {
         }
 
         self.observed_range.update_region_key_range(&region);
-
         // Be compatible with old TiCDC clients, which won't give `observed_range`.
         let (start_key, end_key): (Key, Key);
         if self.observed_range.start_key_encoded.as_encoded() <= &region.start_key {

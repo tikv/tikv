@@ -1687,6 +1687,7 @@ name = "compact-log-backup"
 version = "0.1.0"
 dependencies = [
  "async-compression",
+ "backup-stream",
  "bytes",
  "chrono",
  "cloud",
@@ -1707,6 +1708,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log_wrappers",
+ "parking_lot 0.12.1",
  "pin-project",
  "pprof",
  "prometheus",
@@ -2391,6 +2393,7 @@ version = "0.0.1"
 dependencies = [
  "aws",
  "azure",
+ "clap 3.1.6",
  "cloud",
  "encryption",
  "file_system",
@@ -2401,7 +2404,6 @@ dependencies = [
  "rust-ini",
  "slog",
  "slog-global",
- "structopt",
  "tikv_util",
 ]
 
@@ -2661,6 +2663,7 @@ dependencies = [
  "aws",
  "azure",
  "chrono",
+ "clap 3.1.6",
  "cloud",
  "encryption",
  "fail",
@@ -2681,7 +2684,6 @@ dependencies = [
  "serde_json",
  "slog",
  "slog-global",
- "structopt",
  "tempfile",
  "tikv_alloc",
  "tikv_util",
@@ -3026,9 +3028,9 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "cargo_metadata",
+ "clap 3.1.6",
  "lazy_static",
  "regex",
- "structopt",
 ]
 
 [[package]]
@@ -4420,7 +4422,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#f33f20c54524c6c62cde791f9b274fdf1044535a"
+source = "git+https://github.com/pingcap/kvproto.git#a15c348f8713e5c492b6dfb41224c464b5824979"
 dependencies = [
  "bytes",
  "futures 0.3.15",
@@ -4499,7 +4501,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#a6b0bb0483986cbcec14530064f53b7f14facfa2"
+source = "git+https://github.com/tikv/rust-rocksdb.git#1c17b59dcb506302ed4684b3628c4a7165e0b86d"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -4518,7 +4520,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#a6b0bb0483986cbcec14530064f53b7f14facfa2"
+source = "git+https://github.com/tikv/rust-rocksdb.git#1c17b59dcb506302ed4684b3628c4a7165e0b86d"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4690,9 +4692,9 @@ dependencies = [
 
 [[package]]
 name = "memmap2"
-version = "0.9.3"
+version = "0.9.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45fd3a57831bf88bc63f8cebc0cf956116276e97fef3966103e96416209f7c92"
+checksum = "d1219ed1b7f229ee7104d281dd01d6802fe28bb6e95d292942c4daacdeb798c0"
 dependencies = [
  "libc 0.2.176",
 ]
@@ -6716,7 +6718,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#a6b0bb0483986cbcec14530064f53b7f14facfa2"
+source = "git+https://github.com/tikv/rust-rocksdb.git#1c17b59dcb506302ed4684b3628c4a7165e0b86d"
 dependencies = [
  "libc 0.2.176",
  "librocksdb_sys",
@@ -7656,30 +7658,6 @@ name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
-
-[[package]]
-name = "structopt"
-version = "0.3.20"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "126d630294ec449fae0b16f964e35bf3c74f940da9dca17ee9b905f7b3112eb8"
-dependencies = [
- "clap 2.33.0",
- "lazy_static",
- "structopt-derive",
-]
-
-[[package]]
-name = "structopt-derive"
-version = "0.4.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "65e51c492f9e23a220534971ff5afc14037289de430e3c83f9daf6a1b6ae91e8"
-dependencies = [
- "heck 0.3.1",
- "proc-macro-error",
- "proc-macro2",
- "quote",
- "syn 1.0.103",
-]
 
 [[package]]
 name = "strum"
@@ -8623,7 +8601,7 @@ dependencies = [
  "api_version",
  "base64 0.13.0",
  "cc",
- "clap 2.33.0",
+ "clap 3.1.6",
  "collections",
  "compact-log-backup",
  "crypto",
@@ -8652,7 +8630,6 @@ dependencies = [
  "server",
  "slog",
  "slog-global",
- "structopt",
  "tempfile",
  "tikv",
  "tikv_util",
@@ -8664,9 +8641,9 @@ dependencies = [
 
 [[package]]
 name = "tikv-jemalloc-ctl"
-version = "0.5.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e37706572f4b151dff7a0146e040804e9c26fe3a3118591112f05cf12a4216c1"
+checksum = "661f1f6a57b3a36dc9174a2c10f19513b4866816e13425d3e418b11cc37bc24c"
 dependencies = [
  "libc 0.2.176",
  "paste",
@@ -8675,20 +8652,19 @@ dependencies = [
 
 [[package]]
 name = "tikv-jemalloc-sys"
-version = "0.5.0+5.3.0"
+version = "0.6.1+5.3.0-1-ge13ca993e8ccb9ba9847cc330696e02839f328f7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aeab4310214fe0226df8bfeb893a291a58b19682e8a07e1e1d4483ad4200d315"
+checksum = "cd8aa5b2ab86a2cefa406d889139c162cbb230092f7d1d7cbc1716405d852a3b"
 dependencies = [
  "cc",
- "fs_extra",
  "libc 0.2.176",
 ]
 
 [[package]]
 name = "tikv-jemallocator"
-version = "0.5.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20612db8a13a6c06d57ec83953694185a367e16945f66565e8028d2c0bd76979"
+checksum = "0359b4327f954e0567e69fb191cf1436617748813819c94b8cd4a431422d053a"
 dependencies = [
  "libc 0.2.176",
  "tikv-jemalloc-sys",
@@ -9269,7 +9245,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 0.1.10",
+ "cfg-if 1.0.0",
  "static_assertions",
 ]
 

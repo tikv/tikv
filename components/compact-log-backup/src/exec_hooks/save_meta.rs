@@ -1,13 +1,16 @@
-use std::{sync::Arc, time::Instant};
-
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
+use std::{
+    sync::{Arc, Mutex},
+    time::Instant,
+};
+
 use chrono::Local;
 pub use engine_traits::SstCompressionType;
 use external_storage::{ExternalStorage, UnpinReader};
 use futures::{
     future::TryFutureExt,
     io::{AsyncReadExt, Cursor},
-    stream::TryStreamExt,
+    stream::{self, StreamExt, TryStreamExt},
 };
 use kvproto::brpb;
 use protobuf::Message;
@@ -23,12 +26,17 @@ use crate::{
     ErrorKind,
     compaction::{Input, META_OUT_REL, SST_OUT_REL, Subcompaction, meta::CompactionRunInfoBuilder},
     errors::Result,
-    execute::hooking::{
-        AfterFinishCtx, BeforeStartCtx, CId, ExecHooks, SkipReason, SubcompactionFinishCtx,
-        SubcompactionSkippedCtx, SubcompactionStartCtx,
+    execute::{
+        ExecutionConfig,
+        hooking::{
+            AfterFinishCtx, BeforeStartCtx, CId, ExecHooks, SkipReason, SubcompactionFinishCtx,
+            SubcompactionSkippedCtx, SubcompactionStartCtx,
+        },
     },
-    statistic::CompactLogBackupStatistic,
+    statistic::{CompactLogBackupConfig, CompactLogBackupShard, CompactLogBackupStatistic},
 };
+
+const CHECKPOINT_META_LOAD_CONCURRENCY: usize = 16;
 
 /// Save the metadata to external storage after every subcompaction. After
 /// everything done, it saves the whole compaction to a "migration" that can be
@@ -58,6 +66,7 @@ pub struct SaveMeta {
     begin: chrono::DateTime<Local>,
     meta_writer: Option<MetaBatchWriter>,
     batch_cfg: BatchConfig,
+    checkpointed_file_sizes: Option<CheckpointedFileSizes>,
 }
 
 impl Default for SaveMeta {
@@ -68,6 +77,7 @@ impl Default for SaveMeta {
             begin: Local::now(),
             meta_writer: None,
             batch_cfg: BatchConfig::default(),
+            checkpointed_file_sizes: None,
         }
     }
 }
@@ -93,6 +103,7 @@ struct MetaBatchWriter {
     next_batch_seq: u64,
     buffer: brpb::LogFileSubcompactions,
     cfg: BatchConfig,
+    generated_cmeta_files_total_size: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -105,6 +116,35 @@ pub(crate) struct CheckpointInput {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct CheckpointedSubcompaction {
     pub inputs: Vec<CheckpointInput>,
+}
+
+#[derive(Default)]
+pub(crate) struct LoadedCheckpointedSubcompactions {
+    pub subcompactions: Vec<CheckpointedSubcompaction>,
+    pub cmeta_files_total_size: u64,
+    pub sst_files_total_size: u64,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct CheckpointedFileSizesSnapshot {
+    pub cmeta_files_total_size: u64,
+    pub sst_files_total_size: u64,
+}
+
+#[derive(Clone, Default)]
+pub struct CheckpointedFileSizes(Arc<Mutex<CheckpointedFileSizesSnapshot>>);
+
+impl CheckpointedFileSizes {
+    pub fn snapshot(&self) -> CheckpointedFileSizesSnapshot {
+        *self.0.lock().unwrap()
+    }
+
+    pub(crate) fn set(&self, loaded: &LoadedCheckpointedSubcompactions) {
+        *self.0.lock().unwrap() = CheckpointedFileSizesSnapshot {
+            cmeta_files_total_size: loaded.cmeta_files_total_size,
+            sst_files_total_size: loaded.sst_files_total_size,
+        };
+    }
 }
 
 impl CheckpointInput {
@@ -170,35 +210,64 @@ async fn list_subcompaction_meta_keys(
     Ok(keys)
 }
 
-pub(crate) async fn load_checkpointed_subcompactions(
+async fn load_checkpointed_subcompaction_meta(
     storage: &dyn ExternalStorage,
-    artifacts_prefix: &str,
-) -> Result<Vec<CheckpointedSubcompaction>> {
-    let mut subcompactions = Vec::new();
-    for key in list_subcompaction_meta_keys(storage, artifacts_prefix).await? {
-        let mut content = vec![];
-        match storage.read(&key).read_to_end(&mut content).await {
-            Ok(_) => match protobuf::parse_from_bytes::<brpb::LogFileSubcompactions>(&content) {
-                Ok(metas) => subcompactions.extend(
+    key: String,
+) -> Option<LoadedCheckpointedSubcompactions> {
+    let mut content = vec![];
+    match storage.read(&key).read_to_end(&mut content).await {
+        Ok(_) => match protobuf::parse_from_bytes::<brpb::LogFileSubcompactions>(&content) {
+            Ok(metas) => {
+                let mut loaded = LoadedCheckpointedSubcompactions {
+                    cmeta_files_total_size: content.len() as u64,
+                    ..Default::default()
+                };
+                loaded.sst_files_total_size = metas
+                    .subcompactions
+                    .iter()
+                    .flat_map(|subcompaction| subcompaction.get_sst_outputs())
+                    .map(|file| file.get_size())
+                    .sum::<u64>();
+                loaded.subcompactions.extend(
                     metas
                         .subcompactions
                         .iter()
                         .map(CheckpointedSubcompaction::from_meta),
-                ),
-                Err(err) => {
-                    warn!("SaveMeta: failed to load subcompaction meta batch, ignoring it.";
-                        "key" => %key,
-                        "err" => %err);
-                }
-            },
+                );
+                Some(loaded)
+            }
             Err(err) => {
-                warn!("SaveMeta: failed to read subcompaction meta batch, ignoring it.";
+                warn!("SaveMeta: failed to load subcompaction meta batch, ignoring it.";
                     "key" => %key,
                     "err" => %err);
+                None
             }
+        },
+        Err(err) => {
+            warn!("SaveMeta: failed to read subcompaction meta batch, ignoring it.";
+                "key" => %key,
+                "err" => %err);
+            None
         }
     }
-    Ok(subcompactions)
+}
+
+pub(crate) async fn load_checkpointed_subcompactions(
+    storage: &dyn ExternalStorage,
+    artifacts_prefix: &str,
+) -> Result<LoadedCheckpointedSubcompactions> {
+    let mut loaded = LoadedCheckpointedSubcompactions::default();
+    let mut metas = stream::iter(list_subcompaction_meta_keys(storage, artifacts_prefix).await?)
+        .map(|key| load_checkpointed_subcompaction_meta(storage, key))
+        .buffer_unordered(CHECKPOINT_META_LOAD_CONCURRENCY);
+    while let Some(meta) = metas.next().await {
+        if let Some(meta) = meta {
+            loaded.cmeta_files_total_size += meta.cmeta_files_total_size;
+            loaded.sst_files_total_size += meta.sst_files_total_size;
+            loaded.subcompactions.extend(meta.subcompactions);
+        }
+    }
+    Ok(loaded)
 }
 
 impl MetaBatchWriter {
@@ -209,6 +278,7 @@ impl MetaBatchWriter {
             next_batch_seq: 0,
             buffer: brpb::LogFileSubcompactions::new(),
             cfg,
+            generated_cmeta_files_total_size: 0,
         }
     }
 
@@ -257,6 +327,7 @@ impl MetaBatchWriter {
         let batch_key = format!("{}/{}", self.artifacts_dir, batch_file_name);
         Self::write_bytes(storage, &batch_key, bytes).await?;
 
+        self.generated_cmeta_files_total_size += bytes.len() as u64;
         self.next_batch_seq += 1;
         self.buffer = brpb::LogFileSubcompactions::new();
         Ok(())
@@ -277,13 +348,30 @@ impl SaveMeta {
         self
     }
 
-    fn comments(&self) -> String {
+    pub fn with_checkpointed_file_sizes(mut self, file_sizes: CheckpointedFileSizes) -> Self {
+        self.checkpointed_file_sizes = Some(file_sizes);
+        self
+    }
+
+    fn comments(&self, cfg: &ExecutionConfig) -> String {
         let now = Local::now();
+        let config = CompactLogBackupConfig {
+            from_ts: cfg.from_ts,
+            until_ts: cfg.until_ts,
+            shift_ts: cfg.shift_ts,
+            cal_shift_ts: cfg.calculate_shift_ts,
+            minimal_compaction_size: cfg.minimal_compaction_size,
+            shard: cfg.shard.map(|shard| CompactLogBackupShard {
+                index: shard.index,
+                total: shard.total,
+            }),
+        };
         let stat = CompactLogBackupStatistic {
             start_time: self.begin,
-            end_time: Local::now(),
+            end_time: now,
             time_taken: (now - self.begin).to_std().unwrap_or_default(),
             exec_by: tikv_util::sys::hostname().unwrap_or_default(),
+            config,
 
             load_stat: self.stats.load_stat.clone(),
             subcompact_stat: self.stats.compact_stat.clone(),
@@ -292,6 +380,23 @@ impl SaveMeta {
             prometheus: Default::default(),
         };
         serde_json::to_string(&stat).unwrap_or_else(|err| format!("ERR DURING MARSHALING: {}", err))
+    }
+
+    fn generated_file_sizes(
+        &self,
+        new_cmeta_files_total_size: u64,
+    ) -> CheckpointedFileSizesSnapshot {
+        let checkpointed = self
+            .checkpointed_file_sizes
+            .as_ref()
+            .map(CheckpointedFileSizes::snapshot)
+            .unwrap_or_default();
+        CheckpointedFileSizesSnapshot {
+            cmeta_files_total_size: checkpointed.cmeta_files_total_size
+                + new_cmeta_files_total_size,
+            sst_files_total_size: checkpointed.sst_files_total_size
+                + self.stats.compact_stat.physical_bytes_out,
+        }
     }
 }
 
@@ -345,12 +450,19 @@ impl ExecHooks for SaveMeta {
             warn!("Nothing to write, skipping saving meta.");
             return Ok(());
         }
-        if let Some(writer) = self.meta_writer.as_mut() {
+        let generated_cmeta_files_total_size = if let Some(writer) = self.meta_writer.as_mut() {
             writer.flush(cx.storage.as_ref()).await?;
-        }
+            writer.generated_cmeta_files_total_size
+        } else {
+            0
+        };
 
-        let comments = self.comments();
-        self.collector.mut_meta().set_comments(comments);
+        let comments = self.comments(&cx.this.cfg);
+        let generated_file_sizes = self.generated_file_sizes(generated_cmeta_files_total_size);
+        let meta = self.collector.mut_meta();
+        meta.set_generated_cmeta_files_total_size(generated_file_sizes.cmeta_files_total_size);
+        meta.set_generated_sst_files_total_size(generated_file_sizes.sst_files_total_size);
+        meta.set_comments(comments);
         let begin = Instant::now();
         self.collector
             .write_migration(Arc::clone(cx.storage), cx.this.cfg.shard)
