@@ -38,8 +38,8 @@ use tikv::{
         lock_manager::Config as PessimisticTxnConfig,
     },
     storage::config::{
-        BlockCacheConfig, Config as StorageConfig, EngineType, FlowControlConfig, IoRateLimitConfig,
-        MaxTsConfig,
+        BlockCacheConfig, Config as StorageConfig, EngineType, FlowControlConfig,
+        IoRateLimitConfig, MaxTsConfig,
     },
 };
 use tikv_util::config::{LogFormat, ReadableDuration, ReadableSchedule, ReadableSize};
