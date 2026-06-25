@@ -539,7 +539,7 @@ mod tests {
         let cfg = MaxTsConfig::default();
         assert_eq!(cfg.action_on_invalid_update, "error");
         assert_ne!(cfg.action_on_invalid_update, "panic");
-        assert!(ActionOnInvalidMaxTs::try_from(cfg.action_on_invalid_update.as_str()).is_ok());
+        ActionOnInvalidMaxTs::try_from(cfg.action_on_invalid_update.as_str()).unwrap();
     }
 
     #[test]

@@ -39,6 +39,7 @@ use tikv::{
     },
     storage::config::{
         BlockCacheConfig, Config as StorageConfig, EngineType, FlowControlConfig, IoRateLimitConfig,
+        MaxTsConfig,
     },
 };
 use tikv_util::config::{LogFormat, ReadableDuration, ReadableSchedule, ReadableSize};
@@ -778,6 +779,7 @@ fn test_serde_custom_tikv_config() {
             export_priority: IoPriority::High,
             other_priority: IoPriority::Low,
         },
+        max_ts: MaxTsConfig::default(),
         background_error_recovery_window: ReadableDuration::hours(1),
         txn_status_cache_capacity: 1000,
         memory_quota: ReadableSize::kb(123),
