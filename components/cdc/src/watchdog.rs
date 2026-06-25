@@ -294,7 +294,7 @@ mod tests {
         let pool = Arc::new(Builder::new("cdc-watchdog-test").thread_count(1).create());
         let activity = FlushActivity::with_last_flush(Instant::now() - Duration::from_secs(1));
         let memory_quota = Arc::new(MemoryQuota::new(1));
-        memory_quota.alloc_force(1);
+        memory_quota.alloc(1).unwrap();
 
         let config = Config {
             check_interval: Duration::from_millis(50),

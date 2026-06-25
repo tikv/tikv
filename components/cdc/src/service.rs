@@ -605,7 +605,7 @@ mod tests {
         let memory_quota = Arc::new(MemoryQuota::new(capacity));
         let pool = Arc::new(Builder::new("cdc-watchdog-test").thread_count(1).create());
         let (scheduler, rx) = dummy_scheduler();
-        let cdc_service = create_change_data(Service::new(scheduler, memory_quota));
+        let cdc_service = create_change_data(Service::new(scheduler, memory_quota, pool));
         new_rpc_suite_from_service(cdc_service, rx)
     }
 
@@ -614,9 +614,10 @@ mod tests {
         watchdog_config: watchdog::Config,
     ) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
         let memory_quota = Arc::new(MemoryQuota::new(capacity));
+        let pool = Arc::new(Builder::new("cdc-watchdog-test").thread_count(1).create());
         let (scheduler, rx) = dummy_scheduler();
         let cdc_service = create_change_data(ServiceWithWatchdogConfig {
-            service: Service::new(scheduler, memory_quota),
+            service: Service::new(scheduler, memory_quota, pool),
             watchdog_config,
         });
         new_rpc_suite_from_service(cdc_service, rx)
