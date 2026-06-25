@@ -174,7 +174,7 @@ impl AggrFnStateSumIntUnsigned {
                     return Ok(());
                 }
                 self.sum = self.sum.checked_add(value).ok_or_else(|| {
-                    Error::overflow("BIGINT UNSIGNED", format!("({}, {})", self.sum, value))
+                    Error::overflow("BIGINT UNSIGNED", format!("({} + {})", self.sum, value))
                 })?;
                 Ok(())
             }
@@ -329,4 +329,76 @@ mod tests {
             .parse(expr, &mut ctx, &src_schema, &mut schema, &mut exp)
             .unwrap_err();
     }
+
+     #[test]
+     fn test_sum_int_signed_overflow() {
+         let expr = ExprDefBuilder::aggr_func(ExprType::SumInt, FieldTypeTp::LongLong)
+             .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
+             .build();
+         AggrFnDefinitionParserSumInt.check_supported(&expr).unwrap();
+         let src_schema = [FieldTypeTp::LongLong.into()];
+         let mut columns = LazyBatchColumnVec::from(vec![{
+             let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(0, EvalType::Int);
+             col.mut_decoded().push_int(Some(i64::MAX));
+             col.mut_decoded().push_int(Some(1));
+             col
+         }]);
+         let logical_rows = vec![0, 1];
+         let mut schema = vec![];
+         let mut exp = vec![];
+         let mut ctx = EvalContext::default();
+         let aggr_fn = AggrFnDefinitionParserSumInt
+             .parse(expr, &mut ctx, &src_schema, &mut schema, &mut exp)
+             .unwrap();
+         let mut state = aggr_fn.create_state();
+         let exp_result = exp[0]
+             .eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 2)
+             .unwrap();
+         let exp_result = exp_result.vector_value().unwrap();
+         let vec = exp_result.as_ref().to_int_vec();
+         let chunked_vec: ChunkedVecSized<Int> = vec.into();
+         assert!(update_vector!(state, &mut ctx, chunked_vec, exp_result.logical_rows()).is_err());
+     }
+
+     #[test]
+     fn test_sum_int_unsigned_overflow() {
+         let out_ft = FieldTypeBuilder::new()
+             .tp(FieldTypeTp::LongLong)
+             .flag(FieldTypeFlag::UNSIGNED)
+             .build();
+         let in_ft = FieldTypeBuilder::new()
+             .tp(FieldTypeTp::LongLong)
+             .flag(FieldTypeFlag::UNSIGNED)
+             .build();
+         let expr = ExprDefBuilder::aggr_func(ExprType::SumInt, out_ft)
+             .push_child(ExprDefBuilder::column_ref(0, in_ft))
+             .build();
+         AggrFnDefinitionParserSumInt.check_supported(&expr).unwrap();
+         let src_schema = [FieldTypeBuilder::new()
+             .tp(FieldTypeTp::LongLong)
+             .flag(FieldTypeFlag::UNSIGNED)
+             .build()];
+         let mut columns = LazyBatchColumnVec::from(vec![{
+             let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(0, EvalType::Int);
+             // `u64::MAX` is carried as `-1_i64` in the TiDB/TiKV DAG int representation.
+             col.mut_decoded().push_int(Some(-1));
+             col.mut_decoded().push_int(Some(1));
+             col
+         }]);
+         let logical_rows = vec![0, 1];
+         let mut schema = vec![];
+         let mut exp = vec![];
+         let mut ctx = EvalContext::default();
+         let aggr_fn = AggrFnDefinitionParserSumInt
+             .parse(expr, &mut ctx, &src_schema, &mut schema, &mut exp)
+             .unwrap();
+         let mut state = aggr_fn.create_state();
+         let exp_result = exp[0]
+             .eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 2)
+             .unwrap();
+         let exp_result = exp_result.vector_value().unwrap();
+         let vec = exp_result.as_ref().to_int_vec();
+         let chunked_vec: ChunkedVecSized<Int> = vec.into();
+         assert!(update_vector!(state, &mut ctx, chunked_vec, exp_result.logical_rows()).is_err());
+     }
 }
