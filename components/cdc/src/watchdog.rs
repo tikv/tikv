@@ -257,8 +257,10 @@ impl Watchdog {
                 "conn_id" => ?self.conn_id);
         }
 
+        let memory_quota_used_ratio =
+            self.memory_quota.in_use() as f64 / self.memory_quota.capacity() as f64;
         let memory_quota_abort_threshold_reached =
-            self.memory_quota.used_ratio() >= self.config.memory_quota_abort_threshold();
+            memory_quota_used_ratio >= self.config.memory_quota_abort_threshold();
 
         // Check if last flush was more than the deregister threshold.
         // To prevent the case that the connection idle since there are a lot of

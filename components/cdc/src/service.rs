@@ -4,10 +4,7 @@ use std::sync::Arc;
 
 use collections::{HashMap, HashMapEntry};
 use crossbeam::atomic::AtomicCell;
-use futures::{
-    compat::Stream01CompatExt,
-    stream::{StreamExt, TryStreamExt},
-};
+use futures::{stream::TryStreamExt, SinkExt};
 use grpcio::{DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::{
     cdcpb::{
@@ -16,7 +13,7 @@ use kvproto::{
     },
     kvrpcpb::ApiVersion,
 };
-use tikv_util::{error, info, memory::MemoryQuota, timer::GLOBAL_TIMER_HANDLE, warn, worker::*};
+use tikv_util::{error, info, memory::MemoryQuota, warn, worker::*};
 
 use crate::{
     channel::{channel, Sink, CDC_CHANNLE_CAPACITY},
@@ -490,11 +487,6 @@ impl Service {
             }
         });
 
-        let last_flush_time = Arc::new(AtomicCell::new(Instant::now()));
-        let last_flush_time_for_forward = last_flush_time.clone();
-        let last_flush_time_for_watchdog = last_flush_time;
-        let peer_for_watchdog = ctx.peer();
-
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
 
@@ -550,6 +542,10 @@ impl ChangeData for Service {
 
 #[cfg(feature = "failpoints")]
 async fn sleep_before_drain_change_event() {
+    use std::time::{Duration, Instant};
+
+    use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+
     let should_sleep = || {
         fail::fail_point!("cdc_sleep_before_drain_change_event", |_| true);
         false

@@ -62,7 +62,7 @@ use crate::{
     initializer::{InitializeStats, Initializer},
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
-    service::{validate_kv_api, Conn, ConnId, FeatureGate},
+    service::{validate_kv_api, Conn, FeatureGate},
     types::ConnId,
     CdcObserver, Error,
 };
