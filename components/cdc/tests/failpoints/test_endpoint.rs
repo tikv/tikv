@@ -745,8 +745,6 @@ fn test_cdc_load_unnecessary_old_value() {
     assert_eq!(stats.seek_tombstone, 0);
     assert_eq!(stats.next_tombstone, 0);
     assert_eq!(stats.prev_tombstone, 0);
-
-    fail::remove("ts_filter_is_helpful_always_true");
     suite.stop();
 }
 
