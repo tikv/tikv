@@ -463,6 +463,7 @@ impl Service {
         );
 
         let peer = ctx.peer();
+        let scheduler = self.scheduler.clone();
         ctx.spawn(async move {
             let should_deregister = tokio::select! {
                 _ = watchdog::wait_for_abort(recv_abort) => {
