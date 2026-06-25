@@ -115,7 +115,7 @@ impl AggrFnStateSumIntSigned {
                     return Ok(());
                 }
                 self.sum = self.sum.checked_add(value).ok_or_else(|| {
-                    Error::overflow("BIGINT", format!("({}, {})", self.sum, value))
+                    Error::overflow("BIGINT", format!("({} + {})", self.sum, value))
                 })?;
                 Ok(())
             }
