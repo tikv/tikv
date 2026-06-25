@@ -384,7 +384,7 @@ impl<'a> Drain {
 
     // Forwards contents to the sink with time tracking, simulates
     // StreamExt::forward.
-    pub async fn forward<S, E>(
+    pub(crate) async fn forward<S, E>(
         &'a mut self,
         sink: &mut S,
         activity: Option<&FlushActivity>,
