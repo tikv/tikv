@@ -543,6 +543,63 @@ mod tests {
     }
 
     #[test]
+    fn test_load_split_with_mvcc_boundary_key_no_split() {
+        let path = Builder::new()
+            .prefix("test-load-split-mvcc-boundary")
+            .tempdir()
+            .unwrap();
+        let engine = engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
+
+        let mut region = Region::default();
+        region.set_id(1);
+        region.mut_peers().push(Peer::default());
+        region.mut_region_epoch().set_version(2);
+        region.mut_region_epoch().set_conf_ver(5);
+        // Make range start equal to region start. If fallback picks mvcc key
+        // and strips ts later, it would become a rejected boundary split key.
+        region.set_start_key(Key::from_raw(b"0005").into_encoded());
+        region.set_end_key(Key::from_raw(b"0010").into_encoded());
+
+        let (tx, rx) = mpsc::sync_channel(100);
+        let cfg = Config {
+            // Keep bucket size large enough so one key only forms one bucket.
+            region_max_size: Some(ReadableSize::mb(256)),
+            ..Default::default()
+        };
+        let mut host = CoprocessorHost::new(tx.clone(), cfg);
+        host.registry
+            .register_split_check_observer(100, BoxSplitCheckObserver::new(HalfCheckObserver));
+        host.registry.register_split_check_observer(
+            200,
+            BoxSplitCheckObserver::new(SizeCheckObserver::new(tx.clone())),
+        );
+        host.registry.register_split_check_observer(
+            300,
+            BoxSplitCheckObserver::new(KeysCheckObserver::new(tx.clone())),
+        );
+
+        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, host, None);
+
+        // Only one user key exists in range, but with MVCC suffix.
+        let key = keys::data_key(Key::from_raw(b"0005").append_ts(42.into()).as_encoded());
+        engine.put_cf(CF_DEFAULT, &key, &key).unwrap();
+        engine.flush_cf(CF_DEFAULT, true).unwrap();
+
+        let start_key = Key::from_raw(b"0005").into_encoded();
+        let end_key = Key::from_raw(b"0006").into_encoded();
+        runnable.run(SplitCheckTask::split_check_key_range(
+            region,
+            Some(start_key),
+            Some(end_key),
+            SplitReason::Load,
+            CheckPolicy::Scan,
+            None,
+        ));
+
+        assert_no_ask_split(&rx);
+    }
+
+    #[test]
     fn test_load_split_with_single_bucket_uses_approximate_fallback() {
         let path = Builder::new()
             .prefix("test-load-split-approximate-fallback")
