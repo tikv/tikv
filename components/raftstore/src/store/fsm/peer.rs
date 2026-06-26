@@ -11,7 +11,10 @@ use std::{
     },
     iter::Iterator,
     mem,
-    sync::{Arc, Mutex, atomic::Ordering},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -133,8 +136,27 @@ const REGION_SPLIT_SKIP_MAX_COUNT: usize = 3;
 #[allow(clippy::identity_op)]
 const MAX_BATCH_SIZE_LIMIT: u64 = 1 * 1024 * 1024;
 const UNSAFE_RECOVERY_STATE_TIMEOUT: Duration = Duration::from_secs(60);
+const SNAP_GEN_PRECHECK_RESPONSE_INFO_SAMPLE_RATE: u64 = 100;
+const SNAP_GEN_PRECHECK_REJECTED_RESPONSE_INFO_SAMPLE_RATE: u64 = 10;
+const SNAP_GEN_PRECHECK_IGNORED_RESPONSE_INFO_SAMPLE_RATE: u64 = 1024;
+
+static SNAP_GEN_PRECHECK_RESPONSE_LOG_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub const MAX_PROPOSAL_SIZE_RATIO: f64 = 0.4;
+
+#[inline]
+fn should_log_snap_gen_precheck_response_info(passed: bool, ignored: bool) -> bool {
+    // A rejected response means the follower's snapshot-receive concurrency is
+    // saturated, which is worth attention, so keep it more visible than the
+    // high-volume success path. Stale (ignored) responses carry the least
+    // information and are sampled the most aggressively.
+    let sample_rate = match (passed, ignored) {
+        (_, true) => SNAP_GEN_PRECHECK_IGNORED_RESPONSE_INFO_SAMPLE_RATE,
+        (false, false) => SNAP_GEN_PRECHECK_REJECTED_RESPONSE_INFO_SAMPLE_RATE,
+        (true, false) => SNAP_GEN_PRECHECK_RESPONSE_INFO_SAMPLE_RATE,
+    };
+    SNAP_GEN_PRECHECK_RESPONSE_LOG_COUNTER.fetch_add(1, Ordering::Relaxed) % sample_rate == 0
+}
 
 pub struct DestroyPeerJob {
     pub initialized: bool,
@@ -3337,14 +3359,35 @@ where
             ExtraMessageType::MsgSnapGenPrecheckResponse => {
                 let passed = msg.get_extra_msg().get_snap_gen_precheck_passed();
                 fail_point!("snap_gen_precheck_failed", !passed, |_| {});
-                info!(
+                let ignored = !self.fsm.peer.get_store().has_gen_snap_task();
+                let status = match (passed, ignored) {
+                    (true, false) => {
+                        SNAP_GEN_PRECHECK_RESPONSE_COUNTER.passed.inc();
+                        "passed"
+                    }
+                    (false, false) => {
+                        SNAP_GEN_PRECHECK_RESPONSE_COUNTER.rejected.inc();
+                        "rejected"
+                    }
+                    (true, true) => {
+                        SNAP_GEN_PRECHECK_RESPONSE_COUNTER.ignored_passed.inc();
+                        "ignored_passed"
+                    }
+                    (false, true) => {
+                        SNAP_GEN_PRECHECK_RESPONSE_COUNTER.ignored_rejected.inc();
+                        "ignored_rejected"
+                    }
+                };
+                info_or_debug!(
+                    should_log_snap_gen_precheck_response_info(passed, ignored);
                     "snap gen precheck response: {}", passed;
                     "region_id" => self.region_id(),
                     "peer_id" => self.peer().id,
                     "store_id" => self.store_id(),
                     "receiver_peer_id" => msg.get_from_peer().get_id(),
                     "receiver_store_id" => msg.get_from_peer().get_store_id(),
-                    "ignored" => !self.fsm.peer.get_store().has_gen_snap_task(),
+                    "ignored" => ignored,
+                    "status" => status,
                 );
                 if passed {
                     if let Some(gen_task) = self.fsm.peer.mut_store().take_gen_snap_task() {

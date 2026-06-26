@@ -96,6 +96,13 @@ make_auto_flush_static_metric! {
         skip_partition,
     }
 
+    pub label_enum SnapGenPrecheckResponseStatus {
+        passed,
+        rejected,
+        ignored_passed,
+        ignored_rejected,
+    }
+
     pub struct RaftEntryFetches : LocalIntCounter {
         "type" => RaftEntryType
     }
@@ -134,6 +141,9 @@ make_auto_flush_static_metric! {
     pub struct CompactionGuardActionVec: LocalIntCounter {
         "cf" => CfNames,
         "type" => CompactionGuardAction,
+    }
+    pub struct SnapGenPrecheckResponseCounter: LocalIntCounter {
+        "status" => SnapGenPrecheckResponseStatus,
     }
 }
 
@@ -1013,6 +1023,19 @@ lazy_static! {
         &["reason"]
     )
     .unwrap();
+
+    pub static ref SNAP_GEN_PRECHECK_RESPONSE_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_raftstore_snap_gen_precheck_response_total",
+            "Total number of snapshot generation precheck responses.",
+            &["status"]
+        )
+        .unwrap();
+    pub static ref SNAP_GEN_PRECHECK_RESPONSE_COUNTER: SnapGenPrecheckResponseCounter =
+        auto_flush_from!(
+            SNAP_GEN_PRECHECK_RESPONSE_COUNTER_VEC,
+            SnapGenPrecheckResponseCounter
+        );
 
     pub static ref RAFT_APPLYING_SST_GAUGE: IntGaugeVec = register_int_gauge_vec!(
         "tikv_raft_applying_sst",
