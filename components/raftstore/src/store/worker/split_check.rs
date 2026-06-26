@@ -631,12 +631,12 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         };
         let region_id = region.get_id();
         let is_key_range = start_key.is_some() && end_key.is_some();
-        let request_start_key = start_key.clone();
-        let request_end_key = end_key.clone();
+        let request_start_key = start_key.as_deref();
+        let request_end_key = end_key.as_deref();
         let start_key = if is_key_range {
             // This key is usually from a request, which should be encoded first.
             keys::data_key(
-                Key::from_raw(request_start_key.as_ref().unwrap())
+                Key::from_raw(request_start_key.unwrap())
                     .as_encoded()
                     .as_slice(),
             )
@@ -645,7 +645,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         };
         let end_key = if is_key_range {
             keys::data_end_key(
-                Key::from_raw(request_end_key.as_ref().unwrap())
+                Key::from_raw(request_end_key.unwrap())
                     .as_encoded()
                     .as_slice(),
             )
@@ -760,8 +760,8 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
                 info!(
                     "load split fallback to approximate middle in key range";
                     "region_id" => region_id,
-                    "start_key" => log_wrappers::Value::key(request_start_key.as_ref().unwrap()),
-                    "end_key" => log_wrappers::Value::key(request_end_key.as_ref().unwrap()),
+                    "start_key" => log_wrappers::Value::key(request_start_key.unwrap()),
+                    "end_key" => log_wrappers::Value::key(request_end_key.unwrap()),
                     "split_key" => log_wrappers::Value::key(&split_key),
                 );
                 split_keys.push(split_key);
