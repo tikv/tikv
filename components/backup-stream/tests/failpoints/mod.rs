@@ -128,6 +128,41 @@ mod all {
         let c = suite.global_checkpoint();
         assert!(c > commit_ts.into_inner(), "{} vs {}", c, commit_ts);
     }
+
+    #[test]
+    fn initial_region_scan_does_not_deadlock_when_operator_queue_fills() {
+        defer! {{
+            fail::remove("log_backup_region_operator_buffer_size");
+        }}
+        fail::cfg("log_backup_region_operator_buffer_size", "return(2)").unwrap();
+
+        let mut suite = SuiteBuilder::new_named("initial_region_scan_no_deadlock")
+            .nodes(1)
+            .build();
+        // This is the #19615 pattern scaled down: more leader regions than the
+        // subscription operator queue can hold. Without a nonblocking handoff
+        // from the region collector, registration waits forever here.
+        for i in 1..=8 {
+            suite.must_split(&make_split_key_at_record(1, i * 10));
+        }
+
+        let task = "initial_region_scan_no_deadlock";
+        let cli = suite.get_meta_cli();
+        block_on(cli.insert_task_with_range(
+            &suite.simple_task(task),
+            &[(&make_table_key(1, b""), &make_table_key(2, b""))],
+        ))
+        .unwrap();
+
+        assert!(
+            suite.wait_with_router_timeout(
+                move |r| r.get_task_handler(task).is_ok(),
+                Duration::from_secs(30),
+            ),
+            "log backup task registration did not finish; region initialization may be deadlocked"
+        );
+        suite.cluster.shutdown();
+    }
     #[test]
     fn region_failure() {
         defer! {{
@@ -535,5 +570,25 @@ mod all {
             "{:?}",
             safepoints
         );
+    }
+
+    #[test]
+    fn pending_flush_when_force_flush() {
+        let mut suite = SuiteBuilder::new_named("pending_flush").nodes(1).build();
+        fail::cfg("delay_on_flush", "sleep(5000)").unwrap();
+        suite.must_register_task(1, "pending_flush");
+        suite.sync();
+        let keyset = run_async_test(suite.write_records(0, 1, 1));
+        suite.force_flush_files("pending_flush");
+        suite.for_each_log_backup_cli(|_id, c| {
+            let res = c.flush_now(Default::default()).unwrap();
+            assert_eq!(res.results.len(), 1, "{:?}", res.results);
+            assert!(res.results[0].error_message.is_empty(), "{:?}", res);
+            assert!(res.results[0].success, "{:?}", res);
+        });
+        suite.check_for_write_records(
+            suite.flushed_files.path(),
+            keyset.iter().map(|v| v.as_slice()),
+        )
     }
 }

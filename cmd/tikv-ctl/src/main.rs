@@ -18,17 +18,23 @@ use std::{
 };
 
 use collections::HashMap;
+use compact_log_backup::{
+    TraceResultExt,
+    exec_hooks::{self as compact_log_hooks, skip_small_compaction::SkipSmallCompaction},
+    execute as compact_log,
+};
 use crypto::fips;
 use encryption_export::{
     DataKeyManager, DecrypterReader, Iv, create_backend, data_key_manager_from_config,
 };
-use engine_rocks::get_env;
+use engine_rocks::{RocksEngine, get_env, util::new_engine_opt};
 use engine_traits::Peekable;
 use file_system::calc_crc32;
 use futures::{executor::block_on, future::try_join_all};
 use gag::BufferRedirect;
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use kvproto::{
+    brpb,
     debugpb::{Db as DbType, *},
     encryptionpb::EncryptionMethod,
     kvrpcpb::SplitRegionRequest,
@@ -43,12 +49,19 @@ use raftstore::store::util::build_key_range;
 use regex::Regex;
 use security::{SecurityConfig, SecurityManager};
 use structopt::{StructOpt, clap::ErrorKind};
+use tempfile::TempDir;
 use tikv::{
     config::TikvConfig,
     server::{KvEngineFactoryBuilder, debug::BottommostLevelCompaction},
     storage::config::EngineType,
 };
-use tikv_util::{escape, run_and_wait_child_process, sys::thread::StdThreadBuildWrapper, unescape};
+use tikv_util::{
+    escape,
+    logger::{Level, get_log_level},
+    run_and_wait_child_process,
+    sys::thread::StdThreadBuildWrapper,
+    unescape, warn,
+};
 use txn_types::Key;
 
 use crate::{cmd::*, executor::*, util::*};
@@ -65,7 +78,7 @@ fn main() {
     let opt = Opt::from_args();
 
     // Initialize logger.
-    init_ctl_logger(&opt.log_level);
+    init_ctl_logger(&opt.log_level, &opt.log_format);
 
     // Print OpenSSL FIPS mode status.
     fips::log_status();
@@ -382,6 +395,176 @@ fn main() {
                 start_key,
                 end_key,
             );
+        }
+        Cmd::CompactLogBackup {
+            from_ts,
+            until_ts,
+            max_concurrent_compactions: max_compaction_num,
+            storage_base64,
+            compression,
+            compression_level,
+            name,
+            shard,
+            cal_shift_ts,
+            force_regenerate,
+            minimal_compaction_size,
+            prefetch_running_count,
+            prefetch_buffer_count,
+            physical_file_cache_capacity,
+        } => {
+            let maybe_external_storage = base64::decode(storage_base64)
+                .map_err(|err| format!("cannot parse base64: {}", err))
+                .and_then(|storage_bytes| {
+                    let mut ext_storage = brpb::StorageBackend::new();
+                    ext_storage
+                        .merge_from_bytes(&storage_bytes)
+                        .map_err(|err| format!("cannot parse bytes as StorageBackend: {}", err))?;
+                    Result::Ok(ext_storage)
+                });
+            let external_storage = match maybe_external_storage {
+                Ok(s) => s,
+                Err(err) => {
+                    clap::Error {
+                        message: format!("(-s, --storage-base64) is invalid: {:?}", err),
+                        kind: ErrorKind::InvalidValue,
+                        info: None,
+                    }
+                    .exit();
+                }
+            };
+            let storage = match compact_log::create_storage(&external_storage) {
+                Ok(storage) => storage,
+                Err(err) => {
+                    clap::Error {
+                        message: format!("failed to create external storage: {}", err),
+                        kind: ErrorKind::Io,
+                        info: None,
+                    }
+                    .exit();
+                }
+            };
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build runtime for compact-log-backup");
+            let until_ts_unspecified = until_ts.is_none();
+            let until_ts = match until_ts {
+                Some(until_ts) => until_ts,
+                None => {
+                    match runtime
+                        .block_on(compact_log::load_until_ts_from_checkpoint(storage.as_ref()))
+                    {
+                        Ok(until_ts) => {
+                            tikv_util::info!(
+                                "Loaded compact log backup until-ts from checkpoint.";
+                                "until_ts" => until_ts,
+                            );
+                            until_ts
+                        }
+                        Err(err) => {
+                            clap::Error {
+                                message: format!(
+                                    "failed to load compact-log-backup checkpoint: {}",
+                                    err
+                                ),
+                                kind: ErrorKind::Io,
+                                info: None,
+                            }
+                            .exit();
+                        }
+                    }
+                }
+            };
+            let ccfg = compact_log::ExecutionConfig {
+                shard,
+                shift_ts: from_ts,
+                calculate_shift_ts: cal_shift_ts,
+                minimal_compaction_size: minimal_compaction_size.0,
+                from_ts,
+                until_ts,
+                prefetch_running_count,
+                prefetch_buffer_count,
+                physical_file_cache_capacity: physical_file_cache_capacity.0,
+                compression,
+                compression_level,
+            };
+            let out_prefix = ccfg.recommended_prefix(&name);
+            if force_regenerate {
+                clap::Error {
+                    message: format!(
+                        "--force-regenerate is no longer supported. Please use a different --name to generate a new compaction prefix, or manually clean the existing prefix `{}` before rerunning.",
+                        out_prefix
+                    ),
+                    kind: ErrorKind::ValueValidation,
+                    info: None,
+                }
+                .exit();
+            }
+            let tmp_engine =
+                TemporaryRocks::new(&cfg).expect("failed to create temp engine for writing SSTs.");
+            let exec = compact_log::Execution {
+                out_prefix,
+                cfg: ccfg,
+                max_concurrent_subcompaction: max_compaction_num,
+                external_storage,
+                db: Some(tmp_engine.rocks),
+            };
+
+            use tikv::server::status_server::lite::Server as StatusServerLite;
+            struct ExportTiKVInfo {
+                cfg: TikvConfig,
+            }
+            impl compact_log::hooking::ExecHooks for ExportTiKVInfo {
+                async fn before_execution_started(
+                    &mut self,
+                    cx: compact_log::hooking::BeforeStartCtx<'_>,
+                ) -> compact_log_backup::Result<()> {
+                    use compact_log_backup::OtherErrExt;
+                    tikv_util::info!("Welcome to TiKV control: compact log backup.");
+                    tikv_util::info!("TiKV version info."; "info_string" => tikv::tikv_version_info(None));
+
+                    let level = get_log_level();
+                    if level < Some(Level::Info) {
+                        warn!("Most of compact-log progress logs are only enabled in the `info` level."; "current_level" => ?level);
+                    }
+
+                    let srv = StatusServerLite::new(Arc::new(self.cfg.security.clone()));
+                    let _enter = cx.async_rt.enter();
+                    let hnd = srv
+                        .start(&self.cfg.server.status_addr)
+                        .adapt_err()
+                        .annotate("failed to start status server lite")?;
+                    tikv_util::info!("Started status server lite."; "at" => %hnd.address());
+                    Ok(())
+                }
+            }
+
+            let log_to_term = compact_log_hooks::observability::Observability::default();
+            let checkpoint_hook = compact_log_hooks::checkpoint::Checkpoint::default();
+            let save_meta = compact_log_hooks::save_meta::SaveMeta::default()
+                .with_checkpointed_file_sizes(checkpoint_hook.file_sizes());
+            let checkpoint = Some(checkpoint_hook);
+            let with_lock = if until_ts_unspecified {
+                compact_log_hooks::consistency::StorageConsistencyGuard::without_checkpoint_check()
+            } else {
+                compact_log_hooks::consistency::StorageConsistencyGuard::default()
+            };
+            let with_status_server = ExportTiKVInfo { cfg: cfg.clone() };
+            let skip_small_compaction = SkipSmallCompaction::new(minimal_compaction_size.0);
+            let hooks = (
+                (
+                    (log_to_term, checkpoint),
+                    (with_status_server, skip_small_compaction),
+                ),
+                (save_meta, with_lock),
+            );
+            match runtime.block_on(exec.run_with_storage_async(storage, hooks)) {
+                Ok(()) => tikv_util::info!("Compact log backup successfully."),
+                Err(err) => {
+                    tikv_util::error!("Failed to compact log backup."; "err" => %err, "err_verbose" => ?err);
+                    std::process::exit(1);
+                }
+            }
         }
         // Commands below requires either the data dir or the host.
         cmd => {
@@ -1076,6 +1259,45 @@ fn read_fail_file(path: &str) -> Vec<(String, String)> {
         ))
     }
     list
+}
+
+/// A temporary RocksDB instance.
+/// Its content will be saved at a temp dir, so don't put too many stuffs into
+/// it. The configurations are loaded to this instance, so it can be used for
+/// constructing / reading SST files.
+struct TemporaryRocks {
+    rocks: RocksEngine,
+    #[allow(dead_code)]
+    tmp: TempDir,
+}
+
+impl TemporaryRocks {
+    fn new(cfg: &TikvConfig) -> Result<Self, String> {
+        let tmp = TempDir::new().map_err(|v| format!("failed to create tmp dir: {}", v))?;
+        let opt = build_rocks_opts(cfg);
+        let cf_opts = cfg.rocksdb.build_cf_opts(
+            &cfg.rocksdb.build_cf_resources(
+                cfg.storage.block_cache.build_shared_cache(),
+                Default::default(),
+            ),
+            None,
+            cfg.storage.api_version(),
+            None,
+            cfg.storage.engine,
+        );
+        let rocks = new_engine_opt(
+            tmp.path().to_str().ok_or_else(|| {
+                format!(
+                    "temp path isn't valid utf-8 string: {}",
+                    tmp.path().display()
+                )
+            })?,
+            opt,
+            cf_opts,
+        )
+        .map_err(|v| format!("failed to build engine: {}", v))?;
+        Ok(Self { rocks, tmp })
+    }
 }
 
 fn build_rocks_opts(cfg: &TikvConfig) -> engine_rocks::RocksDbOptions {

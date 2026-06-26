@@ -17,7 +17,7 @@ use dashmap::DashMap;
 use encryption::{BackupEncryptionManager, EncrypterReader, Iv, MultiMasterKeyBackend};
 use encryption_export::create_async_backend;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE, CfName};
-use external_storage::{BackendConfig, ExternalStorage, UnpinReader, create_storage};
+use external_storage::{BackendConfig, ExternalStorage, HdfsConfig, UnpinReader, create_storage};
 use file_system::Sha256Reader;
 use futures::io::Cursor;
 use kvproto::{
@@ -340,6 +340,7 @@ pub struct Config {
     pub temp_file_size_limit: u64,
     pub temp_file_memory_quota: u64,
     pub max_flush_interval: Duration,
+    pub s3_multi_part_size: usize,
 }
 
 impl From<BackupStreamConfig> for Config {
@@ -348,11 +349,13 @@ impl From<BackupStreamConfig> for Config {
         let temp_file_size_limit = value.file_size_limit.0;
         let temp_file_memory_quota = value.temp_file_memory_quota.0;
         let max_flush_interval = value.max_flush_interval.0;
+        let s3_multi_part_size = value.s3_multi_part_size.0 as usize;
         Self {
             prefix,
             temp_file_size_limit,
             temp_file_memory_quota,
             max_flush_interval,
+            s3_multi_part_size,
         }
     }
 }
@@ -410,6 +413,9 @@ pub struct RouterInner {
 
     /// Backup encryption manager
     backup_encryption_manager: BackupEncryptionManager,
+
+    /// S3 multi part size
+    s3_multi_part_size: AtomicUsize,
 }
 
 impl std::fmt::Debug for RouterInner {
@@ -437,6 +443,7 @@ impl RouterInner {
             temp_file_memory_quota: AtomicU64::new(config.temp_file_memory_quota),
             max_flush_interval: SyncRwLock::new(config.max_flush_interval),
             backup_encryption_manager,
+            s3_multi_part_size: AtomicUsize::new(config.s3_multi_part_size),
         }
     }
 
@@ -509,12 +516,17 @@ impl RouterInner {
         let cfg = self.tempfile_config_for_task(&task);
         let backup_encryption_manager =
             self.build_backup_encryption_manager_for_task(&task).await?;
+        let backend_config = BackendConfig {
+            s3_multi_part_size: self.s3_multi_part_size.load(Ordering::Relaxed),
+            hdfs_config: HdfsConfig::default(),
+        };
         let stream_task = StreamTaskHandler::new(
             task,
             ranges.clone(),
             merged_file_size_limit,
             cfg,
             backup_encryption_manager,
+            backend_config,
         )
         .await?;
         self.tasks.insert(task_name.clone(), Arc::new(stream_task));
@@ -703,34 +715,29 @@ impl RouterInner {
     /// of this flush. returns `None` if failed.
     #[instrument(skip(self, cx))]
     pub async fn do_flush(&self, cx: FlushContext<'_>) -> Option<u64> {
-        let task = self.tasks.get(cx.task_name);
-        match task {
-            Some(task_handler) => {
-                let result = task_handler.do_flush(cx).await;
-                // set false to flushing whether success or fail
-                task_handler.set_flushing_status(false);
+        let task_handler = match self.get_task_handler(cx.task_name) {
+            Ok(h) => h,
+            Err(_) => return None,
+        };
+        let result = task_handler.do_flush(cx).await;
+        // set false to flushing whether success or fail
+        task_handler.set_flushing_status(false);
 
-                if let Err(e) = result {
-                    e.report("failed to flush task.");
-                    warn!("backup steam do flush fail"; "err" => ?e);
-                    if task_handler.flush_failure_count() > FLUSH_FAILURE_BECOME_FATAL_THRESHOLD {
-                        // NOTE: Maybe we'd better record all errors and send them to the client?
-                        try_send!(
-                            self.scheduler,
-                            Task::FatalError(
-                                TaskSelector::ByName(cx.task_name.to_owned()),
-                                Box::new(e)
-                            )
-                        );
-                    }
-                    return None;
-                }
-                // if succeed in flushing, update flush_time. Or retry do_flush immediately.
-                task_handler.update_flush_time();
-                result.ok().flatten()
+        if let Err(e) = result {
+            e.report("failed to flush task.");
+            warn!("backup steam do flush fail"; "err" => ?e);
+            if task_handler.flush_failure_count() > FLUSH_FAILURE_BECOME_FATAL_THRESHOLD {
+                // NOTE: Maybe we'd better record all errors and send them to the client?
+                try_send!(
+                    self.scheduler,
+                    Task::FatalError(TaskSelector::ByName(cx.task_name.to_owned()), Box::new(e))
+                );
             }
-            _ => None,
+            return None;
         }
+        // if succeed in flushing, update flush_time. Or retry do_flush immediately.
+        task_handler.update_flush_time();
+        result.ok().flatten()
     }
 
     #[instrument(skip(self))]
@@ -998,13 +1005,11 @@ impl StreamTaskHandler {
         merged_file_size_limit: u64,
         temp_pool_cfg: tempfiles::Config,
         backup_encryption_manager: BackupEncryptionManager,
+        backend_config: BackendConfig,
     ) -> Result<Self> {
         let temp_dir = &temp_pool_cfg.swap_files;
         tokio::fs::create_dir_all(temp_dir).await?;
-        let storage = Arc::from(create_storage(
-            task.info.get_storage(),
-            BackendConfig::default(),
-        )?);
+        let storage = Arc::from(create_storage(task.info.get_storage(), backend_config)?);
         let start_ts = task.info.get_start_ts();
         Ok(Self {
             task,
@@ -1161,8 +1166,8 @@ impl StreamTaskHandler {
             for f in fg.data_files_info.iter_mut() {
                 if let Some((epoches, start_key, end_key)) = rmap.get(&(f.region_id as _)) {
                     f.set_region_epoch(epoches.iter().copied().cloned().collect::<Vec<_>>().into());
-                    f.set_region_start_key(start_key.to_vec());
-                    f.set_region_end_key(end_key.to_vec());
+                    f.set_region_start_key(start_key.to_vec().into());
+                    f.set_region_end_key(end_key.to_vec().into());
                 }
             }
         }
@@ -1292,12 +1297,8 @@ impl StreamTaskHandler {
         }
         let min_ts = min_ts.unwrap_or_default();
         let max_ts = max_ts.unwrap_or_default();
-        merged_file_info.set_path(TempFileKey::file_name(
-            metadata.store_id,
-            min_ts,
-            max_ts,
-            is_meta,
-        ));
+        merged_file_info
+            .set_path(TempFileKey::file_name(metadata.store_id, min_ts, max_ts, is_meta).into());
         merged_file_info.set_data_files_info(data_file_infos.into());
         merged_file_info.set_length(stat_length);
         merged_file_info.set_max_ts(max_ts);
@@ -1317,6 +1318,9 @@ impl StreamTaskHandler {
 
         match ret {
             Ok(_) => {
+                crate::metrics::UPLOAD_FILE_SIZE
+                    .with_label_values(&["log"])
+                    .inc_by(stat_length as _);
                 info!(
                     "backup stream flush success";
                     "duration" => ?start.saturating_elapsed(),
@@ -1341,7 +1345,7 @@ impl StreamTaskHandler {
         )?;
 
         // push merged file into metadata
-        metadata.push(merged_file_info);
+        metadata.push(merged_file_info, is_meta);
         Ok(())
     }
 
@@ -1399,7 +1403,8 @@ impl StreamTaskHandler {
         &self,
         metadata_info: MetadataInfo,
         flush_ts: TimeStamp,
-    ) -> Result<()> {
+    ) -> Result<Vec<String>> {
+        let mut meta_files = vec![];
         if !metadata_info.file_groups.is_empty() {
             let mut min_begin_ts = u64::MAX;
             for file_group in metadata_info.file_groups.as_slice() {
@@ -1421,8 +1426,12 @@ impl StreamTaskHandler {
                 )
                 .await
                 .context(format_args!("flush meta {:?}", meta_path))?;
+            crate::metrics::UPLOAD_FILE_SIZE
+                .with_label_values(&["metadata"])
+                .inc_by(buflen as _);
+            meta_files.push(meta_path);
         }
-        Ok(())
+        Ok(meta_files)
     }
 
     /// get the total count of adjacent error.
@@ -1477,7 +1486,8 @@ impl StreamTaskHandler {
             // flush meta file to storage.
             self.fill_region_info(cx, &mut backup_metadata);
             // flush backup metadata to external storage.
-            self.flush_backup_metadata(backup_metadata, cx.flush_ts)
+            let meta_files = self
+                .flush_backup_metadata(backup_metadata, cx.flush_ts)
                 .await?;
             let save_files_dur = sw.lap();
             crate::metrics::FLUSH_DURATION
@@ -1494,6 +1504,7 @@ impl StreamTaskHandler {
                 .iter()
                 .for_each(|(size, _)| crate::metrics::FLUSH_FILE_SIZE.observe(*size as _));
             info!("log backup flush done";
+                "meta_files" => ?meta_files,
                 "merged_files" => %file_size_vec.len(),    // the number of the merged files
                 "files" => %file_size_vec.iter().map(|(_, v)| v).sum::<usize>(),
                 "total_size" => %file_size_vec.iter().map(|(v, _)| v).sum::<u64>(), // the size of the merged files after compressed
@@ -1745,6 +1756,8 @@ pub struct MetadataInfo {
     pub min_ts: Option<u64>,
     pub max_ts: Option<u64>,
     pub store_id: u64,
+
+    has_meta_files: bool,
 }
 
 impl MetadataInfo {
@@ -1755,6 +1768,7 @@ impl MetadataInfo {
             min_ts: None,
             max_ts: None,
             store_id: 0,
+            has_meta_files: false,
         }
     }
 
@@ -1762,7 +1776,11 @@ impl MetadataInfo {
         self.store_id = store_id;
     }
 
-    fn push(&mut self, file: DataFileGroup) {
+    fn make_flags(&self) -> u64 {
+        if self.has_meta_files { 0 } else { 1 }
+    }
+
+    fn push(&mut self, file: DataFileGroup, is_meta: bool) {
         let rts = file.min_resolved_ts;
         self.min_resolved_ts = self.min_resolved_ts.map_or(Some(rts), |r| Some(r.min(rts)));
         self.min_ts = self
@@ -1772,6 +1790,7 @@ impl MetadataInfo {
             .max_ts
             .map_or(Some(file.max_ts), |ts| Some(ts.max(file.max_ts)));
         self.file_groups.push(file);
+        self.has_meta_files = self.has_meta_files || is_meta;
     }
 
     fn marshal_to(self) -> Result<Vec<u8>> {
@@ -1789,12 +1808,22 @@ impl MetadataInfo {
     }
 
     fn path_to_meta(&self, min_begin_ts: u64, flush_ts: u64) -> String {
+        debug_assert!(
+            flush_ts > 0,
+            "flush_ts must be positive (monotonically assigned by Endpoint)"
+        );
         format!(
-            "v1/backupmeta/{:016X}-{:016X}-{:016X}-{:016X}.meta",
+            "v1/backupmeta/{:016X}{:016X}-{}{:016X}{}{:016X}{}{:016X}{}{:016X}.meta",
             flush_ts,
+            self.store_id,
+            utils::BACKUP_META_MIN_BEGIN_TS_PREFIX,
             min_begin_ts,
+            utils::BACKUP_META_MIN_TS_PREFIX,
             self.min_ts.unwrap_or_default(),
+            utils::BACKUP_META_MAX_TS_PREFIX,
             self.max_ts.unwrap_or_default(),
+            utils::BACKUP_META_FLAG_PREFIX,
+            self.make_flags()
         )
     }
 }
@@ -1905,7 +1934,8 @@ impl DataFile {
             self.sha256
                 .finish()
                 .map(|bytes| bytes.to_vec())
-                .map_err(|err| Error::Other(box_err!("openssl hasher failed to init: {}", err)))?,
+                .map_err(|err| Error::Other(box_err!("openssl hasher failed to init: {}", err)))?
+                .into(),
         );
         meta.set_crc64xor(self.crc64xor);
         meta.set_number_of_entries(self.number_of_entries as _);
@@ -1916,13 +1946,13 @@ impl DataFile {
             self.min_begin_ts
                 .map_or(self.min_ts.into_inner(), |ts| ts.into_inner()),
         );
-        meta.set_start_key(std::mem::take(&mut self.start_key));
-        meta.set_end_key(std::mem::take(&mut self.end_key));
+        meta.set_start_key(std::mem::take(&mut self.start_key).into());
+        meta.set_end_key(std::mem::take(&mut self.end_key).into());
         meta.set_length(self.file_size as _);
 
         meta.set_is_meta(file_key.is_meta);
         meta.set_table_id(file_key.table_id);
-        meta.set_cf(file_key.cf.to_owned());
+        meta.set_cf(file_key.cf.to_owned().into());
         meta.set_region_id(file_key.region_id as i64);
         meta.set_type(file_key.get_file_type());
 
@@ -2090,6 +2120,7 @@ mod tests {
                 temp_file_size_limit: 1024,
                 temp_file_memory_quota: 1024 * 2,
                 max_flush_interval: Duration::from_secs(300),
+                s3_multi_part_size: ReadableSize::mb(5).0 as usize,
             },
             BackupEncryptionManager::default(),
         );
@@ -2189,6 +2220,7 @@ mod tests {
                 temp_file_size_limit: 32,
                 temp_file_memory_quota: 32 * 2,
                 max_flush_interval: Duration::from_secs(300),
+                s3_multi_part_size: ReadableSize::mb(5).0 as usize,
             },
             BackupEncryptionManager::default(),
         );
@@ -2274,29 +2306,19 @@ mod tests {
         for entry in walkdir::WalkDir::new(storage_path) {
             let entry = entry.unwrap();
             if entry.path().extension() == Some(OsStr::new("meta")) {
-                let filename = entry.path().file_stem().unwrap().to_os_string();
-                let parts: Vec<&str> = filename.to_str().unwrap().split('-').collect();
-
-                assert!(
-                    parts.len() >= 4,
-                    "Invalid meta file name format: expected at least 4 parts, got {}, file: {:?}",
-                    parts.len(),
-                    entry.file_name(),
-                );
-
-                for (i, label) in ["flushTs", "minDefaultTs", "minTs", "maxTs"]
-                    .iter()
-                    .enumerate()
-                {
-                    let val = u64::from_str_radix(parts[i], 16);
-                    assert!(
-                        val.is_ok(),
-                        "Failed to parse '{}' as u64 (hex) for {} in file name: {:?}",
-                        parts[i],
-                        label,
-                        entry.file_name(),
-                    );
-                }
+                let filename = entry
+                    .path()
+                    .file_stem()
+                    .and_then(OsStr::to_str)
+                    .unwrap_or_else(|| {
+                        panic!("invalid utf8 meta file name: {:?}", entry.file_name())
+                    });
+                utils::parse_backupmeta_filename(filename).unwrap_or_else(|err| {
+                    panic!(
+                        "invalid backup meta file name {:?}: {err}",
+                        entry.file_name()
+                    )
+                });
 
                 meta_count += 1;
             } else if entry.path().extension() == Some(OsStr::new("log")) {
@@ -2344,6 +2366,7 @@ mod tests {
             merged_file_size_limit,
             make_tempfiles_cfg(tmp_dir.path()),
             BackupEncryptionManager::default(),
+            BackendConfig::default(),
         )
         .await
         .unwrap();
@@ -2472,6 +2495,7 @@ mod tests {
                 temp_file_size_limit: 1,
                 temp_file_memory_quota: 2,
                 max_flush_interval: Duration::from_secs(300),
+                s3_multi_part_size: ReadableSize::mb(5).0 as usize,
             },
             BackupEncryptionManager::default(),
         ));
@@ -2511,6 +2535,7 @@ mod tests {
                 temp_file_size_limit: 32,
                 temp_file_memory_quota: 32 * 2,
                 max_flush_interval: Duration::from_secs(300),
+                s3_multi_part_size: ReadableSize::mb(5).0 as usize,
             },
             BackupEncryptionManager::default(),
         );
@@ -2554,6 +2579,7 @@ mod tests {
                 temp_file_size_limit: 1,
                 temp_file_memory_quota: 2,
                 max_flush_interval: Duration::from_secs(300),
+                s3_multi_part_size: ReadableSize::mb(5).0 as usize,
             },
             BackupEncryptionManager::default(),
         ));
@@ -2609,6 +2635,7 @@ mod tests {
                 temp_file_size_limit: 1,
                 temp_file_memory_quota: 2,
                 max_flush_interval: Duration::from_secs(300),
+                s3_multi_part_size: ReadableSize::mb(5).0 as usize,
             },
             BackupEncryptionManager::default(),
         ));
@@ -2746,6 +2773,7 @@ mod tests {
             0x100000,
             make_tempfiles_cfg(tmp_dir.path()),
             backup_encryption_manager,
+            BackendConfig::default(),
         )
         .await
         .unwrap();
@@ -2902,6 +2930,7 @@ mod tests {
                 temp_file_size_limit: 1,
                 temp_file_memory_quota: 2,
                 max_flush_interval: cfg.max_flush_interval.0,
+                s3_multi_part_size: cfg.s3_multi_part_size.0 as usize,
             },
             BackupEncryptionManager::default(),
         ));
@@ -2959,6 +2988,7 @@ mod tests {
                 temp_file_size_limit: 1000,
                 temp_file_memory_quota: 2,
                 max_flush_interval: Duration::from_secs(300),
+                s3_multi_part_size: ReadableSize::mb(5).0 as usize,
             },
             BackupEncryptionManager::default(),
         ));
@@ -3111,6 +3141,7 @@ mod tests {
             merged_file_size_limit,
             make_tempfiles_cfg(tempfile::tempdir().unwrap().path()),
             backup_encryption_manager.clone(),
+            BackendConfig::default(),
         )
         .await
         .unwrap();
@@ -3199,20 +3230,10 @@ mod tests {
             let entry = entry.unwrap();
             if entry.path().extension() == Some(OsStr::new("meta")) {
                 if let Some(filename) = entry.path().file_stem().and_then(OsStr::to_str) {
-                    // v1/backupmeta/{a}-{b}-{c}-{d}.meta
-                    let parts: Vec<&str> = filename.split('-').collect();
-                    if parts.len() == 4 {
-                        for p in parts {
-                            assert!(
-                                u64::from_str_radix(p, 16).is_ok(),
-                                "Part '{}' is not a valid hex u64",
-                                p
-                            );
-                        }
-                        meta_files.push(entry.path().to_path_buf());
-                    } else {
-                        panic!("backup meta file format changed")
-                    }
+                    utils::parse_backupmeta_filename(filename).unwrap_or_else(|err| {
+                        panic!("backup meta file format changed: {filename}, {err}")
+                    });
+                    meta_files.push(entry.path().to_path_buf());
                 }
             }
         }

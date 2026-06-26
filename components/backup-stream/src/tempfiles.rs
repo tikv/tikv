@@ -340,7 +340,8 @@ impl TempFilePool {
         if let Some(f) = &self.override_swapout {
             return Ok(SwappedOut::Dynamic(f(&abs_path)));
         }
-        let file = OsFile::from_std(SyncOsFile::create(&abs_path)?);
+        let mut file = OsFile::from_std(SyncOsFile::create(&abs_path)?);
+        file.set_max_buf_size(self.config().write_buffer_size);
 
         let pfile = match &self.backup_encryption_manager.opt_data_key_manager() {
             Some(enc) => SwappedOut::Encrypted(
