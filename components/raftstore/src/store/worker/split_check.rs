@@ -801,6 +801,10 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         }
     }
 
+    /// Picks a load-split fallback key from approximate middle within a key range.
+    ///
+    /// The candidate is normalized with the same timestamp-stripping behavior as
+    /// SplitObserver before boundary and region-validity checks.
     fn approximate_middle_for_load_key_range(
         &self,
         tablet: &EK,

@@ -664,6 +664,7 @@ impl AutoSplitController {
         Duration::from_secs(self.cfg.detect_times * 2)
     }
 
+    /// Builds the suppression-cache key from region id and hottest key range.
     fn cpu_top_fallback_suppression_cache_key(
         region_id: u64,
         hottest_key_range: &KeyRange,
@@ -675,12 +676,14 @@ impl AutoSplitController {
         )
     }
 
+    /// Removes stale suppression entries outside the cooldown window.
     fn prune_expired_cpu_top_fallback_suppressions(&mut self) {
         let interval = self.cpu_top_fallback_suppress_interval();
         self.cpu_top_fallback_suppressions
             .retain(|_, last_attempt_time| last_attempt_time.saturating_elapsed() < interval);
     }
 
+    /// Returns whether CPU-top fallback should be suppressed for this region/range.
     fn should_suppress_cpu_top_fallback(
         &mut self,
         region_id: u64,
@@ -692,6 +695,7 @@ impl AutoSplitController {
             .contains_key(&key)
     }
 
+    /// Records a CPU-top fallback attempt for this region/range pair.
     fn record_cpu_top_fallback(
         &mut self,
         region_id: u64,
@@ -1032,6 +1036,7 @@ impl AutoSplitController {
                 Ok(life_time) => life_time < interval,
                 Err(_) => true,
             });
+        // Keep suppression cache bounded even when only clear() runs.
         self.prune_expired_cpu_top_fallback_suppressions();
     }
 

@@ -543,6 +543,7 @@ mod tests {
     }
 
     #[test]
+    /// Regression test for boundary-after-strip behavior in load fallback.
     fn test_load_split_with_mvcc_boundary_key_no_split() {
         let path = Builder::new()
             .prefix("test-load-split-mvcc-boundary")
