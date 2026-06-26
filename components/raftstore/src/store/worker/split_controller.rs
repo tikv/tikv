@@ -565,11 +565,18 @@ pub enum SplitConfigChange {
     UpdateRegionCpuCollector(bool),
 }
 
+#[derive(Debug)]
+struct CpuTopFallbackSuppressionEntry {
+    start_key: Vec<u8>,
+    end_key: Vec<u8>,
+    last_attempt_time: Instant,
+}
+
 pub struct AutoSplitController {
     // RegionID -> Recorder
     pub recorders: HashMap<u64, Recorder>,
-    // (RegionID, start_key, end_key) -> last CPU-top fallback attempt time.
-    cpu_top_fallback_suppressions: HashMap<(u64, Vec<u8>, Vec<u8>), Instant>,
+    // RegionID -> per-range CPU-top fallback suppression entries.
+    cpu_top_fallback_suppressions: HashMap<u64, Vec<CpuTopFallbackSuppressionEntry>>,
     pub cfg: SplitConfig,
     cfg_tracker: Tracker<SplitConfig>,
     // Thread-related info
@@ -664,23 +671,14 @@ impl AutoSplitController {
         Duration::from_secs(self.cfg.detect_times * 2)
     }
 
-    /// Builds the suppression-cache key from region id and hottest key range.
-    fn cpu_top_fallback_suppression_cache_key(
-        region_id: u64,
-        hottest_key_range: &KeyRange,
-    ) -> (u64, Vec<u8>, Vec<u8>) {
-        (
-            region_id,
-            hottest_key_range.start_key.clone(),
-            hottest_key_range.end_key.clone(),
-        )
-    }
-
     /// Removes stale suppression entries outside the cooldown window.
     fn prune_expired_cpu_top_fallback_suppressions(&mut self) {
         let interval = self.cpu_top_fallback_suppress_interval();
         self.cpu_top_fallback_suppressions
-            .retain(|_, last_attempt_time| last_attempt_time.saturating_elapsed() < interval);
+            .retain(|_, entries| {
+                entries.retain(|entry| entry.last_attempt_time.saturating_elapsed() < interval);
+                !entries.is_empty()
+            });
     }
 
     /// Returns whether CPU-top fallback should be suppressed for this region/range.
@@ -690,9 +688,14 @@ impl AutoSplitController {
         hottest_key_range: &KeyRange,
     ) -> bool {
         self.prune_expired_cpu_top_fallback_suppressions();
-        let key = Self::cpu_top_fallback_suppression_cache_key(region_id, hottest_key_range);
         self.cpu_top_fallback_suppressions
-            .contains_key(&key)
+            .get(&region_id)
+            .is_some_and(|entries| {
+                entries.iter().any(|entry| {
+                    entry.start_key.as_slice() == hottest_key_range.start_key.as_slice()
+                        && entry.end_key.as_slice() == hottest_key_range.end_key.as_slice()
+                })
+            })
     }
 
     /// Records a CPU-top fallback attempt for this region/range pair.
@@ -702,11 +705,23 @@ impl AutoSplitController {
         hottest_key_range: &KeyRange,
     ) {
         self.prune_expired_cpu_top_fallback_suppressions();
-        let key = Self::cpu_top_fallback_suppression_cache_key(region_id, hottest_key_range);
-        self.cpu_top_fallback_suppressions.insert(
-            key,
-            Instant::now_coarse(),
-        );
+        let now = Instant::now_coarse();
+        let entries = self
+            .cpu_top_fallback_suppressions
+            .entry(region_id)
+            .or_insert_with(Vec::new);
+        if let Some(entry) = entries.iter_mut().find(|entry| {
+            entry.start_key.as_slice() == hottest_key_range.start_key.as_slice()
+                && entry.end_key.as_slice() == hottest_key_range.end_key.as_slice()
+        }) {
+            entry.last_attempt_time = now;
+        } else {
+            entries.push(CpuTopFallbackSuppressionEntry {
+                start_key: hottest_key_range.start_key.clone(),
+                end_key: hottest_key_range.end_key.clone(),
+                last_attempt_time: now,
+            });
+        }
     }
 
     // collect the read stats from read_stats_vec and dispatch them to a Region
@@ -895,8 +910,7 @@ impl AutoSplitController {
                 && (!is_unified_read_pool_busy || !is_region_busy)
             {
                 self.recorders.remove_entry(&region_id);
-                self.cpu_top_fallback_suppressions
-                    .retain(|(rid, _, _), _| *rid != region_id);
+                self.cpu_top_fallback_suppressions.remove(&region_id);
                 continue;
             }
 
@@ -1542,16 +1556,18 @@ mod tests {
         hub.record_cpu_top_fallback(1, &hottest_key_range);
         assert!(hub.should_suppress_cpu_top_fallback(1, &hottest_key_range));
         let suppress_interval = hub.cpu_top_fallback_suppress_interval();
-        let key = (
-            1,
-            hottest_key_range.start_key.clone(),
-            hottest_key_range.end_key.clone(),
-        );
-        let state = hub.cpu_top_fallback_suppressions.get_mut(&key).unwrap();
-        *state = Instant::now_coarse() - suppress_interval - Duration::from_secs(1);
+        let entries = hub.cpu_top_fallback_suppressions.get_mut(&1).unwrap();
+        let state = entries
+            .iter_mut()
+            .find(|entry| {
+                entry.start_key.as_slice() == hottest_key_range.start_key.as_slice()
+                    && entry.end_key.as_slice() == hottest_key_range.end_key.as_slice()
+            })
+            .unwrap();
+        state.last_attempt_time = Instant::now_coarse() - suppress_interval - Duration::from_secs(1);
         hub.clear();
 
-        assert!(!hub.cpu_top_fallback_suppressions.contains_key(&key));
+        assert!(!hub.cpu_top_fallback_suppressions.contains_key(&1));
         assert!(!hub.should_suppress_cpu_top_fallback(1, &hottest_key_range));
     }
 
@@ -1565,9 +1581,8 @@ mod tests {
         hub.record_cpu_top_fallback(1, &hottest_key_range);
         assert_eq!(
             hub.cpu_top_fallback_suppressions
-                .iter()
-                .filter(|((rid, _, _), _)| *rid == 1)
-                .count(),
+                .get(&1)
+                .map_or(0, Vec::len),
             1
         );
 
@@ -1584,9 +1599,8 @@ mod tests {
 
         assert_eq!(
             hub.cpu_top_fallback_suppressions
-                .iter()
-                .filter(|((rid, _, _), _)| *rid == 1)
-                .count(),
+                .get(&1)
+                .map_or(0, Vec::len),
             0
         );
     }
