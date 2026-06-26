@@ -345,6 +345,11 @@ external_storage = { path = "components/external_storage" }
 external_storage_export = { path = "components/external_storage/export" }
 file_system = { path = "components/file_system" }
 gcp = { path = "components/cloud/gcp" }
+<<<<<<< HEAD
+=======
+gcp_v2 = { path = "components/cloud/gcp_v2" }
+health_controller = { path = "components/health_controller" }
+>>>>>>> 3387bea551 (BR: add new storage type using google offical rust package. (#19315))
 into_other = { path = "components/into_other" }
 keys = { path = "components/keys" }
 log_wrappers = { path = "components/log_wrappers" }

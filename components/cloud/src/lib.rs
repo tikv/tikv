@@ -9,6 +9,9 @@
 pub mod error;
 pub use error::{Error, ErrorTrait, Result};
 
+pub const STORAGE_VENDOR_NAME_GCP: &str = "gcp";
+pub const STORAGE_VENDOR_NAME_GCP_V2: &str = "gcp_v2";
+
 pub mod kms;
 pub use kms::{Config, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey, SubConfigAzure};
 
