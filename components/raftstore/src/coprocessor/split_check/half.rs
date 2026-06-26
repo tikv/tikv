@@ -135,7 +135,10 @@ pub fn get_region_approximate_middle_in_range(
         assert!(keys::validate_data_key(start_key), "start_key must be in data-key space");
     }
     if let Some(end_key) = end_key {
-        assert!(keys::validate_data_key(end_key), "end_key must be in data-key space");
+        assert!(
+            end_key == keys::DATA_MAX_KEY || keys::validate_data_key(end_key),
+            "end_key must be in data_end_key space",
+        );
     }
     let start_key = match start_key {
         Some(start_key) if start_key > region_start_key.as_slice() => start_key.to_vec(),
