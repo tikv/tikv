@@ -12,7 +12,7 @@ default = [
   "test-engine-raft-raft-engine",
   "engine_rocks",
 ]
-failpoints = ["fail/failpoints", "engine_test/failpoints"]
+failpoints = ["fail/failpoints"]
 testexport = []
 test-engine-kv-rocksdb = ["engine_test/test-engine-kv-rocksdb"]
 test-engine-raft-raft-engine = ["engine_test/test-engine-raft-raft-engine"]
