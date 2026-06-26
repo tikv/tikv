@@ -857,6 +857,7 @@ pub mod tests {
             snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
             ScanMode::Mixed,
             false,
+            false,
         );
         let mut statistics = CfStatistics::default();
         cursor.seek(&Key::from_raw(key), &mut statistics).unwrap();
@@ -869,6 +870,7 @@ pub mod tests {
         let mut cursor = Cursor::new(
             snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
             ScanMode::Mixed,
+            false,
             false,
         );
         let mut statistics = CfStatistics::default();
@@ -968,6 +970,7 @@ pub mod tests {
             snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
             ScanMode::Mixed,
             false,
+            false,
         );
         let mut statistics = CfStatistics::default();
         assert!(
@@ -991,6 +994,7 @@ pub mod tests {
         let mut cursor = Cursor::new(
             snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
             ScanMode::Mixed,
+            false,
             false,
         );
         assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
@@ -1016,6 +1020,7 @@ pub mod tests {
             snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
             ScanMode::Mixed,
             false,
+            false,
         );
         assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
         assert_near_seek(&mut cursor, b"z", (b"z", b"2"));
@@ -1033,6 +1038,7 @@ pub mod tests {
         let mut cursor = Cursor::new(
             snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
             ScanMode::Mixed,
+            false,
             false,
         );
         let mut statistics = CfStatistics::default();
@@ -1108,10 +1114,12 @@ pub mod tests {
             snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
             mode,
             false,
+            false,
         );
         let mut near_cursor = Cursor::new(
             snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
             mode,
+            false,
             false,
         );
         let limit = (SEEK_BOUND as usize * 10 + 50 - 1) * 2;
@@ -1251,6 +1259,7 @@ pub mod tests {
         let mut iter = Cursor::new(
             snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
             ScanMode::Forward,
+            false,
             false,
         );
 
