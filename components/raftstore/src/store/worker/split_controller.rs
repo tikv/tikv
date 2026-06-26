@@ -668,7 +668,7 @@ impl AutoSplitController {
     }
 
     fn cpu_top_fallback_suppress_interval(&self) -> Duration {
-        Duration::from_secs(self.cfg.detect_times * 2)
+        Duration::from_secs(self.cfg.detect_times.saturating_mul(2))
     }
 
     /// Removes stale suppression entries outside the cooldown window.
