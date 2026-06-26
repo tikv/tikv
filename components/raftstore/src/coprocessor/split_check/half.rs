@@ -115,8 +115,40 @@ pub fn get_region_approximate_middle(
     db: &impl KvEngine,
     region: &Region,
 ) -> Result<Option<Vec<u8>>> {
-    let start_key = keys::enc_start_key(region);
-    let end_key = keys::enc_end_key(region);
+    get_region_approximate_middle_in_range(db, region, None, None)
+}
+
+/// Get region approximate middle key from an explicit encoded key range.
+///
+/// The provided range is clamped to region boundaries. When the resulting
+/// range is empty, returns `Ok(None)`.
+pub fn get_region_approximate_middle_in_range(
+    db: &impl KvEngine,
+    region: &Region,
+    start_key: Option<&[u8]>,
+    end_key: Option<&[u8]>,
+) -> Result<Option<Vec<u8>>> {
+    let region_start_key = keys::enc_start_key(region);
+    let region_end_key = keys::enc_end_key(region);
+
+    let start_key = match start_key {
+        Some(start_key) if start_key > region_start_key.as_slice() => start_key.to_vec(),
+        _ => region_start_key,
+    };
+    let end_key = match end_key {
+        Some(end_key)
+            if !end_key.is_empty()
+                && (region_end_key.is_empty() || end_key < region_end_key.as_slice()) =>
+        {
+            end_key.to_vec()
+        }
+        _ => region_end_key,
+    };
+
+    if !end_key.is_empty() && start_key >= end_key {
+        return Ok(None);
+    }
+
     let range = Range::new(&start_key, &end_key);
     Ok(box_try!(
         db.get_range_approximate_split_keys(range, 1)
@@ -126,7 +158,7 @@ pub fn get_region_approximate_middle(
 
 #[cfg(test)]
 mod tests {
-    use std::{iter, sync::mpsc};
+    use std::{iter, sync::mpsc, time::Duration};
 
     use engine_test::ctor::{CfOptions, DbOptions};
     use engine_traits::{ALL_CFS, CF_DEFAULT, LARGE_CFS, MiscExt, SyncMutable};
@@ -149,6 +181,56 @@ mod tests {
         },
         store::{BucketRange, SplitCheckRunner, SplitCheckTask},
     };
+
+    fn assert_no_ask_split(rx: &mpsc::Receiver<SchedTask>) {
+        loop {
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(SchedTask::AskSplit { .. }) => {
+                    panic!("unexpected AskSplit task emitted");
+                }
+                Ok(_) => {
+                    // UpdateApproximate* and bucket refresh are expected side effects.
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => break,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+    }
+
+    fn assert_ask_split_in_range(
+        rx: &mpsc::Receiver<SchedTask>,
+        region: &Region,
+        start_key: &[u8],
+        end_key: &[u8],
+    ) {
+        loop {
+            match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(SchedTask::AskSplit {
+                    region_id,
+                    split_keys,
+                    source,
+                    ..
+                }) => {
+                    assert_eq!(region_id, region.get_id());
+                    assert_eq!(source, "split_checker_by_load");
+                    assert_eq!(split_keys.len(), 1);
+                    let split_key = &split_keys[0];
+                    assert!(split_key.as_slice() > start_key);
+                    if !end_key.is_empty() {
+                        assert!(split_key.as_slice() < end_key);
+                    }
+                    return;
+                }
+                Ok(_) => {}
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    panic!("expected AskSplit task, but none received")
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    panic!("expected AskSplit task, but channel disconnected")
+                }
+            }
+        }
+    }
 
     /// SplitCheckerHost should pick Half/Size/Keys observers based on
     /// SplitReason
@@ -358,6 +440,161 @@ mod tests {
         ));
         let split_key = Key::from_raw(b"0006");
         must_split_at(&rx, &region, vec![split_key.into_encoded()]);
+    }
+
+    #[test]
+    fn test_load_split_with_empty_key_range_no_split() {
+        let path = Builder::new()
+            .prefix("test-load-split-empty-range")
+            .tempdir()
+            .unwrap();
+        let engine = engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
+
+        let mut region = Region::default();
+        region.set_id(1);
+        region.mut_peers().push(Peer::default());
+        region.mut_region_epoch().set_version(2);
+        region.mut_region_epoch().set_conf_ver(5);
+
+        let (tx, rx) = mpsc::sync_channel(100);
+        let cfg = Config {
+            // Keep bucket size large enough so tiny ranges won't form >= 2 buckets.
+            region_max_size: Some(ReadableSize::mb(256)),
+            ..Default::default()
+        };
+        let mut host = CoprocessorHost::new(tx.clone(), cfg);
+        host.registry
+            .register_split_check_observer(100, BoxSplitCheckObserver::new(HalfCheckObserver));
+        host.registry.register_split_check_observer(
+            200,
+            BoxSplitCheckObserver::new(SizeCheckObserver::new(tx.clone())),
+        );
+        host.registry.register_split_check_observer(
+            300,
+            BoxSplitCheckObserver::new(KeysCheckObserver::new(tx.clone())),
+        );
+
+        let mut runnable = SplitCheckRunner::new(engine, tx, host, None);
+
+        let start_key = Key::from_raw(b"0000").into_encoded();
+        let end_key = Key::from_raw(b"0001").into_encoded();
+        runnable.run(SplitCheckTask::split_check_key_range(
+            region,
+            Some(start_key),
+            Some(end_key),
+            SplitReason::Load,
+            CheckPolicy::Scan,
+            None,
+        ));
+
+        assert_no_ask_split(&rx);
+    }
+
+    #[test]
+    fn test_load_split_with_single_key_bucket_no_split() {
+        let path = Builder::new()
+            .prefix("test-load-split-single-key")
+            .tempdir()
+            .unwrap();
+        let engine = engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
+
+        let mut region = Region::default();
+        region.set_id(1);
+        region.mut_peers().push(Peer::default());
+        region.mut_region_epoch().set_version(2);
+        region.mut_region_epoch().set_conf_ver(5);
+
+        let (tx, rx) = mpsc::sync_channel(100);
+        let cfg = Config {
+            // Keep bucket size large enough so one key only forms one bucket.
+            region_max_size: Some(ReadableSize::mb(256)),
+            ..Default::default()
+        };
+        let mut host = CoprocessorHost::new(tx.clone(), cfg);
+        host.registry
+            .register_split_check_observer(100, BoxSplitCheckObserver::new(HalfCheckObserver));
+        host.registry.register_split_check_observer(
+            200,
+            BoxSplitCheckObserver::new(SizeCheckObserver::new(tx.clone())),
+        );
+        host.registry.register_split_check_observer(
+            300,
+            BoxSplitCheckObserver::new(KeysCheckObserver::new(tx.clone())),
+        );
+
+        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, host, None);
+
+        let key = keys::data_key(Key::from_raw(b"0005").as_encoded());
+        engine.put_cf(CF_DEFAULT, &key, &key).unwrap();
+        engine.flush_cf(CF_DEFAULT, true).unwrap();
+
+        let start_key = Key::from_raw(b"0005").into_encoded();
+        let end_key = Key::from_raw(b"0006").into_encoded();
+        runnable.run(SplitCheckTask::split_check_key_range(
+            region,
+            Some(start_key),
+            Some(end_key),
+            SplitReason::Load,
+            CheckPolicy::Scan,
+            None,
+        ));
+
+        assert_no_ask_split(&rx);
+    }
+
+    #[test]
+    fn test_load_split_with_single_bucket_uses_approximate_fallback() {
+        let path = Builder::new()
+            .prefix("test-load-split-approximate-fallback")
+            .tempdir()
+            .unwrap();
+        let engine = engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
+
+        let mut region = Region::default();
+        region.set_id(1);
+        region.mut_peers().push(Peer::default());
+        region.mut_region_epoch().set_version(2);
+        region.mut_region_epoch().set_conf_ver(5);
+
+        let (tx, rx) = mpsc::sync_channel(100);
+        let cfg = Config {
+            // Keep bucket size large enough so this range only forms one bucket.
+            region_max_size: Some(ReadableSize::mb(256)),
+            ..Default::default()
+        };
+        let mut host = CoprocessorHost::new(tx.clone(), cfg);
+        host.registry
+            .register_split_check_observer(100, BoxSplitCheckObserver::new(HalfCheckObserver));
+        host.registry.register_split_check_observer(
+            200,
+            BoxSplitCheckObserver::new(SizeCheckObserver::new(tx.clone())),
+        );
+        host.registry.register_split_check_observer(
+            300,
+            BoxSplitCheckObserver::new(KeysCheckObserver::new(tx.clone())),
+        );
+
+        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, host, None);
+
+        for i in 0..21 {
+            let k = format!("{:04}", i).into_bytes();
+            let k = keys::data_key(Key::from_raw(&k).as_encoded());
+            engine.put_cf(CF_DEFAULT, &k, &k).unwrap();
+            engine.flush_cf(CF_DEFAULT, true).unwrap();
+        }
+
+        let start_key = Key::from_raw(b"0000").into_encoded();
+        let end_key = Key::from_raw(b"0020").into_encoded();
+        runnable.run(SplitCheckTask::split_check_key_range(
+            region.clone(),
+            Some(start_key.clone()),
+            Some(end_key.clone()),
+            SplitReason::Load,
+            CheckPolicy::Scan,
+            None,
+        ));
+
+        assert_ask_split_in_range(&rx, &region, &start_key, &end_key);
     }
 
     fn test_generate_region_bucket_impl(mvcc: bool) {
@@ -619,5 +856,49 @@ mod tests {
             .into_raw()
             .unwrap();
         assert_eq!(escape(&middle_key), "key_050");
+    }
+
+    #[test]
+    fn test_get_region_approximate_middle_in_range_cf() {
+        let tmp = Builder::new()
+            .prefix("test_raftstore_util_in_range")
+            .tempdir()
+            .unwrap();
+        let path = tmp.path().to_str().unwrap();
+
+        let db_opts = DbOptions::default();
+        let mut cf_opts = CfOptions::new();
+        cf_opts.set_level_zero_file_num_compaction_trigger(10);
+        let cfs_opts = LARGE_CFS.iter().map(|cf| (*cf, cf_opts.clone())).collect();
+        let engine = engine_test::kv::new_engine_opt(path, db_opts, cfs_opts).unwrap();
+
+        let mut big_value = Vec::with_capacity(256);
+        big_value.extend(iter::repeat_n(b'v', 256));
+        for i in 0..100 {
+            let k = format!("key_{:03}", i).into_bytes();
+            let k = keys::data_key(Key::from_raw(&k).as_encoded());
+            engine.put_cf(CF_DEFAULT, &k, &big_value).unwrap();
+            engine.flush_cf(CF_DEFAULT, true).unwrap();
+        }
+
+        let mut region = Region::default();
+        region.mut_peers().push(Peer::default());
+        let start_key = keys::data_key(Key::from_raw(b"key_020").as_encoded());
+        let end_key = keys::data_key(Key::from_raw(b"key_030").as_encoded());
+
+        let middle_key = get_region_approximate_middle_in_range(
+            &engine,
+            &region,
+            Some(&start_key),
+            Some(&end_key),
+        )
+        .unwrap()
+        .unwrap();
+
+        let middle_key = Key::from_encoded_slice(keys::origin_key(&middle_key))
+            .into_raw()
+            .unwrap();
+        assert!(middle_key.as_slice() >= &b"key_020"[..]);
+        assert!(middle_key.as_slice() < &b"key_030"[..]);
     }
 }
