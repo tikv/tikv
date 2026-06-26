@@ -575,6 +575,11 @@ impl ConcurrencyManager {
         self.action_on_invalid_max_ts.load()
     }
 
+    /// Updates the drift allowance used by future max-ts limit refreshes.
+    ///
+    /// Decreasing the allowance does not immediately tighten the cached drifted
+    /// limit. The cached limit remains monotonic in `set_max_ts_limit` and is
+    /// tightened only after PD TSO or physical time catches up.
     pub fn set_max_ts_drift_allowance(&self, allowance: Duration) {
         self.max_ts_drift_allowance_ms
             .store(allowance.as_millis() as u64, Ordering::SeqCst);
