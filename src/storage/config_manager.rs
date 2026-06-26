@@ -110,16 +110,69 @@ impl<EK: Engine, K: ConfigurableDb, L: LockManager> ConfigManager
                 }
             }
         }
-        if let Some(v) = change.remove("action_on_invalid_max_ts") {
+        dispatch_max_ts_config_change(&self.concurrency_manager, &mut change)?;
+        Ok(())
+    }
+}
+
+fn dispatch_max_ts_config_change(
+    concurrency_manager: &ConcurrencyManager,
+    change: &mut ConfigChange,
+) -> CfgResult<()> {
+    if let Some(ConfigValue::Module(mut max_ts)) = change.remove("max_ts") {
+        if let Some(v) = max_ts.remove("action_on_invalid_update") {
             let str_v: String = v.into();
             let action: concurrency_manager::ActionOnInvalidMaxTs = str_v.try_into()?;
-            self.concurrency_manager
-                .set_action_on_invalid_max_ts(action);
+            concurrency_manager.set_action_on_invalid_max_ts(action);
         }
-        if let Some(v) = change.remove("max_ts_drift_allowance") {
+        if let Some(v) = max_ts.remove("max_drift") {
             let dur_v: ReadableDuration = v.into();
-            self.concurrency_manager.set_max_ts_drift_allowance(dur_v.0);
+            concurrency_manager.set_max_ts_drift_allowance(dur_v.0);
         }
-        Ok(())
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use concurrency_manager::{ActionOnInvalidMaxTs, ConcurrencyManager};
+    use online_config::{ConfigChange, ConfigValue};
+    use txn_types::TimeStamp;
+
+    use super::dispatch_max_ts_config_change;
+
+    fn max_ts_action_change(action: &str) -> ConfigChange {
+        let mut max_ts = HashMap::new();
+        max_ts.insert(
+            "action_on_invalid_update".to_owned(),
+            ConfigValue::String(action.to_owned()),
+        );
+
+        let mut change = HashMap::new();
+        change.insert("max_ts".to_owned(), ConfigValue::Module(max_ts));
+        change
+    }
+
+    #[test]
+    fn test_dispatch_max_ts_action_on_invalid_update() {
+        let cm = ConcurrencyManager::new(TimeStamp::new(1));
+
+        let mut change = max_ts_action_change("error");
+        dispatch_max_ts_config_change(&cm, &mut change).unwrap();
+        assert_eq!(cm.action_on_invalid_max_ts(), ActionOnInvalidMaxTs::Error);
+
+        let mut change = max_ts_action_change("log");
+        dispatch_max_ts_config_change(&cm, &mut change).unwrap();
+        assert_eq!(cm.action_on_invalid_max_ts(), ActionOnInvalidMaxTs::Log);
+
+        let mut change = max_ts_action_change("panic");
+        dispatch_max_ts_config_change(&cm, &mut change).unwrap();
+        assert_eq!(cm.action_on_invalid_max_ts(), ActionOnInvalidMaxTs::Panic);
+
+        let mut change = max_ts_action_change("invalid");
+        dispatch_max_ts_config_change(&cm, &mut change).unwrap_err();
+        assert_eq!(cm.action_on_invalid_max_ts(), ActionOnInvalidMaxTs::Panic);
     }
 }
