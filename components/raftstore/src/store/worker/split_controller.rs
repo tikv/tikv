@@ -681,13 +681,24 @@ impl AutoSplitController {
             });
     }
 
+    /// Removes stale suppression entries for one region.
+    fn prune_expired_cpu_top_fallback_suppressions_for_region(&mut self, region_id: u64) {
+        let interval = self.cpu_top_fallback_suppress_interval();
+        if let Some(entries) = self.cpu_top_fallback_suppressions.get_mut(&region_id) {
+            entries.retain(|entry| entry.last_attempt_time.saturating_elapsed() < interval);
+            if entries.is_empty() {
+                self.cpu_top_fallback_suppressions.remove(&region_id);
+            }
+        }
+    }
+
     /// Returns whether CPU-top fallback should be suppressed for this region/range.
     fn should_suppress_cpu_top_fallback(
         &mut self,
         region_id: u64,
         hottest_key_range: &KeyRange,
     ) -> bool {
-        self.prune_expired_cpu_top_fallback_suppressions();
+        self.prune_expired_cpu_top_fallback_suppressions_for_region(region_id);
         self.cpu_top_fallback_suppressions
             .get(&region_id)
             .is_some_and(|entries| {
@@ -704,7 +715,7 @@ impl AutoSplitController {
         region_id: u64,
         hottest_key_range: &KeyRange,
     ) {
-        self.prune_expired_cpu_top_fallback_suppressions();
+        self.prune_expired_cpu_top_fallback_suppressions_for_region(region_id);
         let now = Instant::now_coarse();
         let entries = self
             .cpu_top_fallback_suppressions
