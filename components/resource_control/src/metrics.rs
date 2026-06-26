@@ -101,6 +101,16 @@ lazy_static! {
         exponential_buckets(1e-4, 2.0, 20).unwrap() // 100us ~ 52s
     )
     .unwrap();
+    pub static ref ADMISSION_POOL_EVICTED: IntCounter = register_int_counter!(
+        "tikv_resource_control_admission_pool_evicted_total",
+        "Total tasks evicted from the admission pool queue by higher-priority tasks"
+    )
+    .unwrap();
+    pub static ref ADMISSION_POOL_OUTSTANDING: IntGauge = register_int_gauge!(
+        "tikv_resource_control_admission_pool_outstanding",
+        "Number of requests currently executing in downstream pools (admitted but not completed)"
+    )
+    .unwrap();
 }
 
 pub fn deregister_metrics(name: &str) {
