@@ -419,6 +419,22 @@ mod tests {
         ));
         let split_key = Key::from_raw(b"0003");
         must_split_at(&rx, &region, vec![split_key.into_encoded()]);
+
+        // Empty start bound should be treated as unbounded and fall back to
+        // region start key.
+        let start_key = vec![];
+        let end_key = Key::from_raw(b"0005").into_encoded();
+        runnable.run(SplitCheckTask::split_check_key_range(
+            region.clone(),
+            Some(start_key),
+            Some(end_key),
+            SplitReason::Admin,
+            CheckPolicy::Scan,
+            None,
+        ));
+        let split_key = Key::from_raw(b"0003");
+        must_split_at(&rx, &region, vec![split_key.into_encoded()]);
+
         let start_key = Key::from_raw(b"0005").into_encoded();
         let end_key = Key::from_raw(b"0010").into_encoded();
         runnable.run(SplitCheckTask::split_check_key_range(
@@ -431,6 +447,22 @@ mod tests {
         ));
         let split_key = Key::from_raw(b"0008");
         must_split_at(&rx, &region, vec![split_key.into_encoded()]);
+
+        // Empty end bound should be treated as unbounded and fall back to
+        // region end key.
+        let start_key = Key::from_raw(b"0005").into_encoded();
+        let end_key = vec![];
+        runnable.run(SplitCheckTask::split_check_key_range(
+            region.clone(),
+            Some(start_key),
+            Some(end_key),
+            SplitReason::Admin,
+            CheckPolicy::Scan,
+            None,
+        ));
+        let split_key = Key::from_raw(b"0008");
+        must_split_at(&rx, &region, vec![split_key.into_encoded()]);
+
         let start_key = Key::from_raw(b"0003").into_encoded();
         let end_key = Key::from_raw(b"0008").into_encoded();
         runnable.run(SplitCheckTask::split_check_key_range(
