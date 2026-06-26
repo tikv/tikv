@@ -8912,7 +8912,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#5f9928e91afe4ac82c770cc9cd5fb2c804a7555e"
+source = "git+https://github.com/mjonss/tipb.git?branch=spatial-pushdown#eacc7e94342eeefa5151ce43f42e9433b3abc58a"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -9245,7 +9245,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 1.0.0",
+ "cfg-if 0.1.10",
  "static_assertions",
 ]
 
