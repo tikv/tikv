@@ -8,6 +8,7 @@ license = "Apache-2.0"
 
 [features]
 default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
+failpoints = ["raft_log_engine/failpoints"]
 
 test-engine-kv-panic = []
 test-engine-kv-rocksdb = []
