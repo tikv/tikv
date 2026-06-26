@@ -605,6 +605,13 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
+    pub static ref STORE_EXTRA_MESSAGE_SEND_FAILURE_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_raftstore_extra_message_send_failure_total",
+            "Total number of failed raftstore extra message sends.",
+            &["type", "reason"]
+        ).unwrap();
+
     pub static ref STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC: IntGaugeVec =
         register_int_gauge_vec!(
             "tikv_raftstore_snapshot_traffic_total",

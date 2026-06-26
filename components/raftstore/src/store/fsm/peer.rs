@@ -3100,9 +3100,7 @@ where
 
             let mut extra = ExtraMessage::default();
             extra.set_type(ExtraMessageType::MsgHibernateRequest);
-            self.fsm
-                .peer
-                .send_extra_message(extra, &mut self.ctx.trans, peer);
+            self.fsm.peer.send_extra_message(extra, self.ctx, peer);
         }
         false
     }
@@ -3122,9 +3120,7 @@ where
         self.on_check_peer_complete_apply_logs();
         let mut extra = ExtraMessage::default();
         extra.set_type(ExtraMessageType::MsgHibernateResponse);
-        self.fsm
-            .peer
-            .send_extra_message(extra, &mut self.ctx.trans, from);
+        self.fsm.peer.send_extra_message(extra, self.ctx, from);
     }
 
     fn on_hibernate_response(&mut self, from: &metapb::Peer) {
@@ -3183,9 +3179,7 @@ where
         report.set_from_region_id(self.region_id());
         report.set_from_region_epoch(self.region().get_region_epoch().clone());
         report.set_trimmed(true);
-        self.fsm
-            .peer
-            .send_extra_message(resp, &mut self.ctx.trans, from);
+        self.fsm.peer.send_extra_message(resp, self.ctx, from);
         debug!(
             "peer responses availability info to leader";
             "region_id" => self.region().get_id(),
@@ -3212,9 +3206,7 @@ where
         let mut resp = ExtraMessage::default();
         resp.set_type(ExtraMessageType::MsgVoterReplicatedIndexResponse);
         resp.index = voter_replicated_idx;
-        self.fsm
-            .peer
-            .send_extra_message(resp, &mut self.ctx.trans, from);
+        self.fsm.peer.send_extra_message(resp, self.ctx, from);
         debug!(
             "leader responses voter_replicated_index to witness";
             "region_id" => self.region().get_id(),
@@ -6513,9 +6505,7 @@ where
             let leader_id = self.fsm.peer.leader_id();
             let leader = self.fsm.peer.get_peer_from_cache(leader_id);
             if let Some(leader) = leader {
-                self.fsm
-                    .peer
-                    .send_extra_message(msg, &mut self.ctx.trans, &leader);
+                self.fsm.peer.send_extra_message(msg, self.ctx, &leader);
             }
         }
         self.register_pull_voter_replicated_index_tick();
@@ -6808,9 +6798,11 @@ where
         );
         let keys = region_buckets.meta.keys.clone();
         let version = region_buckets.meta.version;
-        let mut store_meta = self.ctx.store_meta.lock().unwrap();
-        if let Some(reader) = store_meta.readers.get_mut(&self.fsm.region_id()) {
-            reader.update(ReadProgress::region_buckets(region_buckets.meta.clone()));
+        {
+            let mut store_meta = self.ctx.store_meta.lock().unwrap();
+            if let Some(reader) = store_meta.readers.get_mut(&self.fsm.region_id()) {
+                reader.update(ReadProgress::region_buckets(region_buckets.meta.clone()));
+            }
         }
 
         // Notify followers to refresh their buckets version
@@ -6826,9 +6818,7 @@ where
                 refresh_buckets.set_version(version);
                 refresh_buckets.set_keys(keys.clone().into());
                 extra_msg.set_refresh_buckets(refresh_buckets);
-                self.fsm
-                    .peer
-                    .send_extra_message(extra_msg, &mut self.ctx.trans, &p);
+                self.fsm.peer.send_extra_message(extra_msg, self.ctx, &p);
             }
         }
         // test purpose
@@ -6998,9 +6988,7 @@ where
                 Some(peer) => {
                     let mut msg = ExtraMessage::default();
                     msg.set_type(ExtraMessageType::MsgAvailabilityRequest);
-                    self.fsm
-                        .peer
-                        .send_extra_message(msg, &mut self.ctx.trans, &peer);
+                    self.fsm.peer.send_extra_message(msg, self.ctx, &peer);
                     debug!(
                         "check peer availability";
                         "target_peer_id" => *peer_id,
