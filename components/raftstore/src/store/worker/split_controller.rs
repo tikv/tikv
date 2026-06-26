@@ -565,9 +565,18 @@ pub enum SplitConfigChange {
     UpdateRegionCpuCollector(bool),
 }
 
+#[derive(Debug)]
+struct CpuTopFallbackSuppressionEntry {
+    start_key: Vec<u8>,
+    end_key: Vec<u8>,
+    last_attempt_time: Instant,
+}
+
 pub struct AutoSplitController {
     // RegionID -> Recorder
     pub recorders: HashMap<u64, Recorder>,
+    // RegionID -> per-range CPU-top fallback suppression entries.
+    cpu_top_fallback_suppressions: HashMap<u64, Vec<CpuTopFallbackSuppressionEntry>>,
     pub cfg: SplitConfig,
     cfg_tracker: Tracker<SplitConfig>,
     // Thread-related info
@@ -586,6 +595,7 @@ impl AutoSplitController {
     ) -> AutoSplitController {
         AutoSplitController {
             recorders: HashMap::default(),
+            cpu_top_fallback_suppressions: HashMap::default(),
             cfg: config_manager.value().clone(),
             cfg_tracker: config_manager.0.clone().tracker("split_hub".to_owned()),
             max_grpc_thread_count,
@@ -655,6 +665,74 @@ impl AutoSplitController {
         }
         region_cpu_usage / unified_read_pool_thread_usage
             >= self.cfg.region_cpu_overload_threshold_ratio()
+    }
+
+    fn cpu_top_fallback_suppress_interval(&self) -> Duration {
+        Duration::from_secs(self.cfg.detect_times.saturating_mul(2))
+    }
+
+    /// Removes stale suppression entries outside the cooldown window.
+    fn prune_expired_cpu_top_fallback_suppressions(&mut self) {
+        let interval = self.cpu_top_fallback_suppress_interval();
+        self.cpu_top_fallback_suppressions
+            .retain(|_, entries| {
+                entries.retain(|entry| entry.last_attempt_time.saturating_elapsed() < interval);
+                !entries.is_empty()
+            });
+    }
+
+    /// Removes stale suppression entries for one region.
+    fn prune_expired_cpu_top_fallback_suppressions_for_region(&mut self, region_id: u64) {
+        let interval = self.cpu_top_fallback_suppress_interval();
+        if let Some(entries) = self.cpu_top_fallback_suppressions.get_mut(&region_id) {
+            entries.retain(|entry| entry.last_attempt_time.saturating_elapsed() < interval);
+            if entries.is_empty() {
+                self.cpu_top_fallback_suppressions.remove(&region_id);
+            }
+        }
+    }
+
+    /// Returns whether CPU-top fallback should be suppressed for this region/range.
+    fn should_suppress_cpu_top_fallback(
+        &mut self,
+        region_id: u64,
+        hottest_key_range: &KeyRange,
+    ) -> bool {
+        self.prune_expired_cpu_top_fallback_suppressions_for_region(region_id);
+        self.cpu_top_fallback_suppressions
+            .get(&region_id)
+            .is_some_and(|entries| {
+                entries.iter().any(|entry| {
+                    entry.start_key.as_slice() == hottest_key_range.start_key.as_slice()
+                        && entry.end_key.as_slice() == hottest_key_range.end_key.as_slice()
+                })
+            })
+    }
+
+    /// Records a CPU-top fallback attempt for this region/range pair.
+    fn record_cpu_top_fallback(
+        &mut self,
+        region_id: u64,
+        hottest_key_range: &KeyRange,
+    ) {
+        self.prune_expired_cpu_top_fallback_suppressions_for_region(region_id);
+        let now = Instant::now_coarse();
+        let entries = self
+            .cpu_top_fallback_suppressions
+            .entry(region_id)
+            .or_insert_with(Vec::new);
+        if let Some(entry) = entries.iter_mut().find(|entry| {
+            entry.start_key.as_slice() == hottest_key_range.start_key.as_slice()
+                && entry.end_key.as_slice() == hottest_key_range.end_key.as_slice()
+        }) {
+            entry.last_attempt_time = now;
+        } else {
+            entries.push(CpuTopFallbackSuppressionEntry {
+                start_key: hottest_key_range.start_key.clone(),
+                end_key: hottest_key_range.end_key.clone(),
+                last_attempt_time: now,
+            });
+        }
     }
 
     // collect the read stats from read_stats_vec and dispatch them to a Region
@@ -843,6 +921,7 @@ impl AutoSplitController {
                 && (!is_unified_read_pool_busy || !is_region_busy)
             {
                 self.recorders.remove_entry(&region_id);
+                self.cpu_top_fallback_suppressions.remove(&region_id);
                 continue;
             }
 
@@ -921,23 +1000,47 @@ impl AutoSplitController {
                     cpu_usage_b.partial_cmp(&cpu_usage_a).unwrap()
                 });
                 let region_id = top_cpu_usage[0];
-                let recorder = self.recorders.get_mut(&region_id).unwrap();
-                if let Some(hottest_key_range) = recorder.hottest_key_range.as_ref() {
-                    split_infos.push(SplitInfo::with_start_end_key(
-                        region_id,
-                        recorder.peer.clone(),
-                        hottest_key_range.start_key.clone(),
-                        hottest_key_range.end_key.clone(),
-                    ));
-                    LOAD_BASE_SPLIT_EVENT.ready_to_split_cpu_top.inc();
-                    info!("load base split region";
-                        "region_id" => region_id,
-                        "start_key" => log_wrappers::Value::key(&hottest_key_range.start_key),
-                        "end_key" => log_wrappers::Value::key(&hottest_key_range.end_key),
-                        "cpu_usage" => recorder.cpu_usage,
-                    );
+                if let Some((peer, cpu_usage, hottest_key_range)) = self
+                    .recorders
+                    .get(&region_id)
+                    .map(|recorder| {
+                        (
+                            recorder.peer.clone(),
+                            recorder.cpu_usage,
+                            recorder.hottest_key_range.clone(),
+                        )
+                    })
+                {
+                    if let Some(hottest_key_range) = hottest_key_range {
+                        if self.should_suppress_cpu_top_fallback(region_id, &hottest_key_range) {
+                            LOAD_BASE_SPLIT_EVENT.cpu_top_fallback_suppressed_repeat.inc();
+                            debug!("skip repeated cpu-top fallback key range";
+                                "region_id" => region_id,
+                                "start_key" => log_wrappers::Value::key(&hottest_key_range.start_key),
+                                "end_key" => log_wrappers::Value::key(&hottest_key_range.end_key),
+                                "cpu_usage" => cpu_usage,
+                            );
+                        } else {
+                            split_infos.push(SplitInfo::with_start_end_key(
+                                region_id,
+                                peer,
+                                hottest_key_range.start_key.clone(),
+                                hottest_key_range.end_key.clone(),
+                            ));
+                            self.record_cpu_top_fallback(region_id, &hottest_key_range);
+                            LOAD_BASE_SPLIT_EVENT.ready_to_split_cpu_top.inc();
+                            info!("load base split region";
+                                "region_id" => region_id,
+                                "start_key" => log_wrappers::Value::key(&hottest_key_range.start_key),
+                                "end_key" => log_wrappers::Value::key(&hottest_key_range.end_key),
+                                "cpu_usage" => cpu_usage,
+                            );
+                        }
+                    } else {
+                        LOAD_BASE_SPLIT_EVENT.empty_hottest_key_range.inc();
+                    }
                 } else {
-                    LOAD_BASE_SPLIT_EVENT.empty_hottest_key_range.inc();
+                    LOAD_BASE_SPLIT_EVENT.unable_to_split_cpu_top.inc();
                 }
             } else {
                 LOAD_BASE_SPLIT_EVENT.unable_to_split_cpu_top.inc();
@@ -952,12 +1055,14 @@ impl AutoSplitController {
     }
 
     pub fn clear(&mut self) {
-        let interval = Duration::from_secs(self.cfg.detect_times * 2);
+        let interval = Duration::from_secs(self.cfg.detect_times.saturating_mul(2));
         self.recorders
             .retain(|_, recorder| match recorder.create_time.elapsed() {
                 Ok(life_time) => life_time < interval,
                 Err(_) => true,
             });
+        // Keep suppression cache bounded even when only clear() runs.
+        self.prune_expired_cpu_top_fallback_suppressions();
     }
 
     pub fn refresh_and_check_cfg(&mut self) -> SplitConfigChange {
@@ -1421,6 +1526,94 @@ mod tests {
                 mode
             );
         }
+    }
+
+    #[test]
+    fn test_cpu_top_fallback_suppresses_repeated_same_range() {
+        let mut hub = AutoSplitController::default();
+        hub.cfg.detect_times = 2;
+        let hottest_key_range = build_key_range(b"a", b"m", false);
+
+        assert!(!hub.should_suppress_cpu_top_fallback(1, &hottest_key_range));
+        hub.record_cpu_top_fallback(1, &hottest_key_range);
+        assert!(hub.should_suppress_cpu_top_fallback(1, &hottest_key_range));
+    }
+
+    #[test]
+    fn test_cpu_top_fallback_not_suppressed_for_changed_range() {
+        let mut hub = AutoSplitController::default();
+        hub.cfg.detect_times = 2;
+
+        let hottest_key_range_a = build_key_range(b"a", b"m", false);
+        let hottest_key_range_b = build_key_range(b"a", b"l", false);
+
+        hub.record_cpu_top_fallback(1, &hottest_key_range_a);
+        assert!(hub.should_suppress_cpu_top_fallback(1, &hottest_key_range_a));
+        assert!(!hub.should_suppress_cpu_top_fallback(1, &hottest_key_range_b));
+
+        // Recording B should not evict unexpired A, so A -> B -> A is still
+        // suppressed.
+        hub.record_cpu_top_fallback(1, &hottest_key_range_b);
+        assert!(hub.should_suppress_cpu_top_fallback(1, &hottest_key_range_b));
+        assert!(hub.should_suppress_cpu_top_fallback(1, &hottest_key_range_a));
+    }
+
+    #[test]
+    fn test_cpu_top_fallback_cooldown_expires_after_clear() {
+        let mut hub = AutoSplitController::default();
+        hub.cfg.detect_times = 2;
+        let hottest_key_range = build_key_range(b"a", b"m", false);
+
+        hub.record_cpu_top_fallback(1, &hottest_key_range);
+        assert!(hub.should_suppress_cpu_top_fallback(1, &hottest_key_range));
+        let suppress_interval = hub.cpu_top_fallback_suppress_interval();
+        let entries = hub.cpu_top_fallback_suppressions.get_mut(&1).unwrap();
+        let state = entries
+            .iter_mut()
+            .find(|entry| {
+                entry.start_key.as_slice() == hottest_key_range.start_key.as_slice()
+                    && entry.end_key.as_slice() == hottest_key_range.end_key.as_slice()
+            })
+            .unwrap();
+        state.last_attempt_time = Instant::now_coarse() - suppress_interval - Duration::from_secs(1);
+        hub.clear();
+
+        assert!(!hub.cpu_top_fallback_suppressions.contains_key(&1));
+        assert!(!hub.should_suppress_cpu_top_fallback(1, &hottest_key_range));
+    }
+
+    #[test]
+    fn test_cpu_top_fallback_suppression_cleared_when_not_hot() {
+        let mut hub = AutoSplitController::default();
+        hub.cfg.detect_times = 2;
+        hub.cfg.qps_threshold = Some(1000);
+
+        let hottest_key_range = build_key_range(b"a", b"m", false);
+        hub.record_cpu_top_fallback(1, &hottest_key_range);
+        assert_eq!(
+            hub.cpu_top_fallback_suppressions
+                .get(&1)
+                .map_or(0, Vec::len),
+            1
+        );
+
+        let qps_stats = vec![gen_read_stats(1, vec![build_key_range(b"a", b"b", false)])];
+        let (mut ctx, read_stats_receiver, cpu_stats_receiver) =
+            new_auto_split_controller_ctx(qps_stats, vec![]);
+        let _ = hub.flush(
+            &mut ctx,
+            &read_stats_receiver,
+            &cpu_stats_receiver,
+            &mut ThreadInfoStatistics::default(),
+            &SplitValidator::new(),
+        );
+
+        assert_eq!(
+            hub.cpu_top_fallback_suppressions
+                .get(&1)
+                .map_or(0, Vec::len),
+            0
+        );
     }
 
     fn gen_cpu_stats(
