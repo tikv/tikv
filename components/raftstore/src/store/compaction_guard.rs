@@ -242,7 +242,10 @@ impl<P: RegionInfoProvider> SstPartitioner for CompactionGuardGenerator<P> {
     }
 
     fn can_do_trivial_move(&mut self, _smallest_key: &[u8], _largest_key: &[u8]) -> bool {
+<<<<<<< HEAD
         // Always allow trivial move
+=======
+>>>>>>> 2c5bb34747 (sst_service: avoid trigger false-positive manual compact in `add_force_partition_range` (#19121))
         true
     }
 }
