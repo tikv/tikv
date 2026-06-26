@@ -39,8 +39,14 @@ use pd_client::PdClient;
 use protobuf::RepeatedField;
 use raft::eraftpb::ConfChangeType;
 use raftstore::{
+<<<<<<< HEAD
     store::{fsm::RaftRouter, *},
     RaftRouterCompactedEventSender, Result,
+=======
+    RaftRouterCompactedEventSender, RegionInfoAccessor, Result,
+    coprocessor::CoprocessorHost,
+    store::{fsm::RaftRouter, util::encode_start_ts_into_flag_data, *},
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
 };
 use rand::{seq::SliceRandom, RngCore};
 use server::common::ConfiguredRaftEngine;
@@ -627,6 +633,7 @@ pub fn create_test_engine(
     router: Option<RaftRouter<RocksEngine, RaftTestEngine>>,
     limiter: Option<Arc<IoRateLimiter>>,
     cfg: &Config,
+    force_partition_mgr: &ForcePartitionRangeManager,
 ) -> (
     Engines<RocksEngine, RaftTestEngine>,
     Option<Arc<DataKeyManager>>,
@@ -636,6 +643,27 @@ pub fn create_test_engine(
     Option<Arc<RocksStatistics>>,
 ) {
     let dir = test_util::temp_dir("test_cluster", cfg.prefer_mem);
+<<<<<<< HEAD
+=======
+    start_test_engine(router, limiter, cfg, force_partition_mgr, dir)
+}
+
+pub fn start_test_engine(
+    // TODO: pass it in for all cases.
+    router: Option<RaftRouter<RocksEngine, RaftTestEngine>>,
+    limiter: Option<Arc<IoRateLimiter>>,
+    cfg: &Config,
+    force_partition_mgr: &ForcePartitionRangeManager,
+    dir: TempDir,
+) -> (
+    Engines<RocksEngine, RaftTestEngine>,
+    Option<Arc<DataKeyManager>>,
+    TempDir,
+    LazyWorker<String>,
+    Arc<RocksStatistics>,
+    Option<Arc<RocksStatistics>>,
+) {
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
     let mut cfg = cfg.clone();
     cfg.storage.data_dir = dir.path().to_str().unwrap().to_string();
     cfg.raft_store.raftdb_path = cfg.infer_raft_db_path(None).unwrap();
@@ -654,8 +682,17 @@ pub fn create_test_engine(
 
     let (raft_engine, raft_statistics) = RaftTestEngine::build(&cfg, &env, &key_manager, &cache);
 
-    let mut builder = KvEngineFactoryBuilder::new(env, &cfg, cache, key_manager.clone())
-        .sst_recovery_sender(Some(scheduler));
+    let mut host: CoprocessorHost<RocksEngine> = CoprocessorHost::default();
+    let accessor = RegionInfoAccessor::new(&mut host, Arc::new(|| true), Box::new(|| 1));
+    let mut builder = KvEngineFactoryBuilder::new(
+        env,
+        &cfg,
+        cache,
+        key_manager.clone(),
+        force_partition_mgr.clone(),
+    )
+    .sst_recovery_sender(Some(scheduler))
+    .region_info_accessor(accessor);
     if let Some(router) = router {
         builder = builder.compaction_event_sender(Arc::new(RaftRouterCompactedEventSender {
             router: Mutex::new(router),

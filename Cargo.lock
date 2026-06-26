@@ -2949,7 +2949,11 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
+<<<<<<< HEAD
 source = "git+https://github.com/pingcap/kvproto.git?branch=release-7.5#5030ed622c154001aa3e188dd8e56de8d4965732"
+=======
+source = "git+https://github.com/pingcap/kvproto.git#21e537898f9da31d8cb148f6b7099d6946a99784"
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -3014,7 +3018,11 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.5#eb969913e1e243c0b09533a9a63540cd588e7bdc"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#1fa430f86c29bf43fba3ccd2fefc9ca27b00bc59"
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3033,7 +3041,11 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.5#eb969913e1e243c0b09533a9a63540cd588e7bdc"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#1fa430f86c29bf43fba3ccd2fefc9ca27b00bc59"
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4932,7 +4944,11 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.5#eb969913e1e243c0b09533a9a63540cd588e7bdc"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#1fa430f86c29bf43fba3ccd2fefc9ca27b00bc59"
+>>>>>>> 3899697002 (engine_rocks: introduce `force_partition_range` in compact guard (#18866))
 dependencies = [
  "libc 0.2.146",
  "librocksdb_sys",
