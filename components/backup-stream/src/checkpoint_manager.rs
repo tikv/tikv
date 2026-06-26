@@ -53,7 +53,6 @@ impl std::fmt::Debug for CheckpointManager {
 enum SubscriptionOp {
     Add(Subscription),
     Emit(Box<[FlushEvent]>),
-    #[cfg(test)]
     Inspect(Box<dyn FnOnce(&SubscriptionManager) + Send>),
 }
 
@@ -76,7 +75,6 @@ impl SubscriptionManager {
                 SubscriptionOp::Emit(events) => {
                     self.emit_events(events).await;
                 }
-                #[cfg(test)]
                 SubscriptionOp::Inspect(f) => {
                     f(&self);
                 }
@@ -274,7 +272,9 @@ impl CheckpointManager {
         e.and_modify(|old_cp| {
             let old_ver = old_cp.region.get_region_epoch().get_version();
             let checkpoint_is_newer = old_cp.checkpoint < checkpoint;
-            if !checkpoint_is_newer {
+            // Shouldn't log when checkpoint is the same or it can be really verbose when
+            // checkpoint stuck due to pending txn...
+            if !checkpoint_is_newer && old_cp.checkpoint != checkpoint {
                 warn!("received older checkpoint, maybe region merge.";
                     "region_id" => old_cp.region.get_id(),
                     "old_ver" => old_ver,
@@ -392,8 +392,7 @@ impl CheckpointManager {
         self.resolved_ts.values().map(|x| x.checkpoint).min()
     }
 
-    #[cfg(test)]
-    fn sync_with_subs_mgr<T: Send + 'static>(
+    pub fn sync_with_subs_mgr<T: Send + 'static>(
         &mut self,
         f: impl FnOnce(&SubscriptionManager) -> T + Send + 'static,
     ) -> T {
