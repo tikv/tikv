@@ -118,10 +118,10 @@ pub fn get_region_approximate_middle(
     get_region_approximate_middle_in_range(db, region, None, None)
 }
 
-/// Get region approximate middle key from an explicit encoded key range.
+/// Get region approximate middle key from an explicit encoded data-key range.
 ///
-/// The provided range is clamped to region boundaries. When the resulting
-/// range is empty, returns `Ok(None)`.
+/// The provided range must be in the `keys::data_key` / `keys::data_end_key` space.
+/// It is clamped to region boundaries. When the resulting range is empty, returns `Ok(None)`.
 pub fn get_region_approximate_middle_in_range(
     db: &impl KvEngine,
     region: &Region,
