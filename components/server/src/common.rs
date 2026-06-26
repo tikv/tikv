@@ -704,7 +704,6 @@ impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
 pub fn build_hybrid_engine(
     region_cache_engine_context: InMemoryEngineContext,
     disk_engine: RocksEngine,
-    pd_client: Option<Arc<RpcClient>>,
     region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     casual_router: Box<dyn CasualRouter<RocksEngine>>,
 ) -> HybridEngine<RocksEngine, RegionCacheMemoryEngine> {
@@ -715,13 +714,20 @@ pub fn build_hybrid_engine(
         Some(casual_router),
     );
     memory_engine.set_disk_engine(disk_engine.clone());
-    if let Some(pd_client) = pd_client.as_ref() {
-        memory_engine.start_hint_service(
-            <RegionCacheMemoryEngine as RegionCacheEngine>::RangeHintService::from(
-                pd_client.clone(),
-            ),
-        )
-    }
+
+    // Note: `start_hint_service` is intentionally NOT started here.
+    //
+    // The hint service watches `cache=always` region label rules on PD and,
+    // when a rule is seen, it translates the key range into existing regions
+    // via `RegionInfoProvider::get_regions_in_range` and loads them into
+    // IME. If the hint service fires before raftstore has finished
+    // registering its regions to the provider, that translation returns an
+    // empty set. To keep `cache=always` reliable across node restarts and
+    // rolling upgrades, the caller is responsible for invoking
+    // `start_hint_service` after raftstore has been started; see `run_impl`
+    // in `server.rs`. The background `ResolveManualLoadRanges` task in the
+    // in-memory engine provides the correctness guarantee by re-resolving
+    // any range that could not be translated on the first try.
 
     memory_engine.start_cross_check(
         disk_engine.clone(),
