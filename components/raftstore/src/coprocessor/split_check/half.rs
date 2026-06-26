@@ -142,10 +142,7 @@ pub fn get_region_approximate_middle_in_range(
         _ => region_start_key,
     };
     let end_key = match end_key {
-        Some(end_key)
-            if !end_key.is_empty()
-                && (region_end_key.is_empty() || end_key < region_end_key.as_slice()) =>
-        {
+        Some(end_key) if !end_key.is_empty() && end_key < region_end_key.as_slice() => {
             end_key.to_vec()
         }
         _ => region_end_key,
