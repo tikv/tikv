@@ -826,21 +826,27 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             }
         }?;
 
-        // Guard against split points that are equal to range boundaries.
-        if approximate_middle.as_slice() <= start_key
-            || (!end_key.is_empty() && approximate_middle.as_slice() >= end_key)
+        // Convert to origin keyspace and strip MVCC timestamp first so we don't
+        // accidentally pick a versioned key that becomes invalid after stripping.
+        let origin_start = keys::origin_key(start_key);
+        let origin_end = keys::origin_end_key(end_key);
+        let split_key = strip_timestamp_if_exists(keys::origin_key(&approximate_middle).to_vec());
+
+        // Guard against split points that are equal to range boundaries (after stripping ts).
+        if split_key.as_slice() <= origin_start
+            || (!origin_end.is_empty() && split_key.as_slice() >= origin_end)
         {
             debug!(
                 "ignore out-of-range approximate split key";
                 "region_id" => region.get_id(),
-                "start_key" => log_wrappers::Value::key(start_key),
-                "end_key" => log_wrappers::Value::key(end_key),
-                "split_key" => log_wrappers::Value::key(&approximate_middle),
+                "start_key" => log_wrappers::Value::key(origin_start),
+                "end_key" => log_wrappers::Value::key(origin_end),
+                "approximate_key" => log_wrappers::Value::key(&approximate_middle),
+                "split_key" => log_wrappers::Value::key(&split_key),
             );
             return None;
         }
 
-        let split_key = keys::origin_key(&approximate_middle).to_vec();
         if is_valid_split_key(&split_key, 0, region) {
             Some(split_key)
         } else {
