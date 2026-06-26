@@ -631,8 +631,16 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         };
         let region_id = region.get_id();
         let is_key_range = start_key.is_some() && end_key.is_some();
-        let request_start_key = is_key_range.then_some(start_key.as_deref().unwrap());
-        let request_end_key = is_key_range.then_some(end_key.as_deref().unwrap());
+        let request_start_key = if is_key_range {
+            start_key.as_deref()
+        } else {
+            None
+        };
+        let request_end_key = if is_key_range {
+            end_key.as_deref()
+        } else {
+            None
+        };
         let start_key = request_start_key
             .and_then(Key::from_raw_maybe_unbounded)
             .map_or_else(
