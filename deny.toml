@@ -135,4 +135,7 @@ exceptions = [
 [sources]
 unknown-git = "deny"
 unknown-registry = "deny"
-allow-org = { github = ["tikv", "pingcap", "rust-lang"] }
+# "mjonss" is temporary: it hosts the tipb fork branch carrying the geospatial
+# DE-9IM ScalarFuncSig values not yet in upstream pingcap/tipb. Remove together
+# with the tipb dependency repoint once those sigs land upstream.
+allow-org = { github = ["tikv", "pingcap", "rust-lang", "mjonss"] }
