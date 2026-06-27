@@ -217,7 +217,10 @@ fn geom_dimension(g: &Geometry<f64>) -> i32 {
     match g {
         Geometry::Point(_) | Geometry::MultiPoint(_) => 0,
         Geometry::Line(_) | Geometry::LineString(_) | Geometry::MultiLineString(_) => 1,
-        Geometry::Polygon(_) | Geometry::MultiPolygon(_) | Geometry::Rect(_) | Geometry::Triangle(_) => 2,
+        Geometry::Polygon(_)
+        | Geometry::MultiPolygon(_)
+        | Geometry::Rect(_)
+        | Geometry::Triangle(_) => 2,
         Geometry::GeometryCollection(gc) => gc.0.iter().map(geom_dimension).max().unwrap_or(-1),
     }
 }
@@ -243,8 +246,8 @@ st_predicate!(st_covers, is_covers);
 st_predicate!(st_covered_by, is_coveredby);
 
 /// ST_Crosses is dimension-gated to match MySQL: it returns NULL unless
-/// dim(a) < dim(b) or both operands are curves (lines). The `geo` crate computes
-/// crosses symmetrically, so the gate is applied here.
+/// dim(a) < dim(b) or both operands are curves (lines). The `geo` crate
+/// computes crosses symmetrically, so the gate is applied here.
 #[rpn_fn]
 #[inline]
 pub fn st_crosses(a: BytesRef, b: BytesRef) -> Result<Option<Int>> {
@@ -341,6 +344,12 @@ mod tests {
     /// TiDB's `pkg/util/geomrel` (simplefeatures). Columns follow `SIGS`
     /// order: within, contains, intersects, equals, disjoint, touches,
     /// crosses, overlaps, covers, coveredby.
+    ///
+    /// Expected values are `Option<i64>` so the `ST_Crosses` column can be
+    /// `None`: unlike the other predicates (which mirror raw DE-9IM), TiDB's
+    /// `ST_Crosses` follows MySQL and is NULL unless `dim(a) < dim(b)` or both
+    /// operands are curves — see `st_crosses`. So the equal-dimension polygon
+    /// pairs below expect `None` for crosses rather than the raw geomrel `0`.
     #[test]
     fn test_de9im_corpus() {
         let poly4 = ewkb_polygon(&[&[(0., 0.), (4., 0.), (4., 4.), (0., 4.), (0., 0.)]]);
@@ -349,51 +358,62 @@ mod tests {
         let poly_unit = ewkb_polygon(&[&[(0., 0.), (1., 0.), (1., 1.), (0., 1.), (0., 0.)]]);
         let poly_far = ewkb_polygon(&[&[(5., 5.), (6., 5.), (6., 6.), (5., 6.), (5., 5.)]]);
 
-        let cases: Vec<(Vec<u8>, Vec<u8>, [i64; 10])> = vec![
-            // interior point
+        // y = Some(v); n = None. Crosses (column 6) is None for the equal-
+        // dimension polygon pairs (dim(a) not < dim(b)).
+        let y = Some;
+        let n: Option<i64> = None;
+
+        // (geometry a, geometry b, expected per-predicate result in SIGS order)
+        type Case = (Vec<u8>, Vec<u8>, [Option<i64>; 10]);
+        let cases: Vec<Case> = vec![
+            // interior point (dim 0 < 2, so crosses is gated-in: 0)
             (
                 ewkb_point(2., 2.),
                 poly4.clone(),
-                [1, 0, 1, 0, 0, 0, 0, 0, 0, 1],
+                [y(1), y(0), y(1), y(0), y(0), y(0), y(0), y(0), y(0), y(1)],
             ),
             // outside point
             (
                 ewkb_point(5., 5.),
                 poly4.clone(),
-                [0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+                [y(0), y(0), y(0), y(0), y(1), y(0), y(0), y(0), y(0), y(0)],
             ),
             // boundary corner point
             (
                 ewkb_point(0., 0.),
                 poly4.clone(),
-                [0, 0, 1, 0, 0, 1, 0, 0, 0, 1],
+                [y(0), y(0), y(1), y(0), y(0), y(1), y(0), y(0), y(0), y(1)],
             ),
-            // diagonal line across the polygon
+            // diagonal line across the polygon (dim 1 < 2, crosses gated-in: 0)
             (
                 ewkb_linestring(&[(0., 0.), (4., 4.)]),
                 poly4.clone(),
-                [1, 0, 1, 0, 0, 0, 0, 0, 0, 1],
+                [y(1), y(0), y(1), y(0), y(0), y(0), y(0), y(0), y(0), y(1)],
             ),
-            // partially overlapping polygons
-            (poly_a, poly_b, [0, 0, 1, 0, 0, 0, 0, 1, 0, 0]),
-            // equal polygons
-            (poly4.clone(), poly4.clone(), [1, 1, 1, 1, 0, 0, 0, 0, 1, 1]),
-            // disjoint polygons
-            (poly_unit, poly_far, [0, 0, 0, 0, 1, 0, 0, 0, 0, 0]),
+            // partially overlapping polygons (crosses NULL: equal dimension)
+            (
+                poly_a,
+                poly_b,
+                [y(0), y(0), y(1), y(0), y(0), y(0), n, y(1), y(0), y(0)],
+            ),
+            // equal polygons (crosses NULL: equal dimension)
+            (
+                poly4.clone(),
+                poly4.clone(),
+                [y(1), y(1), y(1), y(1), y(0), y(0), n, y(0), y(1), y(1)],
+            ),
+            // disjoint polygons (crosses NULL: equal dimension)
+            (
+                poly_unit,
+                poly_far,
+                [y(0), y(0), y(0), y(0), y(1), y(0), n, y(0), y(0), y(0)],
+            ),
         ];
 
         for (i, (a, b, expected)) in cases.iter().enumerate() {
             for (j, sig) in SIGS.iter().enumerate() {
                 let out = eval(*sig, a, b);
-                assert_eq!(
-                    out,
-                    Some(expected[j]),
-                    "case {} {:?}: expected {}, got {:?}",
-                    i,
-                    sig,
-                    expected[j],
-                    out
-                );
+                assert_eq!(out, expected[j], "case {} {:?}: got {:?}", i, sig, out);
             }
         }
     }
