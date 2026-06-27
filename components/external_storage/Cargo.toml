@@ -5,6 +5,16 @@ edition = "2021"
 publish = false
 license = "Apache-2.0"
 
+<<<<<<< HEAD
+=======
+[features]
+failpoints = ["fail/failpoints"]
+# Forwards the FIPS feature down to gcp_v2 (which gates rustls/fips). gcp_v2 is
+# only a transitive dependency of the binaries, so the feature is forwarded
+# through this chain rather than enabled directly as `gcp_v2/fips`.
+fips = ["gcp_v2/fips"]
+
+>>>>>>> 9cf8be661e (fips: fix compilation errors when `ENABLE_FIPS=1` (#19742))
 [dependencies]
 async-compression = { version = "0.4.27", features = ["futures-io", "zstd"] }
 async-trait = "0.1"
