@@ -384,10 +384,17 @@ impl Execution {
         storage: &dyn ExternalStorage,
         hooks: &mut impl ExecHooks,
     ) -> Result<()> {
+        let mut first_err = None;
         while !pending.is_empty() {
             let join_res = util::select_vec(pending).await;
-            self.finish_compaction_join(join_res, storage, hooks)
-                .await?;
+            if let Err(err) = self.finish_compaction_join(join_res, storage, hooks).await {
+                if first_err.is_none() {
+                    first_err = Some(err);
+                }
+            }
+        }
+        if let Some(err) = first_err {
+            return Err(err);
         }
         Ok(())
     }
@@ -414,25 +421,19 @@ impl Execution {
         hooks: &mut impl ExecHooks,
         mut cancel: Pin<&mut impl Future<Output = ()>>,
     ) -> Result<()> {
-        let mut canceled = false;
         while !pending.is_empty() {
-            if canceled {
-                let join_res = util::select_vec(pending).await;
-                self.finish_compaction_join(join_res, storage, hooks)
-                    .await?;
-                continue;
-            }
             let res = self
                 .wait_one_compaction(pending, storage, hooks, cancel.as_mut())
                 .await;
             match res {
                 Ok(()) => {}
-                Err(err) if Self::is_user_canceled(&err) => canceled = true,
+                Err(err) if Self::is_user_canceled(&err) => {
+                    self.drain_compactions_after_cancel(pending, storage, hooks)
+                        .await?;
+                    return Err(err);
+                }
                 Err(err) => return Err(err),
             }
-        }
-        if canceled {
-            return Err(Self::user_canceled_error());
         }
         Ok(())
     }
@@ -598,15 +599,17 @@ impl Execution {
             ref mut hooks,
             ..
         } = cx;
-        let metadata_scan = StreamMetaStorage::count_objects(
-            storage.as_ref(),
-            CountObjectsExt {
-                calculate_shift_ts: self.cfg.calculate_shift_ts,
-                from_ts: self.cfg.from_ts,
-                until_ts: self.cfg.until_ts,
-            },
-        )
-        .await?;
+        let metadata_scan = tokio::select! {
+            res = StreamMetaStorage::count_objects(
+                storage.as_ref(),
+                CountObjectsExt {
+                    calculate_shift_ts: self.cfg.calculate_shift_ts,
+                    from_ts: self.cfg.from_ts,
+                    until_ts: self.cfg.until_ts,
+                },
+            ) => res?,
+            _ = cancel.as_mut() => return Err(Self::user_canceled_error()),
+        };
         self.cfg.shift_ts = metadata_scan.shift_ts;
 
         let cx = BeforeStartCtx {
@@ -615,7 +618,10 @@ impl Execution {
             this: self,
             meta_count: metadata_scan.count,
         };
-        hooks.before_execution_started(cx).await?;
+        tokio::select! {
+            res = hooks.before_execution_started(cx) => res?,
+            _ = cancel.as_mut() => return Err(Self::user_canceled_error()),
+        };
 
         // Avoid setting an explicit parent here: this span may be dropped while
         // the parent span is not currently entered (e.g. early-abort paths),
@@ -624,7 +630,10 @@ impl Execution {
         ext.shard = self.cfg.shard;
 
         let storage = Arc::clone(storage);
-        let meta = StreamMetaStorage::load_from_ext(&storage, ext).await?;
+        let meta = tokio::select! {
+            res = StreamMetaStorage::load_from_ext(&storage, ext) => res?,
+            _ = cancel.as_mut() => return Err(Self::user_canceled_error()),
+        };
         let collect_cfg = CollectSubcompactionConfig {
             compact_shift_from_ts: self.cfg.shift_ts,
             compact_from_ts: self.cfg.from_ts,
@@ -689,10 +698,7 @@ impl Execution {
             .drain_compactions(&mut pending, &storage, *hooks, cancel.as_mut())
             .await
         {
-            if Self::is_user_canceled(&err) {
-                self.drain_compactions_after_cancel(&mut pending, &storage, *hooks)
-                    .await?;
-            } else {
+            if !Self::is_user_canceled(&err) {
                 Self::abort_and_drain(&mut pending).await;
             }
             return Err(err);

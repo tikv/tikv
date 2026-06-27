@@ -32,6 +32,8 @@ use crate::{
     test_util::{CompactInMem, KvGen, LogFileBuilder, TmpStorage, gen_step},
 };
 
+const FINISH_FAILED: &str = "finish failed";
+
 #[derive(Clone)]
 struct CompactionSpy(Sender<SubcompactionResult>);
 
@@ -58,6 +60,26 @@ impl ExecHooks for FinishCounter {
         _res: SubcompactionFinishCtx<'_>,
     ) -> crate::Result<()> {
         self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+struct FailOneFinish {
+    finished: Arc<AtomicU64>,
+    fail_cid: CId,
+}
+
+impl ExecHooks for FailOneFinish {
+    async fn after_a_subcompaction_end(
+        &mut self,
+        cid: CId,
+        _res: SubcompactionFinishCtx<'_>,
+    ) -> crate::Result<()> {
+        if cid == self.fail_cid {
+            return Err(ErrorKind::Other(FINISH_FAILED.to_owned()).into());
+        }
+        self.finished.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 }
@@ -658,6 +680,53 @@ async fn test_cancel_drain_processes_finished_compactions() {
 }
 
 #[tokio::test]
+async fn test_cancel_drain_continues_after_finish_error() {
+    let st = TmpStorage::create();
+    let exec = create_compaction(st.backend());
+    let finished = Arc::new(AtomicU64::new(0));
+    let mut hooks = FailOneFinish {
+        finished: Arc::clone(&finished),
+        fail_cid: CId(10),
+    };
+    let (fail_tx, fail_rx) = tokio::sync::oneshot::channel::<()>();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+    let first = tokio::spawn(async move {
+        fail_rx.await.unwrap();
+        let result: super::FinishedCompaction = Ok((empty_subcompaction_result(45), CId(10)));
+        result
+    });
+    fail_tx.send(()).unwrap();
+    while !first.is_finished() {
+        tokio::task::yield_now().await;
+    }
+    let second = tokio::spawn(async move {
+        release_rx.await.unwrap();
+        let result: super::FinishedCompaction = Ok((empty_subcompaction_result(46), CId(11)));
+        result
+    });
+    let mut pending = vec![first, second];
+
+    let err = {
+        let drain =
+            exec.drain_compactions_after_cancel(&mut pending, st.storage().as_ref(), &mut hooks);
+        tokio::pin!(drain);
+        tokio::select! {
+            _ = drain.as_mut() => panic!("drain returned before the remaining compaction finished"),
+            _ = tokio::task::yield_now() => {}
+        }
+
+        release_tx.send(()).unwrap();
+        drain.await.unwrap_err()
+    };
+    assert!(matches!(
+        &err.kind,
+        ErrorKind::Other(msg) if msg == FINISH_FAILED
+    ));
+    assert!(pending.is_empty());
+    assert_eq!(finished.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn test_canceled_drain_returns_after_safe_point() {
     let st = TmpStorage::create();
     let exec = create_compaction(st.backend());
@@ -690,7 +759,7 @@ async fn test_canceled_drain_returns_after_safe_point() {
     };
     assert!(matches!(
         &err.kind,
-        ErrorKind::Other(msg) if msg == "User canceled by Ctrl-C"
+        ErrorKind::Other(msg) if msg == super::USER_CANCELED_BY_CTRL_C
     ));
     assert!(pending.is_empty());
     assert_eq!(finished.load(Ordering::SeqCst), 1);
