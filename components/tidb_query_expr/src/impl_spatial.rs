@@ -211,6 +211,17 @@ fn relate(a: BytesRef<'_>, b: BytesRef<'_>) -> Result<IntersectionMatrix> {
     Ok(ga.relate(&gb))
 }
 
+/// OGC topological dimension: 0 (point), 1 (curve), 2 (surface); a collection
+/// takes the max over its members.
+fn geom_dimension(g: &Geometry<f64>) -> i32 {
+    match g {
+        Geometry::Point(_) | Geometry::MultiPoint(_) => 0,
+        Geometry::Line(_) | Geometry::LineString(_) | Geometry::MultiLineString(_) => 1,
+        Geometry::Polygon(_) | Geometry::MultiPolygon(_) | Geometry::Rect(_) | Geometry::Triangle(_) => 2,
+        Geometry::GeometryCollection(gc) => gc.0.iter().map(geom_dimension).max().unwrap_or(-1),
+    }
+}
+
 macro_rules! st_predicate {
     ($name:ident, $matrix_method:ident) => {
         #[rpn_fn]
@@ -227,10 +238,24 @@ st_predicate!(st_intersects, is_intersects);
 st_predicate!(st_equals, is_equal_topo);
 st_predicate!(st_disjoint, is_disjoint);
 st_predicate!(st_touches, is_touches);
-st_predicate!(st_crosses, is_crosses);
 st_predicate!(st_overlaps, is_overlaps);
 st_predicate!(st_covers, is_covers);
 st_predicate!(st_covered_by, is_coveredby);
+
+/// ST_Crosses is dimension-gated to match MySQL: it returns NULL unless
+/// dim(a) < dim(b) or both operands are curves (lines). The `geo` crate computes
+/// crosses symmetrically, so the gate is applied here.
+#[rpn_fn]
+#[inline]
+pub fn st_crosses(a: BytesRef, b: BytesRef) -> Result<Option<Int>> {
+    let ga = decode_ewkb(a)?;
+    let gb = decode_ewkb(b)?;
+    let (da, db) = (geom_dimension(&ga), geom_dimension(&gb));
+    if !(da < db || (da == 1 && db == 1)) {
+        return Ok(None);
+    }
+    Ok(Some(ga.relate(&gb).is_crosses() as i64))
+}
 
 #[cfg(test)]
 mod tests {
