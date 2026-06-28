@@ -152,7 +152,9 @@ fn should_log_snap_gen_precheck_response_info(passed: bool, ignored: bool) -> bo
         (false, false) => SNAP_GEN_PRECHECK_REJECTED_RESPONSE_INFO_SAMPLE_RATE,
         (true, false) => SNAP_GEN_PRECHECK_RESPONSE_INFO_SAMPLE_RATE,
     };
-    SNAP_GEN_PRECHECK_RESPONSE_LOG_COUNTER.fetch_add(1, Ordering::Relaxed) % sample_rate == 0
+    SNAP_GEN_PRECHECK_RESPONSE_LOG_COUNTER
+        .fetch_add(1, Ordering::Relaxed)
+        .is_multiple_of(sample_rate)
 }
 
 pub struct DestroyPeerJob {
