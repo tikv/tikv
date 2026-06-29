@@ -251,7 +251,7 @@ Companion docs:
 ## Related Components
 
 - `src/storage`
-- `src/gc_worker`
+- `src/server/gc_worker`
 - `components/raftstore`
 - `components/raftstore-v2`
 - `components/external_storage`

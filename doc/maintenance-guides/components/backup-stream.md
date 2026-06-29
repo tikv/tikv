@@ -269,7 +269,7 @@ Companion docs:
 - `components/raftstore`
 - `components/raftstore-v2`
 - `components/resolved_ts`
-- `src/gc_worker`
+- `src/server/gc_worker`
 - `components/external_storage`
 - `components/encryption`
 - `components/cdc`

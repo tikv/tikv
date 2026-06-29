@@ -227,7 +227,7 @@ Companion docs:
 
 - `repo-overview.md`
 - `src/storage.md`
-- `src/gc_worker.md`
+- `src/server/gc_worker.md`
 - `components/raftstore.md`
 - `components/raftstore-v2.md`
 - `components/resolved_ts.md`
@@ -257,7 +257,7 @@ Companion docs:
 ## Related Components
 
 - `components/resolved_ts`
-- `src/gc_worker`
+- `src/server/gc_worker`
 - `components/raftstore`
 - `components/raftstore-v2`
 - `src/storage`
