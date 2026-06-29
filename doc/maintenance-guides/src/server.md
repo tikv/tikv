@@ -122,6 +122,8 @@ High-risk service contracts:
 ### GC and lock manager
 
 - `gc_worker/*` implements MVCC garbage collection and compaction filter logic.
+- `src/gc_worker.md` is the dedicated maintenance map for GC-specific
+  correctness, safe-point, and compaction behavior.
 - `lock_manager/*` owns the live waiter-manager workers, deadlock detector, and
   RPC-facing lock-manager runtime.
 - This module sits on top of the storage-side wait-queue contracts in
@@ -217,6 +219,7 @@ Companion docs:
 
 - `repo-overview.md`
 - `components/server.md`
+- `src/gc_worker.md`
 - `src/storage.md`
 
 ## Glossary
