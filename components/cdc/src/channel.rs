@@ -56,10 +56,13 @@ const CDC_RESP_MAX_BYTES: u32 = 6 * 1024 * 1024;
 /// ```
 const CDC_RESP_MAX_BATCH_COUNT: usize = 2;
 
+pub(crate) type BarrierCallback = Box<dyn FnOnce(()) + Send>;
+pub(crate) type Barrier = Option<BarrierCallback>;
+
 pub enum CdcEvent {
     ResolvedTs(ResolvedTs),
     Event(Event),
-    Barrier(Option<Box<dyn FnOnce(()) + Send>>),
+    Barrier(Barrier),
 }
 
 impl CdcEvent {

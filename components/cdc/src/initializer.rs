@@ -154,7 +154,7 @@ impl<E: KvEngine> Initializer<E> {
         let build_resolver = self.build_resolver.clone();
         let (incremental_scan_barrier_cb, incremental_scan_barrier_fut) =
             tikv_util::future::paired_future_callback();
-        let barrier = CdcEvent::Barrier(Some(incremental_scan_barrier_cb));
+        let barrier = Some(incremental_scan_barrier_cb);
         if let Err(e) = cdc_handle.capture_change(
             self.region_id,
             region_epoch,

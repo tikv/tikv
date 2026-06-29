@@ -16,7 +16,6 @@ use std::{
 use api_version::{ApiV2, KeyMode, KvFormat};
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
-use futures::future::ok;
 use kvproto::{
     cdcpb::{
         ChangeDataRequestKvApi, Error as EventError, Event, Event_oneof_event, EventEntries,
@@ -42,7 +41,7 @@ use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, Write
 
 use crate::{
     Error, Result,
-    channel::{CDC_EVENT_MAX_BYTES, CdcEvent, SendError, Sink},
+    channel::{Barrier, CDC_EVENT_MAX_BYTES, CdcEvent, SendError, Sink},
     endpoint::Advance,
     initializer::KvEntry,
     metrics::*,
@@ -246,9 +245,8 @@ impl Downstream {
         self.sink_event(change_data_event, force_send)
     }
 
-    pub fn sink_barrier(&self, barrier: CdcEvent) -> Result<()> {
-        debug_assert!(matches!(barrier, CdcEvent::Barrier(_)));
-        self.sink_cdc_event(barrier, true)
+    pub fn sink_barrier(&self, barrier: Barrier) -> Result<()> {
+        self.sink_cdc_event(CdcEvent::Barrier(barrier), true)
     }
 
     pub fn set_sink(&mut self, sink: Sink) {
