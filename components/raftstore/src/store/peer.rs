@@ -87,7 +87,7 @@ use super::{
     worker::BucketStatsInfo,
 };
 use crate::{
-    Error, Result,
+    DiscardReason, Error, Result,
     coprocessor::{
         CoprocessorHost, RegionChangeEvent, RegionChangeReason, RoleChange,
         TransferLeaderCustomContext,
@@ -125,6 +125,42 @@ const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000;
 const REGION_READ_PROGRESS_CAP: usize = 128;
 
 const SNAP_GEN_PRECHECK_FEATURE: Feature = Feature::require(8, 2, 0);
+
+fn extra_message_type_label(msg_type: ExtraMessageType) -> &'static str {
+    match msg_type {
+        ExtraMessageType::MsgRegionWakeUp => "region_wake_up",
+        ExtraMessageType::MsgWantRollbackMerge => "want_rollback_merge",
+        ExtraMessageType::MsgCheckStalePeer => "check_stale_peer",
+        ExtraMessageType::MsgCheckStalePeerResponse => "check_stale_peer_response",
+        ExtraMessageType::MsgHibernateRequest => "hibernate_request",
+        ExtraMessageType::MsgHibernateResponse => "hibernate_response",
+        ExtraMessageType::MsgRejectRaftLogCausedByMemoryUsage => {
+            "reject_raft_log_caused_by_memory_usage"
+        }
+        ExtraMessageType::MsgAvailabilityRequest => "availability_request",
+        ExtraMessageType::MsgAvailabilityResponse => "availability_response",
+        ExtraMessageType::MsgVoterReplicatedIndexRequest => "voter_replicated_index_request",
+        ExtraMessageType::MsgVoterReplicatedIndexResponse => "voter_replicated_index_response",
+        ExtraMessageType::MsgGcPeerRequest => "gc_peer_request",
+        ExtraMessageType::MsgGcPeerResponse => "gc_peer_response",
+        ExtraMessageType::MsgFlushMemtable => "flush_memtable",
+        ExtraMessageType::MsgRefreshBuckets => "refresh_buckets",
+        ExtraMessageType::MsgSnapGenPrecheckRequest => "snap_gen_precheck_request",
+        ExtraMessageType::MsgSnapGenPrecheckResponse => "snap_gen_precheck_response",
+        ExtraMessageType::MsgPreLoadRegionRequest => "pre_load_region_request",
+        ExtraMessageType::MsgPreLoadRegionResponse => "pre_load_region_response",
+    }
+}
+
+fn extra_message_send_failure_reason(err: &Error) -> &'static str {
+    match err {
+        Error::Transport(DiscardReason::Full) => "full",
+        Error::Transport(DiscardReason::Disconnected) => "disconnected",
+        Error::Transport(DiscardReason::Paused) => "paused",
+        Error::Transport(DiscardReason::Filtered) => "filtered",
+        _ => "other",
+    }
+}
 
 #[doc(hidden)]
 pub const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;
@@ -2796,7 +2832,7 @@ where
             let mut msg = ExtraMessage::default();
             msg.set_type(ExtraMessageType::MsgAvailabilityResponse);
             msg.wait_data = false;
-            self.send_extra_message(msg, &mut ctx.trans, &leader);
+            self.send_extra_message(msg, ctx, &leader);
             info!(
                 "notify leader the peer is available";
                 "region_id" => self.region().get_id(),
@@ -5863,7 +5899,7 @@ where
     pub fn send_extra_message<T: Transport>(
         &self,
         msg: ExtraMessage,
-        trans: &mut T,
+        ctx: &mut PollContext<EK, ER, T>,
         to: &metapb::Peer,
     ) {
         let mut send_msg = self.prepare_raft_message();
@@ -5876,15 +5912,39 @@ where
         );
         send_msg.set_extra_msg(msg);
         send_msg.set_to_peer(to.clone());
-        if let Err(e) = trans.send(send_msg) {
-            warn!(
-                "failed to send extra message";
-                "err" => ?e,
-                "type" => ?ty,
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-                "target" => ?to,
-            );
+        if let Err(e) = ctx.trans.send(send_msg) {
+            STORE_EXTRA_MESSAGE_SEND_FAILURE_COUNTER_VEC
+                .with_label_values(&[
+                    extra_message_type_label(ty),
+                    extra_message_send_failure_reason(&e),
+                ])
+                .inc();
+            if matches!(&e, Error::Transport(DiscardReason::Full)) {
+                if let Some(suppressed_count) = ctx
+                    .extra_message_full_log_limiter
+                    .record(to.get_store_id(), ty)
+                {
+                    warn!(
+                        "failed to send extra message";
+                        "err" => ?e,
+                        "type" => ?ty,
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                        "target" => ?to,
+                        "target_store_id" => to.get_store_id(),
+                        "suppressed_count" => suppressed_count,
+                    );
+                }
+            } else {
+                warn!(
+                    "failed to send extra message";
+                    "err" => ?e,
+                    "type" => ?ty,
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "target" => ?to,
+                );
+            }
         }
     }
 
@@ -5959,7 +6019,7 @@ where
     ) {
         let mut msg = ExtraMessage::default();
         msg.set_type(ExtraMessageType::MsgRegionWakeUp);
-        self.send_extra_message(msg, &mut ctx.trans, peer);
+        self.send_extra_message(msg, ctx, peer);
     }
 
     pub fn bcast_check_stale_peer_message<T: Transport>(
@@ -5984,7 +6044,7 @@ where
             }
             let mut extra_msg = ExtraMessage::default();
             extra_msg.set_type(ExtraMessageType::MsgCheckStalePeer);
-            self.send_extra_message(extra_msg, &mut ctx.trans, peer);
+            self.send_extra_message(extra_msg, ctx, peer);
         }
     }
 
@@ -6006,7 +6066,7 @@ where
     ) {
         let mut extra_msg = ExtraMessage::default();
         extra_msg.set_type(ExtraMessageType::MsgSnapGenPrecheckRequest);
-        self.send_extra_message(extra_msg, &mut ctx.trans, to_peer);
+        self.send_extra_message(extra_msg, ctx, to_peer);
     }
 
     pub fn send_snap_gen_precheck_response<T: Transport>(
@@ -6018,7 +6078,7 @@ where
         let mut extra_msg = ExtraMessage::default();
         extra_msg.set_type(ExtraMessageType::MsgSnapGenPrecheckResponse);
         extra_msg.set_snap_gen_precheck_passed(passed);
-        self.send_extra_message(extra_msg, &mut ctx.trans, to_peer);
+        self.send_extra_message(extra_msg, ctx, to_peer);
     }
 
     pub fn send_want_rollback_merge<T: Transport>(
@@ -6041,7 +6101,7 @@ where
         let mut extra_msg = ExtraMessage::default();
         extra_msg.set_type(ExtraMessageType::MsgWantRollbackMerge);
         extra_msg.set_index(premerge_commit);
-        self.send_extra_message(extra_msg, &mut ctx.trans, &to_peer);
+        self.send_extra_message(extra_msg, ctx, &to_peer);
     }
 
     pub fn require_updating_max_ts(&self, pd_scheduler: &Scheduler<PdTask<EK>>) {
