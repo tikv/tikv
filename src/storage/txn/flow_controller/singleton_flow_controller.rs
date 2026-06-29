@@ -443,10 +443,13 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
                     {
                         let v = long_term_pending_bytes.get_avg();
                         if v <= soft {
-                            info!(
+                            // Bookkeeping only: record the baseline for the later
+                            // jump check. Downgraded to DEBUG to avoid a log storm
+                            // when UDR is triggered at very high frequency.
+                            debug!(
                                 "before unsafe destroy range";
                                 "cf" => cf,
-                                "pending_bytes" => v
+                                "pending_bytes_log2" => v
                             );
                             cf_checker.pending_bytes_before_unsafe_destroy_range = Some(v);
                         }
@@ -478,26 +481,34 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
                         if current_pending_bytes >= soft || avg_pending_bytes >= soft {
                             // There is a pending bytes jump. Flow control for
                             // compaction bytes won't be re-enabled until the
-                            // pending bytes drop below the soft limit.
+                            // pending bytes drop below the soft limit. This is the
+                            // abnormal path that deserves a visible log line.
                             SCHED_THROTTLE_ACTION_COUNTER
                                 .with_label_values(&[cf, "pending_bytes_jump"])
                                 .inc();
-                        } else {
-                            cf_checker.pending_bytes_before_unsafe_destroy_range = None;
                             info!(
+                                "pending compaction bytes jump after unsafe destroy range";
+                                "cf" => cf,
+                                "before_log2" => before,
+                                "current_pending_bytes_log2" => current_pending_bytes,
+                                "avg_pending_bytes_log2" => avg_pending_bytes,
+                                "soft_limit_log2" => soft,
+                            );
+                        } else {
+                            // Normal path: pending bytes were cleared or dropped,
+                            // which is the vast majority of UDR events. Keep it out
+                            // of the default log and only track it with a metric to
+                            // avoid a log storm; downgrade the state-change log to
+                            // DEBUG.
+                            cf_checker.pending_bytes_before_unsafe_destroy_range = None;
+                            SCHED_THROTTLE_ACTION_COUNTER
+                                .with_label_values(&[cf, "pending_bytes_no_jump"])
+                                .inc();
+                            debug!(
                                 "re-enabled compaction pending bytes flow control";
                                 "cf" => cf,
                             );
                         }
-
-                        info!(
-                            "after unsafe destroy range";
-                            "cf" => cf,
-                            "before" => before,
-                            "current_pending_bytes" => current_pending_bytes,
-                            "avg_pending_bytes" => avg_pending_bytes,
-                            "soft_limit" => soft,
-                        );
                     }
                 }
             }
@@ -664,8 +675,8 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
                     info!(
                         "pending compaction bytes is back to normal";
                         "cf" => &cf,
-                        "avg_pending_compaction_bytes" => avg_pending_compaction_bytes,
-                        "before" => before
+                        "pending_compaction_bytes_log2" => avg_pending_compaction_bytes,
+                        "before_log2" => before
                     );
                     checker.pending_bytes_before_unsafe_destroy_range = None;
                 }

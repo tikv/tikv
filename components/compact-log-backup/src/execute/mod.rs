@@ -58,20 +58,12 @@ pub fn create_storage_with_gcp_v2(
     Ok(Arc::from(storage))
 }
 
-pub async fn load_until_ts_from_checkpoint(
-    storage: &dyn ExternalStorage,
-    replication_status_sub_prefix: Option<&str>,
-) -> Result<u64> {
-    if let Some(sub_prefix) = replication_status_sub_prefix {
-        crate::exec_hooks::consistency::load_replication_status_checkpoint(storage, sub_prefix)
-            .await
-    } else {
-        crate::exec_hooks::consistency::load_storage_checkpoint(storage)
-            .await?
-            .ok_or_else(|| {
-                ErrorKind::Other("Cannot load checkpoint from external storage".to_owned()).into()
-            })
-    }
+pub async fn load_until_ts_from_checkpoint(storage: &dyn ExternalStorage) -> Result<u64> {
+    crate::exec_hooks::consistency::load_checkpoint_with_crr_fallback(storage)
+        .await?
+        .ok_or_else(|| {
+            ErrorKind::Other("Cannot load checkpoint from external storage".to_owned()).into()
+        })
 }
 
 /// Sharding configuration for `compact-log-backup`.
@@ -172,6 +164,9 @@ pub struct ExecutionConfig {
     /// Whether to calculate `shift_ts` from backup metadata names before
     /// collecting subcompactions.
     pub calculate_shift_ts: bool,
+    /// Minimal subcompaction input size in bytes. Smaller subcompactions are
+    /// skipped when the skip-small-compaction hook is installed.
+    pub minimal_compaction_size: u64,
     /// Filter out write CF files don't have any record with TS less than this.
     pub from_ts: u64,
     /// Filter out write CF files don't have any record with TS great or equal
@@ -200,6 +195,7 @@ impl slog::KV for ExecutionConfig {
     ) -> slog::Result {
         serializer.emit_u64("shift_ts", self.shift_ts)?;
         serializer.emit_bool("calculate_shift_ts", self.calculate_shift_ts)?;
+        serializer.emit_u64("minimal_compaction_size", self.minimal_compaction_size)?;
         serializer.emit_u64("from_ts", self.from_ts)?;
         serializer.emit_u64("until_ts", self.until_ts)?;
         if let Some(shard) = self.shard {
@@ -298,6 +294,7 @@ impl ExecutionConfig {
         hasher.write(&self.until_ts.to_le_bytes());
         hasher.write(&self.physical_file_cache_capacity.to_le_bytes());
         hasher.write(&[self.calculate_shift_ts as u8]);
+        hasher.write(&self.minimal_compaction_size.to_le_bytes());
         hasher.write(&util::compression_type_to_u8(self.compression).to_le_bytes());
         hasher.write(&self.compression_level.unwrap_or(0).to_le_bytes());
 

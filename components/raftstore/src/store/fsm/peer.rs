@@ -11,7 +11,10 @@ use std::{
     },
     iter::Iterator,
     mem,
-    sync::{Arc, Mutex, atomic::Ordering},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -60,7 +63,7 @@ use tikv_util::{
     store::{find_peer, find_peer_by_id, is_learner, region_on_same_stores},
     sys::disk::DiskUsage,
     time::{Instant as TiInstant, SlowTimer, monotonic_raw_now},
-    trace, warn,
+    trace, warn, warn_or_debug,
     worker::{ScheduleError, Scheduler},
 };
 use tracker::GLOBAL_TRACKERS;
@@ -133,8 +136,29 @@ const REGION_SPLIT_SKIP_MAX_COUNT: usize = 3;
 #[allow(clippy::identity_op)]
 const MAX_BATCH_SIZE_LIMIT: u64 = 1 * 1024 * 1024;
 const UNSAFE_RECOVERY_STATE_TIMEOUT: Duration = Duration::from_secs(60);
+const SNAP_GEN_PRECHECK_RESPONSE_INFO_SAMPLE_RATE: u64 = 100;
+const SNAP_GEN_PRECHECK_REJECTED_RESPONSE_INFO_SAMPLE_RATE: u64 = 10;
+const SNAP_GEN_PRECHECK_IGNORED_RESPONSE_INFO_SAMPLE_RATE: u64 = 1024;
+
+static SNAP_GEN_PRECHECK_RESPONSE_LOG_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub const MAX_PROPOSAL_SIZE_RATIO: f64 = 0.4;
+
+#[inline]
+fn should_log_snap_gen_precheck_response_info(passed: bool, ignored: bool) -> bool {
+    // A rejected response means the follower's snapshot-receive concurrency is
+    // saturated, which is worth attention, so keep it more visible than the
+    // high-volume success path. Stale (ignored) responses carry the least
+    // information and are sampled the most aggressively.
+    let sample_rate = match (passed, ignored) {
+        (_, true) => SNAP_GEN_PRECHECK_IGNORED_RESPONSE_INFO_SAMPLE_RATE,
+        (false, false) => SNAP_GEN_PRECHECK_REJECTED_RESPONSE_INFO_SAMPLE_RATE,
+        (true, false) => SNAP_GEN_PRECHECK_RESPONSE_INFO_SAMPLE_RATE,
+    };
+    SNAP_GEN_PRECHECK_RESPONSE_LOG_COUNTER
+        .fetch_add(1, Ordering::Relaxed)
+        .is_multiple_of(sample_rate)
+}
 
 pub struct DestroyPeerJob {
     pub initialized: bool,
@@ -715,12 +739,34 @@ where
                     if !self.ctx.coprocessor_host.on_raft_message(&msg.msg) {
                         continue;
                     }
+                    let msg_region_id = msg.msg.get_region_id();
+                    let msg_type = msg.msg.get_message().get_msg_type();
+                    let from_peer_id = msg.msg.get_from_peer().get_id();
+                    let from_store_id = msg.msg.get_from_peer().get_store_id();
+                    let to_peer_id = msg.msg.get_to_peer().get_id();
+                    let to_store_id = msg.msg.get_to_peer().get_store_id();
                     if let Err(e) = self.on_raft_message(msg) {
-                        warn!(
+                        // StepLocalMsg is a benign, high-frequency no-op: a local-type
+                        // message received over the network (e.g. the MsgUnreachable echo
+                        // of a memory-pressure rejected append). Downgrade it to DEBUG
+                        // with a metric; all other errors stay at WARN.
+                        let is_step_local = matches!(&e, Error::Raft(raft::Error::StepLocalMsg));
+                        if is_step_local {
+                            self.ctx.raft_metrics.message_dropped.step_local_msg.inc();
+                        }
+                        warn_or_debug!(
+                            !is_step_local;
                             "handle raft message err";
                             "err" => ?e,
+                            "error_code" => %e.error_code(),
                             "region_id" => self.fsm.region_id(),
                             "peer_id" => self.fsm.peer_id(),
+                            "msg_region_id" => msg_region_id,
+                            "msg_type" => ?msg_type,
+                            "from_peer_id" => from_peer_id,
+                            "from_store_id" => from_store_id,
+                            "to_peer_id" => to_peer_id,
+                            "to_store_id" => to_store_id,
                         );
                     }
                 }
@@ -3078,9 +3124,7 @@ where
 
             let mut extra = ExtraMessage::default();
             extra.set_type(ExtraMessageType::MsgHibernateRequest);
-            self.fsm
-                .peer
-                .send_extra_message(extra, &mut self.ctx.trans, peer);
+            self.fsm.peer.send_extra_message(extra, self.ctx, peer);
         }
         false
     }
@@ -3100,9 +3144,7 @@ where
         self.on_check_peer_complete_apply_logs();
         let mut extra = ExtraMessage::default();
         extra.set_type(ExtraMessageType::MsgHibernateResponse);
-        self.fsm
-            .peer
-            .send_extra_message(extra, &mut self.ctx.trans, from);
+        self.fsm.peer.send_extra_message(extra, self.ctx, from);
     }
 
     fn on_hibernate_response(&mut self, from: &metapb::Peer) {
@@ -3161,9 +3203,7 @@ where
         report.set_from_region_id(self.region_id());
         report.set_from_region_epoch(self.region().get_region_epoch().clone());
         report.set_trimmed(true);
-        self.fsm
-            .peer
-            .send_extra_message(resp, &mut self.ctx.trans, from);
+        self.fsm.peer.send_extra_message(resp, self.ctx, from);
         debug!(
             "peer responses availability info to leader";
             "region_id" => self.region().get_id(),
@@ -3190,9 +3230,7 @@ where
         let mut resp = ExtraMessage::default();
         resp.set_type(ExtraMessageType::MsgVoterReplicatedIndexResponse);
         resp.index = voter_replicated_idx;
-        self.fsm
-            .peer
-            .send_extra_message(resp, &mut self.ctx.trans, from);
+        self.fsm.peer.send_extra_message(resp, self.ctx, from);
         debug!(
             "leader responses voter_replicated_index to witness";
             "region_id" => self.region().get_id(),
@@ -3315,14 +3353,35 @@ where
             ExtraMessageType::MsgSnapGenPrecheckResponse => {
                 let passed = msg.get_extra_msg().get_snap_gen_precheck_passed();
                 fail_point!("snap_gen_precheck_failed", !passed, |_| {});
-                info!(
+                let ignored = !self.fsm.peer.get_store().has_gen_snap_task();
+                let status = match (passed, ignored) {
+                    (true, false) => {
+                        SNAP_GEN_PRECHECK_RESPONSE_COUNTER.passed.inc();
+                        "passed"
+                    }
+                    (false, false) => {
+                        SNAP_GEN_PRECHECK_RESPONSE_COUNTER.rejected.inc();
+                        "rejected"
+                    }
+                    (true, true) => {
+                        SNAP_GEN_PRECHECK_RESPONSE_COUNTER.ignored_passed.inc();
+                        "ignored_passed"
+                    }
+                    (false, true) => {
+                        SNAP_GEN_PRECHECK_RESPONSE_COUNTER.ignored_rejected.inc();
+                        "ignored_rejected"
+                    }
+                };
+                info_or_debug!(
+                    should_log_snap_gen_precheck_response_info(passed, ignored);
                     "snap gen precheck response: {}", passed;
                     "region_id" => self.region_id(),
                     "peer_id" => self.peer().id,
                     "store_id" => self.store_id(),
                     "receiver_peer_id" => msg.get_from_peer().get_id(),
                     "receiver_store_id" => msg.get_from_peer().get_store_id(),
-                    "ignored" => !self.fsm.peer.get_store().has_gen_snap_task(),
+                    "ignored" => ignored,
+                    "status" => status,
                 );
                 if passed {
                     if let Some(gen_task) = self.fsm.peer.mut_store().take_gen_snap_task() {
@@ -6491,9 +6550,7 @@ where
             let leader_id = self.fsm.peer.leader_id();
             let leader = self.fsm.peer.get_peer_from_cache(leader_id);
             if let Some(leader) = leader {
-                self.fsm
-                    .peer
-                    .send_extra_message(msg, &mut self.ctx.trans, &leader);
+                self.fsm.peer.send_extra_message(msg, self.ctx, &leader);
             }
         }
         self.register_pull_voter_replicated_index_tick();
@@ -6786,9 +6843,11 @@ where
         );
         let keys = region_buckets.meta.keys.clone();
         let version = region_buckets.meta.version;
-        let mut store_meta = self.ctx.store_meta.lock().unwrap();
-        if let Some(reader) = store_meta.readers.get_mut(&self.fsm.region_id()) {
-            reader.update(ReadProgress::region_buckets(region_buckets.meta.clone()));
+        {
+            let mut store_meta = self.ctx.store_meta.lock().unwrap();
+            if let Some(reader) = store_meta.readers.get_mut(&self.fsm.region_id()) {
+                reader.update(ReadProgress::region_buckets(region_buckets.meta.clone()));
+            }
         }
 
         // Notify followers to refresh their buckets version
@@ -6804,9 +6863,7 @@ where
                 refresh_buckets.set_version(version);
                 refresh_buckets.set_keys(keys.clone().into());
                 extra_msg.set_refresh_buckets(refresh_buckets);
-                self.fsm
-                    .peer
-                    .send_extra_message(extra_msg, &mut self.ctx.trans, &p);
+                self.fsm.peer.send_extra_message(extra_msg, self.ctx, &p);
             }
         }
         // test purpose
@@ -6976,9 +7033,7 @@ where
                 Some(peer) => {
                     let mut msg = ExtraMessage::default();
                     msg.set_type(ExtraMessageType::MsgAvailabilityRequest);
-                    self.fsm
-                        .peer
-                        .send_extra_message(msg, &mut self.ctx.trans, &peer);
+                    self.fsm.peer.send_extra_message(msg, self.ctx, &peer);
                     debug!(
                         "check peer availability";
                         "target_peer_id" => *peer_id,

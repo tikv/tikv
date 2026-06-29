@@ -72,6 +72,10 @@ pub trait BatchExecutor: Send {
     /// state.
     fn peek_scanned_rows_sum(&self) -> usize;
 
+    /// Returns the total number of bytes scanned (key and value lengths of
+    /// every returned entry), without modifying internal state.
+    fn peek_scanned_bytes_sum(&self) -> usize;
+
     /// Collects underlying storage statistics accumulated during execution and
     /// prepares for next collection.
     ///
@@ -133,6 +137,10 @@ impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
         (**self).peek_scanned_rows_sum()
     }
 
+    fn peek_scanned_bytes_sum(&self) -> usize {
+        (**self).peek_scanned_bytes_sum()
+    }
+
     fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
         (**self).collect_storage_stats(dest);
     }
@@ -185,6 +193,10 @@ impl<C: ExecSummaryCollector + Send, T: BatchExecutor> BatchExecutor
 
     fn peek_scanned_rows_sum(&self) -> usize {
         self.inner.peek_scanned_rows_sum()
+    }
+
+    fn peek_scanned_bytes_sum(&self) -> usize {
+        self.inner.peek_scanned_bytes_sum()
     }
 
     fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {

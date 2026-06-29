@@ -202,6 +202,14 @@ impl CfStatistics {
     }
 }
 
+/// Per-entry contribution to [`Statistics::processed_size`]: key length plus
+/// value length. The single source of truth for the formula, so every site
+/// that accumulates `processed_size` stays in sync.
+#[inline]
+pub fn kv_processed_size(key_len: usize, value_len: usize) -> usize {
+    key_len + value_len
+}
+
 #[derive(Default, Debug)]
 pub struct Statistics {
     pub lock: CfStatistics,

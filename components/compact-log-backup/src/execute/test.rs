@@ -72,6 +72,7 @@ pub fn create_compaction(st: StorageBackend) -> Execution {
             shard: None,
             shift_ts: 0,
             calculate_shift_ts: false,
+            minimal_compaction_size: 0,
             from_ts: 0,
             until_ts: u64::MAX,
             compression: engine_traits::SstCompressionType::Lz4,
@@ -247,6 +248,34 @@ async fn test_exec_simple() {
         .await
         .unwrap();
     assert_eq!(subc.len(), 10);
+
+    let mut expected_cmeta_files_total_size = 0;
+    let mut stream = st.storage().iter_prefix(mig.compactions[0].get_artifacts());
+    while let Some(item) = stream.try_next().await.unwrap() {
+        if item.key.ends_with(".cmeta") {
+            let mut content = vec![];
+            st.storage()
+                .read(&item.key)
+                .read_to_end(&mut content)
+                .await
+                .unwrap();
+            expected_cmeta_files_total_size += content.len() as u64;
+        }
+    }
+    assert_eq!(
+        mig.compactions[0].get_generated_cmeta_files_total_size(),
+        expected_cmeta_files_total_size
+    );
+
+    let expected_sst_files_total_size: u64 = subc
+        .iter()
+        .flat_map(|subcompaction| subcompaction.get_sst_outputs())
+        .map(|file| file.get_size())
+        .sum();
+    assert_eq!(
+        mig.compactions[0].get_generated_sst_files_total_size(),
+        expected_sst_files_total_size
+    );
 }
 
 #[tokio::test]
@@ -293,13 +322,16 @@ async fn test_checkpointing_reuses_only_committed_batches() {
             move || {
                 let mut exec = create_compaction(be);
                 exec.max_concurrent_subcompaction = 1;
-                let save_meta = SaveMeta::default().with_batch_limits(2, usize::MAX);
+                let checkpoint = Checkpoint::default();
+                let save_meta = SaveMeta::default()
+                    .with_batch_limits(2, usize::MAX)
+                    .with_checkpointed_file_sizes(checkpoint.file_sizes());
                 let abort = AbortAfterNFinishes {
                     seen: Arc::new(AtomicU64::new(0)),
                     abort_at: 5,
                 };
                 if with_checkpoint {
-                    exec.run(((save_meta, Checkpoint::default()), abort))
+                    exec.run(((save_meta, checkpoint), abort))
                 } else {
                     exec.run((save_meta, abort))
                 }
@@ -333,14 +365,12 @@ async fn test_checkpointing_reuses_only_committed_batches() {
         move || {
             let mut exec = create_compaction(be);
             exec.max_concurrent_subcompaction = 1;
-            exec.run((
-                (
-                    SaveMeta::default().with_batch_limits(2, usize::MAX),
-                    Checkpoint::default(),
-                ),
-                CompactionSpy(tx),
-            ))
-            .unwrap();
+            let checkpoint = Checkpoint::default();
+            let save_meta = SaveMeta::default()
+                .with_batch_limits(2, usize::MAX)
+                .with_checkpointed_file_sizes(checkpoint.file_sizes());
+            exec.run(((save_meta, checkpoint), CompactionSpy(tx)))
+                .unwrap();
         }
     });
 
@@ -370,12 +400,52 @@ async fn test_checkpointing_reuses_only_committed_batches() {
         .await
         .unwrap();
     assert_eq!(subc.len(), 15);
+
+    let mut expected_cmeta_files_total_size = 0;
+    let mut stream = st.storage().iter_prefix(mig.compactions[0].get_artifacts());
+    while let Some(item) = stream.try_next().await.unwrap() {
+        if item.key.ends_with(".cmeta") {
+            let mut content = vec![];
+            st.storage()
+                .read(&item.key)
+                .read_to_end(&mut content)
+                .await
+                .unwrap();
+            expected_cmeta_files_total_size += content.len() as u64;
+        }
+    }
+    assert_eq!(
+        mig.compactions[0].get_generated_cmeta_files_total_size(),
+        expected_cmeta_files_total_size
+    );
+
+    let expected_sst_files_total_size: u64 = subc
+        .iter()
+        .flat_map(|subcompaction| subcompaction.get_sst_outputs())
+        .map(|file| file.get_size())
+        .sum();
+    assert_eq!(
+        mig.compactions[0].get_generated_sst_files_total_size(),
+        expected_sst_files_total_size
+    );
 }
 
 async fn put_checkpoint(storage: &dyn ExternalStorage, store: u64, cp: u64) {
     let pfx = format!("v1/global_checkpoint/{}.ts", store);
     let content = futures::io::Cursor::new(cp.to_le_bytes());
     storage.write(&pfx, content.into(), 8).await.unwrap();
+}
+
+async fn put_crr_checkpoint(storage: &dyn ExternalStorage, cp: u64) {
+    let content = format!(r#"{{"last_checkpoint":{}}}"#, cp).into_bytes();
+    storage
+        .write(
+            "crr-checkpoint/resume-state.json",
+            futures::io::Cursor::new(content.clone()).into(),
+            content.len() as u64,
+        )
+        .await
+        .unwrap();
 }
 
 async fn load_locks(storage: &dyn ExternalStorage) -> Vec<String> {
@@ -385,6 +455,24 @@ async fn load_locks(storage: &dyn ExternalStorage) -> Vec<String> {
         .try_collect::<Vec<_>>()
         .await
         .unwrap()
+}
+
+#[tokio::test]
+async fn test_load_until_ts_from_checkpoint_prefers_crr_checkpoint() {
+    let st = TmpStorage::create();
+    let storage = st.storage().as_ref();
+    put_checkpoint(storage, 1, 42).await;
+
+    assert_eq!(
+        super::load_until_ts_from_checkpoint(storage).await.unwrap(),
+        42
+    );
+
+    put_crr_checkpoint(storage, 40).await;
+    assert_eq!(
+        super::load_until_ts_from_checkpoint(storage).await.unwrap(),
+        40
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -418,6 +506,24 @@ async fn test_consistency_guard() {
     put_checkpoint(strg, 2, 49).await;
     let mut exec = create_compaction(st.backend());
     exec.cfg.until_ts = 43;
+    let c = StorageConsistencyGuard::default();
+    tokio::task::block_in_place(|| exec.run(c).unwrap());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_consistency_guard_prefers_crr_checkpoint() {
+    let st = TmpStorage::create();
+    let strg = st.storage().as_ref();
+    put_checkpoint(strg, 1, 49).await;
+    put_crr_checkpoint(strg, 40).await;
+
+    let mut exec = create_compaction(st.backend());
+    exec.cfg.until_ts = 41;
+    let c = StorageConsistencyGuard::default();
+    tokio::task::block_in_place(|| exec.run(c).unwrap_err());
+
+    let mut exec = create_compaction(st.backend());
+    exec.cfg.until_ts = 39;
     let c = StorageConsistencyGuard::default();
     tokio::task::block_in_place(|| exec.run(c).unwrap());
 }
@@ -518,6 +624,45 @@ async fn test_filter_out_small_compactions() {
     for c in &cs {
         assert!(c.get_meta().get_size() >= 27800, "{:?}", c.get_meta());
     }
+}
+
+#[tokio::test]
+async fn test_comments_record_execution_config_for_coverage() {
+    let shard = ShardConfig::new(1, 2).unwrap();
+    let store_id = (1..=16)
+        .find(|&store_id| shard.contains_store_id(store_id))
+        .unwrap();
+    let (meta_path, log_path) = store_paths(store_id);
+
+    let st = TmpStorage::create();
+    st.build_flush(&log_path, &meta_path, gen_store_builders(store_id))
+        .await;
+
+    let mut exec = create_compaction(st.backend());
+    exec.cfg.shard = Some(shard);
+    exec.cfg.from_ts = 0x20;
+    exec.cfg.calculate_shift_ts = true;
+    exec.cfg.minimal_compaction_size = 42;
+    exec.out_prefix = exec.cfg.recommended_prefix("comments_config");
+
+    tokio::task::spawn_blocking(move || exec.run(SaveMeta::default()))
+        .await
+        .unwrap()
+        .unwrap();
+
+    let migs = st.load_migrations().await.unwrap();
+    assert_eq!(migs.len(), 1);
+    let comments = migs[0].1.compactions[0].get_comments();
+    let comments: serde_json::Value = serde_json::from_str(comments).unwrap();
+    let config = &comments["config"];
+
+    assert_eq!(config["from-ts"].as_u64(), Some(0x20));
+    assert_eq!(config["until-ts"].as_u64(), Some(u64::MAX));
+    assert_eq!(config["shift-ts"].as_u64(), Some(0x20));
+    assert_eq!(config["cal-shift-ts"].as_bool(), Some(true));
+    assert_eq!(config["minimal-compaction-size"].as_u64(), Some(42));
+    assert_eq!(config["shard"]["index"].as_u64(), Some(1));
+    assert_eq!(config["shard"]["total"].as_u64(), Some(2));
 }
 
 #[tokio::test]

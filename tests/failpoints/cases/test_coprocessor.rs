@@ -297,6 +297,78 @@ fn test_paging_scan() {
 }
 
 #[test]
+fn test_paging_scan_bytes() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+    ];
+
+    let product = ProductTable::new();
+    let (_, endpoint) = init_with_data(&product, &data);
+    // Force one row per batch so the byte budget is evaluated after every row,
+    // making the truncation point deterministic without depending on the exact
+    // per-row encoded size.
+    fail::cfg("copr_batch_initial_size", "return(1)").unwrap();
+    fail::cfg("copr_batch_grow_size", "return(1)").unwrap();
+    for desc in [false, true] {
+        // A 1-byte budget is exceeded after the first row's MVCC processed_size
+        // (encoded key + value, always > 1 byte), so the scan stops after exactly
+        // one row and hands back a resume range pointing past it.
+        let req = DagSelect::from(&product)
+            .paging_size_bytes(1)
+            .desc(desc)
+            .build();
+        let resp = handle_request(&endpoint, req);
+        let mut select_resp = SelectResponse::default();
+        select_resp.merge_from_bytes(resp.get_data()).unwrap();
+        let row_count = DagChunkSpliter::new(select_resp.take_chunks().into(), 3).count();
+        assert_eq!(row_count, 1, "byte budget must truncate to a single row");
+
+        // The resume range must start at the table boundary and stop within the
+        // single returned row's key range, so the caller can continue from there.
+        let res_range = resp.get_range();
+        let (res_start_key, res_end_key) = match desc {
+            true => (res_range.get_end(), res_range.get_start()),
+            false => (res_range.get_start(), res_range.get_end()),
+        };
+        let start_key = match desc {
+            true => product.get_record_range_one(i64::MAX),
+            false => product.get_record_range_one(i64::MIN),
+        };
+        let stop_id = match desc {
+            true => data[data.len() - 1].0,
+            false => data[0].0,
+        };
+        let end_key = product.get_record_range_one(stop_id);
+        assert_eq!(res_start_key, start_key.get_start());
+        assert_ge!(res_end_key, end_key.get_start());
+        assert_le!(res_end_key, end_key.get_end());
+
+        // A budget larger than the whole table must not truncate: the scan drains
+        // naturally and returns no resume range.
+        let req = DagSelect::from(&product)
+            .paging_size_bytes(u64::MAX)
+            .desc(desc)
+            .build();
+        let resp = handle_request(&endpoint, req);
+        let mut select_resp = SelectResponse::default();
+        select_resp.merge_from_bytes(resp.get_data()).unwrap();
+        let row_count = DagChunkSpliter::new(select_resp.take_chunks().into(), 3).count();
+        assert_eq!(
+            row_count,
+            data.len(),
+            "ample byte budget must return all rows"
+        );
+        assert!(
+            resp.range.is_none(),
+            "a draining scan must not set a resume range"
+        );
+    }
+}
+
+#[test]
 fn test_paging_scan_multi_ranges() {
     let data = vec![
         (1, Some("name:0"), 2),
