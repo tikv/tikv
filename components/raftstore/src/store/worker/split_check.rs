@@ -29,8 +29,9 @@ use super::metrics::*;
 use crate::{
     Result,
     coprocessor::{
-        Config, CoprocessorHost, SplitCheckerHost, get_region_approximate_middle_in_range,
+        Config, CoprocessorHost, SplitCheckerHost,
         dispatcher::StoreHandle,
+        get_region_approximate_middle_in_range,
         region_info_accessor::RegionInfoProvider,
         split_observer::{is_valid_split_key, strip_timestamp_if_exists},
     },
@@ -752,12 +753,9 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         };
 
         if split_keys.is_empty() && reason == SplitReason::Load && is_key_range {
-            if let Some(split_key) = self.approximate_middle_for_load_key_range(
-                tablet,
-                region,
-                &start_key,
-                &end_key,
-            ) {
+            if let Some(split_key) =
+                self.approximate_middle_for_load_key_range(tablet, region, &start_key, &end_key)
+            {
                 info!(
                     "load split fallback to approximate middle in key range";
                     "region_id" => region_id,
@@ -802,10 +800,11 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         }
     }
 
-    /// Picks a load-split fallback key from approximate middle within a key range.
+    /// Picks a load-split fallback key from approximate middle within a key
+    /// range.
     ///
-    /// The candidate is normalized with the same timestamp-stripping behavior as
-    /// SplitObserver before boundary and region-validity checks.
+    /// The candidate is normalized with the same timestamp-stripping behavior
+    /// as SplitObserver before boundary and region-validity checks.
     fn approximate_middle_for_load_key_range(
         &self,
         tablet: &EK,
