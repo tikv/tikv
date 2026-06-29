@@ -674,11 +674,10 @@ impl AutoSplitController {
     /// Removes stale suppression entries outside the cooldown window.
     fn prune_expired_cpu_top_fallback_suppressions(&mut self) {
         let interval = self.cpu_top_fallback_suppress_interval();
-        self.cpu_top_fallback_suppressions
-            .retain(|_, entries| {
-                entries.retain(|entry| entry.last_attempt_time.saturating_elapsed() < interval);
-                !entries.is_empty()
-            });
+        self.cpu_top_fallback_suppressions.retain(|_, entries| {
+            entries.retain(|entry| entry.last_attempt_time.saturating_elapsed() < interval);
+            !entries.is_empty()
+        });
     }
 
     /// Removes stale suppression entries for one region.
@@ -692,7 +691,8 @@ impl AutoSplitController {
         }
     }
 
-    /// Returns whether CPU-top fallback should be suppressed for this region/range.
+    /// Returns whether CPU-top fallback should be suppressed for this
+    /// region/range.
     fn should_suppress_cpu_top_fallback(
         &mut self,
         region_id: u64,
@@ -710,11 +710,7 @@ impl AutoSplitController {
     }
 
     /// Records a CPU-top fallback attempt for this region/range pair.
-    fn record_cpu_top_fallback(
-        &mut self,
-        region_id: u64,
-        hottest_key_range: &KeyRange,
-    ) {
+    fn record_cpu_top_fallback(&mut self, region_id: u64, hottest_key_range: &KeyRange) {
         self.prune_expired_cpu_top_fallback_suppressions_for_region(region_id);
         let now = Instant::now_coarse();
         let entries = self
@@ -732,6 +728,17 @@ impl AutoSplitController {
                 end_key: hottest_key_range.end_key.clone(),
                 last_attempt_time: now,
             });
+
+            // Bound per-region suppression state to avoid unbounded growth
+            const MAX_ENTRIES: usize = 8;
+            if entries.len() > MAX_ENTRIES {
+                entries.sort_unstable_by(|a, b| {
+                    a.last_attempt_time
+                        .partial_cmp(&b.last_attempt_time)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                entries.drain(..entries.len() - MAX_ENTRIES);
+            }
         }
     }
 
@@ -1000,10 +1007,8 @@ impl AutoSplitController {
                     cpu_usage_b.partial_cmp(&cpu_usage_a).unwrap()
                 });
                 let region_id = top_cpu_usage[0];
-                if let Some((peer, cpu_usage, hottest_key_range)) = self
-                    .recorders
-                    .get(&region_id)
-                    .map(|recorder| {
+                if let Some((peer, cpu_usage, hottest_key_range)) =
+                    self.recorders.get(&region_id).map(|recorder| {
                         (
                             recorder.peer.clone(),
                             recorder.cpu_usage,
@@ -1013,7 +1018,9 @@ impl AutoSplitController {
                 {
                     if let Some(hottest_key_range) = hottest_key_range {
                         if self.should_suppress_cpu_top_fallback(region_id, &hottest_key_range) {
-                            LOAD_BASE_SPLIT_EVENT.cpu_top_fallback_suppressed_repeat.inc();
+                            LOAD_BASE_SPLIT_EVENT
+                                .cpu_top_fallback_suppressed_repeat
+                                .inc();
                             debug!("skip repeated cpu-top fallback key range";
                                 "region_id" => region_id,
                                 "start_key" => log_wrappers::Value::key(&hottest_key_range.start_key),
@@ -1575,7 +1582,8 @@ mod tests {
                     && entry.end_key.as_slice() == hottest_key_range.end_key.as_slice()
             })
             .unwrap();
-        state.last_attempt_time = Instant::now_coarse() - suppress_interval - Duration::from_secs(1);
+        state.last_attempt_time =
+            Instant::now_coarse() - suppress_interval - Duration::from_secs(1);
         hub.clear();
 
         assert!(!hub.cpu_top_fallback_suppressions.contains_key(&1));
