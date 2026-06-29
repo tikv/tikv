@@ -120,8 +120,9 @@ pub fn get_region_approximate_middle(
 
 /// Get region approximate middle key from an explicit encoded data-key range.
 ///
-/// The provided range must be in the `keys::data_key` / `keys::data_end_key` space.
-/// It is clamped to region boundaries. When the resulting range is empty, returns `Ok(None)`.
+/// The provided range must be in the `keys::data_key` / `keys::data_end_key`
+/// space. It is clamped to region boundaries. When the resulting range is
+/// empty, returns `Ok(None)`.
 pub fn get_region_approximate_middle_in_range(
     db: &impl KvEngine,
     region: &Region,
@@ -132,7 +133,7 @@ pub fn get_region_approximate_middle_in_range(
     let region_end_key = keys::enc_end_key(region);
 
     if let Some(start_key) = start_key {
-        box_try!(if keys::validdate_data_key(start_key) {
+        box_try!(if keys::validate_data_key(start_key) {
             Ok(())
         } else {
             Err(std::io::Error::new(
@@ -142,7 +143,7 @@ pub fn get_region_approximate_middle_in_range(
         })
     }
     if let Some(end_key) = end_key {
-        box_try!(if keys::validdate_data_key(end_key) {
+        box_try!(if keys::validate_data_key(end_key) {
             Ok(())
         } else {
             Err(std::io::Error::new(
@@ -206,7 +207,8 @@ mod tests {
                     panic!("unexpected AskSplit task emitted");
                 }
                 Ok(_) => {
-                    // UpdateApproximate* and bucket refresh are expected side effects.
+                    // UpdateApproximate* and bucket refresh are expected side
+                    // effects.
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => break,
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
