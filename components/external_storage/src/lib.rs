@@ -10,10 +10,13 @@ extern crate tikv_alloc;
 
 use std::{
     any::Any,
+    future::Future,
     io::{self, Write},
     marker::Unpin,
     panic::Location,
+    pin::Pin,
     sync::{Arc, Mutex},
+    task::Poll,
     time::Duration,
 };
 
@@ -23,7 +26,7 @@ use encryption::{DecrypterReader, FileEncryptionInfo, Iv};
 use file_system::{File, Sha256Reader};
 use futures::io::BufReader;
 use futures_io::AsyncRead;
-use futures_util::{AsyncReadExt, future::LocalBoxFuture, stream::LocalBoxStream};
+use futures_util::{future::LocalBoxFuture, stream::LocalBoxStream};
 use kvproto::brpb::CompressionType;
 use openssl::hash::{Hasher, MessageDigest};
 use tikv_util::{
@@ -31,7 +34,7 @@ use tikv_util::{
     stream::READ_BUF_SIZE,
     time::{Instant, Limiter},
 };
-use tokio::time::timeout;
+use tokio::time::{Instant as TokioInstant, Sleep, sleep};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use url::Url;
 
@@ -356,6 +359,7 @@ where
 
     // do the I/O copy from external_storage to the local file.
     let mut buffer = vec![0u8; READ_BUF_SIZE];
+    let mut read_timeout = Box::pin(sleep(dur));
     let mut file_length = 0;
     let mut hasher = build_hasher()?;
 
@@ -364,9 +368,8 @@ where
     loop {
         // separate the speed limiting from actual reading so it won't
         // affect the timeout calculation.
-        let bytes_read = timeout(dur, input.read(&mut buffer))
-            .await
-            .map_err(|_| io::ErrorKind::TimedOut)??;
+        let bytes_read =
+            read_with_stall_timeout(&mut input, &mut buffer, read_timeout.as_mut(), dur).await?;
         if bytes_read == 0 {
             break;
         }
@@ -433,13 +436,13 @@ pub async fn read_external_storage_info_buff(
     let dur = Duration::from_secs((READ_BUF_SIZE / read_speed) as u64);
     let mut output = Vec::new();
     let mut buffer = vec![0u8; READ_BUF_SIZE];
+    let mut read_timeout = Box::pin(sleep(dur));
 
     loop {
         // separate the speed limiting from actual reading so it won't
         // affect the timeout calculation.
-        let bytes_read = timeout(dur, reader.read(&mut buffer))
-            .await
-            .map_err(|_| io::ErrorKind::TimedOut)??;
+        let bytes_read =
+            read_with_stall_timeout(reader, &mut buffer, read_timeout.as_mut(), dur).await?;
         if bytes_read == 0 {
             break;
         }
@@ -486,6 +489,30 @@ pub async fn read_external_storage_info_buff(
     }
 
     Ok(output)
+}
+
+// Reuse one Sleep per restore to avoid allocating and dropping a timeout future
+// for every 2 MB read chunk.
+async fn read_with_stall_timeout<In>(
+    input: &mut In,
+    buffer: &mut [u8],
+    mut read_timeout: Pin<&mut Sleep>,
+    dur: Duration,
+) -> io::Result<usize>
+where
+    In: AsyncRead + Unpin + ?Sized,
+{
+    read_timeout.as_mut().reset(TokioInstant::now() + dur);
+    futures_util::future::poll_fn(|cx| {
+        if let Poll::Ready(result) = Pin::new(&mut *input).poll_read(cx, buffer) {
+            return Poll::Ready(result);
+        }
+        if Future::poll(read_timeout.as_mut(), cx).is_ready() {
+            return Poll::Ready(Err(io::ErrorKind::TimedOut.into()));
+        }
+        Poll::Pending
+    })
+    .await
 }
 
 fn build_hasher() -> Result<Hasher, io::Error> {

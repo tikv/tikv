@@ -220,11 +220,37 @@ impl<'a> BinaryIterator<'a> {
             return false;
         }
 
-        let key = self.sst_iters[self.peek()].key();
-        self.entry_cache.iter().any(|idx| {
-            let iter = &self.sst_iters[*idx];
-            iter.key() == key && iter.value().is_empty()
-        })
+        let root = self.peek();
+        let key = self.sst_iters[root].key();
+        if self.sst_iters[root].value().is_empty() {
+            return true;
+        }
+        self.current_key_subtree_has_empty_value(1, key)
+            || self.current_key_subtree_has_empty_value(2, key)
+    }
+
+    fn current_key_subtree_has_empty_value(&self, pos: usize, key: &[u8]) -> bool {
+        if pos >= self.entry_cache.len() {
+            return false;
+        }
+
+        let iter = &self.sst_iters[self.entry_cache[pos]];
+        match iter.key().cmp(key) {
+            std::cmp::Ordering::Greater => false,
+            std::cmp::Ordering::Equal => {
+                iter.value().is_empty()
+                    || self.current_key_subtree_has_empty_value(pos * 2 + 1, key)
+                    || self.current_key_subtree_has_empty_value(pos * 2 + 2, key)
+            }
+            std::cmp::Ordering::Less => {
+                debug_assert!(
+                    false,
+                    "heap node key should not be smaller than the current minimum key"
+                );
+                self.current_key_subtree_has_empty_value(pos * 2 + 1, key)
+                    || self.current_key_subtree_has_empty_value(pos * 2 + 2, key)
+            }
+        }
     }
 
     fn skip_empty_value_keys(&mut self) -> engine_traits::Result<bool> {
