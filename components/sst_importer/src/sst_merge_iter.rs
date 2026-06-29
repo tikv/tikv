@@ -82,6 +82,7 @@ impl<'a> DefaultSeekIterator<'a> {
         Ok(*valid)
     }
 
+    #[cfg(test)]
     pub fn key(&self) -> &[u8] {
         self.sst_iters[self.matched_idx.unwrap()].key()
     }
@@ -195,45 +196,70 @@ impl<'a> BinaryIterator<'a> {
         self.entry_cache[0]
     }
 
-    fn advance_current_key(&mut self) -> engine_traits::Result<()> {
-        if let Some(mut same_from) = self.pop() {
-            // Handle duplicate keys from different SST files.
-            while !self.entry_cache.is_empty() && self.key() == self.sst_iters[same_from].key() {
-                let from = self.pop().unwrap();
-                let iter = &mut self.sst_iters[same_from];
-                if iter.next()? {
-                    self.push(same_from);
-                }
-                same_from = from;
-            }
-
-            let iter = &mut self.sst_iters[same_from];
-            if iter.next()? {
-                self.push(same_from);
-            }
-        }
-        Ok(())
-    }
-
-    fn current_key_has_empty_value(&self) -> bool {
-        if self.entry_cache.is_empty() {
+    fn current_key_has_duplicate(&self) -> bool {
+        if self.entry_cache.len() <= 1 {
             return false;
         }
 
         let key = self.sst_iters[self.peek()].key();
-        self.entry_cache.iter().any(|idx| {
-            let iter = &self.sst_iters[*idx];
-            iter.key() == key && iter.value().is_empty()
-        })
+        self.iter_key(1) == key || (self.entry_cache.len() > 2 && self.iter_key(2) == key)
     }
 
-    fn skip_empty_value_keys(&mut self) -> engine_traits::Result<bool> {
-        while self.current_key_has_empty_value() {
-            // compact-log-backup encodes physical delete records as empty
-            // values, so any duplicate key group containing one is skipped.
+    fn advance_current_key(&mut self) -> engine_traits::Result<()> {
+        if self.entry_cache.is_empty() {
+            return Ok(());
+        }
+
+        let root = self.peek();
+        if self.sst_iters[root].next()? {
+            self.sift_down(0);
+        } else {
+            self.pop();
+        }
+        Ok(())
+    }
+
+    fn advance_all_current_key(&mut self) -> engine_traits::Result<()> {
+        let mut same_from = self.pop().unwrap();
+        while !self.entry_cache.is_empty() && self.key() == self.sst_iters[same_from].key() {
+            let from = self.pop().unwrap();
+            self.advance_iter_and_push(same_from)?;
+            same_from = from;
+        }
+
+        self.advance_iter_and_push(same_from)
+    }
+
+    fn advance_iter_and_push(&mut self, from: usize) -> engine_traits::Result<()> {
+        if self.sst_iters[from].next()? {
+            self.push(from);
+        }
+        Ok(())
+    }
+
+    fn try_deduplicate_current_key(&mut self) -> engine_traits::Result<bool> {
+        loop {
+            if self.entry_cache.is_empty() {
+                return Ok(false);
+            }
+
+            if self.sst_iters[self.peek()].value().is_empty() {
+                // compact-log-backup encodes physical delete records as empty
+                // values, so any duplicate key group containing one is skipped.
+                self.advance_all_current_key()?;
+                continue;
+            }
+
+            if !self.current_key_has_duplicate() {
+                return Ok(true);
+            }
+
             self.advance_current_key()?;
         }
-        Ok(!self.entry_cache.is_empty())
+    }
+
+    fn normalize_current_key(&mut self) -> engine_traits::Result<bool> {
+        self.try_deduplicate_current_key()
     }
 }
 
@@ -248,7 +274,7 @@ impl Iterator for BinaryIterator<'_> {
             self.entry_cache.push(i);
         }
         self.heap();
-        self.skip_empty_value_keys()
+        self.normalize_current_key()
     }
 
     fn seek_for_prev(&mut self, _key: &[u8]) -> engine_traits::Result<bool> {
@@ -265,7 +291,7 @@ impl Iterator for BinaryIterator<'_> {
             self.entry_cache.push(i);
         }
         self.heap();
-        self.skip_empty_value_keys()
+        self.normalize_current_key()
     }
 
     fn seek_to_last(&mut self) -> engine_traits::Result<bool> {
@@ -278,7 +304,7 @@ impl Iterator for BinaryIterator<'_> {
 
     fn next(&mut self) -> engine_traits::Result<bool> {
         self.advance_current_key()?;
-        self.skip_empty_value_keys()
+        self.normalize_current_key()
     }
 
     fn key(&self) -> &[u8] {
@@ -442,7 +468,11 @@ mod tests {
             db.clone(),
             temp.path(),
             "w2.sst",
-            &[(k1.as_slice(), b""), (k3.as_slice(), b"v3")],
+            &[
+                (k1.as_slice(), b""),
+                (k2.as_slice(), b"v2-dup"),
+                (k3.as_slice(), b"v3"),
+            ],
         );
 
         let readers = [
@@ -459,7 +489,7 @@ mod tests {
 
         assert!(iter.seek_to_first().unwrap());
         assert_eq!(iter.key(), k2.as_slice());
-        assert_eq!(iter.value(), b"v2");
+        assert!(iter.value() == b"v2" || iter.value() == b"v2-dup");
         assert!(iter.next().unwrap());
         assert_eq!(iter.key(), k3.as_slice());
         assert_eq!(iter.value(), b"v3");
@@ -467,7 +497,7 @@ mod tests {
 
         assert!(iter.seek(&k1).unwrap());
         assert_eq!(iter.key(), k2.as_slice());
-        assert_eq!(iter.value(), b"v2");
+        assert!(iter.value() == b"v2" || iter.value() == b"v2-dup");
         assert!(!iter.seek(&k4).unwrap());
     }
 
