@@ -2634,6 +2634,20 @@ def RaftMessage() -> RowPanel:
                     ),
                 ],
             ),
+            graph_panel(
+                title="Extra message send failures",
+                description="The rate of failed raftstore extra message sends by message type and failure reason",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_extra_message_send_failure_total",
+                            by_labels=["type", "reason"],
+                        ),
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
         ]
     )
     return layout.row_panel
