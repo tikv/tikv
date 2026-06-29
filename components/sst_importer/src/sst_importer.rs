@@ -2932,13 +2932,14 @@ impl<E: KvEngine> SstImporter<E> {
                                 first_origin = Some(keys::origin_key(&write_data_key).to_vec());
                             }
 
+                            write_iter.next()?;
                             while write_iter.valid()? {
                                 let write_origin = keys::origin_key(write_iter.key());
-                                if is_after_end_bound(write_origin, &range_end) {
-                                    break;
-                                }
                                 let cur_user_key = Key::truncate_ts_for(write_origin)?;
                                 if cur_user_key != user_key_buf.as_slice() {
+                                    break;
+                                }
+                                if is_after_end_bound(write_origin, &range_end) {
                                     break;
                                 }
                                 write_iter.next()?;
