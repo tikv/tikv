@@ -902,7 +902,7 @@ impl<E: KvEngine> SstImporter<E> {
                     crypter.clone(),
                     &speed_limiter,
                     ext.cache_key.unwrap_or(""),
-                    false,
+                    true,
                 )
                 .await?;
             let sst_reader = downloaded.open_reader(self.key_manager.clone())?;
