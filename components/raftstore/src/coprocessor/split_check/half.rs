@@ -132,13 +132,24 @@ pub fn get_region_approximate_middle_in_range(
     let region_end_key = keys::enc_end_key(region);
 
     if let Some(start_key) = start_key {
-        assert!(keys::validate_data_key(start_key), "start_key must be in data-key space");
+        box_try!(if keys::validdate_data_key(start_key) {
+            Ok(())
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "start_key must be in data-key space",
+            ))
+        })
     }
     if let Some(end_key) = end_key {
-        assert!(
-            end_key == keys::DATA_MAX_KEY || keys::validate_data_key(end_key),
-            "end_key must be in data_end_key space",
-        );
+        box_try!(if keys::validdate_data_key(end_key) {
+            Ok(())
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "end_key must be in data-key space",
+            ))
+        })
     }
     let start_key = match start_key {
         Some(start_key) if start_key > region_start_key.as_slice() => start_key.to_vec(),
