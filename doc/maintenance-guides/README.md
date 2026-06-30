@@ -68,6 +68,10 @@ short, but they should still be present.
   `components/raftstore-v2`
 - Generic FSM batching framework used heavily by raftstore:
   `components/batch-system`
+- Shared region progress tracking for CDC, backup-stream, and stale-read-style
+  consumers: `components/resolved_ts`
+- MVCC GC, safe-point enforcement, and compaction-filter helpers:
+  `src/server/gc_worker`
 - Resource groups, fairness, admission control, quota adjustment:
   `components/resource_control`
 - Hybrid disk + region-cache engine glue: `components/hybrid_engine`
@@ -83,6 +87,10 @@ short, but they should still be present.
 
 ### `components/`
 
+- [backup](./components/backup.md)
+- [backup-stream](./components/backup-stream.md)
+- [cdc](./components/cdc.md)
+- [resolved_ts](./components/resolved_ts.md)
 - [raftstore](./components/raftstore.md)
 - [raftstore-v2](./components/raftstore-v2.md)
 - [resource_control](./components/resource_control.md)
@@ -91,11 +99,14 @@ short, but they should still be present.
 - [batch-system](./components/batch-system.md)
 - [server](./components/server.md)
 - [service](./components/service.md)
+- [sst_importer](./components/sst_importer.md)
 
 ### `src/`
 
 - [coprocessor](./src/coprocessor.md)
 - [coprocessor_v2](./src/coprocessor_v2.md)
+- [gc_worker](./src/gc_worker.md)
+- [import](./src/import.md)
 - [server](./src/server.md)
 - [storage](./src/storage.md)
 
@@ -128,6 +139,10 @@ short, but they should still be present.
 
 - The guide set currently includes:
   - `repo-overview.md`
+  - `components/backup.md`
+  - `components/backup-stream.md`
+  - `components/cdc.md`
+  - `components/resolved_ts.md`
   - `components/raftstore.md`
   - `components/raftstore-v2.md`
   - `components/resource_control.md`
@@ -136,23 +151,20 @@ short, but they should still be present.
   - `components/batch-system.md`
   - `components/server.md`
   - `components/service.md`
+  - `components/sst_importer.md`
   - `src/coprocessor.md`
   - `src/coprocessor_v2.md`
+  - `src/gc_worker.md`
+  - `src/import.md`
   - `src/server.md`
   - `src/storage.md`
 - The guide set now covers both the classic `raftstore` path and the
   `RaftKv2` / `raftstore-v2` path at maintainer-map granularity.
 - The guides focus on maintenance and review, not on external deployment or SQL
   semantics.
-- The repository overview discusses additional subsystems for cross-component
-  reasoning, but these do not yet have dedicated subsystem guides:
-  - `components/cdc`
-  - `components/backup`
-  - `components/backup-stream`
-  - `components/engine_rocks`
-  - `components/pd_client`
-  - `components/sst_importer`
-  - `src/import`
+- Additional cross-component subsystems such as `components/engine_rocks` and
+  `components/pd_client` are still described primarily through
+  `repo-overview.md` and the guides that depend on them.
 
 ## External Reference Links
 
@@ -164,3 +176,7 @@ These upstream docs are useful orientation material and were used together with
 - TiDB / TiKV overview: `https://docs.pingcap.com/tidb/stable/tikv-overview`
 - TiDB resource control and resource groups:
   `https://docs.pingcap.com/tidb/stable/tidb-resource-control-overview`
+- TiDB BR backup and restore overview:
+  `https://docs.pingcap.com/tidb/stable/backup-and-restore-overview/`
+- TiCDC overview:
+  `https://docs.pingcap.com/tidb/stable/ticdc-overview/`
