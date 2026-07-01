@@ -204,7 +204,6 @@ pub enum Task {
         observe_id: ObserveId,
         downstream_id: DownstreamId,
         downstream_state: Arc<AtomicCell<DownstreamState>>,
-        sink: crate::channel::Sink,
         build_resolver: Arc<AtomicBool>,
         // `incremental_scan_barrier` will be sent into `sink` to ensure all delta changes
         // are delivered to the downstream. And then incremental scan can start.
@@ -1080,6 +1079,77 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         }
     }
 
+    fn on_init_downstream(&self) {
+        // `InitDownstream` is queued asynchronously. When it runs, the
+        // delegate or downstream may already have been removed by a
+        // stale observe generation, connection teardown, or region
+        // error.
+        let delegate = match self.capture_regions.get_mut(&region_id) {
+            Some(delegate) if delegate.handle.id == observe_id => delegate,
+            _ => {
+                warn!("cdc delegate not found when init downstream";
+                        "observe_id" => ?observe_id,
+                        "downstream_id" => ?downstream_id,
+                        "request_id" => ?request_id,
+                        "region_id" => region_id,
+                        "conn_id" => ?conn_id);
+                return;
+            }
+        };
+        let downstream = match delegate.downstream(downstream_id) {
+            Some(d) => d,
+            None => {
+                warn!("cdc downstream not found when init downstream";
+                        "observe_id" => ?observe_id,
+                        "downstream_id" => ?downstream_id,
+                        "request_id" => ?request_id,
+                        "region_id" => region_id,
+                        "conn_id" => ?conn_id);
+                return;
+            }
+        };
+        // The downstream may still exist but already be stopped by a
+        // late cancel before this queued task runs.
+        if downstream_state.load() == DownstreamState::Stopped {
+            warn!("cdc failed to init downstream since it's stopped";
+                    "observe_id" => ?observe_id,
+                    "downstream_id" => ?downstream_id,
+                    "request_id" => ?request_id,
+                    "region_id" => region_id,
+                    "conn_id" => ?conn_id);
+            return;
+        }
+        if let Err(e) = downstream.sink_barrier(incremental_scan_barrier) {
+            warn!("cdc failed to schedule barrier for delta before delta scan";
+                    "error" => ?e,
+                    "observe_id" => ?observe_id,
+                    "downstream_id" => ?downstream_id,
+                    "request_id" => ?request_id,
+                    "region_id" => region_id,
+                    "conn_id" => ?conn_id);
+            return;
+        }
+        if !on_init_downstream(&downstream_state) {
+            warn!("cdc downstream fails to initialize: canceled";
+                    "observe_id" => ?observe_id,
+                    "downstream_id" => ?downstream_id,
+                    "request_id" => ?request_id,
+                    "region_id" => region_id,
+                    "conn_id" => ?conn_id);
+            return;
+        }
+        if delegate.init_lock_tracker() {
+            build_resolver.store(true, Ordering::Release);
+        }
+        info!("cdc downstream starts to initialize";
+                "observe_id" => ?observe_id,
+                "downstream_id" => ?downstream_id,
+                "request_id" => ?request_id,
+                "region_id" => region_id,
+                "conn_id" => ?conn_id);
+        cb();
+    }
+
     fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp, current_ts: TimeStamp) {
         self.current_ts = current_ts;
         self.min_resolved_ts = current_ts;
@@ -1259,46 +1329,10 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 observe_id,
                 downstream_id,
                 downstream_state,
-                sink,
                 build_resolver,
                 incremental_scan_barrier,
                 cb,
-            } => {
-                match self.capture_regions.get_mut(&region_id) {
-                    Some(delegate) if delegate.handle.id == observe_id => {
-                        if delegate.init_lock_tracker() {
-                            build_resolver.store(true, Ordering::Release);
-                        }
-                    }
-                    _ => return,
-                }
-                if let Err(e) = sink.unbounded_send(incremental_scan_barrier, true) {
-                    warn!("cdc failed to schedule barrier for delta before delta scan";
-                        "error" => ?e,
-                        "observe_id" => ?observe_id,
-                        "downstream_id" => ?downstream_id,
-                        "request_id" => ?request_id,
-                        "region_id" => region_id,
-                        "conn_id" => ?conn_id);
-                    return;
-                }
-                if on_init_downstream(&downstream_state) {
-                    info!("cdc downstream starts to initialize";
-                        "observe_id" => ?observe_id,
-                        "downstream_id" => ?downstream_id,
-                        "request_id" => ?request_id,
-                        "region_id" => region_id,
-                        "conn_id" => ?conn_id);
-                } else {
-                    warn!("cdc downstream fails to initialize: canceled";
-                        "observe_id" => ?observe_id,
-                        "downstream_id" => ?downstream_id,
-                        "request_id" => ?request_id,
-                        "region_id" => region_id,
-                        "conn_id" => ?conn_id);
-                }
-                cb();
-            }
+            } => self.on_init_downstream(),
             Task::TxnExtra(txn_extra) => {
                 let size = txn_extra.size();
                 for (k, v) in txn_extra.old_values {
