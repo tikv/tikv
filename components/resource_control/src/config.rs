@@ -45,6 +45,8 @@ pub struct Config {
     pub enable_write_admission_control: bool,
     /// Size of the sliding window (in minutes) used to compute per-group
     /// historical RU baselines for fair scheduling and admission control.
+    /// Also sizes the unified read pool's historical CPU-usage tracker, whose
+    /// average is used as a scale-down floor for the pool's thread count.
     /// The window is divided into 30-second buckets (2 per minute). Minimum 2,
     /// maximum 60. Not hot-reloadable; changing requires a restart.
     #[online_config(skip)]

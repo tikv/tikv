@@ -32,6 +32,7 @@ use crate::{
     metrics,
     metrics::{TWO_PHASE_THROTTLED_REQUESTS, deregister_metrics},
     resource_limiter::{ResourceLimiter, ResourceType},
+    score::{TARGET_CPU, pressure_fraction},
 };
 
 // a read task cost at least 50us.
@@ -285,6 +286,34 @@ pub enum AdmissionDecision {
     Reject,
 }
 
+/// Snapshot of the unified read pool's current state, passed to
+/// [`ResourceGroupManager::compute_read_pool_target_threads`] each tick so it
+/// can fold CPU-pressure, thread-usage, and queue-depth triggers into a
+/// single target thread count.
+pub struct ReadPoolThreadState {
+    /// Currently active thread count.
+    pub cur_thread_count: usize,
+    /// Configured minimum thread count.
+    pub min_thread_count: usize,
+    /// Configured (core) thread count, i.e. the configured pool size.
+    pub core_thread_count: usize,
+    /// Maximum thread count the pool can be scaled to.
+    pub max_thread_count: usize,
+    /// CPU budget, in cores, the read pool should not exceed: configured
+    /// `cpu_threshold * total_cpu_quota`, or `total_cpu_quota` when the
+    /// threshold is disabled (0).
+    pub target_cpu_cores: f64,
+    /// Measured CPU cores actually consumed by the read pool's threads.
+    pub read_pool_cpu: f64,
+    /// Average thread usage per second (yatp task-handling time), including
+    /// off-CPU time.
+    pub thread_usage: f64,
+    /// Number of tasks currently running in the pool.
+    pub running_tasks: i64,
+    /// Measured process-wide CPU usage in cores.
+    pub process_cpu: f64,
+}
+
 /// RAII guard that releases an admission-control delay slot on drop.
 /// Ensures the `delayed_req_count` counter is decremented even if the
 /// future is cancelled during the sleep.
@@ -341,6 +370,20 @@ pub struct ResourceGroupManager {
     // only engages when this flag is set, ensuring background is fully
     // squeezed before foreground traffic is touched.
     bg_cpu_at_floor: AtomicBool,
+    // Latest foreground CPU pressure (0.0-1.0), refreshed every tick by
+    // `online_adjust_resource_quota`. Consumed by the unified read pool to
+    // drive its thread-count scale-down decision. Encoded via `f64::to_bits`.
+    read_pool_cpu_pressure: AtomicU64,
+    // Sliding-window tracker of the unified read pool's actual CPU usage
+    // (in µs of CPU time per tick). Its `historical_rate()` is used as a
+    // floor: the read pool should never be scaled below the thread count
+    // needed to sustain its historical CPU consumption.
+    read_pool_cpu_tracker: Mutex<RuTracker>,
+    // Latest measured unified-read-pool CPU usage, in cores. Written every
+    // tick by `GroupQuotaAdjustWorker::adjust_quota` (which owns the /proc
+    // thread scan), read by the unified read pool so it doesn't need to
+    // duplicate the scan. Encoded via `f64::to_bits`.
+    measured_read_pool_cpu_cores: AtomicU64,
 }
 
 impl Default for ResourceGroupManager {
@@ -367,6 +410,10 @@ impl ResourceGroupManager {
             0,
             true,
         ));
+        let start_secs = RuTracker::now_secs();
+        // 2 buckets per minute (30s each) to match RU_BUCKET_SECS, mirroring
+        // the per-group ru_trackers window sizing in `record_ru_consumption`.
+        let read_pool_num_buckets = (config.historical_usage_window_mins.max(2) as usize) * 2;
         let manager = Self {
             resource_groups: Default::default(),
             group_count: AtomicU64::new(0),
@@ -377,8 +424,11 @@ impl ResourceGroupManager {
             has_background: AtomicBool::new(false),
             config: Arc::new(VersionTrack::new(config)),
             ru_trackers: Default::default(),
-            start_secs: RuTracker::now_secs(),
+            start_secs,
             bg_cpu_at_floor: AtomicBool::new(false),
+            read_pool_cpu_pressure: AtomicU64::new(0.0f64.to_bits()),
+            read_pool_cpu_tracker: Mutex::new(RuTracker::new(start_secs, read_pool_num_buckets)),
+            measured_read_pool_cpu_cores: AtomicU64::new(0.0f64.to_bits()),
         };
 
         // init the default resource group by default.
@@ -642,6 +692,125 @@ impl ResourceGroupManager {
         self.bg_cpu_at_floor.load(Ordering::Relaxed)
     }
 
+    fn set_read_pool_cpu_pressure(&self, pressure: f64) {
+        self.read_pool_cpu_pressure
+            .store(pressure.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Latest foreground CPU pressure (0.0-1.0), refreshed every tick by
+    /// `online_adjust_resource_quota`.
+    pub fn read_pool_cpu_pressure(&self) -> f64 {
+        f64::from_bits(self.read_pool_cpu_pressure.load(Ordering::Relaxed))
+    }
+
+    /// Written by `GroupQuotaAdjustWorker::adjust_quota` every tick with the
+    /// unified read pool's measured CPU usage (in cores), so the read pool
+    /// itself doesn't need to duplicate the `/proc` thread scan.
+    pub fn set_measured_read_pool_cpu_cores(&self, cores: f64) {
+        self.measured_read_pool_cpu_cores
+            .store(cores.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Latest measured unified-read-pool CPU usage, in cores.
+    pub fn measured_read_pool_cpu_cores(&self) -> f64 {
+        f64::from_bits(self.measured_read_pool_cpu_cores.load(Ordering::Relaxed))
+    }
+
+    /// Folds the unified read pool's scale triggers (CPU pressure, thread
+    /// usage, queue depth) into a single target thread count, and records
+    /// `st.read_pool_cpu` into the historical tracker so future calls have an
+    /// up-to-date floor.
+    ///
+    /// The floor is the thread count needed to sustain the read pool's
+    /// historical CPU consumption: neither CPU-pressure-driven throttling nor
+    /// thread/queue-driven scale-in are allowed to cut below it.
+    pub fn compute_read_pool_target_threads(
+        &self,
+        st: &ReadPoolThreadState,
+        interval_secs: f64,
+    ) -> usize {
+        self.compute_read_pool_target_threads_at(st, interval_secs, RuTracker::now_secs())
+    }
+
+    fn compute_read_pool_target_threads_at(
+        &self,
+        st: &ReadPoolThreadState,
+        interval_secs: f64,
+        now: u64,
+    ) -> usize {
+        // avg running tasks per-thread that indicates read-pool is busy.
+        const RUNNING_TASKS_PER_THREAD_THRESHOLD: i64 = 3;
+        // consider scale out read pool size if the average thread cpu usage is
+        // higher than this threshold.
+        const READ_POOL_THREAD_HIGH_THRESHOLD: f64 = 0.8;
+        // consider scale in read pool size if the average thread cpu usage is
+        // lower than this threshold.
+        const READ_POOL_THREAD_LOW_THRESHOLD: f64 = 0.7;
+
+        let floor_threads = {
+            let mut tracker = self.read_pool_cpu_tracker.lock().unwrap();
+            tracker.advance(now);
+            if interval_secs > 0.0 {
+                let cpu_us = (st.read_pool_cpu * interval_secs * 1_000_000.0).max(0.0) as u64;
+                tracker.record(cpu_us);
+            }
+            tracker.refresh_cached_historical_rate(self.start_secs, now);
+            let floor_cores = tracker.cached_historical_rate / 1_000_000.0;
+            (floor_cores.ceil() as usize).clamp(st.min_thread_count, st.max_thread_count)
+        };
+
+        let target_cpu_cores = st.target_cpu_cores;
+
+        let busy_thread_scale_out = st.cur_thread_count < st.max_thread_count
+            && st.process_cpu * (st.cur_thread_count as f64 + 1.0) / (st.cur_thread_count as f64)
+                < target_cpu_cores
+            && st.thread_usage > st.cur_thread_count as f64 * READ_POOL_THREAD_HIGH_THRESHOLD
+            && st.running_tasks > st.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD;
+
+        let busy_thread_scale_in = st.cur_thread_count > st.min_thread_count
+            && st.thread_usage < (st.cur_thread_count - 1) as f64 * READ_POOL_THREAD_LOW_THRESHOLD
+            && st.running_tasks < st.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD;
+
+        // When cpu_threshold is disabled, target_cpu_cores == total CPU quota,
+        // which read_pool_cpu (a subset of the process) cannot exceed by more
+        // than the leeway, so this naturally does not fire.
+        let leeway = 0.1;
+        let busy_cpu_scale_in = st.read_pool_cpu > (leeway + 1.0) * target_cpu_cores;
+        let busy_cpu_scale_out = st.read_pool_cpu < (1.0 - leeway) * target_cpu_cores
+            && st.cur_thread_count < st.core_thread_count;
+
+        let pressure = self.read_pool_cpu_pressure();
+
+        let new_thread_count = if busy_cpu_scale_in {
+            // CPU threshold takes precedence over pressure and busy thread
+            // scaling conditions.
+            std::cmp::max(
+                std::cmp::max(
+                    (target_cpu_cores).floor() as usize,
+                    ((st.cur_thread_count as f64) * target_cpu_cores / st.read_pool_cpu).floor()
+                        as usize,
+                ),
+                1, // minimum 1 running thread
+            )
+        } else if pressure > 0.0 && st.cur_thread_count > floor_threads {
+            // Scale linearly toward the historical-CPU floor as foreground
+            // pressure rises from 0 to 1.
+            let reduction =
+                (pressure * (st.cur_thread_count - floor_threads) as f64).ceil() as usize;
+            st.cur_thread_count.saturating_sub(reduction.max(1))
+        } else if busy_cpu_scale_out {
+            st.cur_thread_count + 1
+        } else if busy_thread_scale_in {
+            st.cur_thread_count - 1
+        } else if busy_thread_scale_out {
+            st.cur_thread_count + 1
+        } else {
+            st.cur_thread_count
+        };
+
+        new_thread_count.clamp(max(floor_threads, st.min_thread_count), st.max_thread_count)
+    }
+
     /// Returns true when all foreground groups have unlimited (infinite)
     /// CPU rate limits, i.e. foreground has fully ramped up.
     pub fn is_foreground_fully_ramped_up(&self) -> bool {
@@ -664,8 +833,11 @@ impl ResourceGroupManager {
     ///
     /// Ramp-up: when CPU drops below threshold, recover ×1.1/tick until
     /// NO_LIMIT is restored.
-    pub fn online_adjust_resource_quota(&self, pct: f64) {
-        const TARGET_CPU: f64 = 90.0;
+    ///
+    /// `cpu_score` is the common CPU-utilization score (0-100) computed by
+    /// [`crate::score::compute_resource_scores`]: the max of process,
+    /// unified-read-pool, and grpc normalized utilization.
+    pub fn online_adjust_resource_quota(&self, cpu_score: f64) {
         const RAMP_FACTOR: f64 = 1.2;
         const MIN_RAMP_UP_EPOCHS: u32 = 2;
 
@@ -691,13 +863,22 @@ impl ResourceGroupManager {
                 .set((guard.0.current_rate(now) / 1_000_000.0) * 100.0);
         }
 
-        if pct > throttle_threshold && self.is_bg_cpu_at_floor() {
+        // pressure: 0.0 at throttle_threshold → 1.0 at TARGET_CPU. Shared with
+        // the unified read pool's scale-down decision via
+        // `read_pool_cpu_pressure`. Reset to 0 whenever foreground is not
+        // under CPU pressure so a transient spike can't pin the read pool
+        // down indefinitely.
+        let engaged = cpu_score > throttle_threshold && self.is_bg_cpu_at_floor();
+        let pressure = if engaged {
+            pressure_fraction(cpu_score, throttle_threshold, TARGET_CPU)
+        } else {
+            0.0
+        };
+        self.set_read_pool_cpu_pressure(pressure);
+
+        if engaged {
             // Linearly scale limit from current rate (at threshold) down to
             // historical rate (at TARGET_CPU).
-            // pressure: 0.0 at threshold → 1.0 at TARGET_CPU.
-            let pressure =
-                ((pct - throttle_threshold) / (TARGET_CPU - throttle_threshold)).clamp(0.0, 1.0);
-
             for entry in &self.ru_trackers {
                 let mut guard = entry.lock().unwrap();
                 let hist = guard.0.cached_historical_rate;
@@ -718,7 +899,7 @@ impl ResourceGroupManager {
                     }
                 }
             }
-        } else if pct < leeway_threshold {
+        } else if cpu_score < leeway_threshold {
             // CPU below start threshold — ramp up by RAMP_FACTOR each tick.
             // Only lift to INFINITY after MIN_RAMP_UP_EPOCHS consecutive epochs
             // where the limit has grown past 2x hist, to avoid premature release.
@@ -981,6 +1162,21 @@ impl ResourceGroupManager {
 
     pub fn has_background_groups(&self) -> bool {
         self.has_background.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_read_pool_cpu_pressure_for_test(&self, pressure: f64) {
+        self.set_read_pool_cpu_pressure(pressure);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn compute_read_pool_target_threads_for_test(
+        &self,
+        st: &ReadPoolThreadState,
+        interval_secs: f64,
+        now: u64,
+    ) -> usize {
+        self.compute_read_pool_target_threads_at(st, interval_secs, now)
     }
 }
 
@@ -2298,6 +2494,136 @@ pub(crate) mod tests {
         assert_eq!(
             mgr.admission_decision(true, &spike_limiter),
             AdmissionDecision::Allow
+        );
+    }
+
+    fn default_read_pool_state(cur: usize) -> ReadPoolThreadState {
+        ReadPoolThreadState {
+            cur_thread_count: cur,
+            min_thread_count: 1,
+            core_thread_count: 8,
+            max_thread_count: 8,
+            // Matches read_pool_cpu below so busy_cpu_scale_out doesn't fire
+            // incidentally in cases that aren't exercising it.
+            target_cpu_cores: 8.0,
+            read_pool_cpu: 8.0,
+            thread_usage: 0.0,
+            running_tasks: 0,
+            process_cpu: 0.0,
+        }
+    }
+
+    #[test]
+    fn test_read_pool_pressure_zero_preserves_legacy() {
+        let mgr = ResourceGroupManager::default();
+        let t0 = RuTracker::now_secs();
+
+        // Steady state: cur == core == max so busy_cpu_scale_out can't fire,
+        // and thread_usage/running_tasks sit strictly between the scale-in and
+        // scale-out bands → no trigger fires, target is unchanged.
+        let mut st = default_read_pool_state(8);
+        st.thread_usage = 5.5; // between (cur-1)*0.7=4.9 and cur*0.8=6.4
+        st.running_tasks = 10;
+        assert_eq!(
+            mgr.compute_read_pool_target_threads_for_test(&st, 10.0, t0),
+            8
+        );
+
+        // Idle pool (zero thread usage, zero running tasks, room to shrink)
+        // → busy_thread_scale_in fires (legacy behavior, unrelated to
+        // pressure).
+        let mut st = default_read_pool_state(4);
+        st.thread_usage = 0.0;
+        st.running_tasks = 0;
+        assert_eq!(
+            mgr.compute_read_pool_target_threads_for_test(&st, 10.0, t0 + 30),
+            3
+        );
+
+        // Busy pool (high thread usage, high queue depth, room to grow, low
+        // process CPU) → busy_thread_scale_out fires.
+        let mut st = default_read_pool_state(4);
+        st.thread_usage = 10.0;
+        st.running_tasks = 100;
+        st.process_cpu = 0.1;
+        assert_eq!(
+            mgr.compute_read_pool_target_threads_for_test(&st, 10.0, t0 + 60),
+            5
+        );
+    }
+
+    #[test]
+    fn test_read_pool_pressure_scale_down() {
+        let mgr = ResourceGroupManager::default();
+        let t0 = RuTracker::now_secs();
+
+        // Cold tracker → floor == min_thread_count (1). With pressure=1.0 the
+        // pool should scale all the way down to the floor.
+        mgr.set_read_pool_cpu_pressure_for_test(1.0);
+        let st = default_read_pool_state(8);
+        let target = mgr.compute_read_pool_target_threads_for_test(&st, 10.0, t0);
+        assert_eq!(target, 1);
+
+        // Partial pressure scales partway toward the floor rather than
+        // dropping straight to it.
+        mgr.set_read_pool_cpu_pressure_for_test(0.5);
+        let st = default_read_pool_state(8);
+        let target = mgr.compute_read_pool_target_threads_for_test(&st, 10.0, t0 + 30);
+        assert!(
+            target > 1 && target < 8,
+            "expected partial scale-down, got {target}"
+        );
+    }
+
+    #[test]
+    fn test_read_pool_floor_prevents_scale_below_historical() {
+        // Small window (minimum 2 min = 4 buckets = 120s) so a handful of
+        // directly-seeded buckets fully cover it, giving an exact,
+        // non-ramping historical rate to assert against.
+        let cfg = Config {
+            historical_usage_window_mins: 2,
+            ..Default::default()
+        };
+        let mgr = ResourceGroupManager::new(cfg);
+        let t0 = mgr.start_secs;
+
+        // Seed 4 fully-completed 30s buckets at a sustained 4 cores of usage
+        // (4 cores * 30s * 1_000_000 us/s = 120_000_000 us per bucket). Each
+        // `record_at` call commits the *previous* call's contribution to a
+        // bucket, so a 5th call is needed to flush the 4th bucket closed.
+        {
+            let mut tracker = mgr.read_pool_cpu_tracker.lock().unwrap();
+            tracker.record_at(120_000_000, t0 + 30);
+            tracker.record_at(120_000_000, t0 + 60);
+            tracker.record_at(120_000_000, t0 + 90);
+            tracker.record_at(120_000_000, t0 + 120);
+            tracker.record_at(120_000_000, t0 + 150);
+        }
+        // system_uptime (150s) >= window_secs (120s) → historical_rate uses
+        // the full window as denominator: 480_000_000 / 120 = 4_000_000 us/s
+        // = 4 cores → floor_threads = 4.
+
+        // Even under maximum pressure, the pool must not be scaled below the
+        // historical floor of 4 threads.
+        mgr.set_read_pool_cpu_pressure_for_test(1.0);
+        let st = default_read_pool_state(8);
+        let target = mgr.compute_read_pool_target_threads_for_test(&st, 30.0, t0 + 150);
+        assert_eq!(
+            target, 4,
+            "should scale down to the historical floor exactly"
+        );
+
+        // busy_thread_scale_in (legacy ladder) must also respect the same
+        // floor: an idle pool sitting at the floor should not be pushed
+        // below it.
+        mgr.set_read_pool_cpu_pressure_for_test(0.0);
+        let mut st = default_read_pool_state(4);
+        st.thread_usage = 0.0;
+        st.running_tasks = 0;
+        let target2 = mgr.compute_read_pool_target_threads_for_test(&st, 30.0, t0 + 150);
+        assert_eq!(
+            target2, 4,
+            "thread-based scale-in should not cut below the historical-CPU floor"
         );
     }
 }

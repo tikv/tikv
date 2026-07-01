@@ -374,6 +374,8 @@ where
                 &background_worker,
                 io_bandwidth,
                 compaction_pending_bytes_ratio.clone(),
+                config.readpool.unified.cpu_threshold,
+                config.server.grpc_concurrency,
             );
             Some(mgr)
         } else {
