@@ -517,6 +517,10 @@ impl RegionMetaMap {
         self.manual_load_range.iter().any(|r| r.overlaps(range))
     }
 
+    pub fn manual_load_ranges(&self) -> &[CacheRegion] {
+        &self.manual_load_range
+    }
+
     pub fn add_manual_load_range(&mut self, range: CacheRegion) {
         let mut union = range;
         self.manual_load_range.retain(|r| {
