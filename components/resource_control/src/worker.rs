@@ -16,7 +16,9 @@ use strum::EnumCount;
 use tikv_util::{
     resource_control::{DEFAULT_RESOURCE_GROUP_NAME, TaskPriority},
     sys::{SysQuota, cpu_time::ProcessStat},
-    thread_name_prefix::{SCHEDULE_WORKER_PRIORITY_THREAD, UNIFIED_READ_POOL_THREAD},
+    thread_name_prefix::{
+        GRPC_SERVER_THREAD, SCHEDULE_WORKER_PRIORITY_THREAD, UNIFIED_READ_POOL_THREAD,
+    },
     time::Instant,
     warn,
     yatp_pool::metrics::YATP_POOL_SCHEDULE_WAIT_DURATION_VEC,
@@ -26,6 +28,10 @@ use crate::{
     metrics::*,
     resource_group::ResourceGroupManager,
     resource_limiter::{GroupStatistics, ResourceLimiter, ResourceType},
+    score::{
+        ResourceCapacities, ResourceScoreInputs, ResourceScores, ThreadGroupCpuTracker,
+        compute_resource_scores, pressure_fraction,
+    },
 };
 
 pub const QUOTA_ADJUST_DURATION: Duration = Duration::from_secs(10);
@@ -35,6 +41,14 @@ const MICROS_PER_SEC: f64 = 1_000_000.0;
 // We should exclude this cause when calculate the estimated total wait
 // duration.
 const MINIMAL_SCHEDULE_WAIT_SECS: f64 = 0.000_005; //5us
+
+/// Bundles the two scale-range thresholds so they can be passed as a single
+/// argument to `background_adjust_resource_quota`.
+#[derive(Clone, Copy)]
+struct ScaleThresholds {
+    bg_scale_start: f64,
+    fg_cpu_throttle_threshold: f64,
+}
 
 pub struct ResourceUsageStats {
     total_quota: f64,
@@ -106,6 +120,10 @@ pub struct GroupQuotaAdjustWorker<R> {
     // Whether the previous tick had background groups. Used to detect the
     // empty->non-empty transition and discard stale accumulated consumption.
     prev_had_background: bool,
+    // Measures grpc-server thread CPU usage, feeding the common
+    // resource-pressure score alongside whole-process CPU.
+    grpc_cpu_tracker: ThreadGroupCpuTracker,
+    caps: ResourceCapacities,
 }
 
 impl GroupQuotaAdjustWorker<SysQuotaGetter> {
@@ -113,6 +131,7 @@ impl GroupQuotaAdjustWorker<SysQuotaGetter> {
         resource_ctl: Arc<ResourceGroupManager>,
         io_bandwidth: u64,
         compaction_pending_bytes_ratio: Arc<AtomicU32>,
+        grpc_concurrency: usize,
     ) -> Self {
         let resource_quota_getter = SysQuotaGetter {
             process_stat: ProcessStat::cur_proc_stat().unwrap(),
@@ -124,6 +143,7 @@ impl GroupQuotaAdjustWorker<SysQuotaGetter> {
             resource_ctl,
             resource_quota_getter,
             compaction_pending_bytes_ratio,
+            grpc_concurrency,
         )
     }
 }
@@ -133,6 +153,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         resource_ctl: Arc<ResourceGroupManager>,
         resource_quota_getter: R,
         compaction_pending_bytes_ratio: Arc<AtomicU32>,
+        grpc_concurrency: usize,
     ) -> Self {
         let bg_limiter = resource_ctl.get_background_limiter();
         Self {
@@ -143,6 +164,11 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             bg_limiter,
             prev_stats: array::from_fn(|_| GroupStatistics::default()),
             prev_had_background: false,
+            grpc_cpu_tracker: ThreadGroupCpuTracker::new(GRPC_SERVER_THREAD),
+            caps: ResourceCapacities {
+                total_cpu_cores: SysQuota::cpu_cores_quota(),
+                grpc_concurrency: grpc_concurrency as f64,
+            },
         }
     }
 
@@ -169,21 +195,61 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
                 return;
             }
         };
-        let cpu_util = if cpu_stats.total_quota > f64::EPSILON {
+        let process_cpu_util = if cpu_stats.total_quota > f64::EPSILON {
             cpu_stats.current_used / cpu_stats.total_quota * 100.0
         } else {
             0.0
         };
 
-        self.background_adjust_quota(dur_secs, &cpu_stats);
-        self.foreground_adjust_quota(cpu_util);
+        // Fetch IO stats up front so the common score computation below sees
+        // a consistent snapshot. A fetch failure only disables IO
+        // scoring/adjustment for this tick, not the whole tick.
+        let io_stats = match self
+            .resource_quota_getter
+            .get_current_stats(ResourceType::Io)
+        {
+            Ok(s) => Some(s),
+            Err(e) => {
+                warn!("get io stats failed; skip io adjustment."; "err" => ?e);
+                None
+            }
+        };
+        let io_util = io_stats.as_ref().map_or(0.0, |s| {
+            if s.total_quota > f64::EPSILON {
+                s.current_used / s.total_quota * 100.0
+            } else {
+                0.0
+            }
+        });
+
+        let grpc_cpu_cores = self.grpc_cpu_tracker.measure_cpu_cores();
+
+        let compaction_pending_ratio =
+            self.compaction_pending_bytes_ratio.load(Ordering::Relaxed) as f64;
+
+        let inputs = ResourceScoreInputs {
+            process_cpu_util,
+            grpc_cpu_cores,
+            io_util,
+            compaction_pending_ratio,
+        };
+        let scores = compute_resource_scores(&inputs, &self.caps);
+
+        self.background_adjust_quota(dur_secs, &cpu_stats, io_stats.as_ref(), &scores);
+        self.foreground_adjust_quota(scores.cpu_score);
     }
 
-    fn foreground_adjust_quota(&mut self, cpu_util: f64) {
-        self.resource_ctl.online_adjust_resource_quota(cpu_util);
+    fn foreground_adjust_quota(&mut self, cpu_score: f64) {
+        self.resource_ctl.online_adjust_resource_quota(cpu_score);
     }
 
-    fn background_adjust_quota(&mut self, dur_secs: f64, cpu_stats: &ResourceUsageStats) {
+    fn background_adjust_quota(
+        &mut self,
+        dur_secs: f64,
+        cpu_stats: &ResourceUsageStats,
+        io_stats: Option<&ResourceUsageStats>,
+        scores: &ResourceScores,
+    ) {
         let mut bg_util_limit = self
             .resource_ctl
             .get_resource_group(DEFAULT_RESOURCE_GROUP_NAME)
@@ -223,21 +289,25 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             self.prev_had_background = true;
         }
 
+        let thresholds = ScaleThresholds {
+            bg_scale_start,
+            fg_cpu_throttle_threshold,
+        };
         self.background_adjust_resource_quota(
             ResourceType::Cpu,
             dur_secs,
             bg_util_limit,
-            bg_scale_start,
-            fg_cpu_throttle_threshold,
+            thresholds,
             Some(cpu_stats),
+            scores.cpu_score,
         );
         self.background_adjust_resource_quota(
             ResourceType::Io,
             dur_secs,
             bg_util_limit,
-            bg_scale_start,
-            fg_cpu_throttle_threshold,
-            None,
+            thresholds,
+            io_stats,
+            scores.io_score,
         );
         self.adjust_write_io_by_compaction_pressure();
     }
@@ -247,12 +317,18 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         resource_type: ResourceType,
         dur_secs: f64,
         utilization_limit: u64,
-        bg_scale_start: f64,
-        fg_cpu_throttle_threshold: f64,
-        // Pre-fetched stats for CPU (avoids a second /proc/stat read); None for
-        // IO, which always fetches fresh bytes-transferred counters.
+        thresholds: ScaleThresholds,
+        // Pre-fetched stats for CPU and IO, fetched once up front in
+        // `adjust_quota` to avoid a second /proc read per tick.
         prefetched_stats: Option<&ResourceUsageStats>,
+        // Common 0-100 resource-pressure score for this resource type
+        // (cpu_score or io_score from `compute_resource_scores`).
+        resource_score: f64,
     ) {
+        let ScaleThresholds {
+            bg_scale_start,
+            fg_cpu_throttle_threshold,
+        } = thresholds;
         let fetched;
         let resource_stats = if let Some(s) = prefetched_stats {
             s
@@ -310,11 +386,12 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         .min(target);
 
         let mut new_budget = target;
-        if resource_util > bg_scale_start {
-            // Linearly scale budget from target down to min_floor as utilization
-            // goes from bg_scale_start to fg_cpu_throttle_threshold.
-            let range = (fg_cpu_throttle_threshold - bg_scale_start).max(1.0);
-            let pressure = ((resource_util - bg_scale_start) / range).clamp(0.0, 1.0);
+        if resource_score > bg_scale_start {
+            // Linearly scale budget from target down to min_floor as the
+            // resource-utilization score goes from bg_scale_start to
+            // fg_cpu_throttle_threshold.
+            let pressure =
+                pressure_fraction(resource_score, bg_scale_start, fg_cpu_throttle_threshold);
             new_budget = target * (1.0 - pressure) + min_floor * pressure;
             // Only tighten: never increase the limit in the throttle branch.
             if new_budget > current_limit {
@@ -680,6 +757,7 @@ mod tests {
             resource_ctl.clone(),
             test_provider,
             compaction_pending_bytes_ratio,
+            8,
         );
 
         // Create default background group with 80% utilization limit.
@@ -849,6 +927,7 @@ mod tests {
             resource_ctl.clone(),
             test_provider,
             compaction_pending_bytes_ratio,
+            8,
         );
 
         let reset_quota = |worker: &mut GroupQuotaAdjustWorker<TestResourceStatsProvider>,
@@ -1116,6 +1195,7 @@ mod tests {
             resource_ctl.clone(),
             TestResourceStatsProvider::new(8.0, 10000.0),
             compaction_pending_bytes_ratio,
+            8,
         );
 
         const BG_TARGET: f64 = 5.6;
@@ -1186,6 +1266,7 @@ mod tests {
             resource_ctl.clone(),
             test_provider,
             compaction_pending_bytes_ratio.clone(),
+            8,
         );
 
         // Create default background group with 80% utilization limit.
@@ -1343,6 +1424,7 @@ mod tests {
             resource_ctl.clone(),
             test_provider,
             compaction_pending_bytes_ratio,
+            8,
         );
 
         // Add two background groups with different RU quotas.
