@@ -20,8 +20,8 @@ use kvproto::{errorpb, kvrpcpb::CommandPri};
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
 use prometheus::{Histogram, IntCounter, IntGauge, core::Metric};
 use resource_control::{
-    AdmissionDecision, ControlledFuture, ResourceController, ResourceGroupManager, ResourceLimiter,
-    TaskPriority, with_resource_limiter,
+    AdmissionDecision, ControlledFuture, ReadPoolThreadState, ResourceController,
+    ResourceGroupManager, ResourceLimiter, TaskPriority, with_resource_limiter,
 };
 use thiserror::Error;
 use tikv_util::{
@@ -817,7 +817,21 @@ impl ReadPoolConfigRunner {
             return;
         }
 
-        let read_pool_cpu = self.cpu_time_tracker.get_unified_read_pool_cpu();
+        let resource_manager = match &self.handle {
+            ReadPoolHandle::Yatp {
+                resource_manager, ..
+            } => resource_manager.clone(),
+            _ => None,
+        };
+
+        // When a ResourceGroupManager is present, it measures unified-read-pool
+        // CPU itself (as part of the common resource-pressure score) every
+        // ~10s tick; read that centrally-measured value. Otherwise
+        // (FuturePools, or resource control disabled), scan locally.
+        let read_pool_cpu = match &resource_manager {
+            Some(rm) => rm.measured_read_pool_cpu_cores(),
+            None => self.cpu_time_tracker.get_unified_read_pool_cpu(),
+        };
         let thread_usage = self.cpu_time_tracker.prev_avg_thread_usage();
         let running_tasks = self.running_tasks();
         let process_cpu = match self.process_stats.cpu_usage() {
@@ -833,6 +847,46 @@ impl ReadPoolConfigRunner {
             SysQuota::cpu_cores_quota()
         };
 
+        let new_thread_count = if let Some(resource_manager) = resource_manager {
+            let state = ReadPoolThreadState {
+                cur_thread_count: self.cur_thread_count,
+                min_thread_count: self.min_thread_count,
+                core_thread_count: self.core_thread_count,
+                max_thread_count: self.max_thread_count,
+                target_cpu_cores,
+                read_pool_cpu,
+                thread_usage,
+                running_tasks,
+                process_cpu,
+            };
+            resource_manager.compute_read_pool_target_threads(&state, self.interval.as_secs_f64())
+        } else {
+            self.legacy_target_thread_count(
+                target_cpu_cores,
+                read_pool_cpu,
+                thread_usage,
+                running_tasks,
+                process_cpu,
+            )
+        };
+
+        if new_thread_count != self.cur_thread_count {
+            self.handle.scale_pool_size(new_thread_count);
+            self.notify_pool_size_change(new_thread_count);
+            self.cur_thread_count = new_thread_count;
+        }
+    }
+
+    /// Thread-count decision used when no `ResourceGroupManager` is
+    /// available (e.g. `FuturePools`, or resource control disabled).
+    fn legacy_target_thread_count(
+        &self,
+        target_cpu_cores: f64,
+        read_pool_cpu: f64,
+        thread_usage: f64,
+        running_tasks: i64,
+        process_cpu: f64,
+    ) -> usize {
         // Base scaling conditions (process CPU, thread usage, task queue depth)
         let busy_thread_scale_out = self.cur_thread_count < self.max_thread_count
             && process_cpu * (self.cur_thread_count as f64 + 1.0) / (self.cur_thread_count as f64)
@@ -850,7 +904,7 @@ impl ReadPoolConfigRunner {
         let busy_cpu_scale_out = read_pool_cpu < (1.0 - leeway) * target_cpu_cores
             && self.cur_thread_count < self.core_thread_count;
 
-        let new_thread_count = if busy_cpu_scale_in {
+        if busy_cpu_scale_in {
             // CPU threshold takes precedence over busy thread scaling conditions
             std::cmp::max(
                 std::cmp::max(
@@ -868,12 +922,6 @@ impl ReadPoolConfigRunner {
             self.cur_thread_count + 1
         } else {
             self.cur_thread_count
-        };
-
-        if new_thread_count != self.cur_thread_count {
-            self.handle.scale_pool_size(new_thread_count);
-            self.notify_pool_size_change(new_thread_count);
-            self.cur_thread_count = new_thread_count;
         }
     }
 
