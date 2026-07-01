@@ -566,7 +566,7 @@ impl Snapshot {
         mgr: &SnapManagerCore,
     ) -> RaftStoreResult<Self> {
         let mut s = Self::new(dir, key, true, CheckPolicy::ErrNotAllowed, mgr)?;
-        s.mgr.limiter = Limiter::new(f64::INFINITY);
+        s.mgr.read_limiter = Limiter::new(f64::INFINITY);
 
         if !s.exists() {
             // Skip the initialization below if it doesn't exist.
@@ -656,7 +656,7 @@ impl Snapshot {
         mgr: &SnapManagerCore,
     ) -> RaftStoreResult<Self> {
         let mut s = Self::new(dir, key, false, CheckPolicy::ErrNotAllowed, mgr)?;
-        s.mgr.limiter = Limiter::new(f64::INFINITY);
+        s.mgr.read_limiter = Limiter::new(f64::INFINITY);
         Ok(s)
     }
 
@@ -890,7 +890,7 @@ impl Snapshot {
                     &end_key,
                     self.mgr
                         .get_actual_max_per_file_size(allow_multi_files_snapshot),
-                    &self.mgr.limiter,
+                    &self.mgr.read_limiter,
                     self.mgr.encryption_key_manager.clone(),
                     for_balance,
                 )?
@@ -1403,7 +1403,7 @@ impl Write for Snapshot {
             let mut start = 0;
             loop {
                 let acquire = cmp::min(IO_LIMITER_CHUNK_SIZE, encrypt_len - start);
-                self.mgr.limiter.blocking_consume(acquire);
+                self.mgr.write_limiter.blocking_consume(acquire);
                 file.write_all(&encrypt_buffer[start..start + acquire])?;
                 if start + acquire == encrypt_len {
                     break;
@@ -1465,7 +1465,8 @@ struct SnapManagerCore {
     base: String,
 
     registry: Arc<RwLock<HashMap<SnapKey, Vec<SnapEntry>>>>,
-    limiter: Limiter,
+    read_limiter: Limiter,
+    write_limiter: Limiter,
     recv_concurrency_limiter: Arc<SnapRecvConcurrencyLimiter>,
     temp_sst_id: Arc<AtomicU64>,
     encryption_key_manager: Option<Arc<DataKeyManager>>,
@@ -1800,11 +1801,11 @@ impl SnapManager {
     }
 
     pub fn set_speed_limit(&self, bytes_per_sec: f64) {
-        self.core.limiter.set_speed_limit(bytes_per_sec);
+        self.core.read_limiter.set_speed_limit(bytes_per_sec);
     }
 
     pub fn get_speed_limit(&self) -> f64 {
-        self.core.limiter.speed_limit()
+        self.core.read_limiter.speed_limit()
     }
 
     pub fn set_concurrent_recv_snap_limit(&self, limit: usize) {
@@ -1915,7 +1916,7 @@ impl SnapManager {
     }
 
     pub fn limiter(&self) -> &Limiter {
-        &self.core.limiter
+        &self.core.read_limiter
     }
 
     /// recv_snap_precheck is part of the snapshot recv precheck process, which
@@ -2213,7 +2214,12 @@ impl SnapManagerBuilder {
         self
     }
     pub fn build<T: Into<String>>(self, path: T) -> SnapManager {
-        let limiter = Limiter::new(if self.max_write_bytes_per_sec > 0 {
+        let read_limiter = Limiter::new(if self.max_write_bytes_per_sec > 0 {
+            self.max_write_bytes_per_sec as f64
+        } else {
+            f64::INFINITY
+        });
+        let write_limiter = Limiter::new(if self.max_write_bytes_per_sec > 0 {
             self.max_write_bytes_per_sec as f64
         } else {
             f64::INFINITY
@@ -2237,7 +2243,8 @@ impl SnapManagerBuilder {
             core: SnapManagerCore {
                 base: path,
                 registry: Default::default(),
-                limiter,
+                read_limiter,
+                write_limiter,
                 recv_concurrency_limiter: Arc::new(SnapRecvConcurrencyLimiter::new(
                     self.concurrent_recv_snap_limit,
                     RECV_SNAP_CONCURRENCY_LIMITER_TTL_SECS,
@@ -2747,7 +2754,8 @@ pub mod tests {
                 0,
                 RECV_SNAP_CONCURRENCY_LIMITER_TTL_SECS,
             )),
-            limiter: Limiter::new(f64::INFINITY),
+            read_limiter: Limiter::new(f64::INFINITY),
+            write_limiter: Limiter::new(f64::INFINITY),
             temp_sst_id: Arc::new(AtomicU64::new(0)),
             encryption_key_manager: None,
             max_per_file_size: Arc::new(AtomicU64::new(max_per_file_size)),
