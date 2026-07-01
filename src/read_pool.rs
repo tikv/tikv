@@ -760,6 +760,18 @@ struct ReadPoolConfigRunner {
     cpu_threshold: f64,
 }
 
+// Converts a target CPU budget (in cores) into a thread count, assuming the
+// per-thread CPU usage implied by `cur_thread_count` and `measured_cpu`
+// stays constant. Used both by the hard `cpu_threshold` ceiling and by the
+// ResourceGroupManager-driven pressure scale-down.
+fn threads_for_target_cpu(cur_thread_count: usize, target_cpu: f64, measured_cpu: f64) -> usize {
+    std::cmp::max(
+        target_cpu.floor() as usize,
+        ((cur_thread_count as f64) * target_cpu / measured_cpu).floor() as usize,
+    )
+    .max(1)
+}
+
 impl Runnable for ReadPoolConfigRunner {
     type Task = Task;
     fn run(&mut self, task: Self::Task) {
@@ -817,6 +829,17 @@ impl ReadPoolConfigRunner {
             return;
         }
 
+        let resource_manager = match &self.handle {
+            ReadPoolHandle::Yatp {
+                resource_manager, ..
+            } => resource_manager.clone(),
+            _ => None,
+        };
+
+        // Always measure the unified read pool's CPU usage locally. When a
+        // ResourceGroupManager is present, it still decides the thread count
+        // (scheduling concern) and computes the historical floor from this
+        // measurement, but the measurement itself lives here.
         let read_pool_cpu = self.cpu_time_tracker.get_unified_read_pool_cpu();
         let thread_usage = self.cpu_time_tracker.prev_avg_thread_usage();
         let running_tasks = self.running_tasks();
@@ -833,41 +856,64 @@ impl ReadPoolConfigRunner {
             SysQuota::cpu_cores_quota()
         };
 
-        // Base scaling conditions (process CPU, thread usage, task queue depth)
-        let busy_thread_scale_out = self.cur_thread_count < self.max_thread_count
-            && process_cpu * (self.cur_thread_count as f64 + 1.0) / (self.cur_thread_count as f64)
-                < target_cpu_cores
-            && thread_usage > self.cur_thread_count as f64 * READ_POOL_THREAD_HIGH_THRESHOLD
-            && running_tasks > self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD;
-
-        let busy_thread_scale_in = self.cur_thread_count > self.min_thread_count
-            && thread_usage < (self.cur_thread_count - 1) as f64 * READ_POOL_THREAD_LOW_THRESHOLD
-            && running_tasks < self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD;
-
+        // Hard local safety ceiling derived from cpu_threshold (a config field
+        // resource_control doesn't track) — takes precedence over any
+        // ResourceGroupManager opinion below.
         let leeway = 0.1;
         let busy_cpu_scale_in =
             self.cpu_threshold > 0.0 && read_pool_cpu > (leeway + 1.0) * target_cpu_cores;
-        let busy_cpu_scale_out = read_pool_cpu < (1.0 - leeway) * target_cpu_cores
-            && self.cur_thread_count < self.core_thread_count;
 
         let new_thread_count = if busy_cpu_scale_in {
-            // CPU threshold takes precedence over busy thread scaling conditions
-            std::cmp::max(
-                std::cmp::max(
-                    (target_cpu_cores).floor() as usize,
-                    ((self.cur_thread_count as f64) * target_cpu_cores / read_pool_cpu).floor()
-                        as usize,
-                ),
-                1, // minimum 1 running thread
-            )
-        } else if busy_cpu_scale_out {
-            self.cur_thread_count + 1
-        } else if busy_thread_scale_in {
-            self.cur_thread_count - 1
-        } else if busy_thread_scale_out {
-            self.cur_thread_count + 1
+            // CPU threshold takes precedence over everything else.
+            threads_for_target_cpu(self.cur_thread_count, target_cpu_cores, read_pool_cpu)
+        } else if let Some(rm) = &resource_manager {
+            // The ResourceGroupManager decides the CPU budget the read pool
+            // should target under foreground pressure (scheduling concern,
+            // owned by resource_control). Convert that into a thread count
+            // using the same CPU-ratio math as the cpu_threshold ceiling
+            // above. Scale-up and the min/max bounds remain the read pool's
+            // own responsibility.
+            let target_cpu =
+                rm.compute_read_pool_target_cpu(read_pool_cpu, self.interval.as_secs_f64());
+            let target = if target_cpu < read_pool_cpu && read_pool_cpu > 0.0 {
+                threads_for_target_cpu(self.cur_thread_count, target_cpu, read_pool_cpu)
+            } else if self.cur_thread_count < self.max_thread_count
+                && rm.read_pool_scale_up_allowed()
+            {
+                self.cur_thread_count + 1
+            } else {
+                self.cur_thread_count
+            };
+            target.clamp(self.min_thread_count, self.max_thread_count)
         } else {
-            self.cur_thread_count
+            // No ResourceGroupManager: the read pool acts on its own using
+            // the full local busy-thread/busy-CPU ladder.
+            let busy_thread_scale_out = self.cur_thread_count < self.max_thread_count
+                && process_cpu * (self.cur_thread_count as f64 + 1.0)
+                    / (self.cur_thread_count as f64)
+                    < target_cpu_cores
+                && thread_usage > self.cur_thread_count as f64 * READ_POOL_THREAD_HIGH_THRESHOLD
+                && running_tasks
+                    > self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD;
+
+            let busy_thread_scale_in = self.cur_thread_count > self.min_thread_count
+                && thread_usage
+                    < (self.cur_thread_count - 1) as f64 * READ_POOL_THREAD_LOW_THRESHOLD
+                && running_tasks
+                    < self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD;
+
+            let busy_cpu_scale_out = read_pool_cpu < (1.0 - leeway) * target_cpu_cores
+                && self.cur_thread_count < self.core_thread_count;
+
+            if busy_cpu_scale_out {
+                self.cur_thread_count + 1
+            } else if busy_thread_scale_in {
+                self.cur_thread_count - 1
+            } else if busy_thread_scale_out {
+                self.cur_thread_count + 1
+            } else {
+                self.cur_thread_count
+            }
         };
 
         if new_thread_count != self.cur_thread_count {
@@ -1362,6 +1408,70 @@ mod tests {
                 "Thread count should not decrease further when CPU is low"
             );
         }
+
+        worker.stop();
+    }
+
+    #[test]
+    fn test_read_pool_pressure_scale_down_with_resource_manager() {
+        use tikv_util::worker::Worker;
+
+        let config = UnifiedReadPoolConfig {
+            min_thread_count: 1,
+            max_thread_count: 8,
+            max_tasks_per_worker: 4,
+            cpu_threshold: 0.0,
+            auto_adjust_pool_size: true,
+            ..Default::default()
+        };
+        let resource_manager = Arc::new(ResourceGroupManager::default());
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let pool = build_yatp_read_pool(
+            &config,
+            DummyReporter,
+            engine,
+            None,
+            Some(resource_manager.clone()),
+            CleanupMethod::InPlace,
+            false,
+        );
+
+        let handle = pool.handle();
+        let worker = Worker::new("test-worker");
+        let mut runner = ReadPoolConfigRunner {
+            interval: Duration::from_secs(10),
+            sender: std::sync::mpsc::sync_channel(10).0,
+            handle: handle.clone(),
+            cpu_time_tracker: ReadPoolCpuTimeTracker::new("test-pool"),
+            process_stats: ProcessStat::cur_proc_stat().unwrap(),
+            min_thread_count: config.min_thread_count,
+            core_thread_count: 8,
+            cur_thread_count: 8,
+            max_thread_count: config.max_thread_count,
+            auto_adjust: true,
+            cpu_threshold: config.cpu_threshold,
+        };
+
+        // Drive online_adjust_resource_quota so read_pool_cpu_pressure() > 0,
+        // matching how the real GroupQuotaAdjustWorker tick would set it.
+        resource_manager.set_bg_cpu_at_floor(true);
+        resource_manager.online_adjust_resource_quota(90.0);
+        assert!(resource_manager.read_pool_cpu_pressure() > 0.0);
+
+        // The scale-down is now driven by the read pool's *measured* CPU
+        // usage (converted to a thread count via the same ratio math as the
+        // cpu_threshold ceiling), so give it a non-zero reading to scale
+        // down from — a cold/idle pool has nothing to reduce.
+        runner.cpu_time_tracker.set_test_cpu_utilization(4.0);
+
+        runner.adjust_pool_size();
+
+        assert!(
+            runner.cur_thread_count < 8,
+            "pressure should scale the pool down, got {}",
+            runner.cur_thread_count
+        );
 
         worker.stop();
     }

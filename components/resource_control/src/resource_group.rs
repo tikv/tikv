@@ -32,6 +32,7 @@ use crate::{
     metrics,
     metrics::{TWO_PHASE_THROTTLED_REQUESTS, deregister_metrics},
     resource_limiter::{ResourceLimiter, ResourceType},
+    score::{TARGET_CPU, pressure_fraction},
 };
 
 // a read task cost at least 50us.
@@ -341,6 +342,19 @@ pub struct ResourceGroupManager {
     // only engages when this flag is set, ensuring background is fully
     // squeezed before foreground traffic is touched.
     bg_cpu_at_floor: AtomicBool,
+    // Latest foreground CPU pressure (0.0-1.0), refreshed every tick by
+    // `online_adjust_resource_quota`. Consumed by the unified read pool to
+    // drive its thread-count scale-down decision. Encoded via `f64::to_bits`.
+    read_pool_cpu_pressure: AtomicU64,
+    // Sliding-window tracker of the unified read pool's actual CPU usage
+    // (in µs of CPU time per tick). Its `historical_rate()` is used as a
+    // floor: the read pool should never be scaled below the thread count
+    // needed to sustain its historical CPU consumption.
+    read_pool_cpu_tracker: Mutex<RuTracker>,
+    // True when the last `adjust_group_scheduling` tick saw cpu_score below
+    // the leeway threshold, i.e. the system is comfortably idle and the
+    // unified read pool may scale its thread count up toward its max.
+    read_pool_scale_up_allowed: AtomicBool,
 }
 
 impl Default for ResourceGroupManager {
@@ -367,6 +381,10 @@ impl ResourceGroupManager {
             0,
             true,
         ));
+        let start_secs = RuTracker::now_secs();
+        // 2 buckets per minute (30s each) to match RU_BUCKET_SECS, mirroring
+        // the per-group ru_trackers window sizing in `record_ru_consumption`.
+        let read_pool_num_buckets = (config.historical_usage_window_mins.max(2) as usize) * 2;
         let manager = Self {
             resource_groups: Default::default(),
             group_count: AtomicU64::new(0),
@@ -377,8 +395,11 @@ impl ResourceGroupManager {
             has_background: AtomicBool::new(false),
             config: Arc::new(VersionTrack::new(config)),
             ru_trackers: Default::default(),
-            start_secs: RuTracker::now_secs(),
+            start_secs,
             bg_cpu_at_floor: AtomicBool::new(false),
+            read_pool_cpu_pressure: AtomicU64::new(0.0f64.to_bits()),
+            read_pool_cpu_tracker: Mutex::new(RuTracker::new(start_secs, read_pool_num_buckets)),
+            read_pool_scale_up_allowed: AtomicBool::new(false),
         };
 
         // init the default resource group by default.
@@ -543,36 +564,8 @@ impl ResourceGroupManager {
     }
 
     pub fn advance_min_virtual_time(&self) {
-        // Push RU-based phase state into every controller before updating VT,
-        // so get_priority() sees fresh is_over_baseline flags this tick.
-        if self.config.value().enable_fair_scheduling {
-            self.update_group_phases();
-        }
         for controller in self.registry.read().iter() {
             controller.update_min_virtual_time();
-        }
-    }
-
-    /// Iterates all tracked groups and pushes `is_over_baseline` into each
-    /// registered `ResourceController`.  Called every ~1 second from
-    /// `advance_min_virtual_time` when `enable_fair_scheduling` is on.
-    fn update_group_phases(&self) {
-        let now_secs = RuTracker::now_secs();
-        for entry in &self.ru_trackers {
-            let group_bytes = entry.key().as_bytes();
-            let mut guard = entry.value().lock().unwrap();
-            // Roll the ring buffer forward so phase classification uses
-            // up-to-date bucket boundaries, not stale partial data.
-            guard.0.advance(now_secs);
-            let over = guard
-                .1
-                .get_limiter(ResourceType::Cpu)
-                .get_rate_limit()
-                .is_finite();
-            drop(guard);
-            for controller in self.registry.read().iter() {
-                controller.set_group_phase(group_bytes, over);
-            }
         }
     }
 
@@ -642,40 +635,65 @@ impl ResourceGroupManager {
         self.bg_cpu_at_floor.load(Ordering::Relaxed)
     }
 
-    /// Returns true when all foreground groups have unlimited (infinite)
-    /// CPU rate limits, i.e. foreground has fully ramped up.
-    pub fn is_foreground_fully_ramped_up(&self) -> bool {
-        for entry in &self.ru_trackers {
-            let guard = entry.lock().unwrap();
-            if guard
-                .1
-                .get_limiter(ResourceType::Cpu)
-                .get_rate_limit()
-                .is_finite()
-            {
-                return false;
-            }
-        }
-        true
+    fn set_read_pool_cpu_pressure(&self, pressure: f64) {
+        self.read_pool_cpu_pressure
+            .store(pressure.to_bits(), Ordering::Relaxed);
     }
 
-    /// Only groups whose current rate exceeds their historical rate are
-    /// limited.
+    /// Latest foreground CPU pressure (0.0-1.0), refreshed every tick by
+    /// `online_adjust_resource_quota`.
+    pub fn read_pool_cpu_pressure(&self) -> f64 {
+        f64::from_bits(self.read_pool_cpu_pressure.load(Ordering::Relaxed))
+    }
+
+    /// Records `read_pool_cpu` (in cores) into the historical tracker and
+    /// returns the floor CPU: the cores needed to sustain the read pool's
+    /// historical CPU consumption. This is the raw, unclamped historical
+    /// utilization — callers decide how to turn it into a thread count.
+    pub fn read_pool_cpu_floor(&self, read_pool_cpu: f64, interval_secs: f64) -> f64 {
+        self.read_pool_cpu_floor_at(read_pool_cpu, interval_secs, RuTracker::now_secs())
+    }
+
+    fn read_pool_cpu_floor_at(&self, read_pool_cpu: f64, interval_secs: f64, now: u64) -> f64 {
+        let mut tracker = self.read_pool_cpu_tracker.lock().unwrap();
+        tracker.advance(now);
+        if interval_secs > 0.0 {
+            let cpu_us = (read_pool_cpu * interval_secs * 1_000_000.0).max(0.0) as u64;
+            tracker.record(cpu_us);
+        }
+        tracker.refresh_cached_historical_rate(self.start_secs, now);
+        tracker.cached_historical_rate / 1_000_000.0
+    }
+
+    /// `cpu_score` is the common CPU-utilization score (0-100) computed by
+    /// [`crate::score::compute_resource_scores`]: the max of process and grpc
+    /// normalized utilization.
     ///
-    /// Ramp-up: when CPU drops below threshold, recover ×1.1/tick until
+    /// Delegates to [`Self::adjust_group_throttling`] (per-group CPU
+    /// rate-limit tightening/ramp-up) and [`Self::adjust_group_scheduling`]
+    /// (two-phase priority and the unified read-pool thread-count decision),
+    /// both using the same tick timestamp.
+    pub fn online_adjust_resource_quota(&self, cpu_score: f64) {
+        let now = RuTracker::now_secs();
+        self.adjust_group_throttling(cpu_score, now);
+        self.adjust_group_scheduling(cpu_score, now);
+    }
+
+    /// Per-group CPU rate-limit throttling. Only groups whose current rate
+    /// exceeds their historical rate are limited.
+    ///
+    /// Ramp-up: when CPU drops below threshold, recover ×1.2/tick until
     /// NO_LIMIT is restored.
-    pub fn online_adjust_resource_quota(&self, pct: f64) {
-        const TARGET_CPU: f64 = 90.0;
+    fn adjust_group_throttling(&self, cpu_score: f64, now: u64) {
         const RAMP_FACTOR: f64 = 1.2;
         const MIN_RAMP_UP_EPOCHS: u32 = 2;
 
         let throttle_threshold = self.config.value().fg_cpu_throttle_threshold;
         let leeway_threshold = throttle_threshold * 0.9;
         let burst_factor = 1.0 + self.config.value().baseline_burst_pct / 100.0;
-        let now = RuTracker::now_secs();
 
         // Advance all trackers to `now` and refresh cached historical rates
-        // up front so update_group_phases and the throttling logic below
+        // up front so adjust_group_scheduling and the throttling logic below
         // always see fresh baseline data.
         for entry in &self.ru_trackers {
             let mut guard = entry.lock().unwrap();
@@ -691,13 +709,11 @@ impl ResourceGroupManager {
                 .set((guard.0.current_rate(now) / 1_000_000.0) * 100.0);
         }
 
-        if pct > throttle_threshold && self.is_bg_cpu_at_floor() {
+        let engaged = cpu_score > throttle_threshold && self.is_bg_cpu_at_floor();
+        if engaged {
+            let pressure = pressure_fraction(cpu_score, throttle_threshold, TARGET_CPU);
             // Linearly scale limit from current rate (at threshold) down to
             // historical rate (at TARGET_CPU).
-            // pressure: 0.0 at threshold → 1.0 at TARGET_CPU.
-            let pressure =
-                ((pct - throttle_threshold) / (TARGET_CPU - throttle_threshold)).clamp(0.0, 1.0);
-
             for entry in &self.ru_trackers {
                 let mut guard = entry.lock().unwrap();
                 let hist = guard.0.cached_historical_rate;
@@ -718,7 +734,7 @@ impl ResourceGroupManager {
                     }
                 }
             }
-        } else if pct < leeway_threshold {
+        } else if cpu_score < leeway_threshold {
             // CPU below start threshold — ramp up by RAMP_FACTOR each tick.
             // Only lift to INFINITY after MIN_RAMP_UP_EPOCHS consecutive epochs
             // where the limit has grown past 2x hist, to avoid premature release.
@@ -770,6 +786,88 @@ impl ResourceGroupManager {
             inner.0.advance(now);
             !inner.0.is_idle()
         });
+    }
+
+    /// Two-phase scheduling priority and the read-pool thread-count decision,
+    /// both driven by the same read-path CPU-utilization signal (`cpu_score`).
+    ///
+    /// The `enable_fair_scheduling` config gate is intentionally not checked
+    /// here: `is_over_baseline` is only ever acted on by
+    /// [`ResourceController::is_two_phase_enabled`] at priority-lookup time,
+    /// which already checks that config. Setting the flag unconditionally
+    /// here is harmless when the feature is off.
+    fn adjust_group_scheduling(&self, cpu_score: f64, now: u64) {
+        let throttle_threshold = self.config.value().fg_cpu_throttle_threshold;
+        let leeway_threshold = throttle_threshold * 0.9;
+        let burst_factor = 1.0 + self.config.value().baseline_burst_pct / 100.0;
+
+        // pressure: 0.0 at throttle_threshold → 1.0 at TARGET_CPU. Drives the
+        // unified read pool's scale-down decision in
+        // `compute_read_pool_target_cpu`. Reset to 0 whenever foreground
+        // is not under CPU pressure so a transient spike can't pin the read
+        // pool down indefinitely.
+        let engaged = cpu_score > throttle_threshold && self.is_bg_cpu_at_floor();
+        let pressure = if engaged {
+            pressure_fraction(cpu_score, throttle_threshold, TARGET_CPU)
+        } else {
+            0.0
+        };
+        self.set_read_pool_cpu_pressure(pressure);
+
+        // Comfortably idle (below leeway) → allow the read pool to scale its
+        // thread count back up toward its max on the next tick it checks in.
+        self.read_pool_scale_up_allowed
+            .store(cpu_score < leeway_threshold, Ordering::Relaxed);
+
+        // Deprioritize only the groups that have actually exceeded their own
+        // quota (current rate over their historical baseline by more than
+        // burst_factor), and only while the read path is genuinely under CPU
+        // pressure — a group within its baseline is never deprioritized even
+        // if others are noisy, and no group is deprioritized at all once
+        // pressure clears.
+        for entry in &self.ru_trackers {
+            let group_bytes = entry.key().as_bytes();
+            let guard = entry.value().lock().unwrap();
+            let hist = guard.0.cached_historical_rate;
+            let current = guard.0.current_rate(now);
+            let over_quota = engaged && hist > 0.0 && current > hist * burst_factor;
+            drop(guard);
+            for controller in self.registry.read().iter() {
+                controller.set_group_phase(group_bytes, over_quota);
+            }
+        }
+    }
+
+    /// Decides the unified read pool's target CPU (in cores) under
+    /// foreground pressure: scales down from the currently measured
+    /// `read_pool_cpu` toward the historical-CPU floor as pressure
+    /// increases, or returns `read_pool_cpu` unchanged when there's no
+    /// pressure (hold). Also records `read_pool_cpu` into the historical
+    /// tracker so the floor stays current.
+    ///
+    /// This only ever scales down. The unified read pool converts this
+    /// target CPU into a thread count itself, using the same CPU-ratio math
+    /// it already applies for its `cpu_threshold` ceiling. Scaling up (and
+    /// applying `min_thread_count`/`max_thread_count` bounds) is likewise
+    /// the read pool's own responsibility — it consults
+    /// [`Self::read_pool_scale_up_allowed`] to know whether it's safe to do
+    /// so.
+    pub fn compute_read_pool_target_cpu(&self, read_pool_cpu: f64, interval_secs: f64) -> f64 {
+        let floor_cpu = self.read_pool_cpu_floor(read_pool_cpu, interval_secs);
+        let pressure = self.read_pool_cpu_pressure();
+
+        if pressure > 0.0 && read_pool_cpu > floor_cpu {
+            read_pool_cpu - (read_pool_cpu - floor_cpu) * pressure
+        } else {
+            read_pool_cpu
+        }
+    }
+
+    /// True when the system was comfortably idle (foreground CPU below the
+    /// leeway threshold) on the last `adjust_group_scheduling` tick, i.e. the
+    /// unified read pool may scale its thread count up toward its max.
+    pub fn read_pool_scale_up_allowed(&self) -> bool {
+        self.read_pool_scale_up_allowed.load(Ordering::Relaxed)
     }
 
     /// Returns the token-bucket debt delay for `group`, or `None` if no
@@ -1222,7 +1320,7 @@ impl ResourceController {
     }
 
     /// Updates the two-phase `is_over_baseline` flag for a single group.
-    /// Called each second by `ResourceGroupManager::update_group_phases`.
+    /// Called by `ResourceGroupManager::adjust_group_scheduling`.
     pub fn set_group_phase(&self, group: &[u8], over_baseline: bool) {
         let consumptions = self.resource_consumptions.read();
         if let Some(tracker) = consumptions.get(group) {
@@ -1938,7 +2036,10 @@ pub(crate) mod tests {
 
     #[test]
     fn test_two_phase_scheduling_ru_based() {
-        // Two-phase scheduling driven by real RU (CPU µs) from ResourceGroupManager.
+        // Two-phase scheduling driven by real RU (CPU µs) from
+        // ResourceGroupManager: only groups that have exceeded their own
+        // historical quota are deprioritized, and only while the read path
+        // is genuinely under CPU pressure (engaged).
         let mut cfg = Config::default();
         cfg.enable_fair_scheduling = true;
         let mgr = ResourceGroupManager::new(cfg);
@@ -1950,7 +2051,8 @@ pub(crate) mod tests {
 
         let ctl = mgr.derive_controller("read".into(), true);
 
-        // Warm up steady's RuTracker: 2 completed 30s buckets with consistent rate.
+        // Warm up steady's RuTracker: 2 completed 30s buckets with consistent
+        // rate (current == historical → within baseline).
         let t0 = RuTracker::now_secs();
         {
             let e = mgr
@@ -1974,31 +2076,7 @@ pub(crate) mod tests {
             tr.0.record_at(6000, t0 + 45);
             tr.0.record_at(0, t0 + 60); // close bucket 1: 6000 µs → stable baseline
         }
-        // "spike" has no tracker → is_over_baseline stays false (no history).
-
-        // Push phases into controller.
-        mgr.advance_min_virtual_time();
-
-        // steady: both buckets equal → current_rate == historical_rate → NOT over
-        // baseline. spike: no tracker → also not over baseline.
-        // Neither should be in phase 1 at steady state.
-        {
-            let groups = ctl.resource_consumptions.read();
-            let steady_over = groups
-                .get(b"steady".as_ref())
-                .unwrap()
-                .is_over_baseline
-                .load(Ordering::Relaxed);
-            let spike_over = groups
-                .get(b"spike".as_ref())
-                .unwrap()
-                .is_over_baseline
-                .load(Ordering::Relaxed);
-            assert!(!steady_over, "steady at baseline should be phase 0");
-            assert!(!spike_over, "spike with no history should be phase 0");
-        }
-
-        // Now simulate a spike for "spike": current bucket >> historical.
+        // Simulate a spike for "spike": current bucket >> historical.
         {
             let e = mgr
                 .ru_trackers
@@ -2020,21 +2098,52 @@ pub(crate) mod tests {
             tr.0.record_at(0, t0 + 60); // close bucket [t0+30,t0+60): 3000µs baseline
             tr.0.record_at(12000, t0 + 90); // current open bucket: 12000µs spike (left open)
         }
-        // Trigger a CPU utilization tick to refresh cached_historical_rate
-        // on all trackers. Set bg_cpu_at_floor so the throttle branch fires
-        // and limits groups that are over baseline.
-        mgr.set_bg_cpu_at_floor(true);
-        mgr.online_adjust_resource_quota(75.0);
-        mgr.advance_min_virtual_time();
 
+        // Not engaged (bg not at floor) → neither group is deprioritized,
+        // even though "spike" is already over its own baseline.
+        mgr.online_adjust_resource_quota(75.0);
         {
             let groups = ctl.resource_consumptions.read();
-            let spike_over = groups
-                .get(b"spike".as_ref())
-                .unwrap()
-                .is_over_baseline
-                .load(Ordering::Relaxed);
-            assert!(spike_over, "spike bucket1 > bucket0 → should be phase 1");
+            assert!(
+                !groups
+                    .get(b"steady".as_ref())
+                    .unwrap()
+                    .is_over_baseline
+                    .load(Ordering::Relaxed),
+                "not engaged → steady should be phase 0"
+            );
+            assert!(
+                !groups
+                    .get(b"spike".as_ref())
+                    .unwrap()
+                    .is_over_baseline
+                    .load(Ordering::Relaxed),
+                "not engaged → spike should be phase 0"
+            );
+        }
+
+        // Engaged (over threshold, bg at floor): only "spike" (over its own
+        // baseline) is deprioritized; "steady" (within baseline) is not.
+        mgr.set_bg_cpu_at_floor(true);
+        mgr.online_adjust_resource_quota(75.0);
+        {
+            let groups = ctl.resource_consumptions.read();
+            assert!(
+                !groups
+                    .get(b"steady".as_ref())
+                    .unwrap()
+                    .is_over_baseline
+                    .load(Ordering::Relaxed),
+                "steady is within its baseline → should stay phase 0"
+            );
+            assert!(
+                groups
+                    .get(b"spike".as_ref())
+                    .unwrap()
+                    .is_over_baseline
+                    .load(Ordering::Relaxed),
+                "spike exceeded its baseline → should be phase 1"
+            );
         }
 
         // Phase ordering: steady (phase 0) must sort before spike (phase 1).
@@ -2052,6 +2161,113 @@ pub(crate) mod tests {
         assert!(
             steady_pri < spike_pri,
             "phase 0 must schedule before phase 1"
+        );
+    }
+
+    #[test]
+    fn test_two_phase_scheduling_releases_as_soon_as_pressure_clears() {
+        // A group over its own quota is released the moment CPU pressure
+        // clears — no ramp-up wait or "all groups" synchronization required,
+        // since release is now a direct function of (engaged, over_quota)
+        // recomputed fresh every tick.
+        let mgr = ResourceGroupManager::default();
+
+        let spike = new_resource_group_ru("spike".into(), 1000, MEDIUM_PRIORITY);
+        mgr.add_resource_group(spike);
+        let ctl = mgr.derive_controller("read".into(), true);
+
+        let t0 = RuTracker::now_secs();
+        {
+            let e = mgr
+                .ru_trackers
+                .entry("spike".to_owned())
+                .or_insert_with(|| {
+                    Mutex::new((
+                        RuTracker::new(t0, 30),
+                        Arc::new(ResourceLimiter::new(
+                            "".into(),
+                            f64::INFINITY,
+                            f64::INFINITY,
+                            0,
+                            false,
+                        )),
+                    ))
+                });
+            let mut tr = e.lock().unwrap();
+            tr.0.record_at(3000, t0 + 30);
+            tr.0.record_at(0, t0 + 60); // close bucket: 3000µs baseline
+            tr.0.record_at(12000, t0 + 90); // open bucket: 12000µs spike
+        }
+
+        mgr.set_bg_cpu_at_floor(true);
+        mgr.online_adjust_resource_quota(75.0);
+        assert!(
+            ctl.resource_consumptions
+                .read()
+                .get(b"spike".as_ref())
+                .unwrap()
+                .is_over_baseline
+                .load(Ordering::Relaxed),
+            "spike exceeded its quota while engaged → should be phase 1"
+        );
+
+        // CPU drops back below threshold: released immediately, even though
+        // spike's RU history hasn't changed.
+        mgr.online_adjust_resource_quota(50.0);
+        assert!(
+            !ctl.resource_consumptions
+                .read()
+                .get(b"spike".as_ref())
+                .unwrap()
+                .is_over_baseline
+                .load(Ordering::Relaxed),
+            "spike should be released as soon as pressure clears"
+        );
+    }
+
+    #[test]
+    fn test_read_pool_scale_up_allowed_when_idle() {
+        let mgr = ResourceGroupManager::default();
+        // Drive cpu_score comfortably below the leeway threshold so
+        // adjust_group_scheduling marks the system as idle.
+        mgr.online_adjust_resource_quota(0.0);
+        assert!(mgr.read_pool_scale_up_allowed());
+
+        // With no pressure, compute_read_pool_target_cpu only ever holds at
+        // the measured usage — scaling up is the unified read pool's own
+        // responsibility.
+        let target_cpu = mgr.compute_read_pool_target_cpu(2.0, 10.0);
+        assert_eq!(target_cpu, 2.0, "no pressure → hold current cpu");
+    }
+
+    #[test]
+    fn test_compute_read_pool_target_cpu_holds_in_leeway_zone() {
+        let mgr = ResourceGroupManager::default();
+        // cpu_score in the leeway zone: not engaged (bg not at floor), and
+        // above leeway_threshold, so neither scale-down nor scale-up fires.
+        mgr.online_adjust_resource_quota(65.0);
+        assert!(!mgr.read_pool_scale_up_allowed());
+        assert_eq!(mgr.read_pool_cpu_pressure(), 0.0);
+
+        let target_cpu = mgr.compute_read_pool_target_cpu(2.0, 10.0);
+        assert_eq!(target_cpu, 2.0, "leeway zone should hold current cpu");
+    }
+
+    #[test]
+    fn test_compute_read_pool_target_cpu_scales_down_with_pressure() {
+        let mgr = ResourceGroupManager::default();
+        // Seed a historical floor of 0 cores (cold tracker), then drive full
+        // pressure (cpu_score == TARGET_CPU) so pressure_fraction == 1.0.
+        mgr.set_bg_cpu_at_floor(true);
+        mgr.online_adjust_resource_quota(TARGET_CPU);
+        assert_eq!(mgr.read_pool_cpu_pressure(), 1.0);
+
+        // Full pressure interpolates all the way down to the (cold, i.e. 0)
+        // historical floor.
+        let target_cpu = mgr.compute_read_pool_target_cpu(4.0, 10.0);
+        assert_eq!(
+            target_cpu, 0.0,
+            "full pressure should scale down to the floor"
         );
     }
 
@@ -2299,5 +2515,45 @@ pub(crate) mod tests {
             mgr.admission_decision(true, &spike_limiter),
             AdmissionDecision::Allow
         );
+    }
+
+    #[test]
+    fn test_read_pool_cpu_floor_cold_tracker() {
+        let mgr = ResourceGroupManager::default();
+        let t0 = RuTracker::now_secs();
+        // Cold tracker → historical rate 0 → floor == 0.0 cores.
+        let floor = mgr.read_pool_cpu_floor_at(8.0, 10.0, t0);
+        assert_eq!(floor, 0.0);
+    }
+
+    #[test]
+    fn test_read_pool_cpu_floor_matches_historical_usage() {
+        // Small window (minimum 2 min = 4 buckets = 120s) so a handful of
+        // directly-seeded buckets fully cover it, giving an exact,
+        // non-ramping historical rate to assert against.
+        let cfg = Config {
+            historical_usage_window_mins: 2,
+            ..Default::default()
+        };
+        let mgr = ResourceGroupManager::new(cfg);
+        let t0 = mgr.start_secs;
+
+        // Seed 4 fully-completed 30s buckets at a sustained 4 cores of usage
+        // (4 cores * 30s * 1_000_000 us/s = 120_000_000 us per bucket). Each
+        // `record_at` call commits the *previous* call's contribution to a
+        // bucket, so a 5th call is needed to flush the 4th bucket closed.
+        {
+            let mut tracker = mgr.read_pool_cpu_tracker.lock().unwrap();
+            tracker.record_at(120_000_000, t0 + 30);
+            tracker.record_at(120_000_000, t0 + 60);
+            tracker.record_at(120_000_000, t0 + 90);
+            tracker.record_at(120_000_000, t0 + 120);
+            tracker.record_at(120_000_000, t0 + 150);
+        }
+        // system_uptime (150s) >= window_secs (120s) → historical_rate uses
+        // the full window as denominator: 480_000_000 / 120 = 4_000_000 us/s
+        // = 4 cores → floor = 4.0.
+        let floor = mgr.read_pool_cpu_floor_at(4.0, 30.0, t0 + 150);
+        assert_eq!(floor, 4.0);
     }
 }
