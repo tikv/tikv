@@ -2636,6 +2636,51 @@ mod tests {
     }
 
     #[test]
+    fn test_check_leader_rejects_stale_leader_after_peer_change() {
+        let coprocessor_host = CoprocessorHost::<KvTestEngine>::default();
+
+        let mut changed_region = metapb::Region::default();
+        changed_region.set_id(1);
+        changed_region.mut_region_epoch().set_version(10);
+        changed_region.mut_region_epoch().set_conf_ver(11);
+        changed_region.set_peers(vec![new_peer(1, 1), new_peer(2, 2), new_peer(3, 3)].into());
+
+        let leader_progress = RegionReadProgress::new(&changed_region, 10, 10, 1);
+        leader_progress.update_leader_info(1, 6, &changed_region);
+        let leader_info = leader_progress.core.lock().unwrap().get_leader_info();
+
+        let follower_progress = Arc::new(RegionReadProgress::new(&changed_region, 10, 10, 3));
+        let registry = RegionReadProgressRegistry::new();
+        registry.insert(1, follower_progress.clone());
+
+        // A peer can already have the new region epoch/peer list while its raft
+        // leader id has not caught up yet. In that window, check_leader rejects
+        // the region even though the peer metadata itself is current.
+        follower_progress.update_leader_info(raft::INVALID_ID, 6, &changed_region);
+        assert!(
+            registry
+                .handle_check_leaders(vec![leader_info.clone()], &coprocessor_host)
+                .is_empty()
+        );
+
+        // A matching leader id with an old term is rejected for the same reason.
+        follower_progress.update_leader_info(1, 5, &changed_region);
+        assert!(
+            registry
+                .handle_check_leaders(vec![leader_info.clone()], &coprocessor_host)
+                .is_empty()
+        );
+
+        // Once a later leader-state refresh writes the same leader id and term,
+        // the same region is acknowledged.
+        follower_progress.update_leader_info(1, 6, &changed_region);
+        assert_eq!(
+            registry.handle_check_leaders(vec![leader_info], &coprocessor_host),
+            vec![1]
+        );
+    }
+
+    #[test]
     fn test_peer_id_mismatch() {
         use kvproto::errorpb::{Error, MismatchPeerId};
         let mut header = RaftRequestHeader::default();
