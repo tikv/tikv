@@ -83,6 +83,8 @@ pub struct LoadMetaStatistic {
     /// The log files in this meta won't be calculated in
     /// `log_filtered_out_by_migration`.
     pub meta_filtered_out_by_migration: u64,
+    /// How many empty meta files are skipped by file name?
+    pub empty_meta_files_skipped: u64,
 }
 
 /// The statistic of loading data files for a subcompaction.
