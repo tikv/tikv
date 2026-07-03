@@ -5314,11 +5314,7 @@ where
         assert_eq!(prev, Some(prev_region));
         drop(meta);
 
-        self.fsm.peer.read_progress.update_leader_info(
-            self.fsm.peer.leader_id(),
-            self.fsm.peer.term(),
-            &region,
-        );
+        self.fsm.peer.read_progress.update_region(&region);
 
         for r in &persist_res.destroy_regions {
             if let Err(e) = self.ctx.router.force_send(
