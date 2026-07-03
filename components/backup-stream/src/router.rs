@@ -1405,32 +1405,34 @@ impl StreamTaskHandler {
         flush_ts: TimeStamp,
     ) -> Result<Vec<String>> {
         let mut meta_files = vec![];
-        if !metadata_info.file_groups.is_empty() {
-            let mut min_begin_ts = u64::MAX;
-            for file_group in metadata_info.file_groups.as_slice() {
-                assert!(!file_group.data_files_info.is_empty());
-                for d in file_group.data_files_info.as_slice() {
-                    assert_ne!(d.min_begin_ts_in_default_cf, 0);
-                    min_begin_ts = min_begin_ts.min(d.min_begin_ts_in_default_cf)
-                }
+        let mut min_begin_ts = 0;
+        for file_group in metadata_info.file_groups.as_slice() {
+            assert!(!file_group.data_files_info.is_empty());
+            for d in file_group.data_files_info.as_slice() {
+                assert_ne!(d.min_begin_ts_in_default_cf, 0);
+                min_begin_ts = if min_begin_ts == 0 {
+                    d.min_begin_ts_in_default_cf
+                } else {
+                    min_begin_ts.min(d.min_begin_ts_in_default_cf)
+                };
             }
-            let meta_path = metadata_info.path_to_meta(min_begin_ts, flush_ts.into_inner());
-            let meta_buff = metadata_info.marshal_to()?;
-            let buflen = meta_buff.len();
-
-            self.storage
-                .write(
-                    &meta_path,
-                    UnpinReader(Box::new(Cursor::new(meta_buff))),
-                    buflen as _,
-                )
-                .await
-                .context(format_args!("flush meta {:?}", meta_path))?;
-            crate::metrics::UPLOAD_FILE_SIZE
-                .with_label_values(&["metadata"])
-                .inc_by(buflen as _);
-            meta_files.push(meta_path);
         }
+        let meta_path = metadata_info.path_to_meta(min_begin_ts, flush_ts.into_inner());
+        let meta_buff = metadata_info.marshal_to()?;
+        let buflen = meta_buff.len();
+
+        self.storage
+            .write(
+                &meta_path,
+                UnpinReader(Box::new(Cursor::new(meta_buff))),
+                buflen as _,
+            )
+            .await
+            .context(format_args!("flush meta {:?}", meta_path))?;
+        crate::metrics::UPLOAD_FILE_SIZE
+            .with_label_values(&["metadata"])
+            .inc_by(buflen as _);
+        meta_files.push(meta_path);
         Ok(meta_files)
     }
 
@@ -1777,7 +1779,14 @@ impl MetadataInfo {
     }
 
     fn make_flags(&self) -> u64 {
-        if self.has_meta_files { 0 } else { 1 }
+        let mut flags = 0;
+        if !self.has_meta_files {
+            flags |= utils::BACKUP_META_FLAG_NO_META_FILES;
+        }
+        if self.file_groups.is_empty() {
+            flags |= utils::BACKUP_META_FLAG_EMPTY;
+        }
+        flags
     }
 
     fn push(&mut self, file: DataFileGroup, is_meta: bool) {
@@ -1989,7 +1998,7 @@ mod tests {
     use external_storage::{BlobObject, ExternalData, NoopStorage};
     use futures::{AsyncReadExt, future::LocalBoxFuture, stream::LocalBoxStream};
     use kvproto::{
-        brpb::{CipherInfo, Noop, StorageBackend, StreamBackupTaskInfo},
+        brpb::{CipherInfo, StreamBackupTaskInfo},
         encryptionpb::EncryptionMethod,
     };
     use online_config::{ConfigManager, OnlineConfig};
@@ -2145,13 +2154,6 @@ mod tests {
             result.push(task);
         }
         result
-    }
-
-    fn create_noop_storage_backend() -> StorageBackend {
-        let nop = Noop::new();
-        let mut backend = StorageBackend::default();
-        backend.set_noop(nop);
-        backend
     }
 
     async fn task_handler(name: String) -> Result<(StreamBackupTaskInfo, PathBuf)> {
@@ -2528,6 +2530,7 @@ mod tests {
     async fn test_empty_resolved_ts() {
         let (tx, _rx) = dummy_scheduler();
         let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
+        let storage_dir = tempfile::tempdir().unwrap();
         let router = RouterInner::new(
             tx,
             Config {
@@ -2541,7 +2544,7 @@ mod tests {
         );
         let mut stream_task = StreamBackupTaskInfo::default();
         stream_task.set_name("nothing".to_string());
-        stream_task.set_storage(create_noop_storage_backend());
+        stream_task.set_storage(external_storage::make_local_backend(storage_dir.path()));
 
         router
             .register_task(
@@ -2566,6 +2569,25 @@ mod tests {
         };
         let rts = router.do_flush(cx).await.unwrap();
         assert_eq!(ts.into_inner(), rts);
+
+        let meta_file_paths = meta_file_names(storage_dir.path());
+        assert_eq!(meta_file_paths.len(), 1);
+        let meta_file_name = meta_file_paths[0]
+            .file_stem()
+            .and_then(OsStr::to_str)
+            .unwrap();
+        let parsed_meta_file_name = utils::parse_backupmeta_filename(meta_file_name).unwrap();
+        assert_eq!(
+            parsed_meta_file_name.flags,
+            Some(utils::BACKUP_META_FLAG_NO_META_FILES | utils::BACKUP_META_FLAG_EMPTY)
+        );
+
+        let metadata = read_and_parse_meta_files(meta_file_paths);
+        assert_eq!(metadata.len(), 1);
+        assert!(metadata[0].file_groups.is_empty());
+        assert_eq!(metadata[0].resolved_ts, ts.into_inner());
+        assert_eq!(metadata[0].store_id, 1);
+        assert!(log_file_names(storage_dir.path()).is_empty());
     }
 
     #[tokio::test]

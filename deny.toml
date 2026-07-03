@@ -118,6 +118,9 @@ ignore = [
     # Ignore RUSTSEC-2022-0104 because structopt is only used by tikv-ctl and
     # does not affect the server runtime. This is safe to ignore.
     "RUSTSEC-2022-0104",
+    "RUSTSEC-2026-0190",
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,
