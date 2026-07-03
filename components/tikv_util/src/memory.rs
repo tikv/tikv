@@ -8,6 +8,8 @@ use std::{
     },
 };
 
+use crossbeam_utils::CachePadded;
+
 use collections::HashMap;
 use kvproto::{
     coprocessor as coppb,
@@ -205,8 +207,8 @@ impl_display_as_debug!(MemoryQuotaExceeded);
 pub struct MemoryQuota {
     // We suppose the memory quota should not exceed the upper bound of `isize`.
     // As we don't support 32bit(or lower) arch, this won't be a problem.
-    in_use: AtomicIsize,
-    capacity: AtomicUsize,
+    in_use: CachePadded<AtomicIsize>,
+    capacity: CachePadded<AtomicUsize>,
 }
 
 #[derive(Debug)]
@@ -246,8 +248,9 @@ impl MemoryQuota {
     pub fn new(capacity: usize) -> MemoryQuota {
         let capacity = Self::adjust_capacity(capacity);
         MemoryQuota {
-            in_use: AtomicIsize::new(0),
-            capacity: AtomicUsize::new(capacity),
+            in_use: CachePadded::new(AtomicIsize::new(0)),
+            capacity: CachePadded::new(AtomicUsize::new(capacity)),
+,
         }
     }
 
