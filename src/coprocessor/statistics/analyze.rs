@@ -1,16 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    cmp::Reverse,
-    collections::BinaryHeap,
-    hash::Hasher,
-    mem,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{cmp::Reverse, collections::BinaryHeap, hash::Hasher, mem, sync::Arc};
 
 use api_version::KvFormat;
 use collections::HashSet;
+use engine_traits::CF_WRITE;
 use kvproto::coprocessor::KeyRange;
 use mur3::{Hasher128, murmurhash3_x64_128};
 use protobuf::Message;
@@ -33,6 +27,7 @@ use tikv_util::{
     quota_limiter::QuotaLimiter,
 };
 use tipb::{self, AnalyzeColumnsReq};
+use txn_types::Key;
 
 use super::{
     cmsketch::CmSketch,
@@ -45,11 +40,41 @@ use crate::{
     storage::{Snapshot, SnapshotStore, Statistics},
 };
 
-fn duration_ms(duration: Duration) -> u64 {
-    duration.as_millis() as u64
+fn new_key_range(start: Vec<u8>, end: Vec<u8>) -> KeyRange {
+    let mut range = KeyRange::default();
+    range.set_start(start);
+    range.set_end(end);
+    range
 }
+
+fn decode_storage_user_key(encoded_key: &[u8]) -> Option<Vec<u8>> {
+    Key::from_encoded_slice(encoded_key).into_raw().ok()
+}
+
+fn normalize_block_anchor_key(key: Vec<u8>) -> Vec<u8> {
+    let encoded_key = if keys::validate_data_key(&key) {
+        let origin_key = keys::origin_key(&key);
+        match Key::truncate_ts_for(origin_key) {
+            Ok(user_key) => user_key,
+            Err(_) => origin_key,
+        }
+    } else {
+        key.as_slice()
+    };
+    match decode_storage_user_key(encoded_key) {
+        Some(raw_key) => raw_key,
+        None => encoded_key.to_vec(),
+    }
+}
+
 pub(crate) struct RowSampleBuilder<S: Snapshot, F: KvFormat> {
-    pub(crate) data: BatchTableScanExecutor<TikvStorage<SnapshotStore<S>>, F>,
+    /// Executor for the wave currently being scanned. Wave 0's executor is
+    /// built in `new`; later comb waves rebuild it from `store_template`.
+    /// None between waves and once scanning finished.
+    data: Option<BatchTableScanExecutor<TikvStorage<SnapshotStore<S>>, F>>,
+    /// Fork template for building the executors of waves ≥ 1. Some only when
+    /// comb block sampling is active.
+    store_template: Option<SnapshotStore<S>>,
     /// Accumulated storage statistics for this request. Filled per batch so
     /// that collect_scan_statistics can report request-scoped stats (see
     /// merge_storage_stats_into).
@@ -65,6 +90,217 @@ pub(crate) struct RowSampleBuilder<S: Snapshot, F: KvFormat> {
     quota_limiter: Arc<QuotaLimiter>,
     #[allow(dead_code)] // kept for future use (e.g. priority or reporting)
     is_auto_analyze: bool,
+    // Executor construction parameters, kept so waves ≥ 1 can rebuild it.
+    common_handle_ids: Vec<i64>,
+    primary_prefix_column_ids: Vec<i64>,
+    wave_plan: Option<CombWavePlan>,
+    /// Number of comb waves fully scanned so far.
+    waves_scanned: usize,
+    /// Number of blocks in the fully scanned waves; the count rescale divisor.
+    scanned_blocks: u64,
+    trueblock_diag_batch_count: u64,
+    trueblock_diag_cumulative_rows: u64,
+    trueblock_diag_cumulative_block_reads: u64,
+    trueblock_diag_cumulative_flow_bytes: u64,
+    trueblock_diag_cumulative_processed_size: u64,
+}
+
+/// Upper bound on comb waves scanned per ANALYZE request. Caps the worst-case
+/// extra IO at this multiple of the first wave when scanned blocks keep
+/// yielding too few visible rows (e.g. tombstone-heavy regions).
+const MAX_ANALYZE_SAMPLE_WAVES: usize = 4;
+
+/// Slack applied to the absolute row target so that healthy regions (physical
+/// row estimate ≈ visible rows) stop right after wave 0 instead of paying an
+/// extra wave for estimate noise (multi-version rows, cross-file duplicates).
+const COMB_WAVE_ROW_TARGET_SLACK: f64 = 0.7;
+
+/// A block-aligned key range candidate. `weight` is the anchor's physical row
+/// estimate; comb sampling only uses the summed weights as the absolute
+/// row-target proxy, never for selection, so its per-block accuracy (which is
+/// blind to MVCC deletes) no longer matters.
+#[derive(Debug)]
+struct BlockCandidate {
+    start: Vec<u8>,
+    end: Vec<u8>,
+    weight: u64,
+}
+
+/// The comb-wave sampling plan. Candidates are partitioned by index into
+/// `comb_spacing` interleaved combs; wave w holds comb
+/// `(phase + w) % comb_spacing`. Every block therefore has equal selection
+/// probability `scanned_waves / comb_spacing`, and any scanned wave prefix
+/// stays evenly spread over the key space, so scanning can stop at any wave
+/// boundary once enough rows were collected. `waves[0]` is handed to the
+/// executor built in `RowSampleBuilder::new` and left empty here.
+struct CombWavePlan {
+    waves: Vec<Vec<KeyRange>>,
+    wave_block_counts: Vec<u64>,
+    total_blocks: u64,
+    physical_rows: u64,
+    comb_spacing: u64,
+    phase: u64,
+    target_rows: u64,
+}
+
+/// Splits the requested ranges into block-aligned candidates at the anchor
+/// boundaries. Unlike the weighted path above, the head segment
+/// `[range.start, first_anchor)` is kept, so the candidates partition the
+/// whole requested range. Returns None when a non-empty range has no in-range
+/// anchor (the caller falls back to a plain full scan).
+fn block_candidates_from_anchors(
+    anchors: &[engine_traits::DataBlockKeyAnchor],
+    ranges: &[KeyRange],
+) -> Option<Vec<BlockCandidate>> {
+    let mut candidates = Vec::new();
+    for range in ranges {
+        let start = range.get_start();
+        let end = range.get_end();
+        let end_is_unbounded = end.is_empty();
+        if !end_is_unbounded && start >= end {
+            continue;
+        }
+        // The head boundary carries no anchor weight; count it as one row.
+        let mut boundaries: Vec<(Vec<u8>, u64)> = vec![(start.to_vec(), 1)];
+        for anchor in anchors {
+            if anchor.user_key.as_slice() <= start {
+                continue;
+            }
+            if !end_is_unbounded && anchor.user_key.as_slice() >= end {
+                break;
+            }
+            boundaries.push((anchor.user_key.clone(), anchor.range_size.max(1)));
+        }
+        if boundaries.len() <= 1 {
+            return None;
+        }
+        for (idx, (block_start, weight)) in boundaries.iter().enumerate() {
+            let block_end = boundaries
+                .get(idx + 1)
+                .map(|(next_start, _)| next_start.as_slice())
+                .unwrap_or(end);
+            if end_is_unbounded || block_start.as_slice() < block_end {
+                candidates.push(BlockCandidate {
+                    start: block_start.clone(),
+                    end: block_end.to_vec(),
+                    weight: *weight,
+                });
+            }
+        }
+    }
+    if candidates.is_empty() {
+        None
+    } else {
+        Some(candidates)
+    }
+}
+
+/// Plans equal-probability comb waves over the candidates. The comb spacing is
+/// `round(1 / ndv_rate)` so wave 0 covers ≈ ndv_rate of the blocks; later
+/// waves extend the coverage one comb at a time until the absolute row target
+/// is met (see `advance_to_next_wave`). The phase is random per request so no
+/// block is permanently stuck in an unsampled gap, while wave membership stays
+/// fixed before any data is observed (only *how many* waves get scanned is
+/// data-dependent, which keeps early stopping unbiased up to wave granularity).
+fn plan_comb_waves(
+    candidates: Vec<BlockCandidate>,
+    ndv_rate: f64,
+    forced_phase: Option<u64>,
+) -> Option<CombWavePlan> {
+    let total_blocks = candidates.len() as u64;
+    if total_blocks < 2 {
+        return None;
+    }
+    let comb_spacing = (1.0 / ndv_rate).round() as u64;
+    if comb_spacing < 2 {
+        // ndv_rate is close to a full scan; block sampling is not worth it.
+        return None;
+    }
+    let comb_spacing = comb_spacing.min(total_blocks);
+    let phase = forced_phase
+        .map(|phase| phase % comb_spacing)
+        .unwrap_or_else(|| rand::thread_rng().gen_range(0, comb_spacing));
+    let wave_count = (comb_spacing as usize).min(MAX_ANALYZE_SAMPLE_WAVES);
+    let physical_rows = candidates
+        .iter()
+        .fold(0_u64, |sum, candidate| sum.saturating_add(candidate.weight));
+    let mut waves = vec![Vec::new(); wave_count];
+    let mut wave_block_counts = vec![0_u64; wave_count];
+    for (idx, candidate) in candidates.into_iter().enumerate() {
+        let comb = idx as u64 % comb_spacing;
+        let wave_idx = (comb + comb_spacing - phase) % comb_spacing;
+        if (wave_idx as usize) < wave_count {
+            wave_block_counts[wave_idx as usize] += 1;
+            waves[wave_idx as usize].push(new_key_range(candidate.start, candidate.end));
+        }
+    }
+    // comb_spacing ≤ total_blocks, so index `(phase + w) % comb_spacing`
+    // exists and every planned wave is non-empty.
+    debug_assert!(wave_block_counts.iter().all(|count| *count > 0));
+    let target_rows =
+        ((ndv_rate * physical_rows as f64 * COMB_WAVE_ROW_TARGET_SLACK).ceil() as u64).max(1);
+    Some(CombWavePlan {
+        waves,
+        wave_block_counts,
+        total_blocks,
+        physical_rows,
+        comb_spacing,
+        phase,
+        target_rows,
+    })
+}
+
+fn build_true_block_sample_waves<S: Snapshot>(
+    snapshot: &S,
+    ranges: &[KeyRange],
+    ndv_rate: f64,
+    forced_phase: Option<u64>,
+) -> Result<Option<CombWavePlan>> {
+    if ndv_rate <= 0.0 || ndv_rate >= 1.0 {
+        return Ok(None);
+    }
+    let mut anchors = snapshot.approximate_key_anchors_cf(CF_WRITE)?;
+    let raw_anchor_count = anchors.len();
+    if anchors.is_empty() {
+        return Ok(None);
+    }
+    for anchor in &mut anchors {
+        anchor.user_key = normalize_block_anchor_key(mem::take(&mut anchor.user_key));
+    }
+    anchors.sort_by(|lhs, rhs| lhs.user_key.cmp(&rhs.user_key));
+    let mut merged_anchors: Vec<engine_traits::DataBlockKeyAnchor> =
+        Vec::with_capacity(anchors.len());
+    for mut anchor in anchors {
+        anchor.range_size = anchor.range_size.max(1);
+        if let Some(last) = merged_anchors.last_mut() {
+            if last.user_key == anchor.user_key {
+                last.range_size = last.range_size.max(anchor.range_size);
+                continue;
+            }
+        }
+        merged_anchors.push(anchor);
+    }
+    let merged_anchor_count = merged_anchors.len();
+    let Some(candidates) = block_candidates_from_anchors(&merged_anchors, ranges) else {
+        return Ok(None);
+    };
+    let Some(plan) = plan_comb_waves(candidates, ndv_rate, forced_phase) else {
+        return Ok(None);
+    };
+    info!("analyze comb block sampling select diagnostic";
+        "component" => "tikv",
+        "raw_anchor_count" => raw_anchor_count,
+        "merged_anchor_count" => merged_anchor_count,
+        "total_blocks" => plan.total_blocks,
+        "ndv_rate" => ndv_rate,
+        "comb_spacing" => plan.comb_spacing,
+        "phase" => plan.phase,
+        "planned_waves" => plan.waves.len(),
+        "wave0_blocks" => plan.wave_block_counts[0],
+        "physical_row_estimate" => plan.physical_rows,
+        "target_rows" => plan.target_rows,
+    );
+    Ok(Some(plan))
 }
 
 impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
@@ -90,21 +326,36 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
         let ndv_rate = if ndv_rate > 0.0 { ndv_rate } else { 1.0 };
         let build_singletons = ndv_rate < 1.0;
         let common_handle_ids = req.take_primary_column_ids();
-        let mut table_scanner = BatchTableScanExecutor::new(
+        let primary_prefix_column_ids = req.take_primary_prefix_column_ids();
+        let mut ranges = ranges;
+        let mut wave_plan = None;
+        if build_singletons {
+            if let Some(mut plan) =
+                build_true_block_sample_waves(storage.store().snapshot(), &ranges, ndv_rate, None)?
+            {
+                ranges = mem::take(&mut plan.waves[0]);
+                wave_plan = Some(plan);
+            }
+        }
+        // If no usable block anchors can be built, keep the original ranges and
+        // scan them fully instead of falling back to row-level skip sampling.
+        //
+        // Keep a fork template around before `storage` moves into the wave-0
+        // executor so waves ≥ 1 can rebuild executors on the same snapshot.
+        let store_template = wave_plan.as_ref().map(|_| storage.store().fork());
+        let table_scanner = BatchTableScanExecutor::new(
             storage,
             Arc::new(EvalConfig::default()),
             columns_info.clone(),
             ranges,
-            common_handle_ids,
+            common_handle_ids.clone(),
             false,
             false, // Streaming mode is not supported in Analyze request, always false here
-            req.take_primary_prefix_column_ids(),
+            primary_prefix_column_ids.clone(),
         )?;
-        if build_singletons {
-            table_scanner.set_row_sample_rate(ndv_rate);
-        }
         Ok(Self {
-            data: table_scanner,
+            data: Some(table_scanner),
+            store_template,
             accumulated_storage_stats: Statistics::default(),
             max_sample_size,
             max_fm_sketch_size: req.get_sketch_size() as usize,
@@ -114,6 +365,16 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             column_groups: req.take_column_groups().into(),
             quota_limiter,
             is_auto_analyze,
+            common_handle_ids,
+            primary_prefix_column_ids,
+            wave_plan,
+            waves_scanned: 0,
+            scanned_blocks: 0,
+            trueblock_diag_batch_count: 0,
+            trueblock_diag_cumulative_rows: 0,
+            trueblock_diag_cumulative_block_reads: 0,
+            trueblock_diag_cumulative_flow_bytes: 0,
+            trueblock_diag_cumulative_processed_size: 0,
         })
     }
 
@@ -127,11 +388,24 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             ));
         }
         Box::new(BernoulliRowSampleCollector::new(
-            self.sample_rate,
+            self.histogram_sample_rate(),
             self.max_fm_sketch_size,
             self.columns_info.len() + self.column_groups.len(),
             self.build_singletons,
         ))
+    }
+
+    fn histogram_sample_rate(&self) -> f64 {
+        // Every block is picked with equal probability, so the first-stage
+        // row inclusion rate equals the scanned block fraction. The collector
+        // starts at the wave-0 rate; advance_to_next_wave thins it down as
+        // later waves extend the coverage.
+        let first_stage_sample_rate = self
+            .wave_plan
+            .as_ref()
+            .map(|plan| plan.wave_block_counts[0] as f64 / plan.total_blocks as f64)
+            .unwrap_or(1.0);
+        (self.sample_rate / first_stage_sample_rate).min(1.0)
     }
 
     /// Merges accumulated storage statistics into `dest`. Used by the context
@@ -140,8 +414,78 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
     pub(crate) fn merge_storage_stats_into(&mut self, dest: &mut Statistics) {
         dest.add(&mem::take(&mut self.accumulated_storage_stats));
         // Collect potential trailing scanner stats that were generated after
-        // the last per-batch collection.
-        self.data.collect_storage_stats(dest);
+        // the last per-batch collection (e.g. when the scan errored mid-wave).
+        if let Some(data) = &mut self.data {
+            data.collect_storage_stats(dest);
+        }
+    }
+
+    /// Finishes the wave that just drained and, when the absolute row target
+    /// is not met yet, prepares the executor for the next comb wave. Returns
+    /// false when scanning is complete.
+    fn advance_to_next_wave(&mut self, collector: &mut dyn RowSampleCollector) -> Result<bool> {
+        // Fold the finished executor's trailing scanner stats before dropping it.
+        if let Some(mut data) = self.data.take() {
+            data.collect_storage_stats(&mut self.accumulated_storage_stats);
+        }
+        let Some(plan) = &self.wave_plan else {
+            return Ok(false);
+        };
+        self.scanned_blocks = self
+            .scanned_blocks
+            .saturating_add(plan.wave_block_counts[self.waves_scanned]);
+        self.waves_scanned += 1;
+        if self.waves_scanned >= plan.waves.len() {
+            return Ok(false);
+        }
+        let sketch_sample_count = collector.mut_base().sketch_sample_count;
+        if sketch_sample_count >= plan.target_rows {
+            return Ok(false);
+        }
+        let next_scanned_blocks = self
+            .scanned_blocks
+            .saturating_add(plan.wave_block_counts[self.waves_scanned]);
+        // Every scanned row must keep overall inclusion probability
+        // `sample_rate`. The Bernoulli collector was filled at the previous
+        // (higher) cumulative rate, so thin it down to the rate of the new
+        // coverage before scanning more blocks.
+        let new_rate =
+            (self.sample_rate / (next_scanned_blocks as f64 / plan.total_blocks as f64)).min(1.0);
+        let ranges = plan.waves[self.waves_scanned].clone();
+        info!("analyze comb block sampling advance wave";
+            "component" => "tikv",
+            "next_wave" => self.waves_scanned,
+            "planned_waves" => plan.waves.len(),
+            "scanned_blocks" => self.scanned_blocks,
+            "total_blocks" => plan.total_blocks,
+            "sketch_sample_count" => sketch_sample_count,
+            "target_rows" => plan.target_rows,
+            "histogram_sample_rate" => new_rate,
+        );
+        collector.rescale_sample_rate(new_rate);
+        self.data = Some(self.build_wave_executor(ranges)?);
+        Ok(true)
+    }
+
+    fn build_wave_executor(
+        &self,
+        ranges: Vec<KeyRange>,
+    ) -> Result<BatchTableScanExecutor<TikvStorage<SnapshotStore<S>>, F>> {
+        let store = self
+            .store_template
+            .as_ref()
+            .expect("store template must exist when comb waves are planned")
+            .fork();
+        Ok(BatchTableScanExecutor::new(
+            TikvStorage::new(store, false),
+            Arc::new(EvalConfig::default()),
+            self.columns_info.clone(),
+            ranges,
+            self.common_handle_ids.clone(),
+            false,
+            false, // Streaming mode is not supported in Analyze request, always false here
+            self.primary_prefix_column_ids.clone(),
+        )?)
     }
 
     pub(crate) async fn collect_column_stats(&mut self) -> Result<AnalyzeSamplingResult> {
@@ -150,42 +494,51 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
         let mut is_drained = false;
         let mut collector = self.new_collector();
         let mut ctx = EvalContext::default();
-        let scan_start = Instant::now();
-        let mut batch_count = 0_u64;
-        let mut read_bytes = 0_usize;
-        let mut next_batch_elapsed = Duration::ZERO;
-        let mut encode_collect_elapsed = Duration::ZERO;
-        let mut quota_consume_elapsed = Duration::ZERO;
-        let mut quota_delay_total = Duration::ZERO;
-        while !is_drained {
+        loop {
+            // One executor drain per comb wave: when the current wave's
+            // executor is drained, either advance to the next wave (which
+            // rebuilds self.data) or stop scanning. Degenerates to a single
+            // pass when comb block sampling is inactive.
+            if is_drained {
+                if !self.advance_to_next_wave(collector.as_mut())? {
+                    break;
+                }
+                // The batch below unconditionally refreshes `is_drained` from
+                // the new wave's executor.
+            }
             // Use background limiters for both manual and auto analyze so that iops_limiter
             // (and other background quotas) apply to manual analyze as well.
             let mut sample = self.quota_limiter.new_sample(false);
             let mut read_size: usize = 0;
             {
-                let next_batch_start = Instant::now();
                 let result = {
+                    let data = self.data.as_mut().unwrap();
                     let (duration, res) = sample
-                        .observe_cpu_async(self.data.next_batch(BATCH_MAX_SIZE))
+                        .observe_cpu_async(data.next_batch(BATCH_MAX_SIZE))
                         .await;
                     sample.add_cpu_time(duration);
                     res
                 };
-                next_batch_elapsed += next_batch_start.elapsed();
-                batch_count += 1;
 
                 // Use request-scoped storage stats for IOPS (like collect_scan_statistics),
                 // and count only RocksDB block reads as an approximation of disk IOPS.
                 // PerfContext is thread-local; across an await other tasks can run on the same
                 // thread and pollute it, so we use the Scanner's statistics instead.
                 let mut batch_stats = Statistics::default();
-                self.data.collect_storage_stats(&mut batch_stats);
+                self.data
+                    .as_mut()
+                    .unwrap()
+                    .collect_storage_stats(&mut batch_stats);
                 let batch_iops = batch_stats.data.block_read_count
                     + batch_stats.lock.block_read_count
                     + batch_stats.write.block_read_count;
                 let batch_total_ops = batch_stats.data.total_op_count()
                     + batch_stats.lock.total_op_count()
                     + batch_stats.write.total_op_count();
+                let batch_flow_read_bytes = batch_stats.data.flow_stats.read_bytes
+                    + batch_stats.lock.flow_stats.read_bytes
+                    + batch_stats.write.flow_stats.read_bytes;
+                let batch_processed_size = batch_stats.processed_size;
                 sample.add_iops(batch_iops);
                 self.accumulated_storage_stats.add(&batch_stats);
 
@@ -204,12 +557,59 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                     .inc();
                 let _guard = sample.observe_cpu();
                 is_drained = result.is_drained?.stop();
+                if self.wave_plan.is_some() {
+                    let batch_rows = result.logical_rows.len() as u64;
+                    self.trueblock_diag_batch_count =
+                        self.trueblock_diag_batch_count.saturating_add(1);
+                    self.trueblock_diag_cumulative_rows = self
+                        .trueblock_diag_cumulative_rows
+                        .saturating_add(batch_rows);
+                    self.trueblock_diag_cumulative_block_reads = self
+                        .trueblock_diag_cumulative_block_reads
+                        .saturating_add(batch_iops as u64);
+                    self.trueblock_diag_cumulative_flow_bytes = self
+                        .trueblock_diag_cumulative_flow_bytes
+                        .saturating_add(batch_flow_read_bytes as u64);
+                    self.trueblock_diag_cumulative_processed_size = self
+                        .trueblock_diag_cumulative_processed_size
+                        .saturating_add(batch_processed_size as u64);
+                    let batch_no = self.trueblock_diag_batch_count;
+                    let abnormal_batch = batch_iops >= 1_000
+                        || batch_flow_read_bytes >= 50 * 1024 * 1024
+                        || batch_processed_size >= 50 * 1024 * 1024
+                        || batch_rows < (BATCH_MAX_SIZE / 16) as u64;
+                    if batch_no <= 5 || abnormal_batch || batch_no.is_multiple_of(100) || is_drained
+                    {
+                        info!("analyze true data block sampling scan diagnostic";
+                            "component" => "tikv",
+                            "batch_no" => batch_no,
+                            "batch_rows" => batch_rows,
+                            "batch_block_read_count" => batch_iops,
+                            "batch_total_ops" => batch_total_ops,
+                            "batch_flow_read_bytes" => batch_flow_read_bytes,
+                            "batch_processed_size" => batch_processed_size,
+                            "write_total_ops" => batch_stats.write.total_op_count(),
+                            "write_processed_keys" => batch_stats.write.processed_keys,
+                            "write_block_read_count" => batch_stats.write.block_read_count,
+                            "data_total_ops" => batch_stats.data.total_op_count(),
+                            "data_processed_keys" => batch_stats.data.processed_keys,
+                            "data_block_read_count" => batch_stats.data.block_read_count,
+                            "cumulative_rows" => self.trueblock_diag_cumulative_rows,
+                            "cumulative_block_read_count" => self.trueblock_diag_cumulative_block_reads,
+                            "cumulative_flow_read_bytes" => self.trueblock_diag_cumulative_flow_bytes,
+                            "cumulative_processed_size" => self.trueblock_diag_cumulative_processed_size,
+                            "is_drained" => is_drained,
+                        );
+                    }
+                }
                 let mut exec_stats = ExecuteStats::new(0);
-                self.data.collect_exec_stats(&mut exec_stats);
+                self.data
+                    .as_mut()
+                    .unwrap()
+                    .collect_exec_stats(&mut exec_stats);
                 collector.mut_base().count +=
                     exec_stats.scanned_rows_per_range.into_iter().sum::<usize>() as u64;
 
-                let encode_collect_start = Instant::now();
                 let columns_slice = result.physical_columns.as_slice();
                 let mut column_vals: Vec<Vec<u8>> = vec![vec![]; self.columns_info.len()];
                 let mut collation_key_vals: Vec<Vec<u8>> = vec![vec![]; self.columns_info.len()];
@@ -251,21 +651,16 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                     );
                     collector.collect_column(&column_vals, &collation_key_vals, &self.columns_info);
                 }
-                encode_collect_elapsed += encode_collect_start.elapsed();
             }
 
             sample.add_read_bytes(read_size);
-            read_bytes += read_size;
             // Don't let analyze bandwidth limit the quota limiter, this is already limited
             // in rate limiter.
-            let quota_consume_start = Instant::now();
             let quota_delay = {
                 // Use background limiters for both manual and auto analyze so that iops_limiter
                 // applies to manual analyze as well.
                 self.quota_limiter.consume_sample(sample, false).await
             };
-            quota_consume_elapsed += quota_consume_start.elapsed();
-            quota_delay_total += quota_delay;
 
             if !quota_delay.is_zero() {
                 NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
@@ -273,29 +668,41 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                     .inc_by(quota_delay.as_micros() as u64);
             }
         }
-        debug!("analyze full sampling trace";
-            "component" => "tikv",
-            "phase" => "tikv.scan_full_sampling_table",
-            "event" => "finish",
-            "elapsed_ms" => scan_start.elapsed().as_millis() as u64,
-            "next_batch_elapsed_ms" => duration_ms(next_batch_elapsed),
-            "encode_collect_elapsed_ms" => duration_ms(encode_collect_elapsed),
-            "quota_consume_elapsed_ms" => duration_ms(quota_consume_elapsed),
-            "quota_delay_ms" => duration_ms(quota_delay_total),
-            "batch_count" => batch_count,
-            "scanned_rows" => collector.mut_base().count,
-            "read_bytes" => read_bytes,
-            "columns" => self.columns_info.len(),
-            "column_groups" => self.column_groups.len(),
-            "max_sample_size" => self.max_sample_size,
-            "sample_rate" => self.sample_rate,
-            "is_auto_analyze" => self.is_auto_analyze,
-        );
-        // Row-level NDV sub-sampling only tallies null_count/total_sizes for
-        // selected rows. Rescale them before the single-column-group copy so
-        // derived columns see corrected values.
+        if let Some(plan) = &self.wave_plan {
+            // Equal-probability block selection: every row's first-stage
+            // inclusion probability is scanned_blocks / total_blocks, so the
+            // count scales by the block-count ratio (no weights involved).
+            let sampled_rows = collector.mut_base().count;
+            let scanned_blocks = self.scanned_blocks.max(1);
+            let estimated_rows = ((sampled_rows as u128 * plan.total_blocks as u128
+                + scanned_blocks as u128 / 2)
+                / scanned_blocks as u128)
+                .min(u64::MAX as u128) as u64;
+            collector.mut_base().count = estimated_rows;
+            info!("analyze comb block sampling rescale";
+                "component" => "tikv",
+                "sampled_rows" => sampled_rows,
+                "estimated_rows" => estimated_rows,
+                "sketch_sample_count" => collector.mut_base().sketch_sample_count,
+                "total_blocks" => plan.total_blocks,
+                "scanned_blocks" => scanned_blocks,
+                "waves_scanned" => self.waves_scanned,
+                "planned_waves" => plan.waves.len(),
+                "comb_spacing" => plan.comb_spacing,
+                "phase" => plan.phase,
+                "physical_row_estimate" => plan.physical_rows,
+                "target_rows" => plan.target_rows,
+                "scan_batch_count" => self.trueblock_diag_batch_count,
+                "cumulative_block_read_count" => self.trueblock_diag_cumulative_block_reads,
+                "cumulative_flow_read_bytes" => self.trueblock_diag_cumulative_flow_bytes,
+                "cumulative_processed_size" => self.trueblock_diag_cumulative_processed_size,
+                "scale" => plan.total_blocks as f64 / scanned_blocks as f64,
+            );
+        }
+        // NDV sub-sampling only tallies null_count/total_sizes for selected
+        // rows. Rescale them before the single-column-group copy so derived
+        // columns see corrected values.
         collector.mut_base().rescale_null_count_and_total_sizes();
-        let column_group_fixup_start = Instant::now();
         for i in 0..self.column_groups.len() {
             let offsets = self.column_groups[i].get_column_offsets();
             if offsets.len() != 1 {
@@ -321,13 +728,6 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
             collector.mut_base().total_sizes[col_group_pos] =
                 collector.mut_base().total_sizes[col_pos];
         }
-        debug!("analyze full sampling trace";
-            "component" => "tikv",
-            "phase" => "tikv.column_group_fixup",
-            "event" => "finish",
-            "elapsed_ms" => duration_ms(column_group_fixup_start.elapsed()),
-            "column_groups" => self.column_groups.len(),
-        );
         Ok(AnalyzeSamplingResult::new(collector))
     }
 }
@@ -359,6 +759,12 @@ trait RowSampleCollector: Send {
         columns_info: &[tipb::ColumnInfo],
     );
     fn sampling(&mut self, data: &[Vec<u8>]);
+    /// Comb-wave sampling extends the first-stage coverage mid-scan; when it
+    /// does, the rate-based histogram sample must be thinned down to the new
+    /// cumulative rate so every scanned row keeps inclusion probability
+    /// `sample_rate`. Collectors that sample by size instead of by rate
+    /// (reservoir) are unaffected and ignore this.
+    fn rescale_sample_rate(&mut self, _new_rate: f64) {}
     fn to_proto(&mut self) -> tipb::RowSampleCollector;
     #[allow(dead_code)]
     fn get_reported_memory_usage(&mut self) -> usize {
@@ -802,6 +1208,30 @@ impl RowSampleCollector for BernoulliRowSampleCollector {
         self.base.memory_usage += sample.iter().map(|x| x.capacity()).sum::<usize>();
         self.base.report_memory_usage(false);
         self.samples.push(sample);
+    }
+    fn rescale_sample_rate(&mut self, new_rate: f64) {
+        if new_rate <= 0.0 || new_rate >= self.sample_rate {
+            // Coverage only grows, so the cumulative rate never rises; equal
+            // rates (e.g. both capped at 1.0) are a no-op.
+            debug_assert!(new_rate > 0.0 && new_rate <= self.sample_rate);
+            return;
+        }
+        // Thinning a Bernoulli sample with probability `new_rate / old_rate`
+        // is exactly a Bernoulli sample taken at `new_rate`.
+        let keep_ratio = new_rate / self.sample_rate;
+        let mut released = 0_usize;
+        let rng = &mut self.base.rng;
+        self.samples.retain(|sample| {
+            if rng.gen_range(0.0, 1.0) < keep_ratio {
+                true
+            } else {
+                released += sample.iter().map(|x| x.capacity()).sum::<usize>();
+                false
+            }
+        });
+        self.sample_rate = new_rate;
+        self.base.memory_usage = self.base.memory_usage.saturating_sub(released);
+        self.base.report_memory_usage(false);
     }
     fn to_proto(&mut self) -> tipb::RowSampleCollector {
         self.base.memory_usage = 0;
@@ -1345,6 +1775,117 @@ mod tests {
     use tidb_query_datatype::codec::{datum, datum::Datum};
 
     use super::*;
+
+    fn comb_test_candidates(count: usize) -> Vec<BlockCandidate> {
+        (0..count)
+            .map(|i| BlockCandidate {
+                start: vec![i as u8],
+                end: vec![i as u8 + 1],
+                weight: 10,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_block_candidates_cover_requested_range() {
+        let anchors = [b"b".to_vec(), b"d".to_vec(), b"f".to_vec()]
+            .into_iter()
+            .map(|user_key| engine_traits::DataBlockKeyAnchor {
+                user_key,
+                range_size: 7,
+            })
+            .collect::<Vec<_>>();
+        let range = new_key_range(b"a".to_vec(), b"h".to_vec());
+        let candidates = block_candidates_from_anchors(&anchors, &[range]).unwrap();
+        let bounds: Vec<(&[u8], &[u8])> = candidates
+            .iter()
+            .map(|c| (c.start.as_slice(), c.end.as_slice()))
+            .collect();
+        // The head segment [a, b) is covered; candidates partition [a, h).
+        assert_eq!(
+            bounds,
+            vec![
+                (&b"a"[..], &b"b"[..]),
+                (&b"b"[..], &b"d"[..]),
+                (&b"d"[..], &b"f"[..]),
+                (&b"f"[..], &b"h"[..]),
+            ]
+        );
+        // The head candidate weight defaults to 1; anchored ones keep theirs.
+        assert_eq!(candidates[0].weight, 1);
+        assert!(candidates[1..].iter().all(|c| c.weight == 7));
+
+        // A range without in-range anchors falls back to a full scan.
+        let out_of_reach = new_key_range(b"x".to_vec(), b"z".to_vec());
+        assert!(block_candidates_from_anchors(&anchors, &[out_of_reach]).is_none());
+
+        // Unbounded range end: the tail candidate is unbounded too.
+        let unbounded = new_key_range(b"a".to_vec(), vec![]);
+        let candidates = block_candidates_from_anchors(&anchors, &[unbounded]).unwrap();
+        assert_eq!(candidates.last().unwrap().end, b"".to_vec());
+    }
+
+    #[test]
+    fn test_plan_comb_waves_partition() {
+        // 10 blocks at ndv_rate 0.25 → comb spacing 4, all 4 combs planned.
+        let plan = plan_comb_waves(comb_test_candidates(10), 0.25, Some(1)).unwrap();
+        assert_eq!(plan.comb_spacing, 4);
+        assert_eq!(plan.phase, 1);
+        assert_eq!(plan.waves.len(), 4);
+        assert_eq!(plan.total_blocks, 10);
+        assert_eq!(plan.physical_rows, 100);
+        assert_eq!(plan.wave_block_counts.iter().sum::<u64>(), 10);
+        let starts = |w: usize| {
+            plan.waves[w]
+                .iter()
+                .map(|r| r.get_start()[0] as usize)
+                .collect::<Vec<_>>()
+        };
+        // Wave w holds comb (phase + w) % spacing, key-ordered and disjoint.
+        assert_eq!(starts(0), vec![1, 5, 9]);
+        assert_eq!(starts(1), vec![2, 6]);
+        assert_eq!(starts(2), vec![3, 7]);
+        assert_eq!(starts(3), vec![0, 4, 8]); // phase wrap: comb (1 + 3) % 4 == 0
+        assert_eq!(
+            plan.target_rows,
+            (0.25 * 100.0 * COMB_WAVE_ROW_TARGET_SLACK).ceil() as u64
+        );
+    }
+
+    #[test]
+    fn test_plan_comb_waves_caps_and_fallbacks() {
+        // The wave count is capped by MAX_ANALYZE_SAMPLE_WAVES.
+        let plan = plan_comb_waves(comb_test_candidates(100), 0.1, Some(3)).unwrap();
+        assert_eq!(plan.comb_spacing, 10);
+        assert_eq!(plan.waves.len(), MAX_ANALYZE_SAMPLE_WAVES);
+        assert_eq!(plan.wave_block_counts.iter().sum::<u64>(), 40);
+        assert!(plan.waves.iter().all(|wave| !wave.is_empty()));
+        // Spacing is clamped to the candidate count so every wave is non-empty.
+        let plan = plan_comb_waves(comb_test_candidates(3), 0.1, Some(2)).unwrap();
+        assert_eq!(plan.comb_spacing, 3);
+        assert!(plan.wave_block_counts.iter().all(|count| *count == 1));
+        // Nearly-full rates and single blocks are not worth block sampling.
+        assert!(plan_comb_waves(comb_test_candidates(10), 0.9, Some(0)).is_none());
+        assert!(plan_comb_waves(comb_test_candidates(1), 0.5, Some(0)).is_none());
+    }
+
+    #[test]
+    fn test_bernoulli_rescale_sample_rate() {
+        let mut collector = BernoulliRowSampleCollector::new(1.0, 10, 1, false);
+        for i in 0..2000_u32 {
+            collector.sampling(&[i.to_be_bytes().to_vec()]);
+        }
+        assert_eq!(collector.samples.len(), 2000);
+        let memory_before = collector.base.memory_usage;
+        collector.rescale_sample_rate(0.5);
+        assert_eq!(collector.sample_rate, 0.5);
+        let kept = collector.samples.len();
+        assert!((700..=1300).contains(&kept), "kept {}", kept);
+        assert!(collector.base.memory_usage < memory_before);
+        // An equal rate is a no-op.
+        collector.rescale_sample_rate(0.5);
+        assert_eq!(collector.samples.len(), kept);
+    }
 
     #[test]
     fn test_singleton_sketch_into_hlls() {

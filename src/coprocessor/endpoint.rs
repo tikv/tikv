@@ -69,45 +69,17 @@ use crate::{
 /// light ones, which means they don't need a permit from the semaphore before
 /// execution.
 const LIGHT_TASK_THRESHOLD: Duration = Duration::from_millis(5);
-fn elapsed_ms(start: Instant) -> u64 {
-    start.saturating_elapsed().as_millis() as u64
-}
 
 fn is_analyze_full_sampling_batch_request(req: &coppb::Request) -> bool {
     if req.get_tp() != REQ_TYPE_ANALYZE || req.get_tasks().is_empty() {
         return false;
     }
-    let start = Instant::now();
     let mut analyze = AnalyzeReq::default();
     let merge_res = Message::merge_from_bytes(&mut analyze, req.get_data());
-    if let Err(err) = merge_res {
-        info!("analyze full sampling trace";
-            "component" => "tikv",
-            "phase" => "tikv.inspect_batch_request",
-            "event" => "finish",
-            "request_bytes" => req.get_data().len(),
-            "batch_task_count" => req.get_tasks().len(),
-            "elapsed_ms" => elapsed_ms(start),
-            "success" => false,
-            "err" => ?err,
-        );
+    if merge_res.is_err() {
         return false;
     }
-    let is_full_sampling =
-        analyze.get_tp() == AnalyzeType::TypeFullSampling && analyze.has_col_req();
-    if is_full_sampling {
-        info!("analyze full sampling trace";
-            "component" => "tikv",
-            "phase" => "tikv.inspect_batch_request",
-            "event" => "finish",
-            "request_bytes" => req.get_data().len(),
-            "batch_task_count" => req.get_tasks().len(),
-            "elapsed_ms" => elapsed_ms(start),
-            "success" => true,
-            "is_full_sampling" => is_full_sampling,
-        );
-    }
-    is_full_sampling
+    analyze.get_tp() == AnalyzeType::TypeFullSampling && analyze.has_col_req()
 }
 
 fn response_has_error(resp: &coppb::Response) -> bool {
@@ -139,18 +111,8 @@ struct AnalyzeFullSamplingBatchTaskResult {
 fn set_analyze_sampling_response_data(
     resp: &mut coppb::Response,
     sampling_result: AnalyzeSamplingResult,
-    response_kind: &'static str,
 ) -> Result<()> {
-    let start = Instant::now();
     let data = sampling_result.write_to_bytes()?;
-    debug!("analyze full sampling trace";
-        "component" => "tikv",
-        "phase" => "tikv.set_sampling_response_data",
-        "event" => "finish",
-        "response_kind" => response_kind,
-        "elapsed_ms" => elapsed_ms(start),
-        "response_bytes" => data.len(),
-    );
     record_coprocessor_response_size(data.len() as u64);
     resp.set_data(data);
     Ok(())
@@ -160,7 +122,7 @@ fn analyze_full_sampling_batch_response(
     mut output: AnalyzeFullSamplingBatchTaskResult,
 ) -> Result<coppb::StoreBatchTaskResponse> {
     if let Some(sampling_result) = output.sampling_result.take() {
-        set_analyze_sampling_response_data(&mut output.response, sampling_result, "batch_task")?;
+        set_analyze_sampling_response_data(&mut output.response, sampling_result)?;
     }
 
     let mut response = coppb::StoreBatchTaskResponse::new();
@@ -181,7 +143,6 @@ fn finish_analyze_full_sampling_batch_response(
     mut top: AnalyzeFullSamplingTaskResult,
     mut batch_outputs: Vec<AnalyzeFullSamplingBatchTaskResult>,
 ) -> Result<coppb::Response> {
-    let finish_start = Instant::now();
     let can_reduce = !response_has_error(&top.response)
         && top.sampling_result.is_some()
         && batch_outputs.iter().all(|output| {
@@ -189,56 +150,23 @@ fn finish_analyze_full_sampling_batch_response(
         });
 
     if can_reduce {
-        let batch_task_count = batch_outputs.len();
-        let merge_start = Instant::now();
         let mut merged = top.sampling_result.take().unwrap();
         for output in &mut batch_outputs {
             merged.merge_from(output.sampling_result.take().unwrap())?;
         }
-        info!("analyze full sampling trace";
-            "component" => "tikv",
-            "phase" => "tikv.merge_sampling_results",
-            "event" => "finish",
-            "success" => true,
-            "elapsed_ms" => elapsed_ms(merge_start),
-            "total_task_count" => batch_task_count + 1,
-            "batch_task_count" => batch_task_count,
-        );
-        set_analyze_sampling_response_data(&mut top.response, merged, "reduced_top")?;
+        set_analyze_sampling_response_data(&mut top.response, merged)?;
         top.response.set_batch_responses(Default::default());
-        info!("analyze full sampling trace";
-            "component" => "tikv",
-            "phase" => "tikv.reduce_batch_response",
-            "event" => "finish",
-            "success" => true,
-            "reduced" => true,
-            "elapsed_ms" => elapsed_ms(finish_start),
-            "total_task_count" => batch_task_count + 1,
-            "batch_task_count" => batch_task_count,
-            "response_bytes" => top.response.get_data().len(),
-        );
         return Ok(top.response);
     }
 
     if let Some(sampling_result) = top.sampling_result.take() {
-        set_analyze_sampling_response_data(&mut top.response, sampling_result, "fallback_top")?;
+        set_analyze_sampling_response_data(&mut top.response, sampling_result)?;
     }
     let mut batch_responses = Vec::with_capacity(batch_outputs.len());
     for output in batch_outputs {
         batch_responses.push(analyze_full_sampling_batch_response(output)?);
     }
-    let batch_response_count = batch_responses.len();
     top.response.set_batch_responses(batch_responses.into());
-    info!("analyze full sampling trace";
-        "component" => "tikv",
-        "phase" => "tikv.reduce_batch_response",
-        "event" => "finish",
-        "success" => true,
-        "reduced" => false,
-        "elapsed_ms" => elapsed_ms(finish_start),
-        "response_bytes" => top.response.get_data().len(),
-        "batch_response_count" => batch_response_count,
-    );
     Ok(top.response)
 }
 
@@ -478,23 +406,9 @@ impl<E: Engine> Endpoint<E> {
             }
             REQ_TYPE_ANALYZE => {
                 let mut analyze = AnalyzeReq::default();
-                let unmarshal_start = Instant::now();
                 box_try!(analyze.merge_from(&mut input));
                 if start_ts == 0 {
                     start_ts = analyze.get_start_ts_fallback();
-                }
-                if analyze.get_tp() == AnalyzeType::TypeFullSampling {
-                    debug!("analyze full sampling trace";
-                        "component" => "tikv",
-                        "phase" => "tikv.unmarshal_analyze_req",
-                        "event" => "finish",
-                        "elapsed_ms" => elapsed_ms(unmarshal_start),
-                        "request_bytes" => data.len(),
-                        "range_count" => ranges.len(),
-                        "region_id" => context.get_region_id(),
-                        "start_ts" => start_ts,
-                        "has_column_request" => analyze.has_col_req(),
-                    );
                 }
 
                 req_tag = match analyze.get_tp() {
@@ -764,17 +678,6 @@ impl<E: Engine> Endpoint<E> {
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::IMSnap>,
     ) -> Result<AnalyzeFullSamplingTaskResult> {
-        let total_start = Instant::now();
-        let region_id = tracker.req_ctx.context.get_region_id();
-        let start_ts = tracker.req_ctx.txn_start_ts.into_inner();
-        debug!("analyze full sampling trace";
-            "component" => "tikv",
-            "phase" => "tikv.handle_full_sampling",
-            "event" => "start",
-            "region_id" => region_id,
-            "start_ts" => start_ts,
-            "range_count" => tracker.req_ctx.ranges.len(),
-        );
         with_tls_tracker(|tracker1| {
             record_network_in_bytes(tracker1.metrics.grpc_req_size);
         });
@@ -783,16 +686,7 @@ impl<E: Engine> Endpoint<E> {
 
         // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
         // exists.
-        let snapshot_start = Instant::now();
         let snapshot = unsafe { Self::get_snapshot_with_timeout(&tracker.req_ctx).await }?;
-        debug!("analyze full sampling trace";
-            "component" => "tikv",
-            "phase" => "tikv.get_snapshot",
-            "event" => "finish",
-            "region_id" => region_id,
-            "start_ts" => start_ts,
-            "elapsed_ms" => elapsed_ms(snapshot_start),
-        );
 
         let latest_buckets = snapshot.ext().get_buckets();
         let region_cache_snap = snapshot.ext().in_memory_engine_hit();
@@ -816,20 +710,10 @@ impl<E: Engine> Endpoint<E> {
         tracker.buckets = latest_buckets;
         let buckets_version = tracker.buckets.as_ref().map_or(0, |b| b.version);
 
-        let handler_start = Instant::now();
         let mut handler = handler_builder(snapshot, &tracker.req_ctx)?;
-        debug!("analyze full sampling trace";
-            "component" => "tikv",
-            "phase" => "tikv.build_analyze_handler",
-            "event" => "finish",
-            "region_id" => region_id,
-            "start_ts" => start_ts,
-            "elapsed_ms" => elapsed_ms(handler_start),
-        );
         tracker.on_begin_all_items();
 
         let deadline = tracker.req_ctx.deadline;
-        let scan_start = Instant::now();
         let handle_request_future =
             check_deadline(handler.handle_analyze_full_sampling(), deadline);
         let handle_request_future = track(handle_request_future, tracker.as_mut());
@@ -840,31 +724,13 @@ impl<E: Engine> Endpoint<E> {
             handle_request_future.await
         };
         let result = deadline_res.map_err(Error::from).and_then(|res| res);
-        debug!("analyze full sampling trace";
-            "component" => "tikv",
-            "phase" => "tikv.execute_full_sampling_handler",
-            "event" => "finish",
-            "region_id" => region_id,
-            "start_ts" => start_ts,
-            "elapsed_ms" => elapsed_ms(scan_start),
-            "success" => result.is_ok(),
-        );
 
-        let collect_stats_start = Instant::now();
         let mut exec_summary = ExecSummary::default();
         handler.collect_scan_summary(&mut exec_summary);
         tracker.collect_scan_process_time(exec_summary);
         let mut storage_stats = Statistics::default();
         handler.collect_scan_statistics(&mut storage_stats);
         tracker.collect_storage_statistics(storage_stats);
-        debug!("analyze full sampling trace";
-            "component" => "tikv",
-            "phase" => "tikv.collect_scan_details",
-            "event" => "finish",
-            "region_id" => region_id,
-            "start_ts" => start_ts,
-            "elapsed_ms" => elapsed_ms(collect_stats_start),
-        );
 
         let (mut resp, sampling_result) = match result {
             Ok(sampling_result) => (coppb::Response::default(), Some(sampling_result)),
@@ -885,15 +751,6 @@ impl<E: Engine> Endpoint<E> {
         resp.set_exec_details(exec_details);
         resp.set_exec_details_v2(exec_details_v2);
         resp.set_latest_buckets_version(buckets_version);
-        debug!("analyze full sampling trace";
-            "component" => "tikv",
-            "phase" => "tikv.handle_full_sampling",
-            "event" => "finish",
-            "region_id" => region_id,
-            "start_ts" => start_ts,
-            "elapsed_ms" => elapsed_ms(total_start),
-            "success" => sampling_result.is_some(),
-        );
         Ok(AnalyzeFullSamplingTaskResult {
             response: resp,
             sampling_result,
@@ -1024,19 +881,6 @@ impl<E: Engine> Endpoint<E> {
         peer: Option<String>,
         tracker: ::tracker::TrackerToken,
     ) -> impl Future<Output = MemoryTraceGuard<coppb::Response>> {
-        let total_start = Instant::now();
-        let region_id = req.get_context().get_region_id();
-        let start_ts = req.start_ts;
-        let initial_batch_task_count = req.get_tasks().len();
-        info!("analyze full sampling trace";
-            "component" => "tikv",
-            "phase" => "tikv.handle_batch_request",
-            "event" => "start",
-            "region_id" => region_id,
-            "start_ts" => start_ts,
-            "batch_task_count" => initial_batch_task_count,
-            "request_bytes" => req.get_data().len(),
-        );
         let result_of_batch = self.process_analyze_full_sampling_batch_tasks(&mut req, &peer);
         set_tls_tracker_token(tracker);
         with_tls_tracker(|tracker| {
@@ -1077,21 +921,6 @@ impl<E: Engine> Endpoint<E> {
                 tracker.merge_time_detail(exec_detail_v2.mut_time_detail_v2());
             });
             GLOBAL_TRACKERS.remove(tracker);
-            info!("analyze full sampling trace";
-                "component" => "tikv",
-                "phase" => "tikv.handle_batch_request",
-                "event" => "finish",
-                "region_id" => region_id,
-                "start_ts" => start_ts,
-                "elapsed_ms" => elapsed_ms(total_start),
-                "batch_task_count" => initial_batch_task_count,
-                "response_bytes" => res.get_data().len(),
-                "batch_response_count" => res.get_batch_responses().len(),
-                "success" => !res.has_region_error() && !res.has_locked() && res.get_other_error().is_empty(),
-                "has_region_error" => res.has_region_error(),
-                "has_locked" => res.has_locked(),
-                "other_error" => res.get_other_error(),
-            );
             let memory_size = res.data.capacity();
             MEMTRACE_ANALYZE.trace_guard(res, memory_size)
         }
@@ -1248,7 +1077,6 @@ impl<E: Engine> Endpoint<E> {
         req: &mut coppb::Request,
         peer: &Option<String>,
     ) -> impl Future<Output = Vec<AnalyzeFullSamplingBatchTaskResult>> {
-        let extract_start = Instant::now();
         let mut batch_futs = Vec::with_capacity(req.tasks.len());
         let batch_reqs: Vec<(coppb::Request, u64)> = req
             .take_tasks()
@@ -1264,16 +1092,7 @@ impl<E: Engine> Endpoint<E> {
                 (new_req, task.get_task_id())
             })
             .collect();
-        info!("analyze full sampling trace";
-            "component" => "tikv",
-            "phase" => "tikv.extract_batch_tasks",
-            "event" => "finish",
-            "elapsed_ms" => elapsed_ms(extract_start),
-            "batch_task_count" => batch_reqs.len(),
-        );
         for (cur_req, task_id) in batch_reqs.into_iter() {
-            let region_id = cur_req.get_context().get_region_id();
-            let start_ts = cur_req.start_ts;
             let request_info = RequestInfo::new(
                 cur_req.get_context(),
                 RequestType::Unknown,
@@ -1285,15 +1104,6 @@ impl<E: Engine> Endpoint<E> {
                     set_tls_tracker_token(cur_tracker);
                     let fut = self.handle_analyze_full_sampling_request(r);
                     let fut = async move {
-                        let task_start = Instant::now();
-                        debug!("analyze full sampling trace";
-                            "component" => "tikv",
-                            "phase" => "tikv.handle_batch_sub_task",
-                            "event" => "start",
-                            "task_id" => task_id,
-                            "region_id" => region_id,
-                            "start_ts" => start_ts,
-                        );
                         let mut output = match fut.await {
                             Ok(output) => AnalyzeFullSamplingBatchTaskResult {
                                 task_id,
@@ -1306,20 +1116,6 @@ impl<E: Engine> Endpoint<E> {
                                 sampling_result: None,
                             },
                         };
-                        debug!("analyze full sampling trace";
-                            "component" => "tikv",
-                            "phase" => "tikv.handle_batch_sub_task",
-                            "event" => "finish",
-                            "task_id" => task_id,
-                            "region_id" => region_id,
-                            "start_ts" => start_ts,
-                            "elapsed_ms" => elapsed_ms(task_start),
-                            "success" => output.sampling_result.is_some() && !response_has_error(&output.response),
-                            "response_bytes" => output.response.get_data().len(),
-                            "has_region_error" => output.response.has_region_error(),
-                            "has_locked" => output.response.has_locked(),
-                            "other_error" => output.response.get_other_error(),
-                        );
                         GLOBAL_TRACKERS.with_tracker(cur_tracker, |tracker| {
                             tracker.write_scan_detail(
                                 output.response.mut_exec_details_v2().mut_scan_detail_v2(),

@@ -6,8 +6,8 @@ use std::{
 };
 
 use engine_traits::{
-    self, CfNamesExt, IterOptions, Iterable, Peekable, ReadOptions, Result, Snapshot,
-    SnapshotMiscExt,
+    self, CfNamesExt, DataBlockKeyAnchor, IterOptions, Iterable, Peekable, ReadOptions, Result,
+    Snapshot, SnapshotMiscExt,
 };
 use rocksdb::{DB, DBIterator, rocksdb_options::UnsafeSnap};
 
@@ -35,7 +35,27 @@ impl RocksSnapshot {
     }
 }
 
-impl Snapshot for RocksSnapshot {}
+impl Snapshot for RocksSnapshot {
+    fn approximate_key_anchors_cf(
+        &self,
+        cf: &str,
+        lower_bound: Option<&[u8]>,
+        upper_bound: Option<&[u8]>,
+    ) -> Result<Vec<DataBlockKeyAnchor>> {
+        let handle = get_cf_handle(self.db.as_ref(), cf)?;
+        let anchors = self
+            .db
+            .approximate_key_anchors_cf(handle, lower_bound, upper_bound)
+            .map_err(r2e)?;
+        Ok(anchors
+            .into_iter()
+            .map(|anchor| DataBlockKeyAnchor {
+                user_key: anchor.user_key,
+                range_size: anchor.range_size as u64,
+            })
+            .collect())
+    }
+}
 
 impl Debug for RocksSnapshot {
     fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {

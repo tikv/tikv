@@ -8,7 +8,6 @@ use std::ops::Bound;
 
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE, CfName};
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
-use rand::{RngCore, SeedableRng, rngs::StdRng};
 use txn_types::{
     Key, Lock, LockType, OldValue, TimeStamp, TsSet, Value, ValueEntry, Write, WriteRef, WriteType,
 };
@@ -244,19 +243,6 @@ impl<S: Snapshot> StoreScanner for Scanner<S> {
         }
     }
 
-    fn set_value_sample_rate(&mut self, sample_rate: f64) {
-        if let Scanner::Forward(scanner) = self {
-            scanner.set_value_sample_rate(sample_rate);
-        }
-    }
-
-    fn take_skipped_entries(&mut self) -> usize {
-        match self {
-            Scanner::Forward(scanner) => scanner.take_skipped_entries(),
-            Scanner::Backward(_) => 0,
-        }
-    }
-
     /// Take out and reset the statistics collected so far.
     fn take_statistics(&mut self) -> Statistics {
         match self {
@@ -280,9 +266,6 @@ pub struct ScannerConfig<S: Snapshot> {
     fill_cache: bool,
     omit_value: bool,
     load_commit_ts: bool,
-    value_sample_rate: f64,
-    value_sample_threshold: u64,
-    value_sample_rng: StdRng,
     isolation_level: IsolationLevel,
 
     /// `lower_bound` and `upper_bound` is used to create `default_cursor`.
@@ -311,9 +294,6 @@ impl<S: Snapshot> ScannerConfig<S> {
             snapshot,
             fill_cache: true,
             omit_value: false,
-            value_sample_rate: 1.0,
-            value_sample_threshold: u64::MAX,
-            value_sample_rng: StdRng::from_entropy(),
             isolation_level: IsolationLevel::Si,
             lower_bound: None,
             upper_bound: None,
@@ -326,25 +306,6 @@ impl<S: Snapshot> ScannerConfig<S> {
             check_has_newer_ts_data: false,
             load_commit_ts: false,
         }
-    }
-
-    #[inline]
-    fn set_value_sample_rate(&mut self, sample_rate: f64) {
-        if sample_rate.is_finite() {
-            self.value_sample_rate = sample_rate.clamp(0.0, 1.0);
-            self.value_sample_threshold = (self.value_sample_rate * u64::MAX as f64).round() as u64;
-        }
-    }
-
-    #[inline]
-    fn should_load_value(&mut self) -> bool {
-        if self.value_sample_rate >= 1.0 {
-            return true;
-        }
-        if self.value_sample_rate <= 0.0 {
-            return false;
-        }
-        self.value_sample_rng.next_u64() <= self.value_sample_threshold
     }
 
     #[inline]

@@ -62,7 +62,6 @@ pub enum HandleRes<T> {
     Return(T),
     Skip(Key),
     MoveToNext,
-    SkipEntry,
 }
 
 pub struct Cursors<S: Snapshot> {
@@ -128,7 +127,6 @@ pub struct ForwardScanner<S: Snapshot, P: ScanPolicy<S>> {
     statistics: Statistics,
     scan_policy: P,
     met_newer_ts_data: NewerTsCheckState,
-    skipped_entries: usize,
 }
 
 impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
@@ -155,21 +153,12 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             statistics: Statistics::default(),
             is_started: false,
             scan_policy,
-            skipped_entries: 0,
         }
     }
 
     /// Take out and reset the statistics collected so far.
     pub fn take_statistics(&mut self) -> Statistics {
         std::mem::take(&mut self.statistics)
-    }
-
-    pub fn take_skipped_entries(&mut self) -> usize {
-        std::mem::take(&mut self.skipped_entries)
-    }
-
-    pub fn set_value_sample_rate(&mut self, sample_rate: f64) {
-        self.cfg.set_value_sample_rate(sample_rate);
     }
 
     /// Whether we met newer ts data.
@@ -293,34 +282,21 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     }
                     HandleRes::Skip(key) => key,
                     HandleRes::MoveToNext => continue,
-                    HandleRes::SkipEntry => {
-                        self.skipped_entries += 1;
-                        continue;
-                    }
                 };
             }
             if has_write {
                 let is_current_user_key = self.move_write_cursor_to_ts(&current_user_key)?;
                 if is_current_user_key {
-                    match self.scan_policy.handle_write(
+                    if let HandleRes::Return(output) = self.scan_policy.handle_write(
                         current_user_key,
                         &mut self.cfg,
                         &mut self.cursors,
                         &mut self.statistics,
                     )? {
-                        HandleRes::Return(output) => {
-                            self.statistics.write.processed_keys += 1;
-                            self.statistics.processed_size = self.scan_policy.output_size(&output);
-                            resource_metering::record_read_keys(1);
-                            return Ok(Some(output));
-                        }
-                        HandleRes::SkipEntry => {
-                            self.statistics.write.processed_keys += 1;
-                            self.skipped_entries += 1;
-                            resource_metering::record_read_keys(1);
-                            continue;
-                        }
-                        HandleRes::Skip(_) | HandleRes::MoveToNext => {}
+                        self.statistics.write.processed_keys += 1;
+                        self.statistics.processed_size += self.scan_policy.output_size(&output);
+                        resource_metering::record_read_keys(1);
+                        return Ok(Some(output));
                     }
                 }
             }
@@ -477,11 +453,6 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
                     } else {
                         None
                     };
-                    if !cfg.omit_value && !cfg.should_load_value() {
-                        cursors
-                            .move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
-                        return Ok(HandleRes::SkipEntry);
-                    }
                     if cfg.omit_value {
                         break Some(ValueEntry::new(vec![], commit_ts));
                     }
