@@ -8,7 +8,7 @@ use std::{
     },
 };
 
-use crossbeam_utils::CachePadded;
+use crossbeam::utils::CachePadded;
 
 use collections::HashMap;
 use kvproto::{
