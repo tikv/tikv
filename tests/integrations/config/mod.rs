@@ -71,6 +71,7 @@ fn read_file_in_project_dir(path: &str) -> String {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_serde_custom_tikv_config() {
     let mut value = TikvConfig::default();
     value.log.level = Level::Critical.into();
@@ -119,7 +120,7 @@ fn test_serde_custom_tikv_config() {
         end_point_stream_batch_row_limit: 4096,
         end_point_enable_batch_if_possible: true,
         end_point_request_max_handle_duration: Some(ReadableDuration::secs(12)),
-        end_point_max_concurrency: 10,
+        end_point_max_concurrency: None,
         end_point_perf_level: PerfLevel::EnableTime,
         snap_io_max_bytes_per_sec: ReadableSize::mb(10),
         snap_max_total_size: ReadableSize::gb(10),

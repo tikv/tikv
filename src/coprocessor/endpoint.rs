@@ -42,7 +42,6 @@ use tikv_util::{
     time::Instant,
 };
 use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
-use tokio::sync::Semaphore;
 
 use super::config_manager::CopConfigManager;
 use crate::{
@@ -61,19 +60,12 @@ use crate::{
     tikv_util::time::InstantExt,
 };
 
-/// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as
-/// light ones, which means they don't need a permit from the semaphore before
-/// execution.
-const LIGHT_TASK_THRESHOLD: Duration = Duration::from_millis(5);
-
 /// A pool to build and run Coprocessor request handlers.
 #[derive(Clone)]
 pub struct Endpoint<E: Engine> {
     /// The thread pool to run Coprocessor requests.
     read_pool: ReadPoolHandle,
 
-    /// The concurrency limiter of the coprocessor.
-    semaphore: Option<Arc<Semaphore>>,
     /// The memory quota for coprocessor requests.
     memory_quota: Arc<MemoryQuota>,
 
@@ -131,17 +123,10 @@ impl<E: Engine> Endpoint<E> {
         quota_limiter: Arc<QuotaLimiter>,
         resource_ctl: Option<Arc<ResourceGroupManager>>,
     ) -> Self {
-        let semaphore = match &read_pool {
-            ReadPoolHandle::Yatp { .. } => {
-                Some(Arc::new(Semaphore::new(cfg.end_point_max_concurrency)))
-            }
-            _ => None,
-        };
         let memory_quota = Arc::new(MemoryQuota::new(cfg.end_point_memory_quota.0 as _));
         register_coprocessor_memory_quota_metrics(memory_quota.clone());
         Self {
             read_pool,
-            semaphore,
             memory_quota,
             concurrency_manager,
             perf_level: cfg.end_point_perf_level,
@@ -480,7 +465,6 @@ impl<E: Engine> Endpoint<E> {
     /// request interface of the `RequestHandler` to process the request and
     /// produce a result.
     async fn handle_unary_request_impl(
-        semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::IMSnap>,
     ) -> Result<MemoryTraceGuard<coppb::Response>> {
@@ -536,11 +520,7 @@ impl<E: Engine> Endpoint<E> {
         let handle_request_future = check_deadline(handler.handle_request(), deadline);
         let handle_request_future = track(handle_request_future, tracker.as_mut());
 
-        let deadline_res = if let Some(semaphore) = &semaphore {
-            limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await
-        } else {
-            handle_request_future.await
-        };
+        let deadline_res = handle_request_future.await;
         let result = deadline_res.map_err(Error::from).and_then(|res| res);
 
         // There might be errors when handling requests. In this case, we still need its
@@ -623,12 +603,11 @@ impl<E: Engine> Endpoint<E> {
         allocated_bytes += tracker.approximate_mem_size();
 
         let (tx, rx) = oneshot::channel();
-        let future =
-            Self::handle_unary_request_impl(self.semaphore.clone(), tracker, r.handler_builder)
-                .in_resource_metering_tag(resource_tag)
-                .map(move |res| {
-                    let _ = tx.send(res);
-                });
+        let future = Self::handle_unary_request_impl(tracker, r.handler_builder)
+            .in_resource_metering_tag(resource_tag)
+            .map(move |res| {
+                let _ = tx.send(res);
+            });
         let spawn_fut_result = self.read_pool_spawn_with_memory_quota_check(
             allocated_bytes,
             future,
@@ -791,17 +770,10 @@ impl<E: Engine> Endpoint<E> {
     /// request interface of the `RequestHandler` multiple times to process the
     /// request and produce multiple results.
     fn handle_stream_request_impl(
-        semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::IMSnap>,
     ) -> impl futures::stream::Stream<Item = Result<coppb::Response>> {
         try_stream! {
-            let _permit = if let Some(semaphore) = semaphore.as_ref() {
-                Some(semaphore.acquire().await.expect("the semaphore never be closed"))
-            } else {
-                None
-            };
-
             with_tls_tracker(|tracker| {
                 record_network_in_bytes(tracker.metrics.grpc_req_size);
             });
@@ -913,14 +885,13 @@ impl<E: Engine> Endpoint<E> {
         let tracker = Box::new(Tracker::new(req_ctx, r.req_tag, self.slow_log_threshold));
         allocated_bytes += tracker.approximate_mem_size();
 
-        let future =
-            Self::handle_stream_request_impl(self.semaphore.clone(), tracker, r.handler_builder)
-                .in_resource_metering_tag(resource_tag)
-                .then(futures::future::ok::<_, mpsc::SendError>)
-                .forward(tx)
-                .unwrap_or_else(|e| {
-                    warn!("coprocessor stream send error"; "error" => %e);
-                });
+        let future = Self::handle_stream_request_impl(tracker, r.handler_builder)
+            .in_resource_metering_tag(resource_tag)
+            .then(futures::future::ok::<_, mpsc::SendError>)
+            .forward(tx)
+            .unwrap_or_else(|e| {
+                warn!("coprocessor stream send error"; "error" => %e);
+            });
 
         let spawn_fut = self.read_pool_spawn_with_memory_quota_check(
             allocated_bytes,

@@ -4503,6 +4503,13 @@ impl TikvConfig {
             // override new configuration using old values.
             self.server.end_point_max_tasks = None;
         }
+        if self.server.end_point_max_concurrency.is_some() {
+            warn!(
+                "deprecated configuration, {} is no longer used and ignored.",
+                "server.end-point-max-concurrency",
+            );
+            self.server.end_point_max_concurrency = None;
+        }
         if self.raft_store.clean_stale_peer_delay.as_secs() > 0 {
             warn!(
                 "deprecated configuration, {} is no longer used and ignored.",
@@ -6891,6 +6898,19 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
+    fn test_deprecated_end_point_max_concurrency() {
+        let content = r#"
+        [server]
+        end-point-max-concurrency = 32
+        "#;
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
+        assert_eq!(cfg.server.end_point_max_concurrency, Some(32));
+        cfg.compatible_adjust(None);
+        assert_eq!(cfg.server.end_point_max_concurrency, None);
+    }
+
+    #[test]
     fn test_unrecognized_config_keys() {
         let mut temp_config_file = tempfile::NamedTempFile::new().unwrap();
         let temp_config_writer = temp_config_file.as_file_mut();
@@ -7464,7 +7484,6 @@ mod tests {
         cfg.server.grpc_concurrency = default_cfg.server.grpc_concurrency;
         cfg.server.grpc_raft_conn_num = default_cfg.server.grpc_raft_conn_num;
         cfg.server.background_thread_count = default_cfg.server.background_thread_count;
-        cfg.server.end_point_max_concurrency = default_cfg.server.end_point_max_concurrency;
         cfg.server.end_point_memory_quota = default_cfg.server.end_point_memory_quota;
         cfg.storage.scheduler_worker_pool_size = default_cfg.storage.scheduler_worker_pool_size;
         cfg.rocksdb.max_background_jobs = default_cfg.rocksdb.max_background_jobs;

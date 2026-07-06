@@ -73,7 +73,6 @@ end-point-batch-row-limit = 64
 end-point-stream-batch-row-limit = 4096
 end-point-enable-batch-if-possible = true
 end-point-request-max-handle-duration = "12s"
-end-point-max-concurrency = 10
 end-point-perf-level = 5
 snap-io-max-bytes-per-sec = "10MB"
 snap-max-total-size = "10GB"

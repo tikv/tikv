@@ -101,9 +101,6 @@ lazy_static! {
     };
 }
 
-// At least 4 long coprocessor requests are allowed to run concurrently.
-const MIN_ENDPOINT_MAX_CONCURRENCY: usize = 4;
-
 const DEFAULT_MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;
 
 /// A clone of `grpc::CompressionAlgorithms` with serde supports.
@@ -206,8 +203,6 @@ pub struct Config {
     pub end_point_enable_batch_if_possible: bool,
     #[online_config(skip)]
     pub end_point_request_max_handle_duration: Option<ReadableDuration>,
-    #[online_config(skip)]
-    pub end_point_max_concurrency: usize,
     #[serde(with = "perf_level_serde")]
     #[online_config(skip)]
     pub end_point_perf_level: PerfLevel,
@@ -292,6 +287,14 @@ pub struct Config {
     #[online_config(hidden)]
     #[deprecated = "The configuration has been moved to readpool.coprocessor.max_tasks_per_worker_*."]
     pub end_point_max_tasks: Option<usize>,
+
+    // Deprecated. The coprocessor concurrency limiter was removed, so this
+    // configuration is no longer used.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    #[deprecated = "The coprocessor concurrency limiter has been removed."]
+    pub end_point_max_concurrency: Option<usize>,
 }
 
 impl Default for Config {
@@ -331,16 +334,16 @@ impl Default for Config {
             grpc_keepalive_timeout: ReadableDuration::secs(3),
             concurrent_send_snap_limit: 32,
             concurrent_recv_snap_limit: 32,
-            end_point_concurrency: None, // deprecated
-            end_point_max_tasks: None,   // deprecated
-            end_point_stack_size: None,  // deprecated
+            end_point_concurrency: None,     // deprecated
+            end_point_max_tasks: None,       // deprecated
+            end_point_stack_size: None,      // deprecated
+            end_point_max_concurrency: None, // deprecated
             end_point_recursion_limit: 1000,
             end_point_stream_channel_size: 8,
             end_point_batch_row_limit: DEFAULT_ENDPOINT_BATCH_ROW_LIMIT,
             end_point_stream_batch_row_limit: DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT,
             end_point_enable_batch_if_possible: true,
             end_point_request_max_handle_duration: None,
-            end_point_max_concurrency: cmp::max(cpu_num as usize, MIN_ENDPOINT_MAX_CONCURRENCY),
             end_point_perf_level: PerfLevel::Uninitialized,
             end_point_memory_quota: *DEFAULT_ENDPOINT_MEMORY_QUOTA,
             snap_io_max_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),

@@ -25,8 +25,8 @@ It is a read-heavy hot path and directly impacts query latency.
 ## Process Lifecycle And Startup Sequencing
 
 - Endpoint and read pools are created during server startup.
-- Runtime behavior depends on read-pool setup, memory quota, concurrency
-  controls, and storage snapshot access already being available.
+- Runtime behavior depends on read-pool setup, memory quota, read-pool
+  admission, and storage snapshot access already being available.
 - The main runtime anchors are:
   `src/coprocessor/readpool_impl.rs::build_read_pool`,
   `src/coprocessor/endpoint.rs::Endpoint::new`, and
@@ -74,9 +74,8 @@ It is a read-heavy hot path and directly impacts query latency.
 3. `src/coprocessor/tracker.rs`
 4. `src/coprocessor/readpool_impl.rs`
 5. `src/coprocessor/interceptors/deadline.rs`
-6. `src/coprocessor/interceptors/concurrency_limiter.rs`
-7. `src/coprocessor/dag/mod.rs`
-8. `src/coprocessor/statistics/analyze_context.rs`
+6. `src/coprocessor/dag/mod.rs`
+7. `src/coprocessor/statistics/analyze_context.rs`
 
 ## Main Responsibilities
 
@@ -85,7 +84,7 @@ It is a read-heavy hot path and directly impacts query latency.
 - acquire snapshots and perform memory-lock checks
 - construct request handlers
 - execute handlers on read pools
-- enforce request deadlines, concurrency limits, and memory quotas
+- enforce request deadlines, read-pool admission, and memory quotas
 - collect execution stats and produce coprocessor responses
 
 ## Critical Invariants
@@ -94,7 +93,7 @@ It is a read-heavy hot path and directly impacts query latency.
 - Memory-lock checks must happen before serving reads that could violate lock
   semantics.
 - Handler execution must respect request deadline and cancellation behavior.
-- Memory quota and concurrency limiters must remain cheap and correct.
+- Memory quota and read-pool admission must remain cheap and correct.
 - Streaming and unary response handling must preserve stats and partial-progress
   semantics.
 
@@ -110,15 +109,13 @@ It is a read-heavy hot path and directly impacts query latency.
   `tikv_coprocessor_request_error`,
   `tikv_coprocessor_scan_keys`,
   `tikv_coprocessor_scan_details`,
-  `tikv_coprocessor_response_bytes`,
-  `tikv_coprocessor_waiting_for_semaphore`, and
-  `tikv_coprocessor_semaphore_wait_seconds`.
+  `tikv_coprocessor_response_bytes`.
 - `tracker.rs` is the best place to understand slow logs, exec details, request
   lifetime accounting, and the distinction between schedule wait, snapshot
   wait, suspend time, and processing time.
 - Triage starting points:
   `endpoint.rs`, `tracker.rs`, `readpool_impl.rs`, `metrics.rs`,
-  `interceptors/deadline.rs`, `interceptors/concurrency_limiter.rs`.
+  `interceptors/deadline.rs`.
 
 ## Change Management Guidance
 
@@ -138,7 +135,7 @@ It is a read-heavy hot path and directly impacts query latency.
 
 - Request parsing or context changes:
   inspect `mod.rs`, `endpoint.rs`, and request-type-specific builders
-- Timeout or concurrency admission changes:
+- Timeout or read-pool admission changes:
   inspect interceptors, `tracker.rs`, metrics, and read-pool behavior
 - DAG execution changes:
   inspect `dag/*`, snapshot/store setup, and query-side statistics paths
@@ -168,7 +165,7 @@ It is a read-heavy hot path and directly impacts query latency.
 - lock-check bypass on paths that should block
 - deadline handling drift between streaming and unary paths
 - memory quota leaks on early-return/error paths
-- concurrency limiter behavior only applied to one pool mode
+- read-pool admission behavior applied inconsistently across pool modes
 
 ## Reading Map And Companion Docs
 
@@ -193,9 +190,6 @@ Companion docs:
   built-in coprocessor request for pushed-down query execution
 - ReqContext:
   immutable runtime request context shared through execution
-- Light task threshold:
-  the execution-time budget before a coprocessor future must acquire a
-  semaphore permit in the Yatp path
 - Snapshot wait:
   request time spent between scheduling and obtaining the storage snapshot
 
