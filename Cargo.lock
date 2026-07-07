@@ -8712,6 +8712,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.40",
  "tikv_util",
+ "tokio",
  "tracker",
  "txn_types",
 ]

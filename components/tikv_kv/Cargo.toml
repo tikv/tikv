@@ -39,6 +39,7 @@ slog-global = { workspace = true }
 slog_derive = "0.2"
 tempfile = "3.0"
 thiserror = "1.0"
+tokio = { version = "1.17", features = ["time"] }
 tikv_util = { workspace = true }
 tracker = { workspace = true }
 txn_types = { workspace = true }

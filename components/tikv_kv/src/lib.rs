@@ -745,10 +745,25 @@ pub fn snapshot<E: Engine>(
     ctx: SnapContext<'_>,
 ) -> impl std::future::Future<Output = Result<E::Snap>> {
     let begin = Instant::now();
+
+    // Determine the timeout before `ctx` is consumed by `async_snapshot` below.
+    // Without this, a snapshot request whose completion callback is never
+    // invoked (e.g. due to a stuck propose queue or lost leadership) would
+    // hang indefinitely with no way for the caller to recover.
+    let max_execution_duration_ms = ctx.pb_ctx.max_execution_duration_ms;
+    let timeout_duration = if max_execution_duration_ms == 0 {
+        DEFAULT_TIMEOUT
+    } else {
+        std::time::Duration::from_millis(max_execution_duration_ms)
+    };
+
     let val = engine.async_snapshot(ctx);
     // make engine not cross yield point
     async move {
-        let result = val.await;
+        let result = match tokio::time::timeout(timeout_duration, val).await {
+            Ok(result) => result,
+            Err(_) => Err(Error::from(ErrorInner::Timeout(timeout_duration))),
+        };
         with_tls_tracker(|tracker| {
             tracker.metrics.get_snapshot_nanos += begin.elapsed().as_nanos() as u64;
         });
@@ -1495,5 +1510,94 @@ mod unit_tests {
                 .collect::<Vec<Modify>>(),
             expect_requests
         )
+    }
+}
+
+#[cfg(test)]
+mod snapshot_timeout_tests {
+    use std::time::Duration;
+
+    use kvproto::kvrpcpb::Context;
+
+    use super::*;
+    use crate::btree_engine::BTreeEngine;
+
+    /// An engine whose `async_snapshot` never completes, simulating a
+    /// raftstore callback that's never invoked (e.g. lost leadership,
+    /// dropped propose, stuck queue).
+    #[derive(Clone)]
+    struct HangingEngine {
+        base: BTreeEngine,
+    }
+
+    impl HangingEngine {
+        fn new() -> Self {
+            Self {
+                base: BTreeEngine::default(),
+            }
+        }
+    }
+
+    impl Engine for HangingEngine {
+        type Snap = <BTreeEngine as Engine>::Snap;
+        type Local = <BTreeEngine as Engine>::Local;
+
+        fn kv_engine(&self) -> Option<Self::Local> {
+            self.base.kv_engine()
+        }
+
+        fn modify_on_kv_engine(&self, region_modifies: HashMap<u64, Vec<Modify>>) -> Result<()> {
+            self.base.modify_on_kv_engine(region_modifies)
+        }
+
+        type SnapshotRes = std::future::Pending<Result<Self::Snap>>;
+        fn async_snapshot(&mut self, _ctx: SnapContext<'_>) -> Self::SnapshotRes {
+            std::future::pending()
+        }
+
+        type IMSnap = Self::Snap;
+        type IMSnapshotRes = Self::SnapshotRes;
+        fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
+            self.async_snapshot(ctx)
+        }
+
+        type WriteRes = <BTreeEngine as Engine>::WriteRes;
+        fn async_write(
+            &self,
+            ctx: &Context,
+            batch: WriteData,
+            subscribed: u8,
+            on_applied: Option<OnAppliedCb>,
+        ) -> Self::WriteRes {
+            self.base.async_write(ctx, batch, subscribed, on_applied)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_times_out_instead_of_hanging() {
+        let mut engine = HangingEngine::new();
+        let mut pb_ctx = Context::default();
+        pb_ctx.set_max_execution_duration_ms(50);
+
+        let ctx = SnapContext {
+            pb_ctx: &pb_ctx,
+            ..Default::default()
+        };
+
+        let outcome = tokio::time::timeout(Duration::from_secs(2), snapshot(&mut engine, ctx))
+            .await
+            .expect("snapshot() hung past the outer safety timeout — fix did not apply");
+
+        match outcome {
+            Err(e) => {
+                let msg = format!("{:?}", e);
+                assert!(
+                    msg.contains("Timeout"),
+                    "expected a Timeout error, got: {}",
+                    msg
+                );
+            }
+            Ok(_) => panic!("expected snapshot() to time out, but it returned Ok"),
+        }
     }
 }
