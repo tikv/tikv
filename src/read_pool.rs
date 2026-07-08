@@ -884,7 +884,12 @@ impl ReadPoolConfigRunner {
             } else {
                 self.cur_thread_count
             };
-            target.clamp(self.min_thread_count, self.max_thread_count)
+            let target = target.clamp(self.min_thread_count, self.max_thread_count);
+            // Report whether we're still catching up to max_thread_count so
+            // resource_control keeps deprioritizing noisy groups through the
+            // scale-up window, not just while pressure is still engaged.
+            rm.set_read_pool_scale_up_pending(target < self.max_thread_count);
+            target
         } else {
             // No ResourceGroupManager: the read pool acts on its own using
             // the full local busy-thread/busy-CPU ladder.
