@@ -355,6 +355,13 @@ pub struct ResourceGroupManager {
     // the leeway threshold, i.e. the system is comfortably idle and the
     // unified read pool may scale its thread count up toward its max.
     read_pool_scale_up_allowed: AtomicBool,
+    // True when the unified read pool reported (on its own ~10s tick) that
+    // its thread count is still below `max_thread_count`, i.e. a prior
+    // pressure-driven scale-down hasn't fully recovered yet. Read by
+    // `adjust_group_scheduling` so that per-group deprioritization keeps
+    // protecting the rest of the traffic through the scale-up catch-up
+    // window, not just while CPU pressure is still actively engaged.
+    read_pool_scale_up_pending: AtomicBool,
 }
 
 impl Default for ResourceGroupManager {
@@ -400,6 +407,7 @@ impl ResourceGroupManager {
             read_pool_cpu_pressure: AtomicU64::new(0.0f64.to_bits()),
             read_pool_cpu_tracker: Mutex::new(RuTracker::new(start_secs, read_pool_num_buckets)),
             read_pool_scale_up_allowed: AtomicBool::new(false),
+            read_pool_scale_up_pending: AtomicBool::new(false),
         };
 
         // init the default resource group by default.
@@ -823,14 +831,19 @@ impl ResourceGroupManager {
         // quota (current rate over their historical baseline by more than
         // burst_factor), and only while the read path is genuinely under CPU
         // pressure — a group within its baseline is never deprioritized even
-        // if others are noisy, and no group is deprioritized at all once
-        // pressure clears.
+        // if others are noisy. Once pressure clears, keep deprioritizing
+        // through `read_pool_scale_up_pending` until the unified read pool
+        // has actually caught back up to its max thread count — the pool's
+        // capacity, not just the pressure signal, determines when it's safe
+        // to stop protecting the rest of the traffic from a noisy group.
+        let deprioritize_active =
+            engaged || self.read_pool_scale_up_pending.load(Ordering::Relaxed);
         for entry in &self.ru_trackers {
             let group_bytes = entry.key().as_bytes();
             let guard = entry.value().lock().unwrap();
             let hist = guard.0.cached_historical_rate;
             let current = guard.0.current_rate(now);
-            let over_quota = engaged && hist > 0.0 && current > hist * burst_factor;
+            let over_quota = deprioritize_active && hist > 0.0 && current > hist * burst_factor;
             drop(guard);
             for controller in self.registry.read().iter() {
                 controller.set_group_phase(group_bytes, over_quota);
@@ -868,6 +881,14 @@ impl ResourceGroupManager {
     /// unified read pool may scale its thread count up toward its max.
     pub fn read_pool_scale_up_allowed(&self) -> bool {
         self.read_pool_scale_up_allowed.load(Ordering::Relaxed)
+    }
+
+    /// Called by the unified read pool on its own tick to report whether its
+    /// thread count is still below `max_thread_count`, i.e. it's still
+    /// catching up from a prior pressure-driven scale-down.
+    pub fn set_read_pool_scale_up_pending(&self, pending: bool) {
+        self.read_pool_scale_up_pending
+            .store(pending, Ordering::Relaxed);
     }
 
     /// Returns the token-bucket debt delay for `group`, or `None` if no
@@ -2211,8 +2232,9 @@ pub(crate) mod tests {
             "spike exceeded its quota while engaged → should be phase 1"
         );
 
-        // CPU drops back below threshold: released immediately, even though
-        // spike's RU history hasn't changed.
+        // CPU drops back below threshold: released immediately (no read
+        // pool scale-up is pending in this test), even though spike's RU
+        // history hasn't changed.
         mgr.online_adjust_resource_quota(50.0);
         assert!(
             !ctl.resource_consumptions
@@ -2222,6 +2244,82 @@ pub(crate) mod tests {
                 .is_over_baseline
                 .load(Ordering::Relaxed),
             "spike should be released as soon as pressure clears"
+        );
+    }
+
+    #[test]
+    fn test_two_phase_scheduling_stays_deprioritized_while_scale_up_pending() {
+        // Even after CPU pressure clears, a group that exceeded its quota
+        // must stay deprioritized as long as the unified read pool has
+        // reported that it's still catching up to max_thread_count — the
+        // pool's actual capacity, not just the pressure signal, decides
+        // when it's safe to stop protecting the rest of the traffic.
+        let mgr = ResourceGroupManager::default();
+
+        let spike = new_resource_group_ru("spike".into(), 1000, MEDIUM_PRIORITY);
+        mgr.add_resource_group(spike);
+        let ctl = mgr.derive_controller("read".into(), true);
+
+        let t0 = RuTracker::now_secs();
+        {
+            let e = mgr
+                .ru_trackers
+                .entry("spike".to_owned())
+                .or_insert_with(|| {
+                    Mutex::new((
+                        RuTracker::new(t0, 30),
+                        Arc::new(ResourceLimiter::new(
+                            "".into(),
+                            f64::INFINITY,
+                            f64::INFINITY,
+                            0,
+                            false,
+                        )),
+                    ))
+                });
+            let mut tr = e.lock().unwrap();
+            tr.0.record_at(3000, t0 + 30);
+            tr.0.record_at(0, t0 + 60); // close bucket: 3000µs baseline
+            tr.0.record_at(12000, t0 + 90); // open bucket: 12000µs spike
+        }
+
+        mgr.set_bg_cpu_at_floor(true);
+        mgr.online_adjust_resource_quota(75.0);
+        assert!(
+            ctl.resource_consumptions
+                .read()
+                .get(b"spike".as_ref())
+                .unwrap()
+                .is_over_baseline
+                .load(Ordering::Relaxed),
+            "spike exceeded its quota while engaged → should be phase 1"
+        );
+
+        // CPU drops back below threshold, but the read pool reports it
+        // hasn't finished scaling back up yet: spike must stay deprioritized.
+        mgr.set_read_pool_scale_up_pending(true);
+        mgr.online_adjust_resource_quota(50.0);
+        assert!(
+            ctl.resource_consumptions
+                .read()
+                .get(b"spike".as_ref())
+                .unwrap()
+                .is_over_baseline
+                .load(Ordering::Relaxed),
+            "spike should stay deprioritized while the read pool is still scaling up"
+        );
+
+        // Once the read pool reports it has caught up, spike is released.
+        mgr.set_read_pool_scale_up_pending(false);
+        mgr.online_adjust_resource_quota(50.0);
+        assert!(
+            !ctl.resource_consumptions
+                .read()
+                .get(b"spike".as_ref())
+                .unwrap()
+                .is_over_baseline
+                .load(Ordering::Relaxed),
+            "spike should be released once the read pool has fully scaled up"
         );
     }
 
