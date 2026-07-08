@@ -201,26 +201,35 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             0.0
         };
 
-        // Fetch IO stats up front so the common score computation below sees
-        // a consistent snapshot. A fetch failure only disables IO
-        // scoring/adjustment for this tick, not the whole tick.
-        let io_stats = match self
-            .resource_quota_getter
-            .get_current_stats(ResourceType::Io)
-        {
-            Ok(s) => Some(s),
-            Err(e) => {
-                warn!("get io stats failed; skip io adjustment."; "err" => ?e);
-                None
-            }
+        // io_score (like io_stats) is only consumed by `background_adjust_quota`,
+        // so mirror its own `has_background_groups()` gate here and skip the IO
+        // fetch entirely when there's nothing background to throttle — the old
+        // code never tracked IO stats unconditionally either.
+        let (io_stats, io_util) = if self.resource_ctl.has_background_groups() {
+            // Fetch IO stats up front so the common score computation below
+            // sees a consistent snapshot. A fetch failure only disables IO
+            // scoring/adjustment for this tick, not the whole tick.
+            let io_stats = match self
+                .resource_quota_getter
+                .get_current_stats(ResourceType::Io)
+            {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    warn!("get io stats failed; skip io adjustment."; "err" => ?e);
+                    None
+                }
+            };
+            let io_util = io_stats.as_ref().map_or(0.0, |s| {
+                if s.total_quota > f64::EPSILON {
+                    s.current_used / s.total_quota * 100.0
+                } else {
+                    0.0
+                }
+            });
+            (io_stats, io_util)
+        } else {
+            (None, 0.0)
         };
-        let io_util = io_stats.as_ref().map_or(0.0, |s| {
-            if s.total_quota > f64::EPSILON {
-                s.current_used / s.total_quota * 100.0
-            } else {
-                0.0
-            }
-        });
 
         let grpc_cpu_cores = self.grpc_cpu_tracker.measure_cpu_cores();
 
