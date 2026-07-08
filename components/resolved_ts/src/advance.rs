@@ -3,6 +3,7 @@
 use std::{
     cmp,
     ffi::CString,
+    fmt,
     sync::{
         atomic::{AtomicI32, Ordering},
         Arc,
@@ -48,6 +49,45 @@ use crate::{endpoint::Task, metrics::*, TsSource};
 pub(crate) const DEFAULT_CHECK_LEADER_TIMEOUT_DURATION: Duration = Duration::from_secs(5); // 5s
 const DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL: usize = 2;
 const DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS: usize = 4096;
+const CHECK_LEADER_LOG_REGION_LIMIT: usize = 3;
+
+/// Per target-store status in the check-leader unresolved summary log.
+///
+/// This is printed only when some checked regions cannot pass quorum, so every
+/// field is aimed at answering which requested stores did not return the
+/// unresolved regions.
+struct CheckLeaderStoreStatus {
+    /// Store that received a check-leader request from this leader.
+    to_store_id: u64,
+    /// Number of regions included in the request sent to this store.
+    requested_count: usize,
+    /// Number of regions returned in this store's check-leader response.
+    returned_count: usize,
+    /// Sample of unresolved regions requested from this store but not returned
+    /// by it.
+    unreturned_regions: Vec<u64>,
+    /// Whether `unreturned_regions` was cut at `CHECK_LEADER_LOG_REGION_LIMIT`.
+    unreturned_regions_truncated: bool,
+    /// RPC error from this target store when the request failed before a
+    /// response.
+    rpc_error: Option<String>,
+}
+
+impl fmt::Debug for CheckLeaderStoreStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CheckLeaderStoreStatus")
+            .field("to_store_id", &self.to_store_id)
+            .field("requested_count", &self.requested_count)
+            .field("returned_count", &self.returned_count)
+            .field("unreturned_regions", &self.unreturned_regions)
+            .field(
+                "unreturned_regions_truncated",
+                &self.unreturned_regions_truncated,
+            )
+            .field("rpc_error", &self.rpc_error)
+            .finish()
+    }
+}
 
 pub struct AdvanceTsWorker {
     pd_client: Arc<dyn PdClient>,
@@ -309,6 +349,8 @@ impl LeadershipResolver {
             .find(|req| !req.regions.is_empty())
             .map_or(0, |req| req.regions[0].compute_size());
         let mut check_leader_rpcs = Vec::with_capacity(store_req_map.len());
+        let mut requested_regions_by_store = HashMap::default();
+
         for (store_id, req) in store_req_map {
             if req.regions.is_empty() {
                 continue;
@@ -316,6 +358,13 @@ impl LeadershipResolver {
             let env = env.clone();
             let to_store = *store_id;
             let region_num = req.regions.len() as u32;
+            requested_regions_by_store.insert(
+                to_store,
+                req.regions
+                    .iter()
+                    .map(|leader_info| leader_info.get_region_id())
+                    .collect::<Vec<_>>(),
+            );
             CHECK_LEADER_REQ_SIZE_HISTOGRAM.observe((leader_info_size * region_num) as f64);
             CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM.observe(region_num as f64);
 
@@ -375,6 +424,8 @@ impl LeadershipResolver {
         });
 
         let rpc_count = check_leader_rpcs.len();
+        let mut returned_regions_by_store = HashMap::default();
+        let mut check_leader_errors = HashMap::default();
         for _ in 0..rpc_count {
             // Use `select_all` to avoid the process getting blocked when some
             // TiKVs were down.
@@ -382,6 +433,7 @@ impl LeadershipResolver {
             check_leader_rpcs = remains;
             match res {
                 Ok((to_store, resp)) => {
+                    returned_regions_by_store.insert(to_store, resp.get_regions().to_vec());
                     for region_id in resp.regions {
                         if let Some(prog) = progresses.get_mut(&region_id) {
                             if prog.resolved {
@@ -397,6 +449,7 @@ impl LeadershipResolver {
                 }
                 Err((to_store, reconnect, err)) => {
                     info!("check leader failed"; "error" => ?err, "to_store" => to_store);
+                    check_leader_errors.insert(to_store, err);
                     if reconnect {
                         self.tikv_clients.lock().await.remove(&to_store);
                     }
@@ -408,10 +461,28 @@ impl LeadershipResolver {
         }
         let res: Vec<u64> = self.valid_regions.drain().collect();
         if res.len() != checking_regions.len() {
+            let valid_region_set = res.iter().copied().collect::<HashSet<_>>();
+            let unresolved_region_set = checking_regions
+                .iter()
+                .filter(|region_id| !valid_region_set.contains(region_id))
+                .copied()
+                .collect::<HashSet<_>>();
+            let (unresolved_regions, unresolved_regions_truncated) =
+                limited_region_list(unresolved_region_set.iter().copied());
+            let target_store_status = build_check_leader_store_status(
+                &requested_regions_by_store,
+                &returned_regions_by_store,
+                &check_leader_errors,
+                &unresolved_region_set,
+            );
             warn!(
-                "check leader returns valid regions different from checking regions";
+                "[resolved-ts-stuck] check leader unresolved regions";
+                "store_id" => self.store_id,
                 "valid_regions" => res.len(),
                 "checking_regions" => checking_regions.len(),
+                "unresolved_regions" => ?unresolved_regions,
+                "unresolved_regions_truncated" => unresolved_regions_truncated,
+                "target_store_status" => ?target_store_status,
             );
         }
         res
@@ -449,6 +520,54 @@ where
 
     let resps = futures::future::join_all(reqs).await;
     resps.into_iter().flatten().collect::<Vec<u64>>()
+}
+
+fn limited_region_list<I>(regions: I) -> (Vec<u64>, bool)
+where
+    I: IntoIterator<Item = u64>,
+{
+    let mut limited = Vec::with_capacity(CHECK_LEADER_LOG_REGION_LIMIT);
+    let mut truncated = false;
+    for region_id in regions {
+        if limited.len() == CHECK_LEADER_LOG_REGION_LIMIT {
+            truncated = true;
+            break;
+        }
+        limited.push(region_id);
+    }
+    (limited, truncated)
+}
+
+fn build_check_leader_store_status(
+    requested_regions_by_store: &HashMap<u64, Vec<u64>>,
+    returned_regions_by_store: &HashMap<u64, Vec<u64>>,
+    check_leader_errors: &HashMap<u64, String>,
+    unresolved_region_set: &HashSet<u64>,
+) -> Vec<CheckLeaderStoreStatus> {
+    let mut target_store_status = Vec::with_capacity(requested_regions_by_store.len());
+    for (to_store_id, requested_regions) in requested_regions_by_store {
+        let returned_regions = returned_regions_by_store.get(to_store_id);
+        let returned_region_set = returned_regions
+            .map(|regions| regions.iter().copied().collect::<HashSet<_>>())
+            .unwrap_or_default();
+        let (unreturned_regions, unreturned_regions_truncated) = limited_region_list(
+            requested_regions
+                .iter()
+                .filter(|region_id| unresolved_region_set.contains(region_id))
+                .filter(|region_id| !returned_region_set.contains(region_id))
+                .copied(),
+        );
+        target_store_status.push(CheckLeaderStoreStatus {
+            to_store_id: *to_store_id,
+            requested_count: requested_regions.len(),
+            returned_count: returned_regions.map_or(0, Vec::len),
+            unreturned_regions,
+            unreturned_regions_truncated,
+            rpc_error: check_leader_errors.get(to_store_id).cloned(),
+        });
+    }
+    target_store_status.sort_by_key(|status| status.to_store_id);
+    target_store_status
 }
 
 fn region_has_quorum(peers: &[Peer], stores: &[u64]) -> bool {
