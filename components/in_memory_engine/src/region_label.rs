@@ -244,6 +244,25 @@ impl RegionLabelService {
                         cancel.abort();
                         continue 'outer;
                     }
+                    // etcd can also send compaction as a raw gRPC error
+                    // instead of inside the ResponseHeader proto field.
+                    // That arrives as PdError::Grpc and was falling into
+                    // the generic handler below, retrying forever from the
+                    // same stale revision. Catch it here and recover the
+                    // same way as DataCompacted.
+                    Err(PdError::Grpc(grpcio::Error::RpcFailure(ref status)))
+                        if status
+                            .message()
+                            .contains("required revision has been compacted") =>
+                    {
+                        warn!(
+                            "ime required revision has been compacted (gRPC transport error)";
+                            "err" => ?status
+                        );
+                        self.reload_all_region_labels().await;
+                        cancel.abort();
+                        continue 'outer;
+                    }
                     Err(err) => {
                         error!("ime failed to watch region labels"; "err" => ?err);
                         let _ = GLOBAL_TIMER_HANDLE
@@ -462,6 +481,59 @@ pub mod tests {
         assert!(s.manager.get_region_label("cache/0").is_none());
         let label = s.manager.get_region_label("cache/1").unwrap();
         assert_eq!(label.data[0].start_key, "c".to_string());
+
+        server.stop();
+    }
+    #[test]
+    fn watch_grpc_compaction_error_recovers() {
+        use std::sync::atomic::Ordering;
+        use test_pd::util::new_client_with_update_interval;
+
+        // Build our own MetaStorage so we can control the injection flag.
+        let mocker = Arc::new(MetaStorage::default());
+        let inject_flag = mocker.inject_compaction_error.clone();
+
+        let mut server = MockServer::with_case(1, Arc::clone(&mocker));
+        let eps = server.bind_addrs();
+        let client = new_client_with_update_interval(eps, None, ReadableDuration::millis(100));
+
+        let region_label_manager = Arc::new(RegionLabelRulesManager::default());
+        let cluster_id = client.get_cluster_id().unwrap();
+
+        let mut s =
+            RegionLabelServiceBuilder::new(Arc::clone(&region_label_manager), Arc::new(client))
+                .build()
+                .unwrap();
+
+        // Put a rule in etcd so reload_all_region_labels has something to load.
+        add_region_label_rule(
+            s.meta_client.clone(),
+            cluster_id,
+            &new_region_label_rule("cache/compaction-test", "a", "b"),
+        );
+
+        // Arm the flag — next Watch call will return the gRPC compaction error.
+        inject_flag.store(true, Ordering::Release);
+
+        let background_worker = Builder::new("ime-compaction-test").thread_count(1).create();
+        let mut s_clone = s.clone();
+        background_worker.spawn_async_task(async move {
+            s_clone.watch_region_labels().await;
+        });
+
+        // The service must detect the error, call reload_all_region_labels,
+        // and the rule must appear within 5 seconds.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if region_label_manager.region_labels().len() == 1 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out: service did not recover after gRPC compaction error"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
 
         server.stop();
     }
