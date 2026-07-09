@@ -180,7 +180,7 @@ impl fmt::Debug for CheckLeaderLeaderInfoUpdate {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct CheckLeaderLocalLeaderInfo {
     /// Current local leader info when check-leader detects a mismatch.
     current: CheckLeaderLeaderInfoSnapshot,

@@ -3,7 +3,6 @@
 use std::{
     cmp,
     ffi::CString,
-    fmt,
     sync::{
         atomic::{AtomicI32, Ordering},
         Arc,
@@ -52,6 +51,7 @@ const DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS: usize = 4096;
 const CHECK_LEADER_LOG_REGION_LIMIT: usize = 3;
 
 /// CheckLeaderStoreStatus record each store's leadership details.
+#[derive(Debug)]
 struct CheckLeaderStoreStatus {
     /// Store that received a check-leader request from this leader.
     to_store_id: u64,
@@ -67,22 +67,6 @@ struct CheckLeaderStoreStatus {
     /// RPC error from this target store when the request failed before a
     /// response.
     rpc_error: Option<String>,
-}
-
-impl fmt::Debug for CheckLeaderStoreStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CheckLeaderStoreStatus")
-            .field("to_store_id", &self.to_store_id)
-            .field("requested_count", &self.requested_count)
-            .field("returned_count", &self.returned_count)
-            .field("unreturned_regions", &self.unreturned_regions)
-            .field(
-                "unreturned_regions_truncated",
-                &self.unreturned_regions_truncated,
-            )
-            .field("rpc_error", &self.rpc_error)
-            .finish()
-    }
 }
 
 pub struct AdvanceTsWorker {
@@ -542,14 +526,13 @@ fn build_check_leader_store_status(
     let mut target_store_status = Vec::with_capacity(requested_regions_by_store.len());
     for (to_store_id, requested_regions) in requested_regions_by_store {
         let returned_regions = returned_regions_by_store.get(to_store_id);
-        let returned_region_set = returned_regions
-            .map(|regions| regions.iter().copied().collect::<HashSet<_>>())
-            .unwrap_or_default();
         let (unreturned_regions, unreturned_regions_truncated) = limited_region_list(
             requested_regions
                 .iter()
                 .filter(|region_id| unresolved_region_set.contains(region_id))
-                .filter(|region_id| !returned_region_set.contains(region_id))
+                .filter(|region_id| {
+                    !returned_regions.map_or(false, |regions| regions.contains(*region_id))
+                })
                 .copied(),
         );
         target_store_status.push(CheckLeaderStoreStatus {
