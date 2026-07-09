@@ -1,10 +1,11 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    cmp::Ord,
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     convert::identity,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant as StdInstant},
 };
 
 use engine_traits::{CF_DEFAULT, CF_WRITE, CompactExt, ManualCompactionOptions};
@@ -49,7 +50,7 @@ use tikv_util::{
     thread_name_prefix::IMPORT_SST_WORKER_THREAD,
     time::{Instant, Limiter},
 };
-use tokio::time::sleep;
+use tokio::{sync::RwLock, time::sleep};
 use txn_types::{Key, WriteRef, WriteType};
 
 use super::{
@@ -195,7 +196,7 @@ pub struct ImportSstService<E: Engine> {
     #[allow(dead_code)]
     threads_ref: Arc<Mutex<ResizableRuntime>>,
     importer: Arc<SstImporter<E::Local>>,
-    limiter: Limiter,
+    download_speed_limiter: Arc<DownloadSpeedLimitManager>,
     ingest_latch: Arc<IngestLatch>,
     ingest_admission_guard: Arc<Mutex<()>>,
     raft_entry_max_size: ReadableSize,
@@ -212,6 +213,109 @@ pub struct ImportSstService<E: Engine> {
 
     mem_limit: u64,
     force_partition_range_mgr: ForcePartitionRangeManager,
+}
+
+#[derive(Clone)]
+struct DownloadSpeedLimit {
+    speed_limit: u64,
+    expire_at: Option<StdInstant>,
+}
+
+struct DownloadSpeedLimitTreeWithEffectiveLimitExpireAtCache {
+    effective_limit_expire_at: Option<StdInstant>,
+    tree: BTreeMap<String, DownloadSpeedLimit>,
+}
+
+struct DownloadSpeedLimitManager {
+    limiter: Limiter,
+    task_limits: RwLock<DownloadSpeedLimitTreeWithEffectiveLimitExpireAtCache>,
+}
+
+impl DownloadSpeedLimitManager {
+    pub fn new() -> Self {
+        Self {
+            limiter: Limiter::new(f64::INFINITY),
+            task_limits: RwLock::new(DownloadSpeedLimitTreeWithEffectiveLimitExpireAtCache {
+                effective_limit_expire_at: None,
+                tree: BTreeMap::new(),
+            }),
+        }
+    }
+
+    pub async fn limiter(&self) -> Limiter {
+        self.try_sync_effective_limit().await;
+        self.limiter.clone()
+    }
+
+    pub async fn update_from_request(&self, req: &SetDownloadSpeedLimitRequest) -> Result<f64> {
+        let task_key = req.get_task_id();
+        let speed_limit = req.get_speed_limit();
+        let ttl_seconds = req.get_ttl_seconds();
+        if ttl_seconds == 0 && !task_key.is_empty() {
+            return Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "ttl_seconds must be greater than 0 when task_id is not empty",
+            )));
+        }
+
+        let now_instant = StdInstant::now();
+        // speed_limit == 0 means removing this task's override.
+        if speed_limit == 0 {
+            self.task_limits.write().await.tree.remove(task_key);
+        } else {
+            let expire_at = if ttl_seconds == 0 {
+                None
+            } else {
+                // Treat an unrealistically large TTL as non-expiring instead of
+                // immediately expiring the request due to Instant overflow.
+                now_instant.checked_add(Duration::from_secs(ttl_seconds))
+            };
+            self.task_limits.write().await.tree.insert(
+                task_key.to_owned(),
+                DownloadSpeedLimit {
+                    speed_limit,
+                    expire_at,
+                },
+            );
+        }
+        Ok(self.sync_effective_limit().await)
+    }
+
+    async fn try_sync_effective_limit(&self) {
+        let task_limits = self.task_limits.read().await;
+        let now_instant = StdInstant::now();
+        if let Some(effective_limit_expire_at) = task_limits.effective_limit_expire_at {
+            if effective_limit_expire_at > now_instant {
+                return;
+            }
+            drop(task_limits);
+            self.sync_effective_limit().await;
+        }
+    }
+
+    async fn sync_effective_limit(&self) -> f64 {
+        let mut task_limits = self.task_limits.write().await;
+        let now_instant = StdInstant::now();
+        let mut effective_limit = f64::INFINITY;
+        let mut effective_limit_expire_at = None;
+        task_limits.tree.retain(|_, limit| {
+            let no_expired = limit
+                .expire_at
+                .map(|expire_at| expire_at > now_instant)
+                .unwrap_or(true);
+            if no_expired {
+                let this_speed_limit = limit.speed_limit as f64;
+                if effective_limit > this_speed_limit {
+                    effective_limit_expire_at = limit.expire_at;
+                    effective_limit = this_speed_limit;
+                }
+            }
+            no_expired
+        });
+        task_limits.effective_limit_expire_at = effective_limit_expire_at;
+        self.limiter.set_speed_limit(effective_limit);
+        effective_limit
+    }
 }
 
 struct RequestCollector {
@@ -457,7 +561,7 @@ impl<E: Engine> ImportSstService<E> {
             threads_ref: threads_clone,
             engine,
             importer,
-            limiter: Limiter::new(f64::INFINITY),
+            download_speed_limiter: Arc::new(DownloadSpeedLimitManager::new()),
             ingest_latch: Arc::default(),
             ingest_admission_guard: Arc::default(),
             raft_entry_max_size,
@@ -929,7 +1033,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
         let start = Instant::now();
         let importer = self.importer.clone();
-        let limiter = self.limiter.clone();
+        let download_speed_limiter = self.download_speed_limiter.clone();
         let mem_limit = self.mem_limit;
         let max_raft_size = self.raft_entry_max_size.0 as usize;
         let applier = self.writer.clone();
@@ -951,6 +1055,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 }
             }
 
+            let limiter = download_speed_limiter.limiter().await;
             match Self::do_apply(req, importer, applier, limiter, max_raft_size).await {
                 Ok(Some(r)) => resp.set_range(r),
                 Err(e) => resp.set_error(e),
@@ -989,7 +1094,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             return;
         }
         let importer = Arc::clone(&self.importer);
-        let limiter = self.limiter.clone();
+        let download_speed_limiter = self.download_speed_limiter.clone();
         let mem_limit = self.mem_limit;
         let tablets = self.tablets.clone();
         let start = Instant::now();
@@ -1044,6 +1149,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 }
             };
 
+            let limiter = download_speed_limiter.limiter().await;
             let res = with_resource_limiter(
                 importer.download_ext(
                     req.get_sst(),
@@ -1108,7 +1214,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             return;
         }
         let importer = Arc::clone(&self.importer);
-        let limiter = self.limiter.clone();
+        let download_speed_limiter = self.download_speed_limiter.clone();
         let mem_limit = self.mem_limit;
         let tablets = self.tablets.clone();
         let start = Instant::now();
@@ -1184,6 +1290,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 }
             };
 
+            let limiter = download_speed_limiter.limiter().await;
             let res = with_resource_limiter(
                 importer.download_files_ext_with_ssts(
                     &basic_meta,
@@ -1242,7 +1349,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             return;
         }
         let importer = Arc::clone(&self.importer);
-        let limiter = self.limiter.clone();
+        let download_speed_limiter = self.download_speed_limiter.clone();
         let mem_limit = self.mem_limit;
         let tablets = self.tablets.clone();
         let start = Instant::now();
@@ -1312,6 +1419,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 }
             };
 
+            let limiter = download_speed_limiter.limiter().await;
             let res = with_resource_limiter(
                 importer.download_files_ext_with_latest_mvcc(
                     &basic_meta,
@@ -1500,21 +1608,29 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     ) {
         let label = "set_download_speed_limit";
         let timer = Instant::now_coarse();
-
-        let speed_limit = req.get_speed_limit();
-        self.limiter.set_speed_limit(if speed_limit > 0 {
-            speed_limit as f64
-        } else {
-            f64::INFINITY
-        });
+        let download_speed_limiter = self.download_speed_limiter.clone();
 
         let ctx_task = async move {
-            crate::send_rpc_response!(
-                Ok(SetDownloadSpeedLimitResponse::default()),
-                sink,
-                label,
-                timer
-            );
+            match download_speed_limiter.update_from_request(&req).await {
+                Ok(effective_limit) => {
+                    info!(
+                        "set import download speed limit";
+                        "task_id" => req.get_task_id(),
+                        "speed_limit" => req.get_speed_limit(),
+                        "ttl_seconds" => req.get_ttl_seconds(),
+                        "effective_limit" => effective_limit
+                    );
+                    crate::send_rpc_response!(
+                        Ok(SetDownloadSpeedLimitResponse::default()),
+                        sink,
+                        label,
+                        timer
+                    );
+                }
+                Err(e) => {
+                    crate::send_rpc_response!(Err(e), sink, label, timer);
+                }
+            }
         };
 
         ctx.spawn(ctx_task);
@@ -1865,10 +1981,11 @@ fn download_request_dispatcher(
 
 #[cfg(test)]
 mod test {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, time::Duration};
 
     use engine_traits::{CF_DEFAULT, CF_WRITE};
     use kvproto::{
+        import_sstpb::SetDownloadSpeedLimitRequest,
         kvrpcpb::Context,
         metapb::{Region, RegionEpoch},
         raft_cmdpb::{RaftCmdRequest, Request},
@@ -1881,7 +1998,8 @@ mod test {
 
     use crate::{
         import::sst_service::{
-            RequestCollector, TXN_SOURCE_LIGHTNING_PHY_IMPORT_MASK, check_local_region_stale,
+            DownloadSpeedLimitManager, RequestCollector, TXN_SOURCE_LIGHTNING_PHY_IMPORT_MASK,
+            check_local_region_stale,
         },
         server::raftkv,
     };
@@ -2236,5 +2354,170 @@ mod test {
                 .to_string()
                 .contains("retry write later")
         );
+    }
+
+    fn build_download_speed_limit_req(
+        task_id: &str,
+        speed_limit: u64,
+        ttl_seconds: u64,
+    ) -> SetDownloadSpeedLimitRequest {
+        let mut req = SetDownloadSpeedLimitRequest::default();
+        req.set_task_id(task_id.to_owned());
+        req.set_speed_limit(speed_limit);
+        req.set_ttl_seconds(ttl_seconds);
+        req
+    }
+
+    #[tokio::test]
+    async fn test_download_speed_limit_manager_min_limit_and_remove() {
+        let manager = DownloadSpeedLimitManager::new();
+
+        let req_task_a = build_download_speed_limit_req("task-a", 128, 60);
+        assert_eq!(
+            manager.update_from_request(&req_task_a).await.unwrap(),
+            128.0
+        );
+        assert_eq!(manager.limiter().await.speed_limit(), 128.0);
+
+        let req_task_b = build_download_speed_limit_req("task-b", 64, 60);
+        assert_eq!(
+            manager.update_from_request(&req_task_b).await.unwrap(),
+            64.0
+        );
+        assert_eq!(manager.limiter().await.speed_limit(), 64.0);
+
+        let req_remove_task_b = build_download_speed_limit_req("task-b", 0, 60);
+        assert_eq!(
+            manager
+                .update_from_request(&req_remove_task_b)
+                .await
+                .unwrap(),
+            128.0
+        );
+        assert_eq!(manager.limiter().await.speed_limit(), 128.0);
+
+        let req_remove_task_a = build_download_speed_limit_req("task-a", 0, 60);
+        manager
+            .update_from_request(&req_remove_task_a)
+            .await
+            .unwrap();
+        assert!(manager.limiter().await.speed_limit().is_infinite());
+    }
+
+    #[tokio::test]
+    async fn test_download_speed_limit_manager_expire_old_limit() {
+        let manager = DownloadSpeedLimitManager::new();
+
+        let req_task_a = build_download_speed_limit_req("task-a", 128, 60);
+        let req_task_b = build_download_speed_limit_req("task-b", 64, 1);
+        manager.update_from_request(&req_task_a).await.unwrap();
+        manager.update_from_request(&req_task_b).await.unwrap();
+        assert_eq!(manager.limiter().await.speed_limit(), 64.0);
+
+        std::thread::sleep(Duration::from_millis(1100));
+        let effective_limit = manager.sync_effective_limit().await;
+        assert_eq!(effective_limit, 128.0);
+        assert_eq!(manager.limiter().await.speed_limit(), 128.0);
+    }
+
+    async fn manager_effective_limit_expire_at_is_none(
+        manager: &DownloadSpeedLimitManager,
+    ) -> bool {
+        manager
+            .task_limits
+            .read()
+            .await
+            .effective_limit_expire_at
+            .is_none()
+    }
+
+    async fn manager_task_limits_len(manager: &DownloadSpeedLimitManager) -> usize {
+        manager.task_limits.read().await.tree.len()
+    }
+
+    #[tokio::test]
+    async fn test_download_speed_limit_manager_compatibility() {
+        let manager = DownloadSpeedLimitManager::new();
+        assert_eq!(manager.limiter().await.speed_limit(), f64::INFINITY);
+
+        let old_req_task = build_download_speed_limit_req("", 128, 0);
+        manager.update_from_request(&old_req_task).await.unwrap();
+        assert_eq!(manager.limiter().await.speed_limit(), 128.0);
+        assert!(manager_effective_limit_expire_at_is_none(&manager).await);
+
+        let new_req_task = build_download_speed_limit_req("task-a", 64, 60);
+        manager.update_from_request(&new_req_task).await.unwrap();
+        assert_eq!(manager.limiter().await.speed_limit(), 64.0);
+        assert!(!manager_effective_limit_expire_at_is_none(&manager).await);
+
+        let new_req_task = build_download_speed_limit_req("task-a", 0, 60);
+        manager.update_from_request(&new_req_task).await.unwrap();
+        assert_eq!(manager.limiter().await.speed_limit(), 128.0);
+        assert!(manager_effective_limit_expire_at_is_none(&manager).await);
+
+        let old_req_task = build_download_speed_limit_req("", 0, 0);
+        manager.update_from_request(&old_req_task).await.unwrap();
+        assert_eq!(manager.limiter().await.speed_limit(), f64::INFINITY);
+        assert!(manager_effective_limit_expire_at_is_none(&manager).await);
+
+        let old_req_task = build_download_speed_limit_req("", 0, 0);
+        manager.update_from_request(&old_req_task).await.unwrap();
+        assert_eq!(manager.limiter().await.speed_limit(), f64::INFINITY);
+        assert!(manager_effective_limit_expire_at_is_none(&manager).await);
+
+        let new_req_task = build_download_speed_limit_req("task-a", 0, 60);
+        manager.update_from_request(&new_req_task).await.unwrap();
+        assert_eq!(manager.limiter().await.speed_limit(), f64::INFINITY);
+        assert!(manager_effective_limit_expire_at_is_none(&manager).await);
+
+        let new_req_task = build_download_speed_limit_req("task-a", 64, 60);
+        manager.update_from_request(&new_req_task).await.unwrap();
+        assert_eq!(manager.limiter().await.speed_limit(), 64.0);
+        assert!(!manager_effective_limit_expire_at_is_none(&manager).await);
+
+        let old_req_task = build_download_speed_limit_req("", 32, 0);
+        manager.update_from_request(&old_req_task).await.unwrap();
+        assert_eq!(manager.limiter().await.speed_limit(), 32.0);
+        assert!(manager_effective_limit_expire_at_is_none(&manager).await);
+
+        let new_req_task = build_download_speed_limit_req("task-a", 0, 60);
+        manager.update_from_request(&new_req_task).await.unwrap();
+        assert_eq!(manager.limiter().await.speed_limit(), 32.0);
+        assert!(manager_effective_limit_expire_at_is_none(&manager).await);
+
+        let old_req_task = build_download_speed_limit_req("", 0, 0);
+        manager.update_from_request(&old_req_task).await.unwrap();
+        assert_eq!(manager.limiter().await.speed_limit(), f64::INFINITY);
+        assert!(manager_effective_limit_expire_at_is_none(&manager).await);
+    }
+
+    #[tokio::test]
+    async fn test_download_speed_limit_manager_ttl_overflow_does_not_expire_immediately() {
+        let manager = DownloadSpeedLimitManager::new();
+
+        let req_task_a = build_download_speed_limit_req("task-a", 128, u64::MAX);
+        assert_eq!(
+            manager.update_from_request(&req_task_a).await.unwrap(),
+            128.0
+        );
+        assert_eq!(manager.limiter().await.speed_limit(), 128.0);
+        assert!(manager_effective_limit_expire_at_is_none(&manager).await);
+        assert_eq!(manager_task_limits_len(&manager).await, 1);
+    }
+
+    #[tokio::test]
+    async fn test_download_speed_limit_manager_rejects_non_empty_task_without_ttl() {
+        let manager = DownloadSpeedLimitManager::new();
+
+        let req = build_download_speed_limit_req("task-a", 128, 0);
+        let err = manager.update_from_request(&req).await.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("ttl_seconds must be greater than 0")
+        );
+        assert!(manager.limiter().await.speed_limit().is_infinite());
+
+        let req = build_download_speed_limit_req("task-a", 0, 0);
+        manager.update_from_request(&req).await.unwrap_err();
     }
 }
