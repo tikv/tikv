@@ -4,6 +4,7 @@ mod binary;
 mod gb18030_collation;
 mod gbk_collation;
 mod latin1_bin;
+mod latin1_collation;
 mod utf8mb4_binary;
 mod utf8mb4_general_ci;
 mod utf8mb4_uca;
@@ -18,6 +19,7 @@ use codec::prelude::*;
 pub use gb18030_collation::*;
 pub use gbk_collation::*;
 pub use latin1_bin::*;
+pub use latin1_collation::*;
 pub use utf8mb4_binary::*;
 pub use utf8mb4_general_ci::*;
 pub use utf8mb4_uca::*;
@@ -572,5 +574,85 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_latin1_swedish_ci() {
+        use std::{cmp::Ordering, collections::hash_map::DefaultHasher, hash::Hasher};
+
+        use crate::codec::collation::collator::CollatorLatin1SwedishCi;
+
+        assert_eq!(
+            CollatorLatin1SwedishCi::sort_compare("a".as_bytes(), "A".as_bytes(), false).unwrap(),
+            Ordering::Equal
+        );
+        assert_eq!(
+            CollatorLatin1SwedishCi::sort_compare("y".as_bytes(), "ü".as_bytes(), false).unwrap(),
+            Ordering::Equal
+        );
+        assert_eq!(
+            CollatorLatin1SwedishCi::sort_compare("ä".as_bytes(), "æ".as_bytes(), false).unwrap(),
+            Ordering::Equal
+        );
+        assert_eq!(
+            CollatorLatin1SwedishCi::sort_compare("z".as_bytes(), "å".as_bytes(), false).unwrap(),
+            Ordering::Less
+        );
+        assert_eq!(
+            CollatorLatin1SwedishCi::sort_compare("å".as_bytes(), "ä".as_bytes(), false).unwrap(),
+            Ordering::Less
+        );
+        assert_eq!(
+            CollatorLatin1SwedishCi::sort_compare("æ".as_bytes(), "ö".as_bytes(), false).unwrap(),
+            Ordering::Less
+        );
+
+        assert_eq!(
+            CollatorLatin1SwedishCi::sort_key("😀".as_bytes()).unwrap(),
+            vec![0x3f]
+        );
+        assert_eq!(
+            CollatorLatin1SwedishCi::sort_key("\u{80}".as_bytes()).unwrap(),
+            vec![0x3f]
+        );
+        assert_eq!(
+            CollatorLatin1SwedishCi::sort_key("€‚ƒ„…†‡ˆ‰Š‹ŒŽ".as_bytes()).unwrap(),
+            vec![
+                0x80, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8a, 0x8b, 0x8c, 0x8e
+            ]
+        );
+        assert_eq!(
+            CollatorLatin1SwedishCi::sort_key("‘’“”•–—˜™š›œžŸ".as_bytes()).unwrap(),
+            vec![
+                0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9e, 0x9f
+            ]
+        );
+        assert_eq!(
+            CollatorLatin1SwedishCi::sort_key("aüäæåöz".as_bytes()).unwrap(),
+            vec![0x41, 0x59, 0x5c, 0x5c, 0x5b, 0x5d, 0x5a]
+        );
+        assert_eq!(
+            CollatorLatin1SwedishCi::sort_key(b"Y\xffZ").unwrap(),
+            vec![0x59]
+        );
+
+        assert_eq!(
+            CollatorLatin1SwedishCi::sort_compare("A  ".as_bytes(), "a".as_bytes(), false).unwrap(),
+            Ordering::Equal
+        );
+        assert_eq!(
+            CollatorLatin1SwedishCi::sort_compare(b"Y\xffZ", b"Y\xfeZ", false).unwrap(),
+            Ordering::Equal
+        );
+        assert_eq!(
+            CollatorLatin1SwedishCi::sort_compare(b"Y\xffZ", b"Y", false).unwrap(),
+            Ordering::Greater
+        );
+
+        let mut hasher_a = DefaultHasher::default();
+        CollatorLatin1SwedishCi::sort_hash(&mut hasher_a, "A  ".as_bytes()).unwrap();
+        let mut hasher_b = DefaultHasher::default();
+        CollatorLatin1SwedishCi::sort_hash(&mut hasher_b, "a".as_bytes()).unwrap();
+        assert_eq!(hasher_a.finish(), hasher_b.finish());
     }
 }

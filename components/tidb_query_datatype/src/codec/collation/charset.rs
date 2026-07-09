@@ -63,3 +63,6 @@ pub type CharsetGbk = CharsetUtf8mb4;
 
 // gb18030 character data actually stored with utf8mb4 character encoding.
 pub type CharsetGb18030 = CharsetUtf8mb4;
+
+// latin1 character data actually stored with utf8mb4 character encoding.
+pub type CharsetLatin1 = CharsetUtf8mb4;
