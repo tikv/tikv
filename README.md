@@ -52,7 +52,7 @@ See [Governance](https://github.com/tikv/community/blob/master/GOVERNANCE.md).
 
 ## Documentation
 
-For instructions on deployment, configuration, and maintenance of TiKV,see TiKV documentation on our [website](https://tikv.org/docs/4.0/tasks/introduction/). For more details on concepts and designs behind TiKV, see [Deep Dive TiKV](https://tikv.org/deep-dive/introduction/).
+For instructions on deployment, configuration, and maintenance of TiKV, see TiKV documentation on our [website](https://tikv.org/docs/4.0/tasks/introduction/). For more details on concepts and designs behind TiKV, see [Deep Dive TiKV](https://tikv.org/deep-dive/introduction/).
 
 > **Note:**
 >
@@ -77,7 +77,7 @@ When a node starts, the metadata of the Node, Store and Region are recorded into
 
 ### Deploy a playground with TiUP
 
-The most quickest to try out TiKV with TiDB is using TiUP, a component manager for TiDB.
+The quickest way to try out TiKV with TiDB is using TiUP, a component manager for TiDB.
 
 You can see [this page](https://docs.pingcap.com/tidb/stable/quick-start-with-tidb#deploy-a-local-test-environment-using-tiup-playground) for a step by step tutorial.
 
