@@ -36,7 +36,7 @@ use tikv_util::{
     debug, info,
     store::{find_peer_by_id, region},
     time::{monotonic_raw_now, Instant},
-    Either,
+    warn, Either,
 };
 use time::{Duration, Timespec};
 use tokio::sync::Notify;
@@ -50,6 +50,155 @@ use crate::{
 };
 
 const INVALID_TIMESTAMP: u64 = u64::MAX;
+const CHECK_LEADER_LOG_REGION_LIMIT: usize = 3;
+const CHECK_LEADER_REGISTRY_MUTATION_LIMIT: usize = 10;
+
+#[allow(dead_code)]
+#[derive(Debug)]
+enum CheckLeaderUnreturnedReason {
+    RegistryMiss {
+        registry_recent_mutations: Vec<CheckLeaderRegistryMutation>,
+    },
+    LeaderInfoMismatch {
+        leader_info_mismatch: CheckLeaderLeaderInfoMismatch,
+    },
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
+struct CheckLeaderRegistryMutation {
+    /// Registry mutation kind.
+    kind: &'static str,
+    /// Whether this operation saw an existing entry for the region before it
+    /// ran.
+    had_previous_entry: bool,
+}
+
+struct CheckLeaderRegistryDiagnostics {
+    recent_mutations_by_region: HashMap<u64, VecDeque<CheckLeaderRegistryMutation>>,
+}
+
+impl CheckLeaderRegistryDiagnostics {
+    fn new() -> Self {
+        CheckLeaderRegistryDiagnostics {
+            recent_mutations_by_region: HashMap::default(),
+        }
+    }
+
+    fn record(&mut self, kind: &'static str, region_id: u64, had_previous_entry: bool) {
+        let recent_mutations = self
+            .recent_mutations_by_region
+            .entry(region_id)
+            .or_default();
+        if recent_mutations.len() >= CHECK_LEADER_REGISTRY_MUTATION_LIMIT {
+            recent_mutations.pop_front();
+        }
+        recent_mutations.push_back(CheckLeaderRegistryMutation {
+            kind,
+            had_previous_entry,
+        });
+    }
+
+    fn recent_mutations(&self, region_id: u64) -> Vec<CheckLeaderRegistryMutation> {
+        self.recent_mutations_by_region
+            .get(&region_id)
+            .map(|mutations| mutations.iter().copied().collect())
+            .unwrap_or_default()
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
+struct CheckLeaderLeaderInfoSnapshot {
+    /// Leader peer id recorded in local `RegionReadProgress`.
+    leader_id: u64,
+    /// Leader term recorded in local `RegionReadProgress`.
+    leader_term: u64,
+    /// Region epoch conf_ver recorded in local `RegionReadProgress`.
+    epoch_conf_ver: u64,
+    /// Region epoch version recorded in local `RegionReadProgress`.
+    epoch_version: u64,
+    /// Store id resolved from the local peer list and local leader id.
+    leader_store_id: Option<u64>,
+    /// Number of peers in the local peer list.
+    peer_count: usize,
+}
+
+impl CheckLeaderLeaderInfoSnapshot {
+    fn from_local_info(local_info: &LocalLeaderInfo) -> Self {
+        CheckLeaderLeaderInfoSnapshot {
+            leader_id: local_info.leader_id,
+            leader_term: local_info.leader_term,
+            epoch_conf_ver: local_info.epoch.get_conf_ver(),
+            epoch_version: local_info.epoch.get_version(),
+            leader_store_id: local_info.leader_store_id,
+            peer_count: local_info.peers.len(),
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
+struct CheckLeaderLeaderInfoUpdate {
+    /// Code path that performed the last in-memory leader info update.
+    source: &'static str,
+    /// Monotonic counter of in-memory leader info updates for this region.
+    update_count: u64,
+    /// Local leader info before the last update.
+    before: CheckLeaderLeaderInfoSnapshot,
+    /// Local leader info after the last update.
+    after: CheckLeaderLeaderInfoSnapshot,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
+struct CheckLeaderLeaderInfoMismatch {
+    /// Current local leader info when check-leader detects a mismatch.
+    current: CheckLeaderLeaderInfoSnapshot,
+    /// Last in-memory update that wrote current local leader info.
+    last_update: Option<CheckLeaderLeaderInfoUpdate>,
+}
+
+impl CheckLeaderLeaderInfoMismatch {
+    fn from_core(core: &RegionReadProgressCore) -> Self {
+        CheckLeaderLeaderInfoMismatch {
+            current: CheckLeaderLeaderInfoSnapshot::from_local_info(&core.leader_info),
+            last_update: core.last_leader_info_update,
+        }
+    }
+}
+
+/// Sample of a region requested by check-leader but not returned by this store.
+#[allow(dead_code)]
+#[derive(Debug)]
+struct CheckLeaderUnreturnedRegion {
+    /// Region id from the leader-side check-leader request.
+    region_id: u64,
+    /// First-level reason why this region was not returned.
+    reason: CheckLeaderUnreturnedReason,
+    /// Leader peer id carried by the check-leader request.
+    request_peer_id: u64,
+    /// Leader term carried by the check-leader request.
+    request_term: u64,
+    /// Region epoch conf_ver carried by the check-leader request.
+    request_epoch_conf_ver: u64,
+    /// Region epoch version carried by the check-leader request.
+    request_epoch_version: u64,
+}
+
+impl CheckLeaderUnreturnedRegion {
+    fn new(leader_info: &LeaderInfo, reason: CheckLeaderUnreturnedReason) -> Self {
+        let region_epoch = leader_info.get_region_epoch();
+        CheckLeaderUnreturnedRegion {
+            region_id: leader_info.get_region_id(),
+            reason,
+            request_peer_id: leader_info.peer_id,
+            request_term: leader_info.term,
+            request_epoch_conf_ver: region_epoch.get_conf_ver(),
+            request_epoch_version: region_epoch.get_version(),
+        }
+    }
+}
 
 /// Check if key in region range (`start_key`, `end_key`).
 pub fn check_key_in_region_exclusive(key: &[u8], region: &metapb::Region) -> Result<()> {
@@ -1248,12 +1397,14 @@ impl Display for MsgType<'_> {
 #[derive(Clone)]
 pub struct RegionReadProgressRegistry {
     registry: Arc<Mutex<HashMap<u64, Arc<RegionReadProgress>>>>,
+    diagnostics: Arc<Mutex<CheckLeaderRegistryDiagnostics>>,
 }
 
 impl RegionReadProgressRegistry {
     pub fn new() -> RegionReadProgressRegistry {
         RegionReadProgressRegistry {
             registry: Arc::new(Mutex::new(HashMap::new())),
+            diagnostics: Arc::new(Mutex::new(CheckLeaderRegistryDiagnostics::new())),
         }
     }
 
@@ -1262,14 +1413,35 @@ impl RegionReadProgressRegistry {
         region_id: u64,
         read_progress: Arc<RegionReadProgress>,
     ) -> Option<Arc<RegionReadProgress>> {
-        self.registry
+        let previous = self
+            .registry
             .lock()
             .unwrap()
-            .insert(region_id, read_progress)
+            .insert(region_id, read_progress);
+        self.record_registry_mutation("insert", region_id, previous.is_some());
+        previous
     }
 
     pub fn remove(&self, region_id: &u64) -> Option<Arc<RegionReadProgress>> {
-        self.registry.lock().unwrap().remove(region_id)
+        let previous = self.registry.lock().unwrap().remove(region_id);
+        self.record_registry_mutation("remove", *region_id, previous.is_some());
+        previous
+    }
+
+    fn record_registry_mutation(
+        &self,
+        kind: &'static str,
+        region_id: u64,
+        had_previous_entry: bool,
+    ) {
+        self.diagnostics
+            .lock()
+            .unwrap()
+            .record(kind, region_id, had_previous_entry);
+    }
+
+    fn recent_registry_mutations(&self, region_id: u64) -> Vec<CheckLeaderRegistryMutation> {
+        self.diagnostics.lock().unwrap().recent_mutations(region_id)
     }
 
     pub fn get(&self, region_id: &u64) -> Option<Arc<RegionReadProgress>> {
@@ -1322,16 +1494,61 @@ impl RegionReadProgressRegistry {
         leaders: Vec<LeaderInfo>,
         coprocessor: &CoprocessorHost<E>,
     ) -> Vec<u64> {
+        let request_count = leaders.len();
         let mut regions = Vec::with_capacity(leaders.len());
-        let registry = self.registry.lock().unwrap();
-        let now = Some(Instant::now_coarse());
-        for leader_info in &leaders {
-            let region_id = leader_info.get_region_id();
-            if let Some(rp) = registry.get(&region_id) {
-                if rp.consume_leader_info(leader_info, coprocessor, now) {
-                    regions.push(region_id);
+        let mut registry_miss_count = 0;
+        let mut leader_info_mismatch_count = 0;
+        let mut unreturned_regions = Vec::new();
+        let mut unreturned_regions_truncated = false;
+        {
+            let registry = self.registry.lock().unwrap();
+            let now = Some(Instant::now_coarse());
+            for leader_info in &leaders {
+                let region_id = leader_info.get_region_id();
+                if let Some(rp) = registry.get(&region_id) {
+                    if let Some(mismatch_info) =
+                        rp.consume_leader_info_and_get_mismatch(leader_info, coprocessor, now)
+                    {
+                        leader_info_mismatch_count += 1;
+                        if unreturned_regions.len() < CHECK_LEADER_LOG_REGION_LIMIT {
+                            unreturned_regions.push(CheckLeaderUnreturnedRegion::new(
+                                leader_info,
+                                CheckLeaderUnreturnedReason::LeaderInfoMismatch {
+                                    leader_info_mismatch: mismatch_info,
+                                },
+                            ));
+                        } else {
+                            unreturned_regions_truncated = true;
+                        }
+                    } else {
+                        regions.push(region_id);
+                    }
+                } else {
+                    registry_miss_count += 1;
+                    if unreturned_regions.len() < CHECK_LEADER_LOG_REGION_LIMIT {
+                        unreturned_regions.push(CheckLeaderUnreturnedRegion::new(
+                            leader_info,
+                            CheckLeaderUnreturnedReason::RegistryMiss {
+                                registry_recent_mutations: self
+                                    .recent_registry_mutations(region_id),
+                            },
+                        ));
+                    } else {
+                        unreturned_regions_truncated = true;
+                    }
                 }
             }
+        }
+        if regions.len() < request_count {
+            warn!(
+                "[resolved-ts-stuck] check leader task returned partial regions";
+                "request_count" => request_count,
+                "response_count" => regions.len(),
+                "registry_miss_count" => registry_miss_count,
+                "leader_info_mismatch_count" => leader_info_mismatch_count,
+                "unreturned_regions" => ?unreturned_regions,
+                "unreturned_regions_truncated" => unreturned_regions_truncated,
+            );
         }
         regions
     }
@@ -1478,6 +1695,16 @@ impl RegionReadProgress {
         coprocessor: &CoprocessorHost<E>,
         now: Option<Instant>,
     ) -> bool {
+        self.consume_leader_info_and_get_mismatch(leader_info, coprocessor, now)
+            .is_none()
+    }
+
+    fn consume_leader_info_and_get_mismatch<E: KvEngine>(
+        &self,
+        leader_info: &LeaderInfo,
+        coprocessor: &CoprocessorHost<E>,
+        now: Option<Instant>,
+    ) -> Option<CheckLeaderLeaderInfoMismatch> {
         let mut core = self.core.lock().unwrap();
         if matches!((core.last_instant_of_consume_leader, now), (None, Some(_)))
             || matches!((core.last_instant_of_consume_leader, now), (Some(l), Some(r)) if l < r)
@@ -1499,9 +1726,14 @@ impl RegionReadProgress {
             coprocessor.on_update_safe_ts(leader_info.region_id, self.safe_ts(), rs.get_safe_ts())
         }
         // whether the provided `LeaderInfo` is same as ours
-        core.leader_info.leader_term == leader_info.term
+        if core.leader_info.leader_term == leader_info.term
             && core.leader_info.leader_id == leader_info.peer_id
             && is_region_epoch_equal(&core.leader_info.epoch, leader_info.get_region_epoch())
+        {
+            None
+        } else {
+            Some(CheckLeaderLeaderInfoMismatch::from_core(&core))
+        }
     }
 
     // Dump the `LeaderInfo` and the peer list
@@ -1514,7 +1746,18 @@ impl RegionReadProgress {
     }
 
     pub fn update_leader_info(&self, peer_id: u64, term: u64, region: &Region) {
+        self.update_leader_info_with_source("update_leader_info", peer_id, term, region)
+    }
+
+    pub(crate) fn update_leader_info_with_source(
+        &self,
+        source: &'static str,
+        peer_id: u64,
+        term: u64,
+        region: &Region,
+    ) {
         let mut core = self.core.lock().unwrap();
+        let before = CheckLeaderLeaderInfoSnapshot::from_local_info(&core.leader_info);
         core.leader_info.leader_id = peer_id;
         core.leader_info.leader_term = term;
         if !is_region_epoch_equal(region.get_region_epoch(), &core.leader_info.epoch) {
@@ -1526,7 +1769,14 @@ impl RegionReadProgress {
             core.leader_info.peers = region.get_peers().to_vec();
         }
         core.leader_info.leader_store_id =
-            find_store_id(&core.leader_info.peers, core.leader_info.leader_id)
+            find_store_id(&core.leader_info.peers, core.leader_info.leader_id);
+        core.leader_info_update_count += 1;
+        core.last_leader_info_update = Some(CheckLeaderLeaderInfoUpdate {
+            source,
+            update_count: core.leader_info_update_count,
+            before,
+            after: CheckLeaderLeaderInfoSnapshot::from_local_info(&core.leader_info),
+        });
     }
 
     /// Reset `safe_ts` to 0 and stop updating it
@@ -1578,6 +1828,10 @@ pub struct RegionReadProgressCore {
     read_state: ReadState,
     // The local peer's acknowledge about the leader
     leader_info: LocalLeaderInfo,
+    // Number of in-memory updates to `leader_info`, used only for anomaly diagnosis.
+    leader_info_update_count: u64,
+    // Last in-memory update to `leader_info`, printed only by check-leader anomaly logs.
+    last_leader_info_update: Option<CheckLeaderLeaderInfoUpdate>,
     // `pending_items` is a *sorted* list of `(apply_index, safe_ts)` item
     pending_items: VecDeque<ReadState>,
     // After the region commit merged, the region's key range is extended and the region's
@@ -1663,6 +1917,8 @@ impl RegionReadProgressCore {
             applied_index,
             read_state: ReadState::default(),
             leader_info: LocalLeaderInfo::new(region),
+            leader_info_update_count: 0,
+            last_leader_info_update: None,
             pending_items: VecDeque::with_capacity(cap),
             last_merge_index: 0,
             pause: is_witness,
