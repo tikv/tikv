@@ -87,7 +87,7 @@ impl CheckLeaderRegistryDiagnostics {
         let recent_mutations = self
             .recent_mutations_by_region
             .entry(region_id)
-            .or_insert_with(|| VecDeque::with_capacity(CHECK_LEADER_REGISTRY_MUTATION_LIMIT));
+            .or_default();
         if recent_mutations.len() >= CHECK_LEADER_REGISTRY_MUTATION_LIMIT {
             recent_mutations.pop_front();
         }
