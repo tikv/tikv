@@ -884,15 +884,6 @@ impl ReadPoolConfigRunner {
             && self.cur_thread_count < self.core_thread_count
             && scale_out_allowed;
 
-        // While we haven't scaled back up to core_thread_count, keep noisy
-        // resource groups deprioritized — this is resource_control's own
-        // lever for protecting the rest of the traffic while capacity is
-        // still short, driven from here instead of resource_control
-        // deciding this on its own tick.
-        if let Some(rm) = scheduling_rm {
-            rm.deprioritize_over_quota_groups(self.cur_thread_count < self.core_thread_count);
-        }
-
         let new_thread_count = if busy_cpu_scale_in {
             // CPU threshold takes precedence over busy thread scaling conditions
             std::cmp::max(
@@ -917,6 +908,12 @@ impl ReadPoolConfigRunner {
             self.handle.scale_pool_size(new_thread_count);
             self.notify_pool_size_change(new_thread_count);
             self.cur_thread_count = new_thread_count;
+        }
+
+        // While we haven't scaled back up to core_thread_count, keep noisy
+        // resource groups deprioritized.
+        if let Some(rm) = scheduling_rm {
+            rm.deprioritize_over_quota_groups(self.cur_thread_count < self.core_thread_count);
         }
     }
 
