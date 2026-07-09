@@ -84191,7 +84191,7 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 12,
+            "w": 6,
             "x": 0,
             "y": 0
           },
@@ -84339,8 +84339,8 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 12,
-            "x": 12,
+            "w": 6,
+            "x": 6,
             "y": 0
           },
           "height": null,
@@ -84451,6 +84451,272 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Historical (floor), current (measured), and target (foreground-pressure-driven ceiling) CPU usage of the unified read pool, in cores.",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 6,
+            "x": 12,
+            "y": 0
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 616,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum((\n    tikv_resource_control_read_pool_cpu_cores\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance, type) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{type}}-{{instance}}",
+              "metric": "",
+              "query": "sum((\n    tikv_resource_control_read_pool_cpu_cores\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance, type) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Unified Read Pool CPU",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Common 0-100 resource-pressure score per resource type (cpu, io, compaction) used to drive background/foreground throttling.",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 6,
+            "x": 18,
+            "y": 0
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 617,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum((\n    tikv_resource_control_resource_score\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance, type) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{type}}-{{instance}}",
+              "metric": "",
+              "query": "sum((\n    tikv_resource_control_resource_score\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance, type) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Resource Pressure Scores",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "Current rate limit per resource group (0 = unlimited, hidden).",
           "editable": true,
           "error": false,
@@ -84478,7 +84744,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 616,
+          "id": 618,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -84611,7 +84877,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 617,
+          "id": 619,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -84744,7 +85010,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 618,
+          "id": 620,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -84907,7 +85173,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 619,
+          "id": 621,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -85040,7 +85306,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 620,
+          "id": 622,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -85241,7 +85507,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 621,
+          "id": 623,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -85377,7 +85643,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 622,
+      "id": 624,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -85416,7 +85682,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 623,
+          "id": 625,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -85617,7 +85883,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 624,
+          "id": 626,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -85753,7 +86019,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 625,
+      "id": 627,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -85792,7 +86058,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 626,
+          "id": 628,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -85925,7 +86191,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 627,
+          "id": 629,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -86058,7 +86324,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 628,
+          "id": 630,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -86191,7 +86457,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 629,
+          "id": 631,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -86324,7 +86590,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 630,
+          "id": 632,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -86472,7 +86738,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 631,
+          "id": 633,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -86676,7 +86942,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 632,
+      "id": 634,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -86715,7 +86981,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 633,
+          "id": 635,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -86848,7 +87114,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 634,
+          "id": 636,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -86981,7 +87247,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 635,
+          "id": 637,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -87114,7 +87380,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 636,
+          "id": 638,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -87247,7 +87513,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 637,
+          "id": 639,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -87444,7 +87710,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 638,
+          "id": 640,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -87526,7 +87792,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 639,
+      "id": 641,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -87595,7 +87861,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 640,
+          "id": 642,
           "interval": null,
           "links": [],
           "mappings": [],
@@ -87712,7 +87978,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 641,
+          "id": 643,
           "interval": null,
           "links": [],
           "mappings": [],
@@ -87829,7 +88095,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 642,
+          "id": 644,
           "interval": null,
           "links": [],
           "mappings": [],
@@ -87946,7 +88212,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 643,
+          "id": 645,
           "interval": null,
           "links": [],
           "mappings": [],
