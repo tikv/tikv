@@ -101,6 +101,20 @@ lazy_static! {
         exponential_buckets(1e-4, 2.0, 20).unwrap() // 100us ~ 52s
     )
     .unwrap();
+
+    pub static ref READ_POOL_CPU_VEC: GaugeVec = register_gauge_vec!(
+        "tikv_resource_control_read_pool_cpu_cores",
+        "Unified read pool CPU usage in cores: historical (floor), current (measured), and target (foreground-pressure-driven ceiling)",
+        &["type"]
+    )
+    .unwrap();
+
+    pub static ref RESOURCE_SCORE_VEC: GaugeVec = register_gauge_vec!(
+        "tikv_resource_control_resource_score",
+        "Common 0-100 resource-pressure score computed by compute_resource_scores, per resource type (cpu, io, compaction)",
+        &["type"]
+    )
+    .unwrap();
 }
 
 pub fn deregister_metrics(name: &str) {
