@@ -124,6 +124,10 @@ pub struct GroupQuotaAdjustWorker<R> {
     // resource-pressure score alongside whole-process CPU.
     grpc_cpu_tracker: ThreadGroupCpuTracker,
     caps: ResourceCapacities,
+    // IO quota (bytes/s) available to `resource_quota_getter` for
+    // ResourceType::Io. 0 means IO rate limiting isn't configured at all, in
+    // which case there's nothing to fetch stats for or throttle.
+    io_bandwidth: f64,
 }
 
 impl GroupQuotaAdjustWorker<SysQuotaGetter> {
@@ -144,6 +148,7 @@ impl GroupQuotaAdjustWorker<SysQuotaGetter> {
             resource_quota_getter,
             compaction_pending_bytes_ratio,
             grpc_concurrency,
+            io_bandwidth as f64,
         )
     }
 }
@@ -154,6 +159,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         resource_quota_getter: R,
         compaction_pending_bytes_ratio: Arc<AtomicU32>,
         grpc_concurrency: usize,
+        io_bandwidth: f64,
     ) -> Self {
         let bg_limiter = resource_ctl.get_background_limiter();
         Self {
@@ -169,6 +175,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
                 total_cpu_cores: SysQuota::cpu_cores_quota(),
                 grpc_concurrency: grpc_concurrency as f64,
             },
+            io_bandwidth,
         }
     }
 
@@ -201,35 +208,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             0.0
         };
 
-        // io_score (like io_stats) is only consumed by `background_adjust_quota`,
-        // so mirror its own `has_background_groups()` gate here and skip the IO
-        // fetch entirely when there's nothing background to throttle — the old
-        // code never tracked IO stats unconditionally either.
-        let (io_stats, io_util) = if self.resource_ctl.has_background_groups() {
-            // Fetch IO stats up front so the common score computation below
-            // sees a consistent snapshot. A fetch failure only disables IO
-            // scoring/adjustment for this tick, not the whole tick.
-            let io_stats = match self
-                .resource_quota_getter
-                .get_current_stats(ResourceType::Io)
-            {
-                Ok(s) => Some(s),
-                Err(e) => {
-                    warn!("get io stats failed; skip io adjustment."; "err" => ?e);
-                    None
-                }
-            };
-            let io_util = io_stats.as_ref().map_or(0.0, |s| {
-                if s.total_quota > f64::EPSILON {
-                    s.current_used / s.total_quota * 100.0
-                } else {
-                    0.0
-                }
-            });
-            (io_stats, io_util)
-        } else {
-            (None, 0.0)
-        };
+        let (io_stats, io_util) = self.fetch_io_stats();
 
         let grpc_cpu_cores = self.grpc_cpu_tracker.measure_cpu_cores();
 
@@ -250,6 +229,39 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
 
     fn foreground_adjust_quota(&mut self, cpu_score: f64) {
         self.resource_ctl.online_adjust_resource_quota(cpu_score);
+    }
+
+    // io_score (like io_stats) is only consumed by `background_adjust_quota`,
+    // so mirror its gates here and skip the IO fetch entirely when there's
+    // nothing background to throttle, or when IO rate limiting isn't even
+    // configured (io_bandwidth == 0, so total_quota will be 0 and
+    // background_adjust_resource_quota would bail out anyway) — the old code
+    // never tracked IO stats unconditionally either.
+    fn fetch_io_stats(&mut self) -> (Option<ResourceUsageStats>, f64) {
+        if !self.resource_ctl.has_background_groups() || self.io_bandwidth <= 0.0 {
+            return (None, 0.0);
+        }
+        // Fetch IO stats up front so the common score computation below sees
+        // a consistent snapshot. A fetch failure only disables IO
+        // scoring/adjustment for this tick, not the whole tick.
+        let io_stats = match self
+            .resource_quota_getter
+            .get_current_stats(ResourceType::Io)
+        {
+            Ok(s) => Some(s),
+            Err(e) => {
+                warn!("get io stats failed; skip io adjustment."; "err" => ?e);
+                None
+            }
+        };
+        let io_util = io_stats.as_ref().map_or(0.0, |s| {
+            if s.total_quota > f64::EPSILON {
+                s.current_used / s.total_quota * 100.0
+            } else {
+                0.0
+            }
+        });
+        (io_stats, io_util)
     }
 
     fn background_adjust_quota(
@@ -318,7 +330,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             io_stats,
             scores.io_score,
         );
-        self.adjust_write_io_by_compaction_pressure();
+        self.adjust_write_io_by_compaction_pressure(scores.compaction_score);
     }
 
     fn background_adjust_resource_quota(
@@ -434,8 +446,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
     /// When pressure >= threshold, linearly scale write IO from ceiling to
     /// floor. Below threshold, write IO ramps up 10% per tick capped at
     /// ceiling.
-    fn adjust_write_io_by_compaction_pressure(&self) {
-        let pressure = self.compaction_pending_bytes_ratio.load(Ordering::Relaxed) as f64;
+    fn adjust_write_io_by_compaction_pressure(&self, pressure: f64) {
         let config = self.resource_ctl.get_config().value().clone();
         let threshold = config.bg_compaction_pressure_threshold.clamp(1.0, 99.0);
         let ceiling = config.bg_write_io_ceiling.0 as f64; // bytes/s
@@ -767,6 +778,7 @@ mod tests {
             test_provider,
             compaction_pending_bytes_ratio,
             8,
+            10000.0,
         );
 
         // Create default background group with 80% utilization limit.
@@ -937,6 +949,7 @@ mod tests {
             test_provider,
             compaction_pending_bytes_ratio,
             8,
+            10000.0,
         );
 
         let reset_quota = |worker: &mut GroupQuotaAdjustWorker<TestResourceStatsProvider>,
@@ -1016,6 +1029,46 @@ mod tests {
         check(
             limiter.get_limiter(ResourceType::Io).get_rate_limit(),
             1100.0,
+        );
+    }
+
+    #[test]
+    fn test_zero_io_bandwidth_skips_io_fetch_and_uncaps_io_limiter() {
+        // io_bandwidth == 0 means IO rate limiting isn't configured at all:
+        // adjust_quota should skip fetching IO stats entirely (unobservable
+        // here directly, but exercised so a panic would catch a regression)
+        // and the background IO limiter should stay/become unlimited, same
+        // as background_adjust_resource_quota's own total_quota <= EPSILON
+        // bailout would produce.
+        let resource_ctl = Arc::new(ResourceGroupManager::default());
+
+        let bg = new_background_resource_group_ru("bg_worker".into(), 5000, 8, vec!["br".into()]);
+        resource_ctl.add_resource_group(bg);
+        let limiter = resource_ctl
+            .get_background_resource_limiter("bg_worker", "br")
+            .unwrap();
+
+        // 8 CPU cores, but io_total == 0 (IO rate limiting disabled).
+        let test_provider = TestResourceStatsProvider::new(8.0, 0.0);
+        let compaction_pending_bytes_ratio = Arc::new(AtomicU32::new(0));
+        let mut worker = GroupQuotaAdjustWorker::with_quota_getter(
+            resource_ctl.clone(),
+            test_provider,
+            compaction_pending_bytes_ratio,
+            8,
+            0.0, // io_bandwidth
+        );
+
+        worker.resource_quota_getter.cpu_used = 8.0; // saturate CPU
+        worker.last_adjust_time = Instant::now_coarse() - Duration::from_secs(1);
+        worker.adjust_quota();
+
+        assert!(
+            limiter
+                .get_limiter(ResourceType::Io)
+                .get_rate_limit()
+                .is_infinite(),
+            "IO limiter should stay unlimited when io_bandwidth == 0"
         );
     }
 
@@ -1205,6 +1258,7 @@ mod tests {
             TestResourceStatsProvider::new(8.0, 10000.0),
             compaction_pending_bytes_ratio,
             8,
+            10000.0,
         );
 
         const BG_TARGET: f64 = 5.6;
@@ -1276,6 +1330,7 @@ mod tests {
             test_provider,
             compaction_pending_bytes_ratio.clone(),
             8,
+            10000.0,
         );
 
         // Create default background group with 80% utilization limit.
@@ -1434,6 +1489,7 @@ mod tests {
             test_provider,
             compaction_pending_bytes_ratio,
             8,
+            10000.0,
         );
 
         // Add two background groups with different RU quotas.
