@@ -36,7 +36,7 @@ use tikv_util::{
     debug, info,
     store::{find_peer_by_id, region},
     time::{monotonic_raw_now, Instant},
-    Either,
+    warn, Either,
 };
 use time::{Duration, Timespec};
 use tokio::sync::Notify;
@@ -50,6 +50,103 @@ use crate::{
 };
 
 const INVALID_TIMESTAMP: u64 = u64::MAX;
+const CHECK_LEADER_LOG_REGION_LIMIT: usize = 3;
+
+enum CheckLeaderUnreturnedReason {
+    RegistryMiss,
+    LeaderInfoMismatch,
+}
+
+impl CheckLeaderUnreturnedReason {
+    fn as_str(&self) -> &'static str {
+        match self {
+            CheckLeaderUnreturnedReason::RegistryMiss => "registry_miss",
+            CheckLeaderUnreturnedReason::LeaderInfoMismatch => "leader_info_mismatch",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct CheckLeaderLocalLeaderInfo {
+    leader_id: u64,
+    leader_term: u64,
+    epoch_conf_ver: u64,
+    epoch_version: u64,
+}
+
+impl CheckLeaderLocalLeaderInfo {
+    fn from_core(core: &RegionReadProgressCore) -> Self {
+        CheckLeaderLocalLeaderInfo {
+            leader_id: core.leader_info.leader_id,
+            leader_term: core.leader_info.leader_term,
+            epoch_conf_ver: core.leader_info.epoch.get_conf_ver(),
+            epoch_version: core.leader_info.epoch.get_version(),
+        }
+    }
+}
+
+/// Sample of a region requested by check-leader but not returned by this store.
+struct CheckLeaderUnreturnedRegion {
+    /// Region id from the leader-side check-leader request.
+    region_id: u64,
+    /// First-level reason why this region was not returned.
+    reason: CheckLeaderUnreturnedReason,
+    /// Leader peer id carried by the check-leader request.
+    request_peer_id: u64,
+    /// Leader term carried by the check-leader request.
+    request_term: u64,
+    /// Region epoch conf_ver carried by the check-leader request.
+    request_epoch_conf_ver: u64,
+    /// Region epoch version carried by the check-leader request.
+    request_epoch_version: u64,
+    /// Local leader id in this store's `RegionReadProgress`.
+    local_leader_id: Option<u64>,
+    /// Local leader term in this store's `RegionReadProgress`.
+    local_leader_term: Option<u64>,
+    /// Local region epoch conf_ver in this store's `RegionReadProgress`.
+    local_epoch_conf_ver: Option<u64>,
+    /// Local region epoch version in this store's `RegionReadProgress`.
+    local_epoch_version: Option<u64>,
+}
+
+impl CheckLeaderUnreturnedRegion {
+    fn new(
+        leader_info: &LeaderInfo,
+        reason: CheckLeaderUnreturnedReason,
+        local_leader_info: Option<CheckLeaderLocalLeaderInfo>,
+    ) -> Self {
+        let region_epoch = leader_info.get_region_epoch();
+        CheckLeaderUnreturnedRegion {
+            region_id: leader_info.get_region_id(),
+            reason,
+            request_peer_id: leader_info.peer_id,
+            request_term: leader_info.term,
+            request_epoch_conf_ver: region_epoch.get_conf_ver(),
+            request_epoch_version: region_epoch.get_version(),
+            local_leader_id: local_leader_info.map(|info| info.leader_id),
+            local_leader_term: local_leader_info.map(|info| info.leader_term),
+            local_epoch_conf_ver: local_leader_info.map(|info| info.epoch_conf_ver),
+            local_epoch_version: local_leader_info.map(|info| info.epoch_version),
+        }
+    }
+}
+
+impl fmt::Debug for CheckLeaderUnreturnedRegion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CheckLeaderUnreturnedRegion")
+            .field("region_id", &self.region_id)
+            .field("reason", &self.reason.as_str())
+            .field("request_peer_id", &self.request_peer_id)
+            .field("request_term", &self.request_term)
+            .field("request_epoch_conf_ver", &self.request_epoch_conf_ver)
+            .field("request_epoch_version", &self.request_epoch_version)
+            .field("local_leader_id", &self.local_leader_id)
+            .field("local_leader_term", &self.local_leader_term)
+            .field("local_epoch_conf_ver", &self.local_epoch_conf_ver)
+            .field("local_epoch_version", &self.local_epoch_version)
+            .finish()
+    }
+}
 
 /// Check if key in region range (`start_key`, `end_key`).
 pub fn check_key_in_region_exclusive(key: &[u8], region: &metapb::Region) -> Result<()> {
@@ -1322,16 +1419,58 @@ impl RegionReadProgressRegistry {
         leaders: Vec<LeaderInfo>,
         coprocessor: &CoprocessorHost<E>,
     ) -> Vec<u64> {
+        let request_count = leaders.len();
         let mut regions = Vec::with_capacity(leaders.len());
-        let registry = self.registry.lock().unwrap();
-        let now = Some(Instant::now_coarse());
-        for leader_info in &leaders {
-            let region_id = leader_info.get_region_id();
-            if let Some(rp) = registry.get(&region_id) {
-                if rp.consume_leader_info(leader_info, coprocessor, now) {
-                    regions.push(region_id);
+        let mut registry_miss_count = 0;
+        let mut leader_info_mismatch_count = 0;
+        let mut unreturned_regions = Vec::new();
+        let mut unreturned_regions_truncated = false;
+        {
+            let registry = self.registry.lock().unwrap();
+            let now = Some(Instant::now_coarse());
+            for leader_info in &leaders {
+                let region_id = leader_info.get_region_id();
+                let unreturned_region = if let Some(rp) = registry.get(&region_id) {
+                    if let Some(local_leader_info) =
+                        rp.consume_leader_info_and_get_mismatch(leader_info, coprocessor, now)
+                    {
+                        leader_info_mismatch_count += 1;
+                        Some(CheckLeaderUnreturnedRegion::new(
+                            leader_info,
+                            CheckLeaderUnreturnedReason::LeaderInfoMismatch,
+                            Some(local_leader_info),
+                        ))
+                    } else {
+                        regions.push(region_id);
+                        None
+                    }
+                } else {
+                    registry_miss_count += 1;
+                    Some(CheckLeaderUnreturnedRegion::new(
+                        leader_info,
+                        CheckLeaderUnreturnedReason::RegistryMiss,
+                        None,
+                    ))
+                };
+                if let Some(unreturned_region) = unreturned_region {
+                    if unreturned_regions.len() < CHECK_LEADER_LOG_REGION_LIMIT {
+                        unreturned_regions.push(unreturned_region);
+                    } else {
+                        unreturned_regions_truncated = true;
+                    }
                 }
             }
+        }
+        if regions.len() < request_count {
+            warn!(
+                "[resolved-ts-stuck] check leader task returned partial regions";
+                "request_count" => request_count,
+                "response_count" => regions.len(),
+                "registry_miss_count" => registry_miss_count,
+                "leader_info_mismatch_count" => leader_info_mismatch_count,
+                "unreturned_regions" => ?unreturned_regions,
+                "unreturned_regions_truncated" => unreturned_regions_truncated,
+            );
         }
         regions
     }
@@ -1478,6 +1617,16 @@ impl RegionReadProgress {
         coprocessor: &CoprocessorHost<E>,
         now: Option<Instant>,
     ) -> bool {
+        self.consume_leader_info_and_get_mismatch(leader_info, coprocessor, now)
+            .is_none()
+    }
+
+    fn consume_leader_info_and_get_mismatch<E: KvEngine>(
+        &self,
+        leader_info: &LeaderInfo,
+        coprocessor: &CoprocessorHost<E>,
+        now: Option<Instant>,
+    ) -> Option<CheckLeaderLocalLeaderInfo> {
         let mut core = self.core.lock().unwrap();
         if matches!((core.last_instant_of_consume_leader, now), (None, Some(_)))
             || matches!((core.last_instant_of_consume_leader, now), (Some(l), Some(r)) if l < r)
@@ -1499,9 +1648,14 @@ impl RegionReadProgress {
             coprocessor.on_update_safe_ts(leader_info.region_id, self.safe_ts(), rs.get_safe_ts())
         }
         // whether the provided `LeaderInfo` is same as ours
-        core.leader_info.leader_term == leader_info.term
+        if core.leader_info.leader_term == leader_info.term
             && core.leader_info.leader_id == leader_info.peer_id
             && is_region_epoch_equal(&core.leader_info.epoch, leader_info.get_region_epoch())
+        {
+            None
+        } else {
+            Some(CheckLeaderLocalLeaderInfo::from_core(&core))
+        }
     }
 
     // Dump the `LeaderInfo` and the peer list
