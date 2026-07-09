@@ -30,7 +30,7 @@ impl BackupStreamObserver {
     /// Create a new `BackupStreamObserver`.
     ///
     /// Events are strong ordered, so `scheduler` must be implemented as
-    /// a FIFO queue.
+    /// a FIFO task queue.
     pub fn new(scheduler: Scheduler<Task>) -> BackupStreamObserver {
         BackupStreamObserver {
             scheduler,
