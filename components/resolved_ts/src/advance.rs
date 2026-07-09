@@ -51,11 +51,7 @@ const DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL: usize = 2;
 const DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS: usize = 4096;
 const CHECK_LEADER_LOG_REGION_LIMIT: usize = 3;
 
-/// Per target-store status in the check-leader unresolved summary log.
-///
-/// This is printed only when some checked regions cannot pass quorum, so every
-/// field is aimed at answering which requested stores did not return the
-/// unresolved regions.
+/// CheckLeaderStoreStatus record each store's leadership details.
 struct CheckLeaderStoreStatus {
     /// Store that received a check-leader request from this leader.
     to_store_id: u64,
@@ -467,7 +463,7 @@ impl LeadershipResolver {
                 .filter(|region_id| !valid_region_set.contains(region_id))
                 .copied()
                 .collect::<HashSet<_>>();
-            let (unresolved_regions, unresolved_regions_truncated) =
+            let (unresolved_regions, _) =
                 limited_region_list(unresolved_region_set.iter().copied());
             let target_store_status = build_check_leader_store_status(
                 &requested_regions_by_store,
@@ -481,7 +477,6 @@ impl LeadershipResolver {
                 "valid_region_count" => res.len(),
                 "checking_region_count" => checking_regions.len(),
                 "unresolved_regions" => ?unresolved_regions,
-                "unresolved_regions_truncated" => unresolved_regions_truncated,
                 "target_store_status" => ?target_store_status,
             );
         }
