@@ -51,6 +51,7 @@ const DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS: usize = 4096;
 const CHECK_LEADER_LOG_REGION_LIMIT: usize = 3;
 
 /// CheckLeaderStoreStatus record each store's leadership details.
+#[allow(dead_code)]
 #[derive(Debug)]
 struct CheckLeaderStoreStatus {
     /// Store that received a check-leader request from this leader.

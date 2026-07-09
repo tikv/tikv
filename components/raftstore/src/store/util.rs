@@ -53,6 +53,7 @@ const INVALID_TIMESTAMP: u64 = u64::MAX;
 const CHECK_LEADER_LOG_REGION_LIMIT: usize = 3;
 const CHECK_LEADER_REGISTRY_MUTATION_LIMIT: usize = 10;
 
+#[allow(dead_code)]
 #[derive(Debug)]
 enum CheckLeaderUnreturnedReason {
     RegistryMiss {
@@ -63,6 +64,7 @@ enum CheckLeaderUnreturnedReason {
     },
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 struct CheckLeaderRegistryMutation {
     /// Registry mutation kind.
@@ -105,6 +107,7 @@ impl CheckLeaderRegistryDiagnostics {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 struct CheckLeaderLeaderInfoSnapshot {
     /// Leader peer id recorded in local `RegionReadProgress`.
@@ -134,6 +137,7 @@ impl CheckLeaderLeaderInfoSnapshot {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 struct CheckLeaderLeaderInfoUpdate {
     /// Code path that performed the last in-memory leader info update.
@@ -146,6 +150,7 @@ struct CheckLeaderLeaderInfoUpdate {
     after: CheckLeaderLeaderInfoSnapshot,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 struct CheckLeaderLeaderInfoMismatch {
     /// Current local leader info when check-leader detects a mismatch.
@@ -164,6 +169,7 @@ impl CheckLeaderLeaderInfoMismatch {
 }
 
 /// Sample of a region requested by check-leader but not returned by this store.
+#[allow(dead_code)]
 #[derive(Debug)]
 struct CheckLeaderUnreturnedRegion {
     /// Region id from the leader-side check-leader request.
