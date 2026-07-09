@@ -1564,8 +1564,12 @@ where
         self.maybe_update_read_progress(reader, progress);
 
         // Update leader info
-        self.read_progress
-            .update_leader_info(self.leader_id(), self.term(), self.region());
+        self.read_progress.update_leader_info_with_source(
+            "peer_set_region",
+            self.leader_id(),
+            self.term(),
+            self.region(),
+        );
 
         {
             let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
@@ -2307,8 +2311,12 @@ where
             "peer_id" => self.peer_id(),
         );
 
-        self.read_progress
-            .update_leader_info(leader_id, term, self.region());
+        self.read_progress.update_leader_info_with_source(
+            "peer_on_leader_changed",
+            leader_id,
+            term,
+            self.region(),
+        );
     }
 
     #[inline]

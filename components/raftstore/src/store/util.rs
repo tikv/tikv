@@ -51,7 +51,9 @@ use crate::{
 
 const INVALID_TIMESTAMP: u64 = u64::MAX;
 const CHECK_LEADER_LOG_REGION_LIMIT: usize = 3;
+const CHECK_LEADER_REGISTRY_MUTATION_LIMIT: usize = 128;
 
+#[derive(Clone, Copy)]
 enum CheckLeaderUnreturnedReason {
     RegistryMiss,
     LeaderInfoMismatch,
@@ -67,20 +69,130 @@ impl CheckLeaderUnreturnedReason {
 }
 
 #[derive(Clone, Copy)]
-struct CheckLeaderLocalLeaderInfo {
+struct CheckLeaderRegistryMutation {
+    /// Monotonic counter of registry mutations in this store.
+    mutation_count: u64,
+    /// Registry mutation kind.
+    kind: &'static str,
+    /// Region id touched by the registry mutation.
+    region_id: u64,
+    /// Whether this operation saw an existing entry for the region before it
+    /// ran.
+    had_previous_entry: bool,
+}
+
+impl fmt::Debug for CheckLeaderRegistryMutation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CheckLeaderRegistryMutation")
+            .field("mutation_count", &self.mutation_count)
+            .field("kind", &self.kind)
+            .field("region_id", &self.region_id)
+            .field("had_previous_entry", &self.had_previous_entry)
+            .finish()
+    }
+}
+
+struct CheckLeaderRegistryDiagnostics {
+    mutation_count: u64,
+    recent_mutations: VecDeque<CheckLeaderRegistryMutation>,
+}
+
+impl CheckLeaderRegistryDiagnostics {
+    fn new() -> Self {
+        CheckLeaderRegistryDiagnostics {
+            mutation_count: 0,
+            recent_mutations: VecDeque::with_capacity(CHECK_LEADER_REGISTRY_MUTATION_LIMIT),
+        }
+    }
+
+    fn record(&mut self, kind: &'static str, region_id: u64, had_previous_entry: bool) {
+        self.mutation_count += 1;
+        if self.recent_mutations.len() >= CHECK_LEADER_REGISTRY_MUTATION_LIMIT {
+            self.recent_mutations.pop_front();
+        }
+        self.recent_mutations
+            .push_back(CheckLeaderRegistryMutation {
+                mutation_count: self.mutation_count,
+                kind,
+                region_id,
+                had_previous_entry,
+            });
+    }
+
+    fn last_mutation(&self, region_id: u64) -> Option<CheckLeaderRegistryMutation> {
+        self.recent_mutations
+            .iter()
+            .rev()
+            .find(|mutation| mutation.region_id == region_id)
+            .copied()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CheckLeaderLeaderInfoSnapshot {
+    /// Leader peer id recorded in local `RegionReadProgress`.
     leader_id: u64,
+    /// Leader term recorded in local `RegionReadProgress`.
     leader_term: u64,
+    /// Region epoch conf_ver recorded in local `RegionReadProgress`.
     epoch_conf_ver: u64,
+    /// Region epoch version recorded in local `RegionReadProgress`.
     epoch_version: u64,
+    /// Store id resolved from the local peer list and local leader id.
+    leader_store_id: Option<u64>,
+    /// Number of peers in the local peer list.
+    peer_count: usize,
+}
+
+impl CheckLeaderLeaderInfoSnapshot {
+    fn from_local_info(local_info: &LocalLeaderInfo) -> Self {
+        CheckLeaderLeaderInfoSnapshot {
+            leader_id: local_info.leader_id,
+            leader_term: local_info.leader_term,
+            epoch_conf_ver: local_info.epoch.get_conf_ver(),
+            epoch_version: local_info.epoch.get_version(),
+            leader_store_id: local_info.leader_store_id,
+            peer_count: local_info.peers.len(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct CheckLeaderLeaderInfoUpdate {
+    /// Code path that performed the last in-memory leader info update.
+    source: &'static str,
+    /// Monotonic counter of in-memory leader info updates for this region.
+    update_count: u64,
+    /// Local leader info before the last update.
+    before: CheckLeaderLeaderInfoSnapshot,
+    /// Local leader info after the last update.
+    after: CheckLeaderLeaderInfoSnapshot,
+}
+
+impl fmt::Debug for CheckLeaderLeaderInfoUpdate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CheckLeaderLeaderInfoUpdate")
+            .field("source", &self.source)
+            .field("update_count", &self.update_count)
+            .field("before", &self.before)
+            .field("after", &self.after)
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy)]
+struct CheckLeaderLocalLeaderInfo {
+    /// Current local leader info when check-leader detects a mismatch.
+    current: CheckLeaderLeaderInfoSnapshot,
+    /// Last in-memory update that wrote current local leader info.
+    last_update: Option<CheckLeaderLeaderInfoUpdate>,
 }
 
 impl CheckLeaderLocalLeaderInfo {
     fn from_core(core: &RegionReadProgressCore) -> Self {
         CheckLeaderLocalLeaderInfo {
-            leader_id: core.leader_info.leader_id,
-            leader_term: core.leader_info.leader_term,
-            epoch_conf_ver: core.leader_info.epoch.get_conf_ver(),
-            epoch_version: core.leader_info.epoch.get_version(),
+            current: CheckLeaderLeaderInfoSnapshot::from_local_info(&core.leader_info),
+            last_update: core.last_leader_info_update,
         }
     }
 }
@@ -107,6 +219,15 @@ struct CheckLeaderUnreturnedRegion {
     local_epoch_conf_ver: Option<u64>,
     /// Local region epoch version in this store's `RegionReadProgress`.
     local_epoch_version: Option<u64>,
+    /// Local leader store id in this store's `RegionReadProgress`.
+    local_leader_store_id: Option<u64>,
+    /// Number of peers in this store's local `RegionReadProgress`.
+    local_peer_count: Option<usize>,
+    /// Last in-memory update that wrote local leader info before this mismatch.
+    local_last_update: Option<CheckLeaderLeaderInfoUpdate>,
+    /// Recent registry mutation for this region, if it is still in the bounded
+    /// ring buffer.
+    registry_last_mutation: Option<CheckLeaderRegistryMutation>,
 }
 
 impl CheckLeaderUnreturnedRegion {
@@ -114,6 +235,7 @@ impl CheckLeaderUnreturnedRegion {
         leader_info: &LeaderInfo,
         reason: CheckLeaderUnreturnedReason,
         local_leader_info: Option<CheckLeaderLocalLeaderInfo>,
+        registry_last_mutation: Option<CheckLeaderRegistryMutation>,
     ) -> Self {
         let region_epoch = leader_info.get_region_epoch();
         CheckLeaderUnreturnedRegion {
@@ -123,10 +245,14 @@ impl CheckLeaderUnreturnedRegion {
             request_term: leader_info.term,
             request_epoch_conf_ver: region_epoch.get_conf_ver(),
             request_epoch_version: region_epoch.get_version(),
-            local_leader_id: local_leader_info.map(|info| info.leader_id),
-            local_leader_term: local_leader_info.map(|info| info.leader_term),
-            local_epoch_conf_ver: local_leader_info.map(|info| info.epoch_conf_ver),
-            local_epoch_version: local_leader_info.map(|info| info.epoch_version),
+            local_leader_id: local_leader_info.map(|info| info.current.leader_id),
+            local_leader_term: local_leader_info.map(|info| info.current.leader_term),
+            local_epoch_conf_ver: local_leader_info.map(|info| info.current.epoch_conf_ver),
+            local_epoch_version: local_leader_info.map(|info| info.current.epoch_version),
+            local_leader_store_id: local_leader_info.and_then(|info| info.current.leader_store_id),
+            local_peer_count: local_leader_info.map(|info| info.current.peer_count),
+            local_last_update: local_leader_info.and_then(|info| info.last_update),
+            registry_last_mutation,
         }
     }
 }
@@ -144,6 +270,10 @@ impl fmt::Debug for CheckLeaderUnreturnedRegion {
             .field("local_leader_term", &self.local_leader_term)
             .field("local_epoch_conf_ver", &self.local_epoch_conf_ver)
             .field("local_epoch_version", &self.local_epoch_version)
+            .field("local_leader_store_id", &self.local_leader_store_id)
+            .field("local_peer_count", &self.local_peer_count)
+            .field("local_last_update", &self.local_last_update)
+            .field("registry_last_mutation", &self.registry_last_mutation)
             .finish()
     }
 }
@@ -1345,12 +1475,14 @@ impl Display for MsgType<'_> {
 #[derive(Clone)]
 pub struct RegionReadProgressRegistry {
     registry: Arc<Mutex<HashMap<u64, Arc<RegionReadProgress>>>>,
+    diagnostics: Arc<Mutex<CheckLeaderRegistryDiagnostics>>,
 }
 
 impl RegionReadProgressRegistry {
     pub fn new() -> RegionReadProgressRegistry {
         RegionReadProgressRegistry {
             registry: Arc::new(Mutex::new(HashMap::new())),
+            diagnostics: Arc::new(Mutex::new(CheckLeaderRegistryDiagnostics::new())),
         }
     }
 
@@ -1359,14 +1491,35 @@ impl RegionReadProgressRegistry {
         region_id: u64,
         read_progress: Arc<RegionReadProgress>,
     ) -> Option<Arc<RegionReadProgress>> {
-        self.registry
+        let previous = self
+            .registry
             .lock()
             .unwrap()
-            .insert(region_id, read_progress)
+            .insert(region_id, read_progress);
+        self.record_registry_mutation("insert", region_id, previous.is_some());
+        previous
     }
 
     pub fn remove(&self, region_id: &u64) -> Option<Arc<RegionReadProgress>> {
-        self.registry.lock().unwrap().remove(region_id)
+        let previous = self.registry.lock().unwrap().remove(region_id);
+        self.record_registry_mutation("remove", *region_id, previous.is_some());
+        previous
+    }
+
+    fn record_registry_mutation(
+        &self,
+        kind: &'static str,
+        region_id: u64,
+        had_previous_entry: bool,
+    ) {
+        self.diagnostics
+            .lock()
+            .unwrap()
+            .record(kind, region_id, had_previous_entry);
+    }
+
+    fn last_registry_mutation(&self, region_id: u64) -> Option<CheckLeaderRegistryMutation> {
+        self.diagnostics.lock().unwrap().last_mutation(region_id)
     }
 
     pub fn get(&self, region_id: &u64) -> Option<Arc<RegionReadProgress>> {
@@ -1430,31 +1583,36 @@ impl RegionReadProgressRegistry {
             let now = Some(Instant::now_coarse());
             for leader_info in &leaders {
                 let region_id = leader_info.get_region_id();
-                let unreturned_region = if let Some(rp) = registry.get(&region_id) {
-                    if let Some(local_leader_info) =
+                let mut local_leader_info = None;
+                let reason = if let Some(rp) = registry.get(&region_id) {
+                    if let Some(mismatch_info) =
                         rp.consume_leader_info_and_get_mismatch(leader_info, coprocessor, now)
                     {
                         leader_info_mismatch_count += 1;
-                        Some(CheckLeaderUnreturnedRegion::new(
-                            leader_info,
-                            CheckLeaderUnreturnedReason::LeaderInfoMismatch,
-                            Some(local_leader_info),
-                        ))
+                        local_leader_info = Some(mismatch_info);
+                        Some(CheckLeaderUnreturnedReason::LeaderInfoMismatch)
                     } else {
                         regions.push(region_id);
                         None
                     }
                 } else {
                     registry_miss_count += 1;
-                    Some(CheckLeaderUnreturnedRegion::new(
-                        leader_info,
-                        CheckLeaderUnreturnedReason::RegistryMiss,
-                        None,
-                    ))
+                    Some(CheckLeaderUnreturnedReason::RegistryMiss)
                 };
-                if let Some(unreturned_region) = unreturned_region {
+                if let Some(reason) = reason {
                     if unreturned_regions.len() < CHECK_LEADER_LOG_REGION_LIMIT {
-                        unreturned_regions.push(unreturned_region);
+                        let registry_last_mutation =
+                            if matches!(reason, CheckLeaderUnreturnedReason::RegistryMiss) {
+                                self.last_registry_mutation(region_id)
+                            } else {
+                                None
+                            };
+                        unreturned_regions.push(CheckLeaderUnreturnedRegion::new(
+                            leader_info,
+                            reason,
+                            local_leader_info,
+                            registry_last_mutation,
+                        ));
                     } else {
                         unreturned_regions_truncated = true;
                     }
@@ -1668,7 +1826,18 @@ impl RegionReadProgress {
     }
 
     pub fn update_leader_info(&self, peer_id: u64, term: u64, region: &Region) {
+        self.update_leader_info_with_source("update_leader_info", peer_id, term, region)
+    }
+
+    pub(crate) fn update_leader_info_with_source(
+        &self,
+        source: &'static str,
+        peer_id: u64,
+        term: u64,
+        region: &Region,
+    ) {
         let mut core = self.core.lock().unwrap();
+        let before = CheckLeaderLeaderInfoSnapshot::from_local_info(&core.leader_info);
         core.leader_info.leader_id = peer_id;
         core.leader_info.leader_term = term;
         if !is_region_epoch_equal(region.get_region_epoch(), &core.leader_info.epoch) {
@@ -1680,7 +1849,14 @@ impl RegionReadProgress {
             core.leader_info.peers = region.get_peers().to_vec();
         }
         core.leader_info.leader_store_id =
-            find_store_id(&core.leader_info.peers, core.leader_info.leader_id)
+            find_store_id(&core.leader_info.peers, core.leader_info.leader_id);
+        core.leader_info_update_count += 1;
+        core.last_leader_info_update = Some(CheckLeaderLeaderInfoUpdate {
+            source,
+            update_count: core.leader_info_update_count,
+            before,
+            after: CheckLeaderLeaderInfoSnapshot::from_local_info(&core.leader_info),
+        });
     }
 
     /// Reset `safe_ts` to 0 and stop updating it
@@ -1732,6 +1908,10 @@ pub struct RegionReadProgressCore {
     read_state: ReadState,
     // The local peer's acknowledge about the leader
     leader_info: LocalLeaderInfo,
+    // Number of in-memory updates to `leader_info`, used only for anomaly diagnosis.
+    leader_info_update_count: u64,
+    // Last in-memory update to `leader_info`, printed only by check-leader anomaly logs.
+    last_leader_info_update: Option<CheckLeaderLeaderInfoUpdate>,
     // `pending_items` is a *sorted* list of `(apply_index, safe_ts)` item
     pending_items: VecDeque<ReadState>,
     // After the region commit merged, the region's key range is extended and the region's
@@ -1817,6 +1997,8 @@ impl RegionReadProgressCore {
             applied_index,
             read_state: ReadState::default(),
             leader_info: LocalLeaderInfo::new(region),
+            leader_info_update_count: 0,
+            last_leader_info_update: None,
             pending_items: VecDeque::with_capacity(cap),
             last_merge_index: 0,
             pause: is_witness,

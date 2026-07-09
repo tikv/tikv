@@ -477,9 +477,9 @@ impl LeadershipResolver {
             );
             warn!(
                 "[resolved-ts-stuck] check leader unresolved regions";
-                "store_id" => self.store_id,
-                "valid_regions" => res.len(),
-                "checking_regions" => checking_regions.len(),
+                "local_store_id" => self.store_id,
+                "valid_region_count" => res.len(),
+                "checking_region_count" => checking_regions.len(),
                 "unresolved_regions" => ?unresolved_regions,
                 "unresolved_regions_truncated" => unresolved_regions_truncated,
                 "target_store_status" => ?target_store_status,
