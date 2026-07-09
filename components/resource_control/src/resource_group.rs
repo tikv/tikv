@@ -647,9 +647,7 @@ impl ResourceGroupManager {
     }
 
     /// Records `read_pool_cpu` (in cores) into the historical tracker and
-    /// returns the floor CPU: the cores needed to sustain the read pool's
-    /// historical CPU consumption. This is the raw, unclamped historical
-    /// utilization — callers decide how to turn it into a thread count.
+    /// returns the floor CPU:
     pub fn read_pool_cpu_floor(&self, read_pool_cpu: f64, interval_secs: f64) -> f64 {
         self.read_pool_cpu_floor_at(read_pool_cpu, interval_secs, RuTracker::now_secs())
     }
@@ -668,11 +666,6 @@ impl ResourceGroupManager {
     /// `cpu_score` is the common CPU-utilization score (0-100) computed by
     /// [`crate::score::compute_resource_scores`]: the max of process and grpc
     /// normalized utilization.
-    ///
-    /// Delegates to [`Self::adjust_group_throttling`] (per-group CPU
-    /// rate-limit tightening/ramp-up) and [`Self::adjust_group_scheduling`]
-    /// (two-phase priority and the unified read-pool thread-count decision),
-    /// both using the same tick timestamp.
     pub fn online_adjust_resource_quota(&self, cpu_score: f64) {
         let now = RuTracker::now_secs();
         self.adjust_group_throttling(cpu_score, now);
@@ -788,11 +781,6 @@ impl ResourceGroupManager {
         });
     }
 
-    /// Read-path pressure signals consumed by the unified read pool:
-    /// `read_pool_cpu_pressure` (drives its scale-down target via
-    /// [`Self::compute_read_pool_target_cpu`]) and `read_pool_scale_up_allowed`
-    /// (whether it's safe to grow). Both driven by the same foreground
-    /// CPU-utilization signal (`cpu_score`).
     fn adjust_group_scheduling(&self, cpu_score: f64) {
         let throttle_threshold = self.config.value().fg_cpu_throttle_threshold;
         let leeway_threshold = throttle_threshold * 0.9;
@@ -819,20 +807,9 @@ impl ResourceGroupManager {
     /// Marks each resource group's read-side priority phase based on whether
     /// it has exceeded its own quota (current rate over its historical
     /// baseline by more than `baseline_burst_pct`) — a group within its
-    /// baseline is never marked over-quota even when `active`, and no group
-    /// is marked over-quota when `!active`.
-    ///
-    /// Called by the unified read pool on its own tick, with `active`
-    /// reflecting whatever condition it wants to gate deprioritization on
-    /// (e.g. "haven't scaled back up to `core_thread_count` yet"), rather
-    /// than resource_control deciding this on its own tick.
-    ///
-    /// The `enable_fair_scheduling` config gate is intentionally not checked
-    /// here: `is_over_baseline` is only ever acted on by
-    /// [`ResourceController::is_two_phase_enabled`] at priority-lookup time,
-    /// which already checks that config. Setting the flag unconditionally
-    /// here is harmless when the feature is off.
-    pub fn deprioritize_over_quota_groups(&self, active: bool) {
+    /// baseline is never marked over-quota even when `should_deprioritize`,
+    /// and no group is marked over-quota when `!should_deprioritize`.
+    pub fn deprioritize_over_quota_groups(&self, should_deprioritize: bool) {
         let now = RuTracker::now_secs();
         let burst_factor = 1.0 + self.config.value().baseline_burst_pct / 100.0;
         for entry in &self.ru_trackers {
@@ -840,7 +817,7 @@ impl ResourceGroupManager {
             let guard = entry.value().lock().unwrap();
             let hist = guard.0.cached_historical_rate;
             let current = guard.0.current_rate(now);
-            let over_quota = active && hist > 0.0 && current > hist * burst_factor;
+            let over_quota = should_deprioritize && hist > 0.0 && current > hist * burst_factor;
             drop(guard);
             for controller in self.registry.read().iter() {
                 controller.set_group_phase(group_bytes, over_quota);
@@ -2051,7 +2028,7 @@ pub(crate) mod tests {
         // Two-phase scheduling driven by real RU (CPU µs) from
         // ResourceGroupManager: only groups that have exceeded their own
         // historical quota are deprioritized, and only when the caller
-        // (the unified read pool) says deprioritization is `active`.
+        // (the unified read pool) says `should_deprioritize`.
         let mut cfg = Config::default();
         cfg.enable_fair_scheduling = true;
         let mgr = ResourceGroupManager::new(cfg);
@@ -2118,8 +2095,8 @@ pub(crate) mod tests {
         // deprioritize_over_quota_groups in production).
         mgr.online_adjust_resource_quota(0.0);
 
-        // Not active → neither group is deprioritized, even though "spike"
-        // is already over its own baseline.
+        // should_deprioritize == false → neither group is deprioritized,
+        // even though "spike" is already over its own baseline.
         mgr.deprioritize_over_quota_groups(false);
         {
             let groups = ctl.resource_consumptions.read();
@@ -2129,7 +2106,7 @@ pub(crate) mod tests {
                     .unwrap()
                     .is_over_baseline
                     .load(Ordering::Relaxed),
-                "not active → steady should be phase 0"
+                "should_deprioritize == false → steady should be phase 0"
             );
             assert!(
                 !groups
@@ -2137,12 +2114,12 @@ pub(crate) mod tests {
                     .unwrap()
                     .is_over_baseline
                     .load(Ordering::Relaxed),
-                "not active → spike should be phase 0"
+                "should_deprioritize == false → spike should be phase 0"
             );
         }
 
-        // Active: only "spike" (over its own baseline) is deprioritized;
-        // "steady" (within baseline) is not.
+        // should_deprioritize == true: only "spike" (over its own baseline)
+        // is deprioritized; "steady" (within baseline) is not.
         mgr.deprioritize_over_quota_groups(true);
         {
             let groups = ctl.resource_consumptions.read();
@@ -2185,9 +2162,10 @@ pub(crate) mod tests {
     #[test]
     fn test_deprioritize_over_quota_groups_releases_when_inactive() {
         // A group over its own quota is released the moment the caller
-        // passes `active = false` — no ramp-up wait or "all groups"
-        // synchronization required, since release is a direct function of
-        // (active, over_quota) recomputed fresh every call.
+        // passes `should_deprioritize = false` — no ramp-up wait or "all
+        // groups" synchronization required, since release is a direct
+        // function of (should_deprioritize, over_quota) recomputed fresh
+        // every call.
         let mgr = ResourceGroupManager::default();
 
         let spike = new_resource_group_ru("spike".into(), 1000, MEDIUM_PRIORITY);
@@ -2229,12 +2207,12 @@ pub(crate) mod tests {
                 .unwrap()
                 .is_over_baseline
                 .load(Ordering::Relaxed),
-            "spike exceeded its quota while active → should be phase 1"
+            "spike exceeded its quota while should_deprioritize → should be phase 1"
         );
 
         // Caller (e.g. the unified read pool, once it has scaled back up to
-        // core_thread_count) says deprioritization is no longer active:
-        // released immediately, even though spike's RU history hasn't
+        // core_thread_count) passes should_deprioritize = false: released
+        // immediately, even though spike's RU history hasn't
         // changed.
         mgr.deprioritize_over_quota_groups(false);
         assert!(
