@@ -845,11 +845,29 @@ impl ResourceGroupManager {
         let floor_cpu = self.read_pool_cpu_floor(read_pool_cpu, interval_secs);
         let pressure = self.read_pool_cpu_pressure();
 
-        if pressure > 0.0 && read_pool_cpu > floor_cpu {
+        let target_cpu = if pressure > 0.0 && read_pool_cpu > floor_cpu {
             read_pool_cpu - (read_pool_cpu - floor_cpu) * pressure
         } else {
             f64::INFINITY
-        }
+        };
+
+        metrics::READ_POOL_CPU_VEC
+            .with_label_values(&["historical"])
+            .set(floor_cpu);
+        metrics::READ_POOL_CPU_VEC
+            .with_label_values(&["current"])
+            .set(read_pool_cpu);
+        // f64::INFINITY means "no ceiling imposed" — graph it as coincident
+        // with `current` rather than plotting an unbounded value.
+        metrics::READ_POOL_CPU_VEC
+            .with_label_values(&["target"])
+            .set(if target_cpu.is_finite() {
+                target_cpu
+            } else {
+                read_pool_cpu
+            });
+
+        target_cpu
     }
 
     /// True when the system was comfortably idle (foreground CPU below the

@@ -222,6 +222,15 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             compaction_pending_ratio,
         };
         let scores = compute_resource_scores(&inputs, &self.caps);
+        RESOURCE_SCORE_VEC
+            .with_label_values(&["cpu"])
+            .set(scores.cpu_score);
+        RESOURCE_SCORE_VEC
+            .with_label_values(&["io"])
+            .set(scores.io_score);
+        RESOURCE_SCORE_VEC
+            .with_label_values(&["compaction"])
+            .set(scores.compaction_score);
 
         self.background_adjust_quota(dur_secs, &cpu_stats, io_stats.as_ref(), &scores);
         self.foreground_adjust_quota(scores.cpu_score);
