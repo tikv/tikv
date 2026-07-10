@@ -99,6 +99,10 @@ pub struct ThreadGroupCpuTracker {
     prev_total_cpu_ticks: i64,
     prev_check_time: Instant,
     prev_cpu_cores: f64,
+    // Whether a baseline has been established yet. `utime`/`stime` are
+    // cumulative since thread start, so the first scan can't compute a
+    // meaningful delta — it only records the baseline.
+    initialized: bool,
 }
 
 impl ThreadGroupCpuTracker {
@@ -108,6 +112,7 @@ impl ThreadGroupCpuTracker {
             prev_total_cpu_ticks: 0,
             prev_check_time: Instant::now_coarse(),
             prev_cpu_cores: 0.0,
+            initialized: false,
         }
     }
 
@@ -122,16 +127,37 @@ impl ThreadGroupCpuTracker {
             return self.prev_cpu_cores;
         }
 
-        let mut current_total_cpu_ticks = 0i64;
         let pid = process_id();
-        if let Ok(tids) = thread_ids::<Vec<_>>(pid) {
-            for tid in tids {
-                if let Ok(stat) = full_thread_stat(pid, tid)
-                    && matches_thread_name_prefix(&stat.command, self.name_prefix)
-                {
-                    current_total_cpu_ticks += stat.utime + stat.stime;
-                }
+        let tids = match thread_ids::<Vec<_>>(pid) {
+            Ok(tids) => tids,
+            Err(_) => {
+                // Transient /proc read failure: keep the previous cached
+                // value instead of treating it as zero CPU usage. Otherwise
+                // this tick would spuriously report 0 cores, and the next
+                // successful read would compute tick_diff against a reset
+                // baseline of 0, producing an artificial spike.
+                return self.prev_cpu_cores;
             }
+        };
+
+        let mut current_total_cpu_ticks = 0i64;
+        for tid in tids {
+            if let Ok(stat) = full_thread_stat(pid, tid)
+                && matches_thread_name_prefix(&stat.command, self.name_prefix)
+            {
+                current_total_cpu_ticks += stat.utime + stat.stime;
+            }
+        }
+
+        if !self.initialized {
+            // First successful scan: establish the baseline rather than
+            // treating the thread's entire historical CPU-tick count as this
+            // tick's delta, which would report a false spike.
+            self.initialized = true;
+            self.prev_total_cpu_ticks = current_total_cpu_ticks;
+            self.prev_check_time = check_time;
+            self.prev_cpu_cores = 0.0;
+            return 0.0;
         }
 
         let tick_diff = current_total_cpu_ticks.saturating_sub(self.prev_total_cpu_ticks);
