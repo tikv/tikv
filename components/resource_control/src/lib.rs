@@ -32,6 +32,7 @@ use tikv_util::worker::Worker;
 use worker::{GroupQuotaAdjustWorker, QUOTA_ADJUST_DURATION};
 
 mod metrics;
+pub use metrics::READ_POOL_CPU_VEC;
 mod score;
 pub mod worker;
 
