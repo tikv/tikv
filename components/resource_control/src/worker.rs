@@ -208,7 +208,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             0.0
         };
 
-        let (io_stats, io_util) = self.fetch_io_stats();
+        let io_util = self.fetch_io_util();
 
         let grpc_cpu_cores = self.grpc_cpu_tracker.measure_cpu_cores();
 
@@ -232,7 +232,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             .with_label_values(&["compaction"])
             .set(scores.compaction_score);
 
-        self.background_adjust_quota(dur_secs, &cpu_stats, io_stats.as_ref(), &scores);
+        self.background_adjust_quota(dur_secs, cpu_stats.total_quota, &scores);
         self.foreground_adjust_quota(scores.cpu_score);
     }
 
@@ -240,44 +240,34 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         self.resource_ctl.online_adjust_resource_quota(cpu_score);
     }
 
-    // io_score (like io_stats) is only consumed by `background_adjust_quota`,
-    // so mirror its gates here and skip the IO fetch entirely when there's
-    // nothing background to throttle, or when IO rate limiting isn't even
-    // configured (io_bandwidth == 0, so total_quota will be 0 and
-    // background_adjust_resource_quota would bail out anyway) — the old code
-    // never tracked IO stats unconditionally either.
-    fn fetch_io_stats(&mut self) -> (Option<ResourceUsageStats>, f64) {
+    // io_score is only consumed by `background_adjust_quota`, so mirror its
+    // gates here and skip the IO fetch entirely when there's nothing
+    // background to throttle, or when IO rate limiting isn't even configured
+    // (io_bandwidth == 0, so background_adjust_resource_quota would bail out
+    // anyway) — the old code never tracked IO stats unconditionally either.
+    fn fetch_io_util(&mut self) -> f64 {
         if !self.resource_ctl.has_background_groups() || self.io_bandwidth <= 0.0 {
-            return (None, 0.0);
+            return 0.0;
         }
-        // Fetch IO stats up front so the common score computation below sees
-        // a consistent snapshot. A fetch failure only disables IO
-        // scoring/adjustment for this tick, not the whole tick.
-        let io_stats = match self
+        // A fetch failure only disables IO scoring/adjustment for this tick,
+        // not the whole tick.
+        match self
             .resource_quota_getter
             .get_current_stats(ResourceType::Io)
         {
-            Ok(s) => Some(s),
+            Ok(s) if s.total_quota > f64::EPSILON => s.current_used / s.total_quota * 100.0,
+            Ok(_) => 0.0,
             Err(e) => {
                 warn!("get io stats failed; skip io adjustment."; "err" => ?e);
-                None
-            }
-        };
-        let io_util = io_stats.as_ref().map_or(0.0, |s| {
-            if s.total_quota > f64::EPSILON {
-                s.current_used / s.total_quota * 100.0
-            } else {
                 0.0
             }
-        });
-        (io_stats, io_util)
+        }
     }
 
     fn background_adjust_quota(
         &mut self,
         dur_secs: f64,
-        cpu_stats: &ResourceUsageStats,
-        io_stats: Option<&ResourceUsageStats>,
+        cpu_total_quota: f64,
         scores: &ResourceScores,
     ) {
         let mut bg_util_limit = self
@@ -328,7 +318,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             dur_secs,
             bg_util_limit,
             thresholds,
-            Some(cpu_stats),
+            cpu_total_quota,
             scores.cpu_score,
         );
         self.background_adjust_resource_quota(
@@ -336,7 +326,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             dur_secs,
             bg_util_limit,
             thresholds,
-            io_stats,
+            self.io_bandwidth,
             scores.io_score,
         );
         self.adjust_write_io_by_compaction_pressure(scores.compaction_score);
@@ -346,34 +336,16 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         &mut self,
         resource_type: ResourceType,
         dur_secs: f64,
+        // Configured background share, 0-100 — a score in the same units as
+        // `resource_score`.
         utilization_limit: u64,
         thresholds: ScaleThresholds,
-        // Pre-fetched stats for CPU and IO, fetched once up front in
-        // `adjust_quota` to avoid a second /proc read per tick.
-        prefetched_stats: Option<&ResourceUsageStats>,
+        total_quota: f64,
         // Common 0-100 resource-pressure score for this resource type
         // (cpu_score or io_score from `compute_resource_scores`).
         resource_score: f64,
     ) {
-        let ScaleThresholds {
-            bg_scale_start,
-            fg_cpu_throttle_threshold,
-        } = thresholds;
-        let fetched;
-        let resource_stats = if let Some(s) = prefetched_stats {
-            s
-        } else {
-            fetched = match self.resource_quota_getter.get_current_stats(resource_type) {
-                Ok(r) => r,
-                Err(e) => {
-                    warn!("get resource statistics info failed, skip adjust"; "type" => ?resource_type, "err" => ?e);
-                    return;
-                }
-            };
-            &fetched
-        };
-        // if total resource quota is unlimited, set background limit to unlimited.
-        if resource_stats.total_quota <= f64::EPSILON {
+        if total_quota <= f64::EPSILON {
             self.bg_limiter
                 .get_limiter(resource_type)
                 .set_rate_limit(f64::INFINITY);
@@ -393,49 +365,37 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         }
         let background_consumed = (stats_delta / dur_secs).total_consumed as f64;
 
-        let background_util = (background_consumed / resource_stats.total_quota * 100.0) as u64;
-        let resource_util = resource_stats.current_used / resource_stats.total_quota * 100.0;
+        let background_util = (background_consumed / total_quota * 100.0) as u64;
         BACKGROUND_TASK_RESOURCE_UTILIZATION_VEC
             .with_label_values(&[resource_type.as_str()])
             .set(background_util as i64);
 
-        let util_limit_percent = (utilization_limit as f64 / 100.0).min(1.0);
-        let target = resource_stats.total_quota * util_limit_percent;
+        let utilization_limit_score = (utilization_limit as f64).min(100.0);
+        let target = total_quota * utilization_limit_score / 100.0;
 
         // Treat infinity as target (initial state before first adjustment).
         let current_limit = {
             let l = self.bg_limiter.get_limiter(resource_type).get_rate_limit();
             if l.is_infinite() { target } else { l }
         };
+        let current_limit_score = current_limit / total_quota * 100.0;
 
         // Minimum: 1 CPU core for CPU, 10% of total for IO.
         let min_floor = match resource_type {
             ResourceType::Cpu => MICROS_PER_SEC,
-            ResourceType::Io => resource_stats.total_quota * 0.1,
+            ResourceType::Io => total_quota * 0.1,
         }
         .min(target);
+        let min_floor_score = min_floor / total_quota * 100.0;
 
-        let mut new_budget = target;
-        if resource_score > bg_scale_start {
-            // Linearly scale budget from target down to min_floor as the
-            // resource-utilization score goes from bg_scale_start to
-            // fg_cpu_throttle_threshold.
-            let pressure =
-                pressure_fraction(resource_score, bg_scale_start, fg_cpu_throttle_threshold);
-            new_budget = target * (1.0 - pressure) + min_floor * pressure;
-            // Only tighten: never increase the limit in the throttle branch.
-            if new_budget > current_limit {
-                new_budget = current_limit;
-            }
-        } else if current_limit > target {
-            // Background limit exceeds its allowed share; reset to target.
-            new_budget = target;
-        } else if current_limit < 0.9 * target && resource_util < 0.9 * bg_scale_start {
-            // System is idle; increase limit incrementally from current limit.
-            new_budget = current_limit * 1.1;
-        }
-
-        let new_budget = new_budget.clamp(min_floor, target);
+        let new_budget_score = Self::compute_budget_score(
+            current_limit_score,
+            utilization_limit_score,
+            min_floor_score,
+            resource_score,
+            thresholds,
+        );
+        let new_budget = (new_budget_score / 100.0 * total_quota).clamp(min_floor, target);
         self.bg_limiter
             .get_limiter(resource_type)
             .set_rate_limit(new_budget);
@@ -448,6 +408,45 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         if resource_type == ResourceType::Cpu {
             let at_floor = new_budget <= min_floor && background_consumed <= new_budget;
             self.resource_ctl.set_bg_cpu_at_floor(at_floor);
+        }
+    }
+
+    /// Pure budget decision in score space (0-100 throughout, no absolute
+    /// units or per-resource-type knowledge): tightens `current_limit_score`
+    /// toward `min_floor_score` as `resource_score` rises from
+    /// `bg_scale_start` to `fg_cpu_throttle_threshold`, resets to
+    /// `target_score` if the current limit exceeds it, ramps up
+    /// incrementally when idle, or holds otherwise. Always clamped to
+    /// `[min_floor_score, target_score]` by the caller.
+    fn compute_budget_score(
+        current_limit_score: f64,
+        target_score: f64,
+        min_floor_score: f64,
+        resource_score: f64,
+        thresholds: ScaleThresholds,
+    ) -> f64 {
+        let ScaleThresholds {
+            bg_scale_start,
+            fg_cpu_throttle_threshold,
+        } = thresholds;
+        if resource_score > bg_scale_start {
+            // Linearly scale budget from target down to min_floor as the
+            // resource-utilization score goes from bg_scale_start to
+            // fg_cpu_throttle_threshold.
+            let pressure =
+                pressure_fraction(resource_score, bg_scale_start, fg_cpu_throttle_threshold);
+            let new_budget_score = target_score * (1.0 - pressure) + min_floor_score * pressure;
+            // Only tighten: never increase the limit in the throttle branch.
+            new_budget_score.min(current_limit_score)
+        } else if current_limit_score > target_score {
+            // Background limit exceeds its allowed share; reset to target.
+            target_score
+        } else if current_limit_score < 0.9 * target_score && resource_score < 0.9 * bg_scale_start
+        {
+            // System is idle; increase limit incrementally from current limit.
+            current_limit_score * 1.1
+        } else {
+            target_score
         }
     }
 
@@ -863,13 +862,13 @@ mod tests {
         worker.adjust_quota();
         check_limiter_rates(&limiter, 5.6, 7000.0);
 
-        // Under target (50% CPU): resource_util < 60%, current == target,
+        // Under target (50% CPU): resource_score < 60%, current == target,
         // so none of the branches fire → budget = target.
         reset_quota(&mut worker, 4.0, 2000.0, Duration::from_secs(1));
         worker.adjust_quota();
         check_limiter_rates(&limiter, 5.6, 7000.0);
 
-        // 80% CPU, 80% IO: resource_util > 60% (bg_scale_start).
+        // 80% CPU, 80% IO: resource_score > 60% (bg_scale_start).
         // pressure = (80-60)/(70-60) = 2.0 clamped to 1.0 → min_floor.
         // CPU: budget = min_floor = 1.0. IO: budget = min_floor = 1000.
         reset_quota(&mut worker, 6.4, 8000.0, Duration::from_secs(1));
@@ -894,7 +893,7 @@ mod tests {
         worker.adjust_quota();
         check_limiter_rates(&limiter, 1.0, 1000.0);
 
-        // Load drops (50% CPU, 20% IO): resource_util < 54% (0.9*60%), current <
+        // Load drops (50% CPU, 20% IO): resource_score < 54% (0.9*60%), current <
         // 0.9*target → incremental increase: budget = current * 1.1
         // CPU: 1.0 * 1.1 = 1.1. IO: 1000 * 1.1 = 1100
         reset_quota(&mut worker, 4.0, 2000.0, Duration::from_secs(1));
@@ -1011,8 +1010,8 @@ mod tests {
         );
 
         // --- Unsaturate CPU (25%) → budget recovers incrementally ---
-        // CPU: resource_util = 25% < 54% (0.9*60%), current 1.0M < 5.04M → 1.0 * 1.1 =
-        // 1.1 IO: resource_util = 20% < 54%, current 1000 < 6300 → 1000 * 1.1 =
+        // CPU: resource_score = 25% < 54% (0.9*60%), current 1.0M < 5.04M → 1.0 * 1.1 =
+        // 1.1 IO: resource_score = 20% < 54%, current 1000 < 6300 → 1000 * 1.1 =
         // 1100
         reset_quota(&mut worker, 2.0, 2000.0, Duration::from_secs(1));
         worker.adjust_quota();
@@ -1038,6 +1037,89 @@ mod tests {
         check(
             limiter.get_limiter(ResourceType::Io).get_rate_limit(),
             1100.0,
+        );
+    }
+
+    #[test]
+    fn test_compute_budget_score() {
+        let thresholds = ScaleThresholds {
+            bg_scale_start: 60.0,
+            fg_cpu_throttle_threshold: 70.0,
+        };
+
+        // Under target, not idle enough to ramp: holds at target.
+        assert_eq!(
+            GroupQuotaAdjustWorker::<SysQuotaGetter>::compute_budget_score(
+                70.0, 70.0, 10.0, 50.0, thresholds,
+            ),
+            70.0,
+        );
+
+        // Over bg_scale_start: tighten toward min_floor proportional to
+        // pressure, never exceeding current_limit_score.
+        let score = GroupQuotaAdjustWorker::<SysQuotaGetter>::compute_budget_score(
+            70.0, 70.0, 10.0, 80.0, thresholds,
+        );
+        // pressure = (80-60)/(70-60) = 2.0 clamped to 1.0 -> min_floor.
+        assert_eq!(score, 10.0);
+
+        // Current limit exceeds its allowed share: reset to target.
+        assert_eq!(
+            GroupQuotaAdjustWorker::<SysQuotaGetter>::compute_budget_score(
+                90.0, 70.0, 10.0, 50.0, thresholds,
+            ),
+            70.0,
+        );
+
+        // Idle (resource_score comfortably below bg_scale_start) and current
+        // limit well under target: ramp up incrementally.
+        assert_eq!(
+            GroupQuotaAdjustWorker::<SysQuotaGetter>::compute_budget_score(
+                10.0, 70.0, 10.0, 20.0, thresholds,
+            ),
+            11.0,
+        );
+    }
+
+    #[test]
+    fn test_background_throttled_by_grpc_driven_cpu_score() {
+        // cpu_score is max(process_cpu_util, grpc_util) — a grpc-driven
+        // spike must throttle background CPU exactly like a process-CPU
+        // spike would, even though the *measured* process CPU here is low
+        // and total_quota is untouched (a healthy, always-positive 8 cores).
+        let resource_ctl = Arc::new(ResourceGroupManager::default());
+        let bg = new_background_resource_group_ru("bg".into(), 1000, 8, vec!["br".into()]);
+        resource_ctl.add_resource_group(bg);
+        let bg_limiter = resource_ctl
+            .get_background_resource_limiter("bg", "br")
+            .unwrap();
+
+        let compaction_pending_bytes_ratio = Arc::new(AtomicU32::new(0));
+        let mut worker = GroupQuotaAdjustWorker::with_quota_getter(
+            resource_ctl.clone(),
+            TestResourceStatsProvider::new(8.0, 10000.0),
+            compaction_pending_bytes_ratio,
+            8,
+            10000.0,
+        );
+
+        // Process CPU is only 20% (comfortably idle on its own), but
+        // grpc_util is pinned to 90% — cpu_score = max(20, 90) = 90.
+        let scores = ResourceScores {
+            cpu_score: 90.0,
+            io_score: 0.0,
+            compaction_score: 0.0,
+        };
+        // 8 cores * MICROS_PER_SEC, matching TestResourceStatsProvider::new(8.0, ..).
+        let cpu_total_quota = 8.0 * MICROS_PER_SEC;
+        worker.background_adjust_quota(1.0, cpu_total_quota, &scores);
+
+        // bg_scale_start=60%, fg_cpu_throttle_threshold=70%: pressure =
+        // (90-60)/(70-60) = 3.0 clamped to 1.0 -> min_floor (1 core).
+        let rate = bg_limiter.get_limiter(ResourceType::Cpu).get_rate_limit();
+        assert!(
+            (rate - MICROS_PER_SEC).abs() < MICROS_PER_SEC * 0.01,
+            "grpc-driven cpu_score should throttle background CPU to the floor, got {rate}"
         );
     }
 
@@ -1563,9 +1645,9 @@ mod tests {
         worker.last_adjust_time = Instant::now_coarse() - Duration::from_secs(1);
         worker.adjust_quota();
 
-        // CPU: resource_util=100%, bg_scale_start=60%, fg_cpu_throttle_threshold=70%.
+        // CPU: resource_score=100%, bg_scale_start=60%, fg_cpu_throttle_threshold=70%.
         // pressure = (100-60)/(70-60) = 4.0 clamped to 1.0 → min_floor = 1.0 core.
-        // IO: resource_util=95%, pressure = (95-60)/(70-60) = 3.5 clamped to 1.0 →
+        // IO: resource_score=95%, pressure = (95-60)/(70-60) = 3.5 clamped to 1.0 →
         // min_floor = 1000.
         check(
             limiter_a.get_limiter(ResourceType::Cpu).get_rate_limit(),

@@ -20,8 +20,8 @@ use kvproto::{errorpb, kvrpcpb::CommandPri};
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
 use prometheus::{Histogram, IntCounter, IntGauge, core::Metric};
 use resource_control::{
-    AdmissionDecision, ControlledFuture, ResourceController, ResourceGroupManager, ResourceLimiter,
-    TaskPriority, with_resource_limiter,
+    AdmissionDecision, ControlledFuture, READ_POOL_CPU_VEC, ResourceController,
+    ResourceGroupManager, ResourceLimiter, TaskPriority, with_resource_limiter,
 };
 use thiserror::Error;
 use tikv_util::{
@@ -854,6 +854,9 @@ impl ReadPoolConfigRunner {
                 rm.compute_read_pool_target_cpu(read_pool_cpu, self.interval.as_secs_f64());
             target_cpu_cores = target_cpu_cores.min(rm_target_cpu);
         }
+        READ_POOL_CPU_VEC
+            .with_label_values(&["target"])
+            .set(target_cpu_cores);
 
         // Scaling out is otherwise a purely local decision (process CPU,
         // thread usage, task queue depth, or read_pool_cpu vs
