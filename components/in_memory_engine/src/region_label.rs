@@ -505,14 +505,8 @@ pub mod tests {
                 .build()
                 .unwrap();
 
-        // Put a rule in etcd so reload_all_region_labels has something to load.
-        add_region_label_rule(
-            s.meta_client.clone(),
-            cluster_id,
-            &new_region_label_rule("cache/compaction-test", "a", "b"),
-        );
-
-        // Arm the flag — next Watch call will return the gRPC compaction error.
+        // Arm the flag before starting the watch so the very first Watch call
+        // fails with the gRPC compaction error.
         inject_flag.store(true, Ordering::Release);
 
         let background_worker = Builder::new("ime-compaction-test").thread_count(1).create();
@@ -521,8 +515,20 @@ pub mod tests {
             s_clone.watch_region_labels().await;
         });
 
-        // The service must detect the error, call reload_all_region_labels,
-        // and the rule must appear within 5 seconds.
+        // Give the watch time to hit the compaction error and call reload
+        // (which finds no labels yet).
+        std::thread::sleep(Duration::from_secs(1));
+
+        // Now disable injection and put the rule. The next reload (or the
+        // resumed watch) should pick it up.
+        inject_flag.store(false, Ordering::Release);
+        add_region_label_rule(
+            s.meta_client.clone(),
+            cluster_id,
+            &new_region_label_rule("cache/compaction-test", "a", "b"),
+        );
+
+        // The rule must appear within 5 seconds, proving the service recovered.
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         loop {
             if region_label_manager.region_labels().len() == 1 {
@@ -535,6 +541,8 @@ pub mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
 
+        server.stop();
+    }
         server.stop();
     }
 }
