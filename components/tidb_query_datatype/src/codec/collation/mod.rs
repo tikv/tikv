@@ -108,6 +108,10 @@ pub trait Collator: 'static + std::marker::Send + std::marker::Sync + std::fmt::
 
     const IS_CASE_INSENSITIVE: bool;
 
+    /// Whether LIKE literal matching uses the original bytes instead of the
+    /// collation sort order.
+    const LIKE_LITERAL_MATCHES_BYTES: bool = false;
+
     /// Returns the weight of a given char. The chars that have equal
     /// weight are considered as the same char with this collation.
     /// See more on <http://www.unicode.org/reports/tr10/#Weight_Level_Defn>.
