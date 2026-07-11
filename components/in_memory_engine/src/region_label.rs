@@ -251,10 +251,10 @@ impl RegionLabelService {
                     // same stale revision. Catch it here and recover the
                     // same way as DataCompacted.
                     Err(PdError::Grpc(grpcio::Error::RpcFailure(ref status)))
-                        if status
-                            .message()
-                            .contains("required revision has been compacted") =>
-                    {
+                        if status.code() == grpcio::RpcStatusCode::UNKNOWN
+                            && status
+                                .message()
+                                .contains("required revision has been compacted") => {
                         warn!(
                             "ime required revision has been compacted (gRPC transport error)";
                             "err" => ?status
