@@ -7,21 +7,17 @@ use tidb_query_datatype::codec::{collation::*, data_type::*};
 const UTF8_REPLACEMENT_CHARACTER: &[u8] = b"\xEF\xBF\xBD";
 
 // TiDB decodes malformed UTF-8 as U+FFFD when matching with a character
-// collation. Canonicalize only that case; binary collations must continue to
-// compare the original bytes.
+// collation. Canonicalize only that case; collators using byte-wise LIKE
+// literal matching must continue to compare the original bytes.
 #[inline]
-fn char_bytes_for_compare<C: Collator, CS: Charset>(
-    data: &[u8],
-    ch: CS::Char,
-    width: usize,
-) -> &[u8] {
+fn char_bytes_for_compare<C: Collator, CS: Charset>(data: &[u8], ch: CS::Char) -> &[u8] {
     if <C::Charset as Charset>::charset() == tidb_query_datatype::Charset::Utf8Mb4
         && ch.into() == char::REPLACEMENT_CHARACTER as u32
-        && width == 1
+        && data.len() == 1
     {
         UTF8_REPLACEMENT_CHARACTER
     } else {
-        &data[..width]
+        data
     }
 }
 
@@ -72,9 +68,9 @@ pub fn like<C: Collator, CS: Charset>(
                         target_bytes == pattern_bytes
                     } else {
                         let target_char_bytes =
-                            char_bytes_for_compare::<C, CS>(target_bytes, target_char, toff);
+                            char_bytes_for_compare::<C, CS>(target_bytes, target_char);
                         let pattern_char_bytes =
-                            char_bytes_for_compare::<C, CS>(pattern_bytes, pattern_char, poff);
+                            char_bytes_for_compare::<C, CS>(pattern_bytes, pattern_char);
                         matches!(
                             C::sort_compare(target_char_bytes, pattern_char_bytes, true),
                             Ok(std::cmp::Ordering::Equal)
