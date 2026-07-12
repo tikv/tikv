@@ -291,6 +291,10 @@ fn future_batch_get_command<E: Engine, L: LockManager, F: KvFormat>(
         .copied()
         .zip(trackers.iter().copied())
         .collect();
+    // NOTE: per-request slow-log is not available on the ReqBatcher path
+    // because batch_get_command does not expose individual StageLatencyStats.
+    // Follow-up work needed to either plumb stats through the consumer or
+    // re-evaluate whether a batch-level threshold is sufficient.
     let res = storage.batch_get_command(
         gets,
         requests,
