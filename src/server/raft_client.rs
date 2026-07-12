@@ -40,6 +40,7 @@ use tikv_kv::RaftExtension;
 use tikv_util::{
     config::{Tracker, VersionTrack},
     lru::LruCache,
+    thread_name_prefix::RAFT_STREAM_THREAD,
     time::{InstantExt, duration_to_sec},
     timer::GLOBAL_TIMER_HANDLE,
     worker::{Scheduler, Worker},
@@ -684,10 +685,9 @@ where
                     // local variables without return.
                     let mut transport_on_resolve_fp = || {
                         fail_point!(_ON_RESOLVE_FP, |sid| if let Some(sid) = sid {
-                            use std::mem;
                             let sid: u64 = sid.parse().unwrap();
                             if sid == store_id {
-                                mem::swap(&mut addr, &mut Err(box_err!("injected failure")));
+                                addr = Err(box_err!("injected failure"));
                                 // Sleep some time to avoid race between enqueuing message and
                                 // resolving address.
                                 std::thread::sleep(std::time::Duration::from_millis(10));
@@ -1067,7 +1067,7 @@ where
         background_worker: Worker,
     ) -> Self {
         let future_pool = Arc::new(
-            yatp::Builder::new(thd_name!("raft-stream"))
+            yatp::Builder::new(thd_name!(RAFT_STREAM_THREAD))
                 .max_thread_count(1)
                 .build_future_pool(),
         );
@@ -1130,9 +1130,11 @@ where
                 .connections
                 .entry((store_id, conn_id))
                 .or_insert_with(|| {
-                    let queue = Arc::new(Queue::with_capacity(
-                        self.builder.cfg.value().raft_client_queue_size,
-                    ));
+                    let queue_capacity = {
+                        let cfg = self.builder.cfg.value();
+                        cfg.raft_client_queue_size / cfg.grpc_raft_conn_num
+                    };
+                    let queue = Arc::new(Queue::with_capacity(queue_capacity));
                     if need_pause {
                         queue.set_conn_state(ConnState::Paused);
                     }

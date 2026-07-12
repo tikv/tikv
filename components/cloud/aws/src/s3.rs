@@ -15,6 +15,7 @@ use aws_sdk_s3::{
     operation::get_object::GetObjectError,
     types::{CompletedMultipartUpload, CompletedPart},
 };
+use aws_smithy_types::error::metadata::ProvideErrorMetadata;
 use bytes::Bytes;
 use cloud::{
     blob::{
@@ -363,7 +364,9 @@ fn create_error_stream(
 
 /// A helper for uploading a large files to S3 storage.
 ///
-/// Note: this uploader does not support uploading files larger than 19.5 GiB.
+/// The uploader automatically adjusts part size to respect S3's 10000 part
+/// limit. Maximum file size is approximately (part_size * 10000), but the part
+/// size will be increased automatically if needed.
 struct S3Uploader<'client> {
     client: &'client Client,
 
@@ -400,7 +403,7 @@ impl RetryError for UploadError {
     }
 }
 
-impl<T: 'static + StdError> From<SdkError<T>> for UploadError {
+impl<T: 'static + StdError + ProvideErrorMetadata> From<SdkError<T>> for UploadError {
     fn from(err: SdkError<T>) -> Self {
         let msg = format!("{:?}", err);
         Self::Sdk {
@@ -443,6 +446,8 @@ fn get_content_md5(object_lock_enabled: bool, content: &[u8]) -> Option<String> 
 /// Specifies the minimum size to use multi-part upload.
 /// AWS S3 requires each part to be at least 5 MiB.
 const MINIMUM_PART_SIZE: usize = 5 * 1024 * 1024;
+/// S3 has a maximum of 10000 parts per multipart upload.
+const MAX_PARTS: u64 = 10000;
 
 impl<'client> S3Uploader<'client> {
     /// Creates a new uploader with a given target location and upload
@@ -469,7 +474,26 @@ impl<'client> S3Uploader<'client> {
         reader: &mut (dyn AsyncRead + Unpin + Send),
         est_len: u64,
     ) -> Result<(), UploadError> {
-        if est_len <= self.multi_part_size as u64 {
+        let effective_part_size = if est_len > self.multi_part_size as u64 {
+            let min_part_size_for_limit = est_len.div_ceil(MAX_PARTS);
+            let adjusted_size =
+                std::cmp::max(self.multi_part_size as u64, min_part_size_for_limit) as usize;
+
+            if adjusted_size != self.multi_part_size {
+                debug!(
+                    "adjusted multipart size from {} to {} bytes for file size {} bytes (estimated {} parts)",
+                    self.multi_part_size,
+                    adjusted_size,
+                    est_len,
+                    est_len.div_ceil(adjusted_size as u64)
+                );
+            }
+            adjusted_size
+        } else {
+            self.multi_part_size
+        };
+
+        if est_len <= effective_part_size as u64 {
             // For short files, execute one put_object to upload the entire thing.
             let mut data = Vec::with_capacity(est_len as usize);
             reader.read_to_end(&mut data).await?;
@@ -478,24 +502,24 @@ impl<'client> S3Uploader<'client> {
         } else {
             // Otherwise, use multipart upload to improve robustness.
             self.upload_id = retry_and_count(|| self.begin(), "begin_upload").await?;
-            let upload_res = async {
-                let mut buf = vec![0; self.multi_part_size];
+            let upload_res = Box::pin(async {
+                let mut buf = vec![0; effective_part_size];
                 let mut part_number = 1;
                 loop {
                     let data_size = try_read_exact(reader, &mut buf).await?;
                     if data_size == 0 {
                         break;
                     }
-                    let part = retry_and_count(
+                    let part = Box::pin(retry_and_count(
                         || self.upload_part(part_number, &buf[..data_size]),
                         "upload_part",
-                    )
+                    ))
                     .await?;
                     self.parts.push(part);
                     part_number += 1;
                 }
                 Ok(())
-            }
+            })
             .await;
 
             if upload_res.is_ok() {
@@ -522,6 +546,10 @@ impl<'client> S3Uploader<'client> {
                 )
                 .set_ssekms_key_id(self.sse_kms_key_id.as_ref().map(|s| s.to_string()))
                 .set_storage_class(self.storage_class.as_ref().map(|s| s.as_str().into()))
+                .customize()
+                .mutate_request(|req| {
+                    req.headers_mut().insert(http::header::CONTENT_LENGTH, "0");
+                })
                 .send()
                 .await?
                 .upload_id()
@@ -823,13 +851,19 @@ impl IterableStorage for S3Storage {
 
 #[cfg(test)]
 mod tests {
-    use std::assert_matches::assert_matches;
 
     use aws_sdk_s3::{config::Credentials, primitives::SdkBody};
-    use aws_smithy_runtime::client::http::test_util::{ReplayEvent, StaticReplayClient};
+    use aws_smithy_runtime::{
+        assert_str_contains,
+        client::http::test_util::{ReplayEvent, StaticReplayClient},
+    };
     use http::Uri;
 
     use super::*;
+
+    // Serialize multipart-related tests because they assert deltas on the global
+    // metric CLOUD_REQUEST_HISTOGRAM_VEC, which is shared across tests.
+    static MULTI_PART_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     #[test]
     fn test_s3_get_content_md5() {
@@ -876,6 +910,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_s3_storage_multi_part() {
+        let _guard = MULTI_PART_TEST_LOCK.lock().await;
         let magic_contents = "567890";
 
         let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
@@ -888,11 +923,19 @@ mod tests {
         config.multi_part_size = multi_part_size;
         config.force_path_style = true;
 
+        // Record sample count before the test to compute delta, avoiding
+        // interference from other tests sharing the global metric.
+        let sample_count_before = CLOUD_REQUEST_HISTOGRAM_VEC
+            .get_metric_with_label_values(&["s3", "upload_part"])
+            .unwrap()
+            .get_sample_count();
+
         // split magic_contents into 3 parts, so we mock 5 requests here(1 begin + 3
         // part + 1 complete)
         let client = StaticReplayClient::new(vec![
             ReplayEvent::new(
                 http::Request::builder()
+                    .header("content-length", "0")
                     .uri(Uri::from_static(
                         "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?uploads"
                     ))
@@ -911,6 +954,7 @@ mod tests {
             ),
             ReplayEvent::new(
                 http::Request::builder()
+                    .header("content-length", "2")
                     .uri(Uri::from_static(
                         "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?x-id=UploadPart&partNumber=1&uploadId=1"
                     ))
@@ -920,6 +964,7 @@ mod tests {
             ),
             ReplayEvent::new(
                 http::Request::builder()
+                    .header("content-length", "2")
                     .uri(Uri::from_static(
                         "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?x-id=UploadPart&partNumber=2&uploadId=1"
                     ))
@@ -929,6 +974,7 @@ mod tests {
             ),
             ReplayEvent::new(
                 http::Request::builder()
+                    .header("content-length", "2")
                     .uri(Uri::from_static(
                         "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?x-id=UploadPart&partNumber=3&uploadId=1"
                     ))
@@ -938,6 +984,7 @@ mod tests {
             ),
             ReplayEvent::new(
                 http::Request::builder()
+                    .header("content-length", "216")
                     .uri(Uri::from_static(
                         "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?uploadId=1"
                     ))
@@ -973,11 +1020,126 @@ mod tests {
 
         client.assert_requests_match(&[]);
 
+        let sample_count_after = CLOUD_REQUEST_HISTOGRAM_VEC
+            .get_metric_with_label_values(&["s3", "upload_part"])
+            .unwrap()
+            .get_sample_count();
         assert_eq!(
-            CLOUD_REQUEST_HISTOGRAM_VEC
-                .get_metric_with_label_values(&["s3", "upload_part"])
-                .unwrap()
-                .get_sample_count(),
+            sample_count_after - sample_count_before,
+            // length of magic_contents
+            (magic_contents.len() / multi_part_size) as u64,
+        );
+    }
+
+    #[tokio::test]
+    async fn test_s3_storage_multi_part_abort() {
+        let _guard = MULTI_PART_TEST_LOCK.lock().await;
+        let magic_contents = "567890";
+
+        let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
+        let mut bucket = BucketConf::default(bucket_name);
+        bucket.region = Some(StringNonEmpty::required("cn-north-1".to_string()).unwrap());
+
+        let mut config = Config::default(bucket);
+        let multi_part_size = 2;
+        // set multi_part_size to use upload_part function
+        config.multi_part_size = multi_part_size;
+        config.force_path_style = true;
+
+        // Record sample count before the test to compute delta, avoiding
+        // interference from other tests sharing the global metric.
+        let sample_count_before = CLOUD_REQUEST_HISTOGRAM_VEC
+            .get_metric_with_label_values(&["s3", "upload_part"])
+            .unwrap()
+            .get_sample_count();
+
+        // split magic_contents into 3 parts, so we mock 5 requests here(1 begin + 3
+        // part + 1 abort)
+        let client = StaticReplayClient::new(vec![
+            ReplayEvent::new(
+                http::Request::builder()
+                    .header("content-length", "0")
+                    .uri(Uri::from_static(
+                        "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?uploads"
+                    ))
+                    .body(SdkBody::from(""))
+                    .unwrap(),
+                http::Response::builder()
+                    .status(200)
+                    .body(SdkBody::from(
+                        r#"<?xml version="1.0" encoding="UTF-8"?>
+                            <InitiateMultipartUploadResult>
+                                <Bucket>mybucket</Bucket>
+                                <Key>mykey</Key>
+                                <UploadId>1</UploadId>
+                            </InitiateMultipartUploadResult>"#
+                    )).unwrap()
+            ),
+            ReplayEvent::new(
+                http::Request::builder()
+                    .header("content-length", "2")
+                    .uri(Uri::from_static(
+                        "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?x-id=UploadPart&partNumber=1&uploadId=1"
+                    ))
+                    .body(SdkBody::from("56"))
+                    .unwrap(),
+                http::Response::builder().status(200).body(SdkBody::from("")).unwrap()
+            ),
+            ReplayEvent::new(
+                http::Request::builder()
+                    .header("content-length", "2")
+                    .uri(Uri::from_static(
+                        "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?x-id=UploadPart&partNumber=2&uploadId=1"
+                    ))
+                    .body(SdkBody::from("78"))
+                    .unwrap(),
+                http::Response::builder().status(200).body(SdkBody::from("")).unwrap()
+            ),
+            ReplayEvent::new(
+                http::Request::builder()
+                    .header("content-length", "2")
+                    .uri(Uri::from_static(
+                        "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?x-id=UploadPart&partNumber=3&uploadId=1"
+                    ))
+                    .body(SdkBody::from("90"))
+                    .unwrap(),
+                http::Response::builder().status(404).body(SdkBody::from("Not Found")).unwrap()
+            ),
+            ReplayEvent::new(
+                http::Request::builder()
+                    .uri(Uri::from_static(
+                        "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?x-id=AbortMultipartUpload&uploadId=1"
+                    ))
+                    .body(SdkBody::from(""))
+                    .unwrap(),
+                http::Response::builder()
+                    .status(200)
+                    .body(SdkBody::from("")).unwrap()
+            ),
+        ]);
+
+        let creds = Credentials::from_keys("abc".to_string(), "xyz".to_string(), None);
+
+        let s = S3Storage::new_with_creds_client(config.clone(), client.clone(), creds).unwrap();
+        let err = s
+            .put(
+                "mykey",
+                PutResource(Box::new(magic_contents.as_bytes())),
+                magic_contents.len() as u64,
+            )
+            .await
+            .unwrap_err();
+
+        assert_str_contains!(err.to_string(), "Not Found");
+
+        client.assert_requests_match(&[]);
+
+        let sample_count_after = CLOUD_REQUEST_HISTOGRAM_VEC
+            .get_metric_with_label_values(&["s3", "upload_part"])
+            .unwrap()
+            .get_sample_count();
+        assert_eq!(
+            sample_count_after - sample_count_before,
             // length of magic_contents
             (magic_contents.len() / multi_part_size) as u64,
         );
@@ -1278,10 +1440,47 @@ mod tests {
 
         let mut data = AllowStdIo::new(ThrottleRead(Cursor::new(b"muthologia.")));
         let mut buf = vec![0u8; 6];
-        assert_matches!(try_read_exact(&mut data, &mut buf).await, Ok(6));
+        assert!(matches!(try_read_exact(&mut data, &mut buf).await, Ok(6)));
         assert_eq!(buf, b"muthol");
-        assert_matches!(try_read_exact(&mut data, &mut buf).await, Ok(5));
+        assert!(matches!(try_read_exact(&mut data, &mut buf).await, Ok(5)));
         assert_eq!(&buf[..5], b"ogia.");
-        assert_matches!(try_read_exact(&mut data, &mut buf).await, Ok(0));
+        assert!(matches!(try_read_exact(&mut data, &mut buf).await, Ok(0)));
+    }
+
+    #[test]
+    fn test_multipart_size_adjustment() {
+        const MAX_PARTS: u64 = 10000;
+        let multi_part_size = MINIMUM_PART_SIZE; // 5MB
+
+        // Test case 1: Small file, no adjustment needed
+        let est_len = 10u64 * 1024 * 1024; // 10MB
+        let min_part_size = est_len.div_ceil(MAX_PARTS);
+        let effective_size = std::cmp::max(multi_part_size as u64, min_part_size);
+        assert_eq!(effective_size, multi_part_size as u64);
+
+        // Test case 2: File that would exceed 10000 parts with 5MB part size
+        let est_len = 60u64 * 1024 * 1024 * 1024; // 60GB
+        let min_part_size = est_len.div_ceil(MAX_PARTS);
+        let effective_size = std::cmp::max(multi_part_size as u64, min_part_size);
+        // Should be at least 6MB to fit in 10000 parts
+        assert!(effective_size > multi_part_size as u64);
+        assert!(est_len.div_ceil(effective_size) <= MAX_PARTS);
+
+        // Test case 3: Very large file (100GB)
+        let est_len = 100 * 1024 * 1024 * 1024u64; // 100GB
+        let min_part_size = est_len.div_ceil(MAX_PARTS);
+        let effective_size = std::cmp::max(multi_part_size as u64, min_part_size);
+        // Should be at least ~10MB to fit in 10000 parts
+        assert!(effective_size > multi_part_size as u64);
+        assert!(est_len.div_ceil(effective_size) <= MAX_PARTS);
+
+        // Verify the estimated parts count
+        let estimated_parts = est_len.div_ceil(effective_size);
+        assert!(
+            estimated_parts <= MAX_PARTS,
+            "estimated parts {} exceeds maximum {}",
+            estimated_parts,
+            MAX_PARTS
+        );
     }
 }

@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    mem,
     ops::DerefMut,
     sync::{Arc, Mutex},
 };
@@ -12,7 +13,7 @@ use tidb_query_common::{
     Result,
     error::StorageError,
     storage::{
-        FindRegionResult, IntervalRange, OwnedKvPair, PointRange, RegionStorageAccessor,
+        FindRegionResult, IntervalRange, OwnedKvPairEntry, PointRange, RegionStorageAccessor,
         Result as StorageResult, StateRole, Storage,
     },
 };
@@ -36,6 +37,17 @@ pub struct MockExecutor {
     pub intermediate_results: std::vec::IntoIter<Vec<BatchExecuteResult>>,
     pub child: Option<Box<MockExecutor>>,
     pub scanned_range: Option<IntervalRange>,
+    /// Rows produced since the last `collect_exec_stats` call; drained on
+    /// collection so that `scanned_rows_per_range` reflects physical key
+    /// counts in tests that exercise `max_keys_read`.
+    pending_scanned_rows: usize,
+    /// Per-batch scanned-byte increments consumed in order by `next_batch`.
+    /// Empty by default, so tests that don't exercise `paging_size_bytes` are
+    /// unaffected.
+    scanned_bytes_per_batch: std::vec::IntoIter<usize>,
+    /// Cumulative scanned bytes peeked via `peek_scanned_bytes_sum`; never
+    /// drained, mirroring `Storage::scanned_bytes`.
+    scanned_bytes: usize,
 }
 
 impl MockExecutor {
@@ -48,6 +60,9 @@ impl MockExecutor {
             intermediate_results: std::vec::IntoIter::default(),
             child: None,
             scanned_range: None,
+            pending_scanned_rows: 0,
+            scanned_bytes_per_batch: std::vec::IntoIter::default(),
+            scanned_bytes: 0,
         }
     }
 
@@ -59,11 +74,32 @@ impl MockExecutor {
             intermediate_results: std::vec::IntoIter::default(),
             child: Some(Box::new(child)),
             scanned_range: None,
+            pending_scanned_rows: 0,
+            scanned_bytes_per_batch: std::vec::IntoIter::default(),
+            scanned_bytes: 0,
         }
     }
 
     pub fn set_next_intermediate_results(&mut self, results: Vec<BatchExecuteResult>) {
         self.intermediate_results = vec![results].into_iter();
+    }
+
+    /// Sets per-batch scanned-byte increments for `paging_size_bytes` tests.
+    pub fn set_scanned_bytes_per_batch(&mut self, bytes_per_batch: Vec<usize>) {
+        self.scanned_bytes_per_batch = bytes_per_batch.into_iter();
+    }
+
+    pub fn set_extra_common_handle_keys(&mut self, mut keys: Vec<Vec<Vec<u8>>>) {
+        let v = mem::take(&mut self.results)
+            .enumerate()
+            .map(|(i, mut r)| {
+                let extra_keys = r.physical_columns.mut_extra_common_handle_keys();
+                extra_keys.clear();
+                extra_keys.append(&mut keys[i]);
+                r
+            })
+            .collect::<Vec<_>>();
+        self.results = v.into_iter();
     }
 }
 
@@ -105,12 +141,38 @@ impl BatchExecutor for MockExecutor {
     async fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
         match &mut self.child {
             Some(child) => child.next_batch(_scan_rows).await,
-            None => self.results.next().unwrap(),
+            None => {
+                let result = self.results.next().unwrap();
+                self.pending_scanned_rows += result.logical_rows.len();
+                if let Some(b) = self.scanned_bytes_per_batch.next() {
+                    self.scanned_bytes += b;
+                }
+                result
+            }
         }
     }
 
-    fn collect_exec_stats(&mut self, _dest: &mut ExecuteStats) {
-        // Do nothing
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
+        if self.pending_scanned_rows > 0 {
+            dest.scanned_rows_per_range.push(self.pending_scanned_rows);
+            self.pending_scanned_rows = 0;
+        }
+        if let Some(child) = &mut self.child {
+            child.collect_exec_stats(dest);
+        }
+    }
+
+    fn peek_scanned_rows_sum(&self) -> usize {
+        let child_sum = self.child.as_ref().map_or(0, |c| c.peek_scanned_rows_sum());
+        self.pending_scanned_rows + child_sum
+    }
+
+    fn peek_scanned_bytes_sum(&self) -> usize {
+        let child_sum = self
+            .child
+            .as_ref()
+            .map_or(0, |c| c.peek_scanned_bytes_sum());
+        self.scanned_bytes + child_sum
     }
 
     fn collect_storage_stats(&mut self, _dest: &mut Self::StorageStats) {
@@ -194,6 +256,14 @@ impl BatchExecutor for MockScanExecutor {
         // Do nothing
     }
 
+    fn peek_scanned_rows_sum(&self) -> usize {
+        0
+    }
+
+    fn peek_scanned_bytes_sum(&self) -> usize {
+        0
+    }
+
     fn collect_storage_stats(&mut self, _dest: &mut Self::StorageStats) {
         // Do nothing
     }
@@ -218,20 +288,22 @@ impl Storage for MockStorage {
         &mut self,
         _is_backward_scan: bool,
         _is_key_only: bool,
+        _load_commit_ts: bool,
         _range: IntervalRange,
     ) -> StorageResult<()> {
         unimplemented!()
     }
 
-    fn scan_next(&mut self) -> StorageResult<Option<OwnedKvPair>> {
+    fn scan_next_entry(&mut self) -> StorageResult<Option<OwnedKvPairEntry>> {
         unimplemented!()
     }
 
-    fn get(
+    fn get_entry(
         &mut self,
         _is_key_only: bool,
+        _load_commit_ts: bool,
         _range: PointRange,
-    ) -> StorageResult<Option<OwnedKvPair>> {
+    ) -> StorageResult<Option<OwnedKvPairEntry>> {
         unimplemented!()
     }
 
@@ -240,6 +312,10 @@ impl Storage for MockStorage {
     }
 
     fn collect_statistics(&mut self, _dest: &mut Self::Statistics) {
+        unimplemented!()
+    }
+
+    fn scanned_bytes(&self) -> usize {
         unimplemented!()
     }
 }

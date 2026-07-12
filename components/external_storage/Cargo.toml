@@ -7,6 +7,10 @@ license = "Apache-2.0"
 
 [features]
 failpoints = ["fail/failpoints"]
+# Forwards the FIPS feature down to gcp_v2 (which gates rustls/fips). gcp_v2 is
+# only a transitive dependency of the binaries, so the feature is forwarded
+# through this chain rather than enabled directly as `gcp_v2/fips`.
+fips = ["gcp_v2/fips"]
 
 [dependencies]
 async-compression = { version = "0.4.27", features = ["futures-io", "zstd"] }
@@ -22,6 +26,7 @@ futures = "0.3"
 futures-io = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 gcp = { workspace = true }
+gcp_v2 = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.3"
 openssl = { workspace = true }
@@ -41,10 +46,11 @@ uuid = { version = "0.8", features = ["v4", "serde"] }
 walkdir = "2"
 
 [dev-dependencies]
+clap = { version = "3.1.6", default-features = false, features = ["std", "derive"] }
+hyper = { version = "0.14", features = ["server", "tcp"] }
 rust-ini = "0.14.0"
-structopt = "0.3"
 tempfile = "3.1"
-tokio = { version = "1.5", features = ["macros"] }
+tokio = { version = "1.5", features = ["macros", "rt-multi-thread", "net"] }
 
 [[example]]
 name = "scli"

@@ -160,7 +160,18 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
         keys: &[Key],
         start_ts: impl Into<TimeStamp>,
     ) -> Result<(Vec<Result<KvPair>>, KvGetStatistics)> {
-        block_on(self.store.batch_get(ctx, keys.to_owned(), start_ts.into()))
+        block_on(
+            self.store
+                .batch_get(ctx, keys.to_owned(), start_ts.into(), false),
+        )
+        .map(|(list, stats)| {
+            (
+                list.into_iter()
+                    .map(|r| r.map(|(key, entry)| (key, entry.value)))
+                    .collect(),
+                stats,
+            )
+        })
     }
 
     #[allow(clippy::type_complexity)]
@@ -190,7 +201,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
                 .batch_get_command(requests, ids, trackers, p.clone(), Instant::now()),
         )?;
         let mut values = vec![];
-        for value in p.take_data().into_iter() {
+        for value in p.take_values().into_iter() {
             values.push(value?);
         }
         Ok(values)
@@ -397,7 +408,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
         let p = GetConsumer::new();
         block_on(self.store.raw_batch_get_command(requests, ids, p.clone()))?;
         let mut values = vec![];
-        for value in p.take_data().into_iter() {
+        for value in p.take_values().into_iter() {
             values.push(value?);
         }
         Ok(values)
@@ -479,6 +490,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
         previous_value: Option<Vec<u8>>,
         value: Vec<u8>,
         ttl: u64,
+        delete: bool,
     ) -> Result<(Option<Vec<u8>>, bool)> {
         wait_op!(|cb| self.store.raw_compare_and_swap_atomic(
             ctx,
@@ -487,7 +499,8 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
             previous_value,
             value,
             ttl,
-            cb
+            cb,
+            delete
         ))
         .unwrap()
     }

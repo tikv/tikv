@@ -620,9 +620,12 @@
 ## When storage.engine is "partitioned-raft-kv", default value is 0.
 # stats-dump-period = "10m"
 
-## Refer to: https://github.com/facebook/rocksdb/wiki/RocksDB-FAQ
-## If you want to use RocksDB on multi disks or spinning disks, you should set value at least 2MB.
-# compaction-readahead-size = 0
+## RocksDB 8.x compaction no longer relies on the old setup-time file hint path,
+## so TiKV keeps compaction readahead enabled by default instead of forcing it
+## to 0. Refer to: https://github.com/facebook/rocksdb/wiki/RocksDB-FAQ
+## If you want to use RocksDB on multi disks or spinning disks, you should set
+## value at least 2MB.
+# compaction-readahead-size = "2MB"
 
 ## Max buffer size that is used by WritableFileWrite.
 # writable-file-max-buffer-size = "1MB"
@@ -1092,7 +1095,9 @@
 ## Do not set this config the same as `rocksdb.wal-dir`.
 # wal-dir = ""
 
-# compaction-readahead-size = 0
+## Keep compaction readahead enabled by default for the same reason as
+## `rocksdb.compaction-readahead-size`.
+# compaction-readahead-size = "2MB"
 # writable-file-max-buffer-size = "1MB"
 # use-direct-io-for-flush-and-compaction = false
 # enable-pipelined-write = true
@@ -1323,6 +1328,9 @@
 ## in order to reduce impact on the cluster's performance during back up.
 # enable-auto-tune = true
 
+## Enable GCP v2 external storage backend for backup/restore.
+# gcp-v2-enable = true
+
 [log-backup]
 ## Number of threads to perform backup stream tasks.
 ## The default value is CPU_NUM * 0.5, and limited to [2, 12].
@@ -1331,6 +1339,10 @@
 ## enable this feature. TiKV will starts watch related tasks in PD. and backup kv changes to storage accodring to task.
 ## The default value is false.
 # enable = true
+
+## Enable GCP v2 external storage backend for log-backup.
+## If not set, default is enabled.
+# gcp-v2-enable = true
 
 [backup.hadoop]
 ## let TiKV know how to find the hdfs shell command.

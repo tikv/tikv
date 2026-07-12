@@ -165,6 +165,7 @@ pub fn new_old_value_cursor<S: EngineSnapshot>(snapshot: &S, cf: &'static str) -
         .fill_cache(false)
         .scan_mode(ScanMode::Mixed)
         .range(lower, upper)
+        .missing_range(cf == CF_WRITE)
         .build()
         .unwrap()
 }
@@ -351,7 +352,7 @@ mod tests {
         let new_capacity = 256;
         // The memory usage that needs to be removed because of the capacity reduction.
         let dropped = old_value_cache.cache.size() - new_capacity;
-        let dropped_count = if dropped % size != 0 {
+        let dropped_count = if !dropped.is_multiple_of(size) {
             (dropped / size) + 1
         } else {
             dropped / size

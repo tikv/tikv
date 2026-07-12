@@ -26,6 +26,7 @@ use tikv_util::{
     Either,
     config::VersionTrack,
     sys::{get_global_memory_usage, record_global_memory_usage},
+    thread_name_prefix::{GRPC_SERVER_THREAD, SNAP_HANDLER_THREAD, TRANSPORT_STATS_THREAD},
     timer::GLOBAL_TIMER_HANDLE,
     worker::{LazyWorker, Scheduler, Worker},
 };
@@ -55,9 +56,6 @@ use crate::{
 const LOAD_STATISTICS_SLOTS: usize = 4;
 const LOAD_STATISTICS_INTERVAL: Duration = Duration::from_millis(100);
 const MEMORY_USAGE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
-pub const GRPC_THREAD_PREFIX: &str = "grpc-server";
-pub const READPOOL_NORMAL_THREAD_PREFIX: &str = "store-read-norm";
-pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 
 pub trait GrpcBuilderFactory {
     fn create_builder(&self, env: Arc<Environment>) -> Result<ServerBuilder>;
@@ -68,6 +66,7 @@ struct BuilderFactory<S: Tikv + Send + Clone + 'static> {
     cfg: Arc<VersionTrack<Config>>,
     security_mgr: Arc<SecurityManager>,
     health_service: HealthService,
+    memory_quota: ResourceQuota,
 }
 
 impl<S> BuilderFactory<S>
@@ -79,12 +78,14 @@ where
         cfg: Arc<VersionTrack<Config>>,
         security_mgr: Arc<SecurityManager>,
         health_service: HealthService,
+        memory_quota: ResourceQuota,
     ) -> BuilderFactory<S> {
         BuilderFactory {
             kv_service,
             cfg,
             security_mgr,
             health_service,
+            memory_quota,
         }
     }
 }
@@ -96,8 +97,6 @@ where
     fn create_builder(&self, env: Arc<Environment>) -> Result<ServerBuilder> {
         let addr = SocketAddr::from_str(&self.cfg.value().addr)?;
         let ip: String = format!("{}", addr.ip());
-        let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
-            .resize_memory(self.cfg.value().grpc_memory_pool_quota.0 as usize);
 
         // Best-effort algorithm selection: If the client doesn't support the specified
         // algorithm, the server may fall back to a different one or disable
@@ -117,7 +116,7 @@ where
             .stream_initial_window_size(self.cfg.value().grpc_stream_initial_window_size.0 as i32)
             .max_concurrent_stream(self.cfg.value().grpc_concurrent_stream)
             .max_receive_message_len(-1)
-            .set_resource_quota(mem_quota)
+            .set_resource_quota(self.memory_quota.clone())
             .max_send_message_len(-1)
             .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
             .keepalive_time(self.cfg.value().grpc_keepalive_time.into())
@@ -193,7 +192,7 @@ where
         let stats_pool = if cfg.value().stats_concurrency > 0 {
             Some(
                 RuntimeBuilder::new_multi_thread()
-                    .thread_name(STATS_THREAD_PREFIX)
+                    .thread_name(TRANSPORT_STATS_THREAD)
                     .worker_threads(cfg.value().stats_concurrency)
                     .with_sys_hooks()
                     .build()
@@ -206,8 +205,8 @@ where
             cfg.value().heavy_load_threshold,
         ));
 
-        let snap_worker = Worker::new("snap-handler");
-        let lazy_worker = snap_worker.lazy_build("snap-handler");
+        let snap_worker = Worker::new(SNAP_HANDLER_THREAD);
+        let lazy_worker = snap_worker.lazy_build(SNAP_HANDLER_THREAD);
         let raft_ext = storage.get_engine().raft_extension();
 
         let health_feedback_interval = if cfg.value().health_feedback_interval.0.is_zero() {
@@ -235,16 +234,18 @@ where
             health_feedback_interval,
             raft_message_filter,
         );
+
+        let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
+            .resize_memory(cfg.value().grpc_memory_pool_quota.0 as usize);
         let builder_factory = Box::new(BuilderFactory::new(
             kv_service,
             cfg.clone(),
             security_mgr.clone(),
             health_controller.get_grpc_health_service(),
+            mem_quota.clone(),
         ));
 
         let addr = SocketAddr::from_str(&cfg.value().addr)?;
-        let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
-            .resize_memory(cfg.value().grpc_memory_pool_quota.0 as usize);
         let builder = Either::Left(builder_factory.create_builder(env.clone())?);
 
         let conn_builder = ConnectionBuilder::new(
@@ -382,7 +383,7 @@ where
         // Note this should be called only after grpc server is started.
         let mut grpc_load_stats = {
             let tl = Arc::clone(&self.grpc_thread_load);
-            ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, GRPC_THREAD_PREFIX, tl)
+            ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, GRPC_SERVER_THREAD, tl)
         };
         if let Some(ref p) = self.stats_pool {
             let mut delay = self
@@ -571,7 +572,9 @@ mod tests {
     };
     use resource_metering::ResourceTagFactory;
     use security::SecurityConfig;
-    use tikv_util::{config::ReadableDuration, quota_limiter::QuotaLimiter};
+    use tikv_util::{
+        config::ReadableDuration, quota_limiter::QuotaLimiter, thread_name_prefix::DEBUGGER_THREAD,
+    };
     use tokio::runtime::Builder as TokioBuilder;
 
     use super::{
@@ -652,7 +655,7 @@ mod tests {
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(1)
-                .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
+                .name_prefix(thd_name!(GRPC_SERVER_THREAD))
                 .build(),
         );
 
@@ -686,7 +689,7 @@ mod tests {
         let copr_v2 = coprocessor_v2::Endpoint::new(&coprocessor_v2::Config::default());
         let debug_thread_pool = Arc::new(
             TokioBuilder::new_multi_thread()
-                .thread_name(thd_name!("debugger"))
+                .thread_name(thd_name!(DEBUGGER_THREAD))
                 .worker_threads(1)
                 .with_sys_hooks()
                 .build()

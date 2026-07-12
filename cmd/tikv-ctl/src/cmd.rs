@@ -1,127 +1,130 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{borrow::ToOwned, str, string::ToString, sync::LazyLock};
+use std::{borrow::ToOwned, str, sync::LazyLock};
 
-use clap::{AppSettings, crate_authors};
+use clap::{Parser, Subcommand, crate_authors};
+use compact_log_backup::ShardConfig;
 use engine_traits::{CF_DEFAULT, SstCompressionType};
 use raft_engine::ReadableSize;
-use structopt::StructOpt;
-
 const RAW_KEY_HINT: &str = "Raw key (generally starts with \"z\") in escaped form";
 static VERSION_INFO: LazyLock<String> = LazyLock::new(|| {
     let build_timestamp = option_env!("TIKV_BUILD_TIME");
     tikv::tikv_version_info(build_timestamp)
 });
 
-#[derive(StructOpt)]
-#[structopt(
+#[derive(Parser)]
+#[clap(
     name = "TiKV Control (tikv-ctl)",
     about = "A tool for interacting with TiKV deployments.",
     author = crate_authors!(),
     version = &**VERSION_INFO,
     long_version = &**VERSION_INFO,
-    setting = AppSettings::DontCollapseArgsInUsage,
+    dont_collapse_args_in_usage = true,
 )]
 pub struct Opt {
-    #[structopt(long)]
+    #[clap(long)]
     /// Set the address of pd
     pub pd: Option<String>,
 
-    #[structopt(long, default_value = "warn")]
+    #[clap(long, default_value = "warn")]
     /// Set the log level
     pub log_level: String,
 
-    #[structopt(long, default_value = "text")]
+    #[clap(long, default_value = "text")]
     pub log_format: String,
 
-    #[structopt(long)]
+    #[clap(long)]
     /// Set the remote host
     pub host: Option<String>,
 
-    #[structopt(long)]
+    #[clap(long)]
     /// Set the CA certificate path
     pub ca_path: Option<String>,
 
-    #[structopt(long)]
+    #[clap(long)]
     /// Set the certificate path
     pub cert_path: Option<String>,
 
-    #[structopt(long)]
+    #[clap(long)]
     /// Set the private key path
     pub key_path: Option<String>,
 
-    #[structopt(long)]
+    #[clap(long)]
     /// TiKV config path, by default it's <deploy-dir>/conf/tikv.toml
     pub config: Option<String>,
 
-    #[structopt(long)]
+    #[clap(long)]
     /// TiKV data-dir, check <deploy-dir>/scripts/run.sh to get it
     pub data_dir: Option<String>,
 
-    #[structopt(long)]
+    #[clap(long)]
     /// Skip paranoid checks when open rocksdb
     pub skip_paranoid_checks: bool,
 
     #[allow(dead_code)]
-    #[structopt(
+    #[clap(
         long,
-        validator = |_| Err("DEPRECATED!!! Use --data-dir and --config instead".to_owned()),
+        validator = |_: &str| -> Result<(), String> {
+            Err("DEPRECATED!!! Use --data-dir and --config instead".to_owned())
+        },
     )]
     /// Set the rocksdb path
     pub db: Option<String>,
 
     #[allow(dead_code)]
-    #[structopt(
+    #[clap(
         long,
-        validator = |_| Err("DEPRECATED!!! Use --data-dir and --config instead".to_owned()),
+        validator = |_: &str| -> Result<(), String> {
+            Err("DEPRECATED!!! Use --data-dir and --config instead".to_owned())
+        },
     )]
     /// Set the raft rocksdb path
     pub raftdb: Option<String>,
 
-    #[structopt(conflicts_with = "escaped-to-hex", long = "to-escaped")]
+    #[clap(conflicts_with = "escaped-to-hex", long = "to-escaped")]
     /// Convert a hex key to escaped key
     pub hex_to_escaped: Option<String>,
 
-    #[structopt(conflicts_with = "hex-to-escaped", long = "to-hex")]
+    #[clap(conflicts_with = "hex-to-escaped", long = "to-hex")]
     /// Convert an escaped key to hex key
     pub escaped_to_hex: Option<String>,
 
-    #[structopt(
+    #[clap(
         conflicts_with_all = &["hex-to-escaped", "escaped-to-hex"],
         long,
     )]
     /// Decode a key in escaped format
     pub decode: Option<String>,
 
-    #[structopt(
+    #[clap(
         conflicts_with_all = &["hex-to-escaped", "escaped-to-hex"],
         long,
     )]
     /// Encode a key in escaped format
     pub encode: Option<String>,
 
-    #[structopt(subcommand)]
+    #[clap(subcommand)]
     pub cmd: Option<Cmd>,
 }
 
-#[derive(StructOpt)]
+#[derive(Subcommand)]
 pub enum Cmd {
     /// Print a raft log entry
     Raft {
-        #[structopt(subcommand)]
+        #[clap(subcommand)]
         cmd: RaftCmd,
     },
     /// Print region size
     Size {
-        #[structopt(short = "r")]
+        #[clap(short = 'r')]
         /// Set the region id, if not specified, print all regions
         region: Option<u64>,
 
-        #[structopt(
-            short = "c",
-            use_delimiter = true,
-            require_delimiter = true,
-            value_delimiter = ",",
+        #[clap(
+            short = 'c',
+            use_value_delimiter = true,
+            require_value_delimiter = true,
+            value_delimiter = ',',
             default_value = "default,write,lock"
         )]
         /// Set the cf name, if not specified, print all cf
@@ -129,37 +132,37 @@ pub enum Cmd {
     },
     /// Print the range db range
     Scan {
-        #[structopt(
-            short = "f",
+        #[clap(
+            short = 'f',
             long,
             help = RAW_KEY_HINT,
         )]
         from: String,
 
-        #[structopt(
-            short = "t",
+        #[clap(
+            short = 't',
             long,
             help = RAW_KEY_HINT,
         )]
         to: Option<String>,
 
-        #[structopt(long)]
+        #[clap(long)]
         /// Set the scan limit
         limit: Option<u64>,
 
-        #[structopt(long)]
+        #[clap(long)]
         /// Set the scan start_ts as filter
         start_ts: Option<u64>,
 
-        #[structopt(long)]
+        #[clap(long)]
         /// Set the scan commit_ts as filter
         commit_ts: Option<u64>,
 
-        #[structopt(
+        #[clap(
             long,
-            use_delimiter = true,
-            require_delimiter = true,
-            value_delimiter = ",",
+            use_value_delimiter = true,
+            require_value_delimiter = true,
+            value_delimiter = ',',
             default_value = CF_DEFAULT,
         )]
         /// Column family names, combined from default/lock/write
@@ -167,27 +170,27 @@ pub enum Cmd {
     },
     /// Print all raw keys in the range
     RawScan {
-        #[structopt(
-            short = "f",
+        #[clap(
+            short = 'f',
             long,
             default_value = "",
             help = RAW_KEY_HINT,
         )]
         from: String,
 
-        #[structopt(
-            short = "t",
+        #[clap(
+            short = 't',
             long,
             default_value = "",
             help = RAW_KEY_HINT,
         )]
         to: String,
 
-        #[structopt(long, default_value = "30")]
+        #[clap(long, default_value = "30")]
         /// Limit the number of keys to scan
         limit: usize,
 
-        #[structopt(
+        #[clap(
             long,
             default_value = "default",
             possible_values = &["default", "lock", "write"],
@@ -197,71 +200,73 @@ pub enum Cmd {
     },
     /// Print the raw value
     Print {
-        #[structopt(
-            short = "c",
+        #[clap(
+            short = 'c',
             default_value = CF_DEFAULT,
             possible_values = &["default", "lock", "write"],
         )]
         /// The column family name.
         cf: String,
 
-        #[structopt(
-            short = "k",
+        #[clap(
+            short = 'k',
             help = RAW_KEY_HINT,
         )]
         key: String,
     },
     /// Print the mvcc value
     Mvcc {
-        #[structopt(
-            short = "k",
+        #[clap(
+            short = 'k',
             help = RAW_KEY_HINT,
         )]
         key: String,
 
-        #[structopt(
+        #[clap(
             long,
-            use_delimiter = true,
-            require_delimiter = true,
-            value_delimiter = ",",
+            use_value_delimiter = true,
+            require_value_delimiter = true,
+            value_delimiter = ',',
             default_value = CF_DEFAULT,
         )]
         /// Column family names, combined from default/lock/write
         show_cf: Vec<String>,
 
-        #[structopt(long)]
+        #[clap(long)]
         /// Set start_ts as filter
         start_ts: Option<u64>,
 
-        #[structopt(long)]
+        #[clap(long)]
         /// Set commit_ts as filter
         commit_ts: Option<u64>,
     },
     /// Calculate difference of region keys from different dbs
     Diff {
-        #[structopt(short = "r")]
+        #[clap(short = 'r')]
         /// Specify region id
         region: u64,
 
         #[allow(dead_code)]
-        #[structopt(
+        #[clap(
             conflicts_with = "to_host",
             long,
-            validator = |_| Err("DEPRECATED!!! Use --to-data-dir and --to-config instead".to_owned()),
+            validator = |_: &str| -> Result<(), String> {
+                Err("DEPRECATED!!! Use --to-data-dir and --to-config instead".to_owned())
+            },
         )]
         /// To which db path
         to_db: Option<String>,
 
-        #[structopt(conflicts_with = "to_host", long)]
+        #[clap(conflicts_with = "to_host", long)]
         /// data-dir of the target TiKV
         to_data_dir: Option<String>,
 
-        #[structopt(conflicts_with = "to_host", long)]
+        #[clap(conflicts_with = "to_host", long)]
         /// config of the target TiKV
         to_config: Option<String>,
 
-        #[structopt(
-            required_unless = "to_data_dir",
+        #[clap(
+            required_unless_present = "to_data_dir",
             conflicts_with = "to_db",
             long,
             conflicts_with = "to_db"
@@ -271,46 +276,46 @@ pub enum Cmd {
     },
     /// Compact a column family in a specified range
     Compact {
-        #[structopt(
-            short = "d",
+        #[clap(
+            short = 'd',
             default_value = "kv",
             possible_values = &["kv", "raft"],
         )]
         /// Which db to compact
         db: String,
 
-        #[structopt(
-            short = "c",
+        #[clap(
+            short = 'c',
             default_value = CF_DEFAULT,
             possible_values = &["default", "lock", "write"],
         )]
         /// The column family name.
         cf: String,
 
-        #[structopt(
-            short = "f",
+        #[clap(
+            short = 'f',
             long,
             help = RAW_KEY_HINT,
         )]
         from: Option<String>,
 
-        #[structopt(
-            short = "t",
+        #[clap(
+            short = 't',
             long,
             help = RAW_KEY_HINT,
         )]
         to: Option<String>,
 
-        #[structopt(short = "n", long, default_value = "8")]
+        #[clap(short = 'n', long, default_value = "8")]
         /// Number of threads in one compaction
         threads: u32,
 
-        #[structopt(short = "r", long)]
+        #[clap(short = 'r', long)]
         /// Set the region id
         region: Option<u64>,
 
-        #[structopt(
-            short = "b",
+        #[clap(
+            short = 'b',
             long,
             default_value = "default",
             possible_values = &["skip", "force", "default"],
@@ -320,92 +325,92 @@ pub enum Cmd {
     },
     /// Set some regions on the node to tombstone by manual
     Tombstone {
-        #[structopt(
-            short = "r",
-            use_delimiter = true,
-            require_delimiter = true,
-            value_delimiter = ","
+        #[clap(
+            short = 'r',
+            use_value_delimiter = true,
+            require_value_delimiter = true,
+            value_delimiter = ','
         )]
         /// The target regions, separated with commas if multiple
         regions: Vec<u64>,
 
-        #[structopt(
-            short = "p",
-            use_delimiter = true,
-            require_delimiter = true,
-            value_delimiter = ","
+        #[clap(
+            short = 'p',
+            use_value_delimiter = true,
+            require_value_delimiter = true,
+            value_delimiter = ','
         )]
         /// PD endpoints
         pd: Option<Vec<String>>,
 
-        #[structopt(long)]
+        #[clap(long)]
         /// force execute without pd
         force: bool,
     },
     /// Recover mvcc data on one node by deleting corrupted keys
     RecoverMvcc {
-        #[structopt(short = "a", long)]
+        #[clap(short = 'a', long)]
         /// Recover the whole db
         all: bool,
 
-        #[structopt(
-            required_unless = "all",
+        #[clap(
+            required_unless_present = "all",
             conflicts_with = "all",
-            short = "r",
-            use_delimiter = true,
-            require_delimiter = true,
-            value_delimiter = ","
+            short = 'r',
+            use_value_delimiter = true,
+            require_value_delimiter = true,
+            value_delimiter = ','
         )]
         /// The target regions, separated with commas if multiple
         regions: Vec<u64>,
 
-        #[structopt(
-            required_unless = "all",
-            short = "p",
-            use_delimiter = true,
-            require_delimiter = true,
-            value_delimiter = ","
+        #[clap(
+            required_unless_present = "all",
+            short = 'p',
+            use_value_delimiter = true,
+            require_value_delimiter = true,
+            value_delimiter = ','
         )]
         /// PD endpoints
         pd: Vec<String>,
 
-        #[structopt(long, default_value_if("all", None, "4"), requires = "all")]
+        #[clap(long, default_value_if("all", None, Some("4")), requires = "all")]
         /// The number of threads to do recover, only for --all mode
         threads: Option<usize>,
 
-        #[structopt(short = "R", long)]
+        #[clap(short = 'R', long)]
         /// Skip write RocksDB
         read_only: bool,
     },
     /// Unsafely recover when the store can not start normally, this recover may
     /// lose data
     UnsafeRecover {
-        #[structopt(subcommand)]
+        #[clap(subcommand)]
         cmd: UnsafeRecoverCmd,
     },
     /// Recreate a region with given metadata, but alloc new id for it
     RecreateRegion {
-        #[structopt(
-            short = "p",
-            use_delimiter = true,
-            require_delimiter = true,
-            value_delimiter = ","
+        #[clap(
+            short = 'p',
+            use_value_delimiter = true,
+            require_value_delimiter = true,
+            value_delimiter = ','
         )]
         /// PD endpoints
         pd: Vec<String>,
 
-        #[structopt(short = "r")]
+        #[clap(short = 'r')]
         /// The origin region id
         region: u64,
     },
     /// Print the metrics
     Metrics {
-        #[structopt(
-            short = "t",
+        #[clap(
+            short = 't',
             long,
-            use_delimiter = true,
-            require_delimiter = true,
-            value_delimiter = ",",
+            use_value_delimiter = true,
+            require_value_delimiter = true,
+            value_delimiter = ',',
             default_value = crate::executor::METRICS_PROMETHEUS,
             possible_values = &["prometheus", "jemalloc", "rocksdb_raft", "rocksdb_kv"],
         )]
@@ -416,7 +421,7 @@ pub enum Cmd {
     },
     /// Force a consistency-check for a specified region
     ConsistencyCheck {
-        #[structopt(short = "r")]
+        #[clap(short = 'r')]
         /// The target region
         region: u64,
     },
@@ -426,37 +431,37 @@ pub enum Cmd {
     /// Eg. tikv-ctl --host ip:port modify-tikv-config -n
     /// rocksdb.defaultcf.disable-auto-compactions -v true
     ModifyTikvConfig {
-        #[structopt(short = "n")]
+        #[clap(short = 'n')]
         /// The config name are same as the name used on config file.
         /// eg. raftstore.messages-per-tick, raftdb.max-background-jobs
         config_name: String,
 
-        #[structopt(short = "v")]
+        #[clap(short = 'v')]
         /// The config value, eg. 8, true, 1h, 8MB
         config_value: String,
     },
     /// Dump snapshot meta file
     DumpSnapMeta {
-        #[structopt(short = "f", long)]
+        #[clap(short = 'f', long)]
         /// Output meta file path
         file: String,
     },
     /// Compact the whole cluster in a specified range in one or more column
     /// families
     CompactCluster {
-        #[structopt(
-            short = "d",
+        #[clap(
+            short = 'd',
             default_value = "kv",
             possible_values = &["kv", "raft"],
         )]
         /// The db to use
         db: String,
 
-        #[structopt(
-            short = "c",
-            use_delimiter = true,
-            require_delimiter = true,
-            value_delimiter = ",",
+        #[clap(
+            short = 'c',
+            use_value_delimiter = true,
+            require_value_delimiter = true,
+            value_delimiter = ',',
             default_value = CF_DEFAULT,
             possible_values = &["default", "lock", "write"],
         )]
@@ -464,26 +469,26 @@ pub enum Cmd {
         /// raft db, can only be default
         cf: Vec<String>,
 
-        #[structopt(
-            short = "f",
+        #[clap(
+            short = 'f',
             long,
             help = RAW_KEY_HINT,
         )]
         from: Option<String>,
 
-        #[structopt(
-            short = "t",
+        #[clap(
+            short = 't',
             long,
             help = RAW_KEY_HINT,
         )]
         to: Option<String>,
 
-        #[structopt(short = "n", long, default_value = "8")]
+        #[clap(short = 'n', long, default_value = "8")]
         /// Number of threads in one compaction
         threads: u32,
 
-        #[structopt(
-            short = "b",
+        #[clap(
+            short = 'b',
             long,
             default_value = "default",
             possible_values = &["skip", "force", "default"],
@@ -493,33 +498,33 @@ pub enum Cmd {
     },
     /// Show region properties
     RegionProperties {
-        #[structopt(short = "r")]
+        #[clap(short = 'r')]
         /// The target region id
         region: u64,
     },
     /// Show range properties
     RangeProperties {
-        #[structopt(long, default_value = "")]
+        #[clap(long, default_value = "")]
         /// hex start key (not starts with "z")
         start: String,
 
-        #[structopt(long, default_value = "")]
+        #[clap(long, default_value = "")]
         /// hex end key (not starts with "z")
         end: String,
     },
     /// Split the region
     SplitRegion {
-        #[structopt(short = "r")]
+        #[clap(short = 'r')]
         /// The target region id
         region: u64,
 
-        #[structopt(short = "k")]
+        #[clap(short = 'k')]
         /// The key to split it, in unencoded escaped format
         key: String,
     },
     /// Inject failures to TiKV and recovery
     Fail {
-        #[structopt(subcommand)]
+        #[clap(subcommand)]
         cmd: FailCmd,
     },
     /// Print the store id and api version
@@ -528,17 +533,17 @@ pub enum Cmd {
     Cluster {},
     /// Decrypt an encrypted file
     DecryptFile {
-        #[structopt(long)]
+        #[clap(long)]
         /// input file path
         file: String,
 
-        #[structopt(long)]
+        #[clap(long)]
         /// output file path
         out_file: String,
     },
     /// Dump encryption metadata
     EncryptionMeta {
-        #[structopt(subcommand)]
+        #[clap(subcommand)]
         cmd: EncryptionMetaCmd,
     },
     /// Delete encryption keys that are no longer associated with physical
@@ -546,33 +551,33 @@ pub enum Cmd {
     CleanupEncryptionMeta {},
     /// Print bad ssts related infos
     BadSsts {
-        #[structopt(long)]
+        #[clap(long)]
         /// specify manifest, if not set, it will look up manifest file in db
         /// path
         manifest: Option<String>,
 
-        #[structopt(long, value_delimiter = ",")]
+        #[clap(long, value_delimiter = ',')]
         /// PD endpoints
         pd: String,
     },
     /// Reset data in a TiKV to a certain version
     ResetToVersion {
-        #[structopt(short = "v")]
+        #[clap(short = 'v')]
         /// The version to reset TiKV to
         version: u64,
     },
     /// Control for Raft Engine
     /// Usage: tikv-ctl raft-engine-ctl -- --help
     RaftEngineCtl {
-        #[structopt(last = true)]
+        #[clap(last = true)]
         args: Vec<String>,
     },
-    #[structopt(external_subcommand)]
+    #[clap(external_subcommand)]
     External(Vec<String>),
     /// Usage: tikv-ctl show-cluster-id --config <config-path>
     ShowClusterId {
         /// Data directory path of the given TiKV instance.
-        #[structopt(long)]
+        #[clap(long)]
         data_dir: String,
     },
     /// Usage: tikv-ctl fork-readonly-tikv
@@ -585,15 +590,15 @@ pub enum Cmd {
     /// NOTE: The remained TiKV can't run concurrently with the agent.
     ReuseReadonlyRemains {
         /// Data directory path of the remained TiKV.
-        #[structopt(long)]
+        #[clap(long)]
         data_dir: String,
 
         /// Data directory to create the agent.
-        #[structopt(long)]
+        #[clap(long)]
         agent_dir: String,
 
         /// Reuse snapshot files of the remained TiKV: symlink or copy.
-        #[structopt(long, default_value = "symlink")]
+        #[clap(long, default_value = "symlink")]
         snaps: String,
 
         /// Reuse rocksdb files of the remained TiKV: symlink or copy.
@@ -601,7 +606,7 @@ pub enum Cmd {
         /// NOTE: the last one WAL file will still be copied even if `symlink`
         /// is specified, because the last one WAL file isn't read-only when
         /// opening a RocksDB instance.
-        #[structopt(long, default_value = "symlink")]
+        #[clap(long, default_value = "symlink")]
         rocksdb_files: String,
     },
     /// flashback data in cluster to a certain version
@@ -609,30 +614,30 @@ pub enum Cmd {
     /// NOTE: Should use `./pd-ctl config set halt-scheduling true` to halt PD
     /// scheduling before flashback.
     Flashback {
-        #[structopt(short = "v")]
+        #[clap(short = 'v')]
         /// the version to flashback
         version: u64,
 
-        #[structopt(
-            short = "r",
+        #[clap(
+            short = 'r',
             aliases = &["region"],
-            use_delimiter = true,
-            require_delimiter = true,
-            value_delimiter = ","
+            use_value_delimiter = true,
+            require_value_delimiter = true,
+            value_delimiter = ','
         )]
         /// specific regions to flashback
         regions: Option<Vec<u64>>,
 
-        #[structopt(long, default_value = "")]
+        #[clap(long, default_value = "")]
         /// hex start key
         start: String,
 
-        #[structopt(long, default_value = "")]
+        #[clap(long, default_value = "")]
         /// hex end key
         end: String,
     },
     CompactLogBackup {
-        #[structopt(
+        #[clap(
             short,
             long,
             default_value = "compaction",
@@ -641,7 +646,21 @@ pub enum Cmd {
             )
         )]
         name: String,
-        #[structopt(
+        #[clap(
+            long,
+            value_name = "INDEX/TOTAL",
+            help(
+                "shard the compaction work by backup-stream store id. Prefer \
+                `Metadata.store_id`; if it is absent, fall back to the backup-stream metadata \
+                filename format \
+                (`v1/backupmeta/{flush_ts}{store_id}-d{min_begin_ts}l{min_ts}u{max_ts}p{flags}.meta`), \
+                then backup-stream physical log paths, then a stable metadata-path hash. Only \
+                data from stores assigned to this shard is compacted. Format: INDEX/TOTAL, \
+                where INDEX is 1-based (e.g. 1/3)."
+            )
+        )]
+        shard: Option<ShardConfig>,
+        #[clap(
             long = "from",
             help(
                 "from when we need to include files into the compaction.\
@@ -649,23 +668,32 @@ pub enum Cmd {
             )
         )]
         from_ts: u64,
-        #[structopt(
+        #[clap(
             long = "until",
             help(
-                "until when we need to include files into the compaction.\
-                files contains any record within the [--from, --until) will be selected."
+                "optional upper timestamp bound for selecting files into the compaction. \
+                Files containing any record within [--from, --until) will be selected. \
+                If omitted, compact-log-backup reads the bound from checkpoint state."
             )
         )]
-        until_ts: u64,
-        #[structopt(
-            short = "N",
+        until_ts: Option<u64>,
+        #[clap(
+            long = "cal-shift-ts",
+            help(
+                "extend the default CF scan lower bound to the minimum min_begin_default_ts in \
+                metadata overlapping [--from, --until)."
+            )
+        )]
+        cal_shift_ts: bool,
+        #[clap(
+            short = 'N',
             long = "concurrency",
             default_value = "32",
             help("how many compactions can be executed concurrently.")
         )]
         max_concurrent_compactions: u64,
-        #[structopt(
-            short = "s",
+        #[clap(
+            short = 's',
             long = "storage-base64",
             help(
                 "the base-64 encoded protocol buffer message `StorageBackend`. \
@@ -673,7 +701,7 @@ pub enum Cmd {
             )
         )]
         storage_base64: String,
-        #[structopt(
+        #[clap(
             long,
             default_value = "lz4",
             help(
@@ -681,7 +709,7 @@ pub enum Cmd {
             )
         )]
         compression: SstCompressionType,
-        #[structopt(
+        #[clap(
             long,
             help(
                 "the compression level. it definition and effect varies by the algorithm we choose."
@@ -689,15 +717,15 @@ pub enum Cmd {
         )]
         compression_level: Option<i32>,
 
-        #[structopt(
+        #[clap(
             long,
             help(
-                "if set, all checkpoints will be ignored. i.e. all finished compaction will be regenerated."
+                "deprecated stub; no longer supported. use a different --name or manually clean the target compaction prefix instead."
             )
         )]
         force_regenerate: bool,
 
-        #[structopt(
+        #[clap(
             long,
             default_value = "16M",
             help(
@@ -705,20 +733,53 @@ pub enum Cmd {
             )
         )]
         minimal_compaction_size: ReadableSize,
+
+        #[clap(
+            long,
+            default_value = "128",
+            help("specify the maximum count of running tasks to download a metadata")
+        )]
+        prefetch_running_count: u64,
+
+        #[clap(
+            long,
+            default_value = "1024",
+            help("specify the maximum count of spawning tasks to download a metadata")
+        )]
+        prefetch_buffer_count: u64,
+
+        #[clap(
+            long,
+            default_value = "0",
+            help(
+                "specify memory reserved for caching physical log files, such as 64G. \
+                Zero disables the cache."
+            )
+        )]
+        physical_file_cache_capacity: ReadableSize,
+
+        #[clap(
+            long = "gcp-v2-enable",
+            parse(try_from_str),
+            default_value = "true",
+            possible_values = &["true", "false"],
+            help("whether to enable GCP v2 external storage backend for compact-log-backup")
+        )]
+        gcp_v2_enable: bool,
     },
     /// Get the state of a region's RegionReadProgress.
     GetRegionReadProgress {
-        #[structopt(short = "r", long)]
+        #[clap(short = 'r', long)]
         /// The target region id
         region: u64,
 
-        #[structopt(long)]
+        #[clap(long)]
         /// When specified, prints the locks associated with the transaction
         /// that has the smallest 'start_ts' in the resolver, which is
         /// preventing the 'resolved_ts' from advancing.
         log: bool,
 
-        #[structopt(long, requires = "log")]
+        #[clap(long, requires = "log")]
         /// The smallest start_ts of the target transaction. Namely, only the
         /// transaction whose start_ts is greater than or equal to this value
         /// can be recorded in TiKV logs.
@@ -726,37 +787,37 @@ pub enum Cmd {
     },
 }
 
-#[derive(StructOpt)]
+#[derive(Subcommand)]
 pub enum RaftCmd {
     /// Print the raft log entry info
     Log {
-        #[structopt(required_unless = "key", conflicts_with = "key", short = "r")]
+        #[clap(required_unless_present = "key", conflicts_with = "key", short = 'r')]
         /// Set the region id
         region: Option<u64>,
 
-        #[structopt(required_unless = "key", conflicts_with = "key", short = "i")]
+        #[clap(required_unless_present = "key", conflicts_with = "key", short = 'i')]
         /// Set the raft log index
         index: Option<u64>,
 
-        #[structopt(
-            required_unless_one = &["region", "index"],
+        #[clap(
+            required_unless_present_any = &["region", "index"],
             conflicts_with_all = &["region", "index"],
-            short = "k",
+            short = 'k',
             help = RAW_KEY_HINT,
         )]
         key: Option<String>,
-        #[structopt(short = "b")]
+        #[clap(short = 'b')]
         binary: bool,
     },
     /// print region info
     Region {
-        #[structopt(
-            short = "r",
+        #[clap(
+            short = 'r',
             aliases = &["region"],
             conflicts_with = "all-regions",
-            use_delimiter = true,
-            require_delimiter = true,
-            value_delimiter = ","
+            use_value_delimiter = true,
+            require_value_delimiter = true,
+            value_delimiter = ','
         )]
         /// Print info for these regions
         regions: Option<Vec<u64>>,
@@ -764,29 +825,29 @@ pub enum RaftCmd {
         // `regions` must be None when `all_regions` is present,
         // so we left `all_regions` unused.
         #[allow(dead_code)]
-        #[structopt(long, conflicts_with = "regions")]
+        #[clap(long, conflicts_with = "regions")]
         /// Print info for all regions
         all_regions: bool,
 
-        #[structopt(long, default_value = "")]
+        #[clap(long, default_value = "")]
         /// hex start key
         start: String,
 
-        #[structopt(long, default_value = "")]
+        #[clap(long, default_value = "")]
         /// hex end key
         end: String,
 
-        #[structopt(long, default_value = "16")]
+        #[clap(long, default_value = "16")]
         /// Limit the number of keys to scan
         limit: usize,
 
-        #[structopt(long)]
+        #[clap(long)]
         /// Skip tombstone regions
         skip_tombstone: bool,
     },
 }
 
-#[derive(StructOpt)]
+#[derive(Subcommand)]
 pub enum FailCmd {
     /// Inject failures
     Inject {
@@ -794,7 +855,7 @@ pub enum FailCmd {
         /// E.g. tikv-ctl fail inject a=off b=panic
         args: Vec<String>,
 
-        #[structopt(short = "f")]
+        #[clap(short = 'f')]
         /// Read a file of fail points and actions to inject
         file: Option<String>,
     },
@@ -803,7 +864,7 @@ pub enum FailCmd {
         /// Recover fail points. Eg. tikv-ctl fail recover a b
         args: Vec<String>,
 
-        #[structopt(short = "f")]
+        #[clap(short = 'f')]
         /// Recover from a file of fail points
         file: Option<String>,
     },
@@ -811,66 +872,66 @@ pub enum FailCmd {
     List {},
 }
 
-#[derive(StructOpt)]
+#[derive(Subcommand)]
 pub enum EncryptionMetaCmd {
     /// Dump data keys
     DumpKey {
-        #[structopt(long, use_delimiter = true)]
+        #[clap(long, use_value_delimiter = true)]
         /// List of data key ids. Dump all keys if not provided.
         ids: Option<Vec<u64>>,
     },
     /// Dump file encryption info
     DumpFile {
-        #[structopt(long)]
+        #[clap(long)]
         /// Path to the file. Dump for all files if not provided.
         path: Option<String>,
     },
 }
 
-#[derive(StructOpt)]
+#[derive(Subcommand)]
 pub enum UnsafeRecoverCmd {
     /// Remove the failed machines from the peer list for the regions
     RemoveFailStores {
-        #[structopt(
-            short = "s",
-            use_delimiter = true,
-            require_delimiter = true,
-            value_delimiter = ","
+        #[clap(
+            short = 's',
+            use_value_delimiter = true,
+            require_value_delimiter = true,
+            value_delimiter = ','
         )]
         /// Stores to be removed
         stores: Vec<u64>,
 
-        #[structopt(
-            required_unless = "all-regions",
+        #[clap(
+            required_unless_present = "all-regions",
             conflicts_with = "all-regions",
-            short = "r",
-            use_delimiter = true,
-            require_delimiter = true,
-            value_delimiter = ","
+            short = 'r',
+            use_value_delimiter = true,
+            require_value_delimiter = true,
+            value_delimiter = ','
         )]
         /// Only for these regions
         regions: Option<Vec<u64>>,
 
-        #[structopt(long)]
+        #[clap(long)]
         /// Promote learner to voter
         promote_learner: bool,
 
         // `regions` must be None when `all_regions` is present,
         // so we left `all_regions` unused.
         #[allow(dead_code)]
-        #[structopt(required_unless = "regions", conflicts_with = "regions", long)]
+        #[clap(required_unless_present = "regions", conflicts_with = "regions", long)]
         /// Do the command for all regions
         all_regions: bool,
     },
     /// Remove unapplied raftlogs on the regions
     DropUnappliedRaftlog {
-        #[structopt(
-            required_unless = "all-regions",
+        #[clap(
+            required_unless_present = "all-regions",
             conflicts_with = "all-regions",
-            short = "r",
-            use_delimiter = true,
-            require_delimiter = true,
-            value_delimiter = ","
+            short = 'r',
+            use_value_delimiter = true,
+            require_value_delimiter = true,
+            value_delimiter = ','
         )]
         /// Only for these regions
         regions: Option<Vec<u64>>,
@@ -878,8 +939,98 @@ pub enum UnsafeRecoverCmd {
         // `regions` must be None when `all_regions` is present,
         // so we left `all_regions` unused.
         #[allow(dead_code)]
-        #[structopt(required_unless = "regions", conflicts_with = "regions", long)]
+        #[clap(required_unless_present = "regions", conflicts_with = "regions", long)]
         /// Do the command for all regions
         all_regions: bool,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::{Cmd, Opt};
+
+    #[test]
+    fn compact_log_backup_gcp_v2_enable_default_true() {
+        let opt = Opt::try_parse_from([
+            "tikv-ctl",
+            "compact-log-backup",
+            "--from",
+            "1",
+            "--until",
+            "2",
+            "--storage-base64",
+            "AA==",
+        ])
+        .unwrap();
+
+        match opt.cmd.unwrap() {
+            Cmd::CompactLogBackup { gcp_v2_enable, .. } => assert!(gcp_v2_enable),
+            cmd => panic!("unexpected command: {:?}", std::mem::discriminant(&cmd)),
+        }
+    }
+
+    #[test]
+    fn compact_log_backup_gcp_v2_enable_false() {
+        let opt = Opt::try_parse_from([
+            "tikv-ctl",
+            "compact-log-backup",
+            "--from",
+            "1",
+            "--until",
+            "2",
+            "--storage-base64",
+            "AA==",
+            "--gcp-v2-enable",
+            "false",
+        ])
+        .unwrap();
+
+        match opt.cmd.unwrap() {
+            Cmd::CompactLogBackup { gcp_v2_enable, .. } => assert!(!gcp_v2_enable),
+            cmd => panic!("unexpected command: {:?}", std::mem::discriminant(&cmd)),
+        }
+    }
+
+    #[test]
+    fn compact_log_backup_cal_shift_ts_flag() {
+        let opt = Opt::try_parse_from([
+            "tikv-ctl",
+            "compact-log-backup",
+            "--from",
+            "1",
+            "--until",
+            "2",
+            "--storage-base64",
+            "AA==",
+            "--cal-shift-ts",
+        ])
+        .unwrap();
+
+        match opt.cmd.unwrap() {
+            Cmd::CompactLogBackup { cal_shift_ts, .. } => assert!(cal_shift_ts),
+            cmd => panic!("unexpected command: {:?}", std::mem::discriminant(&cmd)),
+        }
+    }
+
+    #[test]
+    fn compact_log_backup_allows_omitting_until() {
+        let opt = Opt::try_parse_from([
+            "tikv-ctl",
+            "compact-log-backup",
+            "--from",
+            "1",
+            "--storage-base64",
+            "AA==",
+        ])
+        .unwrap();
+
+        match opt.cmd.unwrap() {
+            Cmd::CompactLogBackup { until_ts, .. } => {
+                assert_eq!(until_ts, None);
+            }
+            cmd => panic!("unexpected command: {:?}", std::mem::discriminant(&cmd)),
+        }
+    }
 }

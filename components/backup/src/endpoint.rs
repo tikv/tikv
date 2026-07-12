@@ -10,14 +10,14 @@ use std::{
 
 use async_channel::SendError;
 use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
-use concurrency_manager::ConcurrencyManager;
+use concurrency_manager::{ConcurrencyManager, MaxTsUpdateSource};
 use engine_traits::{CfName, KvEngine, SstCompressionType, name_to_cf, raw_ttl::ttl_current_ts};
 use external_storage::{BackendConfig, ExternalStorage, HdfsConfig, create_storage};
 use futures::{channel::mpsc::*, executor::block_on};
 use kvproto::{
     brpb::*,
     encryptionpb::EncryptionMethod,
-    kvrpcpb::{ApiVersion, Context, IsolationLevel, KeyRange},
+    kvrpcpb::{ApiVersion, Context, IsolationLevel, KeyRange, RequestOrigin},
     metapb::*,
 };
 use online_config::OnlineConfig;
@@ -40,12 +40,13 @@ use tikv_util::{
     impl_display_as_debug, info,
     resizable_threadpool::ResizableRuntime,
     store::find_peer,
+    thread_name_prefix::{BACKUP_IO_THREAD, BACKUP_WORKER_THREAD},
     time::{Instant, Limiter},
     warn,
     worker::Runnable,
 };
 use tokio::runtime::{Handle, Runtime};
-use txn_types::{Key, Lock, TimeStamp, TsSet};
+use txn_types::{Key, TimeStamp, TsSet};
 
 use crate::{
     Error,
@@ -59,6 +60,17 @@ use crate::{
 const BACKUP_BATCH_LIMIT: usize = 1024;
 // task yield duration when resource limit is on.
 const TASK_YIELD_DURATION: Duration = Duration::from_millis(10);
+
+pub fn storage_backend_config(config: &BackupConfig) -> BackendConfig {
+    BackendConfig {
+        s3_multi_part_size: config.s3_multi_part_size.0 as usize,
+        gcp_v2_enable: config.gcp_v2_enable,
+        hdfs_config: HdfsConfig {
+            hadoop_home: config.hadoop.home.clone(),
+            linux_user: config.hadoop.linux_user.clone(),
+        },
+    }
+}
 
 #[derive(Clone)]
 struct Request {
@@ -81,6 +93,7 @@ struct Request {
     replica_read: bool,
     resource_group_name: String,
     source_tag: String,
+    request_origin: RequestOrigin,
     bypass_locks: Vec<u64>,
     access_locks: Vec<u64>,
 }
@@ -154,6 +167,7 @@ impl Task {
                     .get_resource_group_name()
                     .to_owned(),
                 source_tag,
+                request_origin: req.get_context().get_request_origin(),
                 bypass_locks: req.get_context().get_resolved_locks().to_owned(),
                 access_locks: req.get_context().get_committed_locks().to_owned(),
                 cipher: req.cipher_info.unwrap_or_else(|| {
@@ -182,6 +196,7 @@ pub struct BackupRange {
     codec: KeyValueCodec,
     cf: CfName,
     uses_replica_read: bool,
+    request_origin: RequestOrigin,
 }
 
 /// The generic saveable writer. for generic `InMemBackupFiles`.
@@ -235,8 +250,15 @@ async fn save_backup_file_worker<EK: KvEngine>(
 ) {
     while let Ok(msg) = rx.recv().await {
         let files = if msg.files.need_flush_keys() {
-            match with_resource_limiter(msg.files.save(&storage), msg.resource_limiter.clone())
-                .await
+            match with_resource_limiter(
+                msg.files.save(&storage),
+                msg.resource_limiter.clone(),
+                false,
+                false,
+                None,
+                0,
+            )
+            .await
             {
                 Ok(mut split_files) => {
                     let mut has_err = false;
@@ -339,12 +361,22 @@ impl BackupRange {
         ctx.set_peer(self.peer.clone());
         ctx.set_replica_read(self.uses_replica_read);
         ctx.set_isolation_level(IsolationLevel::Si);
+        ctx.set_request_origin(self.request_origin);
 
         let mut snap_ctx = SnapContext {
             pb_ctx: &ctx,
             allowed_in_flashback: self.region.is_in_flashback,
             ..Default::default()
         };
+        // Replica reads do lock checks via read-index, but backup_range should
+        // still run the origin-aware max-ts validation before taking a snapshot.
+        concurrency_manager
+            .update_max_ts(
+                backup_ts,
+                MaxTsUpdateSource::new("backup_range")
+                    .require_request_origin_check(self.request_origin),
+            )
+            .map_err(TxnError::from)?;
         if self.uses_replica_read {
             snap_ctx.start_ts = Some(backup_ts);
             let mut key_range = KeyRange::default();
@@ -356,17 +388,13 @@ impl BackupRange {
             }
             snap_ctx.key_ranges = vec![key_range];
         } else {
-            // Update max_ts and check the in-memory lock table before getting the snapshot
-            concurrency_manager
-                .update_max_ts(backup_ts, "backup_range")
-                .map_err(TxnError::from)?;
             concurrency_manager
                 .read_range_check(
                     self.start_key.as_ref(),
                     self.end_key.as_ref(),
                     |key, lock| {
-                        Lock::check_ts_conflict(
-                            Cow::Borrowed(lock),
+                        txn_types::check_ts_conflict(
+                            Cow::Owned(tikv_util::Either::Left(lock.clone())),
                             key,
                             backup_ts,
                             &Default::default(),
@@ -647,6 +675,10 @@ impl ConfigManager {
     fn set_num_threads(&self, num_threads: usize) {
         self.0.write().unwrap().num_threads = num_threads;
     }
+
+    fn set_gcp_v2_enable(&self, gcp_v2_enable: bool) {
+        self.0.write().unwrap().gcp_v2_enable = gcp_v2_enable;
+    }
 }
 
 /// SoftLimitKeeper can run in the background and adjust the number of threads
@@ -693,7 +725,7 @@ impl SoftLimitKeeper {
         let mut quota_val = num_threads;
         if enable_auto_tune {
             quota_val = cpu_quota
-                .get_quota(|s| s.contains("bkwkr"))
+                .get_quota(|s| s.contains(BACKUP_WORKER_THREAD))
                 .clamp(1, num_threads);
         }
 
@@ -802,7 +834,12 @@ impl<R: RegionInfoProvider> Progress<R> {
     /// Notice: Returning an empty BackupRanges means that no leader region
     /// corresponding to the current range is sought. The caller should
     /// call `forward` again to seek regions for the next range.
-    fn forward(&mut self, limit: usize, replica_read: bool) -> Option<Vec<BackupRange>> {
+    fn forward(
+        &mut self,
+        limit: usize,
+        replica_read: bool,
+        request_origin: RequestOrigin,
+    ) -> Option<Vec<BackupRange>> {
         if self.finished {
             return None;
         }
@@ -823,8 +860,8 @@ impl<R: RegionInfoProvider> Progress<R> {
                 let mut count = 0;
                 for info in iter {
                     let region = &info.region;
-                    if end_key.is_some() {
-                        let end_slice = end_key.as_ref().unwrap().as_encoded().as_slice();
+                    if let Some(end_key) = &end_key {
+                        let end_slice = end_key.as_encoded().as_slice();
                         if end_slice <= region.get_start_key() {
                             // We have reached the end.
                             // The range is defined as [start, end) so break if
@@ -852,6 +889,7 @@ impl<R: RegionInfoProvider> Progress<R> {
                             codec,
                             cf: cf_name,
                             uses_replica_read: info.role != StateRole::Leader,
+                            request_origin,
                         };
                         tx.send(backup_range).unwrap();
                         count += 1;
@@ -897,11 +935,11 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
     ) -> Endpoint<E, R> {
         let pool = ResizableRuntime::new(
             config.num_threads,
-            "bkwkr",
+            BACKUP_WORKER_THREAD,
             Box::new(utils::create_tokio_runtime),
             Box::new(|new_size| BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64)),
         );
-        let rt = utils::create_tokio_runtime(config.io_thread_size, "backup-io").unwrap();
+        let rt = utils::create_tokio_runtime(config.io_thread_size, BACKUP_IO_THREAD).unwrap();
         let config_manager = ConfigManager(Arc::new(RwLock::new(config)));
         let soft_limit_keeper = SoftLimitKeeper::new(config_manager.clone());
         rt.spawn(soft_limit_keeper.clone().run());
@@ -926,20 +964,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
     }
 
     fn get_config(&self) -> BackendConfig {
-        BackendConfig {
-            s3_multi_part_size: self.config_manager.0.read().unwrap().s3_multi_part_size.0 as usize,
-            hdfs_config: HdfsConfig {
-                hadoop_home: self.config_manager.0.read().unwrap().hadoop.home.clone(),
-                linux_user: self
-                    .config_manager
-                    .0
-                    .read()
-                    .unwrap()
-                    .hadoop
-                    .linux_user
-                    .clone(),
-            },
-        }
+        storage_backend_config(&self.config_manager.0.read().unwrap())
     }
 
     fn spawn_backup_worker(
@@ -993,7 +1018,8 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     // needs to be `Send`. (See https://tokio.rs/tokio/tutorial/shared-state)
                     // Use &mut and mark the type for making rust-analyzer happy.
                     let progress: &mut Progress<_> = &mut prs.lock().unwrap();
-                    match progress.forward(batch_size, request.replica_read) {
+                    match progress.forward(batch_size, request.replica_read, request.request_origin)
+                    {
                         Some(batch) => (batch, progress.codec.is_raw_kv, progress.cf),
                         None => return,
                     }
@@ -1065,6 +1091,10 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                                 resource_limiter.clone(),
                             ),
                             resource_limiter.clone(),
+                            false,
+                            false,
+                            None,
+                            0,
                         )
                         .await
                     };
@@ -1246,15 +1276,15 @@ fn get_max_start_key(start_key: Option<&Key>, region: &Region) -> Option<Key> {
     } else {
         Some(Key::from_encoded_slice(region.get_start_key()))
     };
-    if start_key.is_none() {
-        region_start
-    } else {
-        let start_slice = start_key.as_ref().unwrap().as_encoded().as_slice();
+    if let Some(start_key_ref) = &start_key {
+        let start_slice = start_key_ref.as_encoded().as_slice();
         if start_slice < region.get_start_key() {
             region_start
         } else {
             start_key.cloned()
         }
+    } else {
+        region_start
     }
 }
 
@@ -1367,7 +1397,9 @@ pub mod tests {
             txn::tests::{must_commit, must_prewrite_put},
         },
     };
-    use tikv_util::{config::ReadableSize, info, store::new_peer};
+    use tikv_util::{
+        config::ReadableSize, info, store::new_peer, thread_name_prefix::BACKUP_WORKER_THREAD,
+    };
     use tokio::time;
     use txn_types::SHORT_VALUE_MAX_LEN;
 
@@ -1537,7 +1569,7 @@ pub mod tests {
         let counter = Arc::new(AtomicU32::new(0));
         let mut pool = ResizableRuntime::new(
             3,
-            "bkwkr",
+            BACKUP_WORKER_THREAD,
             Box::new(utils::create_tokio_runtime),
             Box::new(|new_size: usize| BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64)),
         );
@@ -1575,6 +1607,15 @@ pub mod tests {
     }
 
     #[test]
+    fn test_gcp_v2_enable_online_config() {
+        let (_tmp, endpoint) = new_endpoint();
+        assert!(endpoint.get_config().gcp_v2_enable);
+
+        endpoint.config_manager.set_gcp_v2_enable(false);
+        assert!(!endpoint.get_config().gcp_v2_enable);
+    }
+
+    #[test]
     fn test_seek_range() {
         let (_tmp, endpoint) = new_endpoint();
 
@@ -1602,7 +1643,9 @@ pub mod tests {
                 let mut ranges = Vec::with_capacity(expect.len());
                 while ranges.len() != expect.len() {
                     let n = (rand::random::<usize>() % 3) + 1;
-                    let mut r = prs.forward(n, false).unwrap();
+                    let mut r = prs
+                        .forward(n, false, RequestOrigin::RequestOriginUnknown)
+                        .unwrap();
                     // The returned backup ranges should <= n
                     assert!(r.len() <= n);
 
@@ -1657,6 +1700,7 @@ pub mod tests {
                         replica_read: false,
                         resource_group_name: "".into(),
                         source_tag: "br".into(),
+                        request_origin: RequestOrigin::RequestOriginUnknown,
                         bypass_locks: vec![],
                         access_locks: vec![],
                     },
@@ -1770,6 +1814,7 @@ pub mod tests {
                 replica_read: false,
                 resource_group_name: "".into(),
                 source_tag: "br".into(),
+                request_origin: RequestOrigin::RequestOriginUnknown,
                 bypass_locks: vec![],
                 access_locks: vec![],
             },
@@ -1803,6 +1848,7 @@ pub mod tests {
                 replica_read: true,
                 resource_group_name: "".into(),
                 source_tag: "br".into(),
+                request_origin: RequestOrigin::RequestOriginUnknown,
                 bypass_locks: vec![],
                 access_locks: vec![],
             },
@@ -1855,7 +1901,7 @@ pub mod tests {
                 let mut ranges = Vec::with_capacity(expect.len());
                 loop {
                     let n = (rand::random::<usize>() % 3) + 1;
-                    let mut r = match prs.forward(n, false) {
+                    let mut r = match prs.forward(n, false, RequestOrigin::RequestOriginUnknown) {
                         None => break,
                         Some(r) => r,
                     };
@@ -1915,6 +1961,7 @@ pub mod tests {
                         replica_read: false,
                         resource_group_name: "".into(),
                         source_tag: "br".into(),
+                        request_origin: RequestOrigin::RequestOriginUnknown,
                         bypass_locks: vec![],
                         access_locks: vec![],
                     },
@@ -2016,6 +2063,7 @@ pub mod tests {
             codec: KeyValueCodec::new(false, ApiVersion::V1, ApiVersion::V1),
             cf: "",
             uses_replica_read: false,
+            request_origin: RequestOrigin::RequestOriginUnknown,
         }]
     }
 
@@ -2047,7 +2095,7 @@ pub mod tests {
         let mut ranges = Vec::with_capacity(expect.len());
         loop {
             let n = (rand::random::<usize>() % 2) + 1;
-            let mut r = match prs.forward(n, false) {
+            let mut r = match prs.forward(n, false, RequestOrigin::RequestOriginUnknown) {
                 None => break,
                 Some(r) => r,
             };
@@ -2761,7 +2809,7 @@ pub mod tests {
         // threads)
         let mut pool = ResizableRuntime::new(
             1,
-            "bkwkr",
+            BACKUP_WORKER_THREAD,
             Box::new(utils::create_tokio_runtime),
             Box::new(|new_size: usize| BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64)),
         );

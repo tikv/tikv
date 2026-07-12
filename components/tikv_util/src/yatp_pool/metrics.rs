@@ -23,4 +23,11 @@ lazy_static! {
         exponential_buckets(1e-5, 2.0, 22).unwrap() // 10us ~ 42s
     )
     .unwrap();
+    pub static ref YATP_POOL_SCHEDULE_EXEC_DURATION_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_yatp_pool_schedule_exec_duration",
+        "Histogram of yatp pool schedule exec duration.",
+        &["name", "priority"],
+        exponential_buckets(1e-5, 2.0, 22).unwrap() // 10us ~ 42s
+    )
+    .unwrap();
 }

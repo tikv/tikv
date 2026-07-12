@@ -46,6 +46,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchIndexScan
             black_box(false),
             black_box(unique),
             black_box(false),
+            black_box(false),
         )
         .unwrap();
         // There is a step of building scanner in the first `next()` which cost time,

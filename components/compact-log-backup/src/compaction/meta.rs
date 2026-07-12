@@ -1,18 +1,18 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
-use std::{
-    collections::{BTreeSet, HashMap},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
+use bytes::Bytes;
 use external_storage::ExternalStorage;
 use futures::stream::TryStreamExt;
 use kvproto::brpb::{self, DeleteSpansOfFile};
+use protobuf::Chars;
 
 use super::{
     EpochHint, Subcompaction, SubcompactionCollectKey, SubcompactionResult, UnformedSubcompaction,
     collector::CollectSubcompactionConfig,
 };
 use crate::{
+    ShardConfig,
     errors::Result,
     storage::{
         LoadFromExt, LogFile, LogFileId, MetaFile, MigrationStorageWrapper, PhysicalLogFile,
@@ -84,6 +84,7 @@ impl Subcompaction {
         out.set_table_id(self.table_id);
         out.set_region_id(self.region_id);
         out.set_cf(self.cf.to_owned());
+        out.set_ty(self.ty);
         out.set_size(self.size);
         out.set_input_min_ts(self.input_min_ts);
         out.set_input_max_ts(self.input_max_ts);
@@ -127,6 +128,7 @@ impl Subcompaction {
         c.form(
             &key,
             &CollectSubcompactionConfig {
+                compact_shift_from_ts: 0,
                 compact_from_ts: 0,
                 compact_to_ts: u64::MAX,
                 subcompaction_size_threshold: 0,
@@ -144,18 +146,33 @@ impl LogFileId {
     }
 }
 
-#[derive(Eq, PartialEq, Debug)]
-struct SortByOffset(LogFileId);
-
-impl PartialOrd for SortByOffset {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.0.offset.partial_cmp(&other.0.offset)
-    }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct SortByOffset {
+    offset: u64,
+    length: u64,
 }
 
-impl Ord for SortByOffset {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.0.offset.cmp(&other.0.offset)
+impl SortByOffset {
+    fn new(id: &LogFileId) -> Self {
+        Self {
+            offset: id.offset,
+            length: id.length,
+        }
+    }
+
+    fn offset(&self) -> u64 {
+        self.offset
+    }
+
+    fn length(&self) -> u64 {
+        self.length
+    }
+
+    fn span(&self) -> brpb::Span {
+        let mut span = brpb::Span::default();
+        span.set_offset(self.offset);
+        span.set_length(self.length);
+        span
     }
 }
 
@@ -164,7 +181,7 @@ impl Ord for SortByOffset {
 /// Finally, it calculates which files can be deleted.
 #[derive(Debug)]
 pub struct CompactionRunInfoBuilder {
-    files: HashMap<Arc<str>, BTreeSet<SortByOffset>>,
+    files: HashMap<Bytes, Vec<SortByOffset>>,
     compaction: brpb::LogFileCompaction,
 }
 
@@ -182,7 +199,7 @@ impl Default for CompactionRunInfoBuilder {
 /// A set of deletable log files from the same metadata.
 pub struct ExpiringFilesOfMeta {
     meta_path: Arc<str>,
-    logs: Vec<Arc<str>>,
+    logs: Vec<Chars>,
     /// Whether the log file is still needed.
     ///
     /// When we are going to delete every log files recoreded in a log file, the
@@ -193,7 +210,7 @@ pub struct ExpiringFilesOfMeta {
     // Since we are not handle meta kv files. the destruct_self may not work here.
     all_data_files_compacted: bool,
     /// The logical log files that can be removed.
-    spans_of_file: HashMap<Arc<str>, (Vec<brpb::Span>, /* physical file size */ u64)>,
+    spans_of_file: HashMap<Chars, (Vec<brpb::Span>, /* physical file size */ u64)>,
 }
 
 impl ExpiringFilesOfMeta {
@@ -210,7 +227,10 @@ impl ExpiringFilesOfMeta {
 
     /// Whether we are going to delete nothing.
     pub fn is_empty(&self) -> bool {
-        self.logs.is_empty() && self.spans_of_file.is_empty() && !self.destruct_self
+        self.logs.is_empty()
+            && self.spans_of_file.is_empty()
+            && !self.destruct_self
+            && !self.all_data_files_compacted
     }
 
     /// Get the list of physical files that can be deleted.
@@ -234,28 +254,37 @@ impl CompactionRunInfoBuilder {
         self.files.is_empty()
     }
 
-    pub fn add_subcompaction(&mut self, c: &SubcompactionResult) {
-        for file in &c.origin.inputs {
-            if !self.files.contains_key(&file.id.name) {
+    pub fn add_origin_subcompaction(&mut self, c: &Subcompaction) {
+        for file in &c.inputs {
+            if let Some(spans) = self.files.get_mut(file.id.name.as_bytes()) {
+                spans.push(SortByOffset::new(&file.id));
+            } else {
+                let mut spans = Vec::with_capacity(16);
+                spans.push(SortByOffset::new(&file.id));
                 self.files
-                    .insert(Arc::clone(&file.id.name), Default::default());
+                    .insert(Bytes::copy_from_slice(file.id.name.as_bytes()), spans);
             }
-            self.files
-                .get_mut(&file.id.name)
-                .unwrap()
-                .insert(SortByOffset(file.id.clone()));
         }
-        self.compaction.artifacts_hash ^= c.origin.crc64();
-        self.compaction.input_min_ts = self.compaction.input_min_ts.min(c.origin.input_min_ts);
-        self.compaction.input_max_ts = self.compaction.input_max_ts.max(c.origin.input_max_ts);
+        self.compaction.artifacts_hash ^= c.crc64();
+        self.compaction.input_min_ts = self.compaction.input_min_ts.min(c.input_min_ts);
+        self.compaction.input_max_ts = self.compaction.input_max_ts.max(c.input_max_ts);
+    }
+
+    pub fn add_subcompaction(&mut self, c: &SubcompactionResult) {
+        self.add_origin_subcompaction(&c.origin);
     }
 
     pub fn mut_meta(&mut self) -> &mut brpb::LogFileCompaction {
         &mut self.compaction
     }
 
-    pub async fn write_migration(&self, s: Arc<dyn ExternalStorage>) -> Result<()> {
-        let migration = self.migration_of(self.find_expiring_files(s.clone()).await?);
+    pub async fn write_migration(
+        &mut self,
+        s: Arc<dyn ExternalStorage>,
+        shard: Option<ShardConfig>,
+    ) -> Result<()> {
+        self.normalize_spans();
+        let migration = self.migration_of(self.find_expiring_files(s.clone(), shard).await?);
         let wrapped_storage = MigrationStorageWrapper::new(s.as_ref());
         wrapped_storage.write(migration.into()).await?;
         Ok(())
@@ -283,8 +312,10 @@ impl CompactionRunInfoBuilder {
     async fn find_expiring_files(
         &self,
         s: Arc<dyn ExternalStorage>,
+        shard: Option<ShardConfig>,
     ) -> Result<Vec<ExpiringFilesOfMeta>> {
-        let ext = LoadFromExt::default();
+        let mut ext = LoadFromExt::default();
+        ext.shard = shard;
         let mut storage = StreamMetaStorage::load_from_ext(&s, ext).await?;
 
         let mut result = vec![];
@@ -298,15 +329,15 @@ impl CompactionRunInfoBuilder {
     }
 
     fn full_covers(&self, file: &PhysicalLogFile) -> bool {
-        match self.files.get(&file.name) {
+        match self.files.get(file.name.as_bytes()) {
             None => false,
             Some(spans) => {
                 let mut cur_offset = 0;
                 for span in spans {
-                    if span.0.offset != cur_offset {
+                    if span.offset() != cur_offset {
                         return false;
                     }
-                    cur_offset += span.0.length
+                    cur_offset += span.length()
                 }
                 assert!(
                     cur_offset <= file.size,
@@ -320,22 +351,29 @@ impl CompactionRunInfoBuilder {
         }
     }
 
+    fn normalize_spans(&mut self) {
+        for spans in self.files.values_mut() {
+            spans.sort_unstable();
+            spans.dedup();
+        }
+    }
+
     fn expiring(&self, file: &MetaFile) -> ExpiringFilesOfMeta {
         let mut result = ExpiringFilesOfMeta::of(&file.name);
         let mut all_full_covers = true;
-        let mut all_data_files_full_covers = true;
+        let mut all_data_files_compacted = true;
         for p in &file.physical_files {
             let full_covers = self.full_covers(p);
             if full_covers {
-                result.logs.push(Arc::clone(&p.name))
+                result.logs.push(p.name.clone());
             } else {
-                if let Some(vs) = self.files.get(&p.name) {
+                if let Some(vs) = self.files.get(p.name.as_bytes()) {
                     let segs = result
                         .spans_of_file
-                        .entry(Arc::clone(&p.name))
+                        .entry(p.name.clone())
                         .or_insert_with(|| (vec![], p.size));
                     for f in vs {
-                        segs.0.push(f.0.span());
+                        segs.0.push(f.span());
                     }
                 }
                 all_full_covers = false;
@@ -344,12 +382,12 @@ impl CompactionRunInfoBuilder {
                 // Therefore, only if this physical file contains no `is_meta` entries
                 // should `all_data_files_full_covers` be set to false.
                 if p.files.iter().any(|f| !f.is_meta) {
-                    all_data_files_full_covers = false;
+                    all_data_files_compacted = false;
                 }
             }
         }
         result.destruct_self = all_full_covers;
-        result.all_data_files_compacted = all_data_files_full_covers;
+        result.all_data_files_compacted = all_data_files_compacted;
 
         result
     }
@@ -379,9 +417,72 @@ mod test {
     };
 
     impl CompactionRunInfoBuilder {
-        async fn mig(&self, s: Arc<dyn ExternalStorage>) -> crate::Result<brpb::Migration> {
-            Ok(self.migration_of(self.find_expiring_files(s).await?))
+        async fn mig(&mut self, s: Arc<dyn ExternalStorage>) -> crate::Result<brpb::Migration> {
+            self.normalize_spans();
+            Ok(self.migration_of(self.find_expiring_files(s, None).await?))
         }
+    }
+
+    #[tokio::test]
+    async fn test_ignore_small_files() {
+        let const_val = |_| b"fiolvit".to_vec();
+        let g11 =
+            LogFileBuilder::from_iter(KvGen::new(gen_min_max(1, 1, 2, 10, 20), const_val), |_| {});
+        let g12 =
+            LogFileBuilder::from_iter(KvGen::new(gen_min_max(1, 3, 4, 15, 25), const_val), |_| {});
+        let g21 =
+            LogFileBuilder::from_iter(KvGen::new(gen_min_max(3, 5, 6, 30, 40), const_val), |_| {});
+        let g22 =
+            LogFileBuilder::from_iter(KvGen::new(gen_min_max(4, 7, 8, 45, 55), const_val), |_| {});
+        let st = TmpStorage::create();
+        let m = st
+            .build_flush_logs("v1/1", "v1/backupmeta/1.meta", [[g11, g12], [g21, g22]])
+            .await;
+
+        let mut coll1 = CompactionRunInfoBuilder::default();
+        let cr = SubcompactionExec::default_config(st.storage().clone());
+        let subc = Subcompaction::singleton(m.physical_files[0].files[0].clone());
+        let res = cr.run(subc, Default::default()).await.unwrap();
+        coll1.add_subcompaction(&res);
+        let mig = coll1.mig(st.storage().clone()).await.unwrap();
+        assert_eq!(mig.edit_meta.len(), 1);
+        assert!(!mig.edit_meta[0].destruct_self);
+        assert!(!mig.edit_meta[0].all_data_files_compacted);
+        assert_eq!(mig.edit_meta[0].delete_physical_files.len(), 0);
+        assert_eq!(mig.edit_meta[0].delete_logical_files.len(), 1);
+
+        let subc = Subcompaction::singleton(m.physical_files[0].files[1].clone());
+        let cr = SubcompactionExec::default_config(st.storage().clone());
+        let res2 = cr.run(subc, Default::default()).await.unwrap();
+        coll1.add_subcompaction(&res2);
+        let mig = coll1.mig(st.storage().clone()).await.unwrap();
+        assert_eq!(mig.edit_meta.len(), 1);
+        assert!(!mig.edit_meta[0].destruct_self);
+        assert!(!mig.edit_meta[0].all_data_files_compacted);
+        assert_eq!(mig.edit_meta[0].delete_physical_files.len(), 1);
+        assert_eq!(mig.edit_meta[0].delete_logical_files.len(), 0);
+
+        let subc = Subcompaction::singleton(m.physical_files[1].files[0].clone());
+        let cr = SubcompactionExec::default_config(st.storage().clone());
+        let res3 = cr.run(subc, Default::default()).await.unwrap();
+        coll1.add_subcompaction(&res3);
+        let mig = coll1.mig(st.storage().clone()).await.unwrap();
+        assert_eq!(mig.edit_meta.len(), 1);
+        assert!(!mig.edit_meta[0].destruct_self);
+        assert!(!mig.edit_meta[0].all_data_files_compacted);
+        assert_eq!(mig.edit_meta[0].delete_physical_files.len(), 1);
+        assert_eq!(mig.edit_meta[0].delete_logical_files.len(), 1);
+
+        let subc = Subcompaction::singleton(m.physical_files[1].files[1].clone());
+        let cr = SubcompactionExec::default_config(st.storage().clone());
+        let res4 = cr.run(subc, Default::default()).await.unwrap();
+        coll1.add_subcompaction(&res4);
+        let mig = coll1.mig(st.storage().clone()).await.unwrap();
+        assert_eq!(mig.edit_meta.len(), 1);
+        assert!(mig.edit_meta[0].destruct_self);
+        assert!(mig.edit_meta[0].all_data_files_compacted);
+        assert_eq!(mig.edit_meta[0].delete_physical_files.len(), 2);
+        assert_eq!(mig.edit_meta[0].delete_logical_files.len(), 0);
     }
 
     #[tokio::test]

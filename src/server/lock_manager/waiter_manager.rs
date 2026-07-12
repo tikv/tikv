@@ -27,6 +27,7 @@ use tikv_util::{
 };
 use tokio::task::spawn_local;
 use tracker::GLOBAL_TRACKERS;
+use txn_types::LockInfoExt;
 
 use super::{config::Config, deadlock::Scheduler as DetectorScheduler, metrics::*};
 use crate::storage::{
@@ -357,7 +358,19 @@ impl WaitTable {
 
         assert_eq!(waiter.wait_info.key, update_event.wait_info.key);
 
-        if waiter.wait_info.lock_digest.ts == update_event.wait_info.lock_digest.ts {
+        // NOTE: `maybe_shared_lock_shrink` should be false currently. Because
+        // update_waiter is only triggered by UpdateWaitForEvent from
+        // LockWaitQueues::update_lock_wait, which is fed by `new_acquired_locks`.
+        // Shared-lock shrink (e.g. rollback/commit removing a sub-lock) writes
+        // SharedLocks with `is_new = false`, so it doesn't enter `new_locks`
+        // and thus won't emit update_wait_for events. However, if the production
+        // pipeline starts reporting shared-lock updates in the future, we should update
+        // the waiter even when the ts is unchanged.
+        let maybe_shared_lock_shrink = waiter.wait_info.lock_info.is_shared_lock()
+            && update_event.wait_info.lock_info.is_shared_lock();
+        if !maybe_shared_lock_shrink
+            && waiter.wait_info.lock_digest.ts == update_event.wait_info.lock_digest.ts
+        {
             // Unchanged.
             return None;
         }
@@ -554,13 +567,13 @@ impl WaiterManager {
                 continue;
             }
 
-            if let Some((previous_wait_info, diag_ctx)) = previous_wait_info
-                && previous_wait_info.allow_lock_with_conflict
-            {
-                self.detector_scheduler
-                    .clean_up_wait_for(event.start_ts, previous_wait_info);
-                self.detector_scheduler
-                    .detect(event.start_ts, event.wait_info, diag_ctx);
+            if let Some((previous_wait_info, diag_ctx)) = previous_wait_info {
+                if previous_wait_info.allow_lock_with_conflict {
+                    self.detector_scheduler
+                        .clean_up_wait_for(event.start_ts, previous_wait_info);
+                    self.detector_scheduler
+                        .detect(event.start_ts, event.wait_info, diag_ctx);
+                }
             }
         }
     }
@@ -582,6 +595,13 @@ impl WaiterManager {
             .borrow_mut()
             .take_waiter_by_lock_digest(lock, waiter_ts);
         if let Some(waiter) = waiter {
+            if waiter.wait_info.lock_info.is_shared_lock() {
+                // When deadlock detected on a shared lock, some wait-for entries might have
+                // been registered to the detect table. So do clean up here to avoid those
+                // entries causing false-positive deadlock errors.
+                self.detector_scheduler
+                    .clean_up_wait_for(waiter_ts, waiter.wait_info.clone());
+            }
             waiter.cancel_for_deadlock(lock, key, deadlock_key_hash, wait_chain);
         }
     }

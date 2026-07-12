@@ -17,6 +17,10 @@ use resource_control::{
 };
 use tikv_util::{
     sys::SysQuota,
+    thread_name_prefix::{
+        SCHEDULE_WORKER_HIGH_PRI_THREAD, SCHEDULE_WORKER_POOL_THREAD,
+        SCHEDULE_WORKER_PRIORITY_THREAD,
+    },
     yatp_pool::{Full, FuturePool, PoolTicker, YatpPoolBuilder},
 };
 use yatp::queue::Extras;
@@ -113,6 +117,7 @@ impl PriorityQueue {
         metadata: TaskMetadata<'_>,
         priority_level: CommandPri,
         f: impl futures::Future<Output = ()> + Send + 'static,
+        write_bytes: u64,
     ) -> Result<(), Full> {
         let fixed_level = match priority_level {
             CommandPri::High => Some(0),
@@ -122,17 +127,22 @@ impl PriorityQueue {
         // TODO: maybe use a better way to generate task_id
         let task_id = rand::random::<u64>();
         let group_name = metadata.group_name().to_owned();
-        let resource_limiter = self.resource_mgr.get_resource_limiter(
-            unsafe { std::str::from_utf8_unchecked(&group_name) },
-            request_source,
-            metadata.override_priority() as u64,
-        );
+        let override_priority = metadata.override_priority() as u64;
         let mut extras = Extras::new_multilevel(task_id, fixed_level);
         extras.set_metadata(metadata.to_vec());
+        let resource_limiter = self.resource_mgr.get_resource_limiter(
+            std::str::from_utf8(&group_name).unwrap_or_default(),
+            request_source,
+            override_priority,
+        );
         self.worker_pool.spawn_with_extras(
             with_resource_limiter(
                 ControlledFuture::new(f, self.resource_ctl.clone(), group_name),
                 resource_limiter,
+                true, // skip compaction pressure for foreground jobs
+                true, // measure-only: build debt, never sleep inside pool
+                Some(self.resource_mgr.clone()),
+                write_bytes,
             ),
             extras,
         )
@@ -189,14 +199,18 @@ impl SchedPool {
                     tls_flush(&reporter);
                 })
                 .enable_task_wait_metrics(true)
+                .enable_task_exec_metrics(true)
         };
         let vanilla = VanillaQueue {
-            worker_pool: builder(pool_size, "sched-worker-pool").build_future_pool(),
-            high_worker_pool: builder(std::cmp::max(1, pool_size / 2), "sched-worker-high")
-                .build_future_pool(),
+            worker_pool: builder(pool_size, SCHEDULE_WORKER_POOL_THREAD).build_future_pool(),
+            high_worker_pool: builder(
+                std::cmp::max(1, pool_size / 2),
+                SCHEDULE_WORKER_HIGH_PRI_THREAD,
+            )
+            .build_future_pool(),
         };
         let priority = resource_ctl.as_ref().map(|r| PriorityQueue {
-            worker_pool: builder(pool_size, "sched-worker-priority")
+            worker_pool: builder(pool_size, SCHEDULE_WORKER_PRIORITY_THREAD)
                 .build_priority_future_pool(r.clone()),
             resource_ctl: r.clone(),
             resource_mgr: resource_mgr.unwrap(),
@@ -220,6 +234,7 @@ impl SchedPool {
         metadata: TaskMetadata<'_>,
         priority_level: CommandPri,
         f: impl futures::Future<Output = ()> + Send + 'static,
+        write_bytes: u64,
     ) -> Result<(), Full> {
         match self.queue_type {
             QueueType::Vanilla => self.vanilla.spawn(priority_level, f),
@@ -231,6 +246,7 @@ impl SchedPool {
                         metadata,
                         priority_level,
                         f,
+                        write_bytes,
                     )
                 } else {
                     fail_point!("single_queue_pool_task");

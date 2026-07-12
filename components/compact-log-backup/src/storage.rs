@@ -2,31 +2,33 @@
 use std::{
     collections::{BTreeSet, HashMap, HashSet, VecDeque, hash_map::Entry},
     future::Future,
-    ops::Not,
+    ops::{Deref, Not},
     path::Path,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll, ready},
 };
 
+use cloud::blob::read_to_end;
 use derive_more::Display;
+use engine_traits::CfName;
 use external_storage::{BlobObject, ExternalStorage, UnpinReader};
 use futures::{
     future::{FusedFuture, FutureExt, TryFutureExt},
-    io::{AsyncReadExt, Cursor},
+    io::Cursor,
     stream::{Fuse, FusedStream, StreamExt, TryStreamExt},
 };
 use kvproto::{
-    brpb::{self, FileType, MetaEdit, Migration},
+    brpb::{self, DataFileInfo, FileType, MetaEdit, Metadata, Migration},
     metapb::RegionEpoch,
 };
 use prometheus::core::{Atomic, AtomicU64};
-use protobuf::ProtobufEnum;
+use protobuf::{Chars, ProtobufEnum};
 use tikv_util::{
     info, retry_expr,
     stream::{JustRetry, RetryExt},
-    time::Instant,
 };
+use tokio::time::Instant;
 use tokio_stream::Stream;
 use tracing::{Span, span::Entered};
 use tracing_active_tree::frame;
@@ -35,12 +37,13 @@ use super::{
     errors::{Error, Result},
     statistic::LoadMetaStatistic,
 };
-use crate::{OtherErrExt, compaction::EpochHint, errors::ErrorKind, util};
+use crate::{OtherErrExt, ShardConfig, compaction::EpochHint, errors::ErrorKind, util};
 
 pub const METADATA_PREFIX: &str = "v1/backupmeta";
 pub const DEFAULT_COMPACTION_OUT_PREFIX: &str = "v1/compaction_out";
 pub const MIGRATION_PREFIX: &str = "v1/migrations";
 pub const LOCK_PREFIX: &str = "v1/LOCK";
+pub const MIGRATION_APPEND_LOCK: &str = "v1/APPEND_LOCK";
 
 /// The in-memory presentation of the message [`brpb::Metadata`].
 #[derive(Debug, PartialEq, Eq)]
@@ -51,28 +54,27 @@ pub struct MetaFile {
     pub max_ts: u64,
 }
 
-impl From<brpb::Metadata> for MetaFile {
-    fn from(value: brpb::Metadata) -> Self {
+impl From<Metadata> for MetaFile {
+    fn from(value: Metadata) -> Self {
         Self::from_file(Arc::from(":memory:"), value)
     }
 }
 
 impl MetaFile {
-    pub fn from_file(name: Arc<str>, mut meta_file: brpb::Metadata) -> Self {
+    pub fn from_file(name: Arc<str>, mut meta_file: Metadata) -> Self {
         let mut log_files = vec![];
         let min_ts = meta_file.min_ts;
         let max_ts = meta_file.max_ts;
 
         // NOTE: perhaps we also need consider non-grouped backup meta here?
         for mut group in meta_file.take_file_groups().into_iter() {
-            let name = Arc::from(group.path.clone().into_boxed_str());
             let mut g = PhysicalLogFile {
                 size: group.length,
-                name: Arc::clone(&name),
-                files: vec![],
+                name: group.path.clone(),
+                files: Vec::with_capacity(group.data_files_info.len()),
             };
             for log_file in group.take_data_files_info().into_iter() {
-                g.files.push(LogFile::from_pb(Arc::clone(&name), log_file))
+                g.files.push(LogFile::from_pb(group.path.clone(), log_file))
             }
             log_files.push(g);
         }
@@ -84,13 +86,15 @@ impl MetaFile {
             max_ts,
         }
     }
-}
 
-impl MetaFile {
     pub fn into_logs(self) -> impl Iterator<Item = LogFile> {
         self.physical_files
             .into_iter()
             .flat_map(|g| g.files.into_iter())
+    }
+
+    pub fn into_physical_logs(self) -> impl Iterator<Item = PhysicalLogFile> {
+        self.physical_files.into_iter()
     }
 }
 
@@ -98,7 +102,7 @@ impl MetaFile {
 #[derive(Debug, PartialEq, Eq)]
 pub struct PhysicalLogFile {
     pub size: u64,
-    pub name: Arc<str>,
+    pub name: Chars,
     pub files: Vec<LogFile>,
 }
 
@@ -138,21 +142,21 @@ pub struct LogFile {
     pub number_of_entries: i64,
     pub crc64xor: u64,
     pub region_id: u64,
-    pub cf: &'static str,
+    pub cf: CfName,
     pub min_ts: u64,
     pub max_ts: u64,
     pub min_start_ts: u64,
-    pub min_key: Arc<[u8]>,
-    pub max_key: Arc<[u8]>,
-    pub region_start_key: Option<Arc<[u8]>>,
-    pub region_end_key: Option<Arc<[u8]>>,
+    pub min_key: bytes::Bytes,
+    pub max_key: bytes::Bytes,
+    pub region_start_key: Option<bytes::Bytes>,
+    pub region_end_key: Option<bytes::Bytes>,
     pub region_epoches: Option<Arc<[Epoch]>>,
     pub is_meta: bool,
     pub ty: FileType,
     pub compression: brpb::CompressionType,
     pub table_id: i64,
     pub resolved_ts: u64,
-    pub sha256: Arc<[u8]>,
+    pub sha256: bytes::Bytes,
 }
 
 impl LogFile {
@@ -167,8 +171,8 @@ impl LogFile {
                 self.region_end_key.iter().flat_map(|ek| {
                     epoches.iter().map(|v| EpochHint {
                         region_epoch: *v,
-                        start_key: Arc::clone(sk),
-                        end_key: Arc::clone(ek),
+                        start_key: sk.clone(),
+                        end_key: ek.clone(),
                     })
                 })
             })
@@ -181,9 +185,88 @@ impl LogFile {
 #[derive(Clone, Display, Eq, PartialEq, Hash)]
 #[display(fmt = "{}@{}+{}", name, offset, length)]
 pub struct LogFileId {
-    pub name: Arc<str>,
+    pub name: Chars,
     pub offset: u64,
     pub length: u64,
+}
+
+/// Parse the store ID from a backup-stream metadata path.
+///
+/// Format:
+/// `v1/backupmeta/
+/// {flush_ts}{store_id}-d{min_begin_ts}l{min_ts}u{max_ts}p{flags}.meta`
+#[cfg(test)]
+fn parse_store_id_from_backupmeta_path(path: &str) -> Option<u64> {
+    parse_backupmeta_path(path).ok().map(|v| v.store_id)
+}
+
+#[cfg(test)]
+fn parse_approx_ts_range_from_backupmeta_path(path: &str) -> Option<(u64, u64)> {
+    let parsed = parse_backupmeta_path(path).ok()?;
+    let default_min_ts = parsed.min_begin_ts_in_default_cf.min(parsed.min_ts);
+    Some((default_min_ts, parsed.max_ts))
+}
+
+fn intersects_ts_window(min_ts: u64, max_ts: u64, from_ts: u64, until_ts: u64) -> bool {
+    max_ts >= from_ts && min_ts <= until_ts
+}
+
+fn store_id_for_sharding_from_path(path: &str) -> Result<u64> {
+    parse_backupmeta_path(path)
+        .map(|v| v.store_id)
+        .map_err(Error::from)
+}
+
+fn validate_store_id_for_sharding(
+    meta_path: &str,
+    meta_store_id: Option<u64>,
+    path_store_id: u64,
+) -> Result<()> {
+    if let Some(meta_store_id) = meta_store_id.filter(|id| *id != path_store_id) {
+        return Err(ErrorKind::Other(format!(
+            "backup metadata store id mismatch: meta_path={}, store_id.from_path={}, store_id.from_metadata={}",
+            meta_path, path_store_id, meta_store_id,
+        ))
+        .into());
+    }
+    Ok(())
+}
+
+struct ParsedBackupMetaName {
+    store_id: u64,
+    min_begin_ts_in_default_cf: u64,
+    min_ts: u64,
+    max_ts: u64,
+}
+
+fn parse_backupmeta_path(path: &str) -> std::io::Result<ParsedBackupMetaName> {
+    let stem = Path::new(path)
+        .file_stem()
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("backup metadata path has no file stem: {path}"),
+            )
+        })?
+        .to_str()
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("backup metadata path is not valid utf8: {path}"),
+            )
+        })?;
+    let parsed = backup_stream::utils::parse_backupmeta_filename(stem).map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("cannot parse backup metadata path {path}: {err}"),
+        )
+    })?;
+    Ok(ParsedBackupMetaName {
+        store_id: parsed.store_id,
+        min_begin_ts_in_default_cf: parsed.min_begin_ts,
+        min_ts: parsed.min_ts,
+        max_ts: parsed.max_ts,
+    })
 }
 
 impl std::fmt::Debug for LogFileId {
@@ -197,8 +280,6 @@ impl std::fmt::Debug for LogFileId {
 
 /// Extra config for loading metadata.
 pub struct LoadFromExt<'a> {
-    /// Max number of concurrent fetching from remote tasks.
-    pub max_concurrent_fetch: usize,
     /// The [`tracing::Span`] of loading remote tasks.
     /// This span will be entered when fetching the remote tasks.
     /// This span will be closed when all metadata loaded.
@@ -206,6 +287,25 @@ pub struct LoadFromExt<'a> {
     /// The prefix of metadata in the external storage.
     /// By default it is `v1/backupmeta`.
     pub meta_prefix: &'a str,
+    /// Optional shard filter applied from the backupmeta path before reading
+    /// the metadata file.
+    pub shard: Option<ShardConfig>,
+    /// Max number of running tasks to fetch metadatas
+    pub prefetch_running_count: usize,
+    /// Max number of spawning tasks to fetch metadatas
+    pub prefetch_buffer_count: usize,
+}
+
+pub struct CountObjectsExt {
+    pub calculate_shift_ts: bool,
+    pub from_ts: u64,
+    pub until_ts: u64,
+}
+
+#[derive(Debug)]
+pub struct CountObjectsResult {
+    pub count: u64,
+    pub shift_ts: u64,
 }
 
 impl LoadFromExt<'_> {
@@ -217,9 +317,11 @@ impl LoadFromExt<'_> {
 impl Default for LoadFromExt<'_> {
     fn default() -> Self {
         Self {
-            max_concurrent_fetch: 16,
             loading_content_span: None,
             meta_prefix: METADATA_PREFIX,
+            shard: None,
+            prefetch_running_count: 128,
+            prefetch_buffer_count: 1024,
         }
     }
 }
@@ -243,6 +345,8 @@ pub struct StreamMetaStorage<'a> {
     files: Fuse<Pin<Box<dyn Stream<Item = std::io::Result<BlobObject>> + 'a>>>,
 
     skip_map: MetaEditFilters,
+
+    running_fetch_tasks: usize,
 }
 
 /// A future that stores its result for future use when completed.
@@ -266,6 +370,10 @@ impl<F: Future> Prefetch<F> {
 
     fn new(f: F) -> Self {
         Self::Polling(f)
+    }
+
+    fn ready(v: <F as Future>::Output) -> Self {
+        Self::Ready(v)
     }
 }
 
@@ -312,12 +420,16 @@ impl Stream for StreamMetaStorage<'_> {
 
         let first_result = self.poll_first_prefetch(cx);
         match first_result {
-            Poll::Ready(item) => Poll::Ready(Some(item.map(|mut meta| {
-                let sm = &self.skip_map;
-                let skipped = sm.apply_to(&mut meta);
-                self.stat.log_filtered_out_by_migration += skipped as u64;
-                meta
-            }))),
+            Poll::Ready(item) => {
+                let result = item.map(|mut meta| {
+                    let sm = &self.skip_map;
+                    let skipped = sm.apply_to(&mut meta);
+                    self.stat.log_filtered_out_by_migration += skipped as u64;
+                    meta
+                });
+                let _ = self.poll_fetch_or_finish(cx);
+                Poll::Ready(Some(result))
+            }
             Poll::Pending => self.poll_fetch_or_finish(cx),
         }
     }
@@ -328,7 +440,9 @@ impl<'a> StreamMetaStorage<'a> {
     fn poll_fetch_or_finish(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<MetaFile>>> {
         loop {
             // No more space for prefetching.
-            if self.prefetch.len() >= self.ext.max_concurrent_fetch {
+            if self.running_fetch_tasks >= self.ext.prefetch_running_count
+                || self.prefetch.len() >= self.ext.prefetch_buffer_count
+            {
                 return Poll::Pending;
             }
             if self.files.is_terminated() {
@@ -345,15 +459,39 @@ impl<'a> StreamMetaStorage<'a> {
             };
             match res {
                 Poll::Ready(Some(load)) => {
-                    let load = load?;
+                    let load = match load {
+                        Ok(load) => load,
+                        Err(err) => {
+                            self.prefetch.push_back(Prefetch::ready(Err(err.into())));
+                            cx.waker().wake_by_ref();
+                            return Poll::Pending;
+                        }
+                    };
                     if self.skip_map.should_fully_skip(&load.key) {
                         info!("Skipping a metadata by migration."; "name" => %load.key);
                         self.stat.meta_filtered_out_by_migration += 1;
                         continue;
                     }
-
+                    let path_store_id = match self.ext.shard {
+                        Some(shard) => {
+                            let store_id = match store_id_for_sharding_from_path(&load.key) {
+                                Ok(store_id) => store_id,
+                                Err(err) => {
+                                    self.prefetch.push_back(Prefetch::ready(Err(err)));
+                                    cx.waker().wake_by_ref();
+                                    return Poll::Pending;
+                                }
+                            };
+                            if !shard.contains_store_id(store_id) {
+                                continue;
+                            }
+                            Some(store_id)
+                        }
+                        None => None,
+                    };
                     let storage = Arc::clone(&self.ext_storage);
-                    let handle = tokio::spawn(MetaFile::load_from_owned(storage, load));
+                    let handle =
+                        tokio::spawn(MetaFile::load_from_owned(storage, load, path_store_id));
                     let mut fut = Prefetch::new(async move { handle.await.unwrap() }.boxed());
                     // start the execution of this future.
                     let poll = fut.poll_unpin(cx);
@@ -363,6 +501,7 @@ impl<'a> StreamMetaStorage<'a> {
                     }
                     self.stat.prefetch_task_emitted += 1;
                     self.prefetch.push_back(fut);
+                    self.running_fetch_tasks += 1;
                 }
                 Poll::Ready(None) => continue,
                 Poll::Pending => return Poll::Pending,
@@ -371,9 +510,10 @@ impl<'a> StreamMetaStorage<'a> {
     }
 
     fn poll_first_prefetch(&mut self, cx: &mut Context<'_>) -> Poll<Result<MetaFile>> {
+        self.running_fetch_tasks = 0;
         for fut in &mut self.prefetch {
-            if !fut.is_terminated() {
-                let _ = fut.poll_unpin(cx);
+            if !fut.is_terminated() && fut.poll_unpin(cx) == Poll::Pending {
+                self.running_fetch_tasks += 1;
             }
         }
         if self.prefetch[0].is_terminated() {
@@ -413,18 +553,36 @@ impl<'a> StreamMetaStorage<'a> {
             ext,
             stat: LoadMetaStatistic::default(),
             skip_map,
+            running_fetch_tasks: 0,
         })
     }
 
-    /// Count the number of the metadata prefix.
-    pub async fn count_objects(s: &'a dyn ExternalStorage) -> std::io::Result<u64> {
-        let mut n = 0;
+    /// Count metadata objects under the metadata prefix.
+    ///
+    /// When enabled, also returns the minimum `min_begin_default_ts` from
+    /// metadata overlapping `[from_ts, until_ts]`.
+    pub async fn count_objects(
+        s: &'a dyn ExternalStorage,
+        ext: CountObjectsExt,
+    ) -> std::io::Result<CountObjectsResult> {
+        let mut count = 0;
+        let mut shift_ts = ext.from_ts;
         // NOTE: should we allow user to specify the prefix?
         let mut items = s.iter_prefix(METADATA_PREFIX);
-        while items.try_next().await?.is_some() {
-            n += 1
+        while let Some(item) = items.try_next().await? {
+            count += 1;
+            if !ext.calculate_shift_ts {
+                continue;
+            }
+
+            let parsed = parse_backupmeta_path(&item.key)?;
+            if intersects_ts_window(parsed.min_ts, parsed.max_ts, ext.from_ts, ext.until_ts)
+                && parsed.min_begin_ts_in_default_cf > 0
+            {
+                shift_ts = shift_ts.min(parsed.min_begin_ts_in_default_cf);
+            }
         }
-        Ok(n)
+        Ok(CountObjectsResult { count, shift_ts })
     }
 }
 
@@ -432,16 +590,18 @@ impl MetaFile {
     async fn load_from_owned(
         s: Arc<dyn ExternalStorage>,
         blob: BlobObject,
+        path_store_id: Option<u64>,
     ) -> Result<(Self, LoadMetaStatistic)> {
-        Self::load_from(s.as_ref(), blob).await
+        Self::load_from(s.as_ref(), blob, path_store_id).await
     }
 
     #[tracing::instrument(skip_all, fields(blob=%blob))]
     async fn load_from(
         s: &dyn ExternalStorage,
         blob: BlobObject,
+        path_store_id: Option<u64>,
     ) -> Result<(Self, LoadMetaStatistic)> {
-        use protobuf::Message;
+        use protobuf::{CodedInputStream, Message};
 
         let _t = crate::statistic::prom::COMPACT_LOG_BACKUP_READ_META_DURATION.start_coarse_timer();
 
@@ -457,19 +617,26 @@ impl MetaFile {
         let loading_file = tikv_util::stream::retry_all_ext(
             || async {
                 let mut content = vec![];
-                let n = s.read(&blob.key).read_to_end(&mut content).await?;
-                std::io::Result::Ok((n, content))
+                let n = read_to_end(s.read(&blob.key), &mut content).await?;
+                std::io::Result::Ok((n, bytes::Bytes::from(content)))
             },
             ext,
         );
         let (n, content) = frame!(loading_file)
             .await
             .map_err(|err| Error::from(err).message(format_args!("reading {}", blob.key)))?;
-        stat.physical_bytes_loaded += n as u64;
+        stat.physical_bytes_loaded += n;
         stat.error_during_downloading += error_cnt2.get();
 
-        let mut meta_file = kvproto::brpb::Metadata::new();
-        meta_file.merge_from_bytes(&content)?;
+        let mut meta_file = Metadata::new();
+        meta_file.merge_from(&mut CodedInputStream::from_carllerche_bytes(&content))?;
+        if let Some(path_store_id) = path_store_id {
+            validate_store_id_for_sharding(
+                &blob.key,
+                (meta_file.store_id > 0).then_some(meta_file.store_id as u64),
+                path_store_id,
+            )?;
+        }
         let name = Arc::from(blob.key.into_boxed_str());
         let result = Self::from_file(name, meta_file);
 
@@ -479,14 +646,14 @@ impl MetaFile {
             .iter()
             .map(|v| v.files.len() as u64)
             .sum::<u64>();
-        stat.load_file_duration += begin.saturating_elapsed();
+        stat.load_file_duration += begin.elapsed();
 
         Ok((result, stat))
     }
 }
 
 impl LogFile {
-    fn from_pb(host_file: Arc<str>, mut pb_info: brpb::DataFileInfo) -> Self {
+    fn from_pb(host_file: Chars, mut pb_info: DataFileInfo) -> Self {
         let region_epoches = pb_info.region_epoch.is_empty().not().then(|| {
             pb_info
                 .region_epoch
@@ -506,24 +673,24 @@ impl LogFile {
             cf: util::cf_name(&pb_info.cf),
             max_ts: pb_info.max_ts,
             min_ts: pb_info.min_ts,
-            max_key: Arc::from(pb_info.take_end_key().into_boxed_slice()),
-            min_key: Arc::from(pb_info.take_start_key().into_boxed_slice()),
+            max_key: pb_info.take_end_key(),
+            min_key: pb_info.take_start_key(),
             region_start_key: pb_info
                 .region_epoch
                 .is_empty()
                 .not()
-                .then(|| Arc::from(pb_info.take_region_start_key().into_boxed_slice())),
+                .then(|| pb_info.take_region_start_key()),
             region_end_key: pb_info
                 .region_epoch
                 .is_empty()
                 .not()
-                .then(|| Arc::from(pb_info.take_region_end_key().into_boxed_slice())),
+                .then(|| pb_info.take_region_end_key()),
             is_meta: pb_info.is_meta,
             min_start_ts: pb_info.min_begin_ts_in_default_cf,
             ty: pb_info.r_type,
             crc64xor: pb_info.crc64xor,
             number_of_entries: pb_info.number_of_entries,
-            sha256: Arc::from(pb_info.take_sha256().into_boxed_slice()),
+            sha256: pb_info.take_sha256(),
             resolved_ts: pb_info.resolved_ts,
             table_id: pb_info.table_id,
             compression: pb_info.compression_type,
@@ -537,26 +704,22 @@ impl LogFile {
         pb.range_length = self.id.length;
         pb.length = self.file_real_size;
         pb.region_id = self.region_id as _;
-        pb.cf = self.cf.to_owned();
+        pb.cf = self.cf.into();
         pb.max_ts = self.max_ts;
         pb.min_ts = self.min_ts;
-        pb.set_end_key(self.max_key.to_vec());
-        pb.set_start_key(self.min_key.to_vec());
+        pb.set_end_key(self.max_key);
+        pb.set_start_key(self.min_key);
         pb.is_meta = self.is_meta;
         pb.min_begin_ts_in_default_cf = self.min_start_ts;
         pb.r_type = self.ty;
         pb.crc64xor = self.crc64xor;
         pb.number_of_entries = self.number_of_entries;
-        pb.set_sha256(self.sha256.to_vec());
+        pb.set_sha256(self.sha256);
         pb.resolved_ts = self.resolved_ts;
         pb.table_id = self.table_id;
         pb.compression_type = self.compression;
-        pb.set_region_start_key(
-            self.region_start_key
-                .map(|v| v.to_vec())
-                .unwrap_or_default(),
-        );
-        pb.set_region_end_key(self.region_end_key.map(|v| v.to_vec()).unwrap_or_default());
+        pb.set_region_start_key(self.region_start_key.unwrap_or_default());
+        pb.set_region_end_key(self.region_end_key.unwrap_or_default());
         pb.set_region_epoch(
             self.region_epoches
                 .map(|v| v.iter().cloned().map(From::from).collect())
@@ -703,12 +866,12 @@ impl MetaEditFilter {
     }
 
     fn should_retain(&self, file: &LogFileId) -> bool {
-        if self.full_files.contains(file.name.as_ref()) {
+        if self.full_files.contains(file.name.deref()) {
             return false;
         }
         if self
             .segments
-            .get(file.name.as_ref())
+            .get(file.name.deref())
             .is_some_and(|map| map.contains(&file.offset))
         {
             return false;
@@ -731,35 +894,17 @@ impl<'a> MigrationStorageWrapper<'a> {
         }
     }
 
-    pub async fn load(&self) -> Result<Vec<Migration>> {
-        self.storage
-            .iter_prefix(self.migrations_prefix)
-            .err_into()
-            .and_then(|item| async move {
-                let mut content = vec![];
-                self.storage
-                    .read(&item.key)
-                    .read_to_end(&mut content)
-                    .await?;
-                protobuf::parse_from_bytes(&content).adapt_err()
-            })
-            .try_collect()
-            .await
-    }
-
-    pub async fn write(&self, migration: VersionedMigration) -> Result<()> {
+    async fn write_next_migration(&self, migration: &Migration) -> Result<()> {
         use protobuf::Message;
 
-        let migration = migration.0;
         let id = self.largest_id().await?;
-        // Note: perhaps we need to verify that there isn't concurrency writing in the
-        // future.
-        let name = name_of_migration(id + 1, &migration);
+        let name = name_of_migration(id + 1, migration);
         let bytes = migration.write_to_bytes()?;
+        let full_name = format!("{}/{}", self.migrations_prefix, name);
         retry_expr!(
             self.storage
                 .write(
-                    &format!("{}/{}", self.migrations_prefix, name),
+                    &full_name,
                     UnpinReader(Box::new(Cursor::new(&bytes))),
                     bytes.len() as u64
                 )
@@ -768,6 +913,49 @@ impl<'a> MigrationStorageWrapper<'a> {
         .await
         .map_err(|err| err.0)?;
         Ok(())
+    }
+
+    pub async fn load(&self) -> Result<Vec<Migration>> {
+        self.storage
+            .iter_prefix(self.migrations_prefix)
+            .err_into()
+            .and_then(|item| async move {
+                let mut content = vec![];
+                read_to_end(self.storage.read(&item.key), &mut content).await?;
+                protobuf::parse_from_bytes(&content).adapt_err()
+            })
+            .try_collect()
+            .await
+    }
+
+    pub async fn write(&self, migration: VersionedMigration) -> Result<()> {
+        use external_storage::locking::LockExt;
+
+        let migration = migration.0;
+
+        let hint = format!(
+            "compact-log-backup writing a migration {}",
+            migration.get_creator()
+        );
+        let lock = retry_expr!(
+            self.storage
+                .lock_for_write(MIGRATION_APPEND_LOCK, hint.clone())
+                .map_err(|err| JustRetry(err))
+        )
+        .await
+        .map_err(|err| err.0)?;
+        let write_res = self.write_next_migration(&migration).await;
+        let unlock_res: Result<()> = lock.unlock(self.storage).await.adapt_err();
+
+        match write_res {
+            Ok(()) => unlock_res,
+            Err(write_err) => match unlock_res {
+                Ok(()) => Err(write_err),
+                Err(unlock_err) => Err(write_err.message(format_args!(
+                    "also failed to unlock migration write lock: {unlock_err}"
+                ))),
+            },
+        }
     }
 
     pub async fn largest_id(&self) -> Result<u64> {
@@ -843,8 +1031,12 @@ mod test {
     use external_storage::ExternalStorage;
     use futures::stream::TryStreamExt;
     use kvproto::brpb::{DeleteSpansOfFile, MetaEdit, Migration, Span};
+    use protobuf::Chars;
 
-    use super::{LoadFromExt, MetaFile, StreamMetaStorage};
+    use super::{
+        CountObjectsExt, LoadFromExt, MetaFile, StreamMetaStorage,
+        parse_approx_ts_range_from_backupmeta_path, parse_store_id_from_backupmeta_path,
+    };
     use crate::{
         storage::{LogFileId, MetaEditFilters, MigrationStorageWrapper},
         test_util::{KvGen, LogFileBuilder, TmpStorage, gen_step},
@@ -879,6 +1071,38 @@ mod test {
         mfs
     }
 
+    #[test]
+    fn test_parse_store_id_from_backupmeta_path() {
+        assert_eq!(
+            parse_store_id_from_backupmeta_path(
+                "v1/backupmeta/000000000000012C000000000000002A-d0000000000000032l0000000000000064u00000000000000C8x0000000000000001.meta"
+            ),
+            Some(42)
+        );
+        assert_eq!(
+            parse_store_id_from_backupmeta_path(
+                "v1/backupmeta/000000000000012C-0000000000000032-0000000000000064-00000000000000C8.meta"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn test_parse_approx_ts_range_from_backupmeta_path() {
+        let p = "v1/backupmeta/000000000000012C000000000000002A-d0000000000000032l0000000000000064u00000000000000C8.meta";
+        // min(default begin, min_ts) is used as approximate min_ts.
+        assert_eq!(
+            parse_approx_ts_range_from_backupmeta_path(p),
+            Some((0x32, 0xC8))
+        );
+
+        let p = "v1/backupmeta/000000000000012C000000000000002A-d0000000000000096l0000000000000064u00000000000000C8.meta";
+        assert_eq!(
+            parse_approx_ts_range_from_backupmeta_path(p),
+            Some((0x64, 0xC8))
+        );
+    }
+
     #[tokio::test]
     async fn test_load_from_storage() {
         let st = TmpStorage::create();
@@ -895,7 +1119,7 @@ mod test {
         let st = &st;
         let test_for_concurrency = |n| async move {
             let mut ext = LoadFromExt::default();
-            ext.max_concurrent_fetch = n;
+            ext.prefetch_running_count = n;
             let storage = st.storage().clone() as Arc<dyn ExternalStorage>;
             let sst = StreamMetaStorage::load_from_ext(&storage, ext)
                 .await
@@ -954,7 +1178,7 @@ mod test {
         assert!(!mefs.should_fully_skip(&meta_path(1)));
         let f1 = mefs.0.get(&meta_path(1)).unwrap();
         let log_file_id = |name: String, offset: u64| LogFileId {
-            name: std::sync::Arc::from(name.into_boxed_str()),
+            name: Chars::from(name),
             offset,
             length: offset + 1,
         };
@@ -1063,5 +1287,103 @@ mod test {
         let stat = sst.take_statistic();
         assert_eq!(stat.log_filtered_out_by_migration, 12);
         assert_eq!(stat.meta_filtered_out_by_migration, 1);
+    }
+
+    #[tokio::test]
+    async fn test_count_objects_can_skip_shift_ts_calculation() {
+        use external_storage::{ExternalStorage, UnpinReader};
+        use futures::io::Cursor;
+
+        let st = TmpStorage::create();
+        let names = [
+            // in range, min_begin_default=0x20
+            "v1/backupmeta/000000000000012C0000000000000001-d0000000000000020l0000000000000064u00000000000000C8.meta",
+            // out of range (min_ts > until), should not affect shift_ts
+            "v1/backupmeta/000000000000012C0000000000000002-d0000000000000010l0000000000000100u0000000000000120.meta",
+            // unparsable path should be counted but ignored when shard=None
+            "v1/backupmeta/not-a-parsable-meta-name.meta",
+        ];
+        for name in names {
+            st.storage()
+                .write(name, UnpinReader(Box::new(Cursor::new(vec![]))), 0)
+                .await
+                .unwrap();
+        }
+
+        let result = StreamMetaStorage::count_objects(
+            st.storage().as_ref(),
+            CountObjectsExt {
+                calculate_shift_ts: false,
+                from_ts: 0x40,
+                until_ts: 0xD0,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.count, 3);
+        assert_eq!(result.shift_ts, 0x40);
+    }
+
+    #[tokio::test]
+    async fn test_count_objects_updates_shift_ts_when_enabled() {
+        use external_storage::{ExternalStorage, UnpinReader};
+        use futures::io::Cursor;
+
+        let st = TmpStorage::create();
+        let names = [
+            // in range, min_begin_default=0x20
+            "v1/backupmeta/000000000000012C0000000000000001-d0000000000000020l0000000000000064u00000000000000C8.meta",
+            // in range, but min_begin_default is larger.
+            "v1/backupmeta/000000000000012C0000000000000002-d0000000000000030l0000000000000040u00000000000000D0.meta",
+            // out of range (min_ts > until), should not affect shift_ts
+            "v1/backupmeta/000000000000012C0000000000000003-d0000000000000010l0000000000000100u0000000000000120.meta",
+        ];
+        for name in names {
+            st.storage()
+                .write(name, UnpinReader(Box::new(Cursor::new(vec![]))), 0)
+                .await
+                .unwrap();
+        }
+
+        let result = StreamMetaStorage::count_objects(
+            st.storage().as_ref(),
+            CountObjectsExt {
+                calculate_shift_ts: true,
+                from_ts: 0x40,
+                until_ts: 0xD0,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.count, 3);
+        assert_eq!(result.shift_ts, 0x20);
+    }
+
+    #[tokio::test]
+    async fn test_count_objects_requires_parseable_path_when_shift_ts_enabled() {
+        use external_storage::{ExternalStorage, UnpinReader};
+        use futures::io::Cursor;
+
+        let st = TmpStorage::create();
+        st.storage()
+            .write(
+                "v1/backupmeta/not-a-parsable-meta-name.meta",
+                UnpinReader(Box::new(Cursor::new(vec![]))),
+                0,
+            )
+            .await
+            .unwrap();
+
+        let err = StreamMetaStorage::count_objects(
+            st.storage().as_ref(),
+            CountObjectsExt {
+                calculate_shift_ts: true,
+                from_ts: 0x40,
+                until_ts: 0xD0,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 }

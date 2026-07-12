@@ -433,9 +433,8 @@ impl<P: RegionInfoProvider> SstPartitioner for CompactionGuardGenerator<P> {
         }
     }
 
-    fn can_do_trivial_move(&mut self, smallest_key: &[u8], largest_key: &[u8]) -> bool {
-        // do not allow trivial move if the range overlaps with force partition range.
-        !overlap_with(&self.force_partition_ranges, smallest_key, largest_key)
+    fn can_do_trivial_move(&mut self, _smallest_key: &[u8], _largest_key: &[u8]) -> bool {
+        true
     }
 }
 

@@ -28,6 +28,7 @@ use tidb_query_datatype::{
 use tikv_util::{
     Either,
     Either::{Left, Right},
+    error,
 };
 use tipb::{ColumnInfo, FieldType, IndexLookUp, TableScan};
 use txn_types::Key;
@@ -116,19 +117,33 @@ where
     table_scan_exec_summary: [ExecSummary; 1],
 }
 
+pub struct BuildIndexLookUpExecutorOptions<Src, Accessor> {
+    pub config: Arc<EvalConfig>,
+    pub src: Src,
+    pub index_lookup: IndexLookUp,
+    pub tbl_scan: TableScan,
+    pub accessor: Option<Accessor>,
+    pub intermediate_channel_index: usize,
+    pub table_scan_child_index: usize,
+}
+
 #[inline]
 pub fn build_index_lookup_executor<
     S: Storage + 'static,
     Handle: RowHandle + 'static,
     F: KvFormat,
+    Src: BatchExecutor<StorageStats = S::Statistics> + 'static,
+    Accessor: RegionStorageAccessor<Storage = S> + 'static,
 >(
-    config: Arc<EvalConfig>,
-    src: impl BatchExecutor<StorageStats = S::Statistics> + 'static,
-    mut index_lookup: IndexLookUp,
-    mut tbl_scan: TableScan,
-    accessor: Option<impl RegionStorageAccessor<Storage = S> + 'static>,
-    intermediate_channel_index: usize,
-    table_scan_child_index: usize,
+    BuildIndexLookUpExecutorOptions {
+        config,
+        src,
+        mut index_lookup,
+        mut tbl_scan,
+        accessor,
+        intermediate_channel_index,
+        table_scan_child_index,
+    }: BuildIndexLookUpExecutorOptions<Src, Accessor>,
 ) -> Result<impl BatchExecutor<StorageStats = S::Statistics>> {
     if index_lookup.get_keep_order() {
         return Err(other_err!(
@@ -204,17 +219,23 @@ where
         intermediate_channel_index: usize,
         table_scan_child_index: usize,
     ) -> Self {
-        let force_no_index_lookup =
-            if config.paging_size.is_some() || table_task_iter_builder.is_none() {
-                // We did not support index lookup when paging is enabled.
-                // TODO: support paging
-                // some times we do not have table_task_iter_builder, such as
-                // - CommonHandle
-                // TODO: support CommonHandle
-                true
-            } else {
-                false
-            };
+        let force_no_index_lookup = if config.paging_size.is_some()
+            || config.max_keys_read.is_some()
+            || table_task_iter_builder.is_none()
+        {
+            // No index lookup under paging or max_keys_read: the buffered
+            // index-then-table-fetch pipeline only counts the index side, so the
+            // row budgets would under-report the table lookup. paging_size_bytes
+            // needs no condition here — the runner already gates it off
+            // (can_resume_by_scanned_range_only) for any plan with IndexLookUp.
+            // TODO: support paging and max_keys_read
+            // some times we do not have table_task_iter_builder, such as
+            // - CommonHandle
+            // TODO: support CommonHandle
+            true
+        } else {
+            false
+        };
 
         let output_schema = table_scan_params
             .columns_info
@@ -535,6 +556,20 @@ where
     }
 
     #[inline]
+    fn peek_scanned_rows_sum(&self) -> usize {
+        self.src.peek_scanned_rows_sum()
+    }
+
+    #[inline]
+    fn peek_scanned_bytes_sum(&self) -> usize {
+        // Only the index-scan side (src); table-lookup bytes are not counted, so
+        // this undercounts for IndexLookUp. Safe only because byte-budget paging
+        // is gated off for any IndexLookUp plan (can_resume_by_scanned_range_only)
+        // and never reaches here — revisit before enabling the byte budget.
+        self.src.peek_scanned_bytes_sum()
+    }
+
+    #[inline]
     fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
         // TODO: support collecting storage stats for index lookup executors.
         self.src.collect_storage_stats(dest)
@@ -642,6 +677,8 @@ where
 
 pub struct TableTask<S> {
     storage: S,
+    // key ranges for the table scan
+    // The `KeyRange.start` and `KeyRange.end` are raw keys without MVCC encoding.
     key_ranges: Vec<KeyRange>,
 }
 
@@ -744,16 +781,14 @@ where
                 )?
             }
 
-            let mut result_handles = Vec::with_capacity(logical_rows_len);
-            for (logical_row_index, &physical_row_index) in result.logical_rows.iter().enumerate() {
-                let handle = Handle::from_lazy_batch_column_vec(
-                    ctx,
-                    &result.physical_columns,
-                    physical_row_index,
-                    &index_layout.handle_offsets,
-                    &index_layout.handle_types,
-                )?;
-                result_handles.push(handle);
+            let result_handles = Handle::from_lazy_batch_column_vec(
+                &mut result.physical_columns,
+                result.logical_rows.as_slice(),
+                &index_layout.handle_offsets,
+                &index_layout.handle_types,
+            )?;
+
+            for logical_row_index in 0..result_handles.len() {
                 orders.push((result_index, logical_row_index));
             }
             handles.push(result_handles);
@@ -916,7 +951,19 @@ where
             // handle this case, just use the region end as the end of the key range to
             // avoid error.
             if !Self::is_key_before_or_eq_region_end(key_range.get_end(), end_exclusive) {
-                key_range.end = end_exclusive.to_vec();
+                let end_exclusive = Key::from_encoded(end_exclusive.to_vec());
+                match end_exclusive.to_raw() {
+                    Ok(end_key) => {
+                        key_range.end = end_key;
+                    }
+                    Err(err) => {
+                        // Set `region` to None to avoid generating a table task.
+                        // The related rows will be looked up on the TiDB side.
+                        region = None;
+                        error!("failed to decode region end key"; "end_key" => ?end_exclusive, "error" => ?err);
+                        debug_assert!(false, "region end should always be in MVCC format");
+                    }
+                }
             }
         }
 
@@ -1295,7 +1342,9 @@ pub mod tests {
         let mut expected_ranges = vec![make_scan_key_range(13, 15)];
         // The end key of the range should be the region end because the point range end
         // of handle 14 exceeds the region.
-        expected_ranges.last_mut().unwrap().end = region.get_end_key().to_vec();
+        expected_ranges.last_mut().unwrap().end = Key::from_encoded(region.get_end_key().to_vec())
+            .to_raw()
+            .unwrap();
         assert_eq!(task.storage, MockStorage(region, expected_ranges.clone()));
         assert_eq!(task.key_ranges, expected_ranges);
         assert_eq!(iter.cursor_in_handle_orders, 5);
@@ -1319,7 +1368,11 @@ pub mod tests {
         let mut expected_range = make_scan_key_range(15, 16);
         // The end key of the range should be the region end because the point range end
         // of handle 15 exceeds the region.
-        expected_range.set_end(region.get_end_key().to_vec());
+        expected_range.set_end(
+            Key::from_encoded(region.get_end_key().to_vec())
+                .to_raw()
+                .unwrap(),
+        );
         let expected_ranges = vec![expected_range];
         assert_eq!(task.storage, MockStorage(region, expected_ranges.clone()));
         assert_eq!(task.key_ranges, expected_ranges.clone());
@@ -2280,6 +2333,18 @@ pub mod tests {
         // does not support paging currently
         let mut cfg = EvalConfig::default_for_test();
         cfg.paging_size = Some(128);
+        let index_lookup = new_index_lookup_executor_for_test(
+            cfg,
+            build_int_array_results(vec![vec![1]]),
+            Some(MockTableTaskIterBuilder),
+            columns.clone(),
+        );
+        assert!(index_lookup.force_no_index_lookup);
+
+        // max_keys_read disables the buffered table-lookup phase to keep
+        // the response range and rows consistent on early stop.
+        let mut cfg = EvalConfig::default_for_test();
+        cfg.max_keys_read = Some(64);
         let index_lookup = new_index_lookup_executor_for_test(
             cfg,
             build_int_array_results(vec![vec![1]]),

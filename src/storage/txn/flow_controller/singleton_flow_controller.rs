@@ -21,6 +21,7 @@ use tikv_util::{
     config::VersionTrack,
     smoother::{SMOOTHER_STALE_RECORD_THRESHOLD, SMOOTHER_TIME_RANGE_THRESHOLD, Smoother, Trend},
     sys::thread::StdThreadBuildWrapper,
+    thread_name_prefix::FLOW_CHECKER_THREAD,
     time::{Instant, Limiter},
 };
 
@@ -432,10 +433,13 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
                     {
                         let v = long_term_pending_bytes.get_avg();
                         if v <= soft {
-                            info!(
+                            // Bookkeeping only: record the baseline for the later
+                            // jump check. Downgraded to DEBUG to avoid a log storm
+                            // when UDR is triggered at very high frequency.
+                            debug!(
                                 "before unsafe destroy range";
                                 "cf" => cf,
-                                "pending_bytes" => v
+                                "pending_bytes_log2" => v
                             );
                             cf_checker.pending_bytes_before_unsafe_destroy_range = Some(v);
                         }
@@ -467,26 +471,34 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
                         if current_pending_bytes >= soft || avg_pending_bytes >= soft {
                             // There is a pending bytes jump. Flow control for
                             // compaction bytes won't be re-enabled until the
-                            // pending bytes drop below the soft limit.
+                            // pending bytes drop below the soft limit. This is the
+                            // abnormal path that deserves a visible log line.
                             SCHED_THROTTLE_ACTION_COUNTER
                                 .with_label_values(&[cf, "pending_bytes_jump"])
                                 .inc();
-                        } else {
-                            cf_checker.pending_bytes_before_unsafe_destroy_range = None;
                             info!(
+                                "pending compaction bytes jump after unsafe destroy range";
+                                "cf" => cf,
+                                "before_log2" => before,
+                                "current_pending_bytes_log2" => current_pending_bytes,
+                                "avg_pending_bytes_log2" => avg_pending_bytes,
+                                "soft_limit_log2" => soft,
+                            );
+                        } else {
+                            // Normal path: pending bytes were cleared or dropped,
+                            // which is the vast majority of UDR events. Keep it out
+                            // of the default log and only track it with a metric to
+                            // avoid a log storm; downgrade the state-change log to
+                            // DEBUG.
+                            cf_checker.pending_bytes_before_unsafe_destroy_range = None;
+                            SCHED_THROTTLE_ACTION_COUNTER
+                                .with_label_values(&[cf, "pending_bytes_no_jump"])
+                                .inc();
+                            debug!(
                                 "re-enabled compaction pending bytes flow control";
                                 "cf" => cf,
                             );
                         }
-
-                        info!(
-                            "after unsafe destroy range";
-                            "cf" => cf,
-                            "before" => before,
-                            "current_pending_bytes" => current_pending_bytes,
-                            "avg_pending_bytes" => avg_pending_bytes,
-                            "soft_limit" => soft,
-                        );
                     }
                 }
             }
@@ -500,7 +512,7 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
 
     fn start(self, rx: Receiver<Msg>, flow_info_receiver: Receiver<FlowInfo>) -> JoinHandle<()> {
         Builder::new()
-            .name(thd_name!("flow-checker"))
+            .name(thd_name!(FLOW_CHECKER_THREAD))
             .spawn_wrapper(move || {
                 let mut checker = self;
                 let mut deadline = std::time::Instant::now();
@@ -638,8 +650,8 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
                     info!(
                         "pending compaction bytes is back to normal";
                         "cf" => &cf,
-                        "pending_compaction_bytes" => pending_compaction_bytes,
-                        "before" => before
+                        "pending_compaction_bytes_log2" => pending_compaction_bytes,
+                        "before_log2" => before
                     );
                     checker.pending_bytes_before_unsafe_destroy_range = None;
                 }
@@ -649,10 +661,10 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
             };
 
             for checker in self.cf_checkers.values() {
-                if let Some(long_term_pending_bytes) = checker.long_term_pending_bytes.as_ref()
-                    && num < long_term_pending_bytes.get_recent()
-                {
-                    return;
+                if let Some(long_term_pending_bytes) = checker.long_term_pending_bytes.as_ref() {
+                    if num < long_term_pending_bytes.get_recent() {
+                        return;
+                    }
                 }
             }
 
@@ -985,9 +997,9 @@ pub(super) mod tests {
 
     pub fn test_flow_controller_basic_impl(flow_controller: &FlowController, region_id: u64) {
         // enable flow controller
-        assert_eq!(flow_controller.enabled(), true);
-        assert_eq!(flow_controller.should_drop(region_id), false);
-        assert_eq!(flow_controller.is_unlimited(region_id), true);
+        assert!(flow_controller.enabled());
+        assert!(!flow_controller.should_drop(region_id));
+        assert!(flow_controller.is_unlimited(region_id));
         assert_eq!(flow_controller.consume(region_id, 0), Duration::ZERO);
         assert_eq!(flow_controller.consume(region_id, 1000), Duration::ZERO);
 
@@ -997,14 +1009,14 @@ pub(super) mod tests {
             ConfigValue::Bool(false),
         )]);
         flow_controller.update_config(change).unwrap();
-        assert_eq!(flow_controller.enabled(), false);
+        assert!(!flow_controller.enabled());
         // re-enable flow controller
         let change =
             std::collections::HashMap::from_iter([("enable".to_string(), ConfigValue::Bool(true))]);
         flow_controller.update_config(change).unwrap();
-        assert_eq!(flow_controller.enabled(), true);
-        assert_eq!(flow_controller.should_drop(region_id), false);
-        assert_eq!(flow_controller.is_unlimited(region_id), true);
+        assert!(flow_controller.enabled());
+        assert!(!flow_controller.should_drop(region_id));
+        assert!(flow_controller.is_unlimited(region_id));
         assert_eq!(flow_controller.consume(region_id, 1), Duration::ZERO);
     }
 
@@ -1042,9 +1054,9 @@ pub(super) mod tests {
         // exceeds the threshold on start
         stub.0.num_memtables.store(8, Ordering::Relaxed);
         send_flow_info(tx, region_id);
-        assert_eq!(flow_controller.should_drop(region_id), false);
+        assert!(!flow_controller.should_drop(region_id));
         // on start check forbids flow control
-        assert_eq!(flow_controller.is_unlimited(region_id), true);
+        assert!(flow_controller.is_unlimited(region_id));
         // once falls below the threshold, pass the on start check
         stub.0.num_memtables.store(1, Ordering::Relaxed);
         send_flow_info(tx, region_id);
@@ -1052,14 +1064,14 @@ pub(super) mod tests {
         // threshold
         stub.0.num_memtables.store(6, Ordering::Relaxed);
         send_flow_info(tx, region_id);
-        assert_eq!(flow_controller.should_drop(region_id), false);
-        assert_eq!(flow_controller.is_unlimited(region_id), true);
+        assert!(!flow_controller.should_drop(region_id));
+        assert!(flow_controller.is_unlimited(region_id));
 
         // the average of sliding window exceeds the threshold
         stub.0.num_memtables.store(6, Ordering::Relaxed);
         send_flow_info(tx, region_id);
-        assert_eq!(flow_controller.should_drop(region_id), false);
-        assert_eq!(flow_controller.is_unlimited(region_id), false);
+        assert!(!flow_controller.should_drop(region_id));
+        assert!(!flow_controller.is_unlimited(region_id));
         assert_ne!(flow_controller.consume(region_id, 2000), Duration::ZERO);
 
         // increase the threshold.
@@ -1069,8 +1081,8 @@ pub(super) mod tests {
         )]);
         flow_controller.update_config(change).unwrap();
         send_flow_info(tx, region_id);
-        assert_eq!(flow_controller.should_drop(region_id), false);
-        assert_eq!(flow_controller.is_unlimited(region_id), true);
+        assert!(!flow_controller.should_drop(region_id));
+        assert!(flow_controller.is_unlimited(region_id));
 
         // decrease the threshold.
         let change = std::collections::HashMap::from_iter([(
@@ -1079,14 +1091,14 @@ pub(super) mod tests {
         )]);
         flow_controller.update_config(change).unwrap();
         send_flow_info(tx, region_id);
-        assert_eq!(flow_controller.should_drop(region_id), false);
-        assert_eq!(flow_controller.is_unlimited(region_id), false);
+        assert!(!flow_controller.should_drop(region_id));
+        assert!(!flow_controller.is_unlimited(region_id));
 
         // not throttle once the number of memtables falls below the threshold
         stub.0.num_memtables.store(1, Ordering::Relaxed);
         send_flow_info(tx, region_id);
-        assert_eq!(flow_controller.should_drop(region_id), false);
-        assert_eq!(flow_controller.is_unlimited(region_id), true);
+        assert!(!flow_controller.should_drop(region_id));
+        assert!(flow_controller.is_unlimited(region_id));
     }
 
     #[test]
@@ -1116,9 +1128,9 @@ pub(super) mod tests {
         // exceeds the threshold
         stub.0.num_l0_files.store(30, Ordering::Relaxed);
         send_flow_info(tx, region_id);
-        assert_eq!(flow_controller.should_drop(region_id), false);
+        assert!(!flow_controller.should_drop(region_id));
         // on start check forbids flow control
-        assert_eq!(flow_controller.is_unlimited(region_id), true);
+        assert!(flow_controller.is_unlimited(region_id));
         // once fall below the threshold, pass the on start check
         stub.0.num_l0_files.store(10, Ordering::Relaxed);
         send_flow_info(tx, region_id);
@@ -1126,8 +1138,8 @@ pub(super) mod tests {
         // exceeds the threshold, throttle now
         stub.0.num_l0_files.store(30, Ordering::Relaxed);
         send_flow_info(tx, region_id);
-        assert_eq!(flow_controller.should_drop(region_id), false);
-        assert_eq!(flow_controller.is_unlimited(region_id), false);
+        assert!(!flow_controller.should_drop(region_id));
+        assert!(!flow_controller.is_unlimited(region_id));
         assert_ne!(flow_controller.consume(region_id, 2000), Duration::ZERO);
 
         // increase the threshold.
@@ -1137,8 +1149,8 @@ pub(super) mod tests {
         )]);
         flow_controller.update_config(change).unwrap();
         send_flow_info(tx, region_id);
-        assert_eq!(flow_controller.should_drop(region_id), false);
-        assert_eq!(flow_controller.is_unlimited(region_id), true);
+        assert!(!flow_controller.should_drop(region_id));
+        assert!(flow_controller.is_unlimited(region_id));
     }
 
     #[test]

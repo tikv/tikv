@@ -61,7 +61,8 @@ use crate::{
         self, SecondaryLocksStatus, Storage, TxnStatus,
         errors::{
             extract_committed, extract_key_error, extract_key_errors, extract_kv_pairs,
-            extract_region_error, extract_region_error_from_error, map_kv_pairs,
+            extract_region_error, extract_region_error_from_error, map_kv_pair_entries,
+            map_kv_pairs,
         },
         kv::Engine,
         lock_manager::LockManager,
@@ -933,7 +934,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         if let Err(e) = self.snap_scheduler.schedule(task) {
             let err_msg = format!("{}", e);
             let sink = match e.into_inner() {
-                SnapTask::Recv { sink, .. } => sink,
+                SnapTask::RecvTablet { sink, .. } => sink,
                 _ => unreachable!(),
             };
             let status = RpcStatus::with_message(RpcStatusCode::RESOURCE_EXHAUSTED, err_msg);
@@ -1624,10 +1625,11 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
         tracker.metrics.grpc_req_size = req.compute_size() as u64;
     });
     let start = Instant::now();
-    let v = storage.get(
+    let v = storage.get_entry(
         req.take_context(),
         Key::from_raw(req.get_key()),
         req.get_version().into(),
+        req.get_need_commit_ts(),
     );
 
     async move {
@@ -1646,10 +1648,16 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
                     GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
                         tracker.write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
                         tracker.merge_time_detail(exec_detail_v2.mut_time_detail_v2());
+                        tracker.write_ru_v2(exec_detail_v2.mut_ru_v2());
                     });
                     set_time_detail(exec_detail_v2, duration, &stats.latency_stats);
                     match val {
-                        Some(val) => resp.set_value(val),
+                        Some(val) => {
+                            resp.set_value(val.value);
+                            if let Some(commit_ts) = val.commit_ts {
+                                resp.set_commit_ts(commit_ts.into_inner());
+                            }
+                        }
                         None => resp.set_not_found(true),
                     }
                 }
@@ -1750,7 +1758,12 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
         tracker.metrics.grpc_req_size = req.compute_size() as u64;
     });
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
-    let v = storage.batch_get(req.take_context(), keys, req.get_version().into());
+    let v = storage.batch_get(
+        req.take_context(),
+        keys,
+        req.get_version().into(),
+        req.get_need_commit_ts(),
+    );
 
     async move {
         let v = v.await;
@@ -1761,7 +1774,7 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
         } else {
             match v {
                 Ok((kv_res, stats)) => {
-                    let pairs = map_kv_pairs(kv_res);
+                    let pairs = map_kv_pair_entries(kv_res);
                     let exec_detail_v2 = resp.mut_exec_details_v2();
                     stats
                         .stats
@@ -1769,6 +1782,7 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
                     GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
                         tracker.write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
                         tracker.merge_time_detail(exec_detail_v2.mut_time_detail_v2());
+                        tracker.write_ru_v2(exec_detail_v2.mut_ru_v2());
                     });
                     set_time_detail(exec_detail_v2, duration, &stats.latency_stats);
                     resp.set_pairs(pairs.into());
@@ -1816,10 +1830,15 @@ fn future_buffer_batch_get<E: Engine, L: LockManager, F: KvFormat>(
                 Ok((kv_res, stats)) => {
                     let pairs = map_kv_pairs(kv_res);
                     let exec_detail_v2 = resp.mut_exec_details_v2();
-                    let scan_detail_v2 = exec_detail_v2.mut_scan_detail_v2();
-                    stats.stats.write_scan_detail(scan_detail_v2);
+                    {
+                        let scan_detail_v2 = exec_detail_v2.mut_scan_detail_v2();
+                        stats.stats.write_scan_detail(scan_detail_v2);
+                        GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                            tracker.write_scan_detail(scan_detail_v2);
+                        });
+                    }
                     GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-                        tracker.write_scan_detail(scan_detail_v2);
+                        tracker.write_ru_v2(exec_detail_v2.mut_ru_v2());
                     });
                     set_time_detail(exec_detail_v2, duration, &stats.latency_stats);
                     resp.set_pairs(pairs.into());
@@ -2272,6 +2291,7 @@ fn future_raw_compare_and_swap<E: Engine, L: LockManager, F: KvFormat>(
     } else {
         Some(req.take_previous_value())
     };
+
     let res = storage.raw_compare_and_swap_atomic(
         req.take_context(),
         req.take_cf(),
@@ -2280,6 +2300,7 @@ fn future_raw_compare_and_swap<E: Engine, L: LockManager, F: KvFormat>(
         req.take_value(),
         req.get_ttl(),
         cb,
+        req.get_delete(),
     );
     async move {
         let v = match res {
@@ -2380,6 +2401,7 @@ macro_rules! txn_command_future {
                 tracker.write_scan_detail($resp.mut_exec_details_v2().mut_scan_detail_v2());
                 tracker.write_write_detail($resp.mut_exec_details_v2().mut_write_detail());
                 tracker.merge_time_detail($resp.mut_exec_details_v2().mut_time_detail_v2());
+                tracker.write_ru_v2($resp.mut_exec_details_v2().mut_ru_v2());
             });
         });
     };
@@ -2391,6 +2413,7 @@ macro_rules! txn_command_future {
                 tracker.write_scan_detail($resp.mut_exec_details_v2().mut_scan_detail_v2());
                 tracker.write_write_detail($resp.mut_exec_details_v2().mut_write_detail());
                 tracker.merge_time_detail($resp.mut_exec_details_v2().mut_time_detail_v2());
+                tracker.write_ru_v2($resp.mut_exec_details_v2().mut_ru_v2());
             });
         });
     };
@@ -2405,17 +2428,19 @@ macro_rules! txn_command_future {
             $req: $req_ty,
         ) -> impl Future<Output = ServerResult<$resp_ty>> {
             $($prelude)*
+            let grpc_req_size = $req.compute_size() as u64;
+            let cmd: crate::storage::txn::commands::TypedCommand<_> = $req.into();
             let $tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
-                $req.get_context(),
-                RequestType::Unknown,
-                0,
+                cmd.cmd.ctx(),
+                cmd.cmd.request_type(),
+                cmd.cmd.ts().into_inner(),
             )));
             set_tls_tracker_token($tracker);
             with_tls_tracker(|tracker| {
-                tracker.metrics.grpc_req_size = $req.compute_size() as u64;
+                tracker.metrics.grpc_req_size = grpc_req_size;
             });
             let (cb, f) = paired_future_callback();
-            let res = storage.sched_txn_command($req.into(), cb);
+            let res = storage.sched_txn_command(cmd, cb);
 
             async move {
                 defer!{{
@@ -2745,10 +2770,10 @@ impl HealthFeedbackAttacher {
 
         let now = Instant::now_coarse();
 
-        if let Some(last_feedback_time) = self.last_feedback_time
-            && now - last_feedback_time < feedback_interval
-        {
-            return;
+        if let Some(last_feedback_time) = self.last_feedback_time {
+            if now - last_feedback_time < feedback_interval {
+                return;
+            }
         }
 
         self.attach(resp, now);
@@ -2786,6 +2811,73 @@ mod tests {
     use tikv_util::sys::thread::StdThreadBuildWrapper;
 
     use super::*;
+
+    #[test]
+    fn test_kv_get_sets_ru_v2_processed_keys() {
+        let storage = crate::storage::TestStorageBuilderApiV1::new(
+            crate::storage::lock_manager::MockLockManager::new(),
+        )
+        .build()
+        .unwrap();
+        let mut req = GetRequest::default();
+        req.set_context(Context::default());
+        req.set_key(b"ruv2_get".to_vec());
+        req.set_version(10);
+        let resp = block_on(future_get(&storage, req)).unwrap();
+        assert_eq!(
+            resp.get_exec_details_v2()
+                .get_ru_v2()
+                .get_storage_processed_keys_get(),
+            1
+        );
+    }
+
+    #[test]
+    fn test_kv_batch_get_sets_ru_v2_processed_keys() {
+        let storage = crate::storage::TestStorageBuilderApiV1::new(
+            crate::storage::lock_manager::MockLockManager::new(),
+        )
+        .build()
+        .unwrap();
+        let mut req = BatchGetRequest::default();
+        req.set_context(Context::default());
+        req.set_version(10);
+        req.mut_keys().push(b"ruv2_batch_get_1".to_vec());
+        req.mut_keys().push(b"ruv2_batch_get_2".to_vec());
+        let resp = block_on(future_batch_get(&storage, req)).unwrap();
+        assert_eq!(
+            resp.get_exec_details_v2()
+                .get_ru_v2()
+                .get_storage_processed_keys_batch_get(),
+            2
+        );
+    }
+
+    #[test]
+    fn test_prewrite_sets_ru_v2_write_bytes() {
+        let storage = crate::storage::TestStorageBuilderApiV1::new(
+            crate::storage::lock_manager::MockLockManager::new(),
+        )
+        .build()
+        .unwrap();
+        let mut req = PrewriteRequest::default();
+        req.set_context(Context::default());
+        req.set_start_version(10);
+        req.set_primary_lock(b"ruv2_prewrite".to_vec());
+        req.set_lock_ttl(3000);
+        let mut mutation = Mutation::default();
+        mutation.set_op(Op::Put);
+        mutation.set_key(b"ruv2_prewrite".to_vec());
+        mutation.set_value(b"v".to_vec());
+        req.mut_mutations().push(mutation);
+        let resp = block_on(future_prewrite(&storage, req)).unwrap();
+        assert!(
+            resp.get_exec_details_v2()
+                .get_ru_v2()
+                .get_raftstore_store_write_trigger_wb_bytes()
+                > 0
+        );
+    }
 
     #[test]
     fn test_poll_future_notify_with_slow_source() {

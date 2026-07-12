@@ -96,6 +96,13 @@ make_auto_flush_static_metric! {
         skip_partition,
     }
 
+    pub label_enum SnapGenPrecheckResponseStatus {
+        passed,
+        rejected,
+        ignored_passed,
+        ignored_rejected,
+    }
+
     pub struct RaftEntryFetches : LocalIntCounter {
         "type" => RaftEntryType
     }
@@ -134,6 +141,9 @@ make_auto_flush_static_metric! {
     pub struct CompactionGuardActionVec: LocalIntCounter {
         "cf" => CfNames,
         "type" => CompactionGuardAction,
+    }
+    pub struct SnapGenPrecheckResponseCounter: LocalIntCounter {
+        "status" => SnapGenPrecheckResponseStatus,
     }
 }
 
@@ -183,6 +193,7 @@ make_static_metric! {
         non_witness,
         recovery,
         unsafe_vote,
+        step_local_msg,
     }
 
     pub label_enum ProposalType {
@@ -256,6 +267,18 @@ make_static_metric! {
         no_uncross_key,
         // Split info for the top hot CPU region has been collected, ready to split.
         ready_to_split_cpu_top,
+        // Normal split-key selection failed.
+        normal_key_failed,
+        // CPU fallback is skipped because the unified read pool is not busy.
+        cpu_fallback_unified_not_busy,
+        // CPU fallback is skipped because the region CPU is not hot enough.
+        cpu_fallback_region_not_busy,
+        // CPU fallback is blocked because gRPC poll threads are busy.
+        cpu_fallback_grpc_busy,
+        // Load-base split admin command succeeds.
+        split_success,
+        // Load-base split admin command fails.
+        split_failed,
         // Hottest key range for the top hot CPU region could not be found.
         empty_hottest_key_range,
         // The top hot CPU region could not be split.
@@ -348,6 +371,17 @@ make_static_metric! {
         },
     }
 
+    pub struct StoreCpuPoolGaugeVec: IntGauge {
+        "pool" => {
+            unified_read,
+            scheduler,
+        },
+        "source" => {
+            store_level,
+            region_sum,
+        },
+    }
+
     pub struct SnapshotGenerateBytesTypeVec: IntCounter {
         "type" => SnapshotGenerateBytesType,
     }
@@ -425,6 +459,20 @@ lazy_static! {
         register_histogram!(
             "tikv_raftstore_store_write_msg_block_wait_duration_seconds",
             "Bucketed histogram of write msg block wait duration.",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    /// Actual wait duration passed to spin_at_least in wait_for_a_while (after trend adjustment).
+    pub static ref STORE_WRITE_SPIN_ACTUAL_WAIT_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_write_spin_actual_wait_duration_seconds",
+            "Bucketed histogram of actual spin wait duration used in wait_for_a_while (after trend).",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    /// Adaptive wait duration (wait_duration_adaptive) for observing difference from actual spin.
+    pub static ref STORE_WRITE_ADAPTIVE_WAIT_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_write_adaptive_wait_duration_seconds",
+            "Bucketed histogram of adaptive wait duration (wait_duration_adaptive) in batching.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
 
@@ -543,7 +591,7 @@ lazy_static! {
         register_histogram!(
             "tikv_raftstore_apply_msg_len",
             "Length of apply msg.",
-            exponential_buckets(1.0, 2.0, 20).unwrap() // max 1024 * 1024
+            exponential_buckets(1.0, 2.0, 21).unwrap() // max 1024 * 1024
         ).unwrap();
 
     pub static ref STORE_RAFT_READY_COUNTER_VEC: IntCounterVec =
@@ -565,6 +613,13 @@ lazy_static! {
             "tikv_raftstore_raft_dropped_message_total",
             "Total number of raft dropped messages.",
             &["type"]
+        ).unwrap();
+
+    pub static ref STORE_EXTRA_MESSAGE_SEND_FAILURE_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_raftstore_extra_message_send_failure_total",
+            "Total number of failed raftstore extra message sends.",
+            &["type", "reason"]
         ).unwrap();
 
     pub static ref STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC: IntGaugeVec =
@@ -675,7 +730,7 @@ lazy_static! {
             "tikv_snapshot_cf_kv_count",
             "Total number of kv in each cf file of snapshot.",
             &["type"],
-            exponential_buckets(100.0, 2.0, 20).unwrap()
+            exponential_buckets(100.0, 2.0, 21).unwrap()
         ).unwrap();
     pub static ref SNAPSHOT_CF_KV_COUNT: SnapCf =
         auto_flush_from!(SNAPSHOT_CF_KV_COUNT_VEC, SnapCf);
@@ -693,21 +748,21 @@ lazy_static! {
         register_histogram!(
             "tikv_snapshot_build_time_duration_secs",
             "Bucketed histogram of snapshot build time duration.",
-            exponential_buckets(0.05, 2.0, 20).unwrap()
+            exponential_buckets(0.05, 2.0, 21).unwrap()
         ).unwrap();
 
     pub static ref SNAPSHOT_KV_COUNT_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_snapshot_kv_count",
             "Total number of kv in snapshot.",
-            exponential_buckets(100.0, 2.0, 20).unwrap() //100,100*2^1,...100M
+            exponential_buckets(100.0, 2.0, 21).unwrap() //100,100*2^1,...100M
         ).unwrap();
 
     pub static ref SNAPSHOT_SIZE_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_snapshot_size",
             "Size of snapshot.",
-            exponential_buckets(1024.0, 2.0, 22).unwrap() // 1024,1024*2^1,..,4G
+            exponential_buckets(1024.0, 2.0, 23).unwrap() // 1024,1024*2^1,..,4G
         ).unwrap();
 
     pub static ref RAFT_ENTRY_FETCHES_VEC: IntCounterVec =
@@ -759,21 +814,21 @@ lazy_static! {
             "tikv_raftstore_event_duration",
             "Duration of raft store events.",
             &["type"],
-            exponential_buckets(0.001, 1.59, 20).unwrap() // max 10s
+            exponential_buckets(0.001, 1.59, 21).unwrap() // max 10s
         ).unwrap();
 
     pub static ref PEER_MSG_LEN: Histogram =
         register_histogram!(
             "tikv_raftstore_peer_msg_len",
             "Length of peer msg.",
-            exponential_buckets(1.0, 2.0, 20).unwrap() // max 1024 * 1024
+            exponential_buckets(1.0, 2.0, 21).unwrap() // max 1024 * 1024
         ).unwrap();
 
     pub static ref RAFT_READ_INDEX_PENDING_DURATION: Histogram =
         register_histogram!(
             "tikv_raftstore_read_index_pending_duration",
             "Duration of pending read index.",
-            exponential_buckets(0.001, 2.0, 20).unwrap() // max 1000s
+            exponential_buckets(0.001, 2.0, 21).unwrap() // max 1000s
         ).unwrap();
 
     pub static ref RAFT_READ_INDEX_PENDING_COUNT: IntGauge =
@@ -802,6 +857,13 @@ lazy_static! {
         "Histogram of query balance",
         &["type"],
         linear_buckets(0.0, 0.05, 20).unwrap()
+    ).unwrap();
+
+    pub static ref LOAD_BASE_SPLIT_REGION_LOAD_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_load_base_split_region_load",
+        "Histogram of region load observed before load-fit filtering when load base split evaluates regions on this TiKV. The type label is cpu_millicores, qps, or bytes_kib.",
+        &["type"],
+        exponential_buckets(1.0, 2.0, 28).unwrap()
     ).unwrap();
 
     pub static ref LOAD_BASE_SPLIT_DURATION_HISTOGRAM : Histogram = register_histogram!(
@@ -850,7 +912,7 @@ lazy_static! {
     register_histogram!(
         "tikv_raftstore_peer_pending_duration_seconds",
         "Bucketed histogram of region peer pending duration.",
-        exponential_buckets(0.1, 1.5, 30).unwrap()  // 0.1s ~ 5.3 hours
+        exponential_buckets(0.1, 1.5, 31).unwrap()  // 0.1s ~ 5.3 hours
     ).unwrap();
 
     pub static ref HIBERNATED_PEER_STATE_GAUGE: HibernatedPeerStateGauge = register_static_int_gauge_vec!(
@@ -969,6 +1031,19 @@ lazy_static! {
     )
     .unwrap();
 
+    pub static ref SNAP_GEN_PRECHECK_RESPONSE_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_raftstore_snap_gen_precheck_response_total",
+            "Total number of snapshot generation precheck responses.",
+            &["status"]
+        )
+        .unwrap();
+    pub static ref SNAP_GEN_PRECHECK_RESPONSE_COUNTER: SnapGenPrecheckResponseCounter =
+        auto_flush_from!(
+            SNAP_GEN_PRECHECK_RESPONSE_COUNTER_VEC,
+            SnapGenPrecheckResponseCounter
+        );
+
     pub static ref RAFT_APPLYING_SST_GAUGE: IntGaugeVec = register_int_gauge_vec!(
         "tikv_raft_applying_sst",
         "Sum of applying sst.",
@@ -1035,4 +1110,11 @@ lazy_static! {
             "Is raft process busy or not",
             &["type"]
         ).unwrap();
+
+    pub static ref STORE_CPU_POOL_GAUGE_VEC: StoreCpuPoolGaugeVec = register_static_int_gauge_vec!(
+        StoreCpuPoolGaugeVec,
+        "tikv_raftstore_cpu_pool_usage",
+        "CPU usage comparison between store-level (ThreadInfoStatistics) and region-level sum (resource metering) per thread pool.",
+        &["pool", "source"]
+    ).unwrap();
 }

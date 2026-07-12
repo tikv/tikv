@@ -7,26 +7,31 @@ use super::*;
 
 const KEYSPACE_PREFIX_LEN: usize = 4;
 
-pub trait KvPair {
+pub trait KvPairEntry {
     fn key(&self) -> &[u8];
     fn value(&self) -> &[u8];
+    fn commit_ts(&self) -> Option<TimeStamp>;
     fn kv(&self) -> (&[u8], &[u8]) {
         (self.key(), self.value())
     }
 }
 
-impl KvPair for (Vec<u8>, Vec<u8>) {
+impl KvPairEntry for (Vec<u8>, Vec<u8>, Option<TimeStamp>) {
     fn key(&self) -> &[u8] {
         &self.0
     }
     fn value(&self) -> &[u8] {
         &self.1
     }
+
+    fn commit_ts(&self) -> Option<TimeStamp> {
+        self.2
+    }
 }
 
 pub trait Keyspace {
-    type KvPair: KvPair = (Vec<u8>, Vec<u8>);
-    fn make_kv_pair(p: (Vec<u8>, Vec<u8>)) -> Result<Self::KvPair>;
+    type KvPairEntry: KvPairEntry = (Vec<u8>, Vec<u8>, Option<TimeStamp>);
+    fn make_kv_pair(p: (Vec<u8>, Vec<u8>, Option<TimeStamp>)) -> Result<Self::KvPairEntry>;
     fn parse_keyspace(key: &[u8]) -> Result<(Option<KeyspaceId>, &[u8])> {
         Ok((None, key))
     }
@@ -42,26 +47,27 @@ impl From<u32> for KeyspaceId {
 }
 
 impl Keyspace for ApiV1 {
-    fn make_kv_pair(p: (Vec<u8>, Vec<u8>)) -> Result<Self::KvPair> {
+    fn make_kv_pair(p: (Vec<u8>, Vec<u8>, Option<TimeStamp>)) -> Result<Self::KvPairEntry> {
         Ok(p)
     }
 }
 
 impl Keyspace for ApiV1Ttl {
-    fn make_kv_pair(p: (Vec<u8>, Vec<u8>)) -> Result<Self::KvPair> {
+    fn make_kv_pair(p: (Vec<u8>, Vec<u8>, Option<TimeStamp>)) -> Result<Self::KvPairEntry> {
         Ok(p)
     }
 }
 
 impl Keyspace for ApiV2 {
-    type KvPair = KeyspaceKv;
+    type KvPairEntry = KeyspaceKv;
 
-    fn make_kv_pair(p: (Vec<u8>, Vec<u8>)) -> Result<Self::KvPair> {
-        let (k, v) = p;
+    fn make_kv_pair(p: (Vec<u8>, Vec<u8>, Option<TimeStamp>)) -> Result<Self::KvPairEntry> {
+        let (k, v, commit_ts) = p;
         let (keyspace, _) = Self::parse_keyspace(&k)?;
         Ok(KeyspaceKv {
             k,
             v,
+            commit_ts,
             keyspace: keyspace.unwrap(),
         })
     }
@@ -82,16 +88,21 @@ impl Keyspace for ApiV2 {
 pub struct KeyspaceKv {
     k: Vec<u8>,
     v: Vec<u8>,
+    commit_ts: Option<TimeStamp>,
     keyspace: KeyspaceId,
 }
 
-impl KvPair for KeyspaceKv {
+impl KvPairEntry for KeyspaceKv {
     fn key(&self) -> &[u8] {
         &self.k[KEYSPACE_PREFIX_LEN..]
     }
 
     fn value(&self) -> &[u8] {
         &self.v
+    }
+
+    fn commit_ts(&self) -> Option<TimeStamp> {
+        self.commit_ts
     }
 }
 
@@ -101,15 +112,15 @@ impl KeyspaceKv {
     }
 }
 
-impl PartialEq<(Vec<u8>, Vec<u8>)> for KeyspaceKv {
-    fn eq(&self, other: &(Vec<u8>, Vec<u8>)) -> bool {
-        self.kv() == (&other.0, &other.1)
+impl PartialEq<(Vec<u8>, Vec<u8>, Option<TimeStamp>)> for KeyspaceKv {
+    fn eq(&self, other: &(Vec<u8>, Vec<u8>, Option<TimeStamp>)) -> bool {
+        self.kv() == (&other.0, &other.1) && self.commit_ts == other.2
     }
 }
 
 impl PartialEq for KeyspaceKv {
     fn eq(&self, other: &Self) -> bool {
-        self.k == other.k && self.v == other.v
+        self.k == other.k && self.v == other.v && self.commit_ts == other.commit_ts
     }
 }
 

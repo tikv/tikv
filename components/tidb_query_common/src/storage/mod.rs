@@ -15,6 +15,18 @@ pub type Result<T> = std::result::Result<T, crate::error::StorageError>;
 
 pub type OwnedKvPair = (Vec<u8>, Vec<u8>);
 
+pub struct OwnedKvPairEntry {
+    pub key: Vec<u8>,
+    pub value: Vec<u8>,
+    pub commit_ts: Option<u64>,
+}
+
+impl From<OwnedKvPairEntry> for OwnedKvPair {
+    fn from(val: OwnedKvPairEntry) -> Self {
+        (val.key, val.value)
+    }
+}
+
 /// The abstract storage interface. The table scan and index scan executor
 /// relies on a `Storage` implementation to provide source data.
 pub trait Storage: Send {
@@ -26,18 +38,45 @@ pub trait Storage: Send {
         &mut self,
         is_backward_scan: bool,
         is_key_only: bool,
+        load_commit_ts: bool,
         range: IntervalRange,
     ) -> Result<()>;
 
-    fn scan_next(&mut self) -> Result<Option<OwnedKvPair>>;
+    fn scan_next_entry(&mut self) -> Result<Option<OwnedKvPairEntry>>;
+
+    #[inline]
+    fn scan_next(&mut self) -> Result<Option<OwnedKvPair>> {
+        Ok(self.scan_next_entry()?.map(|entry| entry.into()))
+    }
 
     // TODO: Use const generics.
     // TODO: Use reference is better.
-    fn get(&mut self, is_key_only: bool, range: PointRange) -> Result<Option<OwnedKvPair>>;
+    fn get_entry(
+        &mut self,
+        is_key_only: bool,
+        load_commit_ts: bool,
+        range: PointRange,
+    ) -> Result<Option<OwnedKvPairEntry>>;
+
+    #[inline]
+    fn get(&mut self, is_key_only: bool, range: PointRange) -> Result<Option<OwnedKvPair>> {
+        Ok(self
+            .get_entry(is_key_only, false, range)?
+            .map(|entry| entry.into()))
+    }
 
     fn met_uncacheable_data(&self) -> Option<bool>;
 
     fn collect_statistics(&mut self, dest: &mut Self::Statistics);
+
+    /// Returns the cumulative number of bytes scanned so far, counting the
+    /// key and value of every returned entry. Unlike `collect_statistics`,
+    /// this is a non-draining read: the total keeps growing monotonically
+    /// across calls.
+    ///
+    /// How the key bytes are measured (e.g. raw or encoded form) is up to the
+    /// implementation.
+    fn scanned_bytes(&self) -> usize;
 }
 
 impl<T: Storage + ?Sized> Storage for Box<T> {
@@ -47,17 +86,23 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
         &mut self,
         is_backward_scan: bool,
         is_key_only: bool,
+        load_commit_ts: bool,
         range: IntervalRange,
     ) -> Result<()> {
-        (**self).begin_scan(is_backward_scan, is_key_only, range)
+        (**self).begin_scan(is_backward_scan, is_key_only, load_commit_ts, range)
     }
 
-    fn scan_next(&mut self) -> Result<Option<OwnedKvPair>> {
-        (**self).scan_next()
+    fn scan_next_entry(&mut self) -> Result<Option<OwnedKvPairEntry>> {
+        (**self).scan_next_entry()
     }
 
-    fn get(&mut self, is_key_only: bool, range: PointRange) -> Result<Option<OwnedKvPair>> {
-        (**self).get(is_key_only, range)
+    fn get_entry(
+        &mut self,
+        is_key_only: bool,
+        load_commit_ts: bool,
+        range: PointRange,
+    ) -> Result<Option<OwnedKvPairEntry>> {
+        (**self).get_entry(is_key_only, load_commit_ts, range)
     }
 
     fn met_uncacheable_data(&self) -> Option<bool> {
@@ -66,6 +111,10 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
 
     fn collect_statistics(&mut self, dest: &mut Self::Statistics) {
         (**self).collect_statistics(dest);
+    }
+
+    fn scanned_bytes(&self) -> usize {
+        (**self).scanned_bytes()
     }
 }
 

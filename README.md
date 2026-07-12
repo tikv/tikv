@@ -10,7 +10,10 @@ TiKV is an open-source, distributed, and transactional key-value database. Unlik
 
 The design of TiKV ('Ti' stands for titanium) is inspired by some great distributed systems from Google, such as BigTable, Spanner, and Percolator, and some of the latest achievements in academia in recent years, such as the Raft consensus algorithm.
 
-If you're interested in contributing to TiKV, or want to build it from source, see [CONTRIBUTING.md](./CONTRIBUTING.md).
+If you're interested in contributing to TiKV, or want to build it from source,
+see [CONTRIBUTING.md](./CONTRIBUTING.md). For maintainership-oriented code
+reading and review context, see
+[doc/maintenance-guides/README.md](./doc/maintenance-guides/README.md).
 
 ![cncf_logo](images/cncf.png#gh-light-mode-only)
 ![cncf_logo](images/cncf-white.png#gh-dark-mode-only)
@@ -123,6 +126,33 @@ print(client.get(b'foo')) # b'bar'
 client.put(b'foo', b'baz')
 print(client.get(b'foo')) # b'baz'
 ```
+
+### Deploy a cluster with Docker Compose
+
+The easiest way to run a complete TiKV cluster (3 PD + 3 TiKV nodes) for development and testing is using Docker Compose. The setup uses pre-built TiKV and PD nightly images from Docker Hub, so no building is required.
+
+> **Note:** On macOS, use `docker compose` (space) instead of `docker-compose` (hyphen) in all commands.
+
+1. Start the cluster:
+
+```bash
+$ docker-compose up -d
+# On macOS, use: docker compose up -d
+```
+
+2. Check cluster status:
+
+```bash
+$ docker-compose ps
+# On macOS, use: docker compose ps
+```
+
+3. Access the cluster:
+
+- PD endpoints: `127.0.0.1:23791`, `127.0.0.1:23792`, `127.0.0.1:23793`
+- TiKV status: `http://localhost:20181/status`, `http://localhost:20182/status`, `http://localhost:20183/status`
+
+For more details, see [docker-compose.README.md](./docker-compose.README.md).
 
 ### Deploy a cluster with TiUP
 

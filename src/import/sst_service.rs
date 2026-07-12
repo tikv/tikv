@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     convert::identity,
     sync::{Arc, Mutex},
     time::Duration,
@@ -46,6 +46,7 @@ use tikv_util::{
         disk::{DiskUsage, get_disk_status},
         get_global_memory_usage,
     },
+    thread_name_prefix::IMPORT_SST_WORKER_THREAD,
     time::{Instant, Limiter},
 };
 use tokio::time::sleep;
@@ -102,6 +103,10 @@ const HIGH_IMPORT_MEMORY_WATER_RATIO: f64 = 0.95;
 // the TTL is to ensure all force partition ranges can be
 // cleaned up eventually.
 const DEFAULT_FORCE_PARTITION_RANGE_TTL_SECONDS: u64 = 3600;
+
+// See components/cdc/src/txn_source.rs
+// cdc then ignores txn sources with this mask.
+const TXN_SOURCE_LIGHTNING_PHY_IMPORT_MASK: u64 = 1 << 16;
 
 /// Check if the system has enough resources for import tasks
 async fn check_import_resources(mem_limit: u64) -> Result<()> {
@@ -250,7 +255,7 @@ impl RequestCollector {
         }
     }
 
-    fn accept_kv(&mut self, cf: &str, is_delete: bool, k: Vec<u8>, v: Vec<u8>) {
+    fn accept_kv(&mut self, cf: &str, is_delete: bool, k: Vec<u8>, mut v: Vec<u8>) {
         debug!("Accepting KV."; "cf" => %cf,
             "key" => %log_wrappers::Value::key(&k),
             "value" => %log_wrappers::Value::key(&v));
@@ -268,7 +273,7 @@ impl RequestCollector {
         let m = if is_delete {
             Modify::Delete(cf, Key::from_encoded(k))
         } else {
-            if cf == CF_WRITE && !write_needs_restore(&v) {
+            if cf == CF_WRITE && !prepare_write(&mut v) {
                 return;
             }
 
@@ -419,7 +424,7 @@ impl<E: Engine> ImportSstService<E> {
 
         let threads = ResizableRuntime::new(
             4,
-            "impwkr",
+            IMPORT_SST_WORKER_THREAD,
             Box::new(create_tokio_runtime),
             Box::new(|_| ()),
         );
@@ -709,7 +714,7 @@ macro_rules! impl_write {
                                     writer.write(batch)?;
                                     Ok(writer)
                                 };
-                                with_resource_limiter(f, limiter.clone())
+                                with_resource_limiter(f, limiter.clone(), true, false, None, 0)
                                     .await
                                     .map(|w| (w, limiter))
                             },
@@ -726,7 +731,9 @@ macro_rules! impl_write {
                         Ok(metas)
                     };
 
-                    let metas: Result<_> = with_resource_limiter(finish_fn, resource_limiter).await;
+                    let metas: Result<_> =
+                        with_resource_limiter(finish_fn, resource_limiter, true, false, None, 0)
+                            .await;
                     let metas = match metas {
                         Ok(r) => r,
                         Err(e) => return (Err(e), None),
@@ -966,10 +973,24 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let label = "download";
         IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
         let timer = Instant::now_coarse();
+
+        // download method only handles single file downloads
+        // Check that this is indeed a single-file request
+        if !req.get_ssts().is_empty() {
+            let error = sst_importer::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "download method only accepts single-file requests, use batch_download for multi-file requests",
+            ));
+            let mut resp = DownloadResponse::default();
+            resp.set_error(error.into());
+            let _ = sink
+                .success(resp)
+                .map_err(|e| warn!("send rpc response"; "err" => %e));
+            return;
+        }
         let importer = Arc::clone(&self.importer);
         let limiter = self.limiter.clone();
         let mem_limit = self.mem_limit;
-        let region_id = req.get_sst().get_region_id();
         let tablets = self.tablets.clone();
         let start = Instant::now();
         let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
@@ -1008,6 +1029,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 .into_option()
                 .filter(|c| c.cipher_type != EncryptionMethod::Plaintext);
 
+            let region_id = req.get_sst().get_region_id();
             let tablet = match tablets.get(region_id) {
                 Some(tablet) => tablet,
                 None => {
@@ -1036,11 +1058,290 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                         .req_type(req.get_request_type()),
                 ),
                 resource_limiter,
-            );
+                true,
+                false,
+                None,
+                0,
+            )
+            .await;
             let mut resp = DownloadResponse::default();
-            match res.await {
+            match res {
                 Ok(range) => match range {
                     Some(r) => resp.set_range(r),
+                    None => resp.set_is_empty(true),
+                },
+                Err(e) => resp.set_error(e.into()),
+            }
+            crate::send_rpc_response!(Ok(resp), sink, label, timer);
+        };
+
+        self.threads.spawn(handle_task);
+    }
+
+    /// Batch downloads multiple files and performs key-rewrite for later
+    /// ingesting. This method is specifically designed for multi-file
+    /// downloads with merging. NOTE: This method will be activated once
+    /// kvproto defines the batch_download RPC.
+    #[allow(dead_code)]
+    fn batch_download(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        req: DownloadRequest,
+        sink: UnarySink<DownloadResponse>,
+    ) {
+        let label = "batch_download";
+        IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
+        let timer = Instant::now_coarse();
+
+        // batch_download specifically handles multi-file downloads
+        // Check that this is indeed a multi-file request
+        if req.get_ssts().is_empty() {
+            let error = sst_importer::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "batch_download method only accepts multi-file requests, use download for single-file requests",
+            ));
+            let mut resp = DownloadResponse::default();
+            resp.set_error(error.into());
+            let _ = sink
+                .success(resp)
+                .map_err(|e| warn!("send rpc response"; "err" => %e));
+            return;
+        }
+        let importer = Arc::clone(&self.importer);
+        let limiter = self.limiter.clone();
+        let mem_limit = self.mem_limit;
+        let tablets = self.tablets.clone();
+        let start = Instant::now();
+        let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
+            r.get_background_resource_limiter(
+                req.get_context()
+                    .get_resource_control_context()
+                    .get_resource_group_name(),
+                req.get_context().get_request_source(),
+            )
+        });
+
+        let handle_task = async move {
+            defer! { IMPORT_RPC_COUNT.with_label_values(&[label]).dec() }
+            // Records how long the batch download task waits to be scheduled.
+            sst_importer::metrics::IMPORTER_DOWNLOAD_DURATION
+                .with_label_values(&["queue"])
+                .observe(start.saturating_elapsed().as_secs_f64());
+
+            let mut resp = DownloadResponse::default();
+            match check_import_resources(mem_limit).await {
+                Ok(()) => (),
+                Err(e) => {
+                    resp.set_error(e.into());
+                    crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    return;
+                }
+            }
+
+            // FIXME: batch_download() should be an async fn, to allow BR to cancel
+            // a download task.
+            // Unfortunately, this currently can't happen because the S3Storage
+            // is not Send + Sync. See the documentation of S3Storage for reason.
+            let cipher = req
+                .cipher_info
+                .to_owned()
+                .into_option()
+                .filter(|c| c.cipher_type != EncryptionMethod::Plaintext);
+
+            let basic_meta = match download_request_dispatcher(&req, false) {
+                Ok(Some(meta)) => meta,
+                Ok(None) => {
+                    // This should never happen since we've already checked ssts is not empty
+                    let error = sst_importer::Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "internal error: download_request_dispatcher returned None despite non-empty ssts",
+                    ));
+                    let mut resp = DownloadResponse::default();
+                    resp.set_error(error.into());
+                    crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    return;
+                }
+                Err(error) => {
+                    let mut resp = DownloadResponse::default();
+                    resp.set_error(error.into());
+                    crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    return;
+                }
+            };
+
+            let region_id = basic_meta.get_region_id();
+            let tablet = match tablets.get(region_id) {
+                Some(tablet) => tablet,
+                None => {
+                    let error = sst_importer::Error::Engine(box_err!(
+                        "region {} not found, maybe it's not a replica of this store",
+                        region_id
+                    ));
+                    let mut resp = DownloadResponse::default();
+                    resp.set_error(error.into());
+                    crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    return;
+                }
+            };
+
+            let res = with_resource_limiter(
+                importer.download_files_ext_with_ssts(
+                    &basic_meta,
+                    req.get_ssts(),
+                    req.get_storage_backend(),
+                    req.get_rewrite_rule(),
+                    cipher,
+                    limiter,
+                    tablet.into_owned(),
+                    DownloadExt::default()
+                        .cache_key(req.get_storage_cache_id())
+                        .req_type(req.get_request_type()),
+                ),
+                resource_limiter,
+                true,
+                false,
+                None,
+                0,
+            )
+            .await;
+
+            let mut resp = DownloadResponse::default();
+            match res {
+                Ok(range) => match range {
+                    Some(r) => resp.set_range(r),
+                    None => resp.set_is_empty(true),
+                },
+                Err(e) => resp.set_error(e.into()),
+            }
+            crate::send_rpc_response!(Ok(resp), sink, label, timer);
+        };
+
+        self.threads.spawn(handle_task);
+    }
+
+    fn batch_download_latest_mvcc(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        req: DownloadRequest,
+        sink: UnarySink<DownloadResponse>,
+    ) {
+        let label = "batch_download_latest_mvcc";
+        IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
+        let timer = Instant::now_coarse();
+
+        if req.get_ssts().is_empty() {
+            let error = sst_importer::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "batch_download_latest_mvcc only accepts multi-file requests",
+            ));
+            let mut resp = DownloadResponse::default();
+            resp.set_error(error.into());
+            let _ = sink
+                .success(resp)
+                .map_err(|e| warn!("send rpc response"; "err" => %e));
+            return;
+        }
+        let importer = Arc::clone(&self.importer);
+        let limiter = self.limiter.clone();
+        let mem_limit = self.mem_limit;
+        let tablets = self.tablets.clone();
+        let start = Instant::now();
+        let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
+            r.get_background_resource_limiter(
+                req.get_context()
+                    .get_resource_control_context()
+                    .get_resource_group_name(),
+                req.get_context().get_request_source(),
+            )
+        });
+
+        let handle_task = async move {
+            defer! { IMPORT_RPC_COUNT.with_label_values(&[label]).dec() }
+            sst_importer::metrics::IMPORTER_DOWNLOAD_DURATION
+                .with_label_values(&["queue"])
+                .observe(start.saturating_elapsed().as_secs_f64());
+
+            let mut resp = DownloadResponse::default();
+            match check_import_resources(mem_limit).await {
+                Ok(()) => (),
+                Err(e) => {
+                    resp.set_error(e.into());
+                    crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    return;
+                }
+            }
+
+            let cipher = req
+                .cipher_info
+                .to_owned()
+                .into_option()
+                .filter(|c| c.cipher_type != EncryptionMethod::Plaintext);
+
+            let basic_meta = match download_request_dispatcher(&req, true) {
+                Ok(Some(meta)) => meta,
+                Ok(None) => {
+                    let error = sst_importer::Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "internal error: download_request_dispatcher returned None despite non-empty ssts",
+                    ));
+                    let mut resp = DownloadResponse::default();
+                    resp.set_error(error.into());
+                    crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    return;
+                }
+                Err(error) => {
+                    let mut resp = DownloadResponse::default();
+                    resp.set_error(error.into());
+                    crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    return;
+                }
+            };
+
+            let region_id = basic_meta.get_region_id();
+            let tablet = match tablets.get(region_id) {
+                Some(tablet) => tablet,
+                None => {
+                    let error = sst_importer::Error::Engine(box_err!(
+                        "region {} not found, maybe it's not a replica of this store",
+                        region_id
+                    ));
+                    let mut resp = DownloadResponse::default();
+                    resp.set_error(error.into());
+                    crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    return;
+                }
+            };
+
+            let res = with_resource_limiter(
+                importer.download_files_ext_with_latest_mvcc(
+                    &basic_meta,
+                    req.get_ssts(),
+                    req.get_storage_backend(),
+                    req.get_rewrite_rule(),
+                    cipher,
+                    limiter,
+                    tablet.into_owned(),
+                    DownloadExt::default()
+                        .cache_key(req.get_storage_cache_id())
+                        .req_type(req.get_request_type()),
+                ),
+                resource_limiter,
+                true,
+                false,
+                None,
+                0,
+            )
+            .await;
+
+            let mut resp = DownloadResponse::default();
+            match res {
+                Ok(result) => match result {
+                    Some(mut r) => {
+                        resp.set_range(r.range);
+                        for sst in r.ssts.drain(..) {
+                            resp.mut_ssts().push(sst);
+                        }
+                    }
                     None => resp.set_is_empty(true),
                 },
                 Err(e) => resp.set_error(e.into()),
@@ -1394,7 +1695,8 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             let mut end_next = req.get_range().get_end().to_owned();
             end_next.push(0);
             let end_next_data_key = keys::data_key(Key::from_raw(&end_next).as_encoded());
-            let opts = ManualCompactionOptions::new(false, 1, true);
+            let mut opts = ManualCompactionOptions::new(false, 1, true);
+            opts.set_check_range_overlap_on_bottom_level(true);
             for cf in [CF_WRITE, CF_DEFAULT] {
                 for rg in [(&*start, &*start_next_data_key), (&end, &end_next_data_key)] {
                     let start = Instant::now_coarse();
@@ -1437,7 +1739,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     }
 }
 
-fn write_needs_restore(write: &[u8]) -> bool {
+fn prepare_write(write: &mut Vec<u8>) -> bool {
     let w = WriteRef::parse(write);
     match w {
         Ok(w)
@@ -1448,6 +1750,10 @@ fn write_needs_restore(write: &[u8]) -> bool {
                 WriteType::Put | WriteType::Delete
             ) =>
         {
+            let mut w = w.to_owned();
+            // To tell CDC ignore this write.
+            w.txn_source |= TXN_SOURCE_LIGHTNING_PHY_IMPORT_MASK;
+            *write = w.as_ref().to_bytes();
             true
         }
         Ok(w) => {
@@ -1460,6 +1766,101 @@ fn write_needs_restore(write: &[u8]) -> bool {
             false
         }
     }
+}
+
+fn download_request_dispatcher(
+    req: &DownloadRequest,
+    allow_write_default_mix: bool,
+) -> Result<Option<SstMeta>> {
+    if req.get_ssts().is_empty() {
+        return Ok(None);
+    }
+    let mut cf_names = HashSet::new();
+    let base_cf = req.get_sst().get_cf_name();
+    if !base_cf.is_empty() {
+        cf_names.insert(base_cf.to_string());
+    }
+    for meta in req.get_ssts().values() {
+        cf_names.insert(meta.get_cf_name().to_string());
+    }
+    let is_write_default_mix =
+        cf_names.len() == 2 && cf_names.contains(CF_WRITE) && cf_names.contains(CF_DEFAULT);
+    if cf_names.len() > 1 && (!allow_write_default_mix || !is_write_default_mix) {
+        let error = sst_importer::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "batch download supports a single column family or a write+default mix, got {:?}",
+                cf_names
+            ),
+        ));
+        return Err(error);
+    }
+
+    let mut basic_meta = req.get_sst().clone();
+    for meta in req.get_ssts().values() {
+        if basic_meta.get_region_id() != meta.get_region_id() {
+            let error = sst_importer::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "region id mismatch in different sst meta, one is {} and another is {}",
+                    basic_meta.get_region_id(),
+                    meta.get_region_id()
+                ),
+            ));
+            return Err(error);
+        }
+        if basic_meta.get_region_epoch() != meta.get_region_epoch() {
+            let error = sst_importer::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "region epoch mismatch in different sst meta, one is {:?} and another is {:?}",
+                    basic_meta.get_region_epoch(),
+                    meta.get_region_epoch()
+                ),
+            ));
+            return Err(error);
+        }
+        if basic_meta.get_cf_name() != meta.get_cf_name()
+            && (!allow_write_default_mix || !is_write_default_mix)
+        {
+            let error = sst_importer::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "cf mismatch in different sst meta, one is {} and another is {}",
+                    basic_meta.get_cf_name(),
+                    meta.get_cf_name()
+                ),
+            ));
+            return Err(error);
+        }
+        if basic_meta.get_end_key_exclusive() != meta.get_end_key_exclusive() {
+            let error = sst_importer::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "end key exclusive mismatch in different sst meta, one is {} and another is {}",
+                    basic_meta.get_end_key_exclusive(),
+                    meta.get_end_key_exclusive()
+                ),
+            ));
+            return Err(error);
+        }
+        if basic_meta.get_range().get_start() > meta.get_range().get_start() {
+            basic_meta
+                .mut_range()
+                .set_start(meta.get_range().get_start().to_owned());
+        }
+        if !basic_meta.get_range().get_end().is_empty()
+            && basic_meta.get_range().get_end() < meta.get_range().get_end()
+        {
+            basic_meta
+                .mut_range()
+                .set_end(meta.get_range().get_end().to_owned());
+        }
+    }
+    if allow_write_default_mix && is_write_default_mix {
+        basic_meta.set_cf_name(CF_WRITE.to_owned());
+    }
+    Ok(Some(basic_meta))
 }
 
 #[cfg(test)]
@@ -1479,13 +1880,16 @@ mod test {
     use txn_types::{Key, TimeStamp, Write, WriteBatchFlags, WriteType};
 
     use crate::{
-        import::sst_service::{RequestCollector, check_local_region_stale},
+        import::sst_service::{
+            RequestCollector, TXN_SOURCE_LIGHTNING_PHY_IMPORT_MASK, check_local_region_stale,
+        },
         server::raftkv,
     };
 
     fn write(key: &[u8], ty: WriteType, commit_ts: u64, start_ts: u64) -> (Vec<u8>, Vec<u8>) {
         let k = Key::from_raw(key).append_ts(TimeStamp::new(commit_ts));
-        let v = Write::new(ty, TimeStamp::new(start_ts), None);
+        let mut v = Write::new(ty, TimeStamp::new(start_ts), None);
+        v.txn_source |= TXN_SOURCE_LIGHTNING_PHY_IMPORT_MASK;
         (k.into_encoded(), v.as_ref().to_bytes())
     }
 

@@ -94,7 +94,7 @@ impl TestEngineBuilder {
         let cfs = self.cfs.unwrap_or_else(|| ALL_CFS.to_vec());
         let mut cache_opt = BlockCacheConfig::default();
         if !enable_block_cache {
-            cache_opt.capacity = Some(ReadableSize::kb(0));
+            cache_opt.capacity = Some(ReadableSize::kb(0).into());
         }
         let shared =
             cfg_rocksdb.build_cf_resources(cache_opt.build_shared_cache(), Default::default());
@@ -230,6 +230,7 @@ mod tests {
             snapshot.iter(CF_DEFAULT, iter_opt).unwrap(),
             ScanMode::Forward,
             false,
+            false,
         );
 
         let mut statistics = CfStatistics::default();
@@ -258,6 +259,7 @@ mod tests {
         let mut iter = Cursor::new(
             snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
             ScanMode::Forward,
+            false,
             false,
         );
 
@@ -341,7 +343,7 @@ mod tests {
             &mut statistics,
         )
         .unwrap();
-        assert_eq!(iter.valid().unwrap(), true);
+        assert!(iter.valid().unwrap());
         assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 0);
 
         let perf_statistics = ReadPerfInstant::new();
@@ -350,7 +352,7 @@ mod tests {
             &mut statistics,
         )
         .unwrap();
-        assert_eq!(iter.valid().unwrap(), false);
+        assert!(!iter.valid().unwrap());
         assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 1);
         let perf_statistics = ReadPerfInstant::new();
         iter.seek(
@@ -358,7 +360,7 @@ mod tests {
             &mut statistics,
         )
         .unwrap();
-        assert_eq!(iter.valid().unwrap(), false);
+        assert!(!iter.valid().unwrap());
         assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 1);
         let perf_statistics = ReadPerfInstant::new();
         iter.seek(
@@ -366,18 +368,17 @@ mod tests {
             &mut statistics,
         )
         .unwrap();
-        assert_eq!(iter.valid().unwrap(), false);
+        assert!(!iter.valid().unwrap());
         assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 1);
         let perf_statistics = ReadPerfInstant::new();
-        assert_eq!(
+        assert!(
             iter.seek(
                 &Key::from_raw(b"foo4").append_ts(TimeStamp::zero()),
                 &mut statistics
             )
-            .unwrap(),
-            true
+            .unwrap()
         );
-        assert_eq!(iter.valid().unwrap(), true);
+        assert!(iter.valid().unwrap());
         assert_eq!(
             iter.key(&mut statistics),
             Key::from_raw(b"foo4")

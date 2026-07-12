@@ -36,7 +36,7 @@ pub unsafe fn vec_transmute<F, T>(from: Vec<F>) -> Vec<T> {
     debug_assert!(mem::size_of::<F>() == mem::size_of::<T>());
     debug_assert!(mem::align_of::<F>() == mem::align_of::<T>());
     let (ptr, len, cap) = from.into_raw_parts();
-    Vec::from_raw_parts(ptr as _, len, cap)
+    unsafe { Vec::from_raw_parts(ptr as _, len, cap) }
 }
 
 /// Query the number of bytes of an object.
@@ -86,10 +86,31 @@ impl<T: HeapSize> HeapSize for Vec<T> {
     }
 }
 
-impl<A: HeapSize, B: HeapSize> HeapSize for (A, B) {
+impl<L: HeapSize, R: HeapSize> HeapSize for crate::Either<L, R> {
     fn approximate_heap_size(&self) -> usize {
-        self.0.approximate_heap_size() + self.1.approximate_heap_size()
+        match self {
+            crate::Either::Left(left) => left.approximate_heap_size(),
+            crate::Either::Right(right) => right.approximate_heap_size(),
+        }
     }
+}
+
+macro_rules! impl_tuple_heapsize {
+    ( $( ($($pos:tt),+) => ($($name:tt),+) ),+ $(,)? ) => {
+        $(
+            impl<$( $name: HeapSize ),+> HeapSize for ( $( $name ),+ ) {
+                fn approximate_heap_size(&self) -> usize {
+                    0 $( + self.$pos.approximate_heap_size() )+
+                }
+            }
+        )+
+    }
+}
+
+impl_tuple_heapsize! {
+    // HeapSize implementation for tuples, extend on demand.
+    (0, 1) => (A, B),
+    (0, 1, 2) => (A, B, C),
 }
 
 impl<T: HeapSize> HeapSize for Option<T> {

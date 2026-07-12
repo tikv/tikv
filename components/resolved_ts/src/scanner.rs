@@ -15,7 +15,8 @@ use tikv::storage::{
     mvcc::MvccReader,
 };
 use tikv_util::{
-    sys::thread::ThreadBuildWrapper, time::Instant, timer::GLOBAL_TIMER_HANDLE, worker::Scheduler,
+    sys::thread::ThreadBuildWrapper, thread_name_prefix::RESOLVED_TS_SCANNER_THREAD, time::Instant,
+    timer::GLOBAL_TIMER_HANDLE, worker::Scheduler,
 };
 use tokio::{
     runtime::{Builder, Runtime},
@@ -91,7 +92,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
     pub fn new(count: usize, cdc_handle: T) -> Self {
         let workers = Arc::new(
             Builder::new_multi_thread()
-                .thread_name("inc-scan")
+                .thread_name(RESOLVED_TS_SCANNER_THREAD)
                 .worker_threads(count)
                 .with_sys_hooks()
                 .build()
@@ -235,6 +236,17 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
                 DEFAULT_SCAN_BATCH_SIZE,
             )
             .map_err(|e| Error::Other(box_err!("{:?}", e)))?;
-        Ok((locks, has_remaining))
+        Ok((
+            locks
+                .into_iter()
+                .map(|(key, lock)| {
+                    (
+                        key,
+                        lock.left().expect("only put/delete lock should be here"),
+                    )
+                })
+                .collect(),
+            has_remaining,
+        ))
     }
 }

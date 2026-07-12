@@ -1,81 +1,8 @@
 # See the OWNERS docs at https://www.kubernetes.dev/docs/guide/owners/#owners
 # The members of 'sig-community-*' are synced from memberships defined in repository: https://github.com/tikv/community.
-approvers:
-  - 5kbpers
-  - AndreMouche
-  - BusyJay
-  - Connor1996
-  - Little-Wallace
-  - LykxSassinator
-  - MyonKeminta
-  - NingLin-P
-  - SpadeA-Tang
-  - TennyZhuang
-  - YuJuncen
-  - andylokandy
-  - breezewish
-  - brson
-  - bufferflies
-  - cfzjywxk
-  - coocood
-  - crazycs520
-  - disksing
-  - ekexium
-  - gengliqi
-  - glorv
-  - hicqu
-  - hunterlxt
-  - imtbkcat
-  - innerr
-  - iosmanthus
-  - jackysp
-  - kennytm
-  - liuzix
-  - lonng
-  - lysu
-  - marsishandsome
-  - niedhui
-  - nrc
-  - overvenus
-  - pingyu
-  - skyzh
-  - sticnarf
-  - sunxiaoguang
-  - tabokie
-  - tonyxuqqi
-  - v01dstar
-  - yiwu-arbug
-  - you06
-  - youjiali1995
-  - zhangjinpeng87
-  - zhongzc
-  - zhouqiang-cl
-  - zyguan
-reviewers:
-  - 3AceShowHand
-  - 3pointer
-  - CalvinNeo
-  - Fullstop000
-  - HuSharp
-  - Jibbow
-  - JmPotato
-  - Leavrth
-  - Mossaka
-  - MrCroxx
-  - Rustin170506
-  - Xuanwo
-  - ethercflow
-  - fredchenbj
-  - gozssky
-  - haojinming
-  - hbisheng
-  - hhwyt
-  - jayzhan211
-  - lhy1024
-  - longfangsong
-  - lzmhhh123
-  - nolouch
-  - rleungx
-  - tier-cap
-  - wjhuang2016
-  - wshwsh12
+filters:
+  .*:
+    approvers:
+      - sig-community-approvers
+    reviewers:
+      - sig-community-reviewers

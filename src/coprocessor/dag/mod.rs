@@ -42,6 +42,8 @@ where
     is_streaming: bool,
     is_cache_enabled: bool,
     paging_size: Option<u64>,
+    max_keys_read: Option<u64>,
+    paging_size_bytes: Option<u64>,
     quota_limiter: Arc<QuotaLimiter>,
     _phantom: PhantomData<F>,
 }
@@ -62,6 +64,8 @@ where
         is_streaming: bool,
         is_cache_enabled: bool,
         paging_size: Option<u64>,
+        max_keys_read: Option<u64>,
+        paging_size_bytes: Option<u64>,
         quota_limiter: Arc<QuotaLimiter>,
     ) -> Self {
         DagHandlerBuilder {
@@ -75,6 +79,8 @@ where
             is_streaming,
             is_cache_enabled,
             paging_size,
+            max_keys_read,
+            paging_size_bytes,
             quota_limiter,
             _phantom: PhantomData,
         }
@@ -99,6 +105,8 @@ where
             self.batch_row_limit,
             self.is_streaming,
             self.paging_size,
+            self.max_keys_read,
+            self.paging_size_bytes,
             self.quota_limiter,
         )?
         .into_boxed())
@@ -163,6 +171,8 @@ impl BatchDagHandler {
         streaming_batch_limit: usize,
         is_streaming: bool,
         paging_size: Option<u64>,
+        max_keys_read: Option<u64>,
+        paging_size_bytes: Option<u64>,
         quota_limiter: Arc<QuotaLimiter>,
     ) -> Result<Self> {
         let extra_storage_accessor =
@@ -177,6 +187,8 @@ impl BatchDagHandler {
                 streaming_batch_limit,
                 is_streaming,
                 paging_size,
+                max_keys_read,
+                paging_size_bytes,
                 quota_limiter,
             )?,
             data_version,

@@ -1,6 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
-use std::{collections::HashSet, ops::Deref, sync::Arc};
+use std::{collections::HashSet, ops::Deref};
 
+use bytes::Bytes;
 use derive_more::Display;
 use kvproto::brpb::{self, FileType};
 
@@ -17,6 +18,7 @@ pub const META_OUT_REL: &str = "metas";
 #[derive(Debug, Clone)]
 pub struct Input {
     pub id: LogFileId,
+    pub file_real_size: u64,
     pub compression: brpb::CompressionType,
     pub crc64xor: u64,
     pub key_value_size: u64,
@@ -53,15 +55,15 @@ pub struct Subcompaction {
     pub input_min_ts: u64,
     pub compact_from_ts: u64,
     pub compact_to_ts: u64,
-    pub min_key: Arc<[u8]>,
-    pub max_key: Arc<[u8]>,
+    pub min_key: Bytes,
+    pub max_key: Bytes,
     pub epoch_hints: Vec<EpochHint>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EpochHint {
-    pub start_key: Arc<[u8]>,
-    pub end_key: Arc<[u8]>,
+    pub start_key: Bytes,
+    pub end_key: Bytes,
     pub region_epoch: Epoch,
 }
 
@@ -71,6 +73,42 @@ impl Deref for Subcompaction {
 
     fn deref(&self) -> &Self::Target {
         &self.subc_key
+    }
+}
+
+impl Subcompaction {
+    fn merge(&mut self, other: Subcompaction) {
+        let Subcompaction {
+            inputs,
+            size,
+            subc_key,
+            input_max_ts,
+            input_min_ts,
+            compact_from_ts,
+            compact_to_ts,
+            min_key,
+            max_key,
+            epoch_hints,
+        } = other;
+
+        debug_assert_eq!(self.subc_key, subc_key);
+        debug_assert_eq!(self.compact_from_ts, compact_from_ts);
+        debug_assert_eq!(self.compact_to_ts, compact_to_ts);
+
+        self.inputs.extend(inputs);
+        self.size += size;
+        self.input_min_ts = self.input_min_ts.min(input_min_ts);
+        self.input_max_ts = self.input_max_ts.max(input_max_ts);
+        if self.min_key > min_key {
+            self.min_key = min_key;
+        }
+        if self.max_key < max_key {
+            self.max_key = max_key;
+        }
+
+        let mut merged_hints: HashSet<_> = self.epoch_hints.drain(..).collect();
+        merged_hints.extend(epoch_hints);
+        self.epoch_hints = merged_hints.into_iter().collect();
     }
 }
 
@@ -112,8 +150,8 @@ struct UnformedSubcompaction {
     inputs: Vec<Input>,
     min_ts: u64,
     max_ts: u64,
-    min_key: Arc<[u8]>,
-    max_key: Arc<[u8]>,
+    min_key: Bytes,
+    max_key: Bytes,
     epoch_hints: HashSet<EpochHint>,
 }
 
@@ -143,8 +181,8 @@ impl UnformedSubcompaction {
             size: self.size,
             input_min_ts: self.min_ts,
             input_max_ts: self.max_ts,
-            min_key: self.min_key.clone(),
-            max_key: self.max_key.clone(),
+            min_key: self.min_key,
+            max_key: self.max_key,
             compact_from_ts: cfg.compact_from_ts,
             compact_to_ts: cfg.compact_to_ts,
             subc_key: *key,
@@ -186,6 +224,7 @@ impl SubcompactionCollectKey {
 fn to_input(file: &LogFile) -> Input {
     Input {
         id: file.id.clone(),
+        file_real_size: file.file_real_size,
         compression: file.compression,
         crc64xor: file.crc64xor,
         key_value_size: file.hacky_key_value_size(),

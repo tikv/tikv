@@ -21,6 +21,7 @@ use tikv_util::{
     Either,
     config::ReadableDuration,
     slog_panic,
+    thread_name_prefix::{TABLET_BACKGROUND_WORKER_THREAD, TABLET_HIGH_PRIORITY_WORKER_THREAD},
     time::Instant,
     worker::{Runnable, RunnableWithTimer},
     yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
@@ -265,11 +266,11 @@ impl<EK: KvEngine> Runner<EK> {
             waiting_destroy_tasks: HashMap::default(),
             pending_destroy_tasks: Vec::new(),
             high_pri_pool: YatpPoolBuilder::new(DefaultTicker::default())
-                .name_prefix("tablet-high")
+                .name_prefix(TABLET_HIGH_PRIORITY_WORKER_THREAD)
                 .thread_count(0, DEFAULT_HIGH_PRI_POOL_SIZE, DEFAULT_HIGH_PRI_POOL_SIZE)
                 .build_future_pool(),
             low_pri_pool: YatpPoolBuilder::new(DefaultTicker::default())
-                .name_prefix("tablet-bg")
+                .name_prefix(TABLET_BACKGROUND_WORKER_THREAD)
                 .thread_count(0, DEFAULT_LOW_PRI_POOL_SIZE, DEFAULT_LOW_PRI_POOL_SIZE)
                 .build_future_pool(),
         }
@@ -658,8 +659,10 @@ where
     fn on_timeout(&mut self) {
         self.pending_destroy_tasks.retain_mut(|(path, cb)| {
             let r = Self::process_destroy_task(&self.logger, &self.tablet_registry, path);
-            if r && let Some(cb) = cb.take() {
-                cb();
+            if r {
+                if let Some(cb) = cb.take() {
+                    cb();
+                }
             }
             !r
         });

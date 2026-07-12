@@ -42,8 +42,8 @@ pub use self::{
     },
 };
 use crate::storage::{
-    Error as StorageError, Result as StorageResult,
-    mvcc::Error as MvccError,
+    Error as StorageError, ErrorInner as StorageErrorInner, Result as StorageResult,
+    mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     types::{MvccInfo, PessimisticLockResults, PrewriteResult, SecondaryLocksStatus, TxnStatus},
 };
 
@@ -94,6 +94,18 @@ impl ProcessResult {
             ProcessResult::PessimisticLockRes { res: Ok(r) } => {
                 Some(ProcessResult::PessimisticLockRes { res: Ok(r.clone()) })
             }
+            _ => None,
+        }
+    }
+
+    pub fn get_key_lock_info(&self) -> Option<&LockInfo> {
+        match self {
+            ProcessResult::PessimisticLockRes {
+                res:
+                    Err(StorageError(box StorageErrorInner::Txn(Error(box ErrorInner::Mvcc(
+                        MvccError(box MvccErrorInner::KeyIsLocked(lock_info)),
+                    ))))),
+            } => Some(lock_info),
             _ => None,
         }
     }
@@ -257,9 +269,10 @@ impl ErrorCodeExt for Error {
 pub mod tests {
     pub use actions::{
         acquire_pessimistic_lock::tests::{
-            must_err as must_acquire_pessimistic_lock_err,
+            must_acquire_shared_pessimistic_lock, must_err as must_acquire_pessimistic_lock_err,
             must_err_return_value as must_acquire_pessimistic_lock_return_value_err,
-            must_pessimistic_locked, must_succeed as must_acquire_pessimistic_lock,
+            must_err_shared_lock as must_acquire_shared_lock_err, must_pessimistic_locked,
+            must_succeed as must_acquire_pessimistic_lock,
             must_succeed_allow_lock_with_conflict as must_acquire_pessimistic_lock_allow_lock_with_conflict,
             must_succeed_for_large_txn as must_acquire_pessimistic_lock_for_large_txn,
             must_succeed_impl as must_acquire_pessimistic_lock_impl,

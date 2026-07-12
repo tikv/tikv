@@ -165,6 +165,7 @@ raft-log-gc-tick-interval = "12s"
 raft-log-gc-threshold = 12
 raft-log-gc-count-limit = 12
 raft-log-gc-size-limit = "1KB"
+raft-read-index-retry-interval-ticks = 123
 raft-log-reserve-max-ticks = 100
 raft-engine-purge-interval = "20m"
 max-manual-flush-rate = 5.0
@@ -647,6 +648,10 @@ enable-compaction-filter = false
 compaction-filter-skip-version-check = true
 num-threads = 2
 
+[gc.auto-compaction]
+mvcc-read-aware-enabled = true
+mvcc-scan-threshold = 10000
+
 [pessimistic-txn]
 enabled = false                # test backward compatibility
 wait-for-lock-timeout = "10ms"
@@ -674,6 +679,8 @@ advance-ts-interval = "5s"
 scan-lock-pool-size = 1
 memory-quota = "1MB"
 incremental-scan-concurrency = 7
+memory-quota-active-check-interval = "2s"
+memory-quota-exceeded-backoff-duration = "1s"
 
 [split]
 detect-times = 10
@@ -687,3 +694,14 @@ split.split-contained-score = 0.5
 [resource-control]
 enabled = false
 priority-ctl-strategy = "aggressive"
+bg-cpu-throttle-threshold = 60.0
+fg-cpu-throttle-threshold = 70.0
+bg-compaction-pressure-threshold = 70.0
+bg-write-io-ceiling = "100GB"
+bg-write-io-floor = "10MB"
+enable-fair-scheduling = false
+enable-read-admission-control = false
+enable-write-admission-control = false
+historical-usage-window-mins = 15
+baseline-burst-pct = 20.0
+admission-max-delayed-count = 10000

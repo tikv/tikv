@@ -9,7 +9,7 @@ use tidb_query_datatype::{
     expr::{EvalConfig, EvalContext},
     match_template_evaltype,
 };
-use tidb_query_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode};
+use tidb_query_expr::{RpnExpression, RpnExpressionBuilder, RpnExpressionNode, RpnStackNode};
 use tipb::{Expr, FieldType, Selection};
 
 use crate::interface::*;
@@ -19,6 +19,7 @@ pub struct BatchSelectionExecutor<Src: BatchExecutor> {
     src: Src,
 
     conditions: Vec<RpnExpression>,
+    condition_column_ref_counts: Vec<u32>,
 }
 
 // We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we
@@ -38,10 +39,12 @@ impl BatchSelectionExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
 impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
     #[cfg(test)]
     pub fn new_for_test(src: Src, conditions: Vec<RpnExpression>) -> Self {
+        let condition_column_ref_counts = conditions.iter().map(count_column_refs).collect();
         Self {
             context: EvalContext::default(),
             src,
             conditions,
+            condition_column_ref_counts,
         }
     }
 
@@ -52,19 +55,20 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
 
     pub fn new(config: Arc<EvalConfig>, src: Src, conditions_def: Vec<Expr>) -> Result<Self> {
         let mut conditions = Vec::with_capacity(conditions_def.len());
+        let mut condition_column_ref_counts = Vec::with_capacity(conditions_def.len());
         let mut ctx = EvalContext::new(config);
         for def in conditions_def {
-            conditions.push(RpnExpressionBuilder::build_from_expr_tree(
-                def,
-                &mut ctx,
-                src.schema().len(),
-            )?);
+            let expr =
+                RpnExpressionBuilder::build_from_expr_tree(def, &mut ctx, src.schema().len())?;
+            condition_column_ref_counts.push(count_column_refs(&expr));
+            conditions.push(expr);
         }
 
         Ok(Self {
             context: ctx,
             src,
             conditions,
+            condition_column_ref_counts,
         })
     }
 
@@ -83,6 +87,18 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
         while condition_index < self.conditions.len() && !src_result.logical_rows.is_empty() {
             src_logical_rows_copy.clear();
             src_logical_rows_copy.extend_from_slice(&src_result.logical_rows);
+
+            // Selection predicate evaluation cost is dominated by expression evaluation.
+            // Approximate work as rows * (number_of_rpn_nodes + number_of_column_refs),
+            // once per evaluated condition.
+            let rows_u64 = src_logical_rows_copy.len() as u64;
+            let rpn_nodes_u64 = self.conditions[condition_index].len() as u64;
+            let col_refs_u64 = self.condition_column_ref_counts[condition_index] as u64;
+            let weighted_nodes_u64 = rpn_nodes_u64.saturating_add(col_refs_u64);
+            tidb_query_common::metrics::record_executor_work(
+                tidb_query_common::metrics::ExecutorName::batch_selection,
+                rows_u64.saturating_mul(weighted_nodes_u64),
+            );
 
             match self.conditions[condition_index].eval(
                 &mut self.context,
@@ -120,6 +136,14 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
 
         Ok(())
     }
+}
+
+fn count_column_refs(expr: &RpnExpression) -> u32 {
+    expr.iter()
+        .filter(|node| matches!(node, RpnExpressionNode::ColumnRef { .. }))
+        .count()
+        .try_into()
+        .unwrap_or(u32::MAX)
 }
 
 fn update_logical_rows_by_scalar_value(
@@ -213,6 +237,16 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
     #[inline]
     fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
         self.src.collect_exec_stats(dest);
+    }
+
+    #[inline]
+    fn peek_scanned_rows_sum(&self) -> usize {
+        self.src.peek_scanned_rows_sum()
+    }
+
+    #[inline]
+    fn peek_scanned_bytes_sum(&self) -> usize {
+        self.src.peek_scanned_bytes_sum()
     }
 
     #[inline]
@@ -675,5 +709,62 @@ mod tests {
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         r.is_drained.unwrap_err();
+    }
+
+    #[test]
+    fn test_extra_common_handle_keys() {
+        let src = MockExecutor::new(
+            vec![FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()],
+            vec![BatchExecuteResult {
+                physical_columns: LazyBatchColumnVec::with_columns_and_extra_common_handle_keys(
+                    vec![
+                        VectorValue::Int(
+                            vec![Some(10), Some(11), Some(12), Some(13), Some(14), Some(15)].into(),
+                        )
+                        .into(),
+                        VectorValue::Int(
+                            vec![Some(20), Some(21), Some(22), Some(23), Some(24), Some(15)].into(),
+                        )
+                        .into(),
+                    ],
+                    Some(vec![
+                        b"h00".to_vec(),
+                        b"h01".to_vec(),
+                        b"h02".to_vec(),
+                        b"h03".to_vec(),
+                        b"h04".to_vec(),
+                        b"h05".to_vec(),
+                    ]),
+                ),
+                logical_rows: vec![4, 0, 5, 2, 1, 3],
+                warnings: EvalWarnings::default(),
+                is_drained: Ok(BatchExecIsDrain::Drain),
+            }],
+        );
+
+        let mut exec = BatchSelectionExecutor::new_for_test(
+            src,
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(0)
+                    .push_fn_call_for_test(is_even_fn_meta(), 1, FieldTypeTp::LongLong)
+                    .build_for_test(),
+            ],
+        );
+
+        let mut r = block_on(exec.next_batch(1));
+        assert_eq!(r.logical_rows, vec![4, 0, 2]);
+        assert_eq!(
+            r.physical_columns.take_extra_common_handle_keys(),
+            Some(vec![
+                b"h00".to_vec(),
+                b"h01".to_vec(),
+                b"h02".to_vec(),
+                b"h03".to_vec(),
+                b"h04".to_vec(),
+                b"h05".to_vec(),
+            ])
+        );
+        assert_eq!(r.is_drained.unwrap(), BatchExecIsDrain::Drain);
     }
 }

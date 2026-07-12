@@ -135,7 +135,7 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
             multi: cmd_batches,
             old_value_cb: Box::new(get_old_value),
         }) {
-            warn!("cdc schedule task failed"; "error" => ?e);
+            warn!("cdc schedule multi batch task failed"; "error" => ?e);
         }
     }
 
@@ -166,7 +166,7 @@ impl RoleObserver for CdcObserver {
                     err: CdcError::request(store_err.into()),
                 };
                 if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
-                    error!("cdc schedule cdc task failed"; "error" => ?e);
+                    error!("cdc schedule role change task failed"; "error" => ?e);
                 }
             }
         }
@@ -195,7 +195,7 @@ impl RegionChangeObserver for CdcObserver {
                         err: CdcError::request(store_err.into()),
                     };
                     if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
-                        error!("cdc schedule cdc task failed"; "error" => ?e);
+                        error!("cdc schedule deregister task failed"; "error" => ?e);
                     }
                 }
             }
@@ -232,16 +232,16 @@ mod tests {
 
         let mut cb = CmdBatch::new(&observe_info, 0);
         cb.push(&observe_info, 0, Cmd::default());
-        let size = cb.size();
         <CdcObserver as CmdObserver<RocksEngine>>::on_flush_applied_cmd_batch(
             &observer,
             cb.level,
             &mut vec![cb],
             &engine,
         );
-        assert_eq!(memory_quota.in_use(), size);
         match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
             Task::MultiBatch { multi, .. } => {
+                let size: usize = multi.iter().map(|batch| batch.size()).sum();
+                assert_eq!(memory_quota.in_use(), size);
                 assert_eq!(multi.len(), 1);
                 assert_eq!(multi[0].len(), 1);
             }

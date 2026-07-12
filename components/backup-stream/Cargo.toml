@@ -10,7 +10,15 @@ test-engine-kv-rocksdb = ["tikv/test-engine-kv-rocksdb", "engine_test/test-engin
 test-engine-raft-raft-engine = ["tikv/test-engine-raft-raft-engine", "engine_test/test-engine-raft-raft-engine"]
 test-engines-rocksdb = ["tikv/test-engines-rocksdb"]
 failpoints = ["tikv/failpoints", "fail/failpoints"]
+# Enable this if you cannot compile `grpcio` when running test cases in macOS.
+openssl-vendored = [
+  "openssl/vendored",
+  "grpcio/openssl-vendored",
+  "encryption_export/sm4",
+]
 backup-stream-debug = []
+# Forwards FIPS to gcp_v2 via external_storage / encryption_export.
+fips = ["external_storage/fips", "encryption_export/fips"]
 
 [[test]]
 name = "integration"
@@ -85,7 +93,7 @@ grpcio = { workspace = true }
 hex = "0.4"
 protobuf = { version = "2.8", features = ["bytes"] }
 rand = "0.8.0"
-tempdir = "0.3"
+regex = "1"
 tempfile = "3.0"
 test_pd = { workspace = true }
 test_pd_client = { workspace = true }

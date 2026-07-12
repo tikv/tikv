@@ -73,6 +73,16 @@ impl<Src: BatchExecutor> BatchExecutor for BatchFastHashAggregationExecutor<Src>
     }
 
     #[inline]
+    fn peek_scanned_rows_sum(&self) -> usize {
+        self.0.peek_scanned_rows_sum()
+    }
+
+    #[inline]
+    fn peek_scanned_bytes_sum(&self) -> usize {
+        self.0.peek_scanned_bytes_sum()
+    }
+
+    #[inline]
     fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
         self.0.collect_storage_stats(dest);
     }
@@ -357,6 +367,12 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
         };
 
         // 2. Update states according to the group.
+        let input_rows_u64 = input_logical_rows.len() as u64;
+        tidb_query_common::metrics::record_executor_work(
+            tidb_query_common::metrics::ExecutorName::batch_fast_hash_aggr,
+            input_rows_u64,
+        );
+
         HashAggregationHelper::update_each_row_states_by_offset(
             entities,
             &mut input_physical_columns,

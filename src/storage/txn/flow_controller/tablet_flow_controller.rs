@@ -16,7 +16,10 @@ use engine_rocks::FlowInfo;
 use engine_traits::{CfNamesExt, DATA_CFS, FlowControlFactorsExt, TabletRegistry};
 use online_config::{ConfigChange, OnlineConfig};
 use rand::Rng;
-use tikv_util::{config::VersionTrack, sys::thread::StdThreadBuildWrapper, time::Limiter};
+use tikv_util::{
+    config::VersionTrack, sys::thread::StdThreadBuildWrapper,
+    thread_name_prefix::FLOW_CHECKER_THREAD, time::Limiter,
+};
 
 use super::singleton_flow_controller::{
     FlowChecker, FlowControlFactorStore, Msg, RATIO_SCALE_FACTOR, TICK_DURATION,
@@ -134,7 +137,7 @@ impl FlowInfoDispatcher {
         global_discard_ratio: Arc<AtomicU32>,
     ) -> JoinHandle<()> {
         Builder::new()
-            .name(thd_name!("flow-checker"))
+            .name(thd_name!(FLOW_CHECKER_THREAD))
             .spawn_wrapper(move || {
                 let mut deadline = std::time::Instant::now();
                 let engine = TabletFlowFactorStore::new(registry.clone());

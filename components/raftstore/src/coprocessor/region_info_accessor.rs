@@ -18,7 +18,9 @@ use kvproto::metapb::Region;
 use pd_client::RegionStat;
 use raft::StateRole;
 use tikv_util::{
-    box_err, debug, info, warn,
+    box_err, debug, info,
+    thread_name_prefix::REGION_COLLECTOR_WORKER_THREAD,
+    warn,
     worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer, Scheduler, Worker},
 };
 
@@ -737,11 +739,11 @@ impl RegionCollector {
                 // epoch is properly set and an Update message was sent.
                 return;
             }
-            if let RaftStoreEvent::RoleChange { initialized, .. } = &event
-                && !initialized
-            {
-                // Ignore uninitialized peers.
-                return;
+            if let RaftStoreEvent::RoleChange { initialized, .. } = &event {
+                if !initialized {
+                    // Ignore uninitialized peers.
+                    return;
+                }
             }
             if !self.check_region_range(region, true) {
                 debug!(
@@ -876,9 +878,9 @@ impl RegionInfoAccessor {
         mvcc_amplification_threshold: Box<dyn Fn() -> usize + Send>,
     ) -> Self {
         let region_leaders = Arc::new(RwLock::new(HashSet::default()));
-        let worker = WorkerBuilder::new("region-collector-worker").create();
+        let worker = WorkerBuilder::new(REGION_COLLECTOR_WORKER_THREAD).create();
         let scheduler = worker.start_with_timer(
-            "region-collector-worker",
+            REGION_COLLECTOR_WORKER_THREAD,
             RegionCollector::new(region_leaders.clone(), mvcc_amplification_threshold),
         );
         register_region_event_listener(host, scheduler.clone(), region_stats_manager_enabled_cb);
@@ -982,11 +984,11 @@ impl RegionInfoProvider for RegionInfoAccessor {
         self.seek_region(
             key,
             Box::new(move |iter| {
-                if let Some(info) = iter.next()
-                    && info.region.get_start_key() <= key_in_vec.as_slice()
-                {
-                    if let Err(e) = tx.send(info.region.clone()) {
-                        warn!("failed to send find_region_by_key result: {:?}", e);
+                if let Some(info) = iter.next() {
+                    if info.region.get_start_key() <= key_in_vec.as_slice() {
+                        if let Err(e) = tx.send(info.region.clone()) {
+                            warn!("failed to send find_region_by_key result: {:?}", e);
+                        }
                     }
                 }
             }),

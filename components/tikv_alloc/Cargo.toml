@@ -23,7 +23,7 @@ libc = "0.2"
 tempfile = "3.0"
 
 [dependencies.mimalloc]
-version = "0.1.25"
+version = "0.1.39"
 optional = true
 
 [dependencies.snmalloc-rs]
@@ -36,16 +36,17 @@ optional = true
 features = ["bundled"]
 
 [dependencies.tikv-jemalloc-ctl]
-version = "0.5.0"
+version = "0.6.1"
 optional = true
+features = ["stats"]
 
 [dependencies.tikv-jemalloc-sys]
-version = "0.5.0"
+version = "0.6.1"
 optional = true
 features = ["stats"]
 
 [dependencies.tikv-jemallocator]
-version = "0.5.0"
+version = "0.6.1"
 optional = true
 features = ["unprefixed_malloc_on_supported_platforms", "stats"]
 

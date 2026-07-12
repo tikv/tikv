@@ -10,6 +10,7 @@ use prometheus_static_metric::*;
 use rocksdb::{
     DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType, HistogramData,
 };
+use tikv_util::time::get_time;
 
 use crate::{
     RocksStatistics, TITAN_COMPRESSION_FACTOR, TITAN_COMPRESSION_FACTOR_SMOOTHER,
@@ -1062,7 +1063,7 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
         let oldest_snapshot_time =
             db.get_property_int(ROCKSDB_OLDEST_SNAPSHOT_TIME)
                 .map_or(0, |t| {
-                    let now = time::get_time().sec as u64;
+                    let now = get_time().sec as u64;
                     // RocksDB returns 0 if no snapshots.
                     if t > 0 && now > t { now - t } else { 0 }
                 });

@@ -351,51 +351,6 @@ impl TestSuite {
         );
     }
 
-    pub fn must_kv_flush(
-        &mut self,
-        region_id: u64,
-        muts: Vec<Mutation>,
-        pk: Vec<u8>,
-        ts: TimeStamp,
-        generation: u64,
-    ) {
-        self.must_kv_flush_with_source(region_id, muts, pk, ts, generation, 0);
-    }
-
-    pub fn must_kv_flush_with_source(
-        &mut self,
-        region_id: u64,
-        muts: Vec<Mutation>,
-        pk: Vec<u8>,
-        ts: TimeStamp,
-        generation: u64,
-        txn_source: u64,
-    ) {
-        let mut flush_req = FlushRequest::default();
-        let mut context = self.get_context(region_id);
-        context.set_txn_source(txn_source);
-        flush_req.set_context(context);
-        flush_req.set_mutations(muts.into_iter().collect());
-        flush_req.primary_key = pk;
-        flush_req.start_ts = ts.into_inner();
-        flush_req.generation = generation;
-        flush_req.lock_ttl = flush_req.start_ts + 1;
-        let flush_resp = self
-            .get_tikv_client(region_id)
-            .kv_flush(&flush_req)
-            .unwrap();
-        assert!(
-            !flush_resp.has_region_error(),
-            "{:?}",
-            flush_resp.get_region_error()
-        );
-        assert!(
-            flush_resp.errors.is_empty(),
-            "{:?}",
-            flush_resp.get_errors()
-        );
-    }
-
     pub fn must_kv_put(&mut self, region_id: u64, key: Vec<u8>, value: Vec<u8>) {
         let mut rawkv_req = RawPutRequest::default();
         rawkv_req.set_context(self.get_context(region_id));
@@ -410,6 +365,61 @@ impl TestSuite {
             rawkv_resp.get_region_error()
         );
         assert!(rawkv_resp.error.is_empty(), "{:?}", rawkv_resp.get_error());
+    }
+
+    pub fn must_kv_compare_and_swap(
+        &mut self,
+        region_id: u64,
+        key: Vec<u8>,
+        expect: Vec<u8>,
+        value: Vec<u8>,
+    ) {
+        let mut cas_req = RawCasRequest::default();
+        cas_req.set_context(self.get_context(region_id));
+        cas_req.set_key(key);
+        cas_req.set_value(value);
+        cas_req.set_previous_value(expect.clone());
+        cas_req.set_ttl(u64::MAX);
+
+        let cas_resp = self
+            .get_tikv_client(region_id)
+            .raw_compare_and_swap(&cas_req)
+            .unwrap();
+        assert!(
+            !cas_resp.has_region_error(),
+            "{:?}",
+            cas_resp.get_region_error()
+        );
+        assert!(cas_resp.error.is_empty(), "{:?}", cas_resp.get_error());
+        assert!(
+            cas_resp.get_previous_value() == expect,
+            "previous value mismatch"
+        );
+        assert!(cas_resp.get_succeed(), "compare and swap failed");
+    }
+
+    pub fn must_kv_compare_and_delete(&mut self, region_id: u64, key: Vec<u8>, expect: Vec<u8>) {
+        let mut cas_req = RawCasRequest::default();
+        cas_req.set_context(self.get_context(region_id));
+        cas_req.set_key(key);
+        cas_req.set_previous_value(expect.clone());
+        cas_req.set_delete(true);
+
+        let cas_resp = self
+            .get_tikv_client(region_id)
+            .raw_compare_and_swap(&cas_req)
+            .unwrap();
+        assert!(
+            !cas_resp.has_region_error(),
+            "{:?}",
+            cas_resp.get_region_error()
+        );
+        assert!(cas_resp.error.is_empty(), "{:?}", cas_resp.get_error());
+        assert!(
+            cas_resp.get_previous_value() == expect,
+            "previous value mismatch"
+        );
+        assert!(cas_resp.get_succeed(), "compare and delete failed");
     }
 
     pub fn must_kv_commit(

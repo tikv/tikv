@@ -16,7 +16,11 @@ use std::{
     convert::TryFrom,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{Arc, Mutex, atomic::AtomicU64, mpsc},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU32, AtomicU64},
+        mpsc,
+    },
     time::Duration,
 };
 
@@ -99,8 +103,8 @@ use tikv::{
         ReadPool, ReadPoolConfigManager, UPDATE_EWMA_TIME_SLICE_INTERVAL, build_yatp_read_pool,
     },
     server::{
-        CPU_CORES_QUOTA_GAUGE, GRPC_THREAD_PREFIX, KvEngineFactoryBuilder, MEMORY_LIMIT_GAUGE,
-        MultiRaftServer, RaftKv, Server,
+        CPU_CORES_QUOTA_GAUGE, KvEngineFactoryBuilder, MEMORY_LIMIT_GAUGE, MultiRaftServer, RaftKv,
+        Server,
         config::{Config as ServerConfig, ServerConfigManager},
         debug::{Debugger, DebuggerImpl},
         gc_worker::{AutoGcConfig, GcWorker},
@@ -135,6 +139,11 @@ use tikv_util::{
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
     sys::{SysQuota, disk, path_in_diff_mount_point, register_memory_usage_high_water},
     thread_group::GroupProperties,
+    thread_name_prefix::{
+        BACKGROUND_WORKER_THREAD, BACKUP_STREAM_THREAD, CDC_THREAD, CHECK_LEADER_THREAD,
+        DEBUGGER_THREAD, GRPC_SERVER_THREAD, PD_WORKER_THREAD, RESOLVED_TS_WORKER_THREAD,
+        SST_RECOVERY_THREAD, UNIFIED_READ_POOL_THREAD,
+    },
     time::{Instant, Monitor},
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
     yatp_pool::CleanupMethod,
@@ -283,6 +292,7 @@ where
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
+    compaction_pending_bytes_ratio: Arc<AtomicU32>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
     br_snap_recovery_mode: bool, // use for br snapshot recovery
@@ -325,7 +335,7 @@ where
 {
     fn init(mut config: TikvConfig, tx: TikvMpsc::Sender<ServiceEvent>) -> TikvServer<ER, F> {
         tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
-        // It is okay use pd config and security config before `init_config`,
+        // It is okay to use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
         // used during startup process.
         let security_mgr = Arc::new(
@@ -336,7 +346,7 @@ where
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(config.server.grpc_concurrency)
-                .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
+                .name_prefix(thd_name!(GRPC_SERVER_THREAD))
                 .after_start(move || {
                     tikv_util::thread_group::set_properties(props.clone());
 
@@ -386,10 +396,11 @@ where
         let store_path = Path::new(&config.storage.data_dir).to_owned();
 
         let thread_count = config.server.background_thread_count;
-        let background_worker = WorkerBuilder::new("background")
+        let background_worker = WorkerBuilder::new(BACKGROUND_WORKER_THREAD)
             .thread_count(thread_count)
             .create();
 
+        let compaction_pending_bytes_ratio = Arc::new(AtomicU32::new(0));
         let resource_manager = if config.resource_control.enabled {
             let mgr = Arc::new(ResourceGroupManager::new(config.resource_control.clone()));
             let io_bandwidth = config.storage.io_rate_limit.max_bytes_per_sec.0;
@@ -398,6 +409,7 @@ where
                 pd_client.clone(),
                 &background_worker,
                 io_bandwidth,
+                compaction_pending_bytes_ratio.clone(),
             );
             Some(mgr)
         } else {
@@ -436,6 +448,7 @@ where
             config.quota.background_cpu_time,
             config.quota.background_write_bandwidth,
             config.quota.background_read_bandwidth,
+            config.quota.background_iops_limit,
             config.quota.max_delay_duration,
             config.quota.enable_auto_tune,
         ));
@@ -458,7 +471,9 @@ where
 
         // Run check leader in a dedicate thread, because it is time sensitive
         // and crucial to TiCDC replication lag.
-        let check_leader_worker = WorkerBuilder::new("check-leader").thread_count(1).create();
+        let check_leader_worker = WorkerBuilder::new(CHECK_LEADER_THREAD)
+            .thread_count(1)
+            .create();
 
         TikvServer {
             core: TikvServerCore {
@@ -491,6 +506,7 @@ where
             sst_worker: None,
             quota_limiter,
             resource_manager,
+            compaction_pending_bytes_ratio,
             causal_ts_provider,
             tablet_registry: None,
             br_snap_recovery_mode: is_recovering_marked,
@@ -575,7 +591,7 @@ where
         let cdc_memory_quota = Arc::new(MemoryQuota::new(
             self.core.config.cdc.sink_memory_quota.0 as _,
         ));
-        let mut cdc_worker = Box::new(LazyWorker::new("cdc"));
+        let mut cdc_worker = Box::new(LazyWorker::new(CDC_THREAD));
         let cdc_scheduler = cdc_worker.scheduler();
         let txn_extra_scheduler =
             cdc::CdcTxnExtraScheduler::new(cdc_scheduler.clone(), cdc_memory_quota.clone());
@@ -595,7 +611,7 @@ where
 
         let engines = self.engines.as_ref().unwrap();
 
-        let pd_worker = LazyWorker::new("pd-worker");
+        let pd_worker = LazyWorker::new(PD_WORKER_THREAD);
         let pd_sender = pd_worker.scheduler();
 
         if let Some(sst_worker) = &mut self.sst_worker {
@@ -616,12 +632,13 @@ where
             let resource_ctl = self
                 .resource_manager
                 .as_ref()
-                .map(|m| m.derive_controller("unified-read-pool".into(), true));
+                .map(|m| m.derive_controller(UNIFIED_READ_POOL_THREAD.into(), true));
             Some(build_yatp_read_pool(
                 &self.core.config.readpool.unified,
                 pd_sender.clone(),
                 engines.engine.clone(),
                 resource_ctl,
+                self.resource_manager.clone(),
                 CleanupMethod::Remote(self.core.background_worker.remote()),
                 true,
             ))
@@ -642,7 +659,7 @@ where
         let props = tikv_util::thread_group::current_properties();
         let debug_thread_pool = Arc::new(
             Builder::new_multi_thread()
-                .thread_name(thd_name!("debugger"))
+                .thread_name(thd_name!(DEBUGGER_THREAD))
                 .enable_time()
                 .worker_threads(1)
                 .with_sys_and_custom_hooks(
@@ -659,6 +676,10 @@ where
         let (recorder_notifier, collector_reg_handle, resource_tag_factory, recorder_worker) =
             resource_metering::init_recorder(
                 self.core.config.resource_metering.precision.as_millis(),
+                self.core
+                    .config
+                    .resource_metering
+                    .enable_network_io_collection,
             );
         self.core.to_stop.push(recorder_worker);
         let (reporter_notifier, data_sink_reg_handle, reporter_worker) =
@@ -798,8 +819,10 @@ where
                     unified_read_pool.as_ref().unwrap().handle(),
                     unified_read_pool_scale_notifier,
                     &self.core.background_worker,
+                    self.core.config.readpool.unified.min_thread_count,
                     self.core.config.readpool.unified.max_thread_count,
                     self.core.config.readpool.unified.auto_adjust_pool_size,
+                    self.core.config.readpool.unified.cpu_threshold,
                 )),
             );
             unified_read_pool_scale_receiver = Some(rx);
@@ -815,10 +838,14 @@ where
         );
 
         // Create resolved ts worker
+        let rts_memory_quota = Arc::new(MemoryQuota::new(
+            self.core.config.resolved_ts.memory_quota.0 as usize,
+        ));
         let rts_worker = if self.core.config.resolved_ts.enable {
-            let worker = Box::new(LazyWorker::new("resolved-ts"));
+            let worker = Box::new(LazyWorker::new(RESOLVED_TS_WORKER_THREAD));
             // Register the resolved ts observer
-            let resolved_ts_ob = resolved_ts::Observer::new(worker.scheduler());
+            let resolved_ts_ob =
+                resolved_ts::Observer::new(worker.scheduler(), rts_memory_quota.clone());
             resolved_ts_ob.register_to(self.coprocessor_host.as_mut().unwrap());
             // Register config manager for resolved ts worker
             cfg_controller.register(
@@ -838,7 +865,7 @@ where
         );
         let check_leader_scheduler = self
             .check_leader_worker
-            .start("check-leader", check_leader_runner);
+            .start(CHECK_LEADER_THREAD, check_leader_runner);
 
         let server_config = Arc::new(VersionTrack::new(self.core.config.server.clone()));
 
@@ -930,7 +957,7 @@ where
         // Start backup stream
         let backup_stream_scheduler = if self.core.config.log_backup.enable {
             // Create backup stream.
-            let mut backup_stream_worker = Box::new(LazyWorker::new("backup-stream"));
+            let mut backup_stream_worker = Box::new(LazyWorker::new(BACKUP_STREAM_THREAD));
             let backup_stream_scheduler = backup_stream_worker.scheduler();
 
             // Register backup-stream observer.
@@ -1000,6 +1027,7 @@ where
             false,
         )
         .unwrap();
+        importer.set_backend_config(backup::storage_backend_config(&self.core.config.backup));
         for (cf_name, compression_type) in &[
             (
                 CF_DEFAULT,
@@ -1160,6 +1188,7 @@ where
                 server.env(),
                 self.security_mgr.clone(),
                 storage.get_scheduler().get_txn_status_cache(),
+                rts_memory_quota,
             );
             self.resolved_ts_scheduler = Some(rts_worker.scheduler());
             rts_worker.start_with_timer(rts_endpoint);
@@ -1561,7 +1590,7 @@ where
             .background_error_recovery_window
             .is_zero()
         {
-            let sst_worker = Box::new(LazyWorker::new("sst-recovery"));
+            let sst_worker = Box::new(LazyWorker::new(SST_RECOVERY_THREAD));
             let scheduler = sst_worker.scheduler();
             self.sst_worker = Some(sst_worker);
             Some(scheduler)
@@ -1722,8 +1751,8 @@ where
                 break;
             }
 
-            info!("Waiting for leader eviction"; 
-                  "leaders_count" => leaders_count, 
+            info!("Waiting for leader eviction";
+                  "leaders_count" => leaders_count,
                   "elapsed" => ?now.saturating_elapsed());
             std::thread::sleep(check_interval);
         }
@@ -1876,6 +1905,7 @@ where
             reg,
             engines.raft.as_rocks_engine().cloned(),
             180, // max_samples_to_preserve
+            self.compaction_pending_bytes_ratio.clone(),
         ));
 
         (engines, engines_info, ime_engine)
@@ -1913,7 +1943,10 @@ fn pre_start() {
 
 #[cfg(test)]
 mod test {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{
+        collections::HashMap,
+        sync::{Arc, atomic::AtomicU32},
+    };
 
     use engine_rocks::raw::Env;
     use engine_traits::{
@@ -1978,7 +2011,13 @@ mod test {
 
         assert!(old_pending_compaction_bytes > new_pending_compaction_bytes);
 
-        let engines_info = Arc::new(EnginesResourceInfo::new(&config, reg, None, 10));
+        let engines_info = Arc::new(EnginesResourceInfo::new(
+            &config,
+            reg,
+            None,
+            10,
+            Arc::new(AtomicU32::new(0)),
+        ));
 
         let mut cached_latest_tablets = HashMap::default();
         engines_info.update(Instant::now(), &mut cached_latest_tablets);

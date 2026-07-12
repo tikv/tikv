@@ -47,6 +47,7 @@ use tikv_util::{
     mpsc::bounded,
     slow_log,
     sys::thread::ThreadBuildWrapper,
+    thread_name_prefix::{CDC_WORKER_THREAD, TSO_THREAD},
     time::{Instant, Limiter, SlowTimer},
     timer::SteadyTimer,
     warn,
@@ -65,7 +66,8 @@ use crate::{
     initializer::Initializer,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
-    service::{Conn, ConnId, FeatureGate, RequestId, validate_kv_api},
+    service::{Conn, FeatureGate, RequestId, validate_kv_api},
+    types::ConnId,
 };
 
 const FEATURE_RESOLVED_TS_STORE: Feature = Feature::require(5, 0, 0);
@@ -136,7 +138,7 @@ impl fmt::Debug for Deregister {
                 .field("request_id", request_id)
                 .field("region_id", region_id)
                 .field("downstream_id", downstream_id)
-                .field("err", err)
+                .field("error", err)
                 .finish(),
             Deregister::Delegate {
                 ref region_id,
@@ -146,7 +148,7 @@ impl fmt::Debug for Deregister {
                 .field("deregister", &"delegate")
                 .field("region_id", region_id)
                 .field("observe_id", observe_id)
-                .field("err", err)
+                .field("error", err)
                 .finish(),
         }
     }
@@ -196,7 +198,9 @@ pub enum Task {
     // The result of ChangeCmd should be returned from CDC Endpoint to ensure
     // the downstream switches to Normal after the previous commands was sunk.
     InitDownstream {
+        conn_id: ConnId,
         region_id: u64,
+        request_id: RequestId,
         observe_id: ObserveId,
         downstream_id: DownstreamId,
         downstream_state: Arc<AtomicCell<DownstreamState>>,
@@ -273,15 +277,19 @@ impl fmt::Debug for Task {
                 de.field("event_time", &event_time).finish()
             }
             Task::InitDownstream {
+                ref conn_id,
                 ref region_id,
+                ref request_id,
                 ref observe_id,
                 ref downstream_id,
                 ..
             } => de
                 .field("type", &"init_downstream")
+                .field("conn_id", &conn_id)
                 .field("region_id", &region_id)
+                .field("request_id", &request_id)
+                .field("downstream_id", &downstream_id)
                 .field("observe_id", &observe_id)
-                .field("downstream", &downstream_id)
                 .finish(),
             Task::TxnExtra(_) => de.field("type", &"txn_extra").finish(),
             Task::Validate(validate) => match validate {
@@ -529,13 +537,13 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
     ) -> Endpoint<T, E, S> {
         let workers = Builder::new_multi_thread()
-            .thread_name("cdcwkr")
+            .thread_name(CDC_WORKER_THREAD)
             .worker_threads(config.incremental_scan_threads)
             .with_sys_hooks()
             .build()
             .unwrap();
         let tso_worker = Builder::new_multi_thread()
-            .thread_name("tso")
+            .thread_name(TSO_THREAD)
             .worker_threads(config.tso_worker_threads)
             .enable_time()
             .with_sys_hooks()
@@ -718,8 +726,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     conn.iter_downstreams(|_, region_id, downstream_id, _| {
                         self.deregister_downstream(region_id, downstream_id, None);
                     });
-                } else {
-                    info!("cdc connection already deregistered"; "conn_id" => ?conn_id);
+                    CDC_CONNECTION_COUNT.dec();
+                    info!("cdc connection deregistered"; "conn_id" => ?conn_id);
                 }
             }
             Deregister::Request {
@@ -731,9 +739,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                         let err = Some(Error::Other("region not found".into()));
                         self.deregister_downstream(region_id, downstream, err);
                     }
-                } else {
-                    info!("cdc connection already deregistered for request deregister"; 
-                    "request_id" => ?request_id, "conn_id" => ?conn_id);
                 }
             }
             Deregister::Region {
@@ -746,9 +751,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                         let err = Some(Error::Other("region not found".into()));
                         self.deregister_downstream(region_id, downstream, err);
                     }
-                } else {
-                    info!("cdc connection already deregistered for region deregister";
-                      "request_id" => ?request_id, "region_id" => region_id, "conn_id" => ?conn_id);
                 }
             }
             Deregister::Downstream {
@@ -815,10 +817,10 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             Some(conn) => conn,
             None => {
                 info!("cdc register region on an deregistered connection, ignore";
+                    "downstream_id" => ?downstream_id,
+                    "request_id" => ?request_id,
                     "region_id" => region_id,
-                    "conn_id" => ?conn_id,
-                    "req_id" => ?request_id,
-                    "downstream_id" => ?downstream_id);
+                    "conn_id" => ?conn_id);
                 return;
             }
         };
@@ -857,11 +859,11 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         });
         if scan_task_count >= self.config.incremental_scan_concurrency_limit as isize {
             debug!("cdc rejects registration, too many scan tasks";
+                "incremental_scan_concurrency_limit" => self.config.incremental_scan_concurrency_limit,
+                "scan_task_count" => scan_task_count,
+                "request_id" => ?request_id,
                 "region_id" => region_id,
                 "conn_id" => ?conn_id,
-                "req_id" => ?request_id,
-                "scan_task_count" => scan_task_count,
-                "incremental_scan_concurrency_limit" => self.config.incremental_scan_concurrency_limit,
             );
             // To avoid OOM (e.g., https://github.com/tikv/tikv/issues/16035),
             // TiKV needs to reject and return error immediately.
@@ -892,10 +894,10 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             err_event.set_duplicate_request(err);
             let _ = downstream.sink_error_event(region_id, err_event);
             error!("cdc duplicate register";
+                "downstream_id" => ?downstream_id,
+                "request_id" => ?request_id,
                 "region_id" => region_id,
-                "conn_id" => ?conn_id,
-                "req_id" => ?request_id,
-                "downstream_id" => ?downstream_id);
+                "conn_id" => ?conn_id);
             return;
         }
 
@@ -914,11 +916,11 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
         let observe_id = delegate.handle.id;
         info!("cdc register region";
-            "region_id" => region_id,
-            "conn_id" => ?conn.get_id(),
-            "req_id" => ?request_id,
             "observe_id" => ?observe_id,
-            "downstream_id" => ?downstream_id);
+            "downstream_id" => ?downstream_id,
+            "request_id" => ?request_id,
+            "region_id" => region_id,
+            "conn_id" => ?conn_id);
 
         let observed_range = downstream.observed_range.clone();
         let downstream_state = downstream.get_state();
@@ -1186,7 +1188,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     Ok(_) | Err(ScheduleError::Stopped(_)) => (),
                     // Must schedule `MinTS` event otherwise resolved ts can not
                     // advance normally.
-                    Err(err) => panic!("failed to schedule min ts event, error: {:?}", err),
+                    Err(err) => panic!("cdc failed to schedule min ts event, error: {:?}", err),
                 }
             }
         };
@@ -1194,7 +1196,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
     }
 
     fn on_open_conn(&mut self, conn: Conn) {
-        self.connections.insert(conn.get_id(), conn);
+        if self.connections.insert(conn.get_id(), conn).is_none() {
+            CDC_CONNECTION_COUNT.inc();
+        }
     }
 
     fn on_set_conn_version(
@@ -1249,7 +1253,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 event_time,
             } => self.register_min_ts_event(leader_resolver, event_time),
             Task::InitDownstream {
+                conn_id,
                 region_id,
+                request_id,
                 observe_id,
                 downstream_id,
                 downstream_state,
@@ -1268,22 +1274,28 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 }
                 if let Err(e) = sink.unbounded_send(incremental_scan_barrier, true) {
                     warn!("cdc failed to schedule barrier for delta before delta scan";
-                        "region_id" => region_id,
+                        "error" => ?e,
                         "observe_id" => ?observe_id,
                         "downstream_id" => ?downstream_id,
-                        "error" => ?e);
+                        "request_id" => ?request_id,
+                        "region_id" => region_id,
+                        "conn_id" => ?conn_id);
                     return;
                 }
                 if on_init_downstream(&downstream_state) {
                     info!("cdc downstream starts to initialize";
-                        "region_id" => region_id,
                         "observe_id" => ?observe_id,
-                        "downstream_id" => ?downstream_id);
+                        "downstream_id" => ?downstream_id,
+                        "request_id" => ?request_id,
+                        "region_id" => region_id,
+                        "conn_id" => ?conn_id);
                 } else {
                     warn!("cdc downstream fails to initialize: canceled";
-                        "region_id" => region_id,
                         "observe_id" => ?observe_id,
-                        "downstream_id" => ?downstream_id);
+                        "downstream_id" => ?downstream_id,
+                        "request_id" => ?request_id,
+                        "region_id" => region_id,
+                        "conn_id" => ?conn_id);
                 }
                 cb();
             }
@@ -1372,11 +1384,12 @@ impl TxnExtraScheduler for CdcTxnExtraScheduler {
         if let Err(e) = self.memory_quota.alloc(size) {
             CDC_DROP_TXN_EXTRA_TASKS_COUNT.inc();
             debug!("cdc schedule txn extra failed on alloc memory quota";
-                "in_use" => self.memory_quota.in_use(), "err" => ?e);
+                "error" => ?e,
+                "in_use" => self.memory_quota.in_use());
             return;
         }
         if let Err(e) = self.scheduler.schedule(Task::TxnExtra(txn_extra)) {
-            error!("cdc schedule txn extra failed"; "err" => ?e);
+            error!("cdc schedule txn extra failed"; "error" => ?e);
         }
     }
 }

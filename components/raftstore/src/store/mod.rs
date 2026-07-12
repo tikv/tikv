@@ -19,6 +19,8 @@ pub mod util;
 mod async_io;
 mod bootstrap;
 mod compaction_guard;
+mod disk_probe;
+mod fail_fast;
 mod hibernate_state;
 mod peer_storage;
 mod region_snapshot;
@@ -47,6 +49,7 @@ pub use self::{
     compaction_guard::{CompactionGuardGeneratorFactory, ForcePartitionRangeManager},
     config::Config,
     entry_storage::{EntryStorage, MAX_INIT_ENTRY_COUNT, RaftlogFetchResult},
+    fail_fast::FailFastMonitor,
     fsm::{DestroyPeerJob, RaftRouter, check_sst_for_ingestion},
     hibernate_state::{GroupState, HibernateState},
     memory::*,
@@ -94,7 +97,8 @@ pub use self::{
         LocalReaderCore, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT, PdStatsMonitor, PdTask,
         REGION_CPU_OVERLOAD_THRESHOLD_RATIO, ReadDelegate, ReadExecutor, ReadExecutorProvider,
         ReadProgress, ReadStats, RefreshConfigTask, RegionTask, SnapGenTask, SplitCheckRunner,
-        SplitCheckTask, SplitConfig, SplitConfigManager, SplitInfo, StoreMetaDelegate,
-        StoreStatsReporter, TrackVer, WriteStats, WriterContoller, metrics as worker_metrics,
+        SplitCheckTask, SplitConfig, SplitConfigManager, SplitInfo, SplitValidator,
+        StoreMetaDelegate, StoreStatsReporter, TrackVer, WriteStats, WriterContoller,
+        metrics as worker_metrics,
     },
 };

@@ -22,6 +22,8 @@ use time::Duration as TimeDuration;
 use super::worker::{RaftStoreBatchComponent, RefreshConfigTask};
 use crate::{Result, coprocessor::config::RAFTSTORE_V2_SPLIT_SIZE};
 
+const DISK_HANG_TIMEOUT_MIN: ReadableDuration = ReadableDuration::secs(30);
+
 lazy_static! {
     pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec!(
         "tikv_config_raftstore",
@@ -90,6 +92,8 @@ pub struct Config {
     /// The maximum raft log numbers that applied_index can be ahead of
     /// persisted_index.
     pub max_apply_unpersisted_log_limit: u64,
+    /// Number of Raft ticks between follower read index request retries.
+    pub raft_read_index_retry_interval_ticks: usize,
     // follower will reject this follower request to avoid falling behind leader too far,
     // when the read index is ahead of the sum between the applied index and
     // follower_read_max_log_gap,
@@ -102,6 +106,13 @@ pub struct Config {
     pub raft_log_reserve_max_ticks: usize,
     // Old logs in Raft engine needs to be purged peridically.
     pub raft_engine_purge_interval: ReadableDuration,
+    /// If set, TiKV exits when a disk probe cannot complete for this long.
+    ///
+    /// This applies to both raft and kv disks (depending on whether they are
+    /// deployed on different mount points). The default is 1 minute. Set it
+    /// to `0s` to disable fail-fast disk hang detection explicitly. Any
+    /// non-zero value must be at least 30 seconds.
+    pub disk_hang_timeout: Option<ReadableDuration>,
     #[doc(hidden)]
     #[online_config(hidden)]
     pub max_manual_flush_rate: f64,
@@ -364,6 +375,15 @@ pub struct Config {
     #[doc(hidden)]
     pub raft_write_wait_duration: ReadableDuration,
 
+    /// Whether to enable adaptive adjustment of the raft write wait duration.
+    #[doc(hidden)]
+    pub adaptive_batch_enabled: bool,
+
+    /// QPS threshold above which the system is considered high-concurrency.
+    /// The adaptive algorithm grows wait_duration more aggressively above this.
+    #[doc(hidden)]
+    pub adaptive_high_qps_threshold: u64,
+
     pub waterfall_metrics: bool,
 
     pub io_reschedule_concurrent_max_count: usize,
@@ -531,9 +551,11 @@ impl Default for Config {
             raft_log_gc_count_limit: None,
             raft_log_gc_size_limit: None,
             max_apply_unpersisted_log_limit: 1024,
+            raft_read_index_retry_interval_ticks: 4,
             follower_read_max_log_gap: 100,
             raft_log_reserve_max_ticks: 6,
             raft_engine_purge_interval: ReadableDuration::secs(10),
+            disk_hang_timeout: Some(ReadableDuration::minutes(1)),
             max_manual_flush_rate: 3.0,
             raft_entry_cache_life_time: ReadableDuration::secs(30),
             raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
@@ -603,6 +625,8 @@ impl Default for Config {
             raft_write_size_limit: ReadableSize::mb(1),
             raft_write_batch_size_hint: ReadableSize::kb(8),
             raft_write_wait_duration: ReadableDuration::micros(20),
+            adaptive_batch_enabled: false,
+            adaptive_high_qps_threshold: 40_000,
             waterfall_metrics: true,
             io_reschedule_concurrent_max_count: 4,
             io_reschedule_hotpot_duration: ReadableDuration::secs(5),
@@ -681,11 +705,11 @@ impl Config {
     }
 
     pub fn raft_store_max_leader_lease(&self) -> TimeDuration {
-        TimeDuration::from_std(self.raft_store_max_leader_lease.0).unwrap()
+        TimeDuration::try_from(self.raft_store_max_leader_lease.0).unwrap()
     }
 
     pub fn raft_base_tick_interval(&self) -> TimeDuration {
-        TimeDuration::from_std(self.raft_base_tick_interval.0).unwrap()
+        TimeDuration::try_from(self.raft_base_tick_interval.0).unwrap()
     }
 
     pub fn raft_heartbeat_interval(&self) -> Duration {
@@ -693,11 +717,11 @@ impl Config {
     }
 
     pub fn check_leader_lease_interval(&self) -> TimeDuration {
-        TimeDuration::from_std(self.check_leader_lease_interval.0).unwrap()
+        TimeDuration::try_from(self.check_leader_lease_interval.0).unwrap()
     }
 
     pub fn renew_leader_lease_advance_duration(&self) -> TimeDuration {
-        TimeDuration::from_std(self.renew_leader_lease_advance_duration.0).unwrap()
+        TimeDuration::try_from(self.renew_leader_lease_advance_duration.0).unwrap()
     }
 
     pub fn raft_log_gc_count_limit(&self) -> u64 {
@@ -863,6 +887,15 @@ impl Config {
             return Err(box_err!("raftstore.merge-check-tick-interval can't be 0."));
         }
 
+        if let Some(timeout) = self.disk_hang_timeout {
+            if !timeout.is_zero() && timeout < DISK_HANG_TIMEOUT_MIN {
+                return Err(box_err!(
+                    "raftstore.disk-hang-timeout must be at least {} ms",
+                    DISK_HANG_TIMEOUT_MIN.as_millis()
+                ));
+            }
+        }
+
         let stale_state_check = self.peer_stale_state_check_interval.as_millis();
         if stale_state_check < election_timeout * 2 {
             return Err(box_err!(
@@ -911,6 +944,12 @@ impl Config {
             return Err(box_err!(
                 "raft-write-wait-duration should be less than 1ms, current value is {}ms",
                 self.raft_write_wait_duration.as_millis()
+            ));
+        }
+
+        if self.adaptive_high_qps_threshold == 0 {
+            return Err(box_err!(
+                "adaptive-high-qps-threshold must be greater than 0"
             ));
         }
 
@@ -1116,6 +1155,9 @@ impl Config {
             .with_label_values(&["max_apply_unpersisted_log_limit"])
             .set(self.max_apply_unpersisted_log_limit as f64);
         CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["raft_read_index_retry_interval_ticks"])
+            .set(self.raft_read_index_retry_interval_ticks as f64);
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_reserve_max_ticks"])
             .set(self.raft_log_reserve_max_ticks as f64);
         CONFIG_RAFTSTORE_GAUGE
@@ -1300,6 +1342,12 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_write_wait_duration"])
             .set(self.raft_write_wait_duration.as_micros() as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["adaptive_batch_enabled"])
+            .set((self.adaptive_batch_enabled as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["adaptive_high_qps_threshold"])
+            .set(self.adaptive_high_qps_threshold as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["waterfall_metrics"])
             .set((self.waterfall_metrics as i32).into());
@@ -1539,6 +1587,30 @@ mod tests {
         cfg.optimize_for(false);
         cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
+
+        cfg = Config::new();
+        cfg.disk_hang_timeout = Some(ReadableDuration::millis(999));
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap_err();
+
+        cfg = Config::new();
+        cfg.disk_hang_timeout = Some(ReadableDuration::secs(0));
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap();
+
+        cfg = Config::new();
+        cfg.disk_hang_timeout = Some(ReadableDuration::secs(29));
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap_err();
+
+        cfg = Config::new();
+        cfg.disk_hang_timeout = Some(ReadableDuration::secs(30));
+        cfg.optimize_for(false);
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap();
 
         cfg = Config::new();
         cfg.raft_base_tick_interval = ReadableDuration::secs(1);

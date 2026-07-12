@@ -42,7 +42,9 @@ use tikv::{
         IoRateLimitConfig, MaxTsConfig,
     },
 };
-use tikv_util::config::{LogFormat, ReadableDuration, ReadableSchedule, ReadableSize};
+use tikv_util::config::{
+    LogFormat, ReadableDuration, ReadableSchedule, ReadableSize, ReadableSizeOrPercent,
+};
 
 mod dynamic;
 mod graceful_shutdown_config;
@@ -80,7 +82,7 @@ fn test_serde_custom_tikv_config() {
     value.slow_log_file = "slow_foo".to_owned();
     value.slow_log_threshold = ReadableDuration::secs(1);
     value.abort_on_panic = true;
-    value.memory_usage_limit = Some(ReadableSize::gb(10));
+    value.memory_usage_limit = Some(ReadableSizeOrPercent::gb(10));
     value.memory_usage_high_water = 0.65;
     value.memory.enable_heap_profiling = false;
     value.memory.profiling_sample_per_bytes = ReadableSize::mb(1);
@@ -141,6 +143,7 @@ fn test_serde_custom_tikv_config() {
             stack_size: ReadableSize::mb(20),
             max_tasks_per_worker: 2200,
             auto_adjust_pool_size: false,
+            cpu_threshold: 0.0,
         },
         storage: StorageReadPoolConfig {
             use_unified_pool: Some(true),
@@ -194,6 +197,7 @@ fn test_serde_custom_tikv_config() {
         raft_log_gc_threshold: 12,
         raft_log_gc_count_limit: Some(12),
         raft_log_gc_size_limit: Some(ReadableSize::kb(1)),
+        raft_read_index_retry_interval_ticks: 123,
         follower_read_max_log_gap: 100,
         raft_log_reserve_max_ticks: 100,
         raft_engine_purge_interval: ReadableDuration::minutes(20),
@@ -754,7 +758,7 @@ fn test_serde_custom_tikv_config() {
         },
         block_cache: BlockCacheConfig {
             shared: None,
-            capacity: Some(ReadableSize::gb(40)),
+            capacity: Some(ReadableSizeOrPercent::gb(40)),
             num_shard_bits: 10,
             strict_capacity_limit: true,
             high_pri_pool_ratio: 0.8,
@@ -867,6 +871,9 @@ fn test_serde_custom_tikv_config() {
             redundant_rows_threshold: 50000,
             redundant_rows_percent_threshold: 20,
             bottommost_level_force: false,
+            mvcc_read_aware_enabled: true,
+            mvcc_scan_threshold: 10000,
+            mvcc_read_weight: 3.0,
         },
     };
     value.pessimistic_txn = PessimisticTxnConfig {
@@ -897,6 +904,8 @@ fn test_serde_custom_tikv_config() {
         scan_lock_pool_size: 1,
         memory_quota: ReadableSize::mb(1),
         incremental_scan_concurrency: 7,
+        memory_quota_active_check_interval: ReadableDuration::secs(2),
+        memory_quota_exceeded_backoff_duration: ReadableDuration::secs(1),
     };
     value.causal_ts = CausalTsConfig {
         renew_interval: ReadableDuration::millis(100),
@@ -910,6 +919,17 @@ fn test_serde_custom_tikv_config() {
     value.resource_control = ResourceControlConfig {
         enabled: false,
         priority_ctl_strategy: PriorityCtlStrategy::Aggressive,
+        bg_cpu_throttle_threshold: 60.0,
+        fg_cpu_throttle_threshold: 70.0,
+        bg_compaction_pressure_threshold: 70.0,
+        bg_write_io_ceiling: ReadableSize::gb(100),
+        bg_write_io_floor: ReadableSize::mb(10),
+        enable_fair_scheduling: false,
+        enable_read_admission_control: false,
+        enable_write_admission_control: false,
+        historical_usage_window_mins: 15,
+        baseline_burst_pct: 20.0,
+        admission_max_delayed_count: 10_000,
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");
@@ -942,6 +962,13 @@ fn test_readpool_default_config() {
     let mut expected = TikvConfig::default();
     expected.readpool.unified.max_thread_count = 1;
     assert_eq!(cfg, expected);
+}
+
+#[test]
+fn test_compaction_readahead_default_config() {
+    let cfg = TikvConfig::default();
+    assert_eq!(cfg.rocksdb.compaction_readahead_size, ReadableSize::mb(2));
+    assert_eq!(cfg.raftdb.compaction_readahead_size, ReadableSize::mb(2));
 }
 
 #[test]

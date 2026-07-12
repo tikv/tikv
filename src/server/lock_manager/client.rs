@@ -11,6 +11,7 @@ use futures::{
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, WriteFlags};
 use kvproto::deadlock::*;
 use security::SecurityManager;
+use tikv_util::thread_name_prefix::DEADLOCK_CLIENT_THREAD;
 
 use super::{Error, Result};
 
@@ -19,7 +20,6 @@ type DeadlockFuture<T> = BoxFuture<'static, Result<T>>;
 pub type Callback = Box<dyn Fn(DeadlockResponse) + Send>;
 
 const CQ_COUNT: usize = 1;
-const CLIENT_PREFIX: &str = "deadlock";
 
 /// Builds the `Environment` of deadlock clients. All clients should use the
 /// same instance.
@@ -27,7 +27,7 @@ pub fn env() -> Arc<Environment> {
     Arc::new(
         EnvBuilder::new()
             .cq_count(CQ_COUNT)
-            .name_prefix(thd_name!(CLIENT_PREFIX))
+            .name_prefix(thd_name!(DEADLOCK_CLIENT_THREAD))
             .build(),
     )
 }

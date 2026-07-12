@@ -21,6 +21,8 @@ const STAT_SEEK_TOMBSTONE: &str = "seek_tombstone";
 const STAT_SEEK_FOR_PREV_TOMBSTONE: &str = "seek_for_prev_tombstone";
 /// Statistics of raw value tombstone by RawKV TTL expired or logical deleted.
 const STAT_RAW_VALUE_TOMBSTONE: &str = "raw_value_tombstone";
+const STAT_HIT_MISSING_RANGE: &str = "hit_missing_range";
+const STAT_CACHE_MISSING_RANGE: &str = "cache_missing_range";
 
 thread_local! {
     pub static RAW_VALUE_TOMBSTONE : RefCell<usize> = const{ RefCell::new(0)};
@@ -40,17 +42,20 @@ pub struct StatsCollector<'a, T: IterMetricsCollector> {
     kind: StatsKind,
 
     internal_tombstone: usize,
+    block_read_count: usize,
     raw_value_tombstone: usize,
 }
 
 impl<'a, T: IterMetricsCollector> StatsCollector<'a, T> {
     pub fn new(collector: T, kind: StatsKind, stats: &'a mut CfStatistics) -> Self {
         let internal_tombstone = collector.internal_delete_skipped_count() as usize;
+        let block_read_count = collector.block_read_count() as usize;
         StatsCollector {
             collector,
             stats,
             kind,
             internal_tombstone,
+            block_read_count,
             raw_value_tombstone: RAW_VALUE_TOMBSTONE.with(|m| *m.borrow()),
         }
     }
@@ -60,6 +65,10 @@ impl<T: IterMetricsCollector> Drop for StatsCollector<'_, T> {
     fn drop(&mut self) {
         self.stats.raw_value_tombstone +=
             RAW_VALUE_TOMBSTONE.with(|m| *m.borrow()) - self.raw_value_tombstone;
+        self.stats.block_read_count +=
+            self.collector
+                .block_read_count()
+                .saturating_sub(self.block_read_count as u64) as usize;
         let internal_tombstone =
             self.collector.internal_delete_skipped_count() as usize - self.internal_tombstone;
         match self.kind {
@@ -97,15 +106,18 @@ pub struct CfStatistics {
     pub over_seek_bound: usize,
 
     pub flow_stats: FlowStatistics,
+    pub block_read_count: usize,
 
     pub next_tombstone: usize,
     pub prev_tombstone: usize,
     pub seek_tombstone: usize,
     pub seek_for_prev_tombstone: usize,
     pub raw_value_tombstone: usize,
+    pub hit_missing_range: usize,
+    pub cache_missing_range: usize,
 }
 
-const STATS_COUNT: usize = 12;
+const STATS_COUNT: usize = 14;
 
 impl CfStatistics {
     #[inline]
@@ -127,6 +139,8 @@ impl CfStatistics {
             (STAT_SEEK_TOMBSTONE, self.seek_tombstone),
             (STAT_SEEK_FOR_PREV_TOMBSTONE, self.seek_for_prev_tombstone),
             (STAT_RAW_VALUE_TOMBSTONE, self.raw_value_tombstone),
+            (STAT_HIT_MISSING_RANGE, self.hit_missing_range),
+            (STAT_CACHE_MISSING_RANGE, self.cache_missing_range),
         ]
     }
 
@@ -147,6 +161,8 @@ impl CfStatistics {
                 self.seek_for_prev_tombstone,
             ),
             (GcKeysDetail::raw_value_tombstone, self.raw_value_tombstone),
+            (GcKeysDetail::hit_missing_range, self.hit_missing_range),
+            (GcKeysDetail::cache_missing_range, self.cache_missing_range),
         ]
     }
 
@@ -159,6 +175,7 @@ impl CfStatistics {
         self.seek_for_prev = self.seek_for_prev.saturating_add(other.seek_for_prev);
         self.over_seek_bound = self.over_seek_bound.saturating_add(other.over_seek_bound);
         self.flow_stats.add(&other.flow_stats);
+        self.block_read_count = self.block_read_count.saturating_add(other.block_read_count);
         self.next_tombstone = self.next_tombstone.saturating_add(other.next_tombstone);
         self.prev_tombstone = self.prev_tombstone.saturating_add(other.prev_tombstone);
         self.seek_tombstone = self.seek_tombstone.saturating_add(other.seek_tombstone);
@@ -168,6 +185,12 @@ impl CfStatistics {
         self.raw_value_tombstone = self
             .raw_value_tombstone
             .saturating_add(other.raw_value_tombstone);
+        self.hit_missing_range = self
+            .hit_missing_range
+            .saturating_add(other.hit_missing_range);
+        self.cache_missing_range = self
+            .cache_missing_range
+            .saturating_add(other.cache_missing_range);
     }
 
     /// Deprecated
@@ -177,6 +200,14 @@ impl CfStatistics {
         info.set_total(self.total_op_count() as i64);
         info
     }
+}
+
+/// Per-entry contribution to [`Statistics::processed_size`]: key length plus
+/// value length. The single source of truth for the formula, so every site
+/// that accumulates `processed_size` stays in sync.
+#[inline]
+pub fn kv_processed_size(key_len: usize, value_len: usize) -> usize {
+    key_len + value_len
 }
 
 #[derive(Default, Debug)]

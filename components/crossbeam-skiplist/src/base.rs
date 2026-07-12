@@ -2030,7 +2030,11 @@ where
                 None => self.range.end_bound(),
             };
             if below_upper_bound(&bound, h.key().borrow()) {
-                self.head.clone_from(&next_head);
+                if let Some(e) = mem::replace(&mut self.head, next_head.clone()) {
+                    unsafe {
+                        e.node.decrement(guard);
+                    }
+                }
                 next_head
             } else {
                 unsafe {
@@ -2057,7 +2061,11 @@ where
                 None => self.range.start_bound(),
             };
             if above_lower_bound(&bound, t.key().borrow()) {
-                self.tail.clone_from(&next_tail);
+                if let Some(e) = mem::replace(&mut self.tail, next_tail.clone()) {
+                    unsafe {
+                        e.node.decrement(guard);
+                    }
+                }
                 next_tail
             } else {
                 unsafe {
@@ -2097,7 +2105,7 @@ impl<K, V> Drop for IntoIter<K, V> {
             unsafe {
                 // Unprotected loads are okay because this function is the only one currently using
                 // the skip list.
-                let next = (*self.node).tower[0].load(Ordering::Relaxed, epoch::unprotected());
+                let next = (&(*self.node).tower)[0].load(Ordering::Relaxed, epoch::unprotected());
 
                 // We can safely do this without deferring because references to
                 // keys & values that we give out never outlive the SkipList.
@@ -2128,7 +2136,7 @@ impl<K, V> Iterator for IntoIter<K, V> {
                 //
                 // Unprotected loads are okay because this function is the only one currently using
                 // the skip list.
-                let next = (*self.node).tower[0].load(Ordering::Relaxed, epoch::unprotected());
+                let next = (&(*self.node).tower)[0].load(Ordering::Relaxed, epoch::unprotected());
 
                 // Deallocate the current node and move to the next one.
                 Node::dealloc(self.node);

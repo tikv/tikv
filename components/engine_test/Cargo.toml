@@ -2,7 +2,7 @@
 name = "engine_test"
 version = "0.0.1"
 description = "A single engine that masquerades as all other engines, for testing"
-edition = "2021"
+edition = "2024"
 publish = false
 license = "Apache-2.0"
 

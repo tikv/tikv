@@ -415,69 +415,72 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         resp: &ExtraMessage,
     ) {
         let region_id = self.region_id();
-        if self.merge_context().is_some()
-            && let Some(PrepareStatus::WaitForTrimStatus {
+        if self.merge_context().is_some() {
+            if let Some(PrepareStatus::WaitForTrimStatus {
                 pending_peers, req, ..
             }) = self.merge_context_mut().prepare_status.as_mut()
-            && req.is_some()
-        {
-            assert!(resp.has_availability_context());
-            let from_region = resp.get_availability_context().get_from_region_id();
-            let from_epoch = resp.get_availability_context().get_from_region_epoch();
-            let trimmed = resp.get_availability_context().get_trimmed();
-            if let Some(epoch) = pending_peers.get(&from_peer)
-                && util::is_region_epoch_equal(from_epoch, epoch)
             {
-                if !trimmed {
-                    info!(
-                        self.logger,
-                        "cancel merge because source peer is not trimmed";
-                        "region_id" => from_region,
-                        "peer_id" => from_peer,
-                    );
-                    self.take_merge_context();
-                    return;
-                } else {
-                    pending_peers.remove(&from_peer);
+                if req.is_some() {
+                    assert!(resp.has_availability_context());
+                    let from_region = resp.get_availability_context().get_from_region_id();
+                    let from_epoch = resp.get_availability_context().get_from_region_epoch();
+                    let trimmed = resp.get_availability_context().get_trimmed();
+                    if let Some(epoch) = pending_peers.get(&from_peer) {
+                        if util::is_region_epoch_equal(from_epoch, epoch) {
+                            if !trimmed {
+                                info!(
+                                    self.logger,
+                                    "cancel merge because source peer is not trimmed";
+                                    "region_id" => from_region,
+                                    "peer_id" => from_peer,
+                                );
+                                self.take_merge_context();
+                                return;
+                            } else {
+                                pending_peers.remove(&from_peer);
+                            }
+                        }
+                    }
+                    if pending_peers.is_empty() {
+                        let mailbox = match store_ctx.router.mailbox(region_id) {
+                            Some(mailbox) => mailbox,
+                            None => {
+                                assert!(
+                                    store_ctx.router.is_shutdown(),
+                                    "{} router should have been closed",
+                                    SlogFormat(&self.logger)
+                                );
+                                return;
+                            }
+                        };
+                        let mut req = req.take().unwrap();
+                        req.mut_header()
+                            .set_flags(WriteBatchFlags::PRE_FLUSH_FINISHED.bits());
+                        let logger = self.logger.clone();
+                        let on_flush_finish = move || {
+                            let (ch, _) = CmdResChannel::pair();
+                            if let Err(e) =
+                                mailbox.force_send(PeerMsg::AdminCommand(RaftRequest::new(req, ch)))
+                            {
+                                error!(
+                                    logger,
+                                    "send PrepareMerge request failed after pre-flush finished";
+                                    "err" => ?e,
+                                );
+                                // We rely on
+                                // `maybe_clean_up_stale_merge_context` to
+                                // clean this up.
+                            }
+                        };
+                        self.start_pre_flush(
+                            store_ctx,
+                            "prepare_merge",
+                            false,
+                            &self.region().clone(),
+                            Box::new(on_flush_finish),
+                        );
+                    }
                 }
-            }
-            if pending_peers.is_empty() {
-                let mailbox = match store_ctx.router.mailbox(region_id) {
-                    Some(mailbox) => mailbox,
-                    None => {
-                        assert!(
-                            store_ctx.router.is_shutdown(),
-                            "{} router should have been closed",
-                            SlogFormat(&self.logger)
-                        );
-                        return;
-                    }
-                };
-                let mut req = req.take().unwrap();
-                req.mut_header()
-                    .set_flags(WriteBatchFlags::PRE_FLUSH_FINISHED.bits());
-                let logger = self.logger.clone();
-                let on_flush_finish = move || {
-                    let (ch, _) = CmdResChannel::pair();
-                    if let Err(e) =
-                        mailbox.force_send(PeerMsg::AdminCommand(RaftRequest::new(req, ch)))
-                    {
-                        error!(
-                            logger,
-                            "send PrepareMerge request failed after pre-flush finished";
-                            "err" => ?e,
-                        );
-                        // We rely on `maybe_clean_up_stale_merge_context` to
-                        // clean this up.
-                    }
-                };
-                self.start_pre_flush(
-                    store_ctx,
-                    "prepare_merge",
-                    false,
-                    &self.region().clone(),
-                    Box::new(on_flush_finish),
-                );
             }
         }
     }
@@ -608,10 +611,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .merge_context()
             .as_ref()
             .and_then(|c| c.prepare_status.as_ref())
-            && start_time.saturating_elapsed() > TRIM_CHECK_TIMEOUT
         {
-            info!(self.logger, "cancel merge because trim check timed out");
-            self.take_merge_context();
+            if start_time.saturating_elapsed() > TRIM_CHECK_TIMEOUT {
+                info!(self.logger, "cancel merge because trim check timed out");
+                self.take_merge_context();
+            }
         }
     }
 

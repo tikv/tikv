@@ -85,7 +85,11 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Rollback {
 mod tests {
     use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
 
-    use crate::storage::{TestEngineBuilder, txn::tests::*};
+    use crate::storage::{
+        TestEngineBuilder,
+        mvcc::tests::{must_get_rollback_protected, must_load_shared_lock, must_unlocked},
+        txn::tests::*,
+    };
 
     #[test]
     fn rollback_lock_with_existing_rollback() {
@@ -99,5 +103,34 @@ mod tests {
 
         must_pessimistic_prewrite_put(&mut engine, k2, v, k1, 10, 10, SkipPessimisticCheck);
         must_rollback(&mut engine, k2, 10, false);
+    }
+
+    #[test]
+    fn rollback_shared_lock() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"shared-lock";
+        let pk1 = b"pk1";
+        let pk2 = b"pk2";
+        let start_ts1 = 10.into();
+        let start_ts2 = 20.into();
+
+        must_acquire_shared_pessimistic_lock(&mut engine, key, pk1, start_ts1, 30, 3000);
+        must_acquire_shared_pessimistic_lock(&mut engine, key, pk2, start_ts2, 40, 3000);
+
+        let mut shared_lock = must_load_shared_lock(&mut engine, key);
+        assert_eq!(shared_lock.len(), 2);
+
+        must_rollback(&mut engine, key, start_ts1, false);
+        must_get_rollback_protected(&mut engine, key, start_ts1, false);
+
+        shared_lock = must_load_shared_lock(&mut engine, key);
+        assert_eq!(shared_lock.len(), 1);
+        assert!(shared_lock.get_lock(&start_ts1).unwrap().is_none());
+        assert!(shared_lock.get_lock(&start_ts2).unwrap().is_some());
+
+        must_rollback(&mut engine, key, start_ts2, false);
+        must_unlocked(&mut engine, key);
+
+        must_get_rollback_protected(&mut engine, key, start_ts2, false);
     }
 }

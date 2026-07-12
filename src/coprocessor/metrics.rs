@@ -57,12 +57,15 @@ make_auto_flush_static_metric! {
         seek_tombstone,
         seek_for_prev_tombstone,
         raw_value_tombstone,
+        hit_missing_range,
+        cache_missing_range,
     }
 
     pub label_enum WaitType {
         all,
         schedule,
         snapshot,
+        suspend,
     }
 
     pub label_enum MemLockCheckResult {
@@ -88,6 +91,16 @@ make_auto_flush_static_metric! {
         "req" => ReqTag,
         "cf" => CF,
         "tag" => ScanKind,
+    }
+
+    pub label_enum AnalyzeMetricKind {
+        read_iops,
+        read_total_op_count,
+        next_batch_count,
+    }
+
+    pub struct AnalyzeLocalCounters: LocalIntCounter {
+        "metric" => AnalyzeMetricKind,
     }
 
     pub struct MemLockCheckHistogramVec: LocalHistogram {
@@ -179,6 +192,11 @@ lazy_static! {
         "The number of tasks waiting for the semaphore"
     )
     .unwrap();
+    pub static ref COPR_SEMAPHORE_WAIT_TIME: Histogram = register_histogram!(
+        "tikv_coprocessor_semaphore_wait_time_duration_seconds",
+        "The duration of heavy tasks waiting for the semaphore",
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
+    ).unwrap();
     pub static ref MEM_LOCK_CHECK_HISTOGRAM_VEC: HistogramVec =
         register_histogram_vec!(
             "tikv_coprocessor_mem_lock_check_duration_seconds",
@@ -189,6 +207,20 @@ lazy_static! {
         .unwrap();
     pub static ref MEM_LOCK_CHECK_HISTOGRAM_VEC_STATIC: MemLockCheckHistogramVec =
         auto_flush_from!(MEM_LOCK_CHECK_HISTOGRAM_VEC, MemLockCheckHistogramVec);
+    pub static ref ANALYZE_METRICS_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_analyze_metrics_total",
+        "Analyze execution metrics (read_iops, read_total_op_count, next_batch_count)",
+        &["metric"]
+    )
+    .unwrap();
+    pub static ref ANALYZE_METRICS_STATIC: AnalyzeLocalCounters =
+        auto_flush_from!(ANALYZE_METRICS_VEC, AnalyzeLocalCounters);
+    pub static ref ANALYZE_IOPS_PER_TOTAL_OP_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_analyze_iops_per_total_op",
+        "Per-batch ratio of analyze block reads to total storage ops",
+        exponential_buckets(0.001, 2.0, 16).unwrap()
+    )
+    .unwrap();
 }
 
 make_static_metric! {
@@ -254,6 +286,8 @@ impl From<GcKeysDetail> for ScanKind {
             GcKeysDetail::seek_tombstone => ScanKind::seek_tombstone,
             GcKeysDetail::seek_for_prev_tombstone => ScanKind::seek_for_prev_tombstone,
             GcKeysDetail::raw_value_tombstone => ScanKind::raw_value_tombstone,
+            GcKeysDetail::hit_missing_range => ScanKind::hit_missing_range,
+            GcKeysDetail::cache_missing_range => ScanKind::cache_missing_range,
         }
     }
 }

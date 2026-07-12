@@ -206,6 +206,24 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         mut physical_columns: LazyBatchColumnVec,
         logical_rows: Vec<usize>,
     ) -> Result<()> {
+        if !logical_rows.is_empty() {
+            let rows = logical_rows.len() as u64;
+            let order_by_len = self.order_exprs.len() as u64;
+            let n = self.n.max(1) as u64;
+
+            // Approx compare volume: O(rows * log2(n) * order_by_len).
+            let log2n = 64 - (n.max(2).leading_zeros() as u64) - 1;
+
+            let compare_ops = rows
+                .saturating_mul(order_by_len)
+                .saturating_mul(log2n.max(1));
+
+            tidb_query_common::metrics::record_executor_work(
+                tidb_query_common::metrics::ExecutorName::batch_top_n,
+                compare_ops,
+            );
+        }
+
         ensure_columns_decoded(
             &mut self.context,
             &self.order_exprs,
@@ -326,6 +344,16 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
     #[inline]
     fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
         self.src.collect_exec_stats(dest);
+    }
+
+    #[inline]
+    fn peek_scanned_rows_sum(&self) -> usize {
+        self.src.peek_scanned_rows_sum()
+    }
+
+    #[inline]
+    fn peek_scanned_bytes_sum(&self) -> usize {
+        self.src.peek_scanned_bytes_sum()
     }
 
     #[inline]
@@ -1347,5 +1375,101 @@ mod tests {
         test_top5_paging4(make_src_executor_unsigned);
         test_top5_paging4(make_src_executor);
         test_top5_paging4(make_bytes_src_executor);
+    }
+
+    #[test]
+    fn test_extra_common_handle_keys() {
+        fn make_result(vals: Vec<i64>, logical_rows: Vec<usize>, last: bool) -> BatchExecuteResult {
+            let vals1 = vals.iter().map(|&v| Some(v)).collect::<Vec<_>>();
+            let vals2 = vals.iter().map(|&v| Some(1000 + v)).collect::<Vec<_>>();
+            let mut extra_handle_keys = vals
+                .iter()
+                .map(|&v| format!("h{}", v).into_bytes())
+                .collect::<Vec<_>>();
+            let mut physical_columns = LazyBatchColumnVec::from(vec![
+                VectorValue::Int(vals1.into()),
+                VectorValue::Int(vals2.into()),
+            ]);
+            physical_columns
+                .mut_extra_common_handle_keys()
+                .append(&mut extra_handle_keys);
+
+            BatchExecuteResult {
+                physical_columns,
+                logical_rows,
+                is_drained: Ok(if last {
+                    BatchExecIsDrain::Drain
+                } else {
+                    BatchExecIsDrain::Remain
+                }),
+                warnings: EvalWarnings::default(),
+            }
+        }
+
+        let src_exec = MockExecutor::new(
+            vec![FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()],
+            vec![
+                make_result(vec![0, 1, 2, 103, 4, 505], vec![5, 4, 2, 0, 3], false),
+                make_result(vec![3, 15, 12], vec![], false),
+                make_result(vec![], vec![], false),
+                make_result(vec![20, 16, 25], vec![1, 2], true),
+            ],
+        );
+
+        let mut exec = BatchTopNExecutor::new_for_test(
+            src_exec,
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(1)
+                    .build_for_test(),
+            ],
+            vec![false],
+            100,
+        );
+
+        let mut rows = vec![];
+        let mut handle_keys = vec![];
+        loop {
+            let mut r = block_on(exec.next_batch(1));
+            if !r.logical_rows.is_empty() {
+                let result_handle_keys = r
+                    .physical_columns
+                    .take_extra_common_handle_keys()
+                    .unwrap_or(vec![]);
+                let vals1 = r.physical_columns[0].decoded().to_int_vec();
+                let vals2 = r.physical_columns[1].decoded().to_int_vec();
+                for row in r.logical_rows {
+                    rows.push((vals1[row].unwrap(), vals2[row].unwrap()));
+                    handle_keys.push(result_handle_keys[row].clone());
+                }
+            }
+            if r.is_drained.unwrap().stop() {
+                break;
+            }
+        }
+        assert_eq!(
+            rows,
+            vec![
+                (0, 1000),
+                (2, 1002),
+                (4, 1004),
+                (16, 1016),
+                (25, 1025),
+                (103, 1103),
+                (505, 1505),
+            ]
+        );
+        assert_eq!(
+            handle_keys,
+            vec![
+                b"h0".to_vec(),
+                b"h2".to_vec(),
+                b"h4".to_vec(),
+                b"h16".to_vec(),
+                b"h25".to_vec(),
+                b"h103".to_vec(),
+                b"h505".to_vec(),
+            ]
+        )
     }
 }

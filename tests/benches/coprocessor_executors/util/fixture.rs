@@ -342,6 +342,16 @@ impl BatchExecutor for BatchFixtureExecutor {
     }
 
     #[inline]
+    fn peek_scanned_rows_sum(&self) -> usize {
+        0
+    }
+
+    #[inline]
+    fn peek_scanned_bytes_sum(&self) -> usize {
+        0
+    }
+
+    #[inline]
     fn collect_storage_stats(&mut self, _dest: &mut Self::StorageStats) {
         // Do nothing
     }
