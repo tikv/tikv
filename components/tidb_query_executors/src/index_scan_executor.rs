@@ -4273,6 +4273,12 @@ mod tests {
         }
     }
 
+    /// Complements every byte of an encoded key. Mirrors TiDB's
+    /// `EncodeKeyWithDesc` for a single-column key.
+    fn to_desc(bs: Vec<u8>) -> Vec<u8> {
+        bs.into_iter().map(|b| !b).collect()
+    }
+
     /// Regression test for the descending-index chunk path
     /// (pingcap/tidb#2519): builds a synthetic index payload that mixes one
     /// ASC column with one DESC column (each column independently encoded
@@ -4280,7 +4286,7 @@ mod tests {
     /// runs it through `extract_columns_from_datum_format`, then verifies
     /// `ensure_decoded` produces the original logical values.
     ///
-    /// Without `un_invert_if_desc` in the extractor the DESC column would
+    /// Without un-inverting in the extractor the DESC column would
     /// reach `decode_int_datum` / `decode_real_datum` as a complemented
     /// flag byte and the chunk path would fail with
     /// `Unsupported datum flag NNN for X vector`. Locks in the contract
@@ -4290,10 +4296,6 @@ mod tests {
         use tidb_query_datatype::codec::batch::LazyBatchColumn;
 
         let mut ctx = EvalContext::default();
-
-        // Helper: complement every byte. Mirrors TiDB's
-        // EncodeKeyWithDesc for a single-column key.
-        let to_desc = |bs: Vec<u8>| -> Vec<u8> { bs.into_iter().map(|b| !b).collect() };
 
         // Two index payloads, each (ASC int = 7, DESC bytes = "abc"):
         // first column ASC, second column DESC (column-by-column complement).
@@ -4350,7 +4352,6 @@ mod tests {
         use tidb_query_datatype::codec::batch::LazyBatchColumn;
 
         let mut ctx = EvalContext::default();
-        let to_desc = |bs: Vec<u8>| -> Vec<u8> { bs.into_iter().map(|b| !b).collect() };
 
         let handle_asc = datum::encode_key(&mut ctx, &[Datum::I64(42)]).unwrap();
         let int_desc = to_desc(datum::encode_key(&mut ctx, &[Datum::I64(-9)]).unwrap());
