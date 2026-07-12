@@ -348,15 +348,6 @@ fn check_subject_alternative_name(
             }
         }
 
-        let mut auth_debug_info = String::new();
-        for x in &auth_ctx {
-            auth_debug_info.push_str(&format!(
-                "Auth property: name = {}, value = {:?}\n",
-                x.name(),
-                x.value()
-            ));
-        }
-
         Err("No matching x509_subject_alternative_name or it doesn't exist.".to_string())
     } else {
         Ok(())
