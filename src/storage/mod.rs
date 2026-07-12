@@ -818,7 +818,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     /// Only writes that are committed before their respective `start_ts` are
     /// visible.
     pub fn batch_get_command<
-        P: 'static + ResponseBatchConsumer<(Option<ValueEntry>, Statistics)>,
+        P: 'static + ResponseBatchConsumer<(Option<ValueEntry>, KvGetStatistics)>,
     >(
         &self,
         requests: Vec<GetRequest>,
@@ -865,6 +865,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         // Unset the TLS tracker because the future below does not belong to any
         // specific request
         clear_tls_tracker_token();
+        let stage_begin_ts = Instant::now();
         self.read_pool_spawn_with_busy_check(
             busy_threshold,
             async move {
@@ -873,6 +874,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     .get(CMD)
                     .observe(requests.len() as f64);
                 let command_duration = Instant::now();
+                let schedule_wait_time = command_duration.saturating_duration_since(stage_begin_ts);
                 let read_id = Some(ThreadReadId::new());
                 let mut statistics = Statistics::default();
                 let mut req_snaps = vec![];
@@ -962,7 +964,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         tracker,
                         deadline,
                     ) = req_snap;
+                    let snap_start = Instant::now();
                     let snap_res = snap.await;
+                    let snap_recv_ts = Instant::now();
+                    let snapshot_wait_time =
+                        snap_recv_ts.saturating_duration_since(snap_start);
+                    let wait_wall_time = snap_recv_ts.saturating_duration_since(stage_begin_ts);
                     if let Err(e) = deadline.check() {
                         consumer.consume(
                             id,
@@ -987,6 +994,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             {
                                 Ok(mut point_getter) => {
                                     let v = point_getter.get_entry(&key, need_commit_ts);
+                                    let process_done = Instant::now();
+                                    let process_wall_time =
+                                        process_done.saturating_duration_since(snap_recv_ts);
                                     with_tls_tracker(|tracker| {
                                         tracker.metrics.storage_processed_keys_get = tracker
                                             .metrics
@@ -1007,10 +1017,24 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                     });
                                     record_network_out_bytes(value_size);
                                     record_logical_read_bytes(statistics.processed_size as u64);
+                                    let latency_stats = StageLatencyStats {
+                                        schedule_wait_time_ns: schedule_wait_time
+                                            .as_nanos() as u64,
+                                        snapshot_wait_time_ns: snapshot_wait_time
+                                            .as_nanos() as u64,
+                                        wait_wall_time_ns: wait_wall_time
+                                            .as_nanos() as u64,
+                                        process_wall_time_ns: process_wall_time
+                                            .as_nanos() as u64,
+                                    };
+                                    let kv_stats = KvGetStatistics {
+                                        stats: stat,
+                                        latency_stats,
+                                    };
                                     consumer.consume(
                                         id,
                                         v.map_err(|e| Error::from(txn::Error::from(e)))
-                                            .map(|v| (v, stat)),
+                                            .map(|v| (v, kv_stats)),
                                         begin_instant,
                                         source,
                                         resource_priority,
@@ -4314,11 +4338,11 @@ pub mod test_util {
         }
     }
 
-    impl ResponseBatchConsumer<(Option<ValueEntry>, Statistics)> for GetConsumer {
+    impl ResponseBatchConsumer<(Option<ValueEntry>, KvGetStatistics)> for GetConsumer {
         fn consume(
             &self,
             id: u64,
-            res: Result<(Option<ValueEntry>, Statistics)>,
+            res: Result<(Option<ValueEntry>, KvGetStatistics)>,
             _: Instant,
             _source: String,
             _resource_priority: ResourcePriority,

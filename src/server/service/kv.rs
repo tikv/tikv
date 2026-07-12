@@ -1048,12 +1048,17 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
 
         let (tx, rx) = unbounded(WakePolicy::TillReach(GRPC_MSG_NOTIFY_SIZE));
         let ctx = Arc::new(ctx);
-        let peer = ctx.peer();
+        let peer = ctx.peer().to_owned();
         let storage = self.storage.clone();
         let copr = self.copr.clone();
         let copr_v2 = self.copr_v2.clone();
         let pool_size = storage.get_normal_pool_size();
-        let batch_builder = BatcherBuilder::new(self.enable_req_batch, pool_size);
+        let batch_builder = BatcherBuilder::new(
+            self.enable_req_batch,
+            pool_size,
+            self.kv_slow_log_threshold,
+            peer.clone(),
+        );
         let resource_manager = self.resource_manager.clone();
         let kv_slow_log_threshold = self.kv_slow_log_threshold;
         let cluster_id = self.cluster_id;
@@ -1520,9 +1525,6 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
         Prewrite, future_prewrite(storage), kv_prewrite;
         Commit, future_commit(storage), kv_commit;
         Cleanup, future_cleanup(storage), kv_cleanup;
-        // ReqBatcher path (future_batch_get_command) does not have per-request
-        // StageLatencyStats, so slow-log requires follow-up work.
-        // Individual non-batched BatchGet requests here use the real threshold.
         BatchGet, future_batch_get(storage, slow_log_threshold), kv_batch_get;
         BatchRollback, future_batch_rollback(storage), kv_batch_rollback;
         TxnHeartBeat, future_txn_heart_beat(storage), kv_txn_heart_beat;
@@ -1623,10 +1625,26 @@ async fn future_handle_empty(
     Ok(res)
 }
 
-/// Returns true when the combined wait + process wall time exceeds the
-/// configured threshold, indicating a slow kv operation.
-fn is_slow_kv_operation(wait_wall_time_ns: u64, process_wall_time_ns: u64, threshold: Duration) -> bool {
-    Duration::from_nanos(wait_wall_time_ns.saturating_add(process_wall_time_ns)) >= threshold
+/// Breakdown of a slow kv operation's wait and process times.
+pub(crate) struct SlowKvTimes {
+    pub(crate) wait_time: Duration,
+    pub(crate) process_time: Duration,
+}
+
+/// Returns the wait + process wall times if the combined duration meets or
+/// exceeds `threshold`. Returns `None` for fast operations so callers can
+/// skip slow-log construction entirely.
+pub(crate) fn slow_kv_times(stats: &StageLatencyStats, threshold: Duration) -> Option<SlowKvTimes> {
+    let total_ns = stats
+        .wait_wall_time_ns
+        .saturating_add(stats.process_wall_time_ns);
+    if Duration::from_nanos(total_ns) < threshold {
+        return None;
+    }
+    Some(SlowKvTimes {
+        wait_time: Duration::from_nanos(stats.wait_wall_time_ns),
+        process_time: Duration::from_nanos(stats.process_wall_time_ns),
+    })
 }
 
 fn future_get<E: Engine, L: LockManager, F: KvFormat>(
@@ -1660,7 +1678,7 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
         let v = v.await;
         let duration = start.saturating_elapsed();
         let mut resp = GetResponse::default();
-        let mut is_slow = false;
+        let mut slow = None;
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
@@ -1676,11 +1694,7 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
                         tracker.write_ru_v2(exec_detail_v2.mut_ru_v2());
                     });
                     set_time_detail(exec_detail_v2, duration, &stats.latency_stats);
-                    is_slow = is_slow_kv_operation(
-                        stats.latency_stats.wait_wall_time_ns,
-                        stats.latency_stats.process_wall_time_ns,
-                        slow_log_threshold,
-                    );
+                    slow = slow_kv_times(&stats.latency_stats, slow_log_threshold);
                     match val {
                         Some(val) => {
                             resp.set_value(val.value);
@@ -1694,13 +1708,15 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
         }
-        if is_slow {
+        if let Some(times) = slow {
             info!(#"slow_log", "slow-query";
                 "region_id" => region_id,
                 "peer_id" => peer_id,
                 "store_id" => store_id,
                 "command" => "kv_get",
                 "total_time" => ?duration,
+                "wait_time" => ?times.wait_time,
+                "process_time" => ?times.process_time,
             );
         }
         GLOBAL_TRACKERS.remove(tracker);
@@ -1815,7 +1831,7 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
         let v = v.await;
         let duration = start.saturating_elapsed();
         let mut resp = BatchGetResponse::default();
-        let mut is_slow = false;
+        let mut slow = None;
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
@@ -1832,11 +1848,7 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
                         tracker.write_ru_v2(exec_detail_v2.mut_ru_v2());
                     });
                     set_time_detail(exec_detail_v2, duration, &stats.latency_stats);
-                    is_slow = is_slow_kv_operation(
-                        stats.latency_stats.wait_wall_time_ns,
-                        stats.latency_stats.process_wall_time_ns,
-                        slow_log_threshold,
-                    );
+                    slow = slow_kv_times(&stats.latency_stats, slow_log_threshold);
                     resp.set_pairs(pairs.into());
                 }
                 Err(e) => {
@@ -1849,7 +1861,7 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
                 }
             }
         }
-        if is_slow {
+        if let Some(times) = slow {
             info!(#"slow_log", "slow-query";
                 "region_id" => region_id,
                 "peer_id" => peer_id,
@@ -1857,6 +1869,8 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
                 "command" => "kv_batch_get",
                 "key_count" => key_count,
                 "total_time" => ?duration,
+                "wait_time" => ?times.wait_time,
+                "process_time" => ?times.process_time,
             );
         }
         GLOBAL_TRACKERS.remove(tracker);
@@ -3097,51 +3111,79 @@ mod tests {
     }
 
     #[test]
-    fn test_is_slow_kv_operation_below_threshold() {
-        // 50ms combined < 300ms threshold -> not slow
+    fn test_slow_kv_times_below_threshold() {
+        // 50ms combined < 300ms threshold -> None
         let threshold = Duration::from_millis(300);
-        assert!(!is_slow_kv_operation(
-            25_000_000,  // 25ms wait
-            25_000_000,  // 25ms process
-            threshold,
-        ));
+        let stats = StageLatencyStats {
+            wait_wall_time_ns: 25_000_000,
+            process_wall_time_ns: 25_000_000,
+            ..Default::default()
+        };
+        assert!(slow_kv_times(&stats, threshold).is_none());
     }
 
     #[test]
-    fn test_is_slow_kv_operation_above_threshold() {
-        // 500ms combined > 300ms threshold -> slow
+    fn test_slow_kv_times_above_threshold() {
+        // 500ms combined > 300ms threshold -> Some
         let threshold = Duration::from_millis(300);
-        assert!(is_slow_kv_operation(
-            250_000_000,  // 250ms wait
-            250_000_000,  // 250ms process
-            threshold,
-        ));
+        let stats = StageLatencyStats {
+            wait_wall_time_ns: 250_000_000,
+            process_wall_time_ns: 250_000_000,
+            ..Default::default()
+        };
+        let times = slow_kv_times(&stats, threshold).unwrap();
+        assert_eq!(times.wait_time, Duration::from_millis(250));
+        assert_eq!(times.process_time, Duration::from_millis(250));
     }
 
     #[test]
-    fn test_is_slow_kv_operation_exactly_at_threshold() {
-        // Exactly 300ms combined >= 300ms -> slow
+    fn test_slow_kv_times_exactly_at_threshold() {
+        // Exactly 300ms combined >= 300ms -> Some
         let threshold = Duration::from_millis(300);
-        assert!(is_slow_kv_operation(
-            150_000_000,  // 150ms wait
-            150_000_000,  // 150ms process
-            threshold,
-        ));
+        let stats = StageLatencyStats {
+            wait_wall_time_ns: 150_000_000,
+            process_wall_time_ns: 150_000_000,
+            ..Default::default()
+        };
+        let times = slow_kv_times(&stats, threshold).unwrap();
+        assert_eq!(times.wait_time, Duration::from_millis(150));
+        assert_eq!(times.process_time, Duration::from_millis(150));
     }
 
     #[test]
-    fn test_is_slow_kv_operation_zero_threshold() {
-        // Any positive wait+process >= 0 -> slow
-        assert!(is_slow_kv_operation(1, 0, Duration::ZERO));
-        // 0ns + 0ns >= 0ns -> slow
-        assert!(is_slow_kv_operation(0, 0, Duration::ZERO));
+    fn test_slow_kv_times_zero_threshold() {
+        // Any wait+process >= 0 -> Some
+        let stats = StageLatencyStats {
+            wait_wall_time_ns: 1,
+            process_wall_time_ns: 0,
+            ..Default::default()
+        };
+        assert!(slow_kv_times(&stats, Duration::ZERO).is_some());
+        // 0ns + 0ns >= 0ns -> Some
+        let stats = StageLatencyStats::default();
+        assert!(slow_kv_times(&stats, Duration::ZERO).is_some());
+    }
+
+    #[test]
+    fn test_slow_kv_times_saturating_u64_max() {
+        // u64::MAX + u64::MAX is extremely large, saturating_add handles it.
+        let threshold = Duration::from_secs(1);
+        let stats = StageLatencyStats {
+            wait_wall_time_ns: u64::MAX,
+            process_wall_time_ns: u64::MAX,
+            ..Default::default()
+        };
+        let times = slow_kv_times(&stats, threshold).unwrap();
+        // Both saturated to u64::MAX nanos (approx 584 years in Duration).
+        assert_eq!(times.wait_time, Duration::from_nanos(u64::MAX));
+        assert_eq!(times.process_time, Duration::from_nanos(u64::MAX));
     }
 
     #[test]
     fn test_future_get_with_slow_log_threshold() {
         // Verifies future_get doesn't panic with a real threshold.
         // The mock storage won't produce real latency stats but the path
-        // exercises is_slow_kv_operation with whatever stats come back.
+        // exercises slow_kv_times with whatever stats come back.
         let storage = crate::storage::TestStorageBuilderApiV1::new(
             crate::storage::lock_manager::MockLockManager::new(),
         )

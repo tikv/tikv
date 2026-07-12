@@ -232,8 +232,8 @@ pub struct Config {
     // If handle time is larger than the threshold, it will print slow log in end point.
     #[online_config(skip)]
     pub end_point_slow_log_threshold: ReadableDuration,
-    // If handle time of KvGet or KvBatchGet is larger than the threshold,
-    // it will print slow log.
+    // If wait time + process time of KvGet or KvBatchGet is larger than the
+    // threshold, it will print slow log.
     #[online_config(skip)]
     pub kv_command_slow_log_threshold: ReadableDuration,
     /// Max connections per address for forwarding request.
