@@ -336,6 +336,49 @@ fn test_analyze_sampling_bernoulli() {
     assert_eq!(collector.get_total_size(), vec![72, 56, 9, 56]);
 }
 
+/// A descending-order index column (pingcap/tidb#2519) is stored
+/// bitwise-complemented. The index-analyze pushdown builds histogram bucket
+/// bounds from the raw key bytes and cannot yet produce meaningful statistics
+/// for such columns, so it must fail loudly instead of returning corrupt
+/// bounds. TiDB skips the pushdown for descending indexes; this locks in the
+/// TiKV-side guard for requests that reach it anyway.
+#[test]
+fn test_analyze_index_rejects_desc_encoded_columns() {
+    use tidb_query_datatype::{
+        codec::{
+            datum::{self, Datum},
+            table,
+        },
+        expr::EvalContext,
+    };
+
+    let product = ProductTable::new();
+    let (mut store, endpoint, _) = init_data_with_commit(&product, &[], false);
+
+    // Craft an index entry whose first column is DESC-encoded (complemented
+    // bytes) followed by an ascending int handle, mirroring what TiDB's
+    // EncodeKeyWithDesc writes for `INDEX (name DESC)`.
+    let idx_id = product["name"].index;
+    let mut ctx = EvalContext::default();
+    let name_asc = datum::encode_key(&mut ctx, &[Datum::Bytes(b"desc-col".to_vec())]).unwrap();
+    let mut encoded: Vec<u8> = name_asc.into_iter().map(|b| !b).collect();
+    let handle = datum::encode_key(&mut ctx, &[Datum::I64(1)]).unwrap();
+    encoded.extend_from_slice(&handle);
+    let idx_key = table::encode_index_seek_key(product.id, idx_id, &encoded);
+
+    store.begin();
+    store.put(Context::default(), vec![(idx_key, vec![0])]);
+    store.commit();
+
+    let req = new_analyze_index_req(&product, 3, idx_id, 4, 32, 2, 1);
+    let resp = handle_request(&endpoint, req);
+    assert!(
+        resp.get_other_error().contains("descending"),
+        "expected the DESC-column rejection, got: {:?}",
+        resp
+    );
+}
+
 #[test]
 fn test_invalid_range() {
     let data = vec![
