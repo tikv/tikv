@@ -232,6 +232,10 @@ pub struct Config {
     // If handle time is larger than the threshold, it will print slow log in end point.
     #[online_config(skip)]
     pub end_point_slow_log_threshold: ReadableDuration,
+    // If handle time of KvGet or KvBatchGet is larger than the threshold,
+    // it will print slow log.
+    #[online_config(skip)]
+    pub kv_command_slow_log_threshold: ReadableDuration,
     /// Max connections per address for forwarding request.
     #[online_config(skip)]
     pub forward_max_connections_per_address: usize,
@@ -355,6 +359,7 @@ impl Default for Config {
             reject_messages_on_memory_ratio: 0.2,
             background_thread_count,
             end_point_slow_log_threshold: ReadableDuration::secs(1),
+            kv_command_slow_log_threshold: ReadableDuration::millis(300),
             // Go tikv client uses 4 as well.
             forward_max_connections_per_address: 4,
             simplify_metrics: false,

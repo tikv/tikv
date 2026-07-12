@@ -233,6 +233,7 @@ where
             health_controller.clone(),
             health_feedback_interval,
             raft_message_filter,
+            cfg.value().kv_command_slow_log_threshold.0,
         );
 
         let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
