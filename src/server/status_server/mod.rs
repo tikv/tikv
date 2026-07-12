@@ -9,7 +9,7 @@ pub mod lite;
 use std::{
     env::args,
     error::Error as StdError,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     pin::Pin,
     str::{self, FromStr},
     sync::Arc,
@@ -1115,12 +1115,12 @@ fn check_cert(security_config: Arc<SecurityConfig>, cert: Option<X509>) -> bool 
                 .entries_by_nid(openssl::nid::Nid::COMMONNAME)
                 .next()
             {
-                let data = name.data().as_slice();
-                // Check common name in peer cert
-                is_cn_authorized = security::match_peer_names(
-                    &security_config.cert_allowed_cn,
-                    std::str::from_utf8(data).unwrap(),
-                );
+                // A malformed common name must fail authorization instead of
+                // panicking the status server.
+                if let Ok(peer_cn) = std::str::from_utf8(name.data().as_slice()) {
+                    is_cn_authorized =
+                        security::match_peer_names(&security_config.cert_allowed_cn, peer_cn);
+                }
             }
         }
 
@@ -1137,6 +1137,12 @@ fn check_cert(security_config: Arc<SecurityConfig>, cert: Option<X509>) -> bool 
                     if let Some(uri) = san.uri() {
                         return security::match_peer_names(&security_config.cert_allowed_san, uri);
                     }
+                    if let Some(ip) = san.ipaddress().and_then(ip_address_from_bytes) {
+                        return security::match_peer_names(
+                            &security_config.cert_allowed_san,
+                            &ip.to_string(),
+                        );
+                    }
                     false
                 });
             }
@@ -1146,6 +1152,14 @@ fn check_cert(security_config: Arc<SecurityConfig>, cert: Option<X509>) -> bool 
         is_cn_authorized && is_san_authorized
     } else {
         false
+    }
+}
+
+fn ip_address_from_bytes(bytes: &[u8]) -> Option<IpAddr> {
+    match bytes.len() {
+        4 => Some(IpAddr::from(<[u8; 4]>::try_from(bytes).ok()?)),
+        16 => Some(IpAddr::from(<[u8; 16]>::try_from(bytes).ok()?)),
+        _ => None,
     }
 }
 
@@ -1463,7 +1477,7 @@ mod tests {
     #[test]
     fn test_security_status_service_with_san() {
         let mut allowed_san = HashSet::default();
-        allowed_san.insert("localhost".to_owned());
+        allowed_san.insert("127.0.0.1".to_owned());
         do_test_security_status_service(HashSet::default(), allowed_san, true);
     }
 
