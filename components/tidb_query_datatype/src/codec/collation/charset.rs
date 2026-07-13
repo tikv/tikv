@@ -43,8 +43,11 @@ impl Charset for CharsetUtf8mb4 {
     fn decode_one(data: &[u8]) -> Option<(Self::Char, usize)> {
         // Match Go's utf8.DecodeRune behavior used by TiDB: malformed UTF-8
         // produces the replacement character and consumes one byte.
-        let width = match *data.first()? {
-            0x00..=0x7F => 1,
+        let first = *data.first()?;
+        if first < 0x80 {
+            return Some((first as char, 1));
+        }
+        let width = match first {
             0xC2..=0xDF => 2,
             0xE0..=0xEF => 3,
             0xF0..=0xF4 => 4,
