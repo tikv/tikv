@@ -123,6 +123,15 @@ impl<Snap> ParseCopRequestResult<Snap> {
 impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
 
 impl<E: Engine> Endpoint<E> {
+    fn unary_request_semaphore(&self, req_tag: ReqTag) -> Option<Arc<Semaphore>> {
+        match req_tag {
+            // The short-term fix only decouples the observed full-sampling
+            // analyze path from the shared coprocessor semaphore.
+            ReqTag::analyze_full_sampling => None,
+            _ => self.semaphore.clone(),
+        }
+    }
+
     pub fn new(
         cfg: &Config,
         read_pool: ReadPoolHandle,
@@ -591,6 +600,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         r: ParseCopRequestResult<E::IMSnap>,
     ) -> impl Future<Output = Result<MemoryTraceGuard<coppb::Response>>> {
+        let req_tag = r.req_tag;
         let req_ctx = r.req_ctx;
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
@@ -619,16 +629,19 @@ impl<E: Engine> Endpoint<E> {
             )
         });
         // box the tracker so that moving it is cheap.
-        let tracker = Box::new(Tracker::new(req_ctx, r.req_tag, self.slow_log_threshold));
+        let tracker = Box::new(Tracker::new(req_ctx, req_tag, self.slow_log_threshold));
         allocated_bytes += tracker.approximate_mem_size();
 
         let (tx, rx) = oneshot::channel();
-        let future =
-            Self::handle_unary_request_impl(self.semaphore.clone(), tracker, r.handler_builder)
-                .in_resource_metering_tag(resource_tag)
-                .map(move |res| {
-                    let _ = tx.send(res);
-                });
+        let future = Self::handle_unary_request_impl(
+            self.unary_request_semaphore(req_tag),
+            tracker,
+            r.handler_builder,
+        )
+        .in_resource_metering_tag(resource_tag)
+        .map(move |res| {
+            let _ = tx.send(res);
+        });
         let spawn_fut_result = self.read_pool_spawn_with_memory_quota_check(
             allocated_bytes,
             future,
@@ -1283,18 +1296,22 @@ mod tests {
     use kvproto::kvrpcpb::{IsolationLevel, LockInfo};
     use protobuf::Message;
     use raft::StateRole;
-    use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
+    use raftstore::{
+        coprocessor::region_info_accessor::MockRegionInfoProvider,
+        store::{ReadStats, WriteStats},
+    };
     use tidb_query_common::storage::Storage;
     use tikv_kv::{MockEngine, MockEngineBuilder, destroy_tls_engine, set_tls_engine};
+    use tikv_util::yatp_pool::CleanupMethod;
     use tipb::{Executor, Expr};
     use txn_types::{Key, LockType};
 
     use super::*;
     use crate::{
-        config::CoprReadPoolConfig,
+        config::{CoprReadPoolConfig, UnifiedReadPoolConfig},
         coprocessor::readpool_impl::build_read_pool_for_test,
-        read_pool::ReadPool,
-        storage::{Store, TestEngineBuilder, kv::RocksEngine},
+        read_pool::{ReadPool, build_yatp_read_pool},
+        storage::{FlowStatsReporter, Store, TestEngineBuilder, kv::RocksEngine},
     };
 
     /// A unary `RequestHandler` that always produces a fixture.
@@ -1442,6 +1459,15 @@ mod tests {
             self.nth += 1;
             result
         }
+    }
+
+    #[derive(Clone)]
+    struct DummyReporter;
+
+    impl FlowStatsReporter for DummyReporter {
+        fn report_read_stats(&self, _: ReadStats) {}
+
+        fn report_write_stats(&self, _: WriteStats) {}
     }
 
     #[test]
@@ -1682,6 +1708,89 @@ mod tests {
         .unwrap();
         assert_eq!(resp.get_data().len(), 0);
         assert!(!resp.get_other_error().is_empty());
+    }
+
+    #[test]
+    fn test_analyze_full_sampling_bypasses_shared_semaphore_only() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = build_yatp_read_pool(
+            &UnifiedReadPoolConfig::default(),
+            DummyReporter,
+            engine,
+            None,
+            None,
+            CleanupMethod::InPlace,
+            false,
+        );
+        let cm = ConcurrencyManager::new_for_test(1.into());
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            None,
+        );
+
+        assert!(copr.semaphore.is_some());
+        assert!(
+            copr.unary_request_semaphore(ReqTag::analyze_full_sampling)
+                .is_none()
+        );
+        assert!(
+            copr.unary_request_semaphore(ReqTag::analyze_table)
+                .is_some()
+        );
+        assert!(
+            copr.unary_request_semaphore(ReqTag::analyze_index)
+                .is_some()
+        );
+        assert!(copr.unary_request_semaphore(ReqTag::select).is_some());
+    }
+
+    #[test]
+    fn test_analyze_request_classification_matches_phase0_semaphore_choice() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = build_yatp_read_pool(
+            &UnifiedReadPoolConfig::default(),
+            DummyReporter,
+            engine,
+            None,
+            None,
+            CleanupMethod::InPlace,
+            false,
+        );
+        let cm = ConcurrencyManager::new_for_test(1.into());
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            None,
+        );
+
+        let mut full_sampling = AnalyzeReq::default();
+        full_sampling.set_tp(AnalyzeType::TypeFullSampling);
+        let mut req = coppb::Request::default();
+        req.set_tp(REQ_TYPE_ANALYZE);
+        req.set_data(full_sampling.write_to_bytes().unwrap());
+        let parsed = copr
+            .parse_request_and_check_memory_locks(req, None, false)
+            .unwrap();
+        assert_eq!(parsed.req_tag, ReqTag::analyze_full_sampling);
+        assert!(copr.unary_request_semaphore(parsed.req_tag).is_none());
+
+        let mut column = AnalyzeReq::default();
+        column.set_tp(AnalyzeType::TypeColumn);
+        let mut req = coppb::Request::default();
+        req.set_tp(REQ_TYPE_ANALYZE);
+        req.set_data(column.write_to_bytes().unwrap());
+        let parsed = copr
+            .parse_request_and_check_memory_locks(req, None, false)
+            .unwrap();
+        assert_eq!(parsed.req_tag, ReqTag::analyze_table);
+        assert!(copr.unary_request_semaphore(parsed.req_tag).is_some());
     }
 
     #[test]
