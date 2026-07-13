@@ -5,7 +5,7 @@ use std::{
     collections::{BinaryHeap, HashSet},
     slice::{Iter, IterMut},
     sync::{Arc, mpsc::Receiver},
-    time::{Duration, SystemTime},
+    time::Duration,
 };
 
 use collections::HashMap;
@@ -271,7 +271,7 @@ pub struct Recorder {
     pub detect_times: usize,
     pub peer: Peer,
     pub key_ranges: Vec<Vec<KeyRange>>,
-    pub create_time: SystemTime,
+    pub create_time: Instant,
     pub cpu_usage: f64,
     pub hottest_key_range: Option<KeyRange>,
 }
@@ -282,7 +282,7 @@ impl Recorder {
             detect_times: detect_times as usize,
             peer: Peer::default(),
             key_ranges: vec![],
-            create_time: SystemTime::now(),
+            create_time: Instant::now_coarse(),
             cpu_usage: 0.0,
             hottest_key_range: None,
         }
@@ -959,10 +959,7 @@ impl AutoSplitController {
     pub fn clear(&mut self) {
         let interval = Duration::from_secs(self.cfg.detect_times * 2);
         self.recorders
-            .retain(|_, recorder| match recorder.create_time.elapsed() {
-                Ok(life_time) => life_time < interval,
-                Err(_) => true,
-            });
+            .retain(|_, recorder| recorder.create_time.saturating_elapsed() < interval);
     }
 
     pub fn refresh_and_check_cfg(&mut self) -> SplitConfigChange {
@@ -1193,6 +1190,22 @@ mod tests {
         assert!(recorder.is_ready());
         let key = recorder.collect(&config);
         assert_eq!(key, b"b");
+    }
+
+    #[test]
+    fn test_clear_removes_stale_recorders() {
+        let mut hub = AutoSplitController::default();
+        hub.cfg.detect_times = 1;
+
+        let mut stale = Recorder::new(hub.cfg.detect_times);
+        stale.create_time = Instant::now_coarse() - Duration::from_secs(3);
+        hub.recorders.insert(1, stale);
+        hub.recorders.insert(2, Recorder::new(hub.cfg.detect_times));
+
+        hub.clear();
+
+        assert!(!hub.recorders.contains_key(&1));
+        assert!(hub.recorders.contains_key(&2));
     }
 
     #[test]

@@ -137,6 +137,8 @@ Load-based split accounting and state:
   Split-config changes, unified-read-pool capacity changes, and per-region
   split-validator disables discard prior detection history so a later decision
   cannot reuse stale samples.
+- Recorder expiration uses monotonic elapsed time so wall-clock adjustments
+  cannot retain stale detection history.
 
 ### Coprocessor hooks
 
