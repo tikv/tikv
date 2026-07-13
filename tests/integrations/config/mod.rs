@@ -766,7 +766,12 @@ fn test_serde_custom_tikv_config() {
         key_path: "invalid path".to_owned(),
         override_ssl_target: "".to_owned(),
         cert_allowed_cn,
+<<<<<<< HEAD
         redact_info_log: Some(true),
+=======
+        cert_allowed_san: HashSet::default(),
+        redact_info_log: log_wrappers::RedactOption::On,
+>>>>>>> 7ecce12e75 (security, server implement SAN based client certificate verification (#17865))
         encryption: EncryptionConfig {
             data_encryption_method: EncryptionMethod::Aes128Ctr,
             data_key_rotation_period: ReadableDuration::days(14),
