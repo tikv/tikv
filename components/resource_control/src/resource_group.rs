@@ -32,7 +32,6 @@ use crate::{
     metrics,
     metrics::{TWO_PHASE_THROTTLED_REQUESTS, deregister_metrics},
     resource_limiter::{ResourceLimiter, ResourceType},
-    score::{TARGET_CPU, pressure_fraction},
 };
 
 // a read task cost at least 50us.
@@ -678,11 +677,13 @@ impl ResourceGroupManager {
     /// Ramp-up: when CPU drops below threshold, recover ×1.2/tick until
     /// NO_LIMIT is restored.
     fn adjust_group_throttling(&self, cpu_score: f64, now: u64) {
-        const RAMP_FACTOR: f64 = 1.2;
+        const RAMP_FACTOR: f64 = 1.1;
         const MIN_RAMP_UP_EPOCHS: u32 = 2;
 
         let throttle_threshold = self.config.value().fg_cpu_throttle_threshold;
-        let leeway_threshold = throttle_threshold * 0.9;
+        // 15% dead zone below the throttle threshold so tighten/release
+        // don't flap when cpu_score hovers near the threshold.
+        let leeway_threshold = throttle_threshold * 0.85;
         let burst_factor = 1.0 + self.config.value().baseline_burst_pct / 100.0;
 
         // Advance all trackers to `now` and refresh cached historical rates
@@ -704,21 +705,27 @@ impl ResourceGroupManager {
 
         let engaged = cpu_score > throttle_threshold && self.is_bg_cpu_at_floor();
         if engaged {
-            let pressure = pressure_fraction(cpu_score, throttle_threshold, TARGET_CPU);
-            // Linearly scale limit from current rate (at threshold) down to
-            // historical rate (at TARGET_CPU).
+            const DECREASE_FACTOR: f64 = 0.9;
+            // Tighten by 10% per tick relative to whatever's currently
+            // enforced (or the measured rate, on the first tick before any
+            // limit is set) — never jump straight to burst_target. No
+            // ratcheting state is tracked here: the limiter's own
+            // current_limit already persists across ticks, so a sustained
+            // 10% reduction each tick compounds into a gradual tighten on
+            // its own, floored at burst_target.
             for entry in &self.ru_trackers {
                 let mut guard = entry.lock().unwrap();
                 let hist = guard.0.cached_historical_rate;
-                let current = guard.0.current_rate(now);
                 let burst_target = hist * burst_factor;
-                if hist > 0.0 && current > burst_target {
-                    // rate slides from current (pressure=0) to burst_target (pressure=1).
-                    let rate = current + (burst_target - current) * pressure;
+                if hist > 0.0 {
                     let current_limit = guard.1.get_limiter(ResourceType::Cpu).get_rate_limit();
-                    // Only tighten the limit — never loosen in the throttle branch.
-                    // Ramp-up is the only path that increases limits.
-                    if current_limit.is_infinite() || rate < current_limit {
+                    let base = if current_limit.is_infinite() {
+                        guard.0.current_rate(now)
+                    } else {
+                        current_limit
+                    };
+                    if base > burst_target {
+                        let rate = (base * DECREASE_FACTOR).max(burst_target);
                         guard.0.ramp_up_epochs = 0;
                         guard
                             .1
@@ -783,20 +790,18 @@ impl ResourceGroupManager {
 
     fn adjust_group_scheduling(&self, cpu_score: f64) {
         let throttle_threshold = self.config.value().fg_cpu_throttle_threshold;
-        let leeway_threshold = throttle_threshold * 0.9;
+        // 15% dead zone below the throttle threshold so tighten/release
+        // don't flap when cpu_score hovers near the threshold.
+        let leeway_threshold = throttle_threshold * 0.85;
 
-        // pressure: 0.0 at throttle_threshold → 1.0 at TARGET_CPU. Drives the
-        // unified read pool's scale-down decision in
-        // `compute_read_pool_target_cpu`. Reset to 0 whenever foreground
-        // is not under CPU pressure so a transient spike can't pin the read
-        // pool down indefinitely.
+        // Engaged/not-engaged gate consumed by compute_read_pool_target_cpu,
+        // which only ever checks read_pool_cpu_pressure() > 0.0 — so this
+        // stores a plain 1.0/0.0 rather than a continuously-varying
+        // fraction. Reset to 0 whenever foreground is not under CPU
+        // pressure so a transient spike can't pin the read pool down
+        // indefinitely.
         let engaged = cpu_score > throttle_threshold && self.is_bg_cpu_at_floor();
-        let pressure = if engaged {
-            pressure_fraction(cpu_score, throttle_threshold, TARGET_CPU)
-        } else {
-            0.0
-        };
-        self.set_read_pool_cpu_pressure(pressure);
+        self.set_read_pool_cpu_pressure(if engaged { 1.0 } else { 0.0 });
 
         // Comfortably idle (below leeway) → allow the read pool to scale its
         // thread count back up toward its max on the next tick it checks in.
@@ -1524,6 +1529,7 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::resource_limiter::ResourceType::{Cpu, Io};
+    use crate::score::TARGET_CPU;
 
     pub fn new_resource_group_ru(name: String, ru: u64, group_priority: u32) -> PbResourceGroup {
         new_resource_group(name, true, ru, ru, group_priority)
@@ -2293,6 +2299,74 @@ pub(crate) mod tests {
         assert!(
             (target_cpu - 3.24).abs() < 1e-9,
             "should track 10% below whatever usage is currently measured, got {target_cpu}"
+        );
+    }
+
+    #[test]
+    fn test_adjust_group_throttling_decreases_by_10_percent_per_tick() {
+        // fg_cpu_throttle_threshold=70, baseline_burst_pct=20 (defaults) ->
+        // burst_factor = 1.2.
+        let mgr = ResourceGroupManager::default();
+        mgr.add_resource_group(new_resource_group_ru("g1".into(), 1000, HIGH_PRIORITY));
+        let limiter = mgr.get_foreground_group_limiter("g1");
+
+        // Seed one completed bucket (historical) and a large spike in the
+        // still-open bucket (current), so hist > 0 and current is well
+        // above burst_target = hist * 1.2.
+        let t0 = RuTracker::now_secs();
+        {
+            let entry = mgr.ru_trackers.get("g1").unwrap();
+            let mut guard = entry.lock().unwrap();
+            guard.0.record_at(6000, t0 + 30);
+            guard.0.record_at(0, t0 + 60); // closes bucket: hist ~= 6000/30 = 200/s
+            guard.0.record_at(120_000, t0 + 65); // open-bucket spike: current >> burst_target
+        }
+        mgr.set_bg_cpu_at_floor(true);
+        let now = t0 + 90;
+
+        // First tick: no limit set yet (starts at INFINITY), so the base is
+        // the measured current rate, tightened by 10% — not an interpolated
+        // jump straight to burst_target.
+        mgr.adjust_group_throttling(90.0, now);
+        let after_tick1 = limiter.get_limiter(ResourceType::Cpu).get_rate_limit();
+        let current_rate = {
+            let entry = mgr.ru_trackers.get("g1").unwrap();
+            entry.lock().unwrap().0.current_rate(now)
+        };
+        assert!(
+            (after_tick1 - current_rate * 0.9).abs() < current_rate * 0.01,
+            "first tick should tighten 10% below measured current rate, got {after_tick1}, \
+             expected ~{}",
+            current_rate * 0.9
+        );
+
+        // Second tick, same inputs: base is now the persisted current_limit
+        // from tick 1 (not a freshly measured/interpolated value), so it
+        // tightens another 10% relative to itself rather than staying put
+        // or jumping to burst_target.
+        mgr.adjust_group_throttling(90.0, now);
+        let after_tick2 = limiter.get_limiter(ResourceType::Cpu).get_rate_limit();
+        assert!(
+            (after_tick2 - after_tick1 * 0.9).abs() < after_tick1 * 0.01,
+            "second tick should tighten another 10% relative to the previous tick's limit, \
+             got {after_tick2}, expected ~{}",
+            after_tick1 * 0.9
+        );
+
+        // Repeated ticks converge to and stop at burst_target = hist * 1.2,
+        // never going below it.
+        for _ in 0..60 {
+            mgr.adjust_group_throttling(90.0, now);
+        }
+        let floored = limiter.get_limiter(ResourceType::Cpu).get_rate_limit();
+        let hist = {
+            let entry = mgr.ru_trackers.get("g1").unwrap();
+            entry.lock().unwrap().0.cached_historical_rate
+        };
+        let burst_target = hist * 1.2;
+        assert!(
+            (floored - burst_target).abs() < burst_target * 0.01,
+            "should converge to and stop at burst_target ({burst_target}), got {floored}"
         );
     }
 
