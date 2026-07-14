@@ -116,16 +116,13 @@ fn map_like_sig(ret_field_type: &FieldType, children: &[Expr]) -> Result<RpnFnMe
         .collation()
         .map_err(tidb_query_datatype::codec::Error::from)?;
 
-    // If the target charset is the same with pattern charset, and is Utf8mb4,
-    // use their charset to decode bytes. If not, use the charset pushed down in
-    // the ret_field type to decode the bytes.
-    //
-    // This behavior is for the compatibility and correctness: The TiDB doesn't
-    // push down the collation information when the new collation framework is
-    // not enabled, and always use the binary collation. However, the `_`
-    // pattern considers not only the order of strings, but also the number of
-    // characters. Some characters more than 1 bytes cannot be matched by `_` if
-    // the new collation framework is not enabled.
+    // The original collation ID distinguishes TiDB's pattern implementations.
+    // The legacy framework pushes down a non-negative ID and always uses a
+    // derived binary pattern, which decodes runes without applying collation
+    // weights. In the new framework, binary and gb18030_bin use byte patterns;
+    // other collations use rune/weight patterns. For the latter, decode with the
+    // argument charset when both arguments use the same charset, or with the
+    // return charset otherwise.
     Ok(match_template_multiple_collators! {
         (TT, TC, PC), (ret_collation, target_collation, pattern_collation), {
             if ret_collation_id >= 0 {

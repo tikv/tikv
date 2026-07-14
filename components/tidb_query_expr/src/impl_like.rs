@@ -432,6 +432,33 @@ mod tests {
             eval_like_with_collation_ids("中".as_bytes(), b"_", NEW_UTF8MB4_BIN, NEW_UTF8MB4_BIN,),
             Some(1)
         );
+
+        // '%' backtracking advances by bytes for byte patterns and by decoded
+        // runes for rune/weight patterns.
+        for collation_id in [NEW_BINARY, NEW_GB18030_BIN] {
+            assert_eq!(
+                eval_like_with_collation_ids("中X".as_bytes(), b"%__X", collation_id, collation_id,),
+                Some(1)
+            );
+        }
+        assert_eq!(
+            eval_like_with_collation_ids(
+                "中X".as_bytes(),
+                b"%__X",
+                LEGACY_BINARY,
+                LEGACY_UTF8MB4_BIN,
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            eval_like_with_collation_ids(
+                "中X".as_bytes(),
+                b"%__X",
+                NEW_UTF8MB4_BIN,
+                NEW_UTF8MB4_BIN,
+            ),
+            Some(0)
+        );
     }
 
     #[test]
