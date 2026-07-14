@@ -57,7 +57,7 @@ use crate::{
     annotate,
     checkpoint_manager::{
         BasicFlushObserver, CheckpointManager, CheckpointV3FlushObserver, FlushObserver,
-        GetCheckpointResult, RegionIdWithVersion, Subscription,
+        GetCheckpointResult, RegionIdWithVersion, Subscription, remove_flush_safe_point,
     },
     errors::{Error, ReportableResult, Result},
     event_loader::InitialDataLoader,
@@ -835,6 +835,11 @@ where
     pub fn on_unregister(&self, task_name: &str) -> Option<StreamBackupTaskInfo> {
         let info = self.unload_task(task_name);
         self.clean_pause_guard_id_for_task(task_name);
+        self.pool.block_on(remove_flush_safe_point(
+            self.pd_client.clone(),
+            self.store_id,
+            task_name,
+        ));
         self.remove_metrics_after_unregister(task_name);
         info
     }
@@ -913,6 +918,7 @@ where
         flush_ts: TimeStamp,
     ) -> future![Result<()>] {
         let router = self.range_router.clone();
+        let sched = self.scheduler.clone();
         let store_id = self.store_id;
         let mut flush_ob = self.flush_observer();
         async move {
@@ -939,7 +945,19 @@ where
                     // We cannot advance the resolved ts for now.
                     return Ok(());
                 }
-                flush_ob.after(&task, rts).await?
+                fail::fail_point!("before_flush_observer_after");
+                flush_ob.after(&task, rts).await?;
+                if !router.has_task(&task) {
+                    // `router.do_flush` releases the task's flushing flag before this observer
+                    // tail runs. An unregister, or another trailing flush for the same removed
+                    // task, can race with `flush_ob.after` and recreate the safe point. The task
+                    // map is the liveness boundary, so ask the endpoint actor to clean up the
+                    // just-updated safe point when no task with this name is still registered.
+                    // The actor re-checks liveness so same-name re-registration is ordered with
+                    // this cleanup.
+                    fail::fail_point!("before_schedule_cleanup_flush_safe_point");
+                    try_send!(sched, Task::CleanupFlushSafePoint(task.clone()));
+                }
             }
             Ok(())
         }
@@ -1199,10 +1217,22 @@ where
             }
             Task::MarkFailover(t) => self.failover_time = Some(t),
             Task::ExecFlush(task, min_ts, flush_ts) => self.on_exec_flush(task, min_ts, flush_ts),
+            Task::CleanupFlushSafePoint(task) => self.on_cleanup_flush_safe_point(&task),
             Task::RegionCheckpointsOp(s) => self.handle_region_checkpoints_op(s),
             Task::UpdateGlobalCheckpoint(task) => self.on_update_global_checkpoint(task),
             Task::Flushed(result) => self.on_flushed(result),
         }
+    }
+
+    fn on_cleanup_flush_safe_point(&self, task: &str) {
+        if self.range_router.has_task(task) {
+            return;
+        }
+        self.pool.block_on(remove_flush_safe_point(
+            self.pd_client.clone(),
+            self.store_id,
+            task,
+        ));
     }
 
     fn on_flushed(&mut self, result: FlushResult) {
@@ -1480,6 +1510,9 @@ pub enum Task {
     /// Execute the flush with the calculated resolved result.
     /// This is an internal command only issued by the `Flush` task.
     ExecFlush(String, ResolvedRegions, TimeStamp),
+    /// Remove the flush safe point if the task is still absent in the endpoint
+    /// actor.
+    CleanupFlushSafePoint(String),
     /// The command for getting region checkpoints.
     RegionCheckpointsOp(RegionCheckpointOperation),
     /// update global-checkpoint-ts to storage.
@@ -1599,6 +1632,9 @@ impl fmt::Debug for Task {
                 .field(&arg1.global_checkpoint())
                 .field(&arg2)
                 .finish(),
+            Self::CleanupFlushSafePoint(task) => {
+                f.debug_tuple("CleanupFlushSafePoint").field(task).finish()
+            }
             Self::RegionCheckpointsOp(s) => f.debug_tuple("GetRegionCheckpoints").field(s).finish(),
             Self::UpdateGlobalCheckpoint(task) => {
                 f.debug_tuple("UpdateGlobalCheckpoint").field(task).finish()
@@ -1640,6 +1676,7 @@ impl Task {
             Task::Sync(..) => "sync",
             Task::MarkFailover(_) => "mark_failover",
             Task::ExecFlush(..) => "flush_with_min_ts",
+            Task::CleanupFlushSafePoint(_) => "cleanup_flush_safe_point",
             Task::RegionCheckpointsOp(..) => "get_checkpoints",
             Task::UpdateGlobalCheckpoint(..) => "update_global_checkpoint",
         }

@@ -12,8 +12,9 @@ mod all {
     use core::panic;
     use std::{
         sync::{
-            Arc,
+            Arc, Mutex,
             atomic::{AtomicBool, Ordering},
+            mpsc::sync_channel,
         },
         time::Duration,
     };
@@ -37,6 +38,7 @@ mod all {
         HandyRwLock, box_err,
         config::{ReadableDuration, ReadableSize},
         defer,
+        thread_name_prefix::BACKUP_STREAM_THREAD,
     };
     use txn_types::Key;
     use walkdir::WalkDir;
@@ -612,5 +614,131 @@ mod all {
             suite.flushed_files.path(),
             keyset.iter().map(|v| v.as_slice()),
         )
+    }
+
+    #[test]
+    fn unregister_during_flush_cleans_flush_safe_point() {
+        let mut suite = SuiteBuilder::new_named("unregister_during_flush")
+            .nodes(1)
+            .build();
+        let task = "unregister_during_flush";
+        let service_id = format!("{}-{}-{}", BACKUP_STREAM_THREAD, task, 1);
+        let (paused_tx, paused_rx) = sync_channel(0);
+        let (resume_tx, resume_rx) = sync_channel(0);
+        let resume_rx = Mutex::new(resume_rx);
+
+        fail::cfg_callback("before_flush_observer_after", move || {
+            paused_tx.send(()).unwrap();
+            resume_rx.lock().unwrap().recv().unwrap();
+        })
+        .unwrap();
+        defer! {
+            fail::remove("before_flush_observer_after")
+        }
+
+        suite.must_register_task(1, task);
+        suite.sync();
+        run_async_test(suite.write_records(0, 1, 1));
+
+        let (flush_tx, mut flush_rx) = tokio::sync::mpsc::channel(1);
+        suite.run(|| Task::ForceFlush(TaskSelector::ByName(task.to_owned()), flush_tx.clone()));
+        drop(flush_tx);
+        paused_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("flush should reach observer tail");
+
+        run_async_test(suite.meta_store.delete(Keys::Key(MetaKey::task_of(task)))).unwrap();
+        suite.wait_with_router(|router| !router.has_task(task));
+
+        resume_tx.send(()).unwrap();
+        run_async_test(async {
+            while let Some(result) = tokio::time::timeout(Duration::from_secs(30), flush_rx.recv())
+                .await
+                .expect("flush should finish after releasing failpoint")
+            {
+                assert!(result.error.is_none(), "{:?}", result.error);
+            }
+        });
+
+        let safepoints = suite.cluster.pd_client.gc_safepoints.rl();
+        assert!(
+            !safepoints
+                .iter()
+                .any(|sp| sp.service == service_id && sp.safepoint.into_inner() > 0),
+            "{:?}",
+            safepoints
+        );
+    }
+
+    #[test]
+    fn cleanup_flush_safe_point_keeps_same_name_registered_task() {
+        let mut suite = SuiteBuilder::new_named("cleanup_same_name_task")
+            .nodes(1)
+            .build();
+        let task = "cleanup_same_name_task";
+        let service_id = format!("{}-{}-{}", BACKUP_STREAM_THREAD, task, 1);
+        let (observer_paused_tx, observer_paused_rx) = sync_channel(0);
+        let (observer_resume_tx, observer_resume_rx) = sync_channel(0);
+        let observer_resume_rx = Mutex::new(observer_resume_rx);
+        let (cleanup_paused_tx, cleanup_paused_rx) = sync_channel(0);
+        let (cleanup_resume_tx, cleanup_resume_rx) = sync_channel(0);
+        let cleanup_resume_rx = Mutex::new(cleanup_resume_rx);
+
+        fail::cfg_callback("before_flush_observer_after", move || {
+            observer_paused_tx.send(()).unwrap();
+            observer_resume_rx.lock().unwrap().recv().unwrap();
+        })
+        .unwrap();
+        defer! {
+            fail::remove("before_flush_observer_after")
+        }
+        fail::cfg_callback("before_schedule_cleanup_flush_safe_point", move || {
+            cleanup_paused_tx.send(()).unwrap();
+            cleanup_resume_rx.lock().unwrap().recv().unwrap();
+        })
+        .unwrap();
+        defer! {
+            fail::remove("before_schedule_cleanup_flush_safe_point")
+        }
+
+        suite.must_register_task(1, task);
+        suite.sync();
+        run_async_test(suite.write_records(0, 1, 1));
+
+        let (flush_tx, mut flush_rx) = tokio::sync::mpsc::channel(1);
+        suite.run(|| Task::ForceFlush(TaskSelector::ByName(task.to_owned()), flush_tx.clone()));
+        drop(flush_tx);
+        observer_paused_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("flush should reach observer tail");
+
+        run_async_test(suite.meta_store.delete(Keys::Key(MetaKey::task_of(task)))).unwrap();
+        suite.wait_with_router(|router| !router.has_task(task));
+
+        observer_resume_tx.send(()).unwrap();
+        cleanup_paused_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("flush should try to schedule safe point cleanup");
+
+        suite.must_register_task(1, task);
+        cleanup_resume_tx.send(()).unwrap();
+        run_async_test(async {
+            while let Some(result) = tokio::time::timeout(Duration::from_secs(30), flush_rx.recv())
+                .await
+                .expect("flush should finish after releasing failpoint")
+            {
+                assert!(result.error.is_none(), "{:?}", result.error);
+            }
+        });
+        suite.sync();
+
+        let safepoints = suite.cluster.pd_client.gc_safepoints.rl();
+        assert!(
+            safepoints
+                .iter()
+                .any(|sp| sp.service == service_id && !sp.ttl.is_zero()),
+            "{:?}",
+            safepoints
+        );
     }
 }
