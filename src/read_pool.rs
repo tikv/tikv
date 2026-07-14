@@ -1465,20 +1465,40 @@ mod tests {
         resource_manager.online_adjust_resource_quota(90.0);
         assert!(resource_manager.read_pool_cpu_pressure() > 0.0);
 
-        // With full pressure and a cold historical floor, the
-        // ResourceGroupManager's target CPU collapses to ~0, which merges
-        // into target_cpu_cores and forces busy_cpu_scale_in to fire (it
-        // otherwise never would, since cpu_threshold's own ceiling is a
-        // generous 100% of cores). Give the read pool a non-zero measured
-        // CPU reading to scale down from — a cold/idle pool has nothing to
-        // reduce.
+        // With pressure engaged, the ResourceGroupManager's target CPU is
+        // 10% below the currently measured read_pool_cpu and forces
+        // busy_cpu_scale_in to fire (it otherwise never would, since
+        // cpu_threshold's own ceiling is a generous 100% of cores). Give the
+        // read pool a non-zero measured CPU reading to scale down from — a
+        // cold/idle pool has nothing to reduce. This reading is a fixed test
+        // override that does not track cur_thread_count, unlike real
+        // measured usage, which is why convergence stops at a floor derived
+        // from this fixed value rather than continuing to the configured
+        // minimum (see compute_read_pool_target_cpu's doc comment).
         runner.cpu_time_tracker.set_test_cpu_utilization(4.0);
 
+        let before_first_tick = runner.cur_thread_count;
         runner.adjust_pool_size();
 
+        assert!(
+            runner.cur_thread_count < before_first_tick && runner.cur_thread_count > 1,
+            "a single tick should reduce the pool gradually, not collapse it straight to the \
+             minimum; before: {}, after: {}",
+            before_first_tick,
+            runner.cur_thread_count
+        );
+
+        // Repeated ticks keep reducing cur_thread_count relative to itself
+        // each time (via the read pool's own cur_thread_count * ratio math),
+        // until it stabilizes at floor(0.9 * 4.0) = 3 — the target ceiling's
+        // own floor, since the fixed test reading never drops further to
+        // push the ceiling down any more.
+        for _ in 0..20 {
+            runner.adjust_pool_size();
+        }
         assert_eq!(
-            runner.cur_thread_count, 1,
-            "resource_manager's collapsed target CPU should scale the pool down to the minimum, got {}",
+            runner.cur_thread_count, 3,
+            "sustained pressure should converge to and stabilize at the target ceiling's floor, got {}",
             runner.cur_thread_count
         );
 

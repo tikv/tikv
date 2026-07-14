@@ -826,24 +826,20 @@ impl ResourceGroupManager {
     }
 
     /// Decides the unified read pool's target CPU (in cores) under
-    /// foreground pressure: scales down from the currently measured
-    /// `read_pool_cpu` toward the historical-CPU floor as pressure
-    /// increases, or returns `f64::INFINITY` (no ceiling) when there's no
-    /// pressure — callers that `min()` this into their own ceiling get back
-    /// exactly that ceiling, unaffected, rather than one that collapses to
-    /// whatever is currently being used. Also records `read_pool_cpu` into
-    /// the historical tracker so the floor stays current.
-    ///
-    /// This only ever scales down. The unified read pool converts this
-    /// target CPU into a thread count itself, using the same CPU-ratio math
-    /// it already applies for its `cpu_threshold` ceiling. Scaling up (and
-    /// applying `min_thread_count`/`max_thread_count` bounds) is likewise
-    /// the read pool's own responsibility — it consults
+    /// foreground pressure: once pressure engages, returns 10% below the
+    /// currently measured `read_pool_cpu`, instead of jumping straight to a
+    /// computed value. The ceiling is clamped to the historical-CPU floor so
+    /// it never drops below what the pool has sustained historically, and
+    /// resets to `f64::INFINITY` (no ceiling) as soon as pressure clears —
+    /// callers that `min()` this into their own ceiling get back exactly
+    /// that ceiling, unaffected. Also records `read_pool_cpu` into the
+    /// historical tracker so the floor stays current.
     /// [`Self::read_pool_scale_up_allowed`] to know whether it's safe to do
     /// so.
     pub fn compute_read_pool_target_cpu(&self, read_pool_cpu: f64, interval_secs: f64) -> f64 {
+        const RATCHET_FACTOR: f64 = 0.9;
+
         let floor_cpu = self.read_pool_cpu_floor(read_pool_cpu, interval_secs);
-        let pressure = self.read_pool_cpu_pressure();
 
         metrics::READ_POOL_CPU_VEC
             .with_label_values(&["historical"])
@@ -852,8 +848,8 @@ impl ResourceGroupManager {
             .with_label_values(&["current"])
             .set(read_pool_cpu);
 
-        if pressure > 0.0 && read_pool_cpu > floor_cpu {
-            read_pool_cpu - (read_pool_cpu - floor_cpu) * pressure
+        if self.read_pool_cpu_pressure() > 0.0 {
+            (read_pool_cpu * RATCHET_FACTOR).max(floor_cpu)
         } else {
             f64::INFINITY
         }
@@ -2267,18 +2263,36 @@ pub(crate) mod tests {
     #[test]
     fn test_compute_read_pool_target_cpu_scales_down_with_pressure() {
         let mgr = ResourceGroupManager::default();
-        // Seed a historical floor of 0 cores (cold tracker), then drive full
-        // pressure (cpu_score == TARGET_CPU) so pressure_fraction == 1.0.
+        // Seed a historical floor of 0 cores (cold tracker), then engage
+        // pressure (cpu_score == TARGET_CPU).
         mgr.set_bg_cpu_at_floor(true);
         mgr.online_adjust_resource_quota(TARGET_CPU);
         assert_eq!(mgr.read_pool_cpu_pressure(), 1.0);
 
-        // Full pressure interpolates all the way down to the (cold, i.e. 0)
+        // Once engaged, the ceiling is 10% below the currently measured
+        // usage instead of collapsing straight to the (cold, i.e. 0)
         // historical floor.
         let target_cpu = mgr.compute_read_pool_target_cpu(4.0, 10.0);
-        assert_eq!(
-            target_cpu, 0.0,
-            "full pressure should scale down to the floor"
+        assert!(
+            (target_cpu - 3.6).abs() < 1e-9,
+            "should be 10% below measured usage, got {target_cpu}"
+        );
+
+        // Stateless: calling again with the same measured usage gives the
+        // same result rather than ratcheting further down on its own.
+        let target_cpu = mgr.compute_read_pool_target_cpu(4.0, 10.0);
+        assert!(
+            (target_cpu - 3.6).abs() < 1e-9,
+            "repeated calls with unchanged usage should not ratchet further, got {target_cpu}"
+        );
+
+        // It does respond to a drop in measured usage (e.g. after the read
+        // pool itself cut its thread count in response to the previous
+        // tick's lower ceiling).
+        let target_cpu = mgr.compute_read_pool_target_cpu(3.6, 10.0);
+        assert!(
+            (target_cpu - 3.24).abs() < 1e-9,
+            "should track 10% below whatever usage is currently measured, got {target_cpu}"
         );
     }
 
