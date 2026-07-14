@@ -9,11 +9,12 @@
 //! whole-process and grpc normalized utilization, so pressure is detected on
 //! whichever signal is hottest.
 //!
-//! Consumers turn a score into a `[0, 1]` pressure fraction via
-//! [`pressure_fraction`], each using their own `(start, end)` threshold range
-//! (e.g. background reads `bg_cpu_throttle_threshold ->
-//! fg_cpu_throttle_threshold`; foreground reads `fg_cpu_throttle_threshold ->
-//! TARGET_CPU`).
+//! Background quota adjustment turns its score into a `[0, 1]` pressure
+//! fraction via [`pressure_fraction`], over its own `(bg_cpu_throttle_threshold,
+//! fg_cpu_throttle_threshold)` range. Foreground/read-pool throttling instead
+//! just tightens whatever's currently in effect by a fixed percentage per
+//! tick once engaged — see `resource_group.rs::adjust_group_throttling` and
+//! `compute_read_pool_target_cpu`.
 
 use std::time::Duration;
 
@@ -23,8 +24,10 @@ use tikv_util::{
     time::Instant,
 };
 
-/// Upper bound of the foreground/read-pool throttle range. Background's
-/// upper bound is `fg_cpu_throttle_threshold` (from config).
+/// Test-only: a cpu_score high enough to guarantee maximum pressure
+/// regardless of configured thresholds, used to drive foreground/read-pool
+/// throttling tests unconditionally into their "fully engaged" branch.
+#[cfg(test)]
 pub(crate) const TARGET_CPU: f64 = 90.0;
 
 /// Maps `score` onto a `[0, 1]` pressure fraction: `0` at `start`, `1` at
