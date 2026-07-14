@@ -127,6 +127,12 @@ pub trait Collator: 'static + std::marker::Send + std::marker::Sync + std::fmt::
     /// See more on <http://www.unicode.org/reports/tr10/#Weight_Level_Defn>.
     fn char_weight(char: <Self::Charset as Charset>::Char) -> Self::Weight;
 
+    /// Compares two characters as literals in a LIKE pattern.
+    #[inline]
+    fn like_pattern_compare(a: &[u8], b: &[u8]) -> Result<bool> {
+        Ok(Self::sort_compare(a, b, true)? == Ordering::Equal)
+    }
+
     /// Writes the SortKey of `bstr` into `writer`.
     fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize>;
 

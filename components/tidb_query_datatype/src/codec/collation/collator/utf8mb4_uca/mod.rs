@@ -18,6 +18,8 @@ pub trait UnicodeVersion: 'static + Send + Sync + Debug {
     fn preprocess(s: &[u8]) -> &[u8];
 
     fn char_weight(ch: char) -> u128;
+
+    fn like_pattern_match(a: char, b: char) -> bool;
 }
 
 #[derive(Debug)]
@@ -35,6 +37,13 @@ impl<T: UnicodeVersion> Collator for CollatorUca<T> {
     #[inline]
     fn char_weight(ch: char) -> Self::Weight {
         T::char_weight(ch)
+    }
+
+    #[inline]
+    fn like_pattern_compare(a: &[u8], b: &[u8]) -> Result<bool> {
+        let a = next_utf8_char(a).map(|(ch, _)| ch);
+        let b = next_utf8_char(b).map(|(ch, _)| ch);
+        Ok(matches!((a, b), (Some(a), Some(b)) if T::like_pattern_match(a, b)))
     }
 
     #[inline]

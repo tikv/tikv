@@ -71,10 +71,7 @@ pub fn like<C: Collator, CS: Charset>(
                             char_bytes_for_compare::<C, CS>(target_bytes, target_char);
                         let pattern_char_bytes =
                             char_bytes_for_compare::<C, CS>(pattern_bytes, pattern_char);
-                        matches!(
-                            C::sort_compare(target_char_bytes, pattern_char_bytes, true),
-                            Ok(std::cmp::Ordering::Equal)
-                        )
+                        C::like_pattern_compare(target_char_bytes, pattern_char_bytes)?
                     };
                     if matches {
                         tx += toff;
@@ -262,6 +259,8 @@ mod tests {
                 Some(0),
             ),
             (r#"Ⱕ"#, r#"ⱕ"#, '\\', Collation::Utf8Mb40900AiCi, Some(1)),
+            (r#"😀"#, r#"😁"#, '\\', Collation::Utf8Mb4UnicodeCi, Some(0)),
+            (r#"😀"#, r#"😀"#, '\\', Collation::Utf8Mb4UnicodeCi, Some(1)),
             (
                 r#"a　a"#,
                 r#"a a"#,
