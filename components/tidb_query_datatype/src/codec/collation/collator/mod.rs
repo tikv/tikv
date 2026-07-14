@@ -22,7 +22,7 @@ pub use utf8mb4_binary::*;
 pub use utf8mb4_general_ci::*;
 pub use utf8mb4_uca::*;
 
-use super::{charset::*, Collator};
+use super::{charset::*, Collator, LikePatternMode};
 use crate::codec::Result;
 
 pub const PADDING_SPACE: char = 0x20 as char;
