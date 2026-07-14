@@ -102,20 +102,36 @@ pub trait Charset {
     fn charset() -> crate::Charset;
 }
 
+/// How a collator implements LIKE pattern matching.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LikePatternMode {
+    /// Decode and match the target and pattern byte by byte.
+    Bytes,
+    /// Decode UTF-8 runes and compare their identity without collation weights.
+    BinaryRunes,
+    /// Decode characters and use the collator's LIKE equivalence relation.
+    CollatorDefined,
+}
+
 pub trait Collator: 'static + std::marker::Send + std::marker::Sync + std::fmt::Debug {
     type Charset: Charset;
     type Weight: Unsigned;
 
     const IS_CASE_INSENSITIVE: bool;
 
-    /// Whether LIKE literal matching uses the original bytes instead of the
-    /// collation sort order.
-    const LIKE_LITERAL_MATCHES_BYTES: bool = false;
+    /// How LIKE patterns decode and compare the target and pattern.
+    const LIKE_PATTERN_MODE: LikePatternMode;
 
     /// Returns the weight of a given char. The chars that have equal
     /// weight are considered as the same char with this collation.
     /// See more on <http://www.unicode.org/reports/tr10/#Weight_Level_Defn>.
     fn char_weight(char: <Self::Charset as Charset>::Char) -> Self::Weight;
+
+    /// Compares two characters as literals in a LIKE pattern.
+    #[inline]
+    fn like_pattern_compare(a: &[u8], b: &[u8]) -> Result<bool> {
+        Ok(Self::sort_compare(a, b, true)? == Ordering::Equal)
+    }
 
     /// Writes the SortKey of `bstr` into `writer`.
     fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize>;
