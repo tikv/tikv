@@ -12,6 +12,7 @@ impl Collator for CollatorUtf8Mb4GeneralCi {
     type Weight = u16;
 
     const IS_CASE_INSENSITIVE: bool = true;
+    const LIKE_PATTERN_MODE: LikePatternMode = LikePatternMode::CollationWeights;
 
     #[inline]
     fn char_weight(ch: char) -> Self::Weight {

@@ -4,6 +4,7 @@ use super::*;
 
 trait GbkCollator: 'static + Send + Sync + std::fmt::Debug {
     const IS_CASE_INSENSITIVE: bool;
+    const LIKE_PATTERN_MODE: LikePatternMode;
     const NEED_TRUNCATE_INVALID_UTF8_RUNE: bool;
     const WEIGHT_TABLE: &'static [u8; TABLE_SIZE_FOR_GBK];
 }
@@ -13,6 +14,7 @@ impl<T: GbkCollator> Collator for T {
     type Weight = u16;
 
     const IS_CASE_INSENSITIVE: bool = T::IS_CASE_INSENSITIVE;
+    const LIKE_PATTERN_MODE: LikePatternMode = T::LIKE_PATTERN_MODE;
 
     #[inline]
     fn char_weight(ch: char) -> Self::Weight {
@@ -126,6 +128,7 @@ pub struct CollatorGbkBin;
 
 impl GbkCollator for CollatorGbkBin {
     const IS_CASE_INSENSITIVE: bool = false;
+    const LIKE_PATTERN_MODE: LikePatternMode = LikePatternMode::BinaryRunes;
     const NEED_TRUNCATE_INVALID_UTF8_RUNE: bool = false;
     const WEIGHT_TABLE: &'static [u8; TABLE_SIZE_FOR_GBK] = GBK_BIN_TABLE;
 }
@@ -137,6 +140,7 @@ pub struct CollatorGbkChineseCi;
 
 impl GbkCollator for CollatorGbkChineseCi {
     const IS_CASE_INSENSITIVE: bool = true;
+    const LIKE_PATTERN_MODE: LikePatternMode = LikePatternMode::CollationWeights;
     const NEED_TRUNCATE_INVALID_UTF8_RUNE: bool = true;
     const WEIGHT_TABLE: &'static [u8; TABLE_SIZE_FOR_GBK] = GBK_CHINESE_CI_TABLE;
 }

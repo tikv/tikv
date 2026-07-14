@@ -48,7 +48,7 @@ use tidb_query_datatype::{
     Charset, Collation, FieldTypeAccessor, FieldTypeFlag,
     codec::{
         collation::{
-            Charset as _, Collator,
+            Charset as _, Collator, LikePatternMode,
             collator::{CollatorBinary, CollatorUtf8Mb4BinNoPadding},
         },
         data_type::*,
@@ -119,10 +119,10 @@ fn map_like_sig(ret_field_type: &FieldType, children: &[Expr]) -> Result<RpnFnMe
     // The original collation ID distinguishes TiDB's pattern implementations.
     // The legacy framework pushes down a non-negative ID and always uses a
     // derived binary pattern, which decodes runes without applying collation
-    // weights. In the new framework, binary and gb18030_bin use byte patterns;
-    // other collations use rune/weight patterns. For the latter, decode with the
-    // argument charset when both arguments use the same charset, or with the
-    // return charset otherwise.
+    // weights. The new framework uses byte patterns, derived binary rune
+    // patterns, or collation-weight patterns depending on the collation. For
+    // collation-weight patterns, decode with the argument charset when both
+    // arguments use the same charset, or with the return charset otherwise.
     Ok(match_template_multiple_collators! {
         (TT, TC, PC), (ret_collation, target_collation, pattern_collation), {
             if ret_collation_id >= 0 {
@@ -133,14 +133,27 @@ fn map_like_sig(ret_field_type: &FieldType, children: &[Expr]) -> Result<RpnFnMe
                     CollatorUtf8Mb4BinNoPadding,
                     <CollatorUtf8Mb4BinNoPadding as Collator>::Charset,
                 >()
-            } else if <TT as Collator>::LIKE_PATTERN_MATCHES_BYTES {
-                // A byte pattern applies to literals, single-character
-                // wildcards, and '%' backtracking alike.
-                like_fn_meta::<CollatorBinary, <CollatorBinary as Collator>::Charset>()
-            } else if <TC as Collator>::Charset::charset() == <PC as Collator>::Charset::charset() {
-                like_fn_meta::<TT, <TC as Collator>::Charset>()
             } else {
-                like_fn_meta::<TT, <TT as Collator>::Charset>()
+                match <TT as Collator>::LIKE_PATTERN_MODE {
+                    LikePatternMode::Bytes => {
+                        // A byte pattern applies to literals, single-character
+                        // wildcards, and '%' backtracking alike.
+                        like_fn_meta::<CollatorBinary, <CollatorBinary as Collator>::Charset>()
+                    }
+                    LikePatternMode::BinaryRunes => like_fn_meta::<
+                        CollatorUtf8Mb4BinNoPadding,
+                        <CollatorUtf8Mb4BinNoPadding as Collator>::Charset,
+                    >(),
+                    LikePatternMode::CollationWeights => {
+                        if <TC as Collator>::Charset::charset()
+                            == <PC as Collator>::Charset::charset()
+                        {
+                            like_fn_meta::<TT, <TC as Collator>::Charset>()
+                        } else {
+                            like_fn_meta::<TT, <TT as Collator>::Charset>()
+                        }
+                    }
+                }
             }
         }
     })

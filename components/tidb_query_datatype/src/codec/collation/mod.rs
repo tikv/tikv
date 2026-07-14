@@ -102,15 +102,25 @@ pub trait Charset {
     fn charset() -> crate::Charset;
 }
 
+/// How a collator implements LIKE pattern matching.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LikePatternMode {
+    /// Decode and match the target and pattern byte by byte.
+    Bytes,
+    /// Decode UTF-8 runes and compare their identity without collation weights.
+    BinaryRunes,
+    /// Decode characters and compare them using the collator's weights.
+    CollationWeights,
+}
+
 pub trait Collator: 'static + std::marker::Send + std::marker::Sync + std::fmt::Debug {
     type Charset: Charset;
     type Weight: Unsigned;
 
     const IS_CASE_INSENSITIVE: bool;
 
-    /// Whether LIKE pattern matching uses the original bytes instead of
-    /// decoded characters and collation weights.
-    const LIKE_PATTERN_MATCHES_BYTES: bool = false;
+    /// How LIKE patterns decode and compare the target and pattern.
+    const LIKE_PATTERN_MODE: LikePatternMode;
 
     /// Returns the weight of a given char. The chars that have equal
     /// weight are considered as the same char with this collation.

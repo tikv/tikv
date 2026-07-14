@@ -30,6 +30,7 @@ impl<T: UnicodeVersion> Collator for CollatorUca<T> {
     type Weight = u128;
 
     const IS_CASE_INSENSITIVE: bool = true;
+    const LIKE_PATTERN_MODE: LikePatternMode = LikePatternMode::CollationWeights;
 
     #[inline]
     fn char_weight(ch: char) -> Self::Weight {

@@ -64,7 +64,7 @@ pub fn like<C: Collator, CS: Charset>(
                 if let Some((target_char, toff)) = CS::decode_one(&target[tx..]) {
                     let target_bytes = &target[tx..tx + toff];
                     let pattern_bytes = &pattern[px..px + poff];
-                    let matches = if C::LIKE_PATTERN_MATCHES_BYTES {
+                    let matches = if C::LIKE_PATTERN_MODE == LikePatternMode::Bytes {
                         target_bytes == pattern_bytes
                     } else {
                         let target_char_bytes =
@@ -382,6 +382,9 @@ mod tests {
         const NEW_BINARY: i32 = -(Collation::Binary as i32);
         const LEGACY_UTF8MB4_BIN: i32 = Collation::Utf8Mb4BinNoPadding as i32;
         const NEW_UTF8MB4_BIN: i32 = Collation::Utf8Mb4Bin as i32;
+        const NEW_UTF8MB4_GENERAL_CI: i32 = Collation::Utf8Mb4GeneralCi as i32;
+        const NEW_LATIN1_BIN: i32 = Collation::Latin1Bin as i32;
+        const NEW_GBK_BIN: i32 = Collation::GbkBin as i32;
         const NEW_GB18030_BIN: i32 = Collation::Gb18030Bin as i32;
 
         let replacement = char::REPLACEMENT_CHARACTER.to_string().into_bytes();
@@ -410,6 +413,14 @@ mod tests {
             eval_like_with_collation_ids("中".as_bytes(), b"_", LEGACY_BINARY, LEGACY_UTF8MB4_BIN,),
             Some(1)
         );
+        assert_eq!(
+            eval_like_with_collation_ids("中".as_bytes(), b"_", LEGACY_BINARY, LEGACY_BINARY,),
+            Some(1)
+        );
+        assert_eq!(
+            eval_like_with_collation_ids(&[0xE4], &[0xAA], LEGACY_BINARY, LEGACY_BINARY,),
+            Some(1)
+        );
 
         // New binary and gb18030_bin collations use byte patterns.
         for collation_id in [NEW_BINARY, NEW_GB18030_BIN] {
@@ -433,8 +444,28 @@ mod tests {
             Some(1)
         );
 
+        // New derived-binary collations decode UTF-8 runes but compare rune
+        // identity instead of collation weights.
+        assert_eq!(
+            eval_like_with_collation_ids(&[0xC3, 0xA9], b"_", NEW_LATIN1_BIN, NEW_LATIN1_BIN,),
+            Some(1)
+        );
+        assert_eq!(
+            eval_like_with_collation_ids(&[0xE4], &[0xAA], NEW_LATIN1_BIN, NEW_LATIN1_BIN,),
+            Some(1)
+        );
+        assert_eq!(
+            eval_like_with_collation_ids(
+                "😀".as_bytes(),
+                "😁".as_bytes(),
+                NEW_GBK_BIN,
+                NEW_GBK_BIN,
+            ),
+            Some(0)
+        );
+
         // '%' backtracking advances by bytes for byte patterns and by decoded
-        // runes for rune/weight patterns.
+        // runes for derived-binary and collation-weight patterns.
         for collation_id in [NEW_BINARY, NEW_GB18030_BIN] {
             assert_eq!(
                 eval_like_with_collation_ids("中X".as_bytes(), b"%__X", collation_id, collation_id,),
@@ -450,6 +481,12 @@ mod tests {
             ),
             Some(0)
         );
+        for collation_id in [NEW_LATIN1_BIN, NEW_GBK_BIN, NEW_UTF8MB4_GENERAL_CI] {
+            assert_eq!(
+                eval_like_with_collation_ids("中X".as_bytes(), b"%__X", collation_id, collation_id,),
+                Some(0)
+            );
+        }
         assert_eq!(
             eval_like_with_collation_ids(
                 "中X".as_bytes(),
