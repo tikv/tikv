@@ -109,8 +109,8 @@ pub enum LikePatternMode {
     Bytes,
     /// Decode UTF-8 runes and compare their identity without collation weights.
     BinaryRunes,
-    /// Decode characters and compare them using the collator's weights.
-    CollationWeights,
+    /// Decode characters and use the collator's LIKE equivalence relation.
+    CollatorDefined,
 }
 
 pub trait Collator: 'static + std::marker::Send + std::marker::Sync + std::fmt::Debug {

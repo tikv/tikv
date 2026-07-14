@@ -120,8 +120,8 @@ fn map_like_sig(ret_field_type: &FieldType, children: &[Expr]) -> Result<RpnFnMe
     // The legacy framework pushes down a non-negative ID and always uses a
     // derived binary pattern, which decodes runes without applying collation
     // weights. The new framework uses byte patterns, derived binary rune
-    // patterns, or collation-weight patterns depending on the collation. For
-    // collation-weight patterns, decode with the argument charset when both
+    // patterns, or collator-defined patterns depending on the collation. For
+    // collator-defined patterns, decode with the argument charset when both
     // arguments use the same charset, or with the return charset otherwise.
     Ok(match_template_multiple_collators! {
         (TT, TC, PC), (ret_collation, target_collation, pattern_collation), {
@@ -144,7 +144,7 @@ fn map_like_sig(ret_field_type: &FieldType, children: &[Expr]) -> Result<RpnFnMe
                         CollatorUtf8Mb4BinNoPadding,
                         <CollatorUtf8Mb4BinNoPadding as Collator>::Charset,
                     >(),
-                    LikePatternMode::CollationWeights => {
+                    LikePatternMode::CollatorDefined => {
                         if <TC as Collator>::Charset::charset()
                             == <PC as Collator>::Charset::charset()
                         {

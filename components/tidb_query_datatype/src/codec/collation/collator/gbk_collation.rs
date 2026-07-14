@@ -140,7 +140,7 @@ pub struct CollatorGbkChineseCi;
 
 impl GbkCollator for CollatorGbkChineseCi {
     const IS_CASE_INSENSITIVE: bool = true;
-    const LIKE_PATTERN_MODE: LikePatternMode = LikePatternMode::CollationWeights;
+    const LIKE_PATTERN_MODE: LikePatternMode = LikePatternMode::CollatorDefined;
     const NEED_TRUNCATE_INVALID_UTF8_RUNE: bool = true;
     const WEIGHT_TABLE: &'static [u8; TABLE_SIZE_FOR_GBK] = GBK_CHINESE_CI_TABLE;
 }

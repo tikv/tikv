@@ -106,7 +106,7 @@ impl Collator for CollatorGb18030ChineseCi {
     type Charset = CharsetGb18030;
     type Weight = u32;
     const IS_CASE_INSENSITIVE: bool = true;
-    const LIKE_PATTERN_MODE: LikePatternMode = LikePatternMode::CollationWeights;
+    const LIKE_PATTERN_MODE: LikePatternMode = LikePatternMode::CollatorDefined;
 
     #[inline]
     fn char_weight(ch: char) -> u32 {
