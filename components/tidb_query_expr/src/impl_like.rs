@@ -36,13 +36,22 @@ pub fn like<C: Collator, CS: Charset>(
     while px < pattern.len() || tx < target.len() {
         if let Some((mut pattern_char, mut poff)) = CS::decode_one(&pattern[px..]) {
             let code: u32 = pattern_char.into();
-            if code == '_' as u32 {
+            let is_escape = code == escape;
+            if is_escape && px + poff < pattern.len() {
+                px += poff;
+                (pattern_char, poff) = if let Some((ch, off)) = CS::decode_one(&pattern[px..]) {
+                    (ch, off)
+                } else {
+                    break;
+                };
+            }
+            if !is_escape && code == '_' as u32 {
                 if let Some((_, toff)) = CS::decode_one(&target[tx..]) {
                     px += poff;
                     tx += toff;
                     continue;
                 }
-            } else if code == '%' as u32 {
+            } else if !is_escape && code == '%' as u32 {
                 // update the backtrace point.
                 px += poff;
                 next_px = px;
@@ -53,14 +62,6 @@ pub fn like<C: Collator, CS: Charset>(
                 next_tx = tx;
                 continue;
             } else {
-                if code == escape && px + poff < pattern.len() {
-                    px += poff;
-                    (pattern_char, poff) = if let Some((ch, off)) = CS::decode_one(&pattern[px..]) {
-                        (ch, off)
-                    } else {
-                        break;
-                    };
-                }
                 if let Some((target_char, toff)) = CS::decode_one(&target[tx..]) {
                     let target_bytes = &target[tx..tx + toff];
                     let pattern_bytes = &pattern[px..px + poff];
@@ -111,6 +112,22 @@ mod tests {
         ret_collation_id: i32,
         arg_collation_id: i32,
     ) -> Option<i64> {
+        eval_like_with_collation_ids_and_escape(
+            target,
+            pattern,
+            '\\',
+            ret_collation_id,
+            arg_collation_id,
+        )
+    }
+
+    fn eval_like_with_collation_ids_and_escape(
+        target: &[u8],
+        pattern: &[u8],
+        escape: char,
+        ret_collation_id: i32,
+        arg_collation_id: i32,
+    ) -> Option<i64> {
         let mut ret_ft = FieldTypeBuilder::new()
             .tp(FieldTypeTp::LongLong)
             .collation(Collation::Binary)
@@ -125,7 +142,7 @@ mod tests {
             .return_field_type(ret_ft)
             .push_param_with_field_type(target.to_vec(), arg_ft.clone())
             .push_param_with_field_type(pattern.to_vec(), arg_ft)
-            .push_param('\\' as i64)
+            .push_param(escape as i64)
             .evaluate(ScalarFuncSig::LikeSig)
             .unwrap()
     }
@@ -195,21 +212,21 @@ mod tests {
                 Collation::Binary,
                 Some(1),
             ),
-            (r#"C:\Programs\"#, r#"%%\"#, '%', Collation::Binary, Some(1)),
-            (r#"C:\Programs%"#, r#"%%%"#, '%', Collation::Binary, Some(1)),
+            (r#"C:\Programs\"#, r#"%%\"#, '%', Collation::Binary, Some(0)),
+            (r#"C:\Programs%"#, r#"%%%"#, '%', Collation::Binary, Some(0)),
             (
                 r#"C:\Programs%"#,
                 r#"%%%%"#,
                 '%',
                 Collation::Binary,
-                Some(1),
+                Some(0),
             ),
             (r#"hello"#, r#"\%"#, '\\', Collation::Binary, Some(0)),
             (r#"%"#, r#"\%"#, '\\', Collation::Binary, Some(1)),
-            (r#"3hello"#, r#"%%hello"#, '%', Collation::Binary, Some(1)),
+            (r#"3hello"#, r#"%%hello"#, '%', Collation::Binary, Some(0)),
             (r#"3hello"#, r#"3%hello"#, '3', Collation::Binary, Some(0)),
             (r#"3hello"#, r#"__hello"#, '_', Collation::Binary, Some(0)),
-            (r#"3hello"#, r#"%_hello"#, '%', Collation::Binary, Some(1)),
+            (r#"3hello"#, r#"%_hello"#, '%', Collation::Binary, Some(0)),
             (
                 r#"aaaaaaaaaaaaaaaaaaaaaaaaaaa"#,
                 r#"a%a%a%a%a%a%a%a%b"#,
@@ -416,6 +433,35 @@ mod tests {
         const NEW_GB18030_BIN: i32 = Collation::Gb18030Bin as i32;
 
         let replacement = char::REPLACEMENT_CHARACTER.to_string().into_bytes();
+
+        // Escape takes precedence when the escape character is itself a LIKE
+        // wildcard. Cover the legacy, byte, derived-binary rune, and
+        // collator-defined pattern paths.
+        for collation_id in [
+            LEGACY_BINARY,
+            NEW_BINARY,
+            NEW_UTF8MB4_BIN,
+            NEW_UTF8MB4_GENERAL_CI,
+        ] {
+            for (target, pattern, escape, expected) in [
+                (b"".as_slice(), b"%".as_slice(), '%', Some(0)),
+                (b"%".as_slice(), b"%".as_slice(), '%', Some(1)),
+                (b"a".as_slice(), b"_".as_slice(), '_', Some(0)),
+                (b"_".as_slice(), b"_".as_slice(), '_', Some(1)),
+            ] {
+                assert_eq!(
+                    eval_like_with_collation_ids_and_escape(
+                        target,
+                        pattern,
+                        escape,
+                        collation_id,
+                        collation_id,
+                    ),
+                    expected,
+                    "target={target:?}, pattern={pattern:?}, escape={escape:?}, collation_id={collation_id}"
+                );
+            }
+        }
 
         // The legacy collation framework uses a derived binary pattern for all
         // collations. It matches decoded runes without applying collation
