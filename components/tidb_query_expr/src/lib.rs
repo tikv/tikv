@@ -47,7 +47,10 @@ use tidb_query_common::Result;
 use tidb_query_datatype::{
     Charset, Collation, FieldTypeAccessor, FieldTypeFlag,
     codec::{
-        collation::{Charset as _, Collator},
+        collation::{
+            Charset as _, Collator,
+            collator::{CollatorBinary, CollatorUtf8Mb4BinNoPadding},
+        },
         data_type::*,
     },
     match_template_charset, match_template_collator, match_template_multiple_collators,
@@ -97,6 +100,7 @@ fn map_compare_in_string_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
 }
 
 fn map_like_sig(ret_field_type: &FieldType, children: &[Expr]) -> Result<RpnFnMeta> {
+    let ret_collation_id = ret_field_type.get_collate();
     let ret_collation = ret_field_type
         .as_accessor()
         .collation()
@@ -124,7 +128,19 @@ fn map_like_sig(ret_field_type: &FieldType, children: &[Expr]) -> Result<RpnFnMe
     // the new collation framework is not enabled.
     Ok(match_template_multiple_collators! {
         (TT, TC, PC), (ret_collation, target_collation, pattern_collation), {
-            if <TC as Collator>::Charset::charset() == <PC as Collator>::Charset::charset() {
+            if ret_collation_id >= 0 {
+                // TiDB uses a derived binary pattern for every collation when
+                // the legacy collation framework is enabled. Non-negative IDs
+                // in the pushed-down field type identify that compatibility path.
+                like_fn_meta::<
+                    CollatorUtf8Mb4BinNoPadding,
+                    <CollatorUtf8Mb4BinNoPadding as Collator>::Charset,
+                >()
+            } else if <TT as Collator>::LIKE_PATTERN_MATCHES_BYTES {
+                // A byte pattern applies to literals, single-character
+                // wildcards, and '%' backtracking alike.
+                like_fn_meta::<CollatorBinary, <CollatorBinary as Collator>::Charset>()
+            } else if <TC as Collator>::Charset::charset() == <PC as Collator>::Charset::charset() {
                 like_fn_meta::<TT, <TC as Collator>::Charset>()
             } else {
                 like_fn_meta::<TT, <TT as Collator>::Charset>()

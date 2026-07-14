@@ -64,7 +64,7 @@ pub fn like<C: Collator, CS: Charset>(
                 if let Some((target_char, toff)) = CS::decode_one(&target[tx..]) {
                     let target_bytes = &target[tx..tx + toff];
                     let pattern_bytes = &pattern[px..px + poff];
-                    let matches = if C::LIKE_LITERAL_MATCHES_BYTES {
+                    let matches = if C::LIKE_PATTERN_MATCHES_BYTES {
                         target_bytes == pattern_bytes
                     } else {
                         let target_char_bytes =
@@ -107,6 +107,31 @@ mod tests {
     use tipb::ScalarFuncSig;
 
     use crate::test_util::RpnFnScalarEvaluator;
+
+    fn eval_like_with_collation_ids(
+        target: &[u8],
+        pattern: &[u8],
+        ret_collation_id: i32,
+        arg_collation_id: i32,
+    ) -> Option<i64> {
+        let mut ret_ft = FieldTypeBuilder::new()
+            .tp(FieldTypeTp::LongLong)
+            .collation(Collation::Binary)
+            .build();
+        ret_ft.set_collate(ret_collation_id);
+        let mut arg_ft = FieldTypeBuilder::new()
+            .tp(FieldTypeTp::String)
+            .collation(Collation::Binary)
+            .build();
+        arg_ft.set_collate(arg_collation_id);
+        RpnFnScalarEvaluator::new()
+            .return_field_type(ret_ft)
+            .push_param_with_field_type(target.to_vec(), arg_ft.clone())
+            .push_param_with_field_type(pattern.to_vec(), arg_ft)
+            .push_param('\\' as i64)
+            .evaluate(ScalarFuncSig::LikeSig)
+            .unwrap()
+    }
 
     #[test]
     fn test_like() {
@@ -284,21 +309,12 @@ mod tests {
             ret_collation: Collation,
             arg_collation: Collation,
         ) -> Option<i64> {
-            let ret_ft = FieldTypeBuilder::new()
-                .tp(FieldTypeTp::LongLong)
-                .collation(ret_collation)
-                .build();
-            let arg_ft = FieldTypeBuilder::new()
-                .tp(FieldTypeTp::String)
-                .collation(arg_collation)
-                .build();
-            RpnFnScalarEvaluator::new()
-                .return_field_type(ret_ft)
-                .push_param_with_field_type(target.to_vec(), arg_ft.clone())
-                .push_param_with_field_type(pattern.to_vec(), arg_ft)
-                .push_param('\\' as i64)
-                .evaluate(ScalarFuncSig::LikeSig)
-                .unwrap()
+            eval_like_with_collation_ids(
+                target,
+                pattern,
+                ret_collation as i32,
+                arg_collation as i32,
+            )
         }
 
         // Regression tests for pingcap/tidb#66597 and pingcap/tidb#67082.
@@ -358,30 +374,77 @@ mod tests {
                 "target={target:?}, pattern={pattern:?}, collation=Gb18030Bin"
             );
         }
+    }
 
-        // Binary comparison must keep byte-wise semantics, including the
-        // compatibility path where UTF-8 arguments use a binary result
-        // collation.
-        for arg_collation in [Collation::Binary, Collation::Utf8Mb4Bin] {
+    #[test]
+    fn test_like_pattern_modes() {
+        const LEGACY_BINARY: i32 = Collation::Binary as i32;
+        const NEW_BINARY: i32 = -(Collation::Binary as i32);
+        const LEGACY_UTF8MB4_BIN: i32 = Collation::Utf8Mb4BinNoPadding as i32;
+        const NEW_UTF8MB4_BIN: i32 = Collation::Utf8Mb4Bin as i32;
+        const NEW_GB18030_BIN: i32 = Collation::Gb18030Bin as i32;
+
+        let replacement = char::REPLACEMENT_CHARACTER.to_string().into_bytes();
+
+        // The legacy collation framework uses a derived binary pattern for all
+        // collations. It matches decoded runes without applying collation
+        // weights.
+        assert_eq!(
+            eval_like_with_collation_ids(&[0xE4], &[0xAA], LEGACY_BINARY, LEGACY_UTF8MB4_BIN,),
+            Some(1)
+        );
+        assert_eq!(
+            eval_like_with_collation_ids(&[0xE4], &replacement, LEGACY_BINARY, LEGACY_UTF8MB4_BIN,),
+            Some(1)
+        );
+        assert_eq!(
+            eval_like_with_collation_ids(
+                &[0xAA],
+                &[b'\\', 0xE4],
+                LEGACY_BINARY,
+                LEGACY_UTF8MB4_BIN,
+            ),
+            Some(1)
+        );
+        assert_eq!(
+            eval_like_with_collation_ids("中".as_bytes(), b"_", LEGACY_BINARY, LEGACY_UTF8MB4_BIN,),
+            Some(1)
+        );
+
+        // New binary and gb18030_bin collations use byte patterns.
+        for collation_id in [NEW_BINARY, NEW_GB18030_BIN] {
             assert_eq!(
-                eval_like(&[0xE4], &[0xAA], Collation::Binary, arg_collation,),
+                eval_like_with_collation_ids(&[0xE4], &[0xAA], collation_id, collation_id),
                 Some(0)
             );
             assert_eq!(
-                eval_like(&[0xE4], &[0xE4], Collation::Binary, arg_collation,),
-                Some(1)
+                eval_like_with_collation_ids("中".as_bytes(), b"_", collation_id, collation_id,),
+                Some(0)
             );
         }
+
+        // Other new collations use rune/weight patterns.
+        assert_eq!(
+            eval_like_with_collation_ids(&[0xE4], &[0xAA], NEW_UTF8MB4_BIN, NEW_UTF8MB4_BIN,),
+            Some(1)
+        );
+        assert_eq!(
+            eval_like_with_collation_ids("中".as_bytes(), b"_", NEW_UTF8MB4_BIN, NEW_UTF8MB4_BIN,),
+            Some(1)
+        );
     }
 
     #[test]
     fn test_like_wide_character() {
+        const LEGACY_BINARY: i32 = Collation::Binary as i32;
+        const NEW_BINARY: i32 = -(Collation::Binary as i32);
+
         let cases = vec![
             (
                 r#"夏威夷吉他"#,
                 r#"_____"#,
                 '\\',
-                Collation::Binary,
+                NEW_BINARY,
                 Collation::Binary,
                 Collation::Binary,
                 Some(0),
@@ -390,7 +453,7 @@ mod tests {
                 r#"🐶🍐🍳➕🥜🎗🐜"#,
                 r#"_______"#,
                 '\\',
-                Collation::Utf8Mb4Bin,
+                Collation::Utf8Mb4Bin as i32,
                 Collation::Utf8Mb4Bin,
                 Collation::Utf8Mb4Bin,
                 Some(1),
@@ -399,7 +462,7 @@ mod tests {
                 r#"🕺_"#,
                 r#"🕺🕺🕺_"#,
                 '🕺',
-                Collation::Binary,
+                NEW_BINARY,
                 Collation::Binary,
                 Collation::Binary,
                 Some(0),
@@ -408,18 +471,18 @@ mod tests {
                 r#"🕺_"#,
                 r#"🕺🕺🕺_"#,
                 '🕺',
-                Collation::Utf8Mb4GeneralCi,
+                Collation::Utf8Mb4GeneralCi as i32,
                 Collation::Utf8Mb4GeneralCi,
                 Collation::Utf8Mb4GeneralCi,
                 Some(1),
             ),
             // When the new collation framework is not enabled, the collation
-            // will always be binary Some related tests are added here
+            // will always be binary. Some related tests are added here.
             (
                 r#"夏威夷吉他"#,
                 r#"_____"#,
                 '\\',
-                Collation::Binary,
+                LEGACY_BINARY,
                 Collation::Utf8Mb4Bin,
                 Collation::Utf8Mb4Bin,
                 Some(1),
@@ -428,7 +491,7 @@ mod tests {
                 r#"🐶🍐🍳➕🥜🎗🐜"#,
                 r#"_______"#,
                 '\\',
-                Collation::Binary,
+                LEGACY_BINARY,
                 Collation::Utf8Mb4Bin,
                 Collation::Utf8Mb4Bin,
                 Some(1),
@@ -437,7 +500,7 @@ mod tests {
                 r#"🕺_"#,
                 r#"🕺🕺🕺_"#,
                 '🕺',
-                Collation::Binary,
+                NEW_BINARY,
                 Collation::Binary,
                 Collation::Binary,
                 Some(0),
@@ -446,7 +509,7 @@ mod tests {
                 r#"🕺_"#,
                 r#"🕺🕺🕺_"#,
                 '🕺',
-                Collation::Binary,
+                LEGACY_BINARY,
                 Collation::Utf8Mb4Bin,
                 Collation::Utf8Mb4Bin,
                 Some(1),
@@ -456,7 +519,7 @@ mod tests {
                 r#"测试"#,
                 r#"测_"#,
                 '\\',
-                Collation::Binary,
+                NEW_BINARY,
                 Collation::Utf8Mb4Bin,
                 Collation::Binary,
                 Some(0),
@@ -468,7 +531,7 @@ mod tests {
                 r#"测试"#,
                 r#"测%"#,
                 '\\',
-                Collation::Binary,
+                NEW_BINARY,
                 Collation::Utf8Mb4Bin,
                 Collation::Binary,
                 Some(1),
@@ -482,7 +545,7 @@ mod tests {
                 r#"测试"#,
                 r#"测_"#,
                 '\\',
-                Collation::Binary,
+                LEGACY_BINARY,
                 Collation::Utf8Mb4Bin,
                 Collation::Utf8Mb4Bin,
                 Some(1),
@@ -494,22 +557,29 @@ mod tests {
                 r#"测试A"#,
                 r#"测_a"#,
                 '\\',
-                Collation::Binary,
+                LEGACY_BINARY,
                 Collation::Utf8Mb4UnicodeCi,
                 Collation::Utf8Mb4UnicodeCi,
                 Some(0),
             ),
         ];
-        for (target, pattern, escape, collation, target_collation, pattern_collation, expected) in
-            cases
+        for (
+            target,
+            pattern,
+            escape,
+            ret_collation_id,
+            target_collation,
+            pattern_collation,
+            expected,
+        ) in cases
         {
+            let mut ret_ft = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .collation(Collation::Binary)
+                .build();
+            ret_ft.set_collate(ret_collation_id);
             let output = RpnFnScalarEvaluator::new()
-                .return_field_type(
-                    FieldTypeBuilder::new()
-                        .tp(FieldTypeTp::LongLong)
-                        .collation(collation)
-                        .build(),
-                )
+                .return_field_type(ret_ft)
                 .push_param_with_field_type(
                     target.to_owned().into_bytes(),
                     FieldTypeBuilder::new()
