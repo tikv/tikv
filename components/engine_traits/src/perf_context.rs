@@ -23,6 +23,16 @@ numeric_enum_serializing_mod! {perf_level_serde PerfLevel {
     OutOfBounds = 6,
 }}
 
+/// Lightweight, engine-agnostic report of the PerfContext delta captured
+/// during the current observation window.
+///
+/// Currently only `block_read_count` is reported, which approximates
+/// physical read IO triggered by foreground SQL requests.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct PerfContextReport {
+    pub block_read_count: u64,
+}
+
 /// Extensions for measuring engine performance.
 ///
 /// A PerfContext is created with a specific measurement level,
@@ -63,6 +73,8 @@ pub trait PerfContext: Send {
     /// Reinitializes statistics and the perf level
     fn start_observe(&mut self);
 
-    /// Reports the current collected metrics to prometheus and trackers
-    fn report_metrics(&mut self, trackers: &[TrackerToken]);
+    /// Reports the current collected metrics to prometheus and trackers,
+    /// and returns the PerfContext delta captured during this observation
+    /// window.
+    fn report_metrics(&mut self, trackers: &[TrackerToken]) -> PerfContextReport;
 }

@@ -39,7 +39,7 @@ pub struct Config {
     /// Sampling window. (only for cpu module)
     pub precision: ReadableDuration,
 
-    /// Whether to collect network traffic and logical io
+    /// Whether to collect network traffic, logical IO and RocksDB block read
     pub enable_network_io_collection: bool,
 }
 

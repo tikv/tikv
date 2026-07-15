@@ -135,6 +135,17 @@ High-risk contracts:
 - MVCC conflict, read, and GC-related metrics
 - flow-control and memory-quota behavior
 - lock-wait and deadlock diagnostics
+- Resource metering / TopSQL records logical IO and, when
+  `resource-metering.enable-network-io-collection` is enabled,
+  `rocksdb_block_read_count`. The latter is the foreground SQL request's
+  RocksDB PerfContext delta and is an approximation of physical read IO, not
+  device-level IOPS. Storage command boundaries in `metrics.rs` own this
+  attribution for read-only commands and read phases of write commands. In
+  particular, transactional writes and `raw_compare_and_swap` must retain the
+  `Storage` PerfContext because CAS reads the prior value before deciding
+  whether to write. Do not attribute Raftstore apply/store write-worker
+  activity to the request: those paths use write-only PerfContext metrics and
+  may batch work from multiple requests.
 
 Start triage with:
 
