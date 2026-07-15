@@ -280,6 +280,12 @@ impl<E: Engine> Endpoint<E> {
                         0 => None,
                         i => Some(i),
                     };
+                    // Byte-budget counterpart of paging_size: 0 disables it,
+                    // otherwise the scan stops once scanned bytes reach the limit.
+                    let paging_size_bytes = match req.get_paging_size_bytes() {
+                        0 => None,
+                        i => Some(i),
+                    };
 
                     let extra_store_accessor =
                         ExtraSnapStoreAccessor::<E>::new(req_ctx.clone(), concurrency_manager);
@@ -294,6 +300,7 @@ impl<E: Engine> Endpoint<E> {
                         req.get_is_cache_enabled(),
                         paging_size,
                         max_keys_read,
+                        paging_size_bytes,
                         quota_limiter,
                     )
                     .data_version(data_version)

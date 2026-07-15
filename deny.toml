@@ -105,9 +105,18 @@ ignore = [
     #
     # See: https://github.com/http-rs/http-types/issues/534
     "RUSTSEC-2026-0174",
-    # Ignore RUSTSEC-2022-0104 because structopt is only used by tikv-ctl and
-    # does not affect the server runtime. This is safe to ignore.
-    "RUSTSEC-2022-0104",
+    # Ignore RUSTSEC-2026-0194 and RUSTSEC-2026-0195 temporarily. Both come
+    # from quick-xml through two transitive chains:
+    #   1. pprof -> inferno -> quick-xml, which TiKV uses only to generate
+    #      local flamegraph SVG output rather than parse untrusted XML input.
+    #   2. azure_core 0.18 -> quick-xml, which requires an Azure SDK upgrade
+    #      instead of a lockfile-only update to reach quick-xml >= 0.41.
+    # The remaining practical exposure is limited to XML returned by the
+    # configured Azure endpoint over TLS, so we accept the temporary DoS risk
+    # until we schedule the SDK upgrade and pprof/inferno dependency refresh.
+    # TODO: Remove after both dependency chains can move to quick-xml >= 0.41.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,

@@ -28,6 +28,7 @@ pub struct DagSelect {
     pub key_ranges: Vec<KeyRange>,
     pub output_offsets: Option<Vec<u32>>,
     pub paging_size: Option<u64>,
+    pub paging_size_bytes: Option<u64>,
     pub start_ts: Option<u64>,
     pub intermediate_outputs: Vec<IntermediateOutputChannel>,
 }
@@ -53,6 +54,7 @@ impl DagSelect {
             key_ranges: vec![table.get_record_range_all()],
             output_offsets: None,
             paging_size: None,
+            paging_size_bytes: None,
             start_ts: None,
             intermediate_outputs: vec![],
         }
@@ -82,6 +84,7 @@ impl DagSelect {
             key_ranges: vec![range],
             output_offsets: None,
             paging_size: None,
+            paging_size_bytes: None,
             start_ts: None,
             intermediate_outputs: vec![],
         }
@@ -268,6 +271,13 @@ impl DagSelect {
     }
 
     #[must_use]
+    pub fn paging_size_bytes(mut self, paging_size_bytes: u64) -> DagSelect {
+        assert_ne!(paging_size_bytes, 0);
+        self.paging_size_bytes = Some(paging_size_bytes);
+        self
+    }
+
+    #[must_use]
     pub fn key_ranges(mut self, key_ranges: Vec<KeyRange>) -> DagSelect {
         self.key_ranges = key_ranges;
         self
@@ -338,6 +348,7 @@ impl DagSelect {
         req.set_data(dag.write_to_bytes().unwrap());
         req.set_ranges(self.key_ranges.into());
         req.set_paging_size(self.paging_size.unwrap_or(0));
+        req.set_paging_size_bytes(self.paging_size_bytes.unwrap_or(0));
         req.set_context(ctx);
         req
     }

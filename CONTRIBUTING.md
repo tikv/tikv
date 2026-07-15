@@ -163,6 +163,20 @@ See [Rustdoc of TiKV](https://tikv.github.io) for TiKV code documentation.
 
 Thanks for your contributions!
 
+### Maintenance guides
+
+TiKV now maintains a maintainer-oriented guide set under
+[`doc/maintenance-guides/`](./doc/maintenance-guides/README.md).
+
+- For non-trivial changes in a covered subsystem, read the relevant guide set
+  first.
+- If your change modifies ownership boundaries, startup or shutdown sequencing,
+  data or metadata contracts, invariants, observability, or the recommended
+  reading map for a covered subsystem, update the matching guide in the same
+  pull request.
+- The repository overview guide is the right starting point for
+  cross-component changes.
+
 ### Finding something to work on
 
 For beginners, we have prepared many suitable tasks for you. Checkout our [Help Wanted issues](https://github.com/tikv/tikv/issues?q=is%3Aopen+is%3Aissue+label%3Astatus%2Fhelp-wanted) for a list, in which we have also marked the difficulty level.
