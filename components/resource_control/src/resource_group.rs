@@ -870,10 +870,10 @@ impl ResourceGroupManager {
 
         metrics::READ_POOL_CPU_VEC
             .with_label_values(&["historical"])
-            .set(floor_cpu);
+            .set(floor_cpu * 100.0);
         metrics::READ_POOL_CPU_VEC
             .with_label_values(&["current"])
-            .set(read_pool_cpu);
+            .set(read_pool_cpu * 100.0);
 
         if self.read_pool_cpu_pressure() > 0.0 {
             (read_pool_cpu * RATCHET_FACTOR).max(floor_cpu)
@@ -1550,8 +1550,10 @@ pub(crate) mod tests {
     use yatp::queue::Extras;
 
     use super::*;
-    use crate::resource_limiter::ResourceType::{Cpu, Io};
-    use crate::score::TARGET_CPU;
+    use crate::{
+        resource_limiter::ResourceType::{Cpu, Io},
+        score::TARGET_CPU,
+    };
 
     pub fn new_resource_group_ru(name: String, ru: u64, group_priority: u32) -> PbResourceGroup {
         new_resource_group(name, true, ru, ru, group_priority)

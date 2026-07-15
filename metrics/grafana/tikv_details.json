@@ -84521,7 +84521,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum((\n    tikv_resource_control_read_pool_cpu_cores\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance, type) ",
+              "expr": "sum((\n    tikv_resource_control_read_pool_cpu_percent\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance, type) ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -84529,7 +84529,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{type}}-{{instance}}",
               "metric": "",
-              "query": "sum((\n    tikv_resource_control_read_pool_cpu_cores\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance, type) ",
+              "query": "sum((\n    tikv_resource_control_read_pool_cpu_percent\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance, type) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -84557,7 +84557,7 @@
           "yaxes": [
             {
               "decimals": null,
-              "format": "short",
+              "format": "percent",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -84566,7 +84566,7 @@
             },
             {
               "decimals": null,
-              "format": "short",
+              "format": "percent",
               "label": null,
               "logBase": 1,
               "max": null,

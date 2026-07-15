@@ -10,10 +10,11 @@
 //! whichever signal is hottest.
 //!
 //! Background quota adjustment turns its score into a `[0, 1]` pressure
-//! fraction via [`pressure_fraction`], over its own `(bg_cpu_throttle_threshold,
-//! fg_cpu_throttle_threshold)` range. Foreground/read-pool throttling instead
-//! just tightens whatever's currently in effect by a fixed percentage per
-//! tick once engaged — see `resource_group.rs::adjust_group_throttling` and
+//! fraction via [`pressure_fraction`], over its own
+//! `(bg_cpu_throttle_threshold, fg_cpu_throttle_threshold)` range.
+//! Foreground/read-pool throttling instead just tightens whatever's currently
+//! in effect by a fixed percentage per tick once engaged — see
+//! `resource_group.rs::adjust_group_throttling` and
 //! `compute_read_pool_target_cpu`.
 
 use std::time::Duration;
