@@ -62,24 +62,22 @@ pub fn like<C: Collator, CS: Charset>(
                     1
                 };
                 continue;
-            } else {
-                if let Some((target_char, toff)) = CS::decode_one(&target[tx..]) {
-                    let target_bytes = &target[tx..tx + toff];
-                    let pattern_bytes = &pattern[px..px + poff];
-                    let matches = if C::LIKE_PATTERN_MODE == LikePatternMode::Bytes {
-                        target_bytes == pattern_bytes
-                    } else {
-                        let target_char_bytes =
-                            char_bytes_for_compare::<C, CS>(target_bytes, target_char);
-                        let pattern_char_bytes =
-                            char_bytes_for_compare::<C, CS>(pattern_bytes, pattern_char);
-                        C::like_pattern_compare(target_char_bytes, pattern_char_bytes)?
-                    };
-                    if matches {
-                        tx += toff;
-                        px += poff;
-                        continue;
-                    }
+            } else if let Some((target_char, toff)) = CS::decode_one(&target[tx..]) {
+                let target_bytes = &target[tx..tx + toff];
+                let pattern_bytes = &pattern[px..px + poff];
+                let matches = if C::LIKE_PATTERN_MODE == LikePatternMode::Bytes {
+                    target_bytes == pattern_bytes
+                } else {
+                    let target_char_bytes =
+                        char_bytes_for_compare::<C, CS>(target_bytes, target_char);
+                    let pattern_char_bytes =
+                        char_bytes_for_compare::<C, CS>(pattern_bytes, pattern_char);
+                    C::like_pattern_compare(target_char_bytes, pattern_char_bytes)?
+                };
+                if matches {
+                    tx += toff;
+                    px += poff;
+                    continue;
                 }
             }
         }
