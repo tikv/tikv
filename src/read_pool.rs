@@ -914,9 +914,13 @@ impl ReadPoolConfigRunner {
         }
 
         // While we haven't scaled back up to core_thread_count, keep noisy
-        // resource groups deprioritized.
+        // resource groups deprioritized. Once recovered, release everyone.
         if let Some(rm) = scheduling_rm {
-            rm.deprioritize_over_quota_groups(self.cur_thread_count < self.core_thread_count);
+            if self.cur_thread_count < self.core_thread_count {
+                rm.deprioritize_over_quota_groups();
+            } else {
+                rm.reset_group_priorities();
+            }
         }
     }
 

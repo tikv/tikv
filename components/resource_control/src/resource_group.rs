@@ -809,12 +809,19 @@ impl ResourceGroupManager {
             .store(cpu_score < leeway_threshold, Ordering::Relaxed);
     }
 
-    /// Marks each resource group's read-side priority phase based on whether
-    /// it has exceeded its own quota (current rate over its historical
-    /// baseline by more than `baseline_burst_pct`) — a group within its
-    /// baseline is never marked over-quota even when `should_deprioritize`,
-    /// and no group is marked over-quota when `!should_deprioritize`.
-    pub fn deprioritize_over_quota_groups(&self, should_deprioritize: bool) {
+    /// Marks resource groups that have exceeded their own quota (current
+    /// rate over their historical baseline by more than `baseline_burst_pct`)
+    /// as over-quota (phase 1), deprioritizing them. A group within its
+    /// baseline is left untouched.
+    ///
+    /// This function only ever sets the over-quota flag, never clears it —
+    /// clearing is the caller's responsibility, once the unified read pool
+    /// has scaled back up to `core_thread_count`, via
+    /// [`Self::reset_group_priorities`]. Otherwise a sustained noisy group's
+    /// own `cached_historical_rate` eventually drifts up to absorb its
+    /// elevated usage, and comparing against it again here would silently
+    /// (and wrongly) release the group early.
+    pub fn deprioritize_over_quota_groups(&self) {
         let now = RuTracker::now_secs();
         let burst_factor = 1.0 + self.config.value().baseline_burst_pct / 100.0;
         for entry in &self.ru_trackers {
@@ -822,10 +829,25 @@ impl ResourceGroupManager {
             let guard = entry.value().lock().unwrap();
             let hist = guard.0.cached_historical_rate;
             let current = guard.0.current_rate(now);
-            let over_quota = should_deprioritize && hist > 0.0 && current > hist * burst_factor;
+            let over_quota = hist > 0.0 && current > hist * burst_factor;
             drop(guard);
+            if over_quota {
+                for controller in self.registry.read().iter() {
+                    controller.set_group_phase(group_bytes, true);
+                }
+            }
+        }
+    }
+
+    /// Resets every tracked resource group's two-phase priority back to
+    /// phase 0 (not over-quota). Called once the unified read pool has
+    /// scaled back up to `core_thread_count`, releasing any groups that
+    /// [`Self::deprioritize_over_quota_groups`] had deprioritized.
+    pub fn reset_group_priorities(&self) {
+        for entry in &self.ru_trackers {
+            let group_bytes = entry.key().as_bytes();
             for controller in self.registry.read().iter() {
-                controller.set_group_phase(group_bytes, over_quota);
+                controller.set_group_phase(group_bytes, false);
             }
         }
     }
@@ -2036,8 +2058,8 @@ pub(crate) mod tests {
     fn test_deprioritize_over_quota_groups_ru_based() {
         // Two-phase scheduling driven by real RU (CPU µs) from
         // ResourceGroupManager: only groups that have exceeded their own
-        // historical quota are deprioritized, and only when the caller
-        // (the unified read pool) says `should_deprioritize`.
+        // historical quota are deprioritized, and only once the caller (the
+        // unified read pool) actually calls deprioritize_over_quota_groups.
         let mut cfg = Config::default();
         cfg.enable_fair_scheduling = true;
         let mgr = ResourceGroupManager::new(cfg);
@@ -2104,9 +2126,9 @@ pub(crate) mod tests {
         // deprioritize_over_quota_groups in production).
         mgr.online_adjust_resource_quota(0.0);
 
-        // should_deprioritize == false → neither group is deprioritized,
-        // even though "spike" is already over its own baseline.
-        mgr.deprioritize_over_quota_groups(false);
+        // Before the caller ever deprioritizes, neither group is
+        // deprioritized, even though "spike" is already over its own
+        // baseline.
         {
             let groups = ctl.resource_consumptions.read();
             assert!(
@@ -2115,7 +2137,7 @@ pub(crate) mod tests {
                     .unwrap()
                     .is_over_baseline
                     .load(Ordering::Relaxed),
-                "should_deprioritize == false → steady should be phase 0"
+                "steady should be phase 0 before deprioritize_over_quota_groups runs"
             );
             assert!(
                 !groups
@@ -2123,13 +2145,13 @@ pub(crate) mod tests {
                     .unwrap()
                     .is_over_baseline
                     .load(Ordering::Relaxed),
-                "should_deprioritize == false → spike should be phase 0"
+                "spike should be phase 0 before deprioritize_over_quota_groups runs"
             );
         }
 
-        // should_deprioritize == true: only "spike" (over its own baseline)
-        // is deprioritized; "steady" (within baseline) is not.
-        mgr.deprioritize_over_quota_groups(true);
+        // Only "spike" (over its own baseline) is deprioritized; "steady"
+        // (within baseline) is not.
+        mgr.deprioritize_over_quota_groups();
         {
             let groups = ctl.resource_consumptions.read();
             assert!(
@@ -2170,11 +2192,9 @@ pub(crate) mod tests {
 
     #[test]
     fn test_deprioritize_over_quota_groups_releases_when_inactive() {
-        // A group over its own quota is released the moment the caller
-        // passes `should_deprioritize = false` — no ramp-up wait or "all
-        // groups" synchronization required, since release is a direct
-        // function of (should_deprioritize, over_quota) recomputed fresh
-        // every call.
+        // A group over its own quota stays deprioritized until the caller
+        // explicitly calls reset_group_priorities — e.g. once the unified
+        // read pool has scaled back up to core_thread_count.
         let mgr = ResourceGroupManager::default();
 
         let spike = new_resource_group_ru("spike".into(), 1000, MEDIUM_PRIORITY);
@@ -2208,7 +2228,7 @@ pub(crate) mod tests {
         // `adjust_group_throttling` on resource_control's own tick.
         mgr.online_adjust_resource_quota(0.0);
 
-        mgr.deprioritize_over_quota_groups(true);
+        mgr.deprioritize_over_quota_groups();
         assert!(
             ctl.resource_consumptions
                 .read()
@@ -2216,14 +2236,13 @@ pub(crate) mod tests {
                 .unwrap()
                 .is_over_baseline
                 .load(Ordering::Relaxed),
-            "spike exceeded its quota while should_deprioritize → should be phase 1"
+            "spike exceeded its quota → should be phase 1"
         );
 
         // Caller (e.g. the unified read pool, once it has scaled back up to
-        // core_thread_count) passes should_deprioritize = false: released
-        // immediately, even though spike's RU history hasn't
-        // changed.
-        mgr.deprioritize_over_quota_groups(false);
+        // core_thread_count) calls reset_group_priorities: released
+        // immediately, even though spike's RU history hasn't changed.
+        mgr.reset_group_priorities();
         assert!(
             !ctl.resource_consumptions
                 .read()
@@ -2231,7 +2250,91 @@ pub(crate) mod tests {
                 .unwrap()
                 .is_over_baseline
                 .load(Ordering::Relaxed),
-            "spike should be released as soon as the caller marks it inactive"
+            "spike should be released once the caller resets priorities"
+        );
+    }
+
+    #[test]
+    fn test_deprioritize_over_quota_groups_does_not_self_release() {
+        // A sustained noisy group must stay deprioritized even once its own
+        // `cached_historical_rate` has drifted up to absorb its elevated
+        // usage (current no longer exceeds hist * burst_factor) — only
+        // reset_group_priorities is allowed to release it.
+        let mgr = ResourceGroupManager::default();
+
+        let spike = new_resource_group_ru("spike".into(), 1000, MEDIUM_PRIORITY);
+        mgr.add_resource_group(spike);
+        let ctl = mgr.derive_controller("read".into(), true);
+
+        let t0 = RuTracker::now_secs();
+        {
+            let e = mgr
+                .ru_trackers
+                .entry("spike".to_owned())
+                .or_insert_with(|| {
+                    Mutex::new((
+                        RuTracker::new(t0, 30),
+                        Arc::new(ResourceLimiter::new(
+                            "".into(),
+                            f64::INFINITY,
+                            f64::INFINITY,
+                            0,
+                            false,
+                        )),
+                    ))
+                });
+            let mut tr = e.lock().unwrap();
+            tr.0.record_at(3000, t0 + 30);
+            tr.0.record_at(0, t0 + 60); // close bucket: 3000µs baseline
+            tr.0.record_at(12000, t0 + 90); // open bucket: 12000µs spike
+        }
+        mgr.online_adjust_resource_quota(0.0);
+
+        mgr.deprioritize_over_quota_groups();
+        assert!(
+            ctl.resource_consumptions
+                .read()
+                .get(b"spike".as_ref())
+                .unwrap()
+                .is_over_baseline
+                .load(Ordering::Relaxed),
+            "spike exceeded its quota → should be phase 1"
+        );
+
+        // Simulate the historical baseline catching up to the sustained
+        // elevated rate: overwrite cached_historical_rate directly to match
+        // current, as if enough windows had rolled over.
+        {
+            let e = mgr.ru_trackers.get("spike").unwrap();
+            let mut tr = e.lock().unwrap();
+            let now = RuTracker::now_secs();
+            tr.0.cached_historical_rate = tr.0.current_rate(now);
+        }
+
+        // Calling deprioritize_over_quota_groups again must not clear the
+        // flag just because current no longer exceeds the (now-caught-up)
+        // historical rate.
+        mgr.deprioritize_over_quota_groups();
+        assert!(
+            ctl.resource_consumptions
+                .read()
+                .get(b"spike".as_ref())
+                .unwrap()
+                .is_over_baseline
+                .load(Ordering::Relaxed),
+            "spike must stay deprioritized even after its baseline catches up"
+        );
+
+        // Only an explicit reset releases it.
+        mgr.reset_group_priorities();
+        assert!(
+            !ctl.resource_consumptions
+                .read()
+                .get(b"spike".as_ref())
+                .unwrap()
+                .is_over_baseline
+                .load(Ordering::Relaxed),
+            "spike should be released once the caller resets priorities"
         );
     }
 
