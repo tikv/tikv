@@ -125,6 +125,23 @@ const MAX_SUMMARY_RECORDS_LEN: usize = 1000;
 #[cfg(test)]
 pub(crate) static NETWORK_IO_COLLECTION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+#[cfg(test)]
+pub(crate) struct NetworkIoCollectionConfigGuard(bool);
+
+#[cfg(test)]
+impl NetworkIoCollectionConfigGuard {
+    pub(crate) fn set(enabled: bool) -> Self {
+        Self(ENABLE_NETWORK_IO_COLLECTION.swap(enabled, Relaxed))
+    }
+}
+
+#[cfg(test)]
+impl Drop for NetworkIoCollectionConfigGuard {
+    fn drop(&mut self) {
+        ENABLE_NETWORK_IO_COLLECTION.store(self.0, Relaxed);
+    }
+}
+
 impl Drop for Guard {
     fn drop(&mut self) {
         STORAGE.with(|s| {
@@ -382,7 +399,7 @@ mod tests {
     #[test]
     fn test_guard_keeps_block_read_only_record() {
         let _test_guard = NETWORK_IO_COLLECTION_TEST_LOCK.lock().unwrap();
-        let previous = ENABLE_NETWORK_IO_COLLECTION.swap(true, Relaxed);
+        let _config_guard = NetworkIoCollectionConfigGuard::set(true);
         std::thread::spawn(|| {
             let resource_tag_factory = ResourceTagFactory::new_for_test();
             let tag = ResourceMeteringTag {
@@ -423,6 +440,5 @@ mod tests {
         })
         .join()
         .unwrap();
-        ENABLE_NETWORK_IO_COLLECTION.store(previous, Relaxed);
     }
 }

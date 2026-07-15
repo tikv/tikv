@@ -204,10 +204,11 @@ where
     }
 }
 
-/// Pick top n agged raw records, then append picked topN records and merge
-/// unpicked ones to others. If enable_network_io_collection is true, pick top n
-/// records by cpu_time, network_io and logical_io, otherwise, pick top n
-/// records by cpu_time only.
+/// Pick top n candidate raw records per resource dimension, then append their
+/// union and merge unpicked records to others. If network IO collection is
+/// enabled, candidates are selected by CPU time, network IO, logical read,
+/// logical write, and RocksDB block read count; otherwise, they are selected
+/// by CPU time only.
 pub fn handle_records_impl<'a, K, T>(
     records: &'a mut T,
     enable_network_io_collection: bool,

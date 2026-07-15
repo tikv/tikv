@@ -168,12 +168,12 @@ mod tests {
     use std::sync::atomic::Ordering::Relaxed;
 
     use super::*;
-    use crate::NETWORK_IO_COLLECTION_TEST_LOCK;
+    use crate::{NETWORK_IO_COLLECTION_TEST_LOCK, NetworkIoCollectionConfigGuard};
 
     #[test]
     fn test_record_rocksdb_block_read_count_respects_config() {
         let _test_guard = NETWORK_IO_COLLECTION_TEST_LOCK.lock().unwrap();
-        let previous = ENABLE_NETWORK_IO_COLLECTION.swap(false, Relaxed);
+        let _config_guard = NetworkIoCollectionConfigGuard::set(false);
         std::thread::spawn(|| {
             STORAGE.with(|s| {
                 s.borrow().summary_cur_record.reset();
@@ -204,6 +204,5 @@ mod tests {
         })
         .join()
         .unwrap();
-        ENABLE_NETWORK_IO_COLLECTION.store(previous, Relaxed);
     }
 }
