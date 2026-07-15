@@ -6,7 +6,7 @@ use prometheus::*;
 lazy_static! {
     pub static ref BACKGROUND_QUOTA_LIMIT_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_resource_control_background_quota_limiter",
-        "The quota limiter for all background tasks per resource type",
+        "The quota limit for all background tasks per resource type, in centi-cores (cores * 100) for CPU or bytes/s for IO",
         &["type"]
     )
     .unwrap();
@@ -43,7 +43,7 @@ lazy_static! {
 
     pub static ref BACKGROUND_TASK_RESOURCE_UTILIZATION_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_resource_control_bg_resource_utilization",
-        "The total resource utilization percentage of background tasks",
+        "The total resource consumed by background tasks, in centi-cores (cores * 100) for CPU or bytes/s for IO",
         &["type"]
     )
     .unwrap();
