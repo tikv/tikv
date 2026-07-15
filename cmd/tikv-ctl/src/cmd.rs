@@ -3,6 +3,7 @@
 use std::{borrow::ToOwned, str, string::ToString, sync::LazyLock};
 
 use clap::{AppSettings, crate_authors};
+use compact_log_backup::ShardConfig;
 use engine_traits::{CF_DEFAULT, SstCompressionType};
 use raft_engine::ReadableSize;
 use structopt::StructOpt;
@@ -642,6 +643,20 @@ pub enum Cmd {
         )]
         name: String,
         #[structopt(
+            long,
+            value_name = "INDEX/TOTAL",
+            help(
+                "shard the compaction work by backup-stream store id. Prefer \
+                `Metadata.store_id`; if it is absent, fall back to the backup-stream metadata \
+                filename format \
+                (`v1/backupmeta/{flush_ts}{store_id}-d{min_begin_ts}l{min_ts}u{max_ts}.meta`), \
+                then backup-stream physical log paths, then a stable metadata-path hash. Only \
+                data from stores assigned to this shard is compacted. Format: INDEX/TOTAL, \
+                where INDEX is 1-based (e.g. 1/3)."
+            )
+        )]
+        shard: Option<ShardConfig>,
+        #[structopt(
             long = "from",
             help(
                 "from when we need to include files into the compaction.\
@@ -652,11 +667,20 @@ pub enum Cmd {
         #[structopt(
             long = "until",
             help(
-                "until when we need to include files into the compaction.\
-                files contains any record within the [--from, --until) will be selected."
+                "optional upper timestamp bound for selecting files into the compaction. \
+                Files containing any record within [--from, --until) will be selected. \
+                If omitted, compact-log-backup reads the bound from checkpoint state."
             )
         )]
-        until_ts: u64,
+        until_ts: Option<u64>,
+        #[structopt(
+            long = "cal-shift-ts",
+            help(
+                "extend the default CF scan lower bound to the minimum min_begin_default_ts in \
+                metadata overlapping [--from, --until)."
+            )
+        )]
+        cal_shift_ts: bool,
         #[structopt(
             short = "N",
             long = "concurrency",
@@ -692,7 +716,7 @@ pub enum Cmd {
         #[structopt(
             long,
             help(
-                "if set, all checkpoints will be ignored. i.e. all finished compaction will be regenerated."
+                "deprecated stub; no longer supported. use a different --name or manually clean the target compaction prefix instead."
             )
         )]
         force_regenerate: bool,
@@ -719,6 +743,16 @@ pub enum Cmd {
             help("specify the maximum count of spawning tasks to download a metadata")
         )]
         prefetch_buffer_count: u64,
+
+        #[structopt(
+            long,
+            default_value = "0",
+            help(
+                "specify memory reserved for caching physical log files, such as 64G. \
+                Zero disables the cache."
+            )
+        )]
+        physical_file_cache_capacity: ReadableSize,
 
         #[structopt(
             long = "gcp-v2-enable",
@@ -951,6 +985,47 @@ mod tests {
 
         match opt.cmd.unwrap() {
             Cmd::CompactLogBackup { gcp_v2_enable, .. } => assert!(!gcp_v2_enable),
+            cmd => panic!("unexpected command: {:?}", std::mem::discriminant(&cmd)),
+        }
+    }
+
+    #[test]
+    fn compact_log_backup_cal_shift_ts_flag() {
+        let opt = Opt::from_iter_safe([
+            "tikv-ctl",
+            "compact-log-backup",
+            "--from",
+            "1",
+            "--until",
+            "2",
+            "--storage-base64",
+            "AA==",
+            "--cal-shift-ts",
+        ])
+        .unwrap();
+
+        match opt.cmd.unwrap() {
+            Cmd::CompactLogBackup { cal_shift_ts, .. } => assert!(cal_shift_ts),
+            cmd => panic!("unexpected command: {:?}", std::mem::discriminant(&cmd)),
+        }
+    }
+
+    #[test]
+    fn compact_log_backup_allows_omitting_until() {
+        let opt = Opt::from_iter_safe([
+            "tikv-ctl",
+            "compact-log-backup",
+            "--from",
+            "1",
+            "--storage-base64",
+            "AA==",
+        ])
+        .unwrap();
+
+        match opt.cmd.unwrap() {
+            Cmd::CompactLogBackup { until_ts, .. } => {
+                assert_eq!(until_ts, None);
+            }
             cmd => panic!("unexpected command: {:?}", std::mem::discriminant(&cmd)),
         }
     }

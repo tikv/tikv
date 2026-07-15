@@ -1686,6 +1686,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log_wrappers",
+ "parking_lot 0.12.1",
  "pin-project",
  "pprof 0.13.0",
  "prometheus",
@@ -4342,7 +4343,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-8.5#50b863799195b57843f21d1651d54f50e38cd84b"
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-8.5#91eb3e407502aa19107d328afeb85e9e32ac7937"
 dependencies = [
  "bytes",
  "futures 0.3.15",

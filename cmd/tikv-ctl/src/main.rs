@@ -404,14 +404,15 @@ fn main() {
             compression,
             compression_level,
             name,
+            shard,
+            cal_shift_ts,
             force_regenerate,
             minimal_compaction_size,
             prefetch_running_count,
             prefetch_buffer_count,
+            physical_file_cache_capacity,
             gcp_v2_enable,
         } => {
-            let tmp_engine =
-                TemporaryRocks::new(&cfg).expect("failed to create temp engine for writing SSTs.");
             let maybe_external_storage = base64::decode(storage_base64)
                 .map_err(|err| format!("cannot parse base64: {}", err))
                 .and_then(|storage_bytes| {
@@ -432,16 +433,79 @@ fn main() {
                     .exit();
                 }
             };
+            let storage =
+                match compact_log::create_storage_with_gcp_v2(&external_storage, gcp_v2_enable) {
+                    Ok(storage) => storage,
+                    Err(err) => {
+                        clap::Error {
+                            message: format!("failed to create external storage: {}", err),
+                            kind: ErrorKind::Io,
+                            info: None,
+                        }
+                        .exit();
+                    }
+                };
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build runtime for compact-log-backup");
+            let until_ts_unspecified = until_ts.is_none();
+            let until_ts = match until_ts {
+                Some(until_ts) => until_ts,
+                None => {
+                    match runtime
+                        .block_on(compact_log::load_until_ts_from_checkpoint(storage.as_ref()))
+                    {
+                        Ok(until_ts) => {
+                            tikv_util::info!(
+                                "Loaded compact log backup until-ts from checkpoint.";
+                                "until_ts" => until_ts,
+                            );
+                            until_ts
+                        }
+                        Err(err) => {
+                            clap::Error {
+                                message: format!(
+                                    "failed to load compact-log-backup checkpoint: {}",
+                                    err
+                                ),
+                                kind: ErrorKind::Io,
+                                info: None,
+                            }
+                            .exit();
+                        }
+                    }
+                }
+            };
             let ccfg = compact_log::ExecutionConfig {
+                shard,
+                shift_ts: from_ts,
+                calculate_shift_ts: cal_shift_ts,
+                minimal_compaction_size: minimal_compaction_size.0,
                 from_ts,
                 until_ts,
                 prefetch_running_count,
                 prefetch_buffer_count,
+                physical_file_cache_capacity: physical_file_cache_capacity.0,
                 compression,
                 compression_level,
             };
+            let out_prefix = ccfg.recommended_prefix(&name);
+            if force_regenerate {
+                clap::Error {
+                    message: format!(
+                        "--force-regenerate is no longer supported. Please use a different --name to generate a new compaction prefix, or manually clean the existing prefix `{}` before rerunning.",
+                        out_prefix
+                    ),
+                    kind: ErrorKind::ValueValidation,
+                    info: None,
+                }
+                .exit();
+            }
+            let tmp_engine =
+                TemporaryRocks::new(&cfg).expect("failed to create temp engine for writing SSTs.");
             let mut exec = compact_log::Execution {
-                out_prefix: ccfg.recommended_prefix(&name),
+                out_prefix,
                 cfg: ccfg,
                 max_concurrent_subcompaction: max_compaction_num,
                 external_storage,
@@ -480,14 +544,16 @@ fn main() {
             }
 
             let log_to_term = compact_log_hooks::observability::Observability::default();
-            let save_meta = compact_log_hooks::save_meta::SaveMeta::default();
-            let with_lock = compact_log_hooks::consistency::StorageConsistencyGuard::default();
-            let with_status_server = ExportTiKVInfo { cfg: cfg.clone() };
-            let checkpoint = if force_regenerate {
-                None
+            let checkpoint_hook = compact_log_hooks::checkpoint::Checkpoint::default();
+            let save_meta = compact_log_hooks::save_meta::SaveMeta::default()
+                .with_checkpointed_file_sizes(checkpoint_hook.file_sizes());
+            let checkpoint = Some(checkpoint_hook);
+            let with_lock = if until_ts_unspecified {
+                compact_log_hooks::consistency::StorageConsistencyGuard::without_checkpoint_check()
             } else {
-                Some(compact_log_hooks::checkpoint::Checkpoint::default())
+                compact_log_hooks::consistency::StorageConsistencyGuard::default()
             };
+            let with_status_server = ExportTiKVInfo { cfg: cfg.clone() };
             let skip_small_compaction = SkipSmallCompaction::new(minimal_compaction_size.0);
             let hooks = (
                 (
@@ -496,7 +562,7 @@ fn main() {
                 ),
                 (save_meta, with_lock),
             );
-            match exec.run(hooks) {
+            match runtime.block_on(exec.run_with_storage_async(storage, hooks)) {
                 Ok(()) => tikv_util::info!("Compact log backup successfully."),
                 Err(err) => {
                     tikv_util::error!("Failed to compact log backup."; "err" => %err, "err_verbose" => ?err);
