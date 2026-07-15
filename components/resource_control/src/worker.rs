@@ -365,7 +365,8 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         }
         let background_consumed = (stats_delta / dur_secs).total_consumed as f64;
 
-        // Centi-cores (cores * 100) for CPU (background_consumed is core-us/s), bytes/s for IO.
+        // Centi-cores (cores * 100) for CPU (background_consumed is core-us/s), bytes/s
+        // for IO.
         let background_resource = match resource_type {
             ResourceType::Cpu => background_consumed / MICROS_PER_SEC * 100.0,
             ResourceType::Io => background_consumed,

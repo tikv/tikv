@@ -103,8 +103,8 @@ lazy_static! {
     .unwrap();
 
     pub static ref READ_POOL_CPU_VEC: GaugeVec = register_gauge_vec!(
-        "tikv_resource_control_read_pool_cpu_cores",
-        "Unified read pool CPU usage in cores: historical (floor), current (measured), and target (foreground-pressure-driven ceiling)",
+        "tikv_resource_control_read_pool_cpu_percent",
+        "Unified read pool CPU usage as a percentage of one core (100 = 1 core): historical (floor), current (measured), and target (foreground-pressure-driven ceiling)",
         &["type"]
     )
     .unwrap();
