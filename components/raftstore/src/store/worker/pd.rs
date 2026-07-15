@@ -42,7 +42,11 @@ use resource_metering::{
 };
 use service::service_manager::GrpcServiceManager;
 use tikv_util::{
+<<<<<<< HEAD
     box_err, debug, error, info,
+=======
+    GLOBAL_SERVER_READINESS, box_err, debug, error, info,
+>>>>>>> 67fccdb16f (raftstore: refine store heartbeat read cpu logging (#19640))
     logger::{Level, get_log_level},
     metrics::ThreadInfoStatistics,
     store::QueryStats,
@@ -1090,11 +1094,14 @@ fn should_log_store_heartbeat_top_read_cpu() -> bool {
     matches!(get_log_level(), Some(Level::Debug) | Some(Level::Trace))
 }
 
+<<<<<<< HEAD
 #[inline]
 fn matches_scheduler_thread_name(thread_name: &str) -> bool {
     matches_thread_name_prefix(thread_name, SCHEDULER_THREAD_PREFIX)
 }
 
+=======
+>>>>>>> 67fccdb16f (raftstore: refine store heartbeat read cpu logging (#19640))
 fn log_store_heartbeat_top_read_cpu(
     store_id: u64,
     interval_seconds: u64,
