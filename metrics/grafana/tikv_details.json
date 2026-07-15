@@ -84318,7 +84318,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Total resource utilization percentage of background tasks.",
+          "description": "Total resource consumed by background tasks, in centi-cores (cores * 100) for CPU or bytes/s for IO.",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -84424,7 +84424,7 @@
           "yaxes": [
             {
               "decimals": null,
-              "format": "percent",
+              "format": "short",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -84850,7 +84850,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Current quota limit for background resource groups.",
+          "description": "Current quota limit for background resource groups, in centi-cores (cores * 100) for CPU or bytes/s for IO.",
           "editable": true,
           "error": false,
           "fieldConfig": {

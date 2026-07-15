@@ -10761,8 +10761,8 @@ def LoadShedding() -> RowPanel:
             ),
             graph_panel(
                 title="Background Resource Utilization",
-                description="Total resource utilization percentage of background tasks.",
-                yaxes=yaxes(left_format=UNITS.PERCENT_FORMAT),
+                description="Total resource consumed by background tasks, in centi-cores (cores * 100) for CPU or bytes/s for IO.",
+                yaxes=yaxes(left_format=UNITS.SHORT),
                 targets=[
                     target(
                         expr=expr_sum(
@@ -10819,7 +10819,7 @@ def LoadShedding() -> RowPanel:
             ),
             graph_panel(
                 title="Background Quota Limit",
-                description="Current quota limit for background resource groups.",
+                description="Current quota limit for background resource groups, in centi-cores (cores * 100) for CPU or bytes/s for IO.",
                 targets=[
                     target(
                         expr=expr_sum(

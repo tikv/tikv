@@ -365,10 +365,14 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         }
         let background_consumed = (stats_delta / dur_secs).total_consumed as f64;
 
-        let background_util = (background_consumed / total_quota * 100.0) as u64;
+        // Centi-cores (cores * 100) for CPU (background_consumed is core-us/s), bytes/s for IO.
+        let background_resource = match resource_type {
+            ResourceType::Cpu => background_consumed / MICROS_PER_SEC * 100.0,
+            ResourceType::Io => background_consumed,
+        };
         BACKGROUND_TASK_RESOURCE_UTILIZATION_VEC
             .with_label_values(&[resource_type.as_str()])
-            .set(background_util as i64);
+            .set(background_resource as i64);
 
         let utilization_limit_score = (utilization_limit as f64).min(100.0);
         let target = total_quota * utilization_limit_score / 100.0;
@@ -399,9 +403,13 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         self.bg_limiter
             .get_limiter(resource_type)
             .set_rate_limit(new_budget);
+        let new_budget_resource = match resource_type {
+            ResourceType::Cpu => new_budget / MICROS_PER_SEC * 100.0,
+            ResourceType::Io => new_budget,
+        };
         BACKGROUND_QUOTA_LIMIT_VEC
             .with_label_values(&[resource_type.as_str()])
-            .set(new_budget as i64);
+            .set(new_budget_resource as i64);
 
         // Update the "background at floor" flag so foreground throttling
         // only kicks in after background has been fully squeezed.
