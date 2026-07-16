@@ -360,9 +360,6 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         BACKGROUND_RESOURCE_CONSUMPTION
             .with_label_values(&[resource_type.as_str()])
             .inc_by(stats_delta.total_consumed);
-        if resource_type == ResourceType::Cpu {
-            BACKGROUND_TASKS_WAIT_DURATION.inc_by(stats_delta.total_wait_dur_us);
-        }
         let background_consumed = (stats_delta / dur_secs).total_consumed as f64;
 
         // Centi-cores (cores * 100) for CPU (background_consumed is core-us/s), bytes/s

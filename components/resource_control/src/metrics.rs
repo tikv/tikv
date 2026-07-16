@@ -16,11 +16,6 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
-    pub static ref BACKGROUND_TASKS_WAIT_DURATION: IntCounter = register_int_counter!(
-        "tikv_resource_control_background_task_wait_duration",
-        "Total wait duration of all background tasks (aggregated across all background resource groups)"
-    )
-    .unwrap();
     pub static ref PRIORITY_QUOTA_LIMIT_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_resource_control_priority_quota_limit",
         "The quota limiter for each priority in resource control",
