@@ -56,6 +56,28 @@ const HIGH_PRIORITY: u32 = 16;
 // virtual time overflow.
 const RESET_VT_THRESHOLD: u64 = (u64::MAX >> 4) / 2;
 
+/// Fraction of `fg_cpu_throttle_threshold` below which foreground CPU
+/// pressure counts as cleared — a dead zone so tighten/release don't flap
+/// when `cpu_score` hovers near the threshold. Shared by
+/// [`ResourceGroupManager::adjust_group_throttling`] and
+/// [`ResourceGroupManager::adjust_group_scheduling`].
+///
+/// Must stay strictly greater than [`THROTTLE_DECREASE_FACTOR`]: the tighten
+/// step below shrinks whatever's currently enforced by
+/// `1 - THROTTLE_DECREASE_FACTOR` each tick, so if that per-tick step were as
+/// large as (or larger than) this leeway gap, a single tick could swing
+/// straight through the dead zone and the engaged/disengaged state — and the
+/// throttle it drives — would just toggle every tick instead of settling.
+const LEEWAY_THRESHOLD_RATIO: f64 = 0.85;
+
+/// Per-tick multiplicative step used to tighten the per-group CPU rate limit
+/// ([`ResourceGroupManager::adjust_group_throttling`]) and to ratchet down
+/// the read pool's CPU ceiling
+/// ([`ResourceGroupManager::compute_read_pool_target_cpu`]) once foreground
+/// CPU pressure is engaged. See [`LEEWAY_THRESHOLD_RATIO`] for the invariant
+/// this must satisfy relative to the leeway threshold.
+const THROTTLE_DECREASE_FACTOR: f64 = 0.9;
+
 /// Duration of each bucket in the RuTracker ring buffer.
 const RU_BUCKET_SECS: u64 = 30;
 
@@ -681,9 +703,7 @@ impl ResourceGroupManager {
         const MIN_RAMP_UP_EPOCHS: u32 = 2;
 
         let throttle_threshold = self.config.value().fg_cpu_throttle_threshold;
-        // 15% dead zone below the throttle threshold so tighten/release
-        // don't flap when cpu_score hovers near the threshold.
-        let leeway_threshold = throttle_threshold * 0.85;
+        let leeway_threshold = throttle_threshold * LEEWAY_THRESHOLD_RATIO;
         let burst_factor = 1.0 + self.config.value().baseline_burst_pct / 100.0;
 
         // Advance all trackers to `now` and refresh cached historical rates
@@ -705,14 +725,6 @@ impl ResourceGroupManager {
 
         let engaged = cpu_score > throttle_threshold && self.is_bg_cpu_at_floor();
         if engaged {
-            const DECREASE_FACTOR: f64 = 0.9;
-            // Tighten by 10% per tick relative to whatever's currently
-            // enforced (or the measured rate, on the first tick before any
-            // limit is set) — never jump straight to burst_target. No
-            // ratcheting state is tracked here: the limiter's own
-            // current_limit already persists across ticks, so a sustained
-            // 10% reduction each tick compounds into a gradual tighten on
-            // its own, floored at burst_target.
             for entry in &self.ru_trackers {
                 let mut guard = entry.lock().unwrap();
                 let hist = guard.0.cached_historical_rate;
@@ -725,7 +737,7 @@ impl ResourceGroupManager {
                         current_limit
                     };
                     if base > burst_target {
-                        let rate = (base * DECREASE_FACTOR).max(burst_target);
+                        let rate = (base * THROTTLE_DECREASE_FACTOR).max(burst_target);
                         guard.0.ramp_up_epochs = 0;
                         guard
                             .1
@@ -790,9 +802,7 @@ impl ResourceGroupManager {
 
     fn adjust_group_scheduling(&self, cpu_score: f64) {
         let throttle_threshold = self.config.value().fg_cpu_throttle_threshold;
-        // 15% dead zone below the throttle threshold so tighten/release
-        // don't flap when cpu_score hovers near the threshold.
-        let leeway_threshold = throttle_threshold * 0.85;
+        let leeway_threshold = throttle_threshold * LEEWAY_THRESHOLD_RATIO;
 
         // Engaged/not-engaged gate consumed by compute_read_pool_target_cpu,
         // which only ever checks read_pool_cpu_pressure() > 0.0 — so this
@@ -853,9 +863,10 @@ impl ResourceGroupManager {
     }
 
     /// Decides the unified read pool's target CPU (in cores) under
-    /// foreground pressure: once pressure engages, returns 10% below the
-    /// currently measured `read_pool_cpu`, instead of jumping straight to a
-    /// computed value. The ceiling is clamped to the historical-CPU floor so
+    /// foreground pressure: once pressure engages, returns
+    /// `THROTTLE_DECREASE_FACTOR` below the currently measured
+    /// `read_pool_cpu`, instead of jumping straight to a computed value. The
+    /// ceiling is clamped to the historical-CPU floor so
     /// it never drops below what the pool has sustained historically, and
     /// resets to `f64::INFINITY` (no ceiling) as soon as pressure clears —
     /// callers that `min()` this into their own ceiling get back exactly
@@ -864,8 +875,6 @@ impl ResourceGroupManager {
     /// [`Self::read_pool_scale_up_allowed`] to know whether it's safe to do
     /// so.
     pub fn compute_read_pool_target_cpu(&self, read_pool_cpu: f64, interval_secs: f64) -> f64 {
-        const RATCHET_FACTOR: f64 = 0.9;
-
         let floor_cpu = self.read_pool_cpu_floor(read_pool_cpu, interval_secs);
 
         metrics::READ_POOL_CPU_VEC
@@ -876,7 +885,7 @@ impl ResourceGroupManager {
             .set(read_pool_cpu * 100.0);
 
         if self.read_pool_cpu_pressure() > 0.0 {
-            (read_pool_cpu * RATCHET_FACTOR).max(floor_cpu)
+            (read_pool_cpu * THROTTLE_DECREASE_FACTOR).max(floor_cpu)
         } else {
             f64::INFINITY
         }
@@ -1026,9 +1035,6 @@ impl ResourceGroupManager {
         let (limiter, _) = self.get_background_resource_limiter_with_priority(rg, request_source);
         if limiter.is_some() {
             return limiter;
-        }
-        if self.get_group_count() <= 1 {
-            return None;
         }
         // Only create a foreground limiter for known groups; unknown or removed
         // groups fall back to "default" to avoid leaking ru_trackers entries.
@@ -2493,16 +2499,19 @@ pub(crate) mod tests {
             .clone()
             .unwrap();
 
-        // Only 1 group (default): foreground always returns None.
-        assert!(mgr.get_resource_limiter("default", "query", 0).is_none());
-        assert!(
-            mgr.get_resource_limiter("default", "query", HIGH_PRIORITY as u64)
-                .is_none()
-        );
-        assert!(
-            mgr.get_resource_limiter("default", "query", LOW_PRIORITY as u64)
-                .is_none()
-        );
+        // Even with only 1 group (default), foreground returns the
+        // per-group limiter regardless of priority level.
+        let fg_default_limiter = mgr.get_resource_limiter("default", "query", 0).unwrap();
+        assert!(Arc::ptr_eq(
+            &mgr.get_resource_limiter("default", "query", HIGH_PRIORITY as u64)
+                .unwrap(),
+            &fg_default_limiter,
+        ));
+        assert!(Arc::ptr_eq(
+            &mgr.get_resource_limiter("default", "query", LOW_PRIORITY as u64)
+                .unwrap(),
+            &fg_default_limiter,
+        ));
 
         let group1 = new_resource_group("test1".into(), true, 100, 100, HIGH_PRIORITY);
         mgr.add_resource_group(group1);
