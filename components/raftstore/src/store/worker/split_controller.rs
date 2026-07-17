@@ -562,7 +562,11 @@ impl SplitInfo {
 #[derive(PartialEq, Debug)]
 pub enum SplitConfigChange {
     Noop,
-    UpdateRegionCpuCollector(bool),
+    ResetStats {
+        /// `Some(true)` registers the CPU collector and `Some(false)` removes
+        /// it. `None` keeps the current registration unchanged.
+        update_region_cpu_collector: Option<bool>,
+    },
 }
 
 pub struct AutoSplitController {
@@ -962,37 +966,48 @@ impl AutoSplitController {
             .retain(|_, recorder| recorder.create_time.saturating_elapsed() < interval);
     }
 
+    fn reset_stats(&mut self) {
+        self.recorders.clear();
+        self.grpc_thread_usage_vec.clear();
+    }
+
     pub fn refresh_and_check_cfg(&mut self) -> SplitConfigChange {
-        let mut cfg_change = SplitConfigChange::Noop;
+        let mut reset_stats = false;
+        let mut update_region_cpu_collector = None;
         if let Some(incoming) = self.cfg_tracker.any_new() {
-            let config_changed = self.cfg != *incoming;
             if self.cfg.region_cpu_overload_threshold_ratio() <= 0.0
                 && incoming.region_cpu_overload_threshold_ratio() > 0.0
             {
-                cfg_change = SplitConfigChange::UpdateRegionCpuCollector(true);
+                update_region_cpu_collector = Some(true);
             }
             if self.cfg.region_cpu_overload_threshold_ratio() > 0.0
                 && incoming.region_cpu_overload_threshold_ratio() <= 0.0
             {
-                cfg_change = SplitConfigChange::UpdateRegionCpuCollector(false);
-            }
-            if config_changed {
-                self.recorders.clear();
-                self.grpc_thread_usage_vec.clear();
+                update_region_cpu_collector = Some(false);
             }
             self.cfg = incoming.clone();
+            // Producers can observe an intermediate version even when multiple
+            // updates return to the previous value before this tick.
+            reset_stats = true;
         }
         // Adjust with the size change of the Unified Read Pool.
+        let mut pool_size_changed = false;
         if let Some(rx) = &self.unified_read_pool_scale_receiver {
-            if let Ok(max_thread_count) = rx.try_recv() {
+            for max_thread_count in rx.try_iter() {
                 if self.max_unified_read_pool_thread_count != max_thread_count {
                     self.max_unified_read_pool_thread_count = max_thread_count;
-                    self.recorders.clear();
-                    self.grpc_thread_usage_vec.clear();
+                    pool_size_changed = true;
                 }
             }
         }
-        cfg_change
+        if reset_stats || pool_size_changed {
+            self.reset_stats();
+            SplitConfigChange::ResetStats {
+                update_region_cpu_collector,
+            }
+        } else {
+            SplitConfigChange::Noop
+        }
     }
 }
 
@@ -1024,6 +1039,20 @@ impl AutoSplitControllerContext {
             // maintaining performance under load.
             gc_duration: Duration::from_secs(30),
         }
+    }
+
+    /// Drops retained statistics and drains both pending sample channels.
+    pub fn discard_pending_stats(
+        &mut self,
+        read_stats_receiver: &Receiver<ReadStats>,
+        cpu_stats_receiver: &Receiver<Arc<RawRecords>>,
+    ) {
+        self.read_stats_vec.clear();
+        self.cpu_stats_vec.clear();
+        self.cpu_stats_cache.region_cpu_map.clear();
+        self.cpu_stats_cache.hottest_key_range_cpu_time_map.clear();
+        while read_stats_receiver.try_recv().is_ok() {}
+        while cpu_stats_receiver.try_recv().is_ok() {}
     }
 
     pub fn batch_recv_read_stats(
@@ -1845,7 +1874,9 @@ mod tests {
         );
         assert_eq!(
             auto_split_controller.refresh_and_check_cfg(),
-            SplitConfigChange::UpdateRegionCpuCollector(false),
+            SplitConfigChange::ResetStats {
+                update_region_cpu_collector: Some(false),
+            },
         );
         assert_eq!(
             auto_split_controller
@@ -1865,13 +1896,37 @@ mod tests {
         );
         assert_eq!(
             auto_split_controller.refresh_and_check_cfg(),
-            SplitConfigChange::UpdateRegionCpuCollector(true),
+            SplitConfigChange::ResetStats {
+                update_region_cpu_collector: Some(true),
+            },
         );
         assert_eq!(
             auto_split_controller
                 .cfg
                 .region_cpu_overload_threshold_ratio(),
             0.1
+        );
+        assert_eq!(
+            auto_split_controller.refresh_and_check_cfg(),
+            SplitConfigChange::Noop,
+        );
+
+        // A round trip still invalidates samples produced between versions.
+        dispatch_split_cfg_change(
+            &mut split_cfg_manager,
+            "region_cpu_overload_threshold_ratio",
+            ConfigValue::F64(0.2),
+        );
+        dispatch_split_cfg_change(
+            &mut split_cfg_manager,
+            "region_cpu_overload_threshold_ratio",
+            ConfigValue::F64(0.1),
+        );
+        assert_eq!(
+            auto_split_controller.refresh_and_check_cfg(),
+            SplitConfigChange::ResetStats {
+                update_region_cpu_collector: None,
+            },
         );
         assert_eq!(
             auto_split_controller.refresh_and_check_cfg(),
@@ -1899,7 +1954,9 @@ mod tests {
 
         assert_eq!(
             auto_split_controller.refresh_and_check_cfg(),
-            SplitConfigChange::Noop,
+            SplitConfigChange::ResetStats {
+                update_region_cpu_collector: None,
+            },
         );
         assert!(auto_split_controller.recorders.is_empty());
         assert!(auto_split_controller.grpc_thread_usage_vec.is_empty());
@@ -1916,11 +1973,15 @@ mod tests {
         auto_split_controller.update_grpc_thread_usage(1.0);
 
         tx.send(2).unwrap();
+        tx.send(3).unwrap();
+        tx.send(4).unwrap();
         assert_eq!(
             auto_split_controller.refresh_and_check_cfg(),
-            SplitConfigChange::Noop,
+            SplitConfigChange::ResetStats {
+                update_region_cpu_collector: None,
+            },
         );
-        assert_eq!(auto_split_controller.max_unified_read_pool_thread_count, 2);
+        assert_eq!(auto_split_controller.max_unified_read_pool_thread_count, 4);
         assert!(auto_split_controller.recorders.is_empty());
         assert!(auto_split_controller.grpc_thread_usage_vec.is_empty());
 
@@ -1928,13 +1989,28 @@ mod tests {
             .recorders
             .insert(2, Recorder::new(auto_split_controller.cfg.detect_times));
         auto_split_controller.update_grpc_thread_usage(2.0);
-        tx.send(2).unwrap();
+        tx.send(3).unwrap();
+        tx.send(4).unwrap();
+        assert_eq!(
+            auto_split_controller.refresh_and_check_cfg(),
+            SplitConfigChange::ResetStats {
+                update_region_cpu_collector: None,
+            },
+        );
+        assert!(auto_split_controller.recorders.is_empty());
+        assert!(auto_split_controller.grpc_thread_usage_vec.is_empty());
+
+        auto_split_controller
+            .recorders
+            .insert(3, Recorder::new(auto_split_controller.cfg.detect_times));
+        auto_split_controller.update_grpc_thread_usage(3.0);
+        tx.send(4).unwrap();
         assert_eq!(
             auto_split_controller.refresh_and_check_cfg(),
             SplitConfigChange::Noop,
         );
-        assert!(auto_split_controller.recorders.contains_key(&2));
-        assert_eq!(auto_split_controller.grpc_thread_usage_vec, vec![2.0]);
+        assert!(auto_split_controller.recorders.contains_key(&3));
+        assert_eq!(auto_split_controller.grpc_thread_usage_vec, vec![3.0]);
     }
 
     #[test]

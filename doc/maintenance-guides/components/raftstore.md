@@ -135,8 +135,12 @@ Load-based split accounting and state:
   region numerator and hottest-range ranking must use unified-read CPU time.
 - Disabling CPU-based detection still drains queued resource-metering records.
   Split-config changes, unified-read-pool capacity changes, and per-region
-  split-validator disables discard prior detection history so a later decision
-  cannot reuse stale samples.
+  split-validator disables discard prior controller detection history.
+- A split-config version or read-pool capacity change also drains observations
+  already queued for load splitting, primes a new thread-CPU baseline, and
+  skips that detection tick. A TLS or resource-metering interval already in
+  progress can still arrive after the drain; the boundary remains best effort
+  until producers carry a configuration generation.
 - Recorder expiration uses monotonic elapsed time so wall-clock adjustments
   cannot retain stale detection history.
 
