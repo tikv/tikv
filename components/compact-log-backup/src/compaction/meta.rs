@@ -290,6 +290,13 @@ impl CompactionRunInfoBuilder {
         Ok(())
     }
 
+    pub(crate) async fn write_empty_migration(&self, s: &dyn ExternalStorage) -> Result<()> {
+        let migration = self.migration_of(Vec::new());
+        let wrapped_storage = MigrationStorageWrapper::new(s);
+        wrapped_storage.write(migration.into()).await?;
+        Ok(())
+    }
+
     pub fn migration_of(&self, metas: Vec<ExpiringFilesOfMeta>) -> brpb::Migration {
         let mut migration = brpb::Migration::default();
         for files in metas {
