@@ -129,6 +129,11 @@ High-risk contracts:
 - `store/worker/read.rs`: local reader and read delegates
 - `store/worker/refresh_config.rs`: runtime config propagation
 
+Load-based split sampling keeps an explicit resource budget. `sample_num` is
+bounded independently of QPS, and `sample_num * detect_times` bounds retained
+per-Region history. Producer reservoirs initially reserve only the default
+sample count and grow toward larger valid configurations as observations arrive.
+
 ### Coprocessor hooks
 
 - `coprocessor/dispatcher.rs` hosts raftstore observers.

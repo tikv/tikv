@@ -7679,6 +7679,13 @@ mod tests {
 
         let cfg_controller = ConfigController::new(cfg.clone());
         let err = cfg_controller
+            .update_config("split.sample-num", "1025")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("sample_num should be between 1 and 1024"));
+        assert_eq!(cfg_controller.get_current().split, cfg.split);
+
+        let err = cfg_controller
             .update_config("split.sample-num", "10")
             .unwrap_err()
             .to_string();

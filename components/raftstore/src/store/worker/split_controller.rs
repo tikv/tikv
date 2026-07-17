@@ -34,7 +34,7 @@ use crate::store::{
     util::build_key_range,
     worker::{
         FlowStatistics, SplitConfig, SplitConfigManager, SplitValidator,
-        split_config::get_sample_num,
+        split_config::{DEFAULT_SAMPLE_NUM, get_sample_num},
     },
 };
 
@@ -351,7 +351,10 @@ impl RegionInfo {
             sample_num,
             query_stats: QueryStats::default(),
             cop_detail: RegionWriteCfCopDetail::default(),
-            key_ranges: Vec::with_capacity(sample_num),
+            // Most Regions only see a few requests in one reporting window. Let
+            // larger reservoirs grow with observations instead of eagerly
+            // reserving the full capacity for every active Region.
+            key_ranges: Vec::with_capacity(sample_num.min(DEFAULT_SAMPLE_NUM)),
             peer: Peer::default(),
             flow: FlowStatistics::default(),
         }
@@ -366,12 +369,18 @@ impl RegionInfo {
     }
 
     fn add_key_ranges(&mut self, key_ranges: Vec<KeyRange>) {
+        self.add_key_ranges_with_rng(key_ranges, &mut rand::thread_rng());
+    }
+
+    fn add_key_ranges_with_rng<R: Rng + ?Sized>(&mut self, key_ranges: Vec<KeyRange>, rng: &mut R) {
         for (i, key_range) in key_ranges.into_iter().enumerate() {
             let n = self.get_read_qps() + i;
             if n == 0 || self.key_ranges.len() < self.sample_num {
                 self.key_ranges.push(key_range);
             } else {
-                let j = rand::thread_rng().gen_range(0..n);
+                // This is the (n + 1)th observation, so it must be selected with
+                // probability sample_num / (n + 1).
+                let j = rng.gen_range(0..=n);
                 if j < self.sample_num {
                     self.key_ranges[j] = key_range;
                 }
@@ -1069,6 +1078,7 @@ mod tests {
     use std::sync::mpsc::{self, TryRecvError};
 
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
+    use rand::rngs::mock::StepRng;
     use resource_metering::{RawRecord, TagInfos};
     use tikv_util::config::{ReadableSize, VersionTrack};
     use txn_types::Key;
@@ -1771,6 +1781,30 @@ mod tests {
             .filter(|key_range| key_range.start_key == b"b")
             .count();
         assert!(num >= r.sample_num - 1);
+    }
+
+    #[test]
+    fn test_region_info_reservoir_replacement_boundary() {
+        let first = build_key_range(b"first", b"first", false);
+        let second = build_key_range(b"second", b"second", false);
+
+        let mut region_info = RegionInfo::new(1);
+        let mut rng = StepRng::new(0, 0);
+        region_info.add_key_ranges_with_rng(vec![first.clone(), second.clone()], &mut rng);
+        assert_eq!(region_info.key_ranges, vec![second.clone()]);
+
+        let mut region_info = RegionInfo::new(1);
+        let mut rng = StepRng::new(0x8000_0000_8000_0000, 0);
+        region_info.add_key_ranges_with_rng(vec![first.clone(), second], &mut rng);
+        assert_eq!(region_info.key_ranges, vec![first]);
+    }
+
+    #[test]
+    fn test_region_info_limits_initial_reservoir_allocation() {
+        let region_info = RegionInfo::new(usize::MAX);
+
+        assert_eq!(region_info.sample_num, usize::MAX);
+        assert_eq!(region_info.key_ranges.capacity(), DEFAULT_SAMPLE_NUM);
     }
 
     const REGION_NUM: u64 = 1000;

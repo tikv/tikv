@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::{convert::TryFrom, sync::Arc};
 
 use lazy_static::lazy_static;
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
@@ -14,6 +14,12 @@ use tikv_util::{
 const DEFAULT_DETECT_TIMES: u64 = 10;
 const DEFAULT_SAMPLE_THRESHOLD: u64 = 100;
 pub(crate) const DEFAULT_SAMPLE_NUM: usize = 20;
+// Each producer keeps one reservoir per active Region. This leaves substantial
+// tuning room over the default while bounding one reservoir.
+const MAX_SAMPLE_NUM: usize = 1024;
+// A hot Region retains one reservoir per detection round and clones the
+// retained ranges when selecting a split key.
+const MAX_RECORDED_SAMPLES_PER_REGION: usize = 4096;
 pub const DEFAULT_QPS_THRESHOLD: usize = 3000;
 pub const DEFAULT_BIG_REGION_QPS_THRESHOLD: usize = 7000;
 pub const DEFAULT_BYTE_THRESHOLD: usize = 30 * 1024 * 1024;
@@ -115,6 +121,27 @@ impl Default for SplitConfig {
 
 impl SplitConfig {
     pub fn validate(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        if !(1..=MAX_SAMPLE_NUM).contains(&self.sample_num) {
+            return Err(format!(
+                "sample_num should be between 1 and {} for load-base-split.",
+                MAX_SAMPLE_NUM
+            )
+            .into());
+        }
+        if self.detect_times == 0 {
+            return Err("detect_times must be greater than 0 for load-base-split.".into());
+        }
+        let recorded_sample_num = usize::try_from(self.detect_times)
+            .ok()
+            .and_then(|detect_times| self.sample_num.checked_mul(detect_times));
+        if recorded_sample_num.is_none_or(|sample_num| sample_num > MAX_RECORDED_SAMPLES_PER_REGION)
+        {
+            return Err(format!(
+                "sample_num * detect_times should not exceed {} for load-base-split.",
+                MAX_RECORDED_SAMPLES_PER_REGION
+            )
+            .into());
+        }
         if self.split_balance_score > 1.0
             || self.split_balance_score < 0.0
             || self.split_contained_score > 1.0
@@ -236,7 +263,9 @@ mod tests {
 
     use crate::store::{
         SplitConfig, SplitConfigManager,
-        worker::split_config::{DEFAULT_SAMPLE_NUM, get_sample_num},
+        worker::split_config::{
+            DEFAULT_SAMPLE_NUM, MAX_RECORDED_SAMPLES_PER_REGION, MAX_SAMPLE_NUM, get_sample_num,
+        },
     };
 
     #[test]
@@ -254,5 +283,33 @@ mod tests {
         cfg_manager.dispatch(config_change).unwrap();
 
         assert_eq!(get_sample_num(), 50);
+    }
+
+    #[test]
+    fn test_validate_sampling_memory_budget() {
+        let mut config = SplitConfig {
+            qps_threshold: Some(usize::MAX),
+            ..Default::default()
+        };
+
+        config.sample_num = 0;
+        assert!(config.validate().is_err());
+
+        config.sample_num = MAX_SAMPLE_NUM + 1;
+        assert!(config.validate().is_err());
+
+        config.sample_num = MAX_SAMPLE_NUM;
+        config.detect_times = (MAX_RECORDED_SAMPLES_PER_REGION / MAX_SAMPLE_NUM) as u64;
+        config.validate().unwrap();
+
+        config.detect_times += 1;
+        assert!(config.validate().is_err());
+
+        config.sample_num = 1;
+        config.detect_times = 0;
+        assert!(config.validate().is_err());
+
+        config.detect_times = u64::MAX;
+        assert!(config.validate().is_err());
     }
 }
