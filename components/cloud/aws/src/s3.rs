@@ -874,8 +874,7 @@ impl IterableStorage for S3Storage {
 
 #[cfg(test)]
 mod tests {
-    use std::assert_matches::assert_matches;
-    use std::ffi::OsString;
+    use std::{assert_matches::assert_matches, ffi::OsString};
 
     use aws_sdk_s3::{config::Credentials, primitives::SdkBody};
     use aws_smithy_runtime::{
