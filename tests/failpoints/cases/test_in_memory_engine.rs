@@ -1259,6 +1259,73 @@ fn test_eviction_when_destroy_uninitialized_peer() {
     cluster.must_region_exist(region.get_id(), 2);
 }
 
+// Regression test for the startup preload issue for `cache=always` regions
+// (tikv/tikv#19555).
+//
+// When `cache=always` is configured for a key range, the PdRangeHintService
+// does two things:
+//   1. `add_manual_load_range(range)` – records the intent to always cache
+//      this range in IME.
+//   2. `get_regions_in_range(start, end)` + `load_region()` – immediately
+//      tries to materialize the load.
+//
+// On a TiKV restart, step (2) can fire before raftstore has registered this
+// node's regions to `RegionInfoProvider`. In that case `get_regions_in_range`
+// returns empty, the callback does not retry, and no role-change event
+// re-triggers the load (role changes for regions that are already leaders on
+// this node after restart do not fire here). The range remains in
+// `manual_load_range` but the corresponding regions are never loaded.
+//
+// The fix introduces a periodic `ResolveManualLoadRanges` background task
+// that walks every range in `manual_load_range` and re-resolves it against
+// the current provider, loading any regions that are not yet registered in
+// IME. This test asserts that behavior at the cluster level: if we record a
+// manual range for a region *without* calling `load_region`, the retry task
+// must eventually load the region on its own.
+#[test]
+fn test_cache_always_preloaded_via_manual_load_range_retry() {
+    fail::cfg("ime_background_check_load_pending_interval", "return(500)").unwrap();
+    fail::cfg(
+        "ime_background_resolve_manual_load_ranges_interval",
+        "return(500)",
+    )
+    .unwrap();
+
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
+    cluster.run();
+
+    cluster.must_put(b"k", b"v");
+    let r = cluster.get_region(b"k");
+    assert!(
+        cluster.leader_of_region(r.id).is_some(),
+        "region must have a leader"
+    );
+
+    let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+    let cache_region = CacheRegion::from_region(&r);
+
+    // Simulate the degenerate startup case: only `add_manual_load_range` is
+    // called (as if `get_regions_in_range` had returned empty). We do NOT
+    // call `load_region` here.
+    region_cache_engine
+        .core()
+        .region_manager()
+        .regions_map()
+        .write()
+        .add_manual_load_range(cache_region.clone());
+
+    // The retry task must re-resolve the manual range against the provider
+    // and load the region into IME on its own, without any role change.
+    eventually(Duration::from_millis(100), Duration::from_secs(10), || {
+        region_cache_engine
+            .snapshot(cache_region.clone(), u64::MAX, u64::MAX)
+            .is_ok()
+    });
+
+    fail::remove("ime_background_resolve_manual_load_ranges_interval");
+    fail::remove("ime_background_check_load_pending_interval");
+}
+
 // IME must not panic when warmup an uninitialized peer.
 #[test]
 fn test_transfer_leader_warmup_uninitialized_peer() {

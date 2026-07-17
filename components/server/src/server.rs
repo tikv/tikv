@@ -37,8 +37,8 @@ use engine_rocks::{
 };
 use engine_rocks_helper::sst_recovery::{DEFAULT_CHECK_INTERVAL, RecoveryRunner};
 use engine_traits::{
-    CF_DEFAULT, CF_WRITE, Engines, KvEngine, MiscExt, RaftEngine, SingletonFactory, TabletContext,
-    TabletRegistry,
+    CF_DEFAULT, CF_WRITE, Engines, KvEngine, MiscExt, RaftEngine, RegionCacheEngine,
+    SingletonFactory, TabletContext, TabletRegistry,
 };
 use file_system::{BytesFetcher, MetricsManager as IoMetricsManager, get_io_rate_limiter};
 use futures::executor::block_on;
@@ -49,8 +49,8 @@ use hybrid_engine::observer::{
     RegionCacheWriteBatchObserver,
 };
 use in_memory_engine::{
-    InMemoryEngineContext, InMemoryEngineStatistics, RegionCacheMemoryEngine,
-    config::InMemoryEngineConfigManager,
+    InMemoryEngineContext, InMemoryEngineStatistics, PdRangeHintService,
+    RegionCacheMemoryEngine, config::InMemoryEngineConfigManager,
 };
 use kvproto::{
     brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
@@ -187,6 +187,25 @@ fn run_impl<CER, F>(
     let (engines, engines_info, in_memory_engine) = tikv.init_raw_engines(listener);
     tikv.init_engines(engines.clone());
     let server_config = tikv.init_servers();
+    // Start the IME hint service after raftstore has been started inside
+    // `init_servers`. This is a best-effort optimization to reduce the
+    // window in which the hint service's initial `cache=always` label
+    // fetch fires against an empty `RegionInfoProvider` (which would leave
+    // `cache=always` ranges recorded in `manual_load_range` but not
+    // materialized as loads).
+    //
+    // IMPORTANT: `init_servers` returning is NOT a strict readiness
+    // barrier for `RegionInfoProvider` — raftstore registers regions
+    // asynchronously, so the initial fetch may still observe an empty
+    // provider. The actual correctness guarantee for eventually loading
+    // `cache=always` regions comes from the periodic
+    // `BackgroundTask::ResolveManualLoadRanges` retry in
+    // `components/in_memory_engine/src/background.rs`, which re-resolves
+    // every recorded manual range against the provider on a fixed
+    // interval. This ordering simply makes the common case faster.
+    if let Some(engine) = in_memory_engine.as_ref() {
+        engine.start_hint_service(PdRangeHintService::from(tikv.pd_client.clone()));
+    }
     tikv.register_services();
     tikv.init_metrics_flusher(fetcher, engines_info);
     tikv.init_cgroup_monitor();
@@ -1850,7 +1869,6 @@ where
             let in_memory_engine = build_hybrid_engine(
                 in_memory_engine_context,
                 kv_engine.clone(),
-                Some(self.pd_client.clone()),
                 Some(Arc::new(self.region_info_accessor.clone().unwrap())),
                 Box::new(self.router.clone()),
             );
