@@ -29,6 +29,11 @@ impl UnicodeVersion for Unicode0900 {
 
         u as u128
     }
+
+    #[inline]
+    fn like_pattern_match(a: char, b: char) -> bool {
+        Self::char_weight(a) == Self::char_weight(b)
+    }
 }
 
 #[inline]
