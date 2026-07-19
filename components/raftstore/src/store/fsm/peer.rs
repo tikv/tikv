@@ -64,7 +64,7 @@ use tikv_util::{
     sys::disk::DiskUsage,
     time::{Instant as TiInstant, SlowTimer, monotonic_raw_now},
     trace, warn, warn_or_debug,
-    worker::Scheduler,
+    worker::{ScheduleError, Scheduler},
 };
 use tracker::GLOBAL_TRACKERS;
 use txn_types::WriteBatchFlags;
@@ -174,26 +174,6 @@ fn validate_split_region_for_source(
     Ok(())
 }
 
-fn new_ask_batch_split_task<EK: KvEngine>(
-    region: Region,
-    peer: metapb::Peer,
-    split_keys: Vec<Vec<u8>>,
-    callback: Callback<EK::Snapshot>,
-    source: &str,
-    configured_right_derive: bool,
-    share_source_region_size: bool,
-) -> PdTask<EK> {
-    PdTask::AskBatchSplit {
-        region,
-        split_keys,
-        peer,
-        right_derive: right_derive_for_source(source, configured_right_derive),
-        share_source_region_size,
-        callback,
-        split_reason: split_reason_for_source(source),
-    }
-}
-
 static SNAP_GEN_PRECHECK_RESPONSE_LOG_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub const MAX_PROPOSAL_SIZE_RATIO: f64 = 0.4;
@@ -293,14 +273,7 @@ where
         while let Ok(msg) = self.receiver.try_recv() {
             let callback = match msg {
                 PeerMsg::RaftCommand(cmd) => cmd.callback,
-                PeerMsg::CasualMessage(box CasualMessage::SplitRegion {
-                    callback, source, ..
-                }) => {
-                    if source == AUTO_SPLIT_SOURCE {
-                        LOAD_BASE_SPLIT_EVENT.split_failed.inc();
-                    }
-                    callback
-                }
+                PeerMsg::CasualMessage(box CasualMessage::SplitRegion { callback, .. }) => callback,
                 PeerMsg::RaftMessage(im, _) => {
                     raft_messages_size += im.heap_size;
                     continue;
@@ -1341,13 +1314,6 @@ where
         if self.fsm.peer.pending_remove == Some(PendingRemoveReason::ReadyToDestroy) {
             // It means that the peer will be asynchronously removed, it's no
             // need to execute the consequentail CasualMessages.
-            if matches!(
-                &*msg,
-                CasualMessage::SplitRegion { source, .. }
-                    if source == AUTO_SPLIT_SOURCE
-            ) {
-                LOAD_BASE_SPLIT_EVENT.split_failed.inc();
-            }
             return;
         }
         match *msg {
@@ -6732,7 +6698,6 @@ where
         source: &str,
         share_source_region_size: bool,
     ) {
-        let is_auto_split = source == AUTO_SPLIT_SOURCE;
         info!(
             "on split";
             "region_id" => self.fsm.region_id(),
@@ -6748,9 +6713,6 @@ where
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
             );
-            if is_auto_split {
-                LOAD_BASE_SPLIT_EVENT.split_failed.inc();
-            }
             cb.invoke_with_response(new_error(Error::NotLeader(
                 self.region_id(),
                 self.fsm.peer.get_peer_from_cache(self.fsm.peer.leader_id()),
@@ -6772,39 +6734,30 @@ where
                 "peer_id" => self.fsm.peer_id(),
                 "source" => %source
             );
-            if is_auto_split {
-                LOAD_BASE_SPLIT_EVENT.split_failed.inc();
-            }
             cb.invoke_with_response(new_error(e));
             return;
         }
         let region = self.fsm.peer.region();
-        let task = new_ask_batch_split_task(
-            region.clone(),
-            self.fsm.peer.peer.clone(),
+        let task = PdTask::AskBatchSplit {
+            region: region.clone(),
             split_keys,
-            cb,
-            source,
-            self.ctx.cfg.right_derive_when_split,
+            peer: self.fsm.peer.peer.clone(),
+            right_derive: right_derive_for_source(source, self.ctx.cfg.right_derive_when_split),
             share_source_region_size,
-        );
-        if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
-            let err = e.to_string();
+            callback: cb,
+            split_reason: split_reason_for_source(source),
+        };
+        if let Err(ScheduleError::Stopped(t)) = self.ctx.pd_scheduler.schedule(task) {
             warn!(
-                "failed to notify pd to split";
+                "failed to notify pd to split: Stopped";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
-                "err" => %err,
             );
-            match e.into_inner() {
+            match t {
                 PdTask::AskBatchSplit { callback, .. } => {
-                    if is_auto_split {
-                        LOAD_BASE_SPLIT_EVENT.split_failed.inc();
-                    }
                     callback.invoke_with_response(new_error(box_err!(
-                        "{} failed to split: {}",
-                        self.fsm.peer.tag,
-                        err
+                        "{} failed to split: Stopped",
+                        self.fsm.peer.tag
                     )));
                 }
                 _ => unreachable!(),
@@ -7923,44 +7876,6 @@ mod tests {
             SplitReason::Size
         );
         assert_eq!(split_reason_for_source("test"), SplitReason::Admin);
-    }
-
-    #[test]
-    fn test_auto_split_task_uses_current_peer() {
-        let mut region = Region::default();
-        region.set_id(42);
-        let mut current_peer = metapb::Peer::default();
-        current_peer.set_id(101);
-
-        let task: PdTask<KvTestEngine> = new_ask_batch_split_task(
-            region.clone(),
-            current_peer.clone(),
-            vec![b"k".to_vec()],
-            Callback::None,
-            AUTO_SPLIT_SOURCE,
-            false,
-            false,
-        );
-        match task {
-            PdTask::AskBatchSplit {
-                region: task_region,
-                split_keys,
-                peer,
-                right_derive,
-                share_source_region_size,
-                callback,
-                split_reason,
-            } => {
-                assert_eq!(task_region, region);
-                assert_eq!(split_keys, vec![b"k".to_vec()]);
-                assert_eq!(peer, current_peer);
-                assert!(right_derive);
-                assert!(!share_source_region_size);
-                assert!(matches!(callback, Callback::None));
-                assert_eq!(split_reason, SplitReason::Load);
-            }
-            _ => panic!("unexpected PD task"),
-        }
     }
 
     #[test]

@@ -56,7 +56,7 @@ use tikv_util::{
     timer::GLOBAL_TIMER_HANDLE,
     topn::TopN,
     warn,
-    worker::{Runnable, Scheduler},
+    worker::{Runnable, ScheduleError, Scheduler},
 };
 use yatp::Remote;
 
@@ -643,21 +643,10 @@ where
     }
 
     fn auto_split(&self, split_infos: Vec<SplitInfo>) {
-        if split_infos.is_empty() {
-            return;
-        }
-        let candidate_count = split_infos.len() as u64;
-        let normal_candidate_count = split_infos
-            .iter()
-            .filter(|split_info| split_info.split_key.is_some())
-            .count() as u64;
-        if let Err(e) = self.0.schedule(Task::AutoSplit { split_infos }) {
-            LOAD_BASE_SPLIT_EVENT
-                .split_failed
-                .inc_by(normal_candidate_count);
+        let task = Task::AutoSplit { split_infos };
+        if let Err(e) = self.0.schedule(task) {
             warn!(
-                "failed to send auto split candidates to pd worker";
-                "candidate_count" => candidate_count,
+                "failed to send split infos to pd worker";
                 "err" => ?e,
             );
         }
@@ -1395,24 +1384,15 @@ where
         remote: Remote<yatp::task::future::TaskCell>,
         reason: pdpb::SplitReason,
     ) {
-        let is_load_split = reason == pdpb::SplitReason::Load;
-        // Normal-key auto split preserves the old `share_source_region_size = false`
-        // behavior. CPU fallback reaches this function with sharing enabled.
-        let is_normal_load_split = is_load_split && !share_source_region_size;
         if split_keys.is_empty() {
             info!("empty split key, skip ask batch split";
                 "region_id" => region.get_id());
-            if is_normal_load_split {
-                LOAD_BASE_SPLIT_EVENT.split_failed.inc();
-            }
             return;
         }
         if reason != pdpb::SplitReason::Admin && split_validator.is_disabled(region.get_id()) {
-            if is_normal_load_split {
-                LOAD_BASE_SPLIT_EVENT.split_failed.inc();
-            }
             return;
         }
+        let is_load_split = reason == pdpb::SplitReason::Load;
         let resp = pd_client.ask_batch_split(region.clone(), split_keys.len(), reason);
         let f = async move {
             match resp.await {
@@ -1470,15 +1450,13 @@ where
                         callback,
                         split_reason: reason,
                     };
-                    if let Err(e) = scheduler.schedule(task) {
-                        let err = e.to_string();
+                    if let Err(ScheduleError::Stopped(t)) = scheduler.schedule(task) {
                         error!(
-                            "failed to notify pd to split";
+                            "failed to notify pd to split: Stopped";
                             "region_id" => region_id,
-                            "peer_id" => peer_id,
-                            "err" => %err,
+                            "peer_id" =>  peer_id
                         );
-                        match e.into_inner() {
+                        match t {
                             Task::AskSplit {
                                 callback,
                                 split_reason,
@@ -1488,8 +1466,7 @@ where
                                     LOAD_BASE_SPLIT_EVENT.split_failed.inc();
                                 }
                                 callback.invoke_with_response(new_error(box_err!(
-                                    "failed to split: {}",
-                                    err
+                                    "failed to split: Stopped"
                                 )));
                             }
                             _ => unreachable!(),
@@ -2629,41 +2606,19 @@ where
                 let f = async move {
                     for mut split_info in split_infos {
                         let region_id = split_info.region_id;
-                        let is_normal_split = split_info.split_key.is_some();
-                        let region = match pd_client.get_region_by_id(region_id).await {
-                            Ok(Some(region)) => region,
-                            Ok(None) => {
-                                if is_normal_split {
-                                    LOAD_BASE_SPLIT_EVENT.split_failed.inc();
-                                    warn!(
-                                        "region disappeared before auto split dispatch";
-                                        "region_id" => region_id,
-                                    );
-                                }
-                                continue;
-                            }
-                            Err(e) => {
-                                if is_normal_split {
-                                    LOAD_BASE_SPLIT_EVENT.split_failed.inc();
-                                    warn!(
-                                        "failed to load region before auto split dispatch";
-                                        "region_id" => region_id,
-                                        "err" => ?e,
-                                    );
-                                }
-                                continue;
-                            }
+                        let Ok(Some(region)) = pd_client.get_region_by_id(region_id).await else {
+                            continue;
                         };
                         // Try to split the region with the given split key.
-                        // The sampled peer can be empty or stale, so the current peer FSM
-                        // resolves the execution identity.
+                        // Classic raftstore intentionally ignores the telemetry peer here.
+                        // The current peer FSM owns execution identity and rejects a leader
+                        // transfer locally instead of forwarding the candidate.
                         if let Some(msg) = take_auto_split_message(
                             region.get_region_epoch().clone(),
                             &mut split_info,
                         ) {
                             let result = router.send_casual_msg(region_id, msg);
                             if let Err(e) = result {
-                                LOAD_BASE_SPLIT_EVENT.split_failed.inc();
                                 warn!(
                                     "failed to route auto split through current peer";
                                     "region_id" => region_id,

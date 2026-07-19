@@ -277,7 +277,7 @@ make_static_metric! {
         cpu_fallback_grpc_busy,
         // Load-base split admin command succeeds.
         split_success,
-        // A normal load-base split candidate dispatch or load-base split admin command fails.
+        // Load-base split admin command fails.
         split_failed,
         // Hottest key range for the top hot CPU region could not be found.
         empty_hottest_key_range,
