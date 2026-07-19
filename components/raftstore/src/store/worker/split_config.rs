@@ -14,11 +14,12 @@ use tikv_util::{
 const DEFAULT_DETECT_TIMES: u64 = 10;
 const DEFAULT_SAMPLE_THRESHOLD: u64 = 100;
 pub(crate) const DEFAULT_SAMPLE_NUM: usize = 20;
-// Each producer keeps one reservoir per active Region. This leaves substantial
-// tuning room over the default while bounding one reservoir.
+// Item-count limits, not global byte limits. Key payloads, spare Vec capacity,
+// producer threads, and active Regions add memory beyond these counts.
+// 1024 leaves more than 50x tuning room over the default per-round reservoir.
 const MAX_SAMPLE_NUM: usize = 1024;
-// A hot Region retains one reservoir per detection round and clones the
-// retained ranges when selecting a split key.
+// 4096 leaves more than 20x tuning room over the default 20 * 10 history while
+// bounding both a Region's retained sample items and split-key selection work.
 const MAX_RECORDED_SAMPLES_PER_REGION: usize = 4096;
 pub const DEFAULT_QPS_THRESHOLD: usize = 3000;
 pub const DEFAULT_BIG_REGION_QPS_THRESHOLD: usize = 7000;
@@ -134,13 +135,21 @@ impl SplitConfig {
         let recorded_sample_num = usize::try_from(self.detect_times)
             .ok()
             .and_then(|detect_times| self.sample_num.checked_mul(detect_times));
-        if recorded_sample_num.is_none_or(|sample_num| sample_num > MAX_RECORDED_SAMPLES_PER_REGION)
-        {
-            return Err(format!(
-                "sample_num * detect_times should not exceed {} for load-base-split.",
-                MAX_RECORDED_SAMPLES_PER_REGION
-            )
-            .into());
+        let recorded_sample_num = match recorded_sample_num {
+            Some(sample_num) if sample_num <= MAX_RECORDED_SAMPLES_PER_REGION => sample_num,
+            _ => {
+                return Err(format!(
+                    "sample_num * detect_times should not exceed {} for load-base-split.",
+                    MAX_RECORDED_SAMPLES_PER_REGION
+                )
+                .into());
+            }
+        };
+        if self.sample_threshold > recorded_sample_num as u64 {
+            return Err(
+                "sample_threshold should not exceed sample_num * detect_times for load-base-split."
+                    .into(),
+            );
         }
         if self.split_balance_score > 1.0
             || self.split_balance_score < 0.0
@@ -264,7 +273,8 @@ mod tests {
     use crate::store::{
         SplitConfig, SplitConfigManager,
         worker::split_config::{
-            DEFAULT_SAMPLE_NUM, MAX_RECORDED_SAMPLES_PER_REGION, MAX_SAMPLE_NUM, get_sample_num,
+            DEFAULT_DETECT_TIMES, DEFAULT_SAMPLE_NUM, MAX_RECORDED_SAMPLES_PER_REGION,
+            MAX_SAMPLE_NUM, get_sample_num,
         },
     };
 
@@ -310,6 +320,14 @@ mod tests {
         assert!(config.validate().is_err());
 
         config.detect_times = u64::MAX;
+        assert!(config.validate().is_err());
+
+        config.sample_num = DEFAULT_SAMPLE_NUM;
+        config.detect_times = DEFAULT_DETECT_TIMES;
+        config.sample_threshold = (DEFAULT_SAMPLE_NUM as u64) * DEFAULT_DETECT_TIMES;
+        config.validate().unwrap();
+
+        config.sample_threshold += 1;
         assert!(config.validate().is_err());
     }
 }

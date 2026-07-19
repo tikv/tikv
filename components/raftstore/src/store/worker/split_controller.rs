@@ -2,7 +2,7 @@
 
 use std::{
     cmp::{Ordering, min},
-    collections::{BinaryHeap, HashSet},
+    collections::{BinaryHeap, HashSet, VecDeque},
     slice::{Iter, IterMut},
     sync::{Arc, mpsc::Receiver},
     time::{Duration, SystemTime},
@@ -270,7 +270,8 @@ impl Samples {
 pub struct Recorder {
     pub detect_times: usize,
     pub peer: Peer,
-    pub key_ranges: Vec<Vec<KeyRange>>,
+    // Advancing a full observation window should not shift all retained rounds.
+    pub key_ranges: VecDeque<Vec<KeyRange>>,
     pub create_time: SystemTime,
     pub cpu_usage: f64,
     pub hottest_key_range: Option<KeyRange>,
@@ -281,15 +282,29 @@ impl Recorder {
         Recorder {
             detect_times: detect_times as usize,
             peer: Peer::default(),
-            key_ranges: vec![],
+            key_ranges: VecDeque::new(),
             create_time: SystemTime::now(),
             cpu_usage: 0.0,
             hottest_key_range: None,
         }
     }
 
-    fn record(&mut self, key_ranges: Vec<KeyRange>) {
-        self.key_ranges.push(key_ranges);
+    fn record(&mut self, mut key_ranges: Vec<KeyRange>, detect_times: u64, sample_num: usize) {
+        // A recorder can survive an online config update, so reapply the current
+        // limits to both retained rounds and the new observation.
+        self.detect_times = detect_times as usize;
+        if self.detect_times == 0 || sample_num == 0 {
+            self.key_ranges.clear();
+            return;
+        }
+        for retained_ranges in &mut self.key_ranges {
+            retained_ranges.truncate(sample_num);
+        }
+        key_ranges.truncate(sample_num);
+        while self.key_ranges.len() >= self.detect_times {
+            let _ = self.key_ranges.pop_front();
+        }
+        self.key_ranges.push_back(key_ranges);
     }
 
     fn update_peer(&mut self, peer: &Peer) {
@@ -307,7 +322,7 @@ impl Recorder {
     }
 
     fn is_ready(&self) -> bool {
-        self.key_ranges.len() >= self.detect_times
+        self.detect_times > 0 && self.key_ranges.len() >= self.detect_times
     }
 
     // collect the split keys from the recorded key_ranges.
@@ -315,7 +330,8 @@ impl Recorder {
     // evaluate the samples according to the given key range, and compute the split
     // keys finally.
     fn collect(&self, config: &SplitConfig) -> Vec<u8> {
-        let sampled_key_ranges = sample(config.sample_num, self.key_ranges.clone(), |x| x);
+        let recorded_rounds: Vec<_> = self.key_ranges.iter().cloned().collect();
+        let sampled_key_ranges = sample(config.sample_num, recorded_rounds, |x| x);
         let mut samples = Samples::from(sampled_key_ranges);
         let recorded_key_ranges: Vec<&KeyRange> = self.key_ranges.iter().flatten().collect();
         // Because we need to observe the number of `no_enough_key` of all the actual
@@ -375,7 +391,7 @@ impl RegionInfo {
     fn add_key_ranges_with_rng<R: Rng + ?Sized>(&mut self, key_ranges: Vec<KeyRange>, rng: &mut R) {
         for (i, key_range) in key_ranges.into_iter().enumerate() {
             let n = self.get_read_qps() + i;
-            if n == 0 || self.key_ranges.len() < self.sample_num {
+            if self.key_ranges.len() < self.sample_num {
                 self.key_ranges.push(key_range);
             } else {
                 // This is the (n + 1)th observation, so it must be selected with
@@ -877,7 +893,7 @@ impl AutoSplitController {
                 LOAD_BASE_SPLIT_EVENT.empty_statistical_key.inc();
                 continue;
             }
-            recorder.record(key_ranges);
+            recorder.record(key_ranges, detect_times, self.cfg.sample_num);
             if recorder.is_ready() {
                 let key = recorder.collect(&self.cfg);
                 if !key.is_empty() {
@@ -1181,14 +1197,88 @@ mod tests {
         let mut recorder = Recorder::new(config.detect_times);
         for _ in 0..config.detect_times {
             assert!(!recorder.is_ready());
-            recorder.record(vec![
-                build_key_range(b"a", b"b", false),
-                build_key_range(b"b", b"c", false),
-            ]);
+            recorder.record(
+                vec![
+                    build_key_range(b"a", b"b", false),
+                    build_key_range(b"b", b"c", false),
+                ],
+                config.detect_times,
+                config.sample_num,
+            );
         }
         assert!(recorder.is_ready());
         let key = recorder.collect(&config);
         assert_eq!(key, b"b");
+    }
+
+    #[test]
+    fn test_recorder_failed_collection_keeps_latest_bounded_window() {
+        let config = SplitConfig {
+            detect_times: 3,
+            sample_num: 2,
+            sample_threshold: 6,
+            split_balance_score: 0.0,
+            ..Default::default()
+        };
+        let mut recorder = Recorder::new(config.detect_times);
+
+        for round in 0..6_u8 {
+            let ranges = (0..3_u8)
+                .map(|sample| build_key_range(&[round, sample], &[round, sample], false))
+                .collect();
+            recorder.record(ranges, config.detect_times, config.sample_num);
+
+            assert!(recorder.key_ranges.len() <= config.detect_times as usize);
+            assert!(
+                recorder.key_ranges.iter().map(Vec::len).sum::<usize>()
+                    <= config.sample_num * config.detect_times as usize
+            );
+            if round + 1 >= config.detect_times as u8 {
+                assert!(recorder.is_ready());
+                assert!(recorder.collect(&config).is_empty());
+            }
+        }
+
+        let retained_rounds: Vec<_> = recorder
+            .key_ranges
+            .iter()
+            .map(|ranges| ranges[0].start_key[0])
+            .collect();
+        assert_eq!(retained_rounds, vec![3, 4, 5]);
+        assert!(
+            recorder
+                .key_ranges
+                .iter()
+                .all(|ranges| ranges.len() == config.sample_num)
+        );
+    }
+
+    #[test]
+    fn test_recorder_applies_smaller_online_limits() {
+        let mut recorder = Recorder::new(3);
+        for round in 0..3_u8 {
+            let ranges = (0..4_u8)
+                .map(|sample| build_key_range(&[round, sample], &[round, sample], false))
+                .collect();
+            recorder.record(ranges, 3, 4);
+        }
+
+        let ranges = (0..3_u8)
+            .map(|sample| build_key_range(&[3, sample], &[3, sample], false))
+            .collect();
+        recorder.record(ranges, 2, 1);
+
+        assert_eq!(recorder.detect_times, 2);
+        assert_eq!(recorder.key_ranges.len(), 2);
+        assert_eq!(
+            recorder
+                .key_ranges
+                .iter()
+                .map(|ranges| ranges[0].start_key[0])
+                .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        assert!(recorder.key_ranges.iter().all(|ranges| ranges.len() == 1));
     }
 
     #[test]
@@ -1797,6 +1887,14 @@ mod tests {
         let mut rng = StepRng::new(0x8000_0000_8000_0000, 0);
         region_info.add_key_ranges_with_rng(vec![first.clone(), second], &mut rng);
         assert_eq!(region_info.key_ranges, vec![first]);
+    }
+
+    #[test]
+    fn test_region_info_zero_sample_reservoir_stays_empty() {
+        let mut region_info = RegionInfo::new(0);
+        region_info.add_key_ranges(vec![build_key_range(b"a", b"b", false)]);
+
+        assert!(region_info.key_ranges.is_empty());
     }
 
     #[test]
