@@ -269,8 +269,10 @@ impl Samples {
 // sample and split them according to the split config appropriately.
 pub struct Recorder {
     pub detect_times: usize,
+    sample_num: usize,
     pub peer: Peer,
     // Advancing a full observation window should not shift all retained rounds.
+    // Every retained round uses this recorder's detect_times and sample_num.
     pub key_ranges: VecDeque<Vec<KeyRange>>,
     pub create_time: SystemTime,
     pub cpu_usage: f64,
@@ -278,9 +280,10 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    fn new(detect_times: u64) -> Recorder {
+    fn new(detect_times: u64, sample_num: usize) -> Recorder {
         Recorder {
             detect_times: detect_times as usize,
+            sample_num,
             peer: Peer::default(),
             key_ranges: VecDeque::new(),
             create_time: SystemTime::now(),
@@ -290,16 +293,21 @@ impl Recorder {
     }
 
     fn record(&mut self, mut key_ranges: Vec<KeyRange>, detect_times: u64, sample_num: usize) {
-        // A recorder can survive an online config update, so reapply the current
-        // limits to both retained rounds and the new observation.
-        self.detect_times = detect_times as usize;
+        let detect_times = detect_times as usize;
+        // Mixing rounds sampled under different parameters biases the retained
+        // history. Start a new observation window after either parameter changes.
+        if self.detect_times != detect_times || self.sample_num != sample_num {
+            self.detect_times = detect_times;
+            self.sample_num = sample_num;
+            self.key_ranges.clear();
+            self.create_time = SystemTime::now();
+        }
         if self.detect_times == 0 || sample_num == 0 {
             self.key_ranges.clear();
             return;
         }
-        for retained_ranges in &mut self.key_ranges {
-            retained_ranges.truncate(sample_num);
-        }
+        // Production callers already sample this round with the current
+        // sample_num. Retain a defensive bound for direct and future callers.
         key_ranges.truncate(sample_num);
         while self.key_ranges.len() >= self.detect_times {
             let _ = self.key_ranges.pop_front();
@@ -877,7 +885,7 @@ impl AutoSplitController {
             let recorder = self
                 .recorders
                 .entry(region_id)
-                .or_insert_with(|| Recorder::new(detect_times));
+                .or_insert_with(|| Recorder::new(detect_times, self.cfg.sample_num));
             recorder.update_peer(&region_infos[0].peer);
             recorder.update_cpu_usage(cpu_usage);
             if let Some(hottest_key_range) = hottest_key_range {
@@ -1194,7 +1202,7 @@ mod tests {
         config.detect_times = 10;
         config.sample_threshold = 20;
 
-        let mut recorder = Recorder::new(config.detect_times);
+        let mut recorder = Recorder::new(config.detect_times, config.sample_num);
         for _ in 0..config.detect_times {
             assert!(!recorder.is_ready());
             recorder.record(
@@ -1220,7 +1228,7 @@ mod tests {
             split_balance_score: 0.0,
             ..Default::default()
         };
-        let mut recorder = Recorder::new(config.detect_times);
+        let mut recorder = Recorder::new(config.detect_times, config.sample_num);
 
         for round in 0..6_u8 {
             let ranges = (0..3_u8)
@@ -1254,31 +1262,36 @@ mod tests {
     }
 
     #[test]
-    fn test_recorder_applies_smaller_online_limits() {
-        let mut recorder = Recorder::new(3);
-        for round in 0..3_u8 {
+    fn test_recorder_resets_window_on_sampling_config_change() {
+        let mut recorder = Recorder::new(3, 4);
+        for round in 0..2_u8 {
             let ranges = (0..4_u8)
                 .map(|sample| build_key_range(&[round, sample], &[round, sample], false))
                 .collect();
             recorder.record(ranges, 3, 4);
         }
+        recorder.create_time = SystemTime::UNIX_EPOCH;
 
         let ranges = (0..3_u8)
-            .map(|sample| build_key_range(&[3, sample], &[3, sample], false))
+            .map(|sample| build_key_range(&[2, sample], &[2, sample], false))
             .collect();
+        recorder.record(ranges, 3, 1);
+
+        assert_eq!(recorder.detect_times, 3);
+        assert_eq!(recorder.sample_num, 1);
+        assert_eq!(recorder.key_ranges.len(), 1);
+        assert_eq!(recorder.key_ranges[0][0].start_key, vec![2, 0]);
+        assert!(recorder.key_ranges.iter().all(|ranges| ranges.len() == 1));
+        assert_ne!(recorder.create_time, SystemTime::UNIX_EPOCH);
+        assert!(!recorder.is_ready());
+
+        let ranges = vec![build_key_range(&[3, 0], &[3, 0], false)];
         recorder.record(ranges, 2, 1);
 
         assert_eq!(recorder.detect_times, 2);
-        assert_eq!(recorder.key_ranges.len(), 2);
-        assert_eq!(
-            recorder
-                .key_ranges
-                .iter()
-                .map(|ranges| ranges[0].start_key[0])
-                .collect::<Vec<_>>(),
-            vec![2, 3]
-        );
-        assert!(recorder.key_ranges.iter().all(|ranges| ranges.len() == 1));
+        assert_eq!(recorder.key_ranges.len(), 1);
+        assert_eq!(recorder.key_ranges[0][0].start_key, vec![3, 0]);
+        assert!(!recorder.is_ready());
     }
 
     #[test]

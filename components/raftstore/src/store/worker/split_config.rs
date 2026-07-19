@@ -20,6 +20,9 @@ pub(crate) const DEFAULT_SAMPLE_NUM: usize = 20;
 const MAX_SAMPLE_NUM: usize = 1024;
 // 4096 leaves more than 20x tuning room over the default 20 * 10 history while
 // bounding both a Region's retained sample items and split-key selection work.
+// `Recorder::collect` can compare up to 2 * sample_num candidate keys with
+// sample_num * detect_times retained ranges. Benchmark before raising either
+// limit.
 const MAX_RECORDED_SAMPLES_PER_REGION: usize = 4096;
 pub const DEFAULT_QPS_THRESHOLD: usize = 3000;
 pub const DEFAULT_BIG_REGION_QPS_THRESHOLD: usize = 7000;
@@ -244,8 +247,18 @@ impl ConfigManager for SplitConfigManager {
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         {
             let change = change.clone();
-            self.0
-                .update(move |cfg: &mut SplitConfig| cfg.update(change))?;
+            self.0.update(
+                move |cfg: &mut SplitConfig| -> std::result::Result<_, Box<dyn std::error::Error>> {
+                    // ConfigController validates before acquiring its commit lock, so
+                    // another update can make that snapshot stale. Validate the combined
+                    // value while holding VersionTrack's write lock.
+                    let mut candidate = cfg.clone();
+                    candidate.update(change)?;
+                    candidate.validate()?;
+                    *cfg = candidate;
+                    Ok(())
+                },
+            )?;
         }
         info!(
             "load base split config changed";
@@ -329,5 +342,28 @@ mod tests {
 
         config.sample_threshold += 1;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_online_update_validates_current_sampling_budget() {
+        let config = Arc::new(VersionTrack::new(SplitConfig::default()));
+        // Avoid changing the process-wide producer sampling configuration in this
+        // manager-only test.
+        let mut cfg_manager = SplitConfigManager(config);
+
+        // Each value is valid with the defaults, but their combination exceeds
+        // the retained-sample budget.
+        let mut config_change = ConfigChange::new();
+        config_change.insert(String::from("sample_num"), ConfigValue::Usize(300));
+        cfg_manager.dispatch(config_change).unwrap();
+        let before_rejected_update = cfg_manager.value().clone();
+
+        let mut config_change = ConfigChange::new();
+        config_change.insert(String::from("detect_times"), ConfigValue::U64(14));
+        let err = cfg_manager.dispatch(config_change).unwrap_err().to_string();
+        assert!(err.contains("sample_num * detect_times should not exceed"));
+
+        let current = cfg_manager.value();
+        assert_eq!(&*current, &before_rejected_update);
     }
 }

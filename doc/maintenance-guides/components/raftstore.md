@@ -139,7 +139,9 @@ the default per-round sample count and more than 20 times the default retained
 history. They are not a global byte limit: key payloads, producer threads,
 active Regions, and `Vec` spare capacity add memory beyond the item counts.
 Producer reservoirs initially reserve at most the default sample count and grow
-with observations.
+with observations. Split-key collection can compare up to twice `sample_num`
+candidate keys against `sample_num * detect_times` retained ranges, so changes
+to either upper bound require benchmarking.
 
 ### Coprocessor hooks
 
