@@ -4,7 +4,11 @@ use std::{
     cmp::{Ordering, min},
     collections::{BinaryHeap, HashSet},
     slice::{Iter, IterMut},
-    sync::{Arc, mpsc::Receiver},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering as AtomicOrdering},
+        mpsc::Receiver,
+    },
     time::Duration,
 };
 
@@ -577,7 +581,7 @@ pub struct AutoSplitController {
     // Thread-related info
     max_grpc_thread_count: usize,
     max_unified_read_pool_thread_count: usize,
-    unified_read_pool_scale_receiver: Option<Receiver<usize>>,
+    unified_read_pool_size: Option<Arc<AtomicUsize>>,
     grpc_thread_usage_vec: Vec<f64>,
 }
 
@@ -586,15 +590,20 @@ impl AutoSplitController {
         config_manager: SplitConfigManager,
         max_grpc_thread_count: usize,
         max_unified_read_pool_thread_count: usize,
-        unified_read_pool_scale_receiver: Option<Receiver<usize>>,
+        unified_read_pool_size: Option<Arc<AtomicUsize>>,
     ) -> AutoSplitController {
+        let max_unified_read_pool_thread_count = unified_read_pool_size
+            .as_ref()
+            .map_or(max_unified_read_pool_thread_count, |current_pool_size| {
+                current_pool_size.load(AtomicOrdering::Relaxed)
+            });
         AutoSplitController {
             recorders: HashMap::default(),
             cfg: config_manager.value().clone(),
             cfg_tracker: config_manager.0.clone().tracker("split_hub".to_owned()),
             max_grpc_thread_count,
             max_unified_read_pool_thread_count,
-            unified_read_pool_scale_receiver,
+            unified_read_pool_size,
             grpc_thread_usage_vec: vec![],
         }
     }
@@ -990,12 +999,13 @@ impl AutoSplitController {
             // updates return to the previous value before this tick.
             reset_stats = true;
         }
-        // Each flush re-evaluates the busy gate with the latest pool capacity
-        // while preserving normal QPS and byte detection history.
-        if let Some(rx) = &self.unified_read_pool_scale_receiver {
-            for max_thread_count in rx.try_iter() {
-                self.max_unified_read_pool_thread_count = max_thread_count;
-            }
+        // Each flush re-evaluates the busy gate with the current pool capacity
+        // while preserving normal QPS and byte detection history. Intermediate
+        // resize values are irrelevant; only the capacity currently in effect is
+        // needed.
+        if let Some(current_pool_size) = &self.unified_read_pool_size {
+            self.max_unified_read_pool_thread_count =
+                current_pool_size.load(AtomicOrdering::Relaxed);
         }
         if reset_stats {
             self.reset_stats();
@@ -1960,17 +1970,21 @@ mod tests {
 
     #[test]
     fn test_read_pool_resize_preserves_controller_history() {
-        let (tx, rx) = mpsc::channel();
-        let mut auto_split_controller =
-            AutoSplitController::new(SplitConfigManager::default(), 0, 1, Some(rx));
+        let current_pool_size = Arc::new(AtomicUsize::new(1));
+        let mut auto_split_controller = AutoSplitController::new(
+            SplitConfigManager::default(),
+            0,
+            1,
+            Some(current_pool_size.clone()),
+        );
         auto_split_controller
             .recorders
             .insert(1, Recorder::new(auto_split_controller.cfg.detect_times));
         auto_split_controller.update_grpc_thread_usage(1.0);
 
-        tx.send(2).unwrap();
-        tx.send(3).unwrap();
-        tx.send(4).unwrap();
+        current_pool_size.store(2, AtomicOrdering::Relaxed);
+        current_pool_size.store(3, AtomicOrdering::Relaxed);
+        current_pool_size.store(4, AtomicOrdering::Relaxed);
         assert_eq!(
             auto_split_controller.refresh_and_check_cfg(),
             SplitConfigChange::Noop,
@@ -1984,10 +1998,10 @@ mod tests {
             .recorders
             .insert(2, Recorder::new(auto_split_controller.cfg.detect_times));
         auto_split_controller.update_grpc_thread_usage(2.0);
-        // Returning from A to B and back to A before a tick still applies the
-        // latest capacity without resetting detection history.
-        tx.send(3).unwrap();
-        tx.send(4).unwrap();
+        // Returning from A to B and back to A before a tick still observes the
+        // current capacity without resetting detection history.
+        current_pool_size.store(3, AtomicOrdering::Relaxed);
+        current_pool_size.store(4, AtomicOrdering::Relaxed);
         assert_eq!(
             auto_split_controller.refresh_and_check_cfg(),
             SplitConfigChange::Noop,

@@ -136,9 +136,10 @@ Load-based split accounting and state:
 - Disabling CPU-based detection still drains queued resource-metering records.
   Split-config changes and per-region split-validator disables discard prior
   controller detection history.
-- Unified-read-pool capacity notifications are drained to the latest value.
-  The current busy gate is re-evaluated with that capacity without interrupting
-  normal QPS and byte detection history.
+- Unified-read-pool capacity is published after each applied resize and shared
+  as authoritative current state rather than queued resize events. The current
+  busy gate reloads that state without interrupting normal QPS and byte
+  detection history.
 - A split-config version change drains observations already visible to the
   stats monitor, primes a new thread-CPU baseline, and skips that detection
   tick. Queued PD-worker tasks, in-progress resource-metering intervals, and

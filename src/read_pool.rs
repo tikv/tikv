@@ -5,8 +5,7 @@ use std::{
     future::Future,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-        mpsc::SyncSender,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -743,7 +742,9 @@ impl ReadPoolCpuTimeTracker {
 }
 struct ReadPoolConfigRunner {
     interval: Duration,
-    sender: SyncSender<usize>,
+    // The capacity already applied to `handle`. Resize transitions do not need
+    // to be retained; consumers only use the current value.
+    current_pool_size: Arc<AtomicUsize>,
     handle: ReadPoolHandle,
     cpu_time_tracker: ReadPoolCpuTimeTracker,
     process_stats: ProcessStat,
@@ -766,19 +767,15 @@ impl Runnable for ReadPoolConfigRunner {
         match task {
             Task::PoolSize(s) => {
                 if s != self.core_thread_count {
-                    self.handle.scale_pool_size(s);
+                    self.scale_pool_size(s);
                     self.core_thread_count = s;
-                    self.cur_thread_count = s;
-                    self.notify_pool_size_change(s);
                 }
             }
             Task::AutoAdjust(s) => {
                 self.auto_adjust = s;
                 // when auto adjust is disabled, reset to the config pool size.
                 if !s && self.cur_thread_count != self.core_thread_count {
-                    self.handle.scale_pool_size(self.core_thread_count);
-                    self.cur_thread_count = self.core_thread_count;
-                    self.notify_pool_size_change(self.cur_thread_count);
+                    self.scale_pool_size(self.core_thread_count);
                 }
             }
             Task::MaxTasksPerWorker(s) => {
@@ -802,6 +799,14 @@ impl RunnableWithTimer for ReadPoolConfigRunner {
 }
 
 impl ReadPoolConfigRunner {
+    fn scale_pool_size(&mut self, new_thread_count: usize) {
+        self.handle.scale_pool_size(new_thread_count);
+        // Publish only after the pool handle reflects the new capacity.
+        self.current_pool_size
+            .store(new_thread_count, Ordering::Relaxed);
+        self.cur_thread_count = new_thread_count;
+    }
+
     fn running_tasks(&self) -> i64 {
         match &self.handle {
             ReadPoolHandle::Yatp { running_tasks, .. } => {
@@ -871,16 +876,7 @@ impl ReadPoolConfigRunner {
         };
 
         if new_thread_count != self.cur_thread_count {
-            self.handle.scale_pool_size(new_thread_count);
-            self.notify_pool_size_change(new_thread_count);
-            self.cur_thread_count = new_thread_count;
-        }
-    }
-
-    fn notify_pool_size_change(&self, new_thread_count: usize) {
-        // it's unlikely to send failed.
-        if let Err(e) = self.sender.try_send(new_thread_count) {
-            warn!("notify read pool thread count change failed"; "err" => ?e);
+            self.scale_pool_size(new_thread_count);
         }
     }
 }
@@ -910,7 +906,7 @@ pub struct ReadPoolConfigManager {
 impl ReadPoolConfigManager {
     pub fn new(
         handle: ReadPoolHandle,
-        sender: SyncSender<usize>,
+        current_pool_size: Arc<AtomicUsize>,
         worker: &Worker,
         min_thread_count: usize,
         max_thread_count: usize,
@@ -919,7 +915,7 @@ impl ReadPoolConfigManager {
     ) -> Self {
         let runner = ReadPoolConfigRunner {
             interval: READ_POOL_THREAD_CHECK_DURATION,
-            sender,
+            current_pool_size,
             handle,
             cpu_time_tracker: ReadPoolCpuTimeTracker::new(&get_unified_read_pool_name()),
             process_stats: ProcessStat::cur_proc_stat().unwrap(),
@@ -1318,7 +1314,7 @@ mod tests {
         // Create ReadPoolConfigRunner with a real CPU tracker first
         let mut runner = ReadPoolConfigRunner {
             interval: Duration::from_secs(10),
-            sender: std::sync::mpsc::sync_channel(10).0,
+            current_pool_size: Arc::new(AtomicUsize::new(config.min_thread_count)),
             handle: handle.clone(),
             cpu_time_tracker: ReadPoolCpuTimeTracker::new("test-pool"),
             process_stats: ProcessStat::cur_proc_stat().unwrap(),
@@ -1615,9 +1611,7 @@ mod tests {
     }
 
     #[test]
-    fn test_auto_adjust_disable_notifies_pool_size_change() {
-        use std::sync::mpsc::sync_channel;
-
+    fn test_auto_adjust_disable_updates_pool_size() {
         let config = UnifiedReadPoolConfig {
             min_thread_count: 2,
             max_thread_count: 8,
@@ -1635,41 +1629,35 @@ mod tests {
             CleanupMethod::InPlace,
             false,
         );
-        let handle = pool.handle();
-
-        let (tx, rx) = sync_channel(10);
+        let mut handle = pool.handle();
 
         let core_thread_count = config.max_thread_count;
         let max_thread_count = config.max_thread_count;
-        let process_stats = match tikv_util::sys::cpu_time::ProcessStat::cur_proc_stat() {
-            Ok(process_stats) => process_stats,
-            Err(_) => return,
-        };
+        let scaled_pool_size = 5;
+        assert!(config.min_thread_count < scaled_pool_size);
+        assert!(scaled_pool_size < core_thread_count);
+        let process_stats = tikv_util::sys::cpu_time::ProcessStat::cur_proc_stat().unwrap();
+        let current_pool_size = Arc::new(AtomicUsize::new(scaled_pool_size));
+        handle.scale_pool_size(scaled_pool_size);
 
         let mut runner = ReadPoolConfigRunner {
             interval: READ_POOL_THREAD_CHECK_DURATION,
-            sender: tx,
+            current_pool_size: current_pool_size.clone(),
             handle,
             cpu_time_tracker: ReadPoolCpuTimeTracker::new("test"),
             process_stats,
-            min_thread_count: core_thread_count,
+            min_thread_count: config.min_thread_count,
             core_thread_count,
             max_thread_count,
-            cur_thread_count: core_thread_count,
+            cur_thread_count: scaled_pool_size,
             auto_adjust: true,
             cpu_threshold: READ_POOL_THREAD_HIGH_THRESHOLD,
         };
 
-        runner.cur_thread_count = 5;
         runner.run(Task::AutoAdjust(false));
 
-        match rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(size) => assert_eq!(size, core_thread_count),
-            Err(_) => {
-                panic!("No pool size change notification received when auto-adjust was disabled.")
-            }
-        }
-
         assert_eq!(runner.cur_thread_count, core_thread_count);
+        assert_eq!(runner.handle.get_normal_pool_size(), core_thread_count);
+        assert_eq!(current_pool_size.load(Ordering::Relaxed), core_thread_count);
     }
 }
