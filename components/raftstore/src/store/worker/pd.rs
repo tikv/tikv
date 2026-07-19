@@ -851,6 +851,10 @@ where
                 if update_region_cpu_collector == Some(false) {
                     region_cpu_records_collector.take();
                 }
+                // This only clears statistics already visible to the stats
+                // monitor. Queued PD-worker tasks, in-progress resource-metering
+                // intervals, and long-lived TLS observations can arrive later,
+                // so this is not a generation fence.
                 auto_split_controller_ctx
                     .discard_pending_stats(read_stats_receiver, cpu_stats_receiver);
                 // Prime the next thread-CPU interval after the reset boundary.
@@ -3139,7 +3143,7 @@ mod tests {
     }
 
     #[test]
-    fn test_load_base_split_reset_drains_queues_and_updates_collector() {
+    fn test_load_base_split_reset_drains_queues_and_updates_collector_guard() {
         let mut manager = SplitConfigManager(Arc::new(VersionTrack::new(SplitConfig::default())));
         let mut controller = AutoSplitController::new(manager.clone(), 0, 0, None);
         let mut context = AutoSplitControllerContext::new(8);

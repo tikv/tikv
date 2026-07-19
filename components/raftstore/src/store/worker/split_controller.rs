@@ -990,17 +990,14 @@ impl AutoSplitController {
             // updates return to the previous value before this tick.
             reset_stats = true;
         }
-        // Adjust with the size change of the Unified Read Pool.
-        let mut pool_size_changed = false;
+        // Each flush re-evaluates the busy gate with the latest pool capacity
+        // while preserving normal QPS and byte detection history.
         if let Some(rx) = &self.unified_read_pool_scale_receiver {
             for max_thread_count in rx.try_iter() {
-                if self.max_unified_read_pool_thread_count != max_thread_count {
-                    self.max_unified_read_pool_thread_count = max_thread_count;
-                    pool_size_changed = true;
-                }
+                self.max_unified_read_pool_thread_count = max_thread_count;
             }
         }
-        if reset_stats || pool_size_changed {
+        if reset_stats {
             self.reset_stats();
             SplitConfigChange::ResetStats {
                 update_region_cpu_collector,
@@ -1041,7 +1038,11 @@ impl AutoSplitControllerContext {
         }
     }
 
-    /// Drops retained statistics and drains both pending sample channels.
+    /// Clears statistics retained by or already queued to the stats monitor.
+    ///
+    /// Queued PD-worker tasks, in-progress resource-metering intervals, and
+    /// long-lived TLS observations can publish older statistics after this
+    /// returns, so this is not a generation fence.
     pub fn discard_pending_stats(
         &mut self,
         read_stats_receiver: &Receiver<ReadStats>,
@@ -1085,11 +1086,6 @@ impl AutoSplitControllerContext {
             }
         }
         (&mut self.cpu_stats_vec, &mut self.cpu_stats_cache)
-    }
-
-    pub fn empty_region_cpu_map(&mut self) -> &HashMap<u64, (f64, Option<KeyRange>)> {
-        self.cpu_stats_cache.region_cpu_map.clear();
-        &self.cpu_stats_cache.region_cpu_map
     }
 
     pub fn maybe_gc(&mut self) {
@@ -1963,7 +1959,7 @@ mod tests {
     }
 
     #[test]
-    fn test_read_pool_resize_clears_controller_history() {
+    fn test_read_pool_resize_preserves_controller_history() {
         let (tx, rx) = mpsc::channel();
         let mut auto_split_controller =
             AutoSplitController::new(SplitConfigManager::default(), 0, 1, Some(rx));
@@ -1977,40 +1973,30 @@ mod tests {
         tx.send(4).unwrap();
         assert_eq!(
             auto_split_controller.refresh_and_check_cfg(),
-            SplitConfigChange::ResetStats {
-                update_region_cpu_collector: None,
-            },
+            SplitConfigChange::Noop,
         );
         assert_eq!(auto_split_controller.max_unified_read_pool_thread_count, 4);
-        assert!(auto_split_controller.recorders.is_empty());
-        assert!(auto_split_controller.grpc_thread_usage_vec.is_empty());
+        assert_eq!(auto_split_controller.recorders.len(), 1);
+        assert!(auto_split_controller.recorders.contains_key(&1));
+        assert_eq!(auto_split_controller.grpc_thread_usage_vec, vec![1.0]);
 
         auto_split_controller
             .recorders
             .insert(2, Recorder::new(auto_split_controller.cfg.detect_times));
         auto_split_controller.update_grpc_thread_usage(2.0);
+        // Returning from A to B and back to A before a tick still applies the
+        // latest capacity without resetting detection history.
         tx.send(3).unwrap();
-        tx.send(4).unwrap();
-        assert_eq!(
-            auto_split_controller.refresh_and_check_cfg(),
-            SplitConfigChange::ResetStats {
-                update_region_cpu_collector: None,
-            },
-        );
-        assert!(auto_split_controller.recorders.is_empty());
-        assert!(auto_split_controller.grpc_thread_usage_vec.is_empty());
-
-        auto_split_controller
-            .recorders
-            .insert(3, Recorder::new(auto_split_controller.cfg.detect_times));
-        auto_split_controller.update_grpc_thread_usage(3.0);
         tx.send(4).unwrap();
         assert_eq!(
             auto_split_controller.refresh_and_check_cfg(),
             SplitConfigChange::Noop,
         );
-        assert!(auto_split_controller.recorders.contains_key(&3));
-        assert_eq!(auto_split_controller.grpc_thread_usage_vec, vec![3.0]);
+        assert_eq!(auto_split_controller.max_unified_read_pool_thread_count, 4);
+        assert_eq!(auto_split_controller.recorders.len(), 2);
+        assert!(auto_split_controller.recorders.contains_key(&1));
+        assert!(auto_split_controller.recorders.contains_key(&2));
+        assert_eq!(auto_split_controller.grpc_thread_usage_vec, vec![1.0, 2.0]);
     }
 
     #[test]
@@ -2047,6 +2033,15 @@ mod tests {
         let mut config_change = ConfigChange::new();
         config_change.insert(String::from(cfg_name), cfg_value);
         split_cfg_manager.dispatch(config_change).unwrap();
+    }
+
+    fn inverse_total_cpu_time(unified_read_cpu_time: u32) -> u32 {
+        const TEST_CPU_TIME_BUDGET: u32 = 1_000;
+        let total_cpu_time = TEST_CPU_TIME_BUDGET
+            .checked_sub(unified_read_cpu_time)
+            .expect("test unified-read CPU time must fit the test budget");
+        assert!(total_cpu_time >= unified_read_cpu_time);
+        total_cpu_time
     }
 
     #[test]
@@ -2110,7 +2105,7 @@ mod tests {
             raw_records.records.insert(
                 ab_key_range_tag.clone(),
                 RawRecord {
-                    cpu_time: 1000 - test_case.0,
+                    cpu_time: inverse_total_cpu_time(test_case.0),
                     unified_read_cpu_time: test_case.0,
                     read_keys: 0,
                     write_keys: 0,
@@ -2125,7 +2120,7 @@ mod tests {
             raw_records.records.insert(
                 cd_key_range_tag.clone(),
                 RawRecord {
-                    cpu_time: 1000 - test_case.1,
+                    cpu_time: inverse_total_cpu_time(test_case.1),
                     unified_read_cpu_time: test_case.1,
                     read_keys: 0,
                     write_keys: 0,
@@ -2140,7 +2135,7 @@ mod tests {
             raw_records.records.insert(
                 multiple_key_ranges_tag.clone(),
                 RawRecord {
-                    cpu_time: 1000 - test_case.2,
+                    cpu_time: inverse_total_cpu_time(test_case.2),
                     unified_read_cpu_time: test_case.2,
                     read_keys: 0,
                     write_keys: 0,
@@ -2155,7 +2150,7 @@ mod tests {
             raw_records.records.insert(
                 empty_key_range_tag.clone(),
                 RawRecord {
-                    cpu_time: 1000 - test_case.3,
+                    cpu_time: inverse_total_cpu_time(test_case.3),
                     unified_read_cpu_time: test_case.3,
                     read_keys: 0,
                     write_keys: 0,
@@ -2402,13 +2397,6 @@ mod tests {
                 TryRecvError::Empty
             );
         }
-    }
-
-    #[test]
-    fn test_auto_split_controller_empty_region_cpu_map() {
-        let mut ctx = AutoSplitControllerContext::new(1);
-        ctx.cpu_stats_cache.region_cpu_map.insert(1, (0.0, None));
-        assert!(ctx.empty_region_cpu_map().is_empty());
     }
 
     #[test]
