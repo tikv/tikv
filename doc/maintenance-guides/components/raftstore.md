@@ -63,6 +63,9 @@ Concrete startup anchors:
 High-risk contracts:
 
 - `RaftCmdRequest` header validation against region epoch and peer identity
+- classic load-based split candidates may outlive the peer identity observed
+  with their read statistics; execution must re-enter the current peer FSM and
+  build the split request from its current Region and peer
 - persisted apply/raft state alignment in `peer_storage.rs`
 - callback/result semantics in `store/msg.rs` and `store/fsm/apply.rs`
 
@@ -139,6 +142,8 @@ High-risk contracts:
 
 - Region epoch checks must remain strict. Most stale command and split/merge
   safety depends on this.
+- Normal load-based split keys must be validated against the current Region's
+  exclusive range before requesting split IDs from PD.
 - A `Peer` must preserve role, applied index, raft log, and lease/read-progress
   consistency across ticks and messages.
 - Snapshot lifecycle must not leak:
