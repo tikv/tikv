@@ -1,15 +1,17 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::{
-    coprocessor::{KeyRange, Request},
+    coprocessor::{KeyRange, Request, StoreBatchTask},
     kvrpcpb::{Context, IsolationLevel},
 };
 use protobuf::Message;
 use test_coprocessor::*;
+use test_storage::*;
 use tipb::{
     AnalyzeColumnGroup, AnalyzeColumnsReq, AnalyzeColumnsResp, AnalyzeIndexReq, AnalyzeIndexResp,
     AnalyzeReq, AnalyzeType,
 };
+use txn_types::Key;
 
 pub const REQ_TYPE_ANALYZE: i64 = 104;
 
@@ -354,4 +356,83 @@ fn test_invalid_range() {
     req.set_ranges(vec![key_range].into());
     let resp = handle_request(&endpoint, req);
     assert!(!resp.get_other_error().is_empty());
+}
+
+#[test]
+fn test_batched_full_sampling_responses() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+        (9, Some("name:8"), 7),
+        (10, Some("name:6"), 8),
+    ];
+    let product = ProductTable::new();
+    let (mut cluster, raft_engine, ctx) = new_raft_engine(1, "");
+    let (_, endpoint, _) =
+        init_data_with_engine_and_commit(ctx, raft_engine, &product, &data, true);
+
+    // Split the region into [1, 2], [4, 5], [9, 10].
+    let region =
+        cluster.get_region(Key::from_raw(&product.get_record_range(1, 1).start).as_encoded());
+    let split_key = Key::from_raw(&product.get_record_range(3, 3).start);
+    cluster.must_split(&region, split_key.as_encoded());
+    let second_region =
+        cluster.get_region(Key::from_raw(&product.get_record_range(4, 4).start).as_encoded());
+    let second_split_key = Key::from_raw(&product.get_record_range(8, 8).start);
+    cluster.must_split(&second_region, second_split_key.as_encoded());
+
+    let mut col_req = AnalyzeColumnsReq::default();
+    col_req.set_columns_info(product.columns_info().into());
+    // A sample rate of one keeps every row, so each response is
+    // deterministic.
+    col_req.set_sample_rate(1.0);
+    col_req.set_sketch_size(1000);
+    let mut analyze_req = AnalyzeReq::default();
+    analyze_req.set_tp(AnalyzeType::TypeFullSampling);
+    analyze_req.set_col_req(col_req);
+
+    let top_range = product.get_record_range(1, 2);
+    let top_region = cluster.get_region(Key::from_raw(&top_range.start).as_encoded());
+    let mut top_ctx = Context::default();
+    top_ctx.set_region_id(top_region.get_id());
+    top_ctx.set_region_epoch(top_region.get_region_epoch().clone());
+    top_ctx.set_peer(cluster.leader_of_region(top_region.get_id()).unwrap());
+
+    let mut req = Request::default();
+    req.set_tp(REQ_TYPE_ANALYZE);
+    req.set_data(analyze_req.write_to_bytes().unwrap());
+    req.set_ranges(vec![top_range].into());
+    req.set_start_ts(100);
+    req.set_context(top_ctx);
+    for (task_id, (start, end)) in [(1, (4, 5)), (2, (9, 10))] {
+        let range = product.get_record_range(start, end);
+        let batch_region = cluster.get_region(Key::from_raw(&range.start).as_encoded());
+        let mut task = StoreBatchTask::new();
+        task.set_region_id(batch_region.get_id());
+        task.set_region_epoch(batch_region.get_region_epoch().clone());
+        task.set_peer(cluster.leader_of_region(batch_region.get_id()).unwrap());
+        task.set_ranges(vec![range].into());
+        task.set_task_id(task_id);
+        req.tasks.push(task);
+    }
+
+    let parse_collector = |data: &[u8]| -> tipb::RowSampleCollector {
+        let mut resp = AnalyzeColumnsResp::default();
+        resp.merge_from_bytes(data).unwrap();
+        resp.take_row_collector()
+    };
+
+    // Existing clients receive one full-sampling result per region.
+    let mut resp = handle_request(&endpoint, req);
+    assert!(!resp.has_region_error(), "{:?}", resp);
+    assert!(resp.get_other_error().is_empty(), "{:?}", resp);
+    assert_eq!(parse_collector(resp.get_data()).get_count(), 2);
+    let batch_resps = resp.take_batch_responses();
+    assert_eq!(batch_resps.len(), 2);
+    for (batch_resp, task_id) in batch_resps.iter().zip([1, 2]) {
+        assert_eq!(batch_resp.get_task_id(), task_id);
+        assert_eq!(parse_collector(batch_resp.get_data()).get_count(), 2);
+    }
 }
