@@ -552,7 +552,10 @@ impl<E: Engine> Endpoint<E> {
         handler.collect_scan_statistics(&mut storage_stats);
         tracker.collect_storage_statistics(storage_stats);
         let mut resp = match result {
-            Ok(resp) => {
+            Ok(output) => {
+                let resp = output.map(|outcome| match outcome {
+                    HandlerOutcome::Ready(resp) => resp,
+                });
                 let resp_size = resp.data.len() as u64;
                 COPR_RESP_SIZE.inc_by(resp_size);
                 record_network_out_bytes(resp_size);
@@ -1338,7 +1341,7 @@ mod tests {
 
     #[async_trait]
     impl RequestHandler for UnaryFixture {
-        async fn handle_request(&mut self) -> Result<MemoryTraceGuard<coppb::Response>> {
+        async fn handle_request(&mut self) -> Result<MemoryTraceGuard<HandlerOutcome>> {
             if self.yieldable {
                 // We split the task into small executions of 100 milliseconds.
                 for _ in 0..self.handle_duration.as_millis() as u64 / 100 {
@@ -1352,7 +1355,10 @@ mod tests {
                 thread::sleep(self.handle_duration);
             }
 
-            self.result.take().unwrap().map(|x| x.into())
+            self.result
+                .take()
+                .unwrap()
+                .map(|x| HandlerOutcome::Ready(x).into())
         }
     }
 

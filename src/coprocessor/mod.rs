@@ -62,11 +62,23 @@ pub const REQ_FLAG_TIDB_SYSSESSION: u64 = 2048;
 
 type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
 
+/// The outcome of handling a unary request.
+pub enum HandlerOutcome {
+    Ready(coppb::Response),
+}
+
+// `MemoryTraceGuard<T>` requires `T: Default`.
+impl Default for HandlerOutcome {
+    fn default() -> Self {
+        Self::Ready(coppb::Response::default())
+    }
+}
+
 /// An interface for all kind of Coprocessor request handlers.
 #[async_trait]
 pub trait RequestHandler: Send {
-    /// Processes current request and produces a response.
-    async fn handle_request(&mut self) -> Result<MemoryTraceGuard<coppb::Response>> {
+    /// Processes current request and produces an outcome.
+    async fn handle_request(&mut self) -> Result<MemoryTraceGuard<HandlerOutcome>> {
         panic!("unary request is not supported for this handler");
     }
 
