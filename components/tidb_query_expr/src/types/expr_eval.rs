@@ -233,14 +233,9 @@ impl RpnExpression {
         input_physical_columns: &'a mut LazyBatchColumnVec,
         input_logical_rows: &[usize],
     ) -> Result<()> {
-        for node in self.as_ref() {
-            if let RpnExpressionNode::ColumnRef { offset, .. } = node {
-                input_physical_columns[*offset].ensure_decoded(
-                    ctx,
-                    &schema[*offset],
-                    LogicalRows::from_slice(input_logical_rows),
-                )?;
-            }
+        let logical_rows = LogicalRows::from_slice(input_logical_rows);
+        for &offset in self.referenced_column_offsets() {
+            input_physical_columns[offset].ensure_decoded(ctx, &schema[offset], logical_rows)?;
         }
         Ok(())
     }
@@ -271,66 +266,134 @@ impl RpnExpression {
     ) -> Result<RpnStackNode<'a>> {
         assert!(output_rows > 0);
         assert!(output_rows <= BATCH_MAX_SIZE);
+
+        // A single-node expression does not need the temporary RPN stack below.
+        // This is especially common for short-circuit arguments such as constants
+        // and column references, so evaluate it directly to avoid a heap allocation.
+        if self.len() == 1 {
+            let (_, result) = Self::eval_one_node(
+                ctx,
+                schema,
+                input_physical_columns,
+                input_logical_rows,
+                output_rows,
+                &self.as_ref()[0],
+                &[],
+            )?;
+            return Ok(result);
+        }
+
+        // Is this stack can be reused?
         let mut stack = Vec::with_capacity(self.len());
 
         for node in self.as_ref() {
-            match node {
-                RpnExpressionNode::Constant { value, field_type } => {
-                    stack.push(RpnStackNode::Scalar { value, field_type });
-                }
-                RpnExpressionNode::ColumnRef { offset } => {
-                    let field_type = &schema[*offset];
-                    let decoded_physical_column = input_physical_columns[*offset].decoded();
-                    assert_eq!(input_logical_rows.len(), output_rows);
-                    stack.push(RpnStackNode::Vector {
+            let (consumed_args, result) = Self::eval_one_node(
+                ctx,
+                schema,
+                input_physical_columns,
+                input_logical_rows,
+                output_rows,
+                node,
+                &stack,
+            )?;
+            stack.truncate(stack.len() - consumed_args);
+            stack.push(result);
+        }
+
+        assert_eq!(stack.len(), 1);
+        Ok(stack.into_iter().next().unwrap())
+    }
+
+    #[inline]
+    fn eval_one_node<'a>(
+        ctx: &mut EvalContext,
+        schema: &'a [FieldType],
+        input_physical_columns: &'a LazyBatchColumnVec,
+        input_logical_rows: &'a [usize],
+        output_rows: usize,
+        node: &'a RpnExpressionNode,
+        stack: &[RpnStackNode<'a>],
+    ) -> Result<(usize, RpnStackNode<'a>)> {
+        match node {
+            RpnExpressionNode::Constant { value, field_type } => {
+                Ok((0, RpnStackNode::Scalar { value, field_type }))
+            }
+            RpnExpressionNode::ColumnRef { offset } => {
+                let field_type = &schema[*offset];
+                let decoded_physical_column = input_physical_columns[*offset].decoded();
+                assert_eq!(input_logical_rows.len(), output_rows);
+                Ok((
+                    0,
+                    RpnStackNode::Vector {
                         value: RpnStackNodeVectorValue::Ref {
                             physical_value: decoded_physical_column,
                             logical_rows: input_logical_rows,
                         },
                         field_type,
-                    });
-                }
-                RpnExpressionNode::FnCall {
-                    func_meta,
-                    args_len,
-                    field_type: ret_field_type,
-                    metadata,
-                } => {
-                    // Suppose that we have function call `Foo(A, B, C)`, the RPN nodes looks like
-                    // `[A, B, C, Foo]`.
-                    // Now we receives a function call `Foo`, so there are `[A, B, C]` in the stack
-                    // as the last several elements. We will directly use the last N (N = number of
-                    // arguments) elements in the stack as function arguments.
-                    assert!(stack.len() >= *args_len);
-                    let stack_slice_begin = stack.len() - *args_len;
-                    let stack_slice = &stack[stack_slice_begin..];
-                    let mut call_extra = RpnFnCallExtra { ret_field_type };
-                    let ret = (func_meta.fn_ptr)(
-                        ctx,
-                        output_rows,
-                        stack_slice,
-                        &mut call_extra,
-                        &**metadata,
-                    )?;
-                    stack.truncate(stack_slice_begin);
-                    stack.push(RpnStackNode::Vector {
+                    },
+                ))
+            }
+            RpnExpressionNode::ShortCircuitFnCall {
+                func_meta,
+                args,
+                field_type,
+            } => {
+                let ret = (func_meta.fn_ptr)(
+                    ctx,
+                    schema,
+                    input_physical_columns,
+                    input_logical_rows,
+                    output_rows,
+                    args,
+                )?;
+                Ok((
+                    0,
+                    RpnStackNode::Vector {
+                        value: RpnStackNodeVectorValue::Generated {
+                            physical_value: ret,
+                        },
+                        field_type,
+                    },
+                ))
+            }
+            RpnExpressionNode::FnCall {
+                func_meta,
+                args_len,
+                field_type: ret_field_type,
+                metadata,
+            } => {
+                // Suppose that we have a function call `Foo(A, B, C)`, the RPN nodes look like
+                // `[A, B, C, Foo]`. The last N stack elements are its arguments.
+                assert!(stack.len() >= *args_len);
+                let stack_slice_begin = stack.len() - *args_len;
+                let stack_slice = &stack[stack_slice_begin..];
+                let mut call_extra = RpnFnCallExtra { ret_field_type };
+                let ret = (func_meta.fn_ptr)(
+                    ctx,
+                    output_rows,
+                    stack_slice,
+                    &mut call_extra,
+                    &**metadata,
+                )?;
+                Ok((
+                    *args_len,
+                    RpnStackNode::Vector {
                         value: RpnStackNodeVectorValue::Generated {
                             physical_value: ret,
                         },
                         field_type: ret_field_type,
-                    });
-                }
+                    },
+                ))
             }
         }
-
-        assert_eq!(stack.len(), 1);
-        Ok(stack.into_iter().next().unwrap())
     }
 }
 
 #[cfg(test)]
 mod tests {
     #![allow(clippy::float_cmp)]
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use test::{Bencher, black_box};
     use tidb_query_codegen::rpn_fn;
@@ -350,6 +413,19 @@ mod tests {
     use super::*;
     use crate::{RpnExpressionBuilder, RpnFnMeta, impl_arithmetic::*, impl_compare::*};
 
+    static SHORT_CIRCUIT_RHS_EVAL_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    #[rpn_fn(nullable)]
+    fn short_circuit_counted_identity(v: Option<&Int>) -> Result<Option<Int>> {
+        SHORT_CIRCUIT_RHS_EVAL_COUNT.fetch_add(1, Ordering::SeqCst);
+        Ok(v.copied())
+    }
+
+    #[rpn_fn(nullable)]
+    fn short_circuit_unreachable(_v: Option<&Int>) -> Result<Option<Int>> {
+        unreachable!("short-circuited argument must not be evaluated")
+    }
+
     /// Single constant node
     #[test]
     fn test_eval_single_constant_node() {
@@ -366,6 +442,371 @@ mod tests {
             Real::new(1.5).ok().as_ref()
         );
         assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::Double);
+    }
+
+    #[test]
+    fn test_logical_short_circuit_skips_rhs_rows() {
+        use tipb::{Expr, ScalarFuncSig};
+
+        fn fn_mapper(expr: &Expr) -> Result<RpnFnMeta> {
+            if expr.get_sig() == ScalarFuncSig::CastIntAsInt {
+                return Ok(short_circuit_counted_identity_fn_meta());
+            }
+            crate::map_expr_node_to_rpn_func(expr)
+        }
+
+        fn int_column(values: &[Option<Int>]) -> LazyBatchColumn {
+            let mut col =
+                LazyBatchColumn::decoded_with_capacity_and_tp(values.len(), EvalType::Int);
+            for value in values {
+                col.mut_decoded().push_int(*value);
+            }
+            col
+        }
+
+        fn run_case(
+            sig: ScalarFuncSig,
+            lhs: &[Option<Int>],
+            rhs: &[Option<Int>],
+            logical_rows: &[usize],
+            expected: &[Option<Int>],
+            expected_rhs_eval_count: usize,
+        ) {
+            let node = ExprDefBuilder::scalar_func(sig, FieldTypeTp::LongLong)
+                .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
+                .push_child(
+                    ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsInt, FieldTypeTp::LongLong)
+                        .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::LongLong)),
+                )
+                .build();
+            let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 2)
+                .unwrap();
+            let mut columns = LazyBatchColumnVec::from(vec![int_column(lhs), int_column(rhs)]);
+            let schema = &[FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()];
+            let mut ctx = EvalContext::default();
+
+            SHORT_CIRCUIT_RHS_EVAL_COUNT.store(0, Ordering::SeqCst);
+            let result = exp
+                .eval(
+                    &mut ctx,
+                    schema,
+                    &mut columns,
+                    logical_rows,
+                    logical_rows.len(),
+                )
+                .unwrap();
+
+            assert_eq!(
+                result.vector_value().unwrap().as_ref().to_int_vec(),
+                expected
+            );
+            assert_eq!(
+                SHORT_CIRCUIT_RHS_EVAL_COUNT.load(Ordering::SeqCst),
+                expected_rhs_eval_count
+            );
+        }
+
+        run_case(
+            ScalarFuncSig::LogicalAnd,
+            &[
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(2),
+                Some(2),
+                Some(2),
+                None,
+                None,
+                None,
+            ],
+            &[
+                Some(0),
+                Some(3),
+                None,
+                Some(0),
+                Some(3),
+                None,
+                Some(0),
+                Some(3),
+                None,
+            ],
+            &[0, 1, 2, 3, 4, 5, 6, 7, 8],
+            &[
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(1),
+                None,
+                Some(0),
+                None,
+                None,
+            ],
+            6,
+        );
+        run_case(
+            ScalarFuncSig::LogicalOr,
+            &[
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(2),
+                Some(2),
+                Some(2),
+                None,
+                None,
+                None,
+            ],
+            &[
+                Some(0),
+                Some(3),
+                None,
+                Some(0),
+                Some(3),
+                None,
+                Some(0),
+                Some(3),
+                None,
+            ],
+            &[0, 1, 2, 3, 4, 5, 6, 7, 8],
+            &[
+                Some(0),
+                Some(1),
+                None,
+                Some(1),
+                Some(1),
+                Some(1),
+                None,
+                Some(1),
+                None,
+            ],
+            6,
+        );
+        run_case(
+            ScalarFuncSig::LogicalOr,
+            &[Some(1), Some(0), None, Some(2), Some(0)],
+            &[Some(0), Some(0), Some(1), None, None],
+            &[4, 0, 2, 3, 1],
+            &[None, Some(1), Some(1), Some(1), Some(0)],
+            3,
+        );
+    }
+
+    #[test]
+    fn test_constant_short_circuit_skips_all_rhs_rows() {
+        use tipb::{Expr, ScalarFuncSig};
+
+        fn fn_mapper(expr: &Expr) -> Result<RpnFnMeta> {
+            if expr.get_sig() == ScalarFuncSig::CastIntAsInt {
+                return Ok(short_circuit_unreachable_fn_meta());
+            }
+            crate::map_expr_node_to_rpn_func(expr)
+        }
+
+        let node = ExprDefBuilder::scalar_func(ScalarFuncSig::LogicalOr, FieldTypeTp::LongLong)
+            .push_child(ExprDefBuilder::constant_int(1))
+            .push_child(
+                ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsInt, FieldTypeTp::LongLong)
+                    .push_child(ExprDefBuilder::constant_int(0)),
+            )
+            .build();
+        let exp =
+            RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0).unwrap();
+        let mut ctx = EvalContext::default();
+        let mut columns = LazyBatchColumnVec::empty();
+
+        let result = exp.eval(&mut ctx, &[], &mut columns, &[], 10).unwrap();
+
+        assert_eq!(
+            result.vector_value().unwrap().as_ref().to_int_vec(),
+            vec![Some(1); 10]
+        );
+    }
+
+    #[test]
+    fn test_constant_short_circuit_without_logical_rows() {
+        use tipb::ScalarFuncSig;
+
+        fn constant(value: Option<Int>) -> ExprDefBuilder {
+            match value {
+                Some(value) => ExprDefBuilder::constant_int(value),
+                None => ExprDefBuilder::constant_null(FieldTypeTp::LongLong),
+            }
+        }
+
+        fn run_case(sig: ScalarFuncSig, lhs: Option<Int>, rhs: Option<Int>, expected: Option<Int>) {
+            let node = ExprDefBuilder::scalar_func(sig, FieldTypeTp::LongLong)
+                .push_child(constant(lhs))
+                .push_child(constant(rhs))
+                .build();
+            let exp =
+                RpnExpressionBuilder::build_from_expr_tree(node, &mut EvalContext::default(), 0)
+                    .unwrap();
+            let mut ctx = EvalContext::default();
+            let mut columns = LazyBatchColumnVec::empty();
+
+            let result = exp.eval(&mut ctx, &[], &mut columns, &[], 3).unwrap();
+
+            assert_eq!(
+                result.vector_value().unwrap().as_ref().to_int_vec(),
+                vec![expected; 3]
+            );
+        }
+
+        run_case(ScalarFuncSig::LogicalOr, Some(0), Some(1), Some(1));
+        run_case(ScalarFuncSig::LogicalAnd, Some(1), Some(0), Some(0));
+        run_case(ScalarFuncSig::LogicalOr, None, Some(1), Some(1));
+        run_case(ScalarFuncSig::LogicalAnd, None, Some(0), Some(0));
+        run_case(ScalarFuncSig::LogicalOr, None, Some(0), None);
+        run_case(ScalarFuncSig::LogicalAnd, None, Some(1), None);
+    }
+
+    #[test]
+    fn test_normal_parent_consumes_short_circuit_result() {
+        use tipb::ScalarFuncSig;
+
+        let node = ExprDefBuilder::scalar_func(ScalarFuncSig::PlusInt, FieldTypeTp::LongLong)
+            .push_child(
+                ExprDefBuilder::scalar_func(ScalarFuncSig::LogicalOr, FieldTypeTp::LongLong)
+                    .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
+                    .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::LongLong)),
+            )
+            .push_child(ExprDefBuilder::constant_int(10))
+            .build();
+        let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut EvalContext::default(), 2)
+            .unwrap();
+        let mut columns = LazyBatchColumnVec::from(vec![
+            VectorValue::Int(vec![Some(0), Some(1), None].into()),
+            VectorValue::Int(vec![Some(0), None, Some(0)].into()),
+        ]);
+        let schema = &[FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()];
+        let mut ctx = EvalContext::default();
+
+        let result = exp
+            .eval(&mut ctx, schema, &mut columns, &[2, 0, 1], 3)
+            .unwrap();
+
+        assert_eq!(
+            result.vector_value().unwrap().as_ref().to_int_vec(),
+            &[None, Some(10), Some(11)]
+        );
+    }
+
+    #[test]
+    fn test_nested_mixed_short_circuit_calls() {
+        use tipb::ScalarFuncSig;
+
+        let node = ExprDefBuilder::scalar_func(ScalarFuncSig::LogicalAnd, FieldTypeTp::LongLong)
+            .push_child(
+                ExprDefBuilder::scalar_func(ScalarFuncSig::LogicalOr, FieldTypeTp::LongLong)
+                    .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
+                    .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::LongLong)),
+            )
+            .push_child(ExprDefBuilder::column_ref(2, FieldTypeTp::LongLong))
+            .build();
+        let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut EvalContext::default(), 3)
+            .unwrap();
+        let mut columns = LazyBatchColumnVec::from(vec![
+            VectorValue::Int(vec![Some(1), Some(0), None, Some(0)].into()),
+            VectorValue::Int(vec![Some(0), Some(0), Some(0), None].into()),
+            VectorValue::Int(vec![Some(1), Some(1), Some(0), Some(1)].into()),
+        ]);
+        let schema = &[
+            FieldTypeTp::LongLong.into(),
+            FieldTypeTp::LongLong.into(),
+            FieldTypeTp::LongLong.into(),
+        ];
+        let mut ctx = EvalContext::default();
+
+        let result = exp
+            .eval(&mut ctx, schema, &mut columns, &[3, 1, 2, 0], 4)
+            .unwrap();
+
+        assert_eq!(
+            result.vector_value().unwrap().as_ref().to_int_vec(),
+            &[None, Some(0), Some(0), Some(1)]
+        );
+    }
+
+    #[test]
+    fn test_flattened_short_circuit_call() {
+        use tipb::ScalarFuncSig;
+
+        let node = ExprDefBuilder::scalar_func(ScalarFuncSig::LogicalOr, FieldTypeTp::LongLong)
+            .push_child(
+                ExprDefBuilder::scalar_func(ScalarFuncSig::LogicalOr, FieldTypeTp::LongLong)
+                    .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
+                    .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::LongLong)),
+            )
+            .push_child(ExprDefBuilder::column_ref(2, FieldTypeTp::LongLong))
+            .build();
+        let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut EvalContext::default(), 3)
+            .unwrap();
+        let mut columns = LazyBatchColumnVec::from(vec![
+            VectorValue::Int(vec![Some(1), Some(0), None, Some(0)].into()),
+            VectorValue::Int(vec![Some(0), Some(0), Some(0), None].into()),
+            VectorValue::Int(vec![Some(0), Some(1), Some(1), Some(0)].into()),
+        ]);
+        let schema = &[
+            FieldTypeTp::LongLong.into(),
+            FieldTypeTp::LongLong.into(),
+            FieldTypeTp::LongLong.into(),
+        ];
+        let mut ctx = EvalContext::default();
+
+        let result = exp
+            .eval(&mut ctx, schema, &mut columns, &[3, 1, 2, 0], 4)
+            .unwrap();
+
+        assert_eq!(
+            result.vector_value().unwrap().as_ref().to_int_vec(),
+            &[None, Some(1), Some(1), Some(1)]
+        );
+    }
+
+    #[test]
+    fn test_flattened_short_circuit_multiple_partial_compactions() {
+        use tipb::ScalarFuncSig;
+
+        let node = ExprDefBuilder::scalar_func(ScalarFuncSig::LogicalOr, FieldTypeTp::LongLong)
+            .push_child(
+                ExprDefBuilder::scalar_func(ScalarFuncSig::LogicalOr, FieldTypeTp::LongLong)
+                    .push_child(
+                        ExprDefBuilder::scalar_func(
+                            ScalarFuncSig::LogicalOr,
+                            FieldTypeTp::LongLong,
+                        )
+                        .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
+                        .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::LongLong)),
+                    )
+                    .push_child(ExprDefBuilder::column_ref(2, FieldTypeTp::LongLong)),
+            )
+            .push_child(ExprDefBuilder::column_ref(3, FieldTypeTp::LongLong))
+            .build();
+        let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut EvalContext::default(), 4)
+            .unwrap();
+        let mut columns = LazyBatchColumnVec::from(vec![
+            VectorValue::Int(vec![Some(1), Some(0), None, Some(0), Some(0), Some(1)].into()),
+            VectorValue::Int(vec![Some(0); 6].into()),
+            VectorValue::Int(vec![Some(0), Some(1), Some(0), Some(0), Some(1), Some(0)].into()),
+            VectorValue::Int(vec![Some(0); 6].into()),
+        ]);
+        let schema = &[
+            FieldTypeTp::LongLong.into(),
+            FieldTypeTp::LongLong.into(),
+            FieldTypeTp::LongLong.into(),
+            FieldTypeTp::LongLong.into(),
+        ];
+        let mut ctx = EvalContext::default();
+
+        let result = exp
+            .eval(&mut ctx, schema, &mut columns, &[5, 2, 0, 4, 1, 3], 6)
+            .unwrap();
+
+        assert_eq!(
+            result.vector_value().unwrap().as_ref().to_int_vec(),
+            &[Some(1), None, Some(1), Some(1), Some(1), Some(0)]
+        );
     }
 
     /// Creates fixture to be used in `test_eval_single_column_node_xxx`.

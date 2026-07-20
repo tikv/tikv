@@ -2,7 +2,13 @@
 
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::{Error, data_type::*};
+use tidb_query_datatype::{
+    codec::{Error, batch::LazyBatchColumnVec, data_type::*},
+    expr::EvalContext,
+};
+use tipb::FieldType;
+
+use crate::{RpnExpression, RpnStackNode, RpnStackNodeVectorValue};
 
 #[rpn_fn(nullable)]
 #[inline]
@@ -24,6 +30,246 @@ pub fn logical_or(arg0: Option<&i64>, arg1: Option<&i64>) -> Result<Option<i64>>
         (None, None) | (None, Some(0)) | (Some(0), None) => None,
         _ => Some(1),
     })
+}
+
+/// Evaluates logical AND from left to right and only evaluates each argument
+/// for rows whose result has not been determined by previous arguments.
+pub fn sc_logical_and(
+    ctx: &mut EvalContext,
+    schema: &[FieldType],
+    input_physical_columns: &LazyBatchColumnVec,
+    input_logical_rows: &[usize],
+    output_rows: usize,
+    args: &[RpnExpression],
+) -> Result<VectorValue> {
+    eval_logical_short_circuit::<ScLogicalAnd>(
+        ctx,
+        schema,
+        input_physical_columns,
+        input_logical_rows,
+        output_rows,
+        args,
+    )
+}
+
+/// Evaluates logical OR from left to right and only evaluates each argument for
+/// rows whose result has not been determined by previous arguments.
+pub fn sc_logical_or(
+    ctx: &mut EvalContext,
+    schema: &[FieldType],
+    input_physical_columns: &LazyBatchColumnVec,
+    input_logical_rows: &[usize],
+    output_rows: usize,
+    args: &[RpnExpression],
+) -> Result<VectorValue> {
+    eval_logical_short_circuit::<ScLogicalOr>(
+        ctx,
+        schema,
+        input_physical_columns,
+        input_logical_rows,
+        output_rows,
+        args,
+    )
+}
+
+trait ScLogicalOp {
+    const IDENTITY: Int;
+
+    fn normalize_value(value: Option<Int>) -> Option<Int> {
+        value.map(|v| if v != 0 { 1 } else { 0 })
+    }
+
+    fn handle_res_value(
+        result: &mut ChunkedVecSized<Int>,
+        idx: usize,
+        value: Option<Int>,
+        resolved_count: &mut usize,
+    ) {
+        match Self::normalize_value(value) {
+            Some(value) if value != Self::IDENTITY => {
+                // An absorbing value determines the final result even if a
+                // previous argument was NULL.
+                result.set(idx, Some(value));
+                (*resolved_count) += 1;
+            }
+            // An identity value does not change the accumulated result. In
+            // particular, it must not overwrite a previous NULL.
+            Some(_) => {}
+            None => result.set(idx, None),
+        }
+    }
+}
+
+struct ScLogicalAnd;
+
+impl ScLogicalOp for ScLogicalAnd {
+    const IDENTITY: Int = 1;
+}
+
+struct ScLogicalOr;
+
+impl ScLogicalOp for ScLogicalOr {
+    const IDENTITY: Int = 0;
+}
+
+fn eval_logical_short_circuit<Op: ScLogicalOp>(
+    ctx: &mut EvalContext,
+    schema: &[FieldType],
+    input_physical_columns: &LazyBatchColumnVec,
+    input_logical_rows: &[usize],
+    output_rows: usize,
+    args: &[RpnExpression],
+) -> Result<VectorValue> {
+    assert!(args.len() >= 2);
+    assert!(input_logical_rows.is_empty() || input_logical_rows.len() == output_rows);
+
+    let mut result = ChunkedVecSized::<Int>::with_capacity(output_rows);
+    for _ in 0..output_rows {
+        result.push(Some(Op::IDENTITY));
+    }
+
+    if output_rows == 0 {
+        return Ok(VectorValue::Int(result));
+    }
+
+    // `None` means all output rows are still pending. Keep this state implicit
+    // until an argument resolves only part of the rows, so the common no-short-
+    // circuit path does not allocate or copy row mappings.
+    let mut pending_rows: Option<(Vec<usize>, Vec<usize>)> = None;
+
+    for (arg_index, arg) in args.iter().enumerate() {
+        let (pending_positions, pending_logical_rows, pending_len) = match pending_rows.as_ref() {
+            Some((positions, logical_rows)) => (
+                Some(positions.as_slice()),
+                logical_rows.as_slice(),
+                positions.len(),
+            ),
+            None => (None, input_logical_rows, output_rows),
+        };
+
+        let arg_result = arg.eval_decoded(
+            ctx,
+            schema,
+            input_physical_columns,
+            pending_logical_rows,
+            pending_len,
+        )?;
+
+        let mut resolved_count = 0;
+        match arg_result {
+            RpnStackNode::Scalar { value, .. } => {
+                let value = value.as_int().copied();
+                for i in 0..pending_len {
+                    let output_index = pending_positions.map_or(i, |positions| positions[i]);
+                    Op::handle_res_value(&mut result, output_index, value, &mut resolved_count);
+                }
+            }
+            RpnStackNode::Vector {
+                value: RpnStackNodeVectorValue::Generated { physical_value },
+                ..
+            } => {
+                let ints = Int::borrow_vector_value(&physical_value);
+                for i in 0..pending_len {
+                    let output_index = pending_positions.map_or(i, |positions| positions[i]);
+                    Op::handle_res_value(
+                        &mut result,
+                        output_index,
+                        ints.get_option_ref(i).copied(),
+                        &mut resolved_count,
+                    );
+                }
+            }
+            RpnStackNode::Vector {
+                value:
+                    RpnStackNodeVectorValue::Ref {
+                        physical_value,
+                        logical_rows,
+                    },
+                ..
+            } => {
+                let ints = Int::borrow_vector_value(physical_value);
+                for i in 0..pending_len {
+                    let output_index = pending_positions.map_or(i, |positions| positions[i]);
+                    Op::handle_res_value(
+                        &mut result,
+                        output_index,
+                        ints.get_option_ref(logical_rows[i]).copied(),
+                        &mut resolved_count,
+                    );
+                }
+            }
+        }
+
+        if resolved_count == 0 {
+            continue;
+        }
+        if resolved_count == pending_len || arg_index + 1 == args.len() {
+            return Ok(VectorValue::Int(result));
+        }
+
+        match &mut pending_rows {
+            Some((positions, logical_rows)) => {
+                let old_pending_len = positions.len();
+                let has_logical_rows = !logical_rows.is_empty();
+                let (mut read_index, mut write_index) = (0, 0);
+                positions.retain(|&output_index| {
+                    let keep = !matches!(
+                        (&result).get_option_ref(output_index),
+                        Some(value) if *value != Op::IDENTITY
+                    );
+                    if keep && has_logical_rows {
+                        logical_rows[write_index] = logical_rows[read_index];
+                        write_index += 1;
+                    }
+
+                    read_index += 1;
+                    keep
+                });
+
+                debug_assert_eq!(read_index, old_pending_len);
+                if has_logical_rows {
+                    logical_rows.truncate(write_index);
+                }
+            }
+            None => {
+                let new_pending_len = pending_len - resolved_count;
+                let mut positions = Vec::with_capacity(new_pending_len);
+                let mut logical_rows = if input_logical_rows.is_empty() {
+                    Vec::new()
+                } else {
+                    Vec::with_capacity(new_pending_len)
+                };
+
+                for output_index in 0..output_rows {
+                    let keep = !matches!(
+                        (&result).get_option_ref(output_index),
+                        Some(value) if *value != Op::IDENTITY
+                    );
+                    if keep {
+                        positions.push(output_index);
+                        if !input_logical_rows.is_empty() {
+                            logical_rows.push(input_logical_rows[output_index]);
+                        }
+                    }
+                }
+
+                debug_assert_eq!(positions.len(), new_pending_len);
+                pending_rows = Some((positions, logical_rows));
+            }
+        }
+
+        let (pending_positions, pending_logical_rows) = pending_rows.as_ref().unwrap();
+        debug_assert_eq!(
+            pending_logical_rows.len(),
+            if input_logical_rows.is_empty() {
+                0
+            } else {
+                pending_positions.len()
+            }
+        );
+    }
+
+    Ok(VectorValue::Int(result))
 }
 
 #[rpn_fn(nullable)]
