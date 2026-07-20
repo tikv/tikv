@@ -56,7 +56,7 @@ impl<S: Snapshot> ChecksumContext<S> {
 
 #[async_trait]
 impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
-    async fn handle_request(&mut self) -> Result<MemoryTraceGuard<Response>> {
+    async fn handle_request(&mut self) -> Result<MemoryTraceGuard<HandlerOutcome>> {
         let algorithm = self.req.get_algorithm();
         if algorithm != ChecksumAlgorithm::Crc64Xor {
             return Err(box_err!("unknown checksum algorithm {:?}", algorithm));
@@ -94,7 +94,7 @@ impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
 
         let mut resp = Response::default();
         resp.set_data(data);
-        Ok(resp.into())
+        Ok(HandlerOutcome::Ready(resp).into())
     }
 
     fn collect_scan_statistics(&mut self, dest: &mut Statistics) {

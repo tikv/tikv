@@ -221,7 +221,7 @@ impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
 
 #[async_trait]
 impl<S: Snapshot, F: KvFormat> RequestHandler for AnalyzeContext<S, F> {
-    async fn handle_request(&mut self) -> Result<MemoryTraceGuard<Response>> {
+    async fn handle_request(&mut self) -> Result<MemoryTraceGuard<HandlerOutcome>> {
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex | AnalyzeType::TypeCommonHandle => {
                 let req = self.req.take_idx_req();
@@ -298,12 +298,12 @@ impl<S: Snapshot, F: KvFormat> RequestHandler for AnalyzeContext<S, F> {
                 let memory_size = data.capacity();
                 let mut resp = Response::default();
                 resp.set_data(data);
-                Ok(MEMTRACE_ANALYZE.trace_guard(resp, memory_size))
+                Ok(MEMTRACE_ANALYZE.trace_guard(HandlerOutcome::Ready(resp), memory_size))
             }
             Err(Error::Other(e)) => {
                 let mut resp = Response::default();
                 resp.set_other_error(e);
-                Ok(resp.into())
+                Ok(HandlerOutcome::Ready(resp).into())
             }
             Err(e) => Err(e),
         }
