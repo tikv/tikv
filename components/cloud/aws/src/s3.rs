@@ -230,9 +230,15 @@ impl S3Storage {
             }
 
             let credentials_provider: io::Result<AssumeRoleProvider> = block_on(async {
-                let sdk_config =
-                    Self::load_sdk_config(&config, util::new_http_client(), credentials_provider)
-                        .await?;
+                // Keep the shared config endpoint-free. It is reused to construct the
+                // STS client for AssumeRole, and the S3 bucket endpoint must not leak
+                // into that service-specific client.
+                let sdk_config = Self::load_base_sdk_config(
+                    &config,
+                    util::new_http_client(),
+                    credentials_provider,
+                )
+                .await?;
                 builder = builder.configure(&sdk_config);
                 Ok(builder.build().await)
             });
@@ -243,7 +249,7 @@ impl S3Storage {
         }
     }
 
-    async fn load_sdk_config<Http, Creds>(
+    async fn load_base_sdk_config<Http, Creds>(
         config: &Config,
         client: Http,
         creds: Creds,
@@ -252,15 +258,17 @@ impl S3Storage {
         Http: HttpClient + 'static,
         Creds: ProvideCredentials + 'static,
     {
+        // This shared config is reused by both S3 and AssumeRole(STS) setup, so it
+        // must only carry common AWS settings such as region, credentials, and HTTP
+        // client. Service-specific endpoint overrides are applied later on the final
+        // S3 builder only.
         let bucket_region = none_to_empty(config.bucket.region.clone());
-        let bucket_endpoint = none_to_empty(config.bucket.endpoint.clone());
 
         let mut loader = aws_config::defaults(BehaviorVersion::latest())
             .stalled_stream_protection(StalledStreamProtectionConfig::disabled())
             .credentials_provider(creds);
 
         loader = util::configure_region(loader, &bucket_region)?;
-        loader = util::configure_endpoint(loader, &bucket_endpoint);
         loader = loader.http_client(client);
         Ok(loader.load().await)
     }
@@ -290,9 +298,16 @@ impl S3Storage {
         Http: HttpClient + 'static,
         Creds: ProvideCredentials + 'static,
     {
-        let sdk_config = Self::load_sdk_config(&config, client, credentials_provider).await?;
+        let sdk_config = Self::load_base_sdk_config(&config, client, credentials_provider).await?;
 
         let mut builder = aws_sdk_s3::config::Builder::from(&sdk_config);
+        if let Some(endpoint) = &config.bucket.endpoint {
+            // Apply the bucket endpoint only to the final S3 client. A custom endpoint
+            // conflicts with SDK FIPS endpoint resolution, so deployments that require
+            // FIPS must provide a FIPS endpoint explicitly here.
+            builder.set_endpoint_url(Some(endpoint.to_string()));
+            builder.set_use_fips(Some(false));
+        }
         builder.set_force_path_style(Some(config.force_path_style));
 
         let client = Client::from_conf(builder.build());
@@ -859,7 +874,7 @@ impl IterableStorage for S3Storage {
 
 #[cfg(test)]
 mod tests {
-    use std::assert_matches::assert_matches;
+    use std::{assert_matches::assert_matches, ffi::OsString};
 
     use aws_sdk_s3::{config::Credentials, primitives::SdkBody};
     use aws_smithy_runtime::{
@@ -870,6 +885,35 @@ mod tests {
 
     use super::*;
 
+    // Serialize multipart-related tests because they assert deltas on the global
+    // metric CLOUD_REQUEST_HISTOGRAM_VEC, which is shared across tests.
+    static MULTI_PART_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    static AWS_ENV_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    const AWS_USE_FIPS_ENDPOINT: &str = "AWS_USE_FIPS_ENDPOINT";
+
+    struct ScopedEnvVar {
+        key: &'static str,
+        old: Option<OsString>,
+    }
+
+    impl ScopedEnvVar {
+        fn set(key: &'static str, value: &str) -> Self {
+            let old = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, old }
+        }
+    }
+
+    impl Drop for ScopedEnvVar {
+        fn drop(&mut self) {
+            if let Some(old) = self.old.take() {
+                std::env::set_var(self.key, old);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
     #[test]
     fn test_s3_get_content_md5() {
         // base64 encode md5sum "helloworld"
@@ -1260,6 +1304,70 @@ mod tests {
         .unwrap();
         fail::remove(s3_sleep_injected_fp);
         fail::remove(s3_timeout_injected_fp);
+
+        client.assert_requests_match(&[]);
+    }
+
+    #[tokio::test]
+    async fn test_load_base_sdk_config_keeps_endpoint_out_of_shared_config() {
+        let _guard = AWS_ENV_TEST_LOCK.lock().await;
+        let _env = ScopedEnvVar::set(AWS_USE_FIPS_ENDPOINT, "true");
+
+        let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
+        let mut bucket = BucketConf::default(bucket_name);
+        bucket.region = StringNonEmpty::opt("us-east-1".to_string());
+        bucket.endpoint =
+            StringNonEmpty::opt("https://s3-fips.us-east-1.amazonaws.com".to_string());
+        let config = Config::default(bucket);
+        let creds = Credentials::from_keys("abc".to_string(), "xyz".to_string(), None);
+
+        let sdk_config =
+            S3Storage::load_base_sdk_config(&config, crate::util::new_http_client(), creds)
+                .await
+                .unwrap();
+
+        assert_eq!(sdk_config.endpoint_url(), None);
+        assert_eq!(sdk_config.use_fips(), Some(true));
+    }
+
+    #[tokio::test]
+    async fn test_s3_storage_custom_endpoint_with_fips_mode() {
+        let _guard = AWS_ENV_TEST_LOCK.lock().await;
+        let _env = ScopedEnvVar::set(AWS_USE_FIPS_ENDPOINT, "true");
+
+        let magic_contents = "5678";
+        let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
+        let mut bucket = BucketConf::default(bucket_name);
+        bucket.region = StringNonEmpty::opt("us-east-1".to_string());
+        bucket.prefix = StringNonEmpty::opt("myprefix".to_string());
+        bucket.endpoint =
+            StringNonEmpty::opt("https://s3-fips.us-east-1.amazonaws.com".to_string());
+        let mut config = Config::default(bucket);
+        config.force_path_style = true;
+
+        let client = StaticReplayClient::new(vec![ReplayEvent::new(
+            http::Request::builder()
+                .method("PUT")
+                .uri(Uri::from_static(
+                    "https://s3-fips.us-east-1.amazonaws.com/mybucket/myprefix/mykey?x-id=PutObject",
+                ))
+                .body(SdkBody::from("5678"))
+                .unwrap(),
+            http::Response::builder()
+                .status(200)
+                .body(SdkBody::from(""))
+                .unwrap(),
+        )]);
+
+        let creds = Credentials::from_keys("abc".to_string(), "xyz".to_string(), None);
+        let s = S3Storage::new_with_creds_client(config.clone(), client.clone(), creds).unwrap();
+        s.put(
+            "mykey",
+            PutResource(Box::new(magic_contents.as_bytes())),
+            magic_contents.len() as u64,
+        )
+        .await
+        .unwrap();
 
         client.assert_requests_match(&[]);
     }
