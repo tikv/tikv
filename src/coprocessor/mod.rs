@@ -62,11 +62,45 @@ pub const REQ_FLAG_TIDB_SYSSESSION: u64 = 2048;
 
 type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
 
+/// A coprocessor response together with its response-data memory trace.
+pub type TracedResponse = MemoryTraceGuard<coppb::Response>;
+
+/// The output of handling a unary request. It always owns the response and
+/// records separately whether its data is ready for transport.
+pub struct HandlerOutput {
+    response: TracedResponse,
+    state: HandlerOutputState,
+}
+
+/// Whether the response data is ready for transport.
+enum HandlerOutputState {
+    Ready,
+}
+
+impl HandlerOutput {
+    /// Creates an untraced ready response.
+    pub fn ready(response: coppb::Response) -> Self {
+        Self {
+            response: response.into(),
+            state: HandlerOutputState::Ready,
+        }
+    }
+
+    /// Creates a ready response whose data is attributed to `trace`.
+    pub fn ready_with_trace(response: coppb::Response, trace: &Arc<MemoryTrace>) -> Self {
+        let data_capacity = response.data.capacity();
+        Self {
+            response: trace.trace_guard(response, data_capacity),
+            state: HandlerOutputState::Ready,
+        }
+    }
+}
+
 /// An interface for all kind of Coprocessor request handlers.
 #[async_trait]
 pub trait RequestHandler: Send {
-    /// Processes current request and produces a response.
-    async fn handle_request(&mut self) -> Result<MemoryTraceGuard<coppb::Response>> {
+    /// Processes current request and produces a unary output.
+    async fn handle_request(&mut self) -> Result<HandlerOutput> {
         panic!("unary request is not supported for this handler");
     }
 
