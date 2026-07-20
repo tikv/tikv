@@ -31,7 +31,6 @@ use tidb_query_common::{
     execute_stats::ExecSummary,
     storage::{FindRegionResult, RegionStorageAccessor, Result as StorageResult},
 };
-use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::{ExtraRegionOverride, SnapshotExt};
 use tikv_util::{
     DeferContext,
@@ -529,7 +528,7 @@ impl<E: Engine> Endpoint<E> {
         semaphore_group: SemaphoreGroup,
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::IMSnap>,
-    ) -> Result<MemoryTraceGuard<coppb::Response>> {
+    ) -> Result<HandlerOutput> {
         with_tls_tracker(|tracker1| {
             record_network_in_bytes(tracker1.metrics.grpc_req_size);
         });
@@ -603,9 +602,9 @@ impl<E: Engine> Endpoint<E> {
         let mut storage_stats = Statistics::default();
         handler.collect_scan_statistics(&mut storage_stats);
         tracker.collect_storage_statistics(storage_stats);
-        let mut resp = match result {
-            Ok(resp) => {
-                let resp_size = resp.data.len() as u64;
+        let mut output = match result {
+            Ok(output) => {
+                let resp_size = output.response.data.len() as u64;
                 COPR_RESP_SIZE.inc_by(resp_size);
                 record_network_out_bytes(resp_size);
                 with_tls_tracker(|tracker| {
@@ -614,7 +613,7 @@ impl<E: Engine> Endpoint<E> {
                         .coprocessor_response_bytes
                         .saturating_add(resp_size);
                 });
-                resp
+                output
             }
             Err(e) => {
                 if let Error::DefaultNotFound(errmsg) = &e {
@@ -623,16 +622,16 @@ impl<E: Engine> Endpoint<E> {
                         "reqCtx" => ?&tracker.req_ctx,
                     );
                 }
-                make_error_response(e).into()
+                HandlerOutput::ready(make_error_response(e))
             }
         };
         let (exec_details, exec_details_v2) = tracker.get_exec_details();
         tracker.on_finish_all_items();
         record_logical_read_bytes(exec_details_v2.get_scan_detail_v2().processed_versions_size);
-        resp.set_exec_details(exec_details);
-        resp.set_exec_details_v2(exec_details_v2);
-        resp.set_latest_buckets_version(buckets_version);
-        Ok(resp)
+        output.response.set_exec_details(exec_details);
+        output.response.set_exec_details_v2(exec_details_v2);
+        output.response.set_latest_buckets_version(buckets_version);
+        Ok(output)
     }
 
     /// Handle a unary request and run on the read pool.
@@ -642,7 +641,7 @@ impl<E: Engine> Endpoint<E> {
     fn handle_unary_request(
         &self,
         r: ParseCopRequestResult<E::IMSnap>,
-    ) -> impl Future<Output = Result<MemoryTraceGuard<coppb::Response>>> {
+    ) -> impl Future<Output = Result<TracedResponse>> {
         let ParseCopRequestResult {
             req_tag,
             req_ctx,
@@ -700,7 +699,11 @@ impl<E: Engine> Endpoint<E> {
         );
         async move {
             spawn_fut_result?.await?;
-            rx.map_err(|_| Error::MaxPendingTasksExceeded).await?
+            let HandlerOutput { response, state } =
+                rx.map_err(|_| Error::MaxPendingTasksExceeded).await??;
+            match state {
+                HandlerOutputState::Ready => Ok(response),
+            }
         }
     }
 
@@ -712,7 +715,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         mut req: coppb::Request,
         peer: Option<String>,
-    ) -> impl Future<Output = MemoryTraceGuard<coppb::Response>> {
+    ) -> impl Future<Output = TracedResponse> {
         let tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
             req.get_context(),
             RequestType::Unknown,
@@ -1423,7 +1426,7 @@ mod tests {
 
     #[async_trait]
     impl RequestHandler for UnaryFixture {
-        async fn handle_request(&mut self) -> Result<MemoryTraceGuard<coppb::Response>> {
+        async fn handle_request(&mut self) -> Result<HandlerOutput> {
             if self.yieldable {
                 // We split the task into small executions of 100 milliseconds.
                 for _ in 0..self.handle_duration.as_millis() as u64 / 100 {
@@ -1437,7 +1440,7 @@ mod tests {
                 thread::sleep(self.handle_duration);
             }
 
-            self.result.take().unwrap().map(|x| x.into())
+            self.result.take().unwrap().map(HandlerOutput::ready)
         }
     }
 
@@ -1459,7 +1462,7 @@ mod tests {
 
     #[async_trait]
     impl RequestHandler for HeavyYieldingUnaryFixture {
-        async fn handle_request(&mut self) -> Result<MemoryTraceGuard<coppb::Response>> {
+        async fn handle_request(&mut self) -> Result<HandlerOutput> {
             for _ in 0..self.yields {
                 let poll_duration = self.poll_duration;
                 let mut first_poll = true;
@@ -1476,7 +1479,7 @@ mod tests {
                 .await;
             }
 
-            self.result.take().unwrap().map(|x| x.into())
+            self.result.take().unwrap().map(HandlerOutput::ready)
         }
     }
 
@@ -2032,9 +2035,10 @@ mod tests {
             .recv_timeout(Duration::from_secs(1))
             .unwrap()
             .unwrap();
-        shared_rx
-            .recv_timeout(Duration::from_millis(250))
-            .unwrap_err();
+        assert!(matches!(
+            shared_rx.recv_timeout(Duration::from_millis(250)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
         drop(shared_permits);
         shared_rx
             .recv_timeout(Duration::from_secs(1))
