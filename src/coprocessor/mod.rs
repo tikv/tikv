@@ -35,7 +35,7 @@ pub mod readpool_impl;
 mod statistics;
 mod tracker;
 
-use std::{ops::Deref, sync::Arc};
+use std::{any::Any, ops::Deref, sync::Arc};
 
 use async_trait::async_trait;
 pub use checksum::checksum_crc64_xor;
@@ -61,6 +61,19 @@ pub const REQ_TYPE_CHECKSUM: i64 = 105;
 pub const REQ_FLAG_TIDB_SYSSESSION: u64 = 2048;
 
 type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
+
+/// A task result that can be combined with results of the same request and
+/// serialized after merging.
+pub trait MergeableResult: Any + Send {
+    /// Merges another result of the same concrete type. Callers may choose any
+    /// merge order, so implementations must produce the same logical result
+    /// independent of that order.
+    fn merge(&mut self, other: Box<dyn MergeableResult>);
+
+    /// Serializes the result into response data. The result should keep any
+    /// memory it holds tracked until it is merged away or serialized.
+    fn into_data(self: Box<Self>) -> Result<Vec<u8>>;
+}
 
 /// The outcome of handling a unary request.
 pub enum HandlerOutcome {
