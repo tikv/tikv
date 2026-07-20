@@ -9,7 +9,7 @@ use tidb_query_datatype::{
     expr::{EvalConfig, EvalContext},
     match_template_evaltype,
 };
-use tidb_query_expr::{RpnExpression, RpnExpressionBuilder, RpnExpressionNode, RpnStackNode};
+use tidb_query_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode};
 use tipb::{Expr, FieldType, Selection};
 
 use crate::interface::*;
@@ -92,7 +92,7 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
             // Approximate work as rows * (number_of_rpn_nodes + number_of_column_refs),
             // once per evaluated condition.
             let rows_u64 = src_logical_rows_copy.len() as u64;
-            let rpn_nodes_u64 = self.conditions[condition_index].len() as u64;
+            let rpn_nodes_u64 = self.conditions[condition_index].node_count() as u64;
             let col_refs_u64 = self.condition_column_ref_counts[condition_index] as u64;
             let weighted_nodes_u64 = rpn_nodes_u64.saturating_add(col_refs_u64);
             tidb_query_common::metrics::record_executor_work(
@@ -139,11 +139,7 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
 }
 
 fn count_column_refs(expr: &RpnExpression) -> u32 {
-    expr.iter()
-        .filter(|node| matches!(node, RpnExpressionNode::ColumnRef { .. }))
-        .count()
-        .try_into()
-        .unwrap_or(u32::MAX)
+    expr.column_ref_count().try_into().unwrap_or(u32::MAX)
 }
 
 fn update_logical_rows_by_scalar_value(

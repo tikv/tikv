@@ -77,6 +77,8 @@ It is a read-heavy hot path and directly impacts query latency.
 6. `src/coprocessor/interceptors/concurrency_limiter.rs`
 7. `src/coprocessor/dag/mod.rs`
 8. `src/coprocessor/statistics/analyze_context.rs`
+9. `components/tidb_query_expr/src/types/expr_eval.rs`
+10. `components/tidb_query_expr/src/impl_op.rs`
 
 ## Main Responsibilities
 
@@ -97,6 +99,10 @@ It is a read-heavy hot path and directly impacts query latency.
 - Memory quota and concurrency limiters must remain cheap and correct.
 - Streaming and unary response handling must preserve stats and partial-progress
   semantics.
+- Short-circuit AND/OR evaluation must preserve Kleene three-valued logic while
+  keeping pending output positions aligned with non-empty logical-row mappings.
+  An empty logical-row mapping is valid for constant expressions with non-zero
+  output rows and must not be indexed during pending-row compaction.
 
 ## Observability And Operational Signals
 
@@ -141,7 +147,8 @@ It is a read-heavy hot path and directly impacts query latency.
 - Timeout or concurrency admission changes:
   inspect interceptors, `tracker.rs`, metrics, and read-pool behavior
 - DAG execution changes:
-  inspect `dag/*`, snapshot/store setup, and query-side statistics paths
+  inspect `dag/*`, snapshot/store setup, query-side statistics paths, and
+  `components/tidb_query_expr` expression evaluation
 - Analyze or checksum changes:
   inspect `statistics/*` or `checksum.rs` plus exec-detail accounting
 
@@ -156,6 +163,8 @@ It is a read-heavy hot path and directly impacts query latency.
 ## Observability And Tests
 
 - Inline tests exist across handler and statistics modules.
+- Short-circuit row selection and constant-expression coverage lives in
+  `components/tidb_query_expr/src/types/expr_eval.rs`.
 - Performance-sensitive behavior often needs bench or end-to-end query testing.
 - Metrics live in `metrics.rs`, trackers, and read-pool tickers.
 - `endpoint.rs` itself contains many targeted tests for parsing, lock checking,

@@ -1,15 +1,24 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::any::Any;
+use std::{any::Any, sync::OnceLock};
 
 use tidb_query_datatype::codec::data_type::ScalarValue;
 use tipb::FieldType;
 
 use super::super::function::RpnFnMeta;
+use crate::ShortCircuitFnMeta;
 
 /// A type for each node in the RPN expression list.
 #[derive(Debug)]
 pub enum RpnExpressionNode {
+    /// Represents a function call that decides which arguments and rows need to
+    /// be evaluated. Each argument remains an independent RPN expression.
+    ShortCircuitFnCall {
+        func_meta: ShortCircuitFnMeta,
+        args: Box<[RpnExpression]>,
+        field_type: FieldType,
+    },
+
     /// Represents a function call.
     FnCall {
         func_meta: RpnFnMeta,
@@ -34,6 +43,7 @@ impl RpnExpressionNode {
     #[cfg(test)]
     pub fn field_type(&self) -> &FieldType {
         match self {
+            RpnExpressionNode::ShortCircuitFnCall { field_type, .. } => field_type,
             RpnExpressionNode::FnCall { field_type, .. } => field_type,
             RpnExpressionNode::Constant { field_type, .. } => field_type,
             RpnExpressionNode::ColumnRef { .. } => panic!(),
@@ -46,6 +56,7 @@ impl RpnExpressionNode {
         use tipb::ExprType;
 
         match self {
+            RpnExpressionNode::ShortCircuitFnCall { .. } => ExprType::ScalarFunc,
             RpnExpressionNode::FnCall { .. } => ExprType::ScalarFunc,
             RpnExpressionNode::Constant { value, .. } => match value.eval_type() {
                 EvalType::Bytes => ExprType::Bytes,
@@ -80,6 +91,29 @@ impl RpnExpressionNode {
             _ => panic!(),
         }
     }
+
+    fn collect_metadata(&self, metadata: &mut RpnExpressionMetadata) {
+        metadata.node_count += 1;
+        match self {
+            RpnExpressionNode::ShortCircuitFnCall { args, .. } => {
+                for arg in args {
+                    arg.collect_metadata(metadata);
+                }
+            }
+            RpnExpressionNode::ColumnRef { offset } => {
+                metadata.column_ref_count += 1;
+                metadata.referenced_column_offsets.push(*offset);
+            }
+            _ => {}
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct RpnExpressionMetadata {
+    node_count: usize,
+    column_ref_count: usize,
+    referenced_column_offsets: Vec<usize>,
 }
 
 /// An expression in Reverse Polish notation, which is simply a list of RPN
@@ -87,62 +121,136 @@ impl RpnExpressionNode {
 ///
 /// You may want to build it using `RpnExpressionBuilder`.
 #[derive(Debug)]
-pub struct RpnExpression(Vec<RpnExpressionNode>);
+pub struct RpnExpression {
+    nodes: Vec<RpnExpressionNode>,
+    metadata: OnceLock<Box<RpnExpressionMetadata>>,
+}
 
 impl std::ops::Deref for RpnExpression {
     type Target = Vec<RpnExpressionNode>;
 
     fn deref(&self) -> &Vec<RpnExpressionNode> {
-        &self.0
+        &self.nodes
     }
 }
 
 impl std::ops::DerefMut for RpnExpression {
     fn deref_mut(&mut self) -> &mut Vec<RpnExpressionNode> {
-        &mut self.0
+        // Any mutable access may change the expression tree, so cached metadata
+        // must be rebuilt the next time it is requested.
+        self.metadata = OnceLock::new();
+        &mut self.nodes
     }
 }
 
 impl From<Vec<RpnExpressionNode>> for RpnExpression {
     fn from(v: Vec<RpnExpressionNode>) -> Self {
-        Self(v)
+        Self {
+            nodes: v,
+            metadata: OnceLock::new(),
+        }
     }
 }
 
 impl AsRef<[RpnExpressionNode]> for RpnExpression {
     fn as_ref(&self) -> &[RpnExpressionNode] {
-        self.0.as_ref()
+        self.nodes.as_ref()
     }
 }
 
 impl AsMut<[RpnExpressionNode]> for RpnExpression {
     fn as_mut(&mut self) -> &mut [RpnExpressionNode] {
-        self.0.as_mut()
+        self.metadata = OnceLock::new();
+        self.nodes.as_mut()
     }
 }
 
 impl RpnExpression {
+    fn metadata(&self) -> &RpnExpressionMetadata {
+        self.metadata
+            .get_or_init(|| {
+                let mut metadata = RpnExpressionMetadata::default();
+                self.collect_metadata(&mut metadata);
+                metadata.referenced_column_offsets.sort_unstable();
+                metadata.referenced_column_offsets.dedup();
+                Box::new(metadata)
+            })
+            .as_ref()
+    }
+
+    fn collect_metadata(&self, metadata: &mut RpnExpressionMetadata) {
+        for node in &self.nodes {
+            node.collect_metadata(metadata);
+        }
+    }
+
     /// Gets the field type of the return value.
     pub fn ret_field_type<'a>(&'a self, schema: &'a [FieldType]) -> &'a FieldType {
-        assert!(!self.0.is_empty());
-        let last_node = self.0.last().unwrap();
+        assert!(!self.nodes.is_empty());
+        let last_node = self.nodes.last().unwrap();
         match last_node {
             RpnExpressionNode::FnCall { field_type, .. } => field_type,
             RpnExpressionNode::Constant { field_type, .. } => field_type,
             RpnExpressionNode::ColumnRef { offset } => &schema[*offset],
+            RpnExpressionNode::ShortCircuitFnCall { field_type, .. } => field_type,
         }
     }
 
     /// Unwraps into the underlying expression node vector.
     pub fn into_inner(self) -> Vec<RpnExpressionNode> {
-        self.0
+        self.nodes
     }
 
     /// Returns true if the last element of expression is a `Constant` variant.
     pub fn is_last_constant(&self) -> bool {
-        assert!(!self.0.is_empty());
-        matches!(self.0.last().unwrap(), RpnExpressionNode::Constant { .. })
+        assert!(!self.nodes.is_empty());
+        matches!(
+            self.nodes.last().unwrap(),
+            RpnExpressionNode::Constant { .. }
+        )
+    }
+
+    /// Returns the number of nodes, including nodes nested in short-circuit
+    /// arguments.
+    pub fn node_count(&self) -> usize {
+        self.metadata().node_count
+    }
+
+    /// Returns the number of column references, including references nested in
+    /// short-circuit arguments.
+    pub fn column_ref_count(&self) -> usize {
+        self.metadata().column_ref_count
+    }
+
+    /// Returns sorted, deduplicated offsets of all referenced columns,
+    /// including references nested in short-circuit arguments.
+    pub(crate) fn referenced_column_offsets(&self) -> &[usize] {
+        &self.metadata().referenced_column_offsets
     }
 }
 
 // For `RpnExpression::eval`, see `expr_eval` file.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cached_metadata_is_deduplicated_and_invalidated_by_mutation() {
+        let mut expr = RpnExpression::from(vec![
+            RpnExpressionNode::ColumnRef { offset: 2 },
+            RpnExpressionNode::ColumnRef { offset: 0 },
+            RpnExpressionNode::ColumnRef { offset: 2 },
+        ]);
+
+        assert_eq!(expr.node_count(), 3);
+        assert_eq!(expr.column_ref_count(), 3);
+        assert_eq!(expr.referenced_column_offsets(), &[0, 2]);
+
+        expr.push(RpnExpressionNode::ColumnRef { offset: 1 });
+
+        assert_eq!(expr.node_count(), 4);
+        assert_eq!(expr.column_ref_count(), 4);
+        assert_eq!(expr.referenced_column_offsets(), &[0, 1, 2]);
+    }
+}

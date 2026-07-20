@@ -2,7 +2,14 @@
 
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::{Error, data_type::*};
+use tidb_query_datatype::{
+    EvalType,
+    codec::{Error, batch::LazyBatchColumnVec, data_type::*},
+    expr::EvalContext,
+};
+use tipb::FieldType;
+
+use crate::RpnExpression;
 
 #[rpn_fn(nullable)]
 #[inline]
@@ -24,6 +31,158 @@ pub fn logical_or(arg0: Option<&i64>, arg1: Option<&i64>) -> Result<Option<i64>>
         (None, None) | (None, Some(0)) | (Some(0), None) => None,
         _ => Some(1),
     })
+}
+
+/// Evaluates logical AND from left to right and only evaluates each argument
+/// for rows whose result has not been determined by previous arguments.
+pub fn sc_logical_and(
+    ctx: &mut EvalContext,
+    schema: &[FieldType],
+    input_physical_columns: &LazyBatchColumnVec,
+    input_logical_rows: &[usize],
+    output_rows: usize,
+    args: &[RpnExpression],
+) -> Result<VectorValue> {
+    eval_logical_short_circuit::<ScLogicalAnd>(
+        ctx,
+        schema,
+        input_physical_columns,
+        input_logical_rows,
+        output_rows,
+        args,
+    )
+}
+
+/// Evaluates logical OR from left to right and only evaluates each argument for
+/// rows whose result has not been determined by previous arguments.
+pub fn sc_logical_or(
+    ctx: &mut EvalContext,
+    schema: &[FieldType],
+    input_physical_columns: &LazyBatchColumnVec,
+    input_logical_rows: &[usize],
+    output_rows: usize,
+    args: &[RpnExpression],
+) -> Result<VectorValue> {
+    eval_logical_short_circuit::<ScLogicalOr>(
+        ctx,
+        schema,
+        input_physical_columns,
+        input_logical_rows,
+        output_rows,
+        args,
+    )
+}
+
+trait ScLogicalOp {
+    const IDENTITY: Int;
+
+    fn normalize_value(value: Option<Int>) -> Option<Int> {
+        value.map(|v| if v != 0 { 1 } else { 0 })
+    }
+}
+
+struct ScLogicalAnd;
+
+impl ScLogicalOp for ScLogicalAnd {
+    const IDENTITY: Int = 1;
+}
+
+struct ScLogicalOr;
+
+impl ScLogicalOp for ScLogicalOr {
+    const IDENTITY: Int = 0;
+}
+
+fn eval_logical_short_circuit<Op: ScLogicalOp>(
+    ctx: &mut EvalContext,
+    schema: &[FieldType],
+    input_physical_columns: &LazyBatchColumnVec,
+    input_logical_rows: &[usize],
+    output_rows: usize,
+    args: &[RpnExpression],
+) -> Result<VectorValue> {
+    assert!(args.len() >= 2);
+    assert!(input_logical_rows.is_empty() || input_logical_rows.len() == output_rows);
+
+    let mut result = vec![Some(Op::IDENTITY); output_rows];
+    let mut pending_positions: Vec<_> = (0..output_rows).collect();
+    let mut pending_logical_rows = if input_logical_rows.is_empty() {
+        Vec::new()
+    } else {
+        input_logical_rows.to_vec()
+    };
+
+    for arg in args {
+        if pending_positions.is_empty() {
+            break;
+        }
+
+        let arg_result = arg.eval_decoded(
+            ctx,
+            schema,
+            input_physical_columns,
+            pending_logical_rows.as_slice(),
+            pending_positions.len(),
+        )?;
+
+        for (i, &output_index) in pending_positions.iter().enumerate() {
+            let value = Int::borrow_scalar_value_ref(arg_result.get_logical_scalar_ref(i)).copied();
+
+            match Op::normalize_value(value) {
+                Some(value) if value != Op::IDENTITY => {
+                    // An absorbing value determines the final result even if a
+                    // previous argument was NULL.
+                    result[output_index] = Some(value);
+                }
+                // An identity value does not change the accumulated result. In
+                // particular, it must not overwrite a previous NULL.
+                Some(_) => {}
+                None => result[output_index] = None,
+            }
+        }
+
+        // `arg_result` may borrow `pending_logical_rows`, so release it before
+        // replacing the row selection for the next argument.
+        drop(arg_result);
+
+        let old_pending_len = pending_positions.len();
+        let has_logical_rows = !pending_logical_rows.is_empty();
+        let (mut read_index, mut write_index) = (0, 0);
+        pending_positions.retain(|&output_index| {
+            let keep = !matches!(
+                result[output_index],
+                Some(value) if value != Op::IDENTITY
+            );
+            if keep && has_logical_rows {
+                pending_logical_rows[write_index] = pending_logical_rows[read_index];
+                write_index += 1;
+            }
+
+            read_index += 1;
+            keep
+        });
+
+        debug_assert_eq!(read_index, old_pending_len);
+        if has_logical_rows {
+            pending_logical_rows.truncate(write_index);
+        }
+        debug_assert_eq!(
+            pending_logical_rows.len(),
+            if input_logical_rows.is_empty() {
+                0
+            } else {
+                pending_positions.len()
+            }
+        );
+    }
+
+    // TODO: Store `result` in a `ChunkedVecSized<Int>` once it supports indexed
+    // updates, avoiding this extra allocation and traversal.
+    let mut physical_value = VectorValue::with_capacity(output_rows, EvalType::Int);
+    for value in result {
+        physical_value.push_int(value);
+    }
+    Ok(physical_value)
 }
 
 #[rpn_fn(nullable)]
