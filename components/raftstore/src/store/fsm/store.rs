@@ -545,6 +545,65 @@ impl Clone for PeerTickBatch {
     }
 }
 
+const EXTRA_MESSAGE_FULL_LOG_INTERVAL: Duration = Duration::from_secs(1);
+
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+struct ExtraMessageFullLogKey {
+    target_store_id: u64,
+    msg_type: ExtraMessageType,
+}
+
+struct ExtraMessageFullLogState {
+    last_log_time: Instant,
+    suppressed_count: u64,
+}
+
+#[derive(Default)]
+pub struct ExtraMessageFullLogLimiter {
+    states: HashMap<ExtraMessageFullLogKey, ExtraMessageFullLogState>,
+}
+
+impl ExtraMessageFullLogLimiter {
+    pub fn record(&mut self, target_store_id: u64, msg_type: ExtraMessageType) -> Option<u64> {
+        self.record_at(target_store_id, msg_type, Instant::now())
+    }
+
+    fn record_at(
+        &mut self,
+        target_store_id: u64,
+        msg_type: ExtraMessageType,
+        now: Instant,
+    ) -> Option<u64> {
+        let key = ExtraMessageFullLogKey {
+            target_store_id,
+            msg_type,
+        };
+        match self.states.entry(key) {
+            HashMapEntry::Vacant(entry) => {
+                entry.insert(ExtraMessageFullLogState {
+                    last_log_time: now,
+                    suppressed_count: 0,
+                });
+                Some(0)
+            }
+            HashMapEntry::Occupied(mut entry) => {
+                let state = entry.get_mut();
+                if now.saturating_duration_since(state.last_log_time)
+                    < EXTRA_MESSAGE_FULL_LOG_INTERVAL
+                {
+                    state.suppressed_count = state.suppressed_count.saturating_add(1);
+                    return None;
+                }
+
+                let suppressed_count = state.suppressed_count;
+                state.last_log_time = now;
+                state.suppressed_count = 0;
+                Some(suppressed_count)
+            }
+        }
+    }
+}
+
 pub struct PollContext<EK, ER, T>
 where
     EK: KvEngine,
@@ -615,6 +674,7 @@ where
     pub gc_safe_point: Arc<AtomicU64>,
 
     pub process_stat: Option<ProcessStat>,
+    pub extra_message_full_log_limiter: ExtraMessageFullLogLimiter,
 }
 
 impl<EK, ER, T> PollContext<EK, ER, T>
@@ -1567,6 +1627,7 @@ where
             pending_latency_inspect: vec![],
             gc_safe_point: self.gc_safe_point.clone(),
             process_stat: None,
+            extra_message_full_log_limiter: ExtraMessageFullLogLimiter::default(),
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());
@@ -3467,10 +3528,64 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, time::Duration};
 
     use engine_rocks::{RangeOffsets, RangeProperties, RocksCompactedEvent};
     use engine_traits::CompactedEvent;
+    use kvproto::raft_serverpb::ExtraMessageType;
+
+    use super::ExtraMessageFullLogLimiter;
+
+    #[test]
+    fn test_extra_message_full_log_limiter() {
+        let mut limiter = ExtraMessageFullLogLimiter::default();
+        let now = std::time::Instant::now();
+
+        assert_eq!(
+            limiter.record_at(2, ExtraMessageType::MsgHibernateRequest, now),
+            Some(0)
+        );
+        assert_eq!(
+            limiter.record_at(
+                2,
+                ExtraMessageType::MsgHibernateRequest,
+                now + Duration::from_millis(500)
+            ),
+            None
+        );
+        assert_eq!(
+            limiter.record_at(
+                2,
+                ExtraMessageType::MsgHibernateRequest,
+                now + Duration::from_secs(1)
+            ),
+            Some(1)
+        );
+        assert_eq!(
+            limiter.record_at(
+                2,
+                ExtraMessageType::MsgHibernateRequest,
+                now + Duration::from_millis(1500)
+            ),
+            None
+        );
+        assert_eq!(
+            limiter.record_at(
+                3,
+                ExtraMessageType::MsgHibernateRequest,
+                now + Duration::from_millis(1500)
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            limiter.record_at(
+                2,
+                ExtraMessageType::MsgHibernateResponse,
+                now + Duration::from_millis(1500)
+            ),
+            Some(0)
+        );
+    }
 
     #[test]
     fn test_calc_region_declined_bytes() {
