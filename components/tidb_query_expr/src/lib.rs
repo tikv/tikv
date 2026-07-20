@@ -946,3 +946,17 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         )),
     })
 }
+
+fn map_expr_node_to_sc_func(expr: &Expr) -> Option<ShortCircuitFnMeta> {
+    match expr.get_sig() {
+        ScalarFuncSig::LogicalOr => Some(ShortCircuitFnMeta {
+            sig: ScalarFuncSig::LogicalOr,
+            fn_ptr: sc_logical_or,
+        }),
+        ScalarFuncSig::LogicalAnd => Some(ShortCircuitFnMeta {
+            sig: ScalarFuncSig::LogicalAnd,
+            fn_ptr: sc_logical_and,
+        }),
+        _ => None,
+    }
+}

@@ -33,6 +33,29 @@ impl<T: Sized + Clone> ChunkedVecSized<T> {
     }
 }
 
+impl<T: Sized + Default> ChunkedVecSized<T> {
+    /// Replaces the value at `idx` while keeping the data and validity bitmap
+    /// layouts in sync.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `idx` is out of bounds.
+    #[inline]
+    pub fn set(&mut self, idx: usize, value: Option<T>) {
+        assert!(idx < self.data.len());
+        match value {
+            Some(value) => {
+                self.data[idx] = value;
+                self.bitmap.replace(idx, true);
+            }
+            None => {
+                self.data[idx] = T::default();
+                self.bitmap.replace(idx, false);
+            }
+        }
+    }
+}
+
 impl<T: Clone> ChunkedVec<T> for ChunkedVecSized<T> {
     impl_chunked_vec_common! { T }
 
@@ -204,6 +227,21 @@ mod tests {
         assert_eq!(x.get(3), None);
         assert_eq!(x.len(), 4);
         assert!(!x.is_empty());
+    }
+
+    #[test]
+    fn test_set() {
+        let mut x = ChunkedVecSized::<Int>::from_slice(&[Some(1), None, Some(3)]);
+
+        x.set(0, None);
+        x.set(1, Some(2));
+        x.set(2, Some(4));
+
+        assert_eq!(x.to_vec(), vec![None, Some(2), Some(4)]);
+        assert_eq!(
+            x,
+            ChunkedVecSized::<Int>::from_slice(&[None, Some(2), Some(4)])
+        );
     }
 
     #[test]
