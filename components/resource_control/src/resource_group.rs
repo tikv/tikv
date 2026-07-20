@@ -465,9 +465,6 @@ impl ResourceGroupManager {
                 .get_write_io_limiter()
                 .set_rate_limit(f64::INFINITY);
         }
-        self.registry.read().iter().for_each(|controller| {
-            controller.set_has_background(any_has_bg);
-        });
     }
 
     fn build_resource_limiter(&self, rg: &PbResourceGroup) -> Option<Arc<ResourceLimiter>> {
@@ -538,7 +535,6 @@ impl ResourceGroupManager {
             let ru_quota = Self::get_ru_setting(&g.value().group, controller.is_read);
             controller.add_resource_group(g.key().clone().into_bytes(), ru_quota, g.group.priority);
         }
-        controller.set_has_background(self.has_background.load(Ordering::Acquire));
         controller
     }
 
@@ -1061,8 +1057,6 @@ pub struct ResourceController {
     last_rest_vt_time: Cell<Instant>,
     // whether the settings are customized by user
     customized: AtomicBool,
-    // whether any resource group has background settings configured
-    has_background: AtomicBool,
     // Shared config. Read on the hot path to check enable_fair_scheduling.
     config: Arc<VersionTrack<Config>>,
 }
@@ -1082,7 +1076,6 @@ impl ResourceController {
             max_ru_quota: Mutex::new(DEFAULT_MAX_RU_QUOTA),
             last_rest_vt_time: Cell::new(Instant::now_coarse()),
             customized: AtomicBool::new(false),
-            has_background: AtomicBool::new(false),
             config,
         }
     }
@@ -1198,11 +1191,7 @@ impl ResourceController {
     }
 
     pub fn is_customized(&self) -> bool {
-        self.customized.load(Ordering::Acquire) || self.has_background.load(Ordering::Acquire)
-    }
-
-    pub fn set_has_background(&self, has_background: bool) {
-        self.has_background.store(has_background, Ordering::Release);
+        self.customized.load(Ordering::Acquire)
     }
 
     #[inline]
@@ -1800,6 +1789,29 @@ pub(crate) mod tests {
         resource_manager.add_resource_group(group);
         assert_eq!(resource_ctl_write.resource_group(b"test1").weight, 200);
         assert_eq!(resource_ctl_write.resource_group(b"default").weight, 10);
+    }
+
+    #[test]
+    fn test_background_settings_do_not_customize_resource_controller() {
+        let resource_manager = ResourceGroupManager::default();
+        let resource_ctl = resource_manager.derive_controller("test_write".into(), false);
+
+        let default_group = new_background_resource_group_ru(
+            DEFAULT_RESOURCE_GROUP_NAME.into(),
+            MAX_RU_QUOTA,
+            MEDIUM_PRIORITY,
+            vec!["br".into()],
+        );
+        resource_manager.add_resource_group(default_group);
+
+        assert!(!resource_ctl.is_customized());
+
+        let group = new_resource_group_ru("test".into(), 5000, MEDIUM_PRIORITY);
+        resource_manager.add_resource_group(group);
+        assert!(resource_ctl.is_customized());
+
+        resource_manager.remove_resource_group("test");
+        assert!(!resource_ctl.is_customized());
     }
 
     #[cfg(feature = "failpoints")]
