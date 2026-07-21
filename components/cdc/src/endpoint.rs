@@ -1264,41 +1264,20 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
             } => {
                 // `InitDownstream` is queued asynchronously. When it runs, the
                 // delegate or downstream may already have been removed by a
-                // stale observe generation, connection teardown, or region
-                // error.
+                // stale observe generation, connection teardown, or region error.
+                // early return dropping `cb` cancels the paired oneshot receiver and wakes
+                // `Initializer::initialize` with an error.
                 let delegate = match self.capture_regions.get_mut(&region_id) {
                     Some(delegate) if delegate.handle.id == observe_id => delegate,
-                    _ => {
-                        warn!("cdc delegate not found when init downstream";
-                                "observe_id" => ?observe_id,
-                                "downstream_id" => ?downstream_id,
-                                "request_id" => ?request_id,
-                                "region_id" => region_id,
-                                "conn_id" => ?conn_id);
-                        return;
-                    }
+                    _ => return,
                 };
                 let downstream = match delegate.downstream(downstream_id) {
                     Some(d) => d,
-                    None => {
-                        warn!("cdc downstream not found when init downstream";
-                                "observe_id" => ?observe_id,
-                                "downstream_id" => ?downstream_id,
-                                "request_id" => ?request_id,
-                                "region_id" => region_id,
-                                "conn_id" => ?conn_id);
-                        return;
-                    }
+                    None => return,
                 };
-                // The downstream may still exist but already be stopped by a
-                // late cancel before this queued task runs.
+                // The downstream may still exist but stopped by a late cancel before this
+                // queued task runs.
                 if downstream_state.load() == DownstreamState::Stopped {
-                    warn!("cdc failed to init downstream since it's stopped";
-                            "observe_id" => ?observe_id,
-                            "downstream_id" => ?downstream_id,
-                            "request_id" => ?request_id,
-                            "region_id" => region_id,
-                            "conn_id" => ?conn_id);
                     return;
                 }
                 if let Err(e) = downstream.sink_barrier(incremental_scan_barrier) {

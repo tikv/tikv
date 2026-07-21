@@ -193,7 +193,9 @@ impl Downstream {
             Some(sink) => sink,
             None => {
                 info!("cdc drop event, no sink";
-                    "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => ?self.req_id);
+                    "downstream_id" => ?self.id,
+                    "request_id" => ?self.req_id,
+                    "conn_id" => ?self.conn_id);
                 return Err(Error::Sink(SendError::Disconnected));
             }
         };
