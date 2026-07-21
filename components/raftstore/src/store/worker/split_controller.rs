@@ -699,12 +699,11 @@ impl AutoSplitController {
         let read_stats_vec = ctx.batch_recv_read_stats(read_stats_receiver);
         // RegionID -> Vec<RegionInfo>, collect the RegionInfo from different threads.
         let mut region_infos_map = HashMap::default();
-        let capacity = read_stats_vec.len();
         for read_stats in read_stats_vec.drain(..) {
             for (region_id, region_info) in read_stats.region_infos {
                 let region_infos = region_infos_map
                     .entry(region_id)
-                    .or_insert_with(|| Vec::with_capacity(capacity));
+                    .or_insert_with(|| Vec::with_capacity(1));
                 region_infos.push(region_info);
             }
         }
@@ -1452,6 +1451,24 @@ mod tests {
             read_stats_receiver,
             cpu_stats_receiver,
         )
+    }
+
+    #[test]
+    fn test_collect_read_stats_uses_sparse_region_capacity() {
+        const REPORT_COUNT: usize = 128;
+
+        let read_stats = (1..=REPORT_COUNT)
+            .map(|region_id| gen_read_stats(region_id as u64, vec![KeyRange::default()]))
+            .collect();
+        let (mut ctx, read_stats_receiver, _) = new_auto_split_controller_ctx(read_stats, vec![]);
+
+        let region_infos = AutoSplitController::collect_read_stats(&mut ctx, &read_stats_receiver);
+
+        assert_eq!(region_infos.len(), REPORT_COUNT);
+        for infos in region_infos.values() {
+            assert_eq!(infos.len(), 1);
+            assert!(infos.capacity() < REPORT_COUNT);
+        }
     }
 
     fn check_split_key(mode: &[u8], qps_stats: Vec<ReadStats>, split_keys: Vec<&[u8]>) {
