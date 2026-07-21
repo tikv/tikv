@@ -918,6 +918,9 @@ impl DefaultCfConfig {
                         )
                         .unwrap();
                 }
+                ApiVersion::V3 => {
+                    unreachable!("API V3 is not supported by this TiKV build")
+                }
             }
         } else {
             match api_version {
@@ -947,6 +950,9 @@ impl DefaultCfConfig {
                             RawCompactionFilterFactory,
                         )
                         .unwrap();
+                }
+                ApiVersion::V3 => {
+                    unreachable!("API V3 is not supported by this TiKV build")
                 }
             }
         }
