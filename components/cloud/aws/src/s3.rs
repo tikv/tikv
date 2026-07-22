@@ -15,6 +15,7 @@ use aws_sdk_s3::{
     types::{CompletedMultipartUpload, CompletedPart},
     Client,
 };
+use aws_smithy_types::error::metadata::ProvideErrorMetadata;
 use bytes::Bytes;
 use cloud::{
     blob::{
@@ -405,7 +406,7 @@ impl RetryError for UploadError {
     }
 }
 
-impl<T: 'static + StdError> From<SdkError<T>> for UploadError {
+impl<T: 'static + StdError + ProvideErrorMetadata> From<SdkError<T>> for UploadError {
     fn from(err: SdkError<T>) -> Self {
         let msg = format!("{:?}", err);
         Self::Sdk {

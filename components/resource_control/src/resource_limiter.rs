@@ -37,9 +37,13 @@ impl fmt::Debug for ResourceType {
 }
 
 pub struct ResourceLimiter {
-    _name: String,
+    name: String,
     version: u64,
     limiters: [QuotaLimiter; ResourceType::COUNT],
+    // Dedicated write-only IO limiter for compaction pressure throttling.
+    // Independent from the combined IO limiter; rate is set by do_adjust
+    // based on compaction pressure. Defaults to f64::INFINITY (no throttle).
+    write_io_limiter: QuotaLimiter,
     // whether the resource limiter is a background limiter or priority limiter.
     is_background: bool,
     // the wait duration histogram for prioitry limiter.
@@ -74,23 +78,39 @@ impl ResourceLimiter {
             None
         };
         Self {
-            _name: name,
+            name,
             version,
             limiters: [cpu_limiter, io_limiter],
+            write_io_limiter: QuotaLimiter::new(f64::INFINITY),
             is_background,
             wait_histogram,
         }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     pub fn is_background(&self) -> bool {
         self.is_background
     }
 
-    pub fn consume(&self, cpu_time: Duration, io_bytes: IoBytes, wait: bool) -> Duration {
+    pub fn consume(
+        &self,
+        cpu_time: Duration,
+        io_bytes: IoBytes,
+        wait: bool,
+        skip_compaction_pressure: bool,
+    ) -> Duration {
         let cpu_dur =
             self.limiters[ResourceType::Cpu as usize].consume(cpu_time.as_micros() as u64, wait);
         let io_dur = self.limiters[ResourceType::Io as usize].consume_io(io_bytes, wait);
-        let wait_dur = cpu_dur.max(io_dur);
+        let write_io_dur = if skip_compaction_pressure {
+            Duration::ZERO
+        } else {
+            self.write_io_limiter.consume(io_bytes.write, wait)
+        };
+        let wait_dur = cpu_dur.max(io_dur).max(write_io_dur);
         if !wait_dur.is_zero()
             && let Some(h) = &self.wait_histogram
         {
@@ -99,8 +119,34 @@ impl ResourceLimiter {
         wait_dur
     }
 
-    pub async fn async_consume(&self, cpu_time: Duration, io_bytes: IoBytes) -> Duration {
-        let dur = self.consume(cpu_time, io_bytes, true);
+    /// Returns the current token-bucket debt the caller should wait before
+    /// entering the thread pool. Reads accumulated debt via `consume(0, ...)`
+    /// which returns the existing debt when the rate limit is finite, without
+    /// adding new token consumption.
+    ///
+    /// For write requests (`is_read = false`), the write-specific IO limiter
+    /// debt is also considered alongside CPU and combined IO debt.
+    ///
+    /// Note: `write_io_limiter` and the combined IO limiter are only rate-set
+    /// for background limiters (via `do_adjust`); for foreground per-group
+    /// limiters their rates remain at `f64::INFINITY`, so their debt is
+    /// always zero and only CPU debt drives the delay in practice.
+    pub fn admission_delay(&self, is_read: bool) -> Duration {
+        self.consume(
+            Duration::ZERO,
+            IoBytes::default(),
+            true,
+            is_read, // skip_compaction_pressure = true for reads (skip write_io_limiter)
+        )
+    }
+
+    pub async fn async_consume(
+        &self,
+        cpu_time: Duration,
+        io_bytes: IoBytes,
+        skip_compaction_pressure: bool,
+    ) -> Duration {
+        let dur = self.consume(cpu_time, io_bytes, true, skip_compaction_pressure);
         if !dur.is_zero() {
             _ = GLOBAL_TIMER_HANDLE
                 .delay(Instant::now() + dur)
@@ -113,6 +159,11 @@ impl ResourceLimiter {
     #[inline]
     pub(crate) fn get_limiter(&self, ty: ResourceType) -> &QuotaLimiter {
         &self.limiters[ty as usize]
+    }
+
+    #[inline]
+    pub(crate) fn get_write_io_limiter(&self) -> &QuotaLimiter {
+        &self.write_io_limiter
     }
 
     pub(crate) fn get_limit_statistics(&self, ty: ResourceType) -> GroupStatistics {
