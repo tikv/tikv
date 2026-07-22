@@ -3160,7 +3160,7 @@ mod tests {
     }
 
     #[test]
-    fn test_init_downstream_uses_current_downstream_sink() {
+    fn test_init_downstream() {
         let cfg = CdcConfig {
             min_ts_interval: ReadableDuration(Duration::from_secs(60)),
             ..Default::default()
@@ -3232,5 +3232,254 @@ mod tests {
             Some((CdcEvent::Barrier(_), _))
         ));
         barrier_rx.try_recv().unwrap();
+    }
+
+    #[test]
+    fn test_late_init_downstream_after_conn_deregistered() {
+        let cfg = CdcConfig {
+            min_ts_interval: ReadableDuration(Duration::from_secs(60)),
+            ..Default::default()
+        };
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
+        suite.add_region(1, 100);
+
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let (tx_a, mut rx_a) = channel::channel(ConnId::default(), 1, quota.clone());
+        let conn_a = Conn::new(ConnId::default(), tx_a, String::new());
+        let conn_id_a = conn_a.get_id();
+        suite.run(Task::OpenConn { conn: conn_a });
+        suite.run(set_conn_version_task(
+            conn_id_a,
+            FeatureGate::batch_resolved_ts(),
+        ));
+
+        let request_id_a = RequestId(1);
+        let mut req_a = ChangeDataRequest::default();
+        req_a.set_region_id(1);
+        req_a.set_request_id(request_id_a.0);
+        let downstream_a = Downstream::new(
+            String::new(),
+            req_a.get_region_epoch().clone(),
+            request_id_a,
+            conn_id_a,
+            ChangeDataRequestKvApi::TiDb,
+            false,
+            ObservedRange::default(),
+        );
+        let downstream_id_a = downstream_a.id;
+        let downstream_state_a = downstream_a.get_state();
+        suite.run(Task::Register {
+            request: req_a,
+            downstream: downstream_a,
+        });
+        let observe_id = suite.capture_regions[&1].handle.id;
+
+        let (tx_b, _rx_b) = channel::channel(ConnId::default(), 1, quota);
+        let conn_b = Conn::new(ConnId::default(), tx_b, String::new());
+        let conn_id_b = conn_b.get_id();
+        suite.run(Task::OpenConn { conn: conn_b });
+        suite.run(set_conn_version_task(
+            conn_id_b,
+            FeatureGate::batch_resolved_ts(),
+        ));
+
+        let request_id_b = RequestId(2);
+        let mut req_b = ChangeDataRequest::default();
+        req_b.set_region_id(1);
+        req_b.set_request_id(request_id_b.0);
+        let downstream_b = Downstream::new(
+            String::new(),
+            req_b.get_region_epoch().clone(),
+            request_id_b,
+            conn_id_b,
+            ChangeDataRequestKvApi::TiDb,
+            false,
+            ObservedRange::default(),
+        );
+        let downstream_id_b = downstream_b.id;
+        suite.run(Task::Register {
+            request: req_b,
+            downstream: downstream_b,
+        });
+
+        let build_resolver = Arc::new(AtomicBool::new(false));
+        let (barrier_cb, barrier_fut) = tikv_util::future::paired_future_callback::<()>();
+        let (response_cb, response_fut) = tikv_util::future::paired_future_callback::<()>();
+        let late_task = Task::InitDownstream {
+            conn_id: conn_id_a,
+            region_id: 1,
+            request_id: request_id_a,
+            observe_id,
+            downstream_id: downstream_id_a,
+            downstream_state: downstream_state_a.clone(),
+            build_resolver: build_resolver.clone(),
+            incremental_scan_barrier: Some(barrier_cb),
+            cb: Box::new(move || response_cb(())),
+        };
+
+        suite.run(Task::Deregister(Deregister::Conn(conn_id_a)));
+        suite.run(late_task);
+
+        assert!(!suite.connections.contains_key(&conn_id_a));
+        assert_eq!(downstream_state_a.load(), DownstreamState::Stopped);
+        assert!(!build_resolver.load(Ordering::Acquire));
+        let delegate = &suite.capture_regions[&1];
+        assert_eq!(delegate.downstreams().len(), 1);
+        assert_eq!(delegate.downstreams()[0].id, downstream_id_b);
+        assert!(matches!(
+            tikv_util::future::block_on_timeout(barrier_fut, Duration::from_millis(100)),
+            Ok(Err(_))
+        ));
+        assert!(matches!(
+            tikv_util::future::block_on_timeout(response_fut, Duration::from_millis(100)),
+            Ok(Err(_))
+        ));
+        assert!(matches!(
+            channel::recv_timeout(&mut rx_a.drain(), Duration::from_millis(100)),
+            Ok(None) | Err(())
+        ));
+    }
+
+    #[test]
+    fn test_init_downstream_rejects_stale_observe_id() {
+        let cfg = CdcConfig {
+            min_ts_interval: ReadableDuration(Duration::from_secs(60)),
+            ..Default::default()
+        };
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
+        suite.add_region(1, 100);
+
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let (tx, mut rx) = channel::channel(ConnId::default(), 1, quota);
+        let conn = Conn::new(ConnId::default(), tx, String::new());
+        let conn_id = conn.get_id();
+        suite.run(Task::OpenConn { conn });
+        suite.run(set_conn_version_task(
+            conn_id,
+            FeatureGate::batch_resolved_ts(),
+        ));
+
+        let request_id = RequestId(1);
+        let mut req = ChangeDataRequest::default();
+        req.set_region_id(1);
+        req.set_request_id(request_id.0);
+        let downstream = Downstream::new(
+            String::new(),
+            req.get_region_epoch().clone(),
+            request_id,
+            conn_id,
+            ChangeDataRequestKvApi::TiDb,
+            false,
+            ObservedRange::default(),
+        );
+        let downstream_id = downstream.id;
+        let downstream_state = downstream.get_state();
+        suite.run(Task::Register {
+            request: req,
+            downstream,
+        });
+
+        let stale_observe_id = ObserveId::new();
+        assert_ne!(stale_observe_id, suite.capture_regions[&1].handle.id);
+        let build_resolver = Arc::new(AtomicBool::new(false));
+        let (barrier_cb, barrier_fut) = tikv_util::future::paired_future_callback::<()>();
+        let (response_cb, response_fut) = tikv_util::future::paired_future_callback::<()>();
+        suite.run(Task::InitDownstream {
+            conn_id,
+            region_id: 1,
+            request_id,
+            observe_id: stale_observe_id,
+            downstream_id,
+            downstream_state: downstream_state.clone(),
+            build_resolver: build_resolver.clone(),
+            incremental_scan_barrier: Some(barrier_cb),
+            cb: Box::new(move || response_cb(())),
+        });
+
+        assert_eq!(downstream_state.load(), DownstreamState::Uninitialized);
+        assert!(!build_resolver.load(Ordering::Acquire));
+        assert!(matches!(
+            tikv_util::future::block_on_timeout(barrier_fut, Duration::from_millis(100)),
+            Ok(Err(_))
+        ));
+        assert!(matches!(
+            tikv_util::future::block_on_timeout(response_fut, Duration::from_millis(100)),
+            Ok(Err(_))
+        ));
+        channel::recv_timeout(&mut rx.drain(), Duration::from_millis(100)).unwrap_err();
+    }
+
+    #[test]
+    fn test_init_downstream_rejects_stopped_state() {
+        let cfg = CdcConfig {
+            min_ts_interval: ReadableDuration(Duration::from_secs(60)),
+            ..Default::default()
+        };
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
+        suite.add_region(1, 100);
+
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let (tx, mut rx) = channel::channel(ConnId::default(), 1, quota);
+        let conn = Conn::new(ConnId::default(), tx, String::new());
+        let conn_id = conn.get_id();
+        suite.run(Task::OpenConn { conn });
+        suite.run(set_conn_version_task(
+            conn_id,
+            FeatureGate::batch_resolved_ts(),
+        ));
+
+        let request_id = RequestId(1);
+        let mut req = ChangeDataRequest::default();
+        req.set_region_id(1);
+        req.set_request_id(request_id.0);
+        let downstream = Downstream::new(
+            String::new(),
+            req.get_region_epoch().clone(),
+            request_id,
+            conn_id,
+            ChangeDataRequestKvApi::TiDb,
+            false,
+            ObservedRange::default(),
+        );
+        let downstream_id = downstream.id;
+        let downstream_state = downstream.get_state();
+        suite.run(Task::Register {
+            request: req,
+            downstream,
+        });
+
+        let observe_id = suite.capture_regions[&1].handle.id;
+        downstream_state.store(DownstreamState::Stopped);
+        let build_resolver = Arc::new(AtomicBool::new(false));
+        let (barrier_cb, barrier_fut) = tikv_util::future::paired_future_callback::<()>();
+        let (response_cb, response_fut) = tikv_util::future::paired_future_callback::<()>();
+        suite.run(Task::InitDownstream {
+            conn_id,
+            region_id: 1,
+            request_id,
+            observe_id,
+            downstream_id,
+            downstream_state: downstream_state.clone(),
+            build_resolver: build_resolver.clone(),
+            incremental_scan_barrier: Some(barrier_cb),
+            cb: Box::new(move || response_cb(())),
+        });
+
+        assert_eq!(downstream_state.load(), DownstreamState::Stopped);
+        assert!(
+            suite.capture_regions[&1]
+                .downstream(downstream_id)
+                .is_some()
+        );
+        assert!(!build_resolver.load(Ordering::Acquire));
+        assert!(matches!(
+            tikv_util::future::block_on_timeout(barrier_fut, Duration::from_millis(100)),
+            Ok(Err(_))
+        ));
+        assert!(matches!(
+            tikv_util::future::block_on_timeout(response_fut, Duration::from_millis(100)),
+            Ok(Err(_))
+        ));
+        channel::recv_timeout(&mut rx.drain(), Duration::from_millis(100)).unwrap_err();
     }
 }
