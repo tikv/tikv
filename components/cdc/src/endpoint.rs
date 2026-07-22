@@ -3158,4 +3158,79 @@ mod tests {
         });
         assert!(suite.connections.is_empty());
     }
+
+    #[test]
+    fn test_init_downstream_uses_current_downstream_sink() {
+        let cfg = CdcConfig {
+            min_ts_interval: ReadableDuration(Duration::from_secs(60)),
+            ..Default::default()
+        };
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
+        suite.add_region(1, 100);
+
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let (tx, mut rx) = channel::channel(ConnId::default(), 1, quota);
+        let conn = Conn::new(ConnId::default(), tx, String::new());
+        let conn_id = conn.get_id();
+        suite.run(Task::OpenConn { conn });
+        suite.run(set_conn_version_task(
+            conn_id,
+            FeatureGate::batch_resolved_ts(),
+        ));
+
+        let request_id = RequestId(1);
+        let mut req = ChangeDataRequest::default();
+        req.set_region_id(1);
+        req.set_request_id(request_id.0);
+        let downstream = Downstream::new(
+            String::new(),
+            req.get_region_epoch().clone(),
+            request_id,
+            conn_id,
+            ChangeDataRequestKvApi::TiDb,
+            false,
+            ObservedRange::default(),
+        );
+        let downstream_id = downstream.id;
+        let downstream_state = downstream.get_state();
+        suite.run(Task::Register {
+            request: req,
+            downstream,
+        });
+
+        let observe_id = suite.capture_regions[&1].handle.id;
+        let build_resolver = Arc::new(AtomicBool::new(false));
+        let (barrier_tx, barrier_rx) = std::sync::mpsc::channel();
+        let (response_tx, response_rx) = std::sync::mpsc::channel();
+        suite.run(Task::InitDownstream {
+            conn_id,
+            region_id: 1,
+            request_id,
+            observe_id,
+            downstream_id,
+            downstream_state: downstream_state.clone(),
+            build_resolver: build_resolver.clone(),
+            incremental_scan_barrier: Some(Box::new(move |()| {
+                barrier_tx.send(()).unwrap();
+            })),
+            cb: Box::new(move || {
+                response_tx.send(()).unwrap();
+            }),
+        });
+
+        assert_eq!(downstream_state.load(), DownstreamState::Initializing);
+        assert!(build_resolver.load(Ordering::Acquire));
+        response_rx.try_recv().unwrap();
+        assert_eq!(
+            barrier_rx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        );
+
+        let mut drain = rx.drain();
+        assert!(matches!(
+            block_on(futures::StreamExt::next(&mut drain)),
+            Some((CdcEvent::Barrier(_), _))
+        ));
+        barrier_rx.try_recv().unwrap();
+    }
 }
