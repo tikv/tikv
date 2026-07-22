@@ -1275,9 +1275,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                     Some(d) => d,
                     None => return,
                 };
-                // The downstream may still exist but stopped by a late cancel before this
+                // The downstream may still exist but no longer be uninitialized before this
                 // queued task runs.
-                if downstream_state.load() == DownstreamState::Stopped {
+                if downstream_state.load() != DownstreamState::Uninitialized {
                     return;
                 }
                 if let Err(e) = downstream.sink_barrier(incremental_scan_barrier) {
@@ -3232,6 +3232,101 @@ mod tests {
             Some((CdcEvent::Barrier(_), _))
         ));
         barrier_rx.try_recv().unwrap();
+
+        let duplicate_build_resolver = Arc::new(AtomicBool::new(false));
+        let (barrier_cb, barrier_fut) = tikv_util::future::paired_future_callback::<()>();
+        let (response_cb, response_fut) = tikv_util::future::paired_future_callback::<()>();
+        suite.run(Task::InitDownstream {
+            conn_id,
+            region_id: 1,
+            request_id,
+            observe_id,
+            downstream_id,
+            downstream_state: downstream_state.clone(),
+            build_resolver: duplicate_build_resolver.clone(),
+            incremental_scan_barrier: Some(barrier_cb),
+            cb: Box::new(move || response_cb(())),
+        });
+
+        assert_eq!(downstream_state.load(), DownstreamState::Initializing);
+        assert!(!duplicate_build_resolver.load(Ordering::Acquire));
+        assert!(matches!(
+            tikv_util::future::block_on_timeout(barrier_fut, Duration::from_millis(100)),
+            Ok(Err(_))
+        ));
+        assert!(matches!(
+            tikv_util::future::block_on_timeout(response_fut, Duration::from_millis(100)),
+            Ok(Err(_))
+        ));
+        channel::recv_timeout(&mut drain, Duration::from_millis(100)).unwrap_err();
+    }
+
+    #[test]
+    fn test_init_downstream_sink_barrier_error() {
+        let cfg = CdcConfig {
+            min_ts_interval: ReadableDuration(Duration::from_secs(60)),
+            ..Default::default()
+        };
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
+        suite.add_region(1, 100);
+
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let (tx, rx) = channel::channel(ConnId::default(), 1, quota);
+        let conn = Conn::new(ConnId::default(), tx, String::new());
+        let conn_id = conn.get_id();
+        suite.run(Task::OpenConn { conn });
+        suite.run(set_conn_version_task(
+            conn_id,
+            FeatureGate::batch_resolved_ts(),
+        ));
+
+        let request_id = RequestId(1);
+        let mut req = ChangeDataRequest::default();
+        req.set_region_id(1);
+        req.set_request_id(request_id.0);
+        let downstream = Downstream::new(
+            String::new(),
+            req.get_region_epoch().clone(),
+            request_id,
+            conn_id,
+            ChangeDataRequestKvApi::TiDb,
+            false,
+            ObservedRange::default(),
+        );
+        let downstream_id = downstream.id;
+        let downstream_state = downstream.get_state();
+        suite.run(Task::Register {
+            request: req,
+            downstream,
+        });
+
+        let observe_id = suite.capture_regions[&1].handle.id;
+        let build_resolver = Arc::new(AtomicBool::new(false));
+        let (barrier_cb, barrier_fut) = tikv_util::future::paired_future_callback::<()>();
+        let (response_cb, response_fut) = tikv_util::future::paired_future_callback::<()>();
+        drop(rx);
+        suite.run(Task::InitDownstream {
+            conn_id,
+            region_id: 1,
+            request_id,
+            observe_id,
+            downstream_id,
+            downstream_state: downstream_state.clone(),
+            build_resolver: build_resolver.clone(),
+            incremental_scan_barrier: Some(barrier_cb),
+            cb: Box::new(move || response_cb(())),
+        });
+
+        assert_eq!(downstream_state.load(), DownstreamState::Uninitialized);
+        assert!(!build_resolver.load(Ordering::Acquire));
+        assert!(matches!(
+            tikv_util::future::block_on_timeout(barrier_fut, Duration::from_millis(100)),
+            Ok(Err(_))
+        ));
+        assert!(matches!(
+            tikv_util::future::block_on_timeout(response_fut, Duration::from_millis(100)),
+            Ok(Err(_))
+        ));
     }
 
     #[test]
