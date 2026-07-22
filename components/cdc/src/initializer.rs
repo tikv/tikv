@@ -192,9 +192,10 @@ impl<E: KvEngine> Initializer<E> {
             return Err(Error::request(e.into()));
         }
 
-        // Wait all delta changes earlier than the incremental scan snapshot be
-        // sent to the downstream, so that they must be consumed before the
-        // incremental scan result.
+        // Wait until the connection drain reaches the observed-event boundary
+        // inserted by `Task::InitDownstream`. This prevents scan events sent through
+        // the separate bounded channel from overtaking observed events that the
+        // Endpoint emitted before downstream initialization.
         if let Err(e) = incremental_scan_barrier_fut.await {
             return Err(Error::Other(box_err!(e)));
         }
