@@ -275,6 +275,9 @@ impl SchedPool {
         f: impl futures::Future<Output = ()> + Send + 'static,
         write_bytes: u64,
     ) -> Result<(), Full> {
+        if request_source.is_empty() {
+            return self.vanilla.spawn(priority_level, f);
+        }
         let resource_mgr = &self.priority.as_ref().unwrap().resource_mgr;
         let group_name = std::str::from_utf8(metadata.group_name()).unwrap_or_default();
         let resource_limiter =
