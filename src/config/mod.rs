@@ -1260,6 +1260,9 @@ pub struct DbConfig {
     pub enable_statistics: bool,
     #[online_config(skip)]
     pub stats_dump_period: Option<ReadableDuration>,
+    // RocksDB 8.x compaction no longer relies on the old setup-time file hint
+    // path, so keep compaction readahead enabled by default instead of forcing
+    // it to 0 from TiKV config.
     pub compaction_readahead_size: ReadableSize,
     #[doc(hidden)]
     #[serde(skip_serializing)]
@@ -1356,7 +1359,7 @@ impl Default for DbConfig {
             max_open_files: 40960,
             enable_statistics: true,
             stats_dump_period: None,
-            compaction_readahead_size: ReadableSize::kb(0),
+            compaction_readahead_size: ReadableSize::mb(2),
             info_log_max_size: ReadableSize::gb(1),
             info_log_roll_time: ReadableDuration::secs(0),
             info_log_keep_log_file_num: 10,
@@ -1829,6 +1832,9 @@ pub struct RaftDbConfig {
     pub enable_statistics: bool,
     #[online_config(skip)]
     pub stats_dump_period: ReadableDuration,
+    // RocksDB 8.x compaction no longer relies on the old setup-time file hint
+    // path, so keep compaction readahead enabled by default instead of forcing
+    // it to 0 from TiKV config.
     pub compaction_readahead_size: ReadableSize,
     #[doc(hidden)]
     #[serde(skip_serializing)]
@@ -1894,7 +1900,7 @@ impl Default for RaftDbConfig {
             max_open_files: 40960,
             enable_statistics: true,
             stats_dump_period: ReadableDuration::minutes(10),
-            compaction_readahead_size: ReadableSize::kb(0),
+            compaction_readahead_size: ReadableSize::mb(2),
             info_log_max_size: ReadableSize::gb(1),
             info_log_roll_time: ReadableDuration::secs(0),
             info_log_keep_log_file_num: 10,
@@ -2946,6 +2952,7 @@ pub struct BackupStreamConfig {
     #[online_config(skip)]
     pub initial_scan_rate_limit: ReadableSize,
     pub initial_scan_concurrency: usize,
+    pub s3_multi_part_size: ReadableSize,
 }
 
 impl BackupStreamConfig {
@@ -2979,6 +2986,14 @@ impl BackupStreamConfig {
         if self.initial_scan_rate_limit.0 < 1024 {
             return Err("the `initial_scan_rate_limit` should be at least 1024 bytes".into());
         }
+        if self.s3_multi_part_size.0 > ReadableSize::gb(5).0 {
+            warn!(
+                "backup.s3_multi_part_size cannot larger than 5GB, change it to {:?}",
+                default_cfg.s3_multi_part_size
+            );
+            self.s3_multi_part_size = default_cfg.s3_multi_part_size;
+        }
+
         Ok(())
     }
 }
@@ -3008,6 +3023,7 @@ impl Default for BackupStreamConfig {
             initial_scan_rate_limit: ReadableSize::mb(60),
             initial_scan_concurrency: 6,
             temp_file_memory_quota: cache_size,
+            s3_multi_part_size: ReadableSize::mb(5),
         }
     }
 }
@@ -6029,8 +6045,9 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "#ifdef MALLOC_CONF"]
     #[cfg(feature = "mem-profiling")]
-    fn test_change_memory_config() {
+    fn test_change_memory_config_ifdef_malloc_conf() {
         let (cfg, _dir) = TikvConfig::with_tmp().unwrap();
         let cfg_controller = ConfigController::new(cfg);
 
