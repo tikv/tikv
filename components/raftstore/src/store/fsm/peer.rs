@@ -855,7 +855,7 @@ where
         self.on_loop_finished();
         slow_log!(
             T timer,
-            "{} handle {} peer messages {:?}, detail: {:?}",
+            "{} handle {} peer messages {:?}",
             self.fsm.peer.tag,
             count,
             PeerMsg::<EK>::VARIANTS.iter().zip(distribution).filter(|(_, c)| *c > 0).format(", "),

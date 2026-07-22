@@ -992,7 +992,7 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         }
         slow_log!(
             T timer,
-            "[store {}] handle {} store messages {:?}, detail: {:?}",
+            "[store {}] handle {} store messages {:?}",
             self.fsm.store.id,
             count,
             StoreMsg::<EK>::VARIANTS.iter().zip(distribution).filter(|(_, c)| *c > 0).format(", "),
