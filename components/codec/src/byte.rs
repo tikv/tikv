@@ -496,16 +496,42 @@ pub struct CompactByteCodec;
 
 impl CompactByteCodec {
     /// Gets the length of the first encoded byte sequence in the given buffer,
-    /// which is encoded in the compact format. If the buffer is not complete,
-    /// the length of buffer will be returned.
+    /// which is encoded in the compact format. If the buffer is not complete
+    /// or the length prefix is malformed (e.g. negative), the length of
+    /// buffer will be returned.
     pub fn get_first_encoded_len(encoded: &[u8]) -> usize {
-        let result = NumberCodec::try_decode_var_i64(encoded);
-        match result {
-            Err(_) => encoded.len(),
-            Ok((value, decoded_n)) => {
-                let r = value as usize + decoded_n;
-                r.min(encoded.len())
-            }
+        Self::first_encoded_len_from_prefix(encoded, encoded.len())
+    }
+
+    /// Gets the length of the first encoded byte sequence in the given buffer,
+    /// which is encoded in the descending compact format: every byte,
+    /// including the varint length prefix, is bitwise-complemented relative
+    /// to the ascending compact format (pingcap/tidb#2519). Only the length
+    /// prefix is un-complemented, into a small stack buffer, so the payload
+    /// itself is never copied. If the buffer is not complete or the prefix is
+    /// malformed, the length of buffer will be returned.
+    pub fn get_first_encoded_len_desc(encoded: &[u8]) -> usize {
+        let prefix_len = number::MAX_VARINT64_LENGTH.min(encoded.len());
+        let mut inv = [0u8; number::MAX_VARINT64_LENGTH];
+        for (i, b) in encoded[..prefix_len].iter().enumerate() {
+            inv[i] = !b;
+        }
+        Self::first_encoded_len_from_prefix(&inv[..prefix_len], encoded.len())
+    }
+
+    /// Decodes a compact-format varint length prefix and returns the total
+    /// encoded length (prefix + payload), clamped to `total_len`. A negative
+    /// length is nonsensical for a byte payload; it is treated as malformed
+    /// and clamped like an incomplete buffer. `try_from` + `checked_add`
+    /// keep this panic-free in debug builds.
+    fn first_encoded_len_from_prefix(prefix: &[u8], total_len: usize) -> usize {
+        match NumberCodec::try_decode_var_i64(prefix) {
+            Ok((value, decoded_n)) => usize::try_from(value)
+                .ok()
+                .and_then(|n| n.checked_add(decoded_n))
+                .map(|n| n.min(total_len))
+                .unwrap_or(total_len),
+            Err(_) => total_len,
         }
     }
 }
@@ -704,6 +730,32 @@ mod tests {
         for (expect_len, data) in cases {
             assert_eq!(expect_len, CompactByteCodec::get_first_encoded_len(&data));
         }
+    }
+
+    #[test]
+    fn test_encode_compact_byte_len_desc() {
+        // The descending compact format is the bitwise complement of the
+        // ascending one; the length probe must agree with the ASC sizer on
+        // the complemented input.
+        let cases: Vec<(usize, Vec<u8>)> = vec![
+            (1, vec![0]),
+            (3, vec![10, 104, 101]),
+            (6, vec![10, 104, 101, 108, 108, 111]),
+            (6, vec![10, 104, 101, 108, 108, 111, 2, 3]),
+            (7, vec![12, 228, 184, 150, 231, 149, 140]),
+            (7, vec![12, 228, 184, 150, 231, 149, 140, 2, 3]),
+        ];
+        for (expect_len, data) in cases {
+            let inverted: Vec<u8> = data.iter().map(|b| !b).collect();
+            assert_eq!(
+                expect_len,
+                CompactByteCodec::get_first_encoded_len_desc(&inverted)
+            );
+        }
+        // A malformed (negative) length prefix clamps to the buffer length
+        // instead of panicking: varint zig-zag of -1 is 0x01, complemented
+        // 0xFE.
+        assert_eq!(2, CompactByteCodec::get_first_encoded_len_desc(&[!0x01, 0]));
     }
 
     #[test]

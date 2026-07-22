@@ -420,7 +420,17 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
                 // ignore this slice of the datum.
                 if let Some(&index) = index {
                     if !self.is_column_filled[index] {
-                        columns[index].mut_raw().push(datum);
+                        // TiDB rejects DESC on clustered primary keys, so a
+                        // descending-order column (pingcap/tidb#2519) should
+                        // never appear in a common handle. Mirror the
+                        // index-scan extractor's canonicalisation anyway so a
+                        // future relaxation of that DDL rule cannot silently
+                        // hand complemented bytes to the ASC-only decoders.
+                        if datum::is_desc_flag(datum[0]) {
+                            columns[index].mut_raw().push_inverted(datum);
+                        } else {
+                            columns[index].mut_raw().push(datum);
+                        }
                         decoded_columns += 1;
                         self.is_column_filled[index] = true;
                     }

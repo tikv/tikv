@@ -10,7 +10,10 @@ use tidb_query_common::storage::{
     Range,
     scanner::{RangesScanner, RangesScannerOptions},
 };
-use tidb_query_datatype::codec::{datum::split_datum, table};
+use tidb_query_datatype::codec::{
+    datum::{is_desc_flag, split_datum},
+    table,
+};
 use tidb_query_executors::interface::BatchExecutor;
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_util::quota_limiter::QuotaLimiter;
@@ -173,6 +176,21 @@ impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
                     ));
                 }
                 let (column, remaining) = split_datum(datums, false)?;
+                // Descending-order index columns (pingcap/tidb#2519) are
+                // stored bitwise-complemented. The histogram below relies on
+                // rows arriving in ascending order of the bytes it stores;
+                // un-inverting here would feed it a descending (or, for
+                // mixed-direction indexes, unsorted) stream and silently
+                // produce corrupt bucket bounds, while keeping the complement
+                // would return bounds TiDB cannot decode. Reject loudly until
+                // the statistics pipeline understands DESC columns end to
+                // end; TiDB is expected to skip the index-analyze pushdown
+                // for such indexes.
+                if is_desc_flag(column[0]) {
+                    return Err(box_err!(
+                        "analyzing an index with descending-order columns is not supported yet"
+                    ));
+                }
                 datums = remaining;
                 data.extend_from_slice(column);
                 if let Some(cms) = cms.as_mut() {
