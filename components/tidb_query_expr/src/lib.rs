@@ -38,6 +38,7 @@ pub mod impl_miscellaneous;
 pub mod impl_op;
 pub mod impl_other;
 pub mod impl_regexp;
+pub mod impl_spatial;
 pub mod impl_string;
 pub mod impl_time;
 pub mod impl_vec;
@@ -61,7 +62,8 @@ pub use self::types::*;
 use self::{
     impl_arithmetic::*, impl_cast::*, impl_compare::*, impl_compare_in::*, impl_control::*,
     impl_encryption::*, impl_json::*, impl_like::*, impl_math::*, impl_miscellaneous::*,
-    impl_op::*, impl_other::*, impl_regexp::*, impl_string::*, impl_time::*, impl_vec::*,
+    impl_op::*, impl_other::*, impl_regexp::*, impl_spatial::*, impl_string::*, impl_time::*,
+    impl_vec::*,
 };
 
 fn map_to_binary_fn_sig(expr: &Expr) -> Result<RpnFnMeta> {
@@ -682,6 +684,18 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::RegexpSubstrSig => map_regexp_substr_sig(ft)?,
         ScalarFuncSig::RegexpInStrSig => map_regexp_instr_sig(ft)?,
         ScalarFuncSig::RegexpReplaceSig => map_regexp_replace_sig(ft)?,
+        // impl_spatial: geospatial DE-9IM predicates pushed down from the
+        // spatial-index refine filter (two EWKB args -> int 0/1).
+        ScalarFuncSig::StWithin => st_within_fn_meta(),
+        ScalarFuncSig::StContains => st_contains_fn_meta(),
+        ScalarFuncSig::StIntersects => st_intersects_fn_meta(),
+        ScalarFuncSig::StEquals => st_equals_fn_meta(),
+        ScalarFuncSig::StDisjoint => st_disjoint_fn_meta(),
+        ScalarFuncSig::StTouches => st_touches_fn_meta(),
+        ScalarFuncSig::StCrosses => st_crosses_fn_meta(),
+        ScalarFuncSig::StOverlaps => st_overlaps_fn_meta(),
+        ScalarFuncSig::StCovers => st_covers_fn_meta(),
+        ScalarFuncSig::StCoveredBy => st_covered_by_fn_meta(),
 
         // impl_math
         ScalarFuncSig::AbsInt => abs_int_fn_meta(),

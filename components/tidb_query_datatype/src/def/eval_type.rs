@@ -77,6 +77,9 @@ impl std::convert::TryFrom<crate::FieldTypeTp> for EvalType {
             | crate::FieldTypeTp::Blob
             | crate::FieldTypeTp::VarString
             | crate::FieldTypeTp::String
+            // Geometry is stored and evaluated as its EWKB binary string, so the
+            // coprocessor treats it as Bytes (the spatial fns decode the EWKB).
+            | crate::FieldTypeTp::Geometry
             | crate::FieldTypeTp::Null => EvalType::Bytes,
             crate::FieldTypeTp::Enum => EvalType::Enum,
             _ => {
