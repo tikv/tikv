@@ -26,7 +26,7 @@ use crate::{
         checkpoint::Checkpoint, consistency::StorageConsistencyGuard, save_meta::SaveMeta,
         skip_small_compaction::SkipSmallCompaction,
     },
-    execute::hooking::{CId, ExecHooks, SubcompactionFinishCtx},
+    execute::hooking::{AfterFinishCtx, BeforeStartCtx, CId, ExecHooks, SubcompactionFinishCtx},
     storage::{LOCK_PREFIX, hash_meta_edit},
     test_util::{CompactInMem, KvGen, LogFileBuilder, TmpStorage, gen_step},
 };
@@ -663,6 +663,86 @@ async fn test_comments_record_execution_config_for_coverage() {
     assert_eq!(config["minimal-compaction-size"].as_u64(), Some(42));
     assert_eq!(config["shard"]["index"].as_u64(), Some(1));
     assert_eq!(config["shard"]["total"].as_u64(), Some(2));
+}
+
+#[tokio::test]
+async fn test_empty_execution_still_writes_migration_with_comments() {
+    let st = TmpStorage::create();
+    let mut exec = create_compaction(st.backend());
+    exec.cfg.shard = Some(ShardConfig::new(1, 2).unwrap());
+    exec.cfg.from_ts = 0x20;
+    exec.cfg.until_ts = 0x80;
+    exec.cfg.calculate_shift_ts = true;
+    exec.cfg.minimal_compaction_size = 42;
+    exec.out_prefix = exec.cfg.recommended_prefix("empty_comments_config");
+
+    tokio::task::spawn_blocking(move || exec.run(SaveMeta::default()))
+        .await
+        .unwrap()
+        .unwrap();
+
+    let migs = st.load_migrations().await.unwrap();
+    assert_eq!(migs.len(), 1);
+    let mig = &migs[0].1;
+    assert!(mig.edit_meta.is_empty());
+    assert_eq!(mig.compactions.len(), 1);
+
+    let compaction = &mig.compactions[0];
+    assert_eq!(compaction.get_generated_cmeta_files_total_size(), 0);
+    assert_eq!(compaction.get_generated_sst_files_total_size(), 0);
+
+    let comments: serde_json::Value = serde_json::from_str(compaction.get_comments()).unwrap();
+    let config = &comments["config"];
+    assert_eq!(config["from-ts"].as_u64(), Some(0x20));
+    assert_eq!(config["until-ts"].as_u64(), Some(0x80));
+    assert_eq!(config["shift-ts"].as_u64(), Some(0x20));
+    assert_eq!(config["cal-shift-ts"].as_bool(), Some(true));
+    assert_eq!(config["minimal-compaction-size"].as_u64(), Some(42));
+    assert_eq!(config["shard"]["index"].as_u64(), Some(1));
+    assert_eq!(config["shard"]["total"].as_u64(), Some(2));
+}
+
+#[tokio::test]
+async fn test_empty_migration_does_not_scan_backup_metadata() {
+    let st = TmpStorage::create();
+    let bad_meta = vec![0xFF];
+    st.storage()
+        .write(
+            "v1/backupmeta/bad.meta",
+            futures::io::Cursor::new(bad_meta.clone()).into(),
+            bad_meta.len() as u64,
+        )
+        .await
+        .unwrap();
+
+    let mut exec = create_compaction(st.backend());
+    exec.cfg.shard = Some(ShardConfig::new(1, 2).unwrap());
+    let storage: Arc<dyn ExternalStorage> = st.storage().clone();
+    let handle = tokio::runtime::Handle::current();
+    let mut save_meta = SaveMeta::default();
+
+    save_meta
+        .before_execution_started(BeforeStartCtx {
+            async_rt: &handle,
+            this: &exec,
+            meta_count: 1,
+            storage: storage.as_ref(),
+        })
+        .await
+        .unwrap();
+    save_meta
+        .after_execution_finished(AfterFinishCtx {
+            async_rt: &handle,
+            this: &exec,
+            storage: &storage,
+        })
+        .await
+        .unwrap();
+
+    let migs = st.load_migrations().await.unwrap();
+    assert_eq!(migs.len(), 1);
+    assert!(migs[0].1.edit_meta.is_empty());
+    assert_eq!(migs[0].1.compactions.len(), 1);
 }
 
 #[tokio::test]

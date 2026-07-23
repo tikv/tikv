@@ -581,16 +581,7 @@ fn test_transfer_leader_safe() {
     }
 
     // Any up-to-date follower can become leader.
-    cluster.transfer_leader(region_id, new_peer(3, 3));
-    // Retry for more stability
-    for _ in 0..20 {
-        cluster.reset_leader_of_region(region_id);
-        if cluster.leader_of_region(region_id) != Some(new_peer(3, 3)) {
-            continue;
-        }
-        break;
-    }
-    assert_eq!(cluster.leader_of_region(region_id).unwrap().get_id(), 3);
+    cluster.must_transfer_leader(region_id, new_peer(3, 3));
     let leader_id = 3;
 
     // Cannot transfer when removed peer
