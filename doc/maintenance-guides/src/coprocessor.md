@@ -31,6 +31,19 @@ It is a read-heavy hot path and directly impacts query latency.
   `src/coprocessor/readpool_impl.rs::build_read_pool`,
   `src/coprocessor/endpoint.rs::Endpoint::new`, and
   `src/server/service/kv.rs` as the RPC entry path.
+- On the Yatp path, unary and streaming heavy tasks are admitted through
+  semaphores created in `Endpoint::new`: a shared semaphore for ordinary
+  coprocessor work and a dedicated semaphore for request classes that are
+  intentionally throttled by the background quota limiter.
+- The shared semaphore keeps the full
+  `server.end-point-max-concurrency` budget, while the dedicated
+  background-limited semaphore is an extra bounded cap derived from the same
+  setting at startup.
+- Because these two semaphores are independent, the total number of concurrent
+  heavy coprocessor tasks can exceed `server.end-point-max-concurrency` when
+  both ordinary traffic and background-limited traffic are active.
+- The dedicated cap does not automatically track unified read-pool worker
+  autoscaling at runtime.
 - `build_read_pool` sets TLS engine state and marks threads as
   `IoType::ForegroundRead`. Any change that moves blocking work into or out of
   this path should be reviewed against foreground IO expectations.
@@ -95,6 +108,12 @@ It is a read-heavy hot path and directly impacts query latency.
   semantics.
 - Handler execution must respect request deadline and cancellation behavior.
 - Memory quota and concurrency limiters must remain cheap and correct.
+- Request parsing and admission must stay aligned: if a request class reports
+  quota samples to the background quota limiter, it should use the dedicated
+  background-limited semaphore instead of bypassing heavy-task admission.
+- The dedicated background-limited semaphore protects the full-sampling analyze
+  path from unlimited fan-out, but it is not part of the ordinary shared
+  heavy-task budget.
 - Streaming and unary response handling must preserve stats and partial-progress
   semantics.
 
@@ -113,6 +132,8 @@ It is a read-heavy hot path and directly impacts query latency.
   `tikv_coprocessor_response_bytes`,
   `tikv_coprocessor_waiting_for_semaphore`, and
   `tikv_coprocessor_semaphore_wait_seconds`.
+- The semaphore metrics aggregate waits from both the shared semaphore and the
+  dedicated background-limited semaphore.
 - `tracker.rs` is the best place to understand slow logs, exec details, request
   lifetime accounting, and the distinction between schedule wait, snapshot
   wait, suspend time, and processing time.
