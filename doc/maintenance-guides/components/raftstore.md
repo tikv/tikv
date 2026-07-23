@@ -129,6 +129,25 @@ High-risk contracts:
 - `store/worker/read.rs`: local reader and read delegates
 - `store/worker/refresh_config.rs`: runtime config propagation
 
+Load-based split accounting and state:
+
+- Region CPU load is compared with unified-read-pool utilization, so both the
+  region numerator and hottest-range ranking must use unified-read CPU time.
+- Disabling CPU-based detection still drains queued resource-metering records.
+  Split-config changes and per-region split-validator disables discard prior
+  controller detection history.
+- Unified-read-pool capacity is published after each applied resize and shared
+  as authoritative current state rather than queued resize events. The current
+  busy gate reloads that state without interrupting normal QPS and byte
+  detection history.
+- A split-config version change drains observations already visible to the
+  stats monitor, primes a new thread-CPU baseline, and skips that detection
+  tick. Queued PD-worker tasks, in-progress resource-metering intervals, and
+  long-lived TLS observations can still arrive after the drain; the boundary
+  remains best effort until producers carry a configuration generation.
+- Recorder expiration uses monotonic elapsed time so wall-clock adjustments
+  cannot retain stale detection history.
+
 ### Coprocessor hooks
 
 - `coprocessor/dispatcher.rs` hosts raftstore observers.

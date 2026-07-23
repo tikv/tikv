@@ -18,8 +18,8 @@ use std::{
     str::FromStr,
     sync::{
         Arc,
-        atomic::{AtomicU32, AtomicU64},
-        mpsc::{self, sync_channel},
+        atomic::{AtomicU32, AtomicU64, AtomicUsize},
+        mpsc::sync_channel,
     },
     time::Duration,
 };
@@ -663,14 +663,16 @@ where
             cop_read_pools.handle()
         };
 
-        let mut unified_read_pool_scale_receiver = None;
+        let mut unified_read_pool_size = None;
         if self.core.config.readpool.is_unified_pool_enabled() {
-            let (unified_read_pool_scale_notifier, rx) = mpsc::sync_channel(10);
+            let current_pool_size = Arc::new(AtomicUsize::new(
+                self.core.config.readpool.unified.max_thread_count,
+            ));
             cfg_controller.register(
                 tikv::config::Module::Readpool,
                 Box::new(ReadPoolConfigManager::new(
                     unified_read_pool.as_ref().unwrap().handle(),
-                    unified_read_pool_scale_notifier,
+                    current_pool_size.clone(),
                     &self.core.background_worker,
                     self.core.config.readpool.unified.min_thread_count,
                     self.core.config.readpool.unified.max_thread_count,
@@ -678,7 +680,7 @@ where
                     self.core.config.readpool.unified.cpu_threshold,
                 )),
             );
-            unified_read_pool_scale_receiver = Some(rx);
+            unified_read_pool_size = Some(current_pool_size);
         }
 
         // Run check leader in a dedicate thread, because it is time sensitive
@@ -922,7 +924,7 @@ where
             split_config_manager,
             self.core.config.server.grpc_concurrency,
             self.core.config.readpool.unified.max_thread_count,
-            unified_read_pool_scale_receiver,
+            unified_read_pool_size,
         );
 
         // `ConsistencyCheckObserver` must be registered before `Node::start`.
