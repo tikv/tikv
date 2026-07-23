@@ -144,6 +144,56 @@ impl Tracker {
     }
 }
 
+/// Attributes a tracked future's poll time to the slab tracker addressed by
+/// a token: busy poll time accumulates into
+/// [`RequestMetrics::future_process_nanos`] and the gaps between polls —
+/// including the wait before the first poll — into
+/// [`RequestMetrics::future_suspend_nanos`], which
+/// [`Tracker::merge_time_detail`] folds into the request's `TimeDetailV2`.
+/// Unlike `TlsFutureTracker` in the storage layer it keeps no thread local
+/// state, so it can track a future handed to a foreign executor; an invalid
+/// or removed token makes it a no-op.
+#[derive(Debug)]
+pub struct TokenFutureTracker {
+    token: TrackerToken,
+    poll_began: Option<Instant>,
+    last_finished: Instant,
+    suspend_nanos: u64,
+}
+
+impl TokenFutureTracker {
+    pub fn new(token: TrackerToken) -> Self {
+        Self {
+            token,
+            poll_began: None,
+            last_finished: Instant::now(),
+            suspend_nanos: 0,
+        }
+    }
+}
+
+impl FutureTrack for TokenFutureTracker {
+    fn on_poll_begin(&mut self) {
+        let now = Instant::now();
+        self.suspend_nanos += now.saturating_duration_since(self.last_finished).as_nanos() as u64;
+        self.poll_began = Some(now);
+    }
+
+    fn on_poll_finish(&mut self) {
+        let now = Instant::now();
+        let process_nanos = self
+            .poll_began
+            .take()
+            .map_or(0, |at| now.saturating_duration_since(at).as_nanos() as u64);
+        let suspend_nanos = std::mem::take(&mut self.suspend_nanos);
+        GLOBAL_TRACKERS.with_tracker(self.token, |tracker| {
+            tracker.metrics.future_process_nanos += process_nanos;
+            tracker.metrics.future_suspend_nanos += suspend_nanos;
+        });
+        self.last_finished = now;
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RequestInfo {
     pub region_id: u64,
@@ -286,6 +336,54 @@ mod tests {
             cid: 0,
             is_external_req: false,
         }
+    }
+
+    #[test]
+    fn test_token_future_tracker_attributes_poll_time() {
+        use std::{
+            future::{Future, poll_fn},
+            pin::pin,
+            task::{Context, Poll, Waker},
+            time::Duration,
+        };
+
+        // Spinning self-measures, so assertions hold under arbitrary
+        // scheduling load, unlike sleeps.
+        fn spin(d: Duration) {
+            let begin = Instant::now();
+            while begin.elapsed() < d {}
+        }
+
+        let token = GLOBAL_TRACKERS.insert(Tracker::new(new_req_info()));
+        let mut polled = false;
+        let fut = track(
+            poll_fn(move |_cx| {
+                spin(Duration::from_millis(2));
+                if polled {
+                    Poll::Ready(())
+                } else {
+                    polled = true;
+                    Poll::Pending
+                }
+            }),
+            TokenFutureTracker::new(token),
+        );
+        let mut fut = pin!(fut);
+        let mut cx = Context::from_waker(Waker::noop());
+
+        spin(Duration::from_millis(2));
+        assert!(fut.as_mut().poll(&mut cx).is_pending());
+        spin(Duration::from_millis(2));
+        assert!(fut.as_mut().poll(&mut cx).is_ready());
+
+        let mut detail = pb::TimeDetailV2::default();
+        GLOBAL_TRACKERS.with_tracker(token, |tracker| tracker.merge_time_detail(&mut detail));
+        GLOBAL_TRACKERS.remove(token);
+
+        // Two polls spun >= 2ms each; a >= 2ms gap preceded each poll.
+        let expected = Duration::from_millis(4).as_nanos() as u64;
+        assert!(detail.get_process_wall_time_ns() >= expected);
+        assert!(detail.get_process_suspend_wall_time_ns() >= expected);
     }
 
     #[test]
