@@ -93,7 +93,7 @@ const MAX_CONCURRENT_ANALYZE_BATCH_TASKS: usize = 4;
 
 fn allows_full_sampling_analyze_merge(req: &coppb::Request) -> bool {
     if req.get_tp() != REQ_TYPE_ANALYZE
-        || !req.get_allow_batch_task_data_merge()
+        || !req.get_allow_analyze_batch_task_data_merge()
         || req.get_is_cache_enabled()
     {
         return false;
@@ -844,7 +844,7 @@ impl<E: Engine> Endpoint<E> {
                 let quota_limiter = self.quota_limiter.clone();
                 let merge_full_sampling = !is_streaming
                     && cache_match_version.is_none()
-                    && req.get_allow_batch_task_data_merge()
+                    && req.get_allow_analyze_batch_task_data_merge()
                     && analyze.get_tp() == AnalyzeType::TypeFullSampling;
 
                 handler_builder = if merge_full_sampling {
@@ -1277,7 +1277,7 @@ impl<E: Engine> Endpoint<E> {
         if !merge_batch_tasks {
             // Negotiation without children is an ordinary unary Analyze
             // request and must keep the serialized handler contract.
-            req.set_allow_batch_task_data_merge(false);
+            req.set_allow_analyze_batch_task_data_merge(false);
         }
         let finalize_context = merge_batch_tasks.then(|| req.get_context().clone());
         let batch_outputs = self.process_batch_tasks(&mut req, &peer);
@@ -1379,7 +1379,7 @@ impl<E: Engine> Endpoint<E> {
         req: &mut coppb::Request,
         peer: &Option<String>,
     ) -> impl Stream<Item = BatchTaskOutput> {
-        let merge_analyze = req.get_allow_batch_task_data_merge();
+        let merge_analyze = req.get_allow_analyze_batch_task_data_merge();
         let mut batch_futs = Vec::with_capacity(req.tasks.len());
         let batch_reqs: Vec<(usize, coppb::Request, u64)> = req
             .take_tasks()
@@ -2441,7 +2441,7 @@ mod tests {
     #[test]
     fn test_full_sampling_analyze_merge_gate_is_exact() {
         let mut req = coppb::Request::default();
-        req.set_allow_batch_task_data_merge(true);
+        req.set_allow_analyze_batch_task_data_merge(true);
 
         // The additive capability bit alone must not alter DAG or malformed
         // Analyze requests.
@@ -2465,7 +2465,7 @@ mod tests {
         req.set_is_cache_enabled(true);
         assert!(!allows_full_sampling_analyze_merge(&req));
         req.set_is_cache_enabled(false);
-        req.set_allow_batch_task_data_merge(false);
+        req.set_allow_analyze_batch_task_data_merge(false);
         assert!(!allows_full_sampling_analyze_merge(&req));
     }
 

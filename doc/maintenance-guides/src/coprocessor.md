@@ -65,11 +65,11 @@ It is a read-heavy hot path and directly impacts query latency.
   `AnalyzeSamplingResult`; generic handlers and other request types cannot opt
   into result merging.
 - Merging is enabled only for a valid full-sampling Analyze request that sets
-  `Request.allow_batch_task_data_merge`, disables cache lookup, and carries at
-  least one batched task. All other requests keep the ordinary one-response-
-  per-task behavior. A negotiated request may carry at most four child tasks;
-  a wider request is rejected before any scan starts so the whole batch remains
-  retryable.
+  `Request.allow_analyze_batch_task_data_merge`, disables cache lookup, and
+  carries at least one batched task. All other requests keep the ordinary
+  one-response-per-task behavior. A negotiated request may carry at most four
+  child tasks; a wider request is rejected before any scan starts so the whole
+  batch remains retryable.
 - The top scan and child scans are polled concurrently because read-pool work
   is enqueued only when its future is first polled, while its deadline starts
   at parse time. At most four child scans run concurrently (five physical

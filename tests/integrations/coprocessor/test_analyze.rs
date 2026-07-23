@@ -407,7 +407,7 @@ fn test_batched_full_sampling_responses() {
         req.set_ranges(vec![top_range].into());
         req.set_start_ts(100);
         req.set_context(top_ctx);
-        req.set_allow_batch_task_data_merge(allow_merge);
+        req.set_allow_analyze_batch_task_data_merge(allow_merge);
         for (task_id, (start, end)) in [(1, (4, 5)), (2, (9, 10))] {
             let range = product.get_record_range(start, end);
             let batch_region = cluster.get_region(Key::from_raw(&range.start).as_encoded());
