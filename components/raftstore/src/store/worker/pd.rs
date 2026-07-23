@@ -311,6 +311,11 @@ pub struct PeerStat {
     pub last_region_report_written_bytes: u64,
     pub last_region_report_written_keys: u64,
     pub last_region_report_ts: UnixSecs,
+    pub last_region_report_term: u64,
+    pub last_region_report_leader_id: u64,
+    pub last_region_report_leader_store_id: u64,
+    pub last_region_report_region_version: u64,
+    pub last_region_report_region_conf_ver: u64,
     // last_store_report_attributes records the state of the last store heartbeat
     pub last_store_report_read_bytes: u64,
     pub last_store_report_read_keys: u64,
@@ -1159,6 +1164,7 @@ where
     scheduler: Scheduler<Task<EK>>,
     stats_monitor: StatsMonitor<WrappedScheduler<EK>>,
     store_heartbeat_interval: Duration,
+    region_heartbeat_report_interval: Duration,
 
     // region_id -> CPU time breakdown accumulated for RegionHeartbeat reporting.
     // This map is consumed/cleared by the region-heartbeat path.
@@ -1212,6 +1218,7 @@ where
         let mut store_stat = StoreStat::default();
         store_stat.set_cpu_quota(SysQuota::cpu_cores_quota(), cfg.inspect_cpu_util_thd);
         let store_heartbeat_interval = cfg.pd_store_heartbeat_tick_interval.0;
+        let region_heartbeat_report_interval = cfg.pd_heartbeat_tick_interval.0;
         let interval = store_heartbeat_interval / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT;
         let mut stats_monitor = StatsMonitor::new(
             interval,
@@ -1269,6 +1276,7 @@ where
             start_ts: UnixSecs::now(),
             scheduler,
             store_heartbeat_interval,
+            region_heartbeat_report_interval,
             stats_monitor,
             region_cpu_records_since_region_heartbeat: HashMap::default(),
             region_cpu_records_since_store_heartbeat: HashMap::default(),
@@ -2656,6 +2664,91 @@ where
                     None => 0, // size uninitialized
                 };
                 let approximate_keys = hb_task.approximate_keys.unwrap_or_default();
+                let suppress_interval_secs = self.region_heartbeat_report_interval.as_secs();
+                if suppress_interval_secs > 0 {
+                    let region_id = hb_task.region.get_id();
+                    let now = UnixSecs::now();
+                    let should_suppress = {
+                        let region_peers = self.region_peers.read().unwrap();
+                        if let Some(peer_stat) = region_peers.get(&region_id) {
+                            let read_bytes_delta =
+                                peer_stat.read_bytes - peer_stat.last_region_report_read_bytes;
+                            let read_keys_delta =
+                                peer_stat.read_keys - peer_stat.last_region_report_read_keys;
+                            let written_bytes_delta =
+                                hb_task.written_bytes - peer_stat.last_region_report_written_bytes;
+                            let written_keys_delta =
+                                hb_task.written_keys - peer_stat.last_region_report_written_keys;
+                            let query_stats = peer_stat
+                                .query_stats
+                                .sub_query_stats(&peer_stat.last_region_report_query_stats);
+                            let cop_detail = peer_stat
+                                .cop_detail
+                                .sub(&peer_stat.last_region_report_cop_detail);
+                            let mut last_report_ts = peer_stat.last_region_report_ts;
+                            if last_report_ts.is_zero() {
+                                last_report_ts = self.start_ts;
+                            }
+                            let interval_second = now
+                                .into_inner()
+                                .saturating_sub(last_report_ts.into_inner());
+                            let (cpu_usage, cpu_stats) = {
+                                let cpu_record = self
+                                    .region_cpu_records_since_region_heartbeat
+                                    .get(&region_id)
+                                    .copied()
+                                    .unwrap_or_default();
+                                if interval_second > 0 {
+                                    let total = cpu_usage_from_millis(
+                                        cpu_record.cpu_time_ms as u64,
+                                        interval_second,
+                                    );
+                                    let cpu_usage =
+                                        calculate_region_cpu_usage(cpu_record, interval_second);
+                                    let mut stats = pdpb::CpuStats::default();
+                                    stats.set_unified_read(cpu_usage.unified_read_cpu_usage);
+                                    stats.set_scheduler(cpu_usage.scheduler_cpu_usage);
+                                    (total, stats)
+                                } else {
+                                    (0, pdpb::CpuStats::default())
+                                }
+                            };
+                            let has_heartbeat_delta = read_bytes_delta > 0
+                                || read_keys_delta > 0
+                                || written_bytes_delta > 0
+                                || written_keys_delta > 0
+                                || query_stats.get_all_query_num() > 0
+                                || cop_detail.iterated_count() > 0
+                                || cop_detail.processed_keys > 0
+                                || cpu_usage > 0
+                                || cpu_stats.get_unified_read() > 0
+                                || cpu_stats.get_scheduler() > 0
+                                || !hb_task.down_peers.is_empty()
+                                || !hb_task.pending_peers.is_empty()
+                                || !hb_task.wait_data_peers.is_empty()
+                                || hb_task.replication_status.is_some();
+                            should_suppress_redundant_region_heartbeat(
+                                suppress_interval_secs,
+                                now,
+                                peer_stat,
+                                &hb_task,
+                                approximate_size,
+                                approximate_keys,
+                                has_heartbeat_delta,
+                            )
+                        } else {
+                            false
+                        }
+                    };
+                    if should_suppress {
+                        debug!(
+                            "suppress redundant region heartbeat";
+                            "region_id" => region_id,
+                            "peer_id" => hb_task.peer.get_id(),
+                        );
+                        return;
+                    }
+                }
                 let (
                     read_bytes_delta,
                     read_keys_delta,
@@ -2737,6 +2830,18 @@ where
                         cpu_stats,
                     )
                 };
+                {
+                    let mut region_peers = self.region_peers.write().unwrap();
+                    if let Some(peer_stat) = region_peers.get_mut(&hb_task.region.get_id()) {
+                        peer_stat.last_region_report_term = hb_task.term;
+                        peer_stat.last_region_report_leader_id = hb_task.peer.get_id();
+                        peer_stat.last_region_report_leader_store_id = hb_task.peer.get_store_id();
+                        peer_stat.last_region_report_region_version =
+                            hb_task.region.get_region_epoch().get_version();
+                        peer_stat.last_region_report_region_conf_ver =
+                            hb_task.region.get_region_epoch().get_conf_ver();
+                    }
+                }
                 self.handle_heartbeat(
                     hb_task.term,
                     hb_task.region,
@@ -3041,6 +3146,44 @@ fn collect_report_read_peer_stats(
         }
     }
     stats
+}
+fn should_suppress_redundant_region_heartbeat(
+    suppress_interval_secs: u64,
+    now: UnixSecs,
+    peer_stat: &PeerStat,
+    hb_task: &HeartbeatTask,
+    approximate_size: u64,
+    approximate_keys: u64,
+    has_heartbeat_delta: bool,
+) -> bool {
+    if suppress_interval_secs == 0 || has_heartbeat_delta || peer_stat.last_region_report_ts.is_zero() {
+        return false;
+    }
+    let elapsed = now
+        .into_inner()
+        .saturating_sub(peer_stat.last_region_report_ts.into_inner());
+    if elapsed >= suppress_interval_secs {
+        return false;
+    }
+    if hb_task.term != peer_stat.last_region_report_term {
+        return false;
+    }
+    if hb_task.peer.get_id() != peer_stat.last_region_report_leader_id
+        || hb_task.peer.get_store_id() != peer_stat.last_region_report_leader_store_id
+    {
+        return false;
+    }
+    let epoch = hb_task.region.get_region_epoch();
+    if epoch.get_version() != peer_stat.last_region_report_region_version
+        || epoch.get_conf_ver() != peer_stat.last_region_report_region_conf_ver
+    {
+        return false;
+    }
+    if approximate_size != peer_stat.approximate_size || approximate_keys != peer_stat.approximate_keys
+    {
+        return false;
+    }
+    true
 }
 
 fn remove_peer_stat_from_maps(
@@ -3468,6 +3611,113 @@ mod tests {
         assert!(region_peers.is_empty());
         assert!(region_cpu_records_since_region_heartbeat.is_empty());
         assert!(region_cpu_records_since_store_heartbeat.is_empty());
+    }
+
+    #[test]
+    fn test_should_suppress_redundant_region_heartbeat() {
+        let mut region = metapb::Region::default();
+        region.set_id(1);
+        let mut epoch = metapb::RegionEpoch::default();
+        epoch.set_version(10);
+        epoch.set_conf_ver(20);
+        region.set_region_epoch(epoch);
+
+        let mut peer = metapb::Peer::default();
+        peer.set_id(11);
+        peer.set_store_id(12);
+
+        let now = UnixSecs::now();
+        let mut peer_stat = PeerStat::default();
+        peer_stat.last_region_report_ts = now;
+        peer_stat.last_region_report_term = 3;
+        peer_stat.last_region_report_leader_id = 11;
+        peer_stat.last_region_report_leader_store_id = 12;
+        peer_stat.last_region_report_region_version = 10;
+        peer_stat.last_region_report_region_conf_ver = 20;
+        peer_stat.approximate_size = 100;
+        peer_stat.approximate_keys = 200;
+
+        let hb_task = HeartbeatTask {
+            term: 3,
+            region,
+            peer,
+            down_peers: vec![],
+            pending_peers: vec![],
+            written_bytes: 0,
+            written_keys: 0,
+            approximate_size: Some(100),
+            approximate_keys: Some(200),
+            replication_status: None,
+            wait_data_peers: vec![],
+        };
+
+        assert!(should_suppress_redundant_region_heartbeat(
+            60,
+            now,
+            &peer_stat,
+            &hb_task,
+            100,
+            200,
+            false,
+        ));
+    }
+
+    #[test]
+    fn test_should_not_suppress_redundant_region_heartbeat_on_delta_or_metadata_change() {
+        let mut region = metapb::Region::default();
+        region.set_id(1);
+        let mut epoch = metapb::RegionEpoch::default();
+        epoch.set_version(10);
+        epoch.set_conf_ver(20);
+        region.set_region_epoch(epoch);
+
+        let mut peer = metapb::Peer::default();
+        peer.set_id(11);
+        peer.set_store_id(12);
+
+        let now = UnixSecs::now();
+        let mut peer_stat = PeerStat::default();
+        peer_stat.last_region_report_ts = now;
+        peer_stat.last_region_report_term = 3;
+        peer_stat.last_region_report_leader_id = 11;
+        peer_stat.last_region_report_leader_store_id = 12;
+        peer_stat.last_region_report_region_version = 10;
+        peer_stat.last_region_report_region_conf_ver = 20;
+        peer_stat.approximate_size = 100;
+        peer_stat.approximate_keys = 200;
+
+        let hb_task = HeartbeatTask {
+            term: 4,
+            region,
+            peer,
+            down_peers: vec![],
+            pending_peers: vec![],
+            written_bytes: 0,
+            written_keys: 0,
+            approximate_size: Some(100),
+            approximate_keys: Some(200),
+            replication_status: None,
+            wait_data_peers: vec![],
+        };
+
+        assert!(!should_suppress_redundant_region_heartbeat(
+            60,
+            now,
+            &peer_stat,
+            &hb_task,
+            100,
+            200,
+            false,
+        ));
+        assert!(!should_suppress_redundant_region_heartbeat(
+            60,
+            now,
+            &peer_stat,
+            &hb_task,
+            100,
+            200,
+            true,
+        ));
     }
 
     use engine_test::kv::KvTestEngine;
