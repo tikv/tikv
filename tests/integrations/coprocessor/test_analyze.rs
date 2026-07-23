@@ -428,6 +428,58 @@ fn test_batched_full_sampling_responses() {
         resp.take_row_collector()
     };
 
+    // Negotiation alone does not activate deferred finalization. With no
+    // child tasks the ordinary full-sampling path must still serialize the
+    // top result inside its handler.
+    let mut no_child_req = build_req(true);
+    no_child_req.clear_tasks();
+    let resp = handle_request(&endpoint, no_child_req);
+    assert!(!resp.has_region_error(), "{:?}", resp);
+    assert!(resp.get_other_error().is_empty(), "{:?}", resp);
+    assert_eq!(parse_collector(resp.get_data()).get_count(), 2);
+    assert!(resp.get_batch_responses().is_empty());
+
+    // Establish the exact accounting baseline from the ordinary per-task
+    // response shape. The merged shape below must expose the same total once
+    // in its outer execution details.
+    let unmerged_resp = handle_request(&endpoint, build_req(false));
+    assert!(!unmerged_resp.has_region_error(), "{:?}", unmerged_resp);
+    assert!(
+        unmerged_resp.get_other_error().is_empty(),
+        "{:?}",
+        unmerged_resp
+    );
+    let all_unmerged_details = std::iter::once(unmerged_resp.get_exec_details_v2()).chain(
+        unmerged_resp
+            .get_batch_responses()
+            .iter()
+            .map(|child| child.get_exec_details_v2()),
+    );
+    let expected_processed_versions = all_unmerged_details
+        .clone()
+        .map(|details| details.get_scan_detail_v2().get_processed_versions())
+        .sum::<u64>();
+    let expected_processed_versions_size = all_unmerged_details
+        .clone()
+        .map(|details| {
+            details
+                .get_scan_detail_v2()
+                .get_processed_versions_size()
+        })
+        .sum::<u64>();
+    let expected_total_versions = all_unmerged_details
+        .clone()
+        .map(|details| details.get_scan_detail_v2().get_total_versions())
+        .sum::<u64>();
+    let expected_table_scan_iterations = all_unmerged_details
+        .map(|details| {
+            details
+                .get_ru_v2()
+                .get_executor_inputs()
+                .get_tikv_coprocessor_executor_work_total_batch_table_scan()
+        })
+        .sum::<u64>();
+
     // When the client allows merging, the response carries the merged result
     // of all three regions and every batched task is acknowledged without
     // data of its own.
@@ -437,6 +489,49 @@ fn test_batched_full_sampling_responses() {
     let collector = parse_collector(resp.get_data());
     assert_eq!(collector.get_count(), 6);
     assert_eq!(collector.get_samples().len(), 6);
+    // The outer response is the single accounting owner for the top task and
+    // every successfully merged child. Per-task ACK details remain available
+    // for diagnostics, but clients must not add them again.
+    assert_eq!(
+        resp.get_exec_details_v2()
+            .get_scan_detail_v2()
+            .get_processed_versions(),
+        expected_processed_versions
+    );
+    assert_eq!(
+        resp.get_exec_details_v2()
+            .get_scan_detail_v2()
+            .get_processed_versions_size(),
+        expected_processed_versions_size
+    );
+    assert_eq!(
+        resp.get_exec_details_v2()
+            .get_scan_detail_v2()
+            .get_total_versions(),
+        expected_total_versions
+    );
+    assert_eq!(
+        resp.get_exec_details_v2()
+            .get_ru_v2()
+            .get_executor_inputs()
+            .get_tikv_coprocessor_executor_work_total_batch_table_scan(),
+        expected_table_scan_iterations
+    );
+    assert!(
+        resp.get_exec_details_v2()
+            .get_time_detail_v2()
+            .get_process_wall_time_ns()
+            >= resp
+                .get_batch_responses()
+                .iter()
+                .map(|child| {
+                    child
+                        .get_exec_details_v2()
+                        .get_time_detail_v2()
+                        .get_process_wall_time_ns()
+                })
+                .sum::<u64>()
+    );
     let mut batch_resps = resp.take_batch_responses().into_vec();
     batch_resps.sort_unstable_by_key(|resp| resp.get_task_id());
     assert_eq!(batch_resps.len(), 2);
@@ -463,6 +558,14 @@ fn test_batched_full_sampling_responses() {
     let collector = parse_collector(resp.get_data());
     assert_eq!(collector.get_count(), 4);
     assert_eq!(collector.get_samples().len(), 4);
+    // Only the successfully merged child belongs to the outer aggregate. The
+    // failed child remains a separate response for retry and accounting.
+    assert_eq!(
+        resp.get_exec_details_v2()
+            .get_scan_detail_v2()
+            .get_processed_versions(),
+        4
+    );
     let mut batch_resps = resp.take_batch_responses().into_vec();
     batch_resps.sort_unstable_by_key(|resp| resp.get_task_id());
     assert_eq!(batch_resps.len(), 2);
@@ -475,10 +578,16 @@ fn test_batched_full_sampling_responses() {
 
     // Without the client's consent every task keeps its own serialized
     // result.
-    let mut resp = handle_request(&endpoint, build_req(false));
+    let mut resp = unmerged_resp;
     assert!(!resp.has_region_error(), "{:?}", resp);
     assert!(resp.get_other_error().is_empty(), "{:?}", resp);
     assert_eq!(parse_collector(resp.get_data()).get_count(), 2);
+    assert_eq!(
+        resp.get_exec_details_v2()
+            .get_scan_detail_v2()
+            .get_processed_versions(),
+        2
+    );
     let mut batch_resps = resp.take_batch_responses().into_vec();
     batch_resps.sort_unstable_by_key(|resp| resp.get_task_id());
     assert_eq!(batch_resps.len(), 2);
