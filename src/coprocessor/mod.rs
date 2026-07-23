@@ -75,15 +75,39 @@ pub trait MergeableResult: Any + Send {
     fn into_data(self: Box<Self>) -> Result<Vec<u8>>;
 }
 
-/// The outcome of handling a unary request.
+/// The outcome of handling a unary request: either a response that is ready
+/// to be returned, or a partial response whose data is kept unserialized
+/// until the endpoint serializes it at the end of the request pipeline (see
+/// `endpoint::serialize_handler_outcome`).
 pub enum HandlerOutcome {
     Ready(coppb::Response),
+    Mergeable {
+        /// The response carrying everything but the data (errors, cache
+        /// hints, ...); its data is produced from `result`.
+        partial_response: coppb::Response,
+        result: Box<dyn MergeableResult>,
+    },
 }
 
 // `MemoryTraceGuard<T>` requires `T: Default`.
 impl Default for HandlerOutcome {
     fn default() -> Self {
         Self::Ready(coppb::Response::default())
+    }
+}
+
+impl HandlerOutcome {
+    /// The response as produced so far: the ready response, or the partial
+    /// response of a `Mergeable` outcome, whose data stays empty until the
+    /// result is serialized.
+    pub fn response(&self) -> &coppb::Response {
+        match self {
+            Self::Ready(response)
+            | Self::Mergeable {
+                partial_response: response,
+                ..
+            } => response,
+        }
     }
 }
 
