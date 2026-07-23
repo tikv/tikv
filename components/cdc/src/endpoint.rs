@@ -1271,15 +1271,18 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                     Some(delegate) if delegate.handle.id == observe_id => delegate,
                     _ => return,
                 };
-                let downstream = match delegate.downstream(downstream_id) {
-                    Some(d) => d,
-                    None => return,
-                };
                 // The downstream may still exist but no longer be uninitialized before this
                 // queued task runs.
                 if downstream_state.load() != DownstreamState::Uninitialized {
                     return;
                 }
+                if delegate.init_lock_tracker() {
+                    build_resolver.store(true, Ordering::Release);
+                }
+                let downstream = match delegate.downstream(downstream_id) {
+                    Some(d) => d,
+                    None => return,
+                };
                 if let Err(e) = downstream.sink_barrier(incremental_scan_barrier) {
                     warn!("cdc failed to schedule barrier for delta before delta scan";
                             "error" => ?e,
@@ -1298,9 +1301,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                             "region_id" => region_id,
                             "conn_id" => ?conn_id);
                     return;
-                }
-                if delegate.init_lock_tracker() {
-                    build_resolver.store(true, Ordering::Release);
                 }
                 info!("cdc downstream starts to initialize";
                         "observe_id" => ?observe_id,
@@ -1414,8 +1414,10 @@ mod tests {
     use kvproto::{
         cdcpb::{ChangeDataRequestKvApi, Header},
         errorpb::Error as ErrorHeader,
+        raft_cmdpb::{CmdType, PutRequest, RaftCmdRequest, Request},
     };
     use raftstore::{
+        coprocessor::{Cmd, ObserveLevel},
         errors::{DiscardReason, Error as RaftStoreError},
         router::{CdcRaftRouter, RaftStoreRouter},
         store::{PeerMsg, ReadDelegate, fsm::StoreMeta, msg::CasualMessage},
@@ -1430,6 +1432,7 @@ mod tests {
         config::{ReadableDuration, ReadableSize},
         worker::{ReceiverWrapper, dummy_scheduler},
     };
+    use txn_types::{Lock, LockType};
 
     use super::*;
     use crate::{
@@ -3318,7 +3321,48 @@ mod tests {
         });
 
         assert_eq!(downstream_state.load(), DownstreamState::Uninitialized);
-        assert!(!build_resolver.load(Ordering::Acquire));
+        let key = Key::from_raw(b"key").into_encoded();
+        let mut put = PutRequest::default();
+        put.key = key.clone();
+        put.cf = "lock".to_owned();
+        put.value = Lock::new(
+            LockType::Put,
+            key,
+            1.into(),
+            10,
+            None,
+            TimeStamp::zero(),
+            0,
+            TimeStamp::zero(),
+            false,
+        )
+        .to_bytes();
+        let mut request = Request::default();
+        request.set_cmd_type(CmdType::Put);
+        request.set_put(put);
+        let mut raft_request = RaftCmdRequest::default();
+        raft_request.mut_requests().push(request);
+        let batch = CmdBatch {
+            level: ObserveLevel::All,
+            cdc_id: observe_id,
+            rts_id: ObserveId::default(),
+            pitr_id: ObserveId::default(),
+            region_id: 1,
+            cmds: vec![Cmd::new(1, 1, raft_request, Default::default())],
+        };
+        suite.sink_memory_quota.alloc_force(batch.size());
+        suite.run(Task::MultiBatch {
+            multi: vec![batch],
+            old_value_cb: Box::new(|_, _, _, _| Ok(None)),
+        });
+        assert!(build_resolver.load(Ordering::Acquire));
+        assert!(
+            !suite
+                .capture_regions
+                .get_mut(&1)
+                .unwrap()
+                .init_lock_tracker()
+        );
         assert!(matches!(
             tikv_util::future::block_on_timeout(barrier_fut, Duration::from_millis(100)),
             Ok(Err(_))
@@ -3419,6 +3463,7 @@ mod tests {
         assert_eq!(downstream_state_a.load(), DownstreamState::Stopped);
         assert!(!build_resolver.load(Ordering::Acquire));
         let delegate = &suite.capture_regions[&1];
+        assert!(delegate.downstream(downstream_id_a).is_none());
         assert_eq!(delegate.downstreams().len(), 1);
         assert_eq!(delegate.downstreams()[0].id, downstream_id_b);
         assert!(matches!(
