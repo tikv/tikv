@@ -82,16 +82,17 @@ It is a read-heavy hot path and directly impacts query latency.
   non-mergeable children keep normal responses so the client can retry or
   consume them independently.
 - The top response is the single accounting owner for merged work: its
-  execution details combine the top scan with every acknowledged child.
-  Acknowledgements retain their per-child details for diagnostics, but a
-  supporting client must not charge those details again.
+  execution details combine the top scan, finalization phase, and every
+  acknowledged child. Acknowledgements retain their per-child details for
+  diagnostics, but a supporting client must not charge those details again.
 - Merging and protobuf encoding run in a second read-pool task under the
   preserved top tracker, resource-metering tag, deadline, resource control,
   and an eagerly acquired coprocessor semaphore permit. The finalizer never
   falls back to inline execution. Pool rejection, permit/deadline failure, or
   encode failure returns one top-level error with no child acknowledgements,
-  so the client retries the whole batch. Response bytes and acknowledgements
-  are committed only after encoding finishes and the deadline is rechecked.
+  so the client retries or fails the whole batch without partial consumption.
+  Response bytes and acknowledgements are committed only after encoding
+  finishes and the deadline is rechecked.
 - The canonical contracts live on `FullSamplingAnalyzeHandler` and
   `AnalyzeSamplingResult` in `src/coprocessor/statistics/`, and on
   `collect_batch_task_outputs`, `merge_and_encode_analyze_batch`,
@@ -139,7 +140,7 @@ It is a read-heavy hot path and directly impacts query latency.
 - Streaming and unary response handling must preserve stats and partial-progress
   semantics.
 - Merged batched responses must keep the wire contract described in
-  "Handler outcomes and batched-task merging".
+  "Typed full-sampling Analyze batching".
 
 ## Observability And Operational Signals
 
