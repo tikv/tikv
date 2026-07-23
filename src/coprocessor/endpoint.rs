@@ -2390,6 +2390,34 @@ mod tests {
         assert_eq!(data, vec![3, 2]);
     }
 
+    #[test]
+    fn test_full_sampling_analyze_merge_gate_is_exact() {
+        let mut req = coppb::Request::default();
+        req.set_allow_batch_task_data_merge(true);
+
+        // The additive capability bit alone must not alter DAG or malformed
+        // Analyze requests.
+        req.set_tp(REQ_TYPE_DAG);
+        assert!(!allows_full_sampling_analyze_merge(&req));
+        req.set_tp(REQ_TYPE_ANALYZE);
+        req.set_data(vec![0xff]);
+        assert!(!allows_full_sampling_analyze_merge(&req));
+
+        // Other Analyze subtypes keep their ordinary serialized path.
+        let mut analyze = AnalyzeReq::default();
+        analyze.set_tp(AnalyzeType::TypeColumn);
+        req.set_data(analyze.write_to_bytes().unwrap());
+        assert!(!allows_full_sampling_analyze_merge(&req));
+
+        // Only full-sampling Analyze plus explicit client consent enables the
+        // typed two-phase path.
+        analyze.set_tp(AnalyzeType::TypeFullSampling);
+        req.set_data(analyze.write_to_bytes().unwrap());
+        assert!(allows_full_sampling_analyze_merge(&req));
+        req.set_allow_batch_task_data_merge(false);
+        assert!(!allows_full_sampling_analyze_merge(&req));
+    }
+
     /// A streaming `RequestHandler` that always produces a fixture.
     struct StreamFixture {
         result_len: usize,
