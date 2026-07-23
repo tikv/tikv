@@ -11,5 +11,5 @@ pub use self::{
     expr::{RpnExpression, RpnExpressionNode},
     expr_builder::RpnExpressionBuilder,
     expr_eval::{BATCH_MAX_SIZE, RpnStackNode},
-    function::{RpnFnCallExtra, RpnFnMeta},
+    function::{RpnFnCallExtra, RpnFnMeta, ShortCircuitFnMeta},
 };
