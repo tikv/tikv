@@ -4,7 +4,7 @@ pub mod hooking;
 #[cfg(test)]
 mod test;
 
-use std::{borrow::Cow, cell::Cell, path::Path, pin::Pin, str::FromStr, sync::Arc};
+use std::{borrow::Cow, cell::Cell, future::Future, path::Path, pin::Pin, str::FromStr, sync::Arc};
 
 use chrono::Utc;
 use engine_rocks::RocksEngine;
@@ -23,7 +23,7 @@ use tokio::{
 };
 use tokio_stream::Stream;
 use tracing::trace_span;
-use tracing_active_tree::{frame, root};
+use tracing_active_tree::root;
 
 use self::hooking::AbortedCtx;
 use super::{
@@ -226,6 +226,8 @@ impl slog::KV for ExecutionConfig {
 type FinishedCompaction = Result<(SubcompactionResult, CId)>;
 type CompactJoin = tokio::task::JoinHandle<FinishedCompaction>;
 
+const USER_CANCELED_BY_CTRL_C: &str = "User canceled by Ctrl-C";
+
 trait TakeLoadMetaStatistic {
     fn take_load_meta_statistic(&mut self) -> LoadMetaStatistic;
 }
@@ -338,6 +340,14 @@ struct ExecuteCtx<'a, H: ExecHooks> {
 }
 
 impl Execution {
+    fn user_canceled_error() -> crate::Error {
+        ErrorKind::Other(USER_CANCELED_BY_CTRL_C.to_owned()).into()
+    }
+
+    fn is_user_canceled(err: &crate::Error) -> bool {
+        matches!(&err.kind, ErrorKind::Other(msg) if msg == USER_CANCELED_BY_CTRL_C)
+    }
+
     async fn abort_and_drain<T>(pending: &mut Vec<JoinHandle<T>>) {
         for join in pending.iter() {
             join.abort();
@@ -354,6 +364,39 @@ impl Execution {
                 Err(ErrorKind::Other(format!("subcompaction task join error: {join_err}")).into())
             }
         }
+    }
+
+    async fn finish_compaction_join(
+        &self,
+        join_res: std::result::Result<FinishedCompaction, JoinError>,
+        storage: &dyn ExternalStorage,
+        hooks: &mut impl ExecHooks,
+    ) -> Result<()> {
+        let (cres, cid) = Self::unpack_compaction_join(join_res)?;
+        self.on_compaction_finish(cid, &cres, storage, hooks)
+            .await?;
+        Ok(())
+    }
+
+    async fn drain_compactions_after_cancel(
+        &self,
+        pending: &mut Vec<CompactJoin>,
+        storage: &dyn ExternalStorage,
+        hooks: &mut impl ExecHooks,
+    ) -> Result<()> {
+        let mut first_err = None;
+        while !pending.is_empty() {
+            let join_res = util::select_vec(pending).await;
+            if let Err(err) = self.finish_compaction_join(join_res, storage, hooks).await {
+                if first_err.is_none() {
+                    first_err = Some(err);
+                }
+            }
+        }
+        if let Some(err) = first_err {
+            return Err(err);
+        }
+        Ok(())
     }
 
     pub fn gen_name(&self) -> String {
@@ -376,11 +419,21 @@ impl Execution {
         pending: &mut Vec<CompactJoin>,
         storage: &dyn ExternalStorage,
         hooks: &mut impl ExecHooks,
+        mut cancel: Pin<&mut impl Future<Output = ()>>,
     ) -> Result<()> {
-        while let Some(join) = pending.pop() {
-            let (cres, cid) = Self::unpack_compaction_join(frame!("final_wait"; join).await)?;
-            self.on_compaction_finish(cid, &cres, storage, hooks)
-                .await?;
+        while !pending.is_empty() {
+            let res = self
+                .wait_one_compaction(pending, storage, hooks, cancel.as_mut())
+                .await;
+            match res {
+                Ok(()) => {}
+                Err(err) if Self::is_user_canceled(&err) => {
+                    self.drain_compactions_after_cancel(pending, storage, hooks)
+                        .await?;
+                    return Err(err);
+                }
+                Err(err) => return Err(err),
+            }
         }
         Ok(())
     }
@@ -423,10 +476,13 @@ impl Execution {
         pending: &mut Vec<CompactJoin>,
         storage: &dyn ExternalStorage,
         hooks: &mut impl ExecHooks,
+        mut cancel: Pin<&mut impl Future<Output = ()>>,
     ) -> Result<()> {
-        let join = util::select_vec(pending);
-        let (cres, cid) = Self::unpack_compaction_join(frame!("wait_for_compaction"; join).await)?;
-        self.on_compaction_finish(cid, &cres, storage, hooks)
+        let join_res = tokio::select! {
+            join_res = util::select_vec(pending) => join_res,
+            _ = cancel.as_mut() => return Err(Self::user_canceled_error()),
+        };
+        self.finish_compaction_join(join_res, storage, hooks)
             .await?;
         Ok(())
     }
@@ -439,11 +495,12 @@ impl Execution {
         c: Subcompaction,
         cid: CId,
         physical_file_cache: Option<Arc<PhysicalFileCache>>,
+        cancel: Pin<&mut impl Future<Output = ()>>,
     ) -> Result<()> {
         let join = self.spawn_subcompaction(storage, c, cid, physical_file_cache);
         pending.push(join);
         if pending.len() >= self.max_concurrent_subcompaction as _ {
-            self.wait_one_compaction(pending, storage.as_ref(), hooks)
+            self.wait_one_compaction(pending, storage.as_ref(), hooks, cancel)
                 .await?;
         }
         Ok(())
@@ -485,12 +542,20 @@ impl Execution {
         storage: &Arc<dyn ExternalStorage>,
         hooks: &mut impl ExecHooks,
         pending: &mut Vec<CompactJoin>,
+        mut cancel: Pin<&mut impl Future<Output = ()>>,
     ) -> Result<()>
     where
         S: Stream<Item = Result<Subcompaction>> + TakeStreamingSubcompactionStatistic + Unpin,
     {
         let mut id = 0;
-        while let Some(c) = compact_stream.next().await {
+        loop {
+            let c = tokio::select! {
+                c = compact_stream.next() => c,
+                _ = cancel.as_mut() => return Err(Self::user_canceled_error()),
+            };
+            let Some(c) = c else {
+                break;
+            };
             let cstat = compact_stream.take_collect_statistic();
             let lstat = compact_stream.take_load_meta_statistic();
             let c = c?;
@@ -512,6 +577,7 @@ impl Execution {
                     c,
                     cid,
                     physical_file_cache.clone(),
+                    cancel.as_mut(),
                 )
                 .await?;
             }
@@ -519,7 +585,11 @@ impl Execution {
         Ok(())
     }
 
-    async fn run_prepared(&mut self, cx: &mut ExecuteCtx<'_, impl ExecHooks>) -> Result<()> {
+    async fn run_prepared(
+        &mut self,
+        cx: &mut ExecuteCtx<'_, impl ExecHooks>,
+        mut cancel: Pin<&mut impl Future<Output = ()>>,
+    ) -> Result<()> {
         let mut ext = LoadFromExt::default();
         ext.prefetch_running_count = self.cfg.prefetch_running_count as usize;
         ext.prefetch_buffer_count = self.cfg.prefetch_buffer_count as usize;
@@ -529,15 +599,17 @@ impl Execution {
             ref mut hooks,
             ..
         } = cx;
-        let metadata_scan = StreamMetaStorage::count_objects(
-            storage.as_ref(),
-            CountObjectsExt {
-                calculate_shift_ts: self.cfg.calculate_shift_ts,
-                from_ts: self.cfg.from_ts,
-                until_ts: self.cfg.until_ts,
-            },
-        )
-        .await?;
+        let metadata_scan = tokio::select! {
+            res = StreamMetaStorage::count_objects(
+                storage.as_ref(),
+                CountObjectsExt {
+                    calculate_shift_ts: self.cfg.calculate_shift_ts,
+                    from_ts: self.cfg.from_ts,
+                    until_ts: self.cfg.until_ts,
+                },
+            ) => res?,
+            _ = cancel.as_mut() => return Err(Self::user_canceled_error()),
+        };
         self.cfg.shift_ts = metadata_scan.shift_ts;
 
         let cx = BeforeStartCtx {
@@ -546,7 +618,10 @@ impl Execution {
             this: self,
             meta_count: metadata_scan.count,
         };
-        hooks.before_execution_started(cx).await?;
+        tokio::select! {
+            res = hooks.before_execution_started(cx) => res?,
+            _ = cancel.as_mut() => return Err(Self::user_canceled_error()),
+        };
 
         // Avoid setting an explicit parent here: this span may be dropped while
         // the parent span is not currently entered (e.g. early-abort paths),
@@ -555,7 +630,10 @@ impl Execution {
         ext.shard = self.cfg.shard;
 
         let storage = Arc::clone(storage);
-        let meta = StreamMetaStorage::load_from_ext(&storage, ext).await?;
+        let meta = tokio::select! {
+            res = StreamMetaStorage::load_from_ext(&storage, ext) => res?,
+            _ = cancel.as_mut() => return Err(Self::user_canceled_error()),
+        };
         let collect_cfg = CollectSubcompactionConfig {
             compact_shift_from_ts: self.cfg.shift_ts,
             compact_from_ts: self.cfg.from_ts,
@@ -586,6 +664,7 @@ impl Execution {
                 &storage,
                 *hooks,
                 &mut pending,
+                cancel.as_mut(),
             )
             .await
         } else {
@@ -600,17 +679,28 @@ impl Execution {
                 &storage,
                 *hooks,
                 &mut pending,
+                cancel.as_mut(),
             )
             .await
         };
 
         if let Err(err) = schedule_res {
-            Self::abort_and_drain(&mut pending).await;
+            if Self::is_user_canceled(&err) {
+                self.drain_compactions_after_cancel(&mut pending, &storage, *hooks)
+                    .await?;
+            } else {
+                Self::abort_and_drain(&mut pending).await;
+            }
             return Err(err);
         }
 
-        if let Err(err) = self.drain_compactions(&mut pending, &storage, *hooks).await {
-            Self::abort_and_drain(&mut pending).await;
+        if let Err(err) = self
+            .drain_compactions(&mut pending, &storage, *hooks, cancel.as_mut())
+            .await
+        {
+            if !Self::is_user_canceled(&err) {
+                Self::abort_and_drain(&mut pending).await;
+            }
             return Err(err);
         }
 
@@ -637,9 +727,21 @@ impl Execution {
     }
 
     pub async fn run_with_storage_async(
+        self,
+        storage: Arc<dyn ExternalStorage>,
+        hooks: impl ExecHooks,
+    ) -> Result<()> {
+        self.run_with_storage_async_with_cancel(storage, hooks, async {
+            let _ = tokio::signal::ctrl_c().await;
+        })
+        .await
+    }
+
+    async fn run_with_storage_async_with_cancel(
         mut self,
         storage: Arc<dyn ExternalStorage>,
         mut hooks: impl ExecHooks,
+        cancel: impl Future<Output = ()>,
     ) -> Result<()> {
         let mut cx = ExecuteCtx {
             storage: &storage,
@@ -647,11 +749,8 @@ impl Execution {
         };
 
         let guarded = async {
-            let all_works = self.run_prepared(&mut cx);
-            let res = tokio::select! {
-                res = all_works => res,
-                _ = tokio::signal::ctrl_c() => Err(ErrorKind::Other("User canceled by Ctrl-C".to_owned()).into())
-            };
+            tokio::pin!(cancel);
+            let res = self.run_prepared(&mut cx, cancel.as_mut()).await;
 
             if let Err(ref err) = res {
                 cx.hooks
