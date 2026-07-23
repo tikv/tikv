@@ -1,7 +1,9 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, Mutex};
-
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use futures::{SinkExt, StreamExt, executor::block_on};
 use grpcio::{RpcStatus, RpcStatusCode};
 use kvproto::meta_storagepb as mpb;
@@ -12,6 +14,10 @@ use crate::PdMocker;
 #[derive(Default)]
 pub struct MetaStorage {
     store: Arc<Mutex<Etcd>>,
+    /// When true, the next Watch call will immediately fail with the
+    /// same gRPC error that etcd sends on compaction in production.
+    pub inject_compaction_error: Arc<AtomicBool>,
+
 }
 
 fn convert_kv(from: KeyValue) -> mpb::KeyValue {
@@ -90,6 +96,18 @@ impl PdMocker for MetaStorage {
                 sink.fail(RpcStatus::with_message(
                     RpcStatusCode::INVALID_ARGUMENT,
                     err,
+                ))
+                .await
+                .unwrap()
+            });
+            return true;
+        }
+        // Simulate etcd sending compaction as a gRPC transport error.
+        if self.inject_compaction_error.load(Ordering::Acquire) {
+            ctx.spawn(async move {
+                sink.fail(RpcStatus::with_message(
+                    RpcStatusCode::UNKNOWN,
+                    "etcdserver: mvcc: required revision has been compacted".to_owned(),
                 ))
                 .await
                 .unwrap()
