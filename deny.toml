@@ -105,6 +105,17 @@ ignore = [
     # time at 0.3.20. Upgrading time to >=0.3.47 currently conflicts with
     # raft-engine's serde =1.0.194 requirement in this branch.
     "RUSTSEC-2026-0009",
+    # Ignore the following advisories because this branch is for a hotfix.
+    # Upgrading these dependencies would introduce unrelated changes and
+    # increase regression risk.
+    "RUSTSEC-2022-0104",
+    "RUSTSEC-2026-0097",
+    "RUSTSEC-2026-0174",
+    "RUSTSEC-2026-0186",
+    "RUSTSEC-2026-0190",
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+    "RUSTSEC-2026-0204",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,
