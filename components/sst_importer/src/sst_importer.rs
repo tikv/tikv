@@ -38,7 +38,7 @@ use tikv_util::{
     Either, HandyRwLock,
     codec::{
         bytes::{decode_bytes_in_place, encode_bytes},
-        number::NumberEncoder,
+        number::{NumberEncoder, U64_SIZE},
         stream_event::{EventEncoder, EventIterator, Iterator as EIterator},
     },
     future::RescheduleChecker,
@@ -931,7 +931,7 @@ impl<E: KvEngine> SstImporter<E> {
                     crypter.clone(),
                     &speed_limiter,
                     ext.cache_key.unwrap_or(""),
-                    false,
+                    true,
                 )
                 .await?;
             let sst_reader = downloaded.open_reader(self.key_manager.clone())?;
@@ -2866,6 +2866,14 @@ impl<E: KvEngine> SstImporter<E> {
             let mut write_data_key = Vec::new();
             let mut default_data_key = Vec::new();
             let mut key_scratch = KeyspaceKeyRewriteScratch::new(old_prefix, new_prefix);
+            let compact_after_count =
+                INPORTER_DOWNLOAD_COMPACT_KEYS_COUNT.with_label_values(&["after"]);
+            let compact_before_count =
+                INPORTER_DOWNLOAD_COMPACT_KEYS_COUNT.with_label_values(&["before"]);
+            let ignore_after_ts = (rewrite_rule.ignore_after_timestamp != 0)
+                .then(|| TimeStamp::new(rewrite_rule.ignore_after_timestamp));
+            let ignore_before_ts = (rewrite_rule.ignore_before_timestamp != 0)
+                .then(|| TimeStamp::new(rewrite_rule.ignore_before_timestamp));
 
             'outer: while write_iter.valid()? {
                 let origin = keys::origin_key(write_iter.key());
@@ -2878,6 +2886,7 @@ impl<E: KvEngine> SstImporter<E> {
                 user_key_buf.clear();
                 user_key_buf.extend_from_slice(user_key);
 
+                let mut is_first_version_for_key = true;
                 while write_iter.valid()? {
                     count += 1;
                     if count >= 1024 {
@@ -2886,29 +2895,26 @@ impl<E: KvEngine> SstImporter<E> {
                     }
 
                     let write_origin = keys::origin_key(write_iter.key());
-                    if is_after_end_bound(write_origin, &range_end) {
-                        break;
+                    if is_first_version_for_key {
+                        is_first_version_for_key = false;
+                    } else {
+                        let cur_user_key = Key::truncate_ts_for(write_origin)?;
+                        if cur_user_key != user_key_buf.as_slice() {
+                            break;
+                        }
+                        if is_after_end_bound(write_origin, &range_end) {
+                            break;
+                        }
                     }
-                    let cur_user_key = Key::truncate_ts_for(write_origin)?;
-                    if cur_user_key != user_key_buf.as_slice() {
-                        break;
-                    }
+
                     let commit_ts = Key::decode_ts_from(write_origin)?;
-                    if rewrite_rule.ignore_after_timestamp != 0
-                        && commit_ts > TimeStamp::new(rewrite_rule.ignore_after_timestamp)
-                    {
-                        INPORTER_DOWNLOAD_COMPACT_KEYS_COUNT
-                            .with_label_values(&["after"])
-                            .inc();
+                    if ignore_after_ts.is_some_and(|ts| commit_ts > ts) {
+                        compact_after_count.inc();
                         write_iter.next()?;
                         continue;
                     }
-                    if rewrite_rule.ignore_before_timestamp != 0
-                        && commit_ts < TimeStamp::new(rewrite_rule.ignore_before_timestamp)
-                    {
-                        INPORTER_DOWNLOAD_COMPACT_KEYS_COUNT
-                            .with_label_values(&["before"])
-                            .inc();
+                    if ignore_before_ts.is_some_and(|ts| commit_ts < ts) {
+                        compact_before_count.inc();
                         write_iter.next()?;
                         continue;
                     }
@@ -2945,11 +2951,16 @@ impl<E: KvEngine> SstImporter<E> {
                                         write_ref.start_ts
                                     )));
                                 }
-                                let default_origin = keys::origin_key(default_iter.key());
-                                key_scratch.build_download_data_key(
-                                    default_origin,
-                                    &mut default_data_key,
-                                )?;
+                                // The exact default key has the same user key as the write key,
+                                // so reuse the already-rewritten write key prefix and only swap
+                                // the MVCC timestamp to the write's start_ts.
+                                default_data_key.clear();
+                                default_data_key.extend_from_slice(
+                                    &write_data_key[..write_data_key.len() - U64_SIZE],
+                                );
+                                default_data_key
+                                    .encode_u64_desc(write_ref.start_ts.into_inner())
+                                    .unwrap();
                                 default_writer.put(&default_data_key, default_iter.value())?;
                                 wrote_default = true;
                             }
@@ -2959,13 +2970,14 @@ impl<E: KvEngine> SstImporter<E> {
                                 first_origin = Some(keys::origin_key(&write_data_key).to_vec());
                             }
 
+                            write_iter.next()?;
                             while write_iter.valid()? {
                                 let write_origin = keys::origin_key(write_iter.key());
-                                if is_after_end_bound(write_origin, &range_end) {
-                                    break;
-                                }
                                 let cur_user_key = Key::truncate_ts_for(write_origin)?;
                                 if cur_user_key != user_key_buf.as_slice() {
+                                    break;
+                                }
+                                if is_after_end_bound(write_origin, &range_end) {
                                     break;
                                 }
                                 write_iter.next()?;
