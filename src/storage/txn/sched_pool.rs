@@ -118,6 +118,7 @@ impl PriorityQueue {
         priority_level: CommandPri,
         f: impl futures::Future<Output = ()> + Send + 'static,
         write_bytes: u64,
+        measure_only: bool,
     ) -> Result<(), Full> {
         let fixed_level = match priority_level {
             CommandPri::High => Some(0),
@@ -138,7 +139,7 @@ impl PriorityQueue {
         let is_background = resource_limiter
             .as_ref()
             .is_some_and(|limiter| limiter.is_background());
-        let measure_only = !is_background;
+        let measure_only = measure_only || !is_background;
         let skip_compaction_pressure = !is_background;
         self.worker_pool.spawn_with_extras(
             with_resource_limiter(
@@ -241,6 +242,25 @@ impl SchedPool {
         f: impl futures::Future<Output = ()> + Send + 'static,
         write_bytes: u64,
     ) -> Result<(), Full> {
+        self.spawn_opt(
+            request_source,
+            metadata,
+            priority_level,
+            f,
+            write_bytes,
+            false,
+        )
+    }
+
+    pub fn spawn_opt(
+        &self,
+        request_source: &str,
+        metadata: TaskMetadata<'_>,
+        priority_level: CommandPri,
+        f: impl futures::Future<Output = ()> + Send + 'static,
+        write_bytes: u64,
+        measure_only: bool,
+    ) -> Result<(), Full> {
         match self.queue_type {
             QueueType::Vanilla => self.vanilla.spawn(priority_level, f),
             QueueType::Dynamic => {
@@ -252,6 +272,7 @@ impl SchedPool {
                         priority_level,
                         f,
                         write_bytes,
+                        measure_only,
                     )
                 } else {
                     fail_point!("single_queue_pool_task");
@@ -261,6 +282,7 @@ impl SchedPool {
                         priority_level,
                         f,
                         write_bytes,
+                        measure_only,
                     )
                 }
             }
@@ -274,6 +296,7 @@ impl SchedPool {
         priority_level: CommandPri,
         f: impl futures::Future<Output = ()> + Send + 'static,
         write_bytes: u64,
+        measure_only: bool,
     ) -> Result<(), Full> {
         let resource_mgr = &self.priority.as_ref().unwrap().resource_mgr;
         let group_name = std::str::from_utf8(metadata.group_name()).unwrap_or_default();
@@ -286,7 +309,7 @@ impl SchedPool {
                     f,
                     Some(resource_limiter),
                     false, // enforce compaction-pressure limits for background writes
-                    false, // throttle long-running background tasks inside the pool
+                    measure_only,
                     None,
                     write_bytes,
                 ),
