@@ -383,40 +383,44 @@ fn test_batched_full_sampling_responses() {
     let second_split_key = Key::from_raw(&product.get_record_range(8, 8).start);
     cluster.must_split(&second_region, second_split_key.as_encoded());
 
-    let mut col_req = AnalyzeColumnsReq::default();
-    col_req.set_columns_info(product.columns_info().into());
-    // A sample rate of one keeps every row, so each response is
-    // deterministic.
-    col_req.set_sample_rate(1.0);
-    col_req.set_sketch_size(1000);
-    let mut analyze_req = AnalyzeReq::default();
-    analyze_req.set_tp(AnalyzeType::TypeFullSampling);
-    analyze_req.set_col_req(col_req);
+    let mut build_req = |allow_merge: bool| -> Request {
+        let mut col_req = AnalyzeColumnsReq::default();
+        col_req.set_columns_info(product.columns_info().into());
+        // A sample rate of one keeps every row, so the merged sample set is
+        // deterministic.
+        col_req.set_sample_rate(1.0);
+        col_req.set_sketch_size(1000);
+        let mut analyze_req = AnalyzeReq::default();
+        analyze_req.set_tp(AnalyzeType::TypeFullSampling);
+        analyze_req.set_col_req(col_req);
 
-    let top_range = product.get_record_range(1, 2);
-    let top_region = cluster.get_region(Key::from_raw(&top_range.start).as_encoded());
-    let mut top_ctx = Context::default();
-    top_ctx.set_region_id(top_region.get_id());
-    top_ctx.set_region_epoch(top_region.get_region_epoch().clone());
-    top_ctx.set_peer(cluster.leader_of_region(top_region.get_id()).unwrap());
+        let top_range = product.get_record_range(1, 2);
+        let top_region = cluster.get_region(Key::from_raw(&top_range.start).as_encoded());
+        let mut top_ctx = Context::default();
+        top_ctx.set_region_id(top_region.get_id());
+        top_ctx.set_region_epoch(top_region.get_region_epoch().clone());
+        top_ctx.set_peer(cluster.leader_of_region(top_region.get_id()).unwrap());
 
-    let mut req = Request::default();
-    req.set_tp(REQ_TYPE_ANALYZE);
-    req.set_data(analyze_req.write_to_bytes().unwrap());
-    req.set_ranges(vec![top_range].into());
-    req.set_start_ts(100);
-    req.set_context(top_ctx);
-    for (task_id, (start, end)) in [(1, (4, 5)), (2, (9, 10))] {
-        let range = product.get_record_range(start, end);
-        let batch_region = cluster.get_region(Key::from_raw(&range.start).as_encoded());
-        let mut task = StoreBatchTask::new();
-        task.set_region_id(batch_region.get_id());
-        task.set_region_epoch(batch_region.get_region_epoch().clone());
-        task.set_peer(cluster.leader_of_region(batch_region.get_id()).unwrap());
-        task.set_ranges(vec![range].into());
-        task.set_task_id(task_id);
-        req.tasks.push(task);
-    }
+        let mut req = Request::default();
+        req.set_tp(REQ_TYPE_ANALYZE);
+        req.set_data(analyze_req.write_to_bytes().unwrap());
+        req.set_ranges(vec![top_range].into());
+        req.set_start_ts(100);
+        req.set_context(top_ctx);
+        req.set_allow_batch_task_data_merge(allow_merge);
+        for (task_id, (start, end)) in [(1, (4, 5)), (2, (9, 10))] {
+            let range = product.get_record_range(start, end);
+            let batch_region = cluster.get_region(Key::from_raw(&range.start).as_encoded());
+            let mut task = StoreBatchTask::new();
+            task.set_region_id(batch_region.get_id());
+            task.set_region_epoch(batch_region.get_region_epoch().clone());
+            task.set_peer(cluster.leader_of_region(batch_region.get_id()).unwrap());
+            task.set_ranges(vec![range].into());
+            task.set_task_id(task_id);
+            req.tasks.push(task);
+        }
+        req
+    };
 
     let parse_collector = |data: &[u8]| -> tipb::RowSampleCollector {
         let mut resp = AnalyzeColumnsResp::default();
@@ -424,15 +428,63 @@ fn test_batched_full_sampling_responses() {
         resp.take_row_collector()
     };
 
-    // Existing clients receive one full-sampling result per region.
-    let mut resp = handle_request(&endpoint, req);
+    // When the client allows merging, the response carries the merged result
+    // of all three regions and every batched task is acknowledged without
+    // data of its own.
+    let mut resp = handle_request(&endpoint, build_req(true));
     assert!(!resp.has_region_error(), "{:?}", resp);
     assert!(resp.get_other_error().is_empty(), "{:?}", resp);
-    assert_eq!(parse_collector(resp.get_data()).get_count(), 2);
-    let batch_resps = resp.take_batch_responses();
+    let collector = parse_collector(resp.get_data());
+    assert_eq!(collector.get_count(), 6);
+    assert_eq!(collector.get_samples().len(), 6);
+    let mut batch_resps = resp.take_batch_responses().into_vec();
+    batch_resps.sort_unstable_by_key(|resp| resp.get_task_id());
     assert_eq!(batch_resps.len(), 2);
     for (batch_resp, task_id) in batch_resps.iter().zip([1, 2]) {
         assert_eq!(batch_resp.get_task_id(), task_id);
+        assert!(batch_resp.get_data_merged_into_response());
+        assert!(batch_resp.get_data().is_empty());
+        assert_eq!(
+            batch_resp
+                .get_exec_details_v2()
+                .get_scan_detail_v2()
+                .get_processed_versions(),
+            2
+        );
+    }
+
+    // A failed task remains separate for retry while successful tasks are
+    // still merged and acknowledged.
+    let mut req = build_req(true);
+    req.tasks[1].mut_region_epoch().set_version(0);
+    let mut resp = handle_request(&endpoint, req);
+    assert!(!resp.has_region_error(), "{:?}", resp);
+    assert!(resp.get_other_error().is_empty(), "{:?}", resp);
+    let collector = parse_collector(resp.get_data());
+    assert_eq!(collector.get_count(), 4);
+    assert_eq!(collector.get_samples().len(), 4);
+    let mut batch_resps = resp.take_batch_responses().into_vec();
+    batch_resps.sort_unstable_by_key(|resp| resp.get_task_id());
+    assert_eq!(batch_resps.len(), 2);
+    assert_eq!(batch_resps[0].get_task_id(), 1);
+    assert!(batch_resps[0].get_data_merged_into_response());
+    assert!(batch_resps[0].get_data().is_empty());
+    assert_eq!(batch_resps[1].get_task_id(), 2);
+    assert!(!batch_resps[1].get_data_merged_into_response());
+    assert!(batch_resps[1].has_region_error());
+
+    // Without the client's consent every task keeps its own serialized
+    // result.
+    let mut resp = handle_request(&endpoint, build_req(false));
+    assert!(!resp.has_region_error(), "{:?}", resp);
+    assert!(resp.get_other_error().is_empty(), "{:?}", resp);
+    assert_eq!(parse_collector(resp.get_data()).get_count(), 2);
+    let mut batch_resps = resp.take_batch_responses().into_vec();
+    batch_resps.sort_unstable_by_key(|resp| resp.get_task_id());
+    assert_eq!(batch_resps.len(), 2);
+    for (batch_resp, task_id) in batch_resps.iter().zip([1, 2]) {
+        assert_eq!(batch_resp.get_task_id(), task_id);
+        assert!(!batch_resp.get_data_merged_into_response());
         assert_eq!(parse_collector(batch_resp.get_data()).get_count(), 2);
     }
 }

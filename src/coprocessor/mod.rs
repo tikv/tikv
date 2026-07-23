@@ -62,28 +62,46 @@ pub const REQ_FLAG_TIDB_SYSSESSION: u64 = 2048;
 
 type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
 
-/// A task result that can be combined with results of the same request and
-/// serialized after merging.
+/// A task result that a `RequestHandler` returns unserialized (see
+/// `HandlerOutcome::Mergeable`), so that the endpoint can merge the results
+/// of a batched request's tasks (one per region) and serialize the merged
+/// result only once.
 pub trait MergeableResult: Any + Send {
-    /// Merges another result of the same concrete type. Callers may choose any
-    /// merge order, so implementations must produce the same logical result
-    /// independent of that order.
+    /// Merges the result of another task of the same request into this one.
+    /// Results of one request must have the same concrete type; the endpoint
+    /// relies on this invariant, so implementations may downcast `other`
+    /// accordingly. Eligible batched results are merged as their tasks
+    /// complete, so implementations must produce the same logical result
+    /// independent of merge order.
     fn merge(&mut self, other: Box<dyn MergeableResult>);
 
     /// Serializes the result into response data. The result should keep any
-    /// memory it holds tracked until it is merged away or serialized.
+    /// memory it holds tracked (e.g. reported to a memory trace) until it is
+    /// merged away or serialized.
     fn into_data(self: Box<Self>) -> Result<Vec<u8>>;
 }
 
 /// The outcome of handling a unary request: either a response that is ready
-/// to be returned, or a partial response whose data is kept unserialized
-/// until the endpoint serializes it at the end of the request pipeline (see
-/// `endpoint::serialize_handler_outcome`).
+/// to be returned, or a partial response whose data is kept unserialized so
+/// that the endpoint can merge the results of a batched request's tasks
+/// before serializing the merged result once. Any request type can opt into
+/// the latter by returning `Mergeable` from its handler.
+///
+/// The merged shape is negotiated explicitly: when the client allows it
+/// (`Request::allow_batch_task_data_merge`) and the top task produces an
+/// error-free mergeable result, each compatible successful batched task is
+/// merged into it and acknowledged by a response without data
+/// (`StoreBatchTaskResponse::data_merged_into_response`) that keeps the
+/// task's execution details. Failed or non-mergeable tasks keep their normal
+/// responses, so the client can consume the merged successes and apply its
+/// usual retry or error handling to the rest. If the client does not allow
+/// merging or the top task cannot carry merged data, every result is
+/// serialized into its own response as usual.
 pub enum HandlerOutcome {
     Ready(coppb::Response),
     Mergeable {
         /// The response carrying everything but the data (errors, cache
-        /// hints, ...); its data is produced from `result`.
+        /// hints, ...); its data is produced from the merged result.
         partial_response: coppb::Response,
         result: Box<dyn MergeableResult>,
     },
@@ -109,12 +127,24 @@ impl HandlerOutcome {
             } => response,
         }
     }
+
+    /// Mutable variant of [`HandlerOutcome::response`].
+    pub fn response_mut(&mut self) -> &mut coppb::Response {
+        match self {
+            Self::Ready(response)
+            | Self::Mergeable {
+                partial_response: response,
+                ..
+            } => response,
+        }
+    }
 }
 
 /// An interface for all kind of Coprocessor request handlers.
 #[async_trait]
 pub trait RequestHandler: Send {
-    /// Processes current request and produces an outcome.
+    /// Processes current request and produces an outcome: a ready response,
+    /// or a result kept unserialized for merging. See `HandlerOutcome`.
     async fn handle_request(&mut self) -> Result<MemoryTraceGuard<HandlerOutcome>> {
         panic!("unary request is not supported for this handler");
     }
