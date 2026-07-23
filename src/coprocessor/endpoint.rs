@@ -1001,7 +1001,7 @@ impl<E: Engine> Endpoint<E> {
     /// Every ordinary handler still produces a serialized response here.
     async fn handle_unary_request_impl(
         semaphore: Option<Arc<Semaphore>>,
-        mut tracker: Box<Tracker<E>>,
+        mut tracker: TokenTrackedTracker<E>,
         handler_builder: CopRequestHandlerBuilder<E::IMSnap>,
         defer_analyze_tracker: bool,
     ) -> Result<UnaryOutput<E>> {
@@ -1077,7 +1077,7 @@ impl<E: Engine> Endpoint<E> {
             }
         };
         let process_future = check_deadline(process_future, deadline);
-        let process_future = track(process_future, tracker.as_mut());
+        let process_future = track(process_future, &mut *tracker);
 
         let deadline_res = if let Some(semaphore) = &semaphore {
             limit_concurrency(process_future, semaphore, LIGHT_TASK_THRESHOLD).await
@@ -1142,7 +1142,7 @@ impl<E: Engine> Endpoint<E> {
                 Ok(UnaryOutput::FullSamplingAnalyze(AnalyzeScanOutput {
                     response,
                     result,
-                    tracker: Some(TokenTrackedTracker::new(tracker, get_tls_tracker_token())),
+                    tracker: Some(tracker),
                 }))
             }
             CopRequestHandlerResult::FullSamplingAnalyze(result) => {
@@ -1205,7 +1205,10 @@ impl<E: Engine> Endpoint<E> {
             )
         });
         // box the tracker so that moving it is cheap.
-        let tracker = Box::new(Tracker::new(req_ctx, r.req_tag, self.slow_log_threshold));
+        let tracker = TokenTrackedTracker::new(
+            Box::new(Tracker::new(req_ctx, r.req_tag, self.slow_log_threshold)),
+            get_tls_tracker_token(),
+        );
         allocated_bytes += tracker.approximate_mem_size();
 
         let (tx, rx) = oneshot::channel();
@@ -2350,6 +2353,47 @@ mod tests {
             RequestType::CoprocessorAnalyze,
             1,
         )));
+        let sibling = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
+            &context,
+            RequestType::CoprocessorAnalyze,
+            2,
+        )));
+        let original = get_tls_tracker_token();
+        set_tls_tracker_token(owner);
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            handle.clone(),
+            ConcurrencyManager::new_for_test(1.into()),
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            None,
+        );
+        let handler_builder =
+            Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed()));
+        let rejected_unary = copr.handle_unary_request(
+            ParseCopRequestResult::default_for_test(handler_builder),
+            false,
+        );
+        thread::sleep(Duration::from_millis(1));
+        set_tls_tracker_token(sibling);
+        assert!(matches!(
+            block_on(rejected_unary),
+            Err(Error::MaxPendingTasksExceeded)
+        ));
+        assert_eq!(get_tls_tracker_token(), sibling);
+        let owner_wait = GLOBAL_TRACKERS
+            .with_tracker(owner, |tracker| {
+                tracker.metrics.read_pool_schedule_wait_nanos
+            })
+            .unwrap();
+        let sibling_wait = GLOBAL_TRACKERS
+            .with_tracker(sibling, |tracker| {
+                tracker.metrics.read_pool_schedule_wait_nanos
+            })
+            .unwrap();
+        assert!(owner_wait > 0);
+        assert_eq!(sibling_wait, 0);
+
         let finalizer = AnalyzeBatchFinalizer {
             read_pool: handle,
             semaphore: None,
@@ -2367,10 +2411,13 @@ mod tests {
         assert!(response.get_region_error().has_server_is_busy());
         assert!(response.get_data().is_empty());
         assert!(response.get_batch_responses().is_empty());
+        assert_eq!(get_tls_tracker_token(), sibling);
 
         release_first.send(()).unwrap();
         release_second.send(()).unwrap();
+        set_tls_tracker_token(original);
         GLOBAL_TRACKERS.remove(owner);
+        GLOBAL_TRACKERS.remove(sibling);
     }
 
     #[test]
