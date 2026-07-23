@@ -31,6 +31,7 @@ use crate::{
     coprocessor::{
         Config, CoprocessorHost, SplitCheckerHost,
         dispatcher::StoreHandle,
+        get_region_approximate_middle_in_range,
         region_info_accessor::RegionInfoProvider,
         split_observer::{is_valid_split_key, strip_timestamp_if_exists},
     },
@@ -631,17 +632,28 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         };
         let region_id = region.get_id();
         let is_key_range = start_key.is_some() && end_key.is_some();
-        let start_key = if is_key_range {
-            // This key is usually from a request, which should be encoded first.
-            keys::data_key(Key::from_raw(&start_key.unwrap()).as_encoded().as_slice())
+        let request_start_key = if is_key_range {
+            start_key.as_deref()
         } else {
-            keys::enc_start_key(region)
+            None
         };
-        let end_key = if is_key_range {
-            keys::data_end_key(Key::from_raw(&end_key.unwrap()).as_encoded().as_slice())
+        let request_end_key = if is_key_range {
+            end_key.as_deref()
         } else {
-            keys::enc_end_key(region)
+            None
         };
+        let start_key = request_start_key
+            .and_then(Key::from_raw_maybe_unbounded)
+            .map_or_else(
+                || keys::enc_start_key(region),
+                |key| keys::data_key(key.as_encoded().as_slice()),
+            );
+        let end_key = request_end_key
+            .and_then(Key::from_raw_maybe_unbounded)
+            .map_or_else(
+                || keys::enc_end_key(region),
+                |key| keys::data_end_key(key.as_encoded().as_slice()),
+            );
         debug!(
             "executing task";
             "region_id" => region_id,
@@ -665,7 +677,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             return;
         }
 
-        let split_keys = match host.policy() {
+        let mut split_keys = match host.policy() {
             CheckPolicy::Scan => {
                 match self.scan_split_keys(
                     &mut host,
@@ -740,6 +752,21 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             CheckPolicy::Usekey => vec![], // Handled by pd worker directly.
         };
 
+        if split_keys.is_empty() && reason == SplitReason::Load && is_key_range {
+            if let Some(split_key) =
+                self.approximate_middle_for_load_key_range(tablet, region, &start_key, &end_key)
+            {
+                info!(
+                    "load split fallback to approximate middle in key range";
+                    "region_id" => region_id,
+                    "start_key" => log_wrappers::Value::key(request_start_key.unwrap()),
+                    "end_key" => log_wrappers::Value::key(request_end_key.unwrap()),
+                    "split_key" => log_wrappers::Value::key(&split_key),
+                );
+                split_keys.push(split_key);
+            }
+        }
+
         if !split_keys.is_empty() {
             // Notify peer that if the region is truly splitable.
             // If it's truly splitable, then skip_split_check should be false;
@@ -770,6 +797,63 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             );
 
             CHECK_SPILT_COUNTER.ignore.inc();
+        }
+    }
+
+    /// Picks a load-split fallback key from approximate middle within a key
+    /// range.
+    ///
+    /// The candidate is normalized with the same timestamp-stripping behavior
+    /// as SplitObserver before boundary and region-validity checks.
+    fn approximate_middle_for_load_key_range(
+        &self,
+        tablet: &EK,
+        region: &Region,
+        start_key: &[u8],
+        end_key: &[u8],
+    ) -> Option<Vec<u8>> {
+        let approximate_middle = match get_region_approximate_middle_in_range(
+            tablet,
+            region,
+            Some(start_key),
+            Some(end_key),
+        ) {
+            Ok(key) => key,
+            Err(e) => {
+                error!(%e;
+                    "failed to get approximate middle in key range";
+                    "region_id" => region.get_id(),
+                    "start_key" => log_wrappers::Value::key(start_key),
+                    "end_key" => log_wrappers::Value::key(end_key),
+                );
+                return None;
+            }
+        }?;
+
+        // Normalize to the same form used by SplitObserver before all checks,
+        // so the candidate won't become invalid after timestamp stripping.
+        let split_key = strip_timestamp_if_exists(keys::origin_key(&approximate_middle).to_vec());
+        let range_start = keys::origin_key(start_key);
+        let range_end = keys::origin_end_key(end_key);
+
+        // Guard against split points that are equal to range boundaries.
+        if split_key.as_slice() <= range_start
+            || (!range_end.is_empty() && split_key.as_slice() >= range_end)
+        {
+            debug!(
+                "ignore out-of-range approximate split key";
+                "region_id" => region.get_id(),
+                "start_key" => log_wrappers::Value::key(range_start),
+                "end_key" => log_wrappers::Value::key(range_end),
+                "split_key" => log_wrappers::Value::key(&split_key),
+            );
+            return None;
+        }
+
+        if is_valid_split_key(&split_key, 0, region) {
+            Some(split_key)
+        } else {
+            None
         }
     }
 
