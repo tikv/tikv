@@ -105,7 +105,11 @@ work:
 - `components/backup` and `components/backup-stream` own backup and log-backup
   surfaces.
 - `components/cdc` owns changefeed capture and delivery.
+- `components/resolved_ts` owns the shared progress engine used by CDC,
+  backup-stream, and stale-read-style consumers.
 - `src/import` and `components/sst_importer` own SST import and ingest flows.
+- `src/server/gc_worker` owns MVCC GC, GC auto-scheduling, compaction-filter
+  integration, and related safe-point enforcement.
 
 Repository boundary rule:
 
