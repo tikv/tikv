@@ -1,12 +1,20 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    borrow::Cow, fmt::Display, future::Future, iter::FromIterator, marker::PhantomData, mem,
-    sync::Arc, time::Duration,
+    borrow::Cow,
+    fmt::Display,
+    future::Future,
+    iter::FromIterator,
+    marker::PhantomData,
+    mem,
+    sync::{Arc, Mutex},
+    task::Poll,
+    time::Duration,
 };
 
 use ::tracker::{
-    GLOBAL_TRACKERS, RequestInfo, RequestType, set_tls_tracker_token, track, with_tls_tracker,
+    GLOBAL_TRACKERS, RequestInfo, RequestType, TrackerToken, get_tls_tracker_token,
+    set_tls_tracker_token, track, with_tls_tracker,
 };
 use anyhow::anyhow;
 use api_version::{KvFormat, dispatch_api_version};
@@ -23,8 +31,8 @@ use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
 use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
 use resource_metering::{
-    FutureExt, ResourceTagFactory, StreamExt, record_logical_read_bytes, record_network_in_bytes,
-    record_network_out_bytes,
+    FutureExt, ResourceMeteringTag, ResourceTagFactory, StreamExt, record_logical_read_bytes,
+    record_network_in_bytes, record_network_out_bytes,
 };
 use tidb_query_common::{
     error::StorageError,
@@ -34,7 +42,7 @@ use tidb_query_common::{
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::{ExtraRegionOverride, SnapshotExt};
 use tikv_util::{
-    deadline::set_deadline_exceeded_busy_error,
+    deadline::{Deadline, set_deadline_exceeded_busy_error},
     future::async_timeout,
     memory::{MemoryQuota, OwnedAllocated},
     quota_limiter::QuotaLimiter,
@@ -66,18 +74,54 @@ use crate::{
 /// execution.
 const LIGHT_TASK_THRESHOLD: Duration = Duration::from_millis(5);
 
+fn response_has_error(resp: &coppb::Response) -> bool {
+    resp.has_region_error() || resp.has_locked() || !resp.get_other_error().is_empty()
+}
+
+/// Records the size of response data attributed to the request tracked by
+/// `tracker`. The token is passed explicitly because response data may be
+/// serialized outside the request's own read pool task (see
+/// `BatchMergeFinalizer`), where the thread local tracker belongs to
+/// another request.
+fn record_coprocessor_response_size(resp_size: u64, tracker: TrackerToken) {
+    COPR_RESP_SIZE.inc_by(resp_size);
+    record_network_out_bytes(resp_size);
+    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+        tracker.metrics.coprocessor_response_bytes = tracker
+            .metrics
+            .coprocessor_response_bytes
+            .saturating_add(resp_size);
+    });
+}
+
+fn batch_response_has_error(resp: &coppb::StoreBatchTaskResponse) -> bool {
+    resp.has_region_error() || resp.has_locked() || !resp.get_other_error().is_empty()
+}
+
+/// Serializes the mergeable result of a task into response data, recording
+/// its size against the request tracked by `tracker`.
+fn serialize_mergeable_result(
+    result: Box<dyn MergeableResult>,
+    tracker: TrackerToken,
+) -> Result<Vec<u8>> {
+    let data = result.into_data()?;
+    record_coprocessor_response_size(data.len() as u64, tracker);
+    Ok(data)
+}
+
+type HandlerOutput = MemoryTraceGuard<HandlerOutcome>;
+
 /// Serializes a `Mergeable` outcome's result into its response data,
 /// resizing the guard's memory trace to the serialized data. A `Ready`
 /// outcome is returned unchanged. The response size is not recorded here:
 /// the caller records it once the data is in the response, exactly as for
 /// a `Ready` outcome.
-fn serialize_handler_outcome(
-    outcome: MemoryTraceGuard<HandlerOutcome>,
-) -> Result<MemoryTraceGuard<coppb::Response>> {
-    let mergeable = matches!(&*outcome, HandlerOutcome::Mergeable { .. });
+fn serialize_handler_outcome(outcome: HandlerOutput) -> Result<HandlerOutput> {
+    if !matches!(&*outcome, HandlerOutcome::Mergeable { .. }) {
+        return Ok(outcome);
+    }
     let mut serialize_err = None;
-    let mut resp = outcome.map(|outcome| match outcome {
-        HandlerOutcome::Ready(response) => response,
+    let mut outcome = outcome.map(|outcome| match outcome {
         HandlerOutcome::Mergeable {
             mut partial_response,
             result,
@@ -86,24 +130,272 @@ fn serialize_handler_outcome(
             match result.into_data() {
                 Ok(data) => {
                     partial_response.set_data(data);
-                    partial_response
+                    HandlerOutcome::Ready(partial_response)
                 }
                 Err(e) => {
                     serialize_err = Some(e);
-                    coppb::Response::default()
+                    HandlerOutcome::default()
                 }
             }
         }
+        ready => ready,
     });
     if let Some(e) = serialize_err {
-        // Dropping the placeholder response releases the guard's trace.
+        // Dropping the placeholder outcome releases the guard's trace.
         return Err(e);
     }
-    if mergeable {
-        let data_len = resp.get_data().len();
-        resp.retrace(data_len);
+    let data_len = outcome.response().get_data().len();
+    outcome.retrace(data_len);
+    Ok(outcome)
+}
+
+/// Completes after one poll, waking its task immediately. Placed between
+/// two chunks of synchronous work it gives wrappers like `check_deadline`
+/// and `limit_concurrency` a poll boundary to act on.
+fn yield_once() -> impl Future<Output = ()> {
+    let mut yielded = false;
+    future::poll_fn(move |cx| {
+        if yielded {
+            Poll::Ready(())
+        } else {
+            yielded = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    })
+}
+
+/// The output of handling one batched task of the request: the task's
+/// response plus, when the handler produced a `Mergeable` outcome, its
+/// still-unserialized result.
+///
+/// When `mergeable_result` is `Some`, `response` carries no data; the
+/// task's data lives in the result until `merge_batch_task_responses`
+/// either merges it into the top response or serializes it into
+/// `response`. Unlike `HandlerOutput` this carries no memory trace guard:
+/// the task's guard is consumed in `process_batch_tasks` and the
+/// serialized data is re-accounted by the top task's guard.
+struct BatchTaskOutput {
+    response: coppb::StoreBatchTaskResponse,
+    mergeable_result: Option<Box<dyn MergeableResult>>,
+}
+
+/// Drives the top task and the batched tasks concurrently until all of
+/// them complete, collecting the batched outputs in completion order.
+///
+/// Polling `batch_outputs` alongside `top_output` matters: a batched task
+/// is enqueued into the read pool only when its future is first polled
+/// (see `handle_unary_request`), while its deadline starts at parse time.
+/// Awaiting the top task first would leave every batched task unscheduled
+/// behind an arbitrarily slow top task and could expire their deadlines
+/// before they run at all.
+async fn collect_batch_task_outputs(
+    top_output: impl Future<Output = HandlerOutput>,
+    batch_outputs: impl Stream<Item = BatchTaskOutput>,
+) -> (HandlerOutput, Vec<BatchTaskOutput>) {
+    let mut completed_outputs = Vec::new();
+    let batch_outputs = batch_outputs.fuse();
+    futures::pin_mut!(top_output, batch_outputs);
+    let output = loop {
+        match future::select(top_output.as_mut(), batch_outputs.next()).await {
+            Either::Left((output, _)) => break output,
+            Either::Right((Some(batch_output), _)) => completed_outputs.push(batch_output),
+            Either::Right((None, _)) => break top_output.await,
+        }
+    };
+    while let Some(batch_output) = batch_outputs.next().await {
+        completed_outputs.push(batch_output);
     }
-    Ok(resp)
+    (output, completed_outputs)
+}
+
+/// Merges and serializes the collected outputs into the final response.
+/// `tracker` is the top task's token, which owns the response bytes
+/// serialized here; the batched tasks' trackers are already gone.
+///
+/// When the top task kept an error-free mergeable result, each compatible
+/// successful batched result is merged into it and dropped. Only its
+/// data-less acknowledgement and execution details remain. Other results
+/// are serialized into their own batch responses. Batch responses follow
+/// task completion order.
+///
+/// This is the CPU-heavy step of a batched request outside its handlers,
+/// so the endpoint runs it in the read pool (see `BatchMergeFinalizer`).
+/// The deadline is checked and the task yields between per-task steps. On
+/// a deadline failure the whole response degrades to a plain error without
+/// data, acknowledgements or batch responses: consumed results cannot be
+/// recovered, and the top error makes the client retry every task, so
+/// nothing is lost or double-counted.
+async fn merge_batch_task_responses(
+    mut output: HandlerOutput,
+    batch_outputs: Vec<BatchTaskOutput>,
+    tracker: TrackerToken,
+    deadline: Deadline,
+) -> MemoryTraceGuard<coppb::Response> {
+    let merge_batch_results = matches!(
+        &*output,
+        HandlerOutcome::Mergeable {
+            partial_response,
+            ..
+        } if !response_has_error(partial_response)
+    );
+    let mut merged_batch_result = false;
+    let mut batch_responses = Vec::with_capacity(batch_outputs.len());
+
+    for mut batch_output in batch_outputs {
+        if deadline.check().is_err() {
+            return make_error_response(Error::DeadlineExceeded).into();
+        }
+        let can_merge = merge_batch_results
+            && !batch_response_has_error(&batch_output.response)
+            && batch_output.mergeable_result.is_some();
+        if can_merge {
+            debug_assert!(batch_output.response.get_data().is_empty());
+            let HandlerOutcome::Mergeable { result: merged, .. } = &mut *output else {
+                unreachable!("batch merging requires a mergeable top result");
+            };
+            merged.merge(batch_output.mergeable_result.take().unwrap());
+            batch_output.response.set_data_merged_into_response(true);
+            merged_batch_result = true;
+        }
+        batch_responses.push(resolve_batch_task_output(batch_output, tracker));
+        yield_once().await;
+    }
+
+    if deadline.check().is_err() {
+        return make_error_response(Error::DeadlineExceeded).into();
+    }
+    build_batched_response(output, batch_responses, tracker, merged_batch_result)
+}
+
+fn resolve_batch_task_output(
+    mut output: BatchTaskOutput,
+    tracker: TrackerToken,
+) -> coppb::StoreBatchTaskResponse {
+    if let Some(mergeable) = output.mergeable_result {
+        match serialize_mergeable_result(mergeable, tracker) {
+            Ok(data) => output.response.set_data(data),
+            Err(e) => make_error_batch_response(&mut output.response, e),
+        }
+    }
+    output.response
+}
+
+/// Builds the top task's final response: serializes a still-unserialized
+/// top result into its response data, attaches the batch responses, and
+/// resizes the guard's memory trace to the serialized data.
+fn build_batched_response(
+    output: HandlerOutput,
+    batch_responses: Vec<coppb::StoreBatchTaskResponse>,
+    tracker: TrackerToken,
+    merged_batch_result: bool,
+) -> MemoryTraceGuard<coppb::Response> {
+    let mut resp = output.map(|outcome| {
+        let mut response = match outcome {
+            HandlerOutcome::Ready(response) => response,
+            HandlerOutcome::Mergeable {
+                mut partial_response,
+                result,
+            } => {
+                debug_assert!(partial_response.get_data().is_empty());
+                match serialize_mergeable_result(result, tracker) {
+                    Ok(data) => {
+                        partial_response.set_data(data);
+                        partial_response
+                    }
+                    // Once a child result has been merged it cannot be
+                    // recovered for an individual response. Return no
+                    // acknowledgements or partial data so a retry cannot
+                    // lose or double-count results.
+                    Err(e) if merged_batch_result => return make_error_response(e),
+                    Err(e) => make_error_response(e),
+                }
+            }
+        };
+        response.set_batch_responses(batch_responses.into());
+        response
+    });
+    let data_len = resp.get_data().len();
+    resp.retrace(data_len);
+    resp
+}
+
+/// Runs `merge_batch_task_responses` of one batched request as a read pool
+/// task, restoring the protections its handlers ran under: read pool
+/// scheduling and resource control, the request's resource tag, its
+/// deadline, and the coprocessor semaphore. Built from the top task's
+/// request before parsing consumes it (see
+/// `Endpoint::batch_merge_finalizer`).
+struct BatchMergeFinalizer {
+    read_pool: ReadPoolHandle,
+    semaphore: Option<Arc<Semaphore>>,
+    resource_tag: ResourceMeteringTag,
+    priority: CommandPri,
+    metadata: TaskMetadata<'static>,
+    resource_limiter: Option<Arc<ResourceLimiter>>,
+    deadline: Deadline,
+    task_id: u64,
+}
+
+impl BatchMergeFinalizer {
+    async fn finalize(
+        self,
+        output: HandlerOutput,
+        batch_outputs: Vec<BatchTaskOutput>,
+        tracker: TrackerToken,
+    ) -> MemoryTraceGuard<coppb::Response> {
+        let Self {
+            read_pool,
+            semaphore,
+            resource_tag,
+            priority,
+            metadata,
+            resource_limiter,
+            deadline,
+            task_id,
+        } = self;
+        let work = move || async move {
+            let fut = merge_batch_task_responses(output, batch_outputs, tracker, deadline);
+            match &semaphore {
+                Some(semaphore) => limit_concurrency(fut, semaphore, LIGHT_TASK_THRESHOLD).await,
+                None => fut.await,
+            }
+        };
+        // The work is handed off through a slot so that it can still run
+        // when the read pool drops the task without running it.
+        let work_slot = Arc::new(Mutex::new(Some(work)));
+        let (tx, rx) = oneshot::channel();
+        let pool_work = {
+            let work_slot = work_slot.clone();
+            async move {
+                let work = work_slot.lock().unwrap().take();
+                if let Some(work) = work {
+                    let _ = tx.send(work().await);
+                }
+            }
+            .in_resource_metering_tag(resource_tag)
+        };
+        // The merge works on memory the request already owns and accounts,
+        // so unlike `read_pool_spawn_with_memory_quota_check` this spawn
+        // does not reserve additional quota.
+        let spawned = read_pool.spawn(pool_work, priority, task_id, metadata, resource_limiter);
+        if spawned.await.is_ok() {
+            if let Ok(resp) = rx.await {
+                return resp;
+            }
+        }
+        // The read pool rejected the task or dropped it before it ran
+        // (overload or shutdown): degrade to merging on the current
+        // executor rather than discarding the completed tasks' results.
+        let work = work_slot.lock().unwrap().take();
+        match work {
+            Some(work) => work().await,
+            // The task ran but its response was lost. The results may be
+            // partially consumed, so only an error is left; the top error
+            // makes the client retry every task.
+            None => make_error_response(Error::MaxPendingTasksExceeded).into(),
+        }
+    }
 }
 
 /// A pool to build and run Coprocessor request handlers.
@@ -520,14 +812,18 @@ impl<E: Engine> Endpoint<E> {
     /// request interface of the `RequestHandler` to process the request and
     /// produce a result.
     ///
-    /// A `Mergeable` outcome is serialized into its response right here —
-    /// inside the deadline, tracking, concurrency and resource protections
-    /// of the request, like any `Ready` response's data.
+    /// When `serialize_outcome` is set, a `Mergeable` outcome is serialized
+    /// into its response right here — inside the deadline, tracking,
+    /// concurrency and resource protections of the request, like any `Ready`
+    /// response's data. Callers clear it only when the endpoint merges
+    /// batched results, in which case the result stays unserialized until
+    /// `merge_batch_task_responses`.
     async fn handle_unary_request_impl(
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::IMSnap>,
-    ) -> Result<MemoryTraceGuard<coppb::Response>> {
+        serialize_outcome: bool,
+    ) -> Result<HandlerOutput> {
         with_tls_tracker(|tracker1| {
             record_network_in_bytes(tracker1.metrics.grpc_req_size);
         });
@@ -580,7 +876,11 @@ impl<E: Engine> Endpoint<E> {
         let handle_request_future = handler.handle_request();
         let process_future = async move {
             let outcome = handle_request_future.await?;
-            serialize_handler_outcome(outcome)
+            if serialize_outcome {
+                serialize_handler_outcome(outcome)
+            } else {
+                Ok(outcome)
+            }
         };
         let process_future = check_deadline(process_future, deadline);
         let process_future = track(process_future, tracker.as_mut());
@@ -600,18 +900,15 @@ impl<E: Engine> Endpoint<E> {
         let mut storage_stats = Statistics::default();
         handler.collect_scan_statistics(&mut storage_stats);
         tracker.collect_storage_statistics(storage_stats);
-        let mut resp = match result {
-            Ok(resp) => {
-                let resp_size = resp.data.len() as u64;
-                COPR_RESP_SIZE.inc_by(resp_size);
-                record_network_out_bytes(resp_size);
-                with_tls_tracker(|tracker| {
-                    tracker.metrics.coprocessor_response_bytes = tracker
-                        .metrics
-                        .coprocessor_response_bytes
-                        .saturating_add(resp_size);
-                });
-                resp
+        let mut resp: HandlerOutput = match result {
+            Ok(outcome) => {
+                // A `Mergeable` outcome carries no data yet; its size is
+                // recorded when the merged result is serialized.
+                record_coprocessor_response_size(
+                    outcome.response().get_data().len() as u64,
+                    get_tls_tracker_token(),
+                );
+                outcome
             }
             Err(e) => {
                 if let Error::DefaultNotFound(errmsg) = &e {
@@ -620,15 +917,16 @@ impl<E: Engine> Endpoint<E> {
                         "reqCtx" => ?&tracker.req_ctx,
                     );
                 }
-                make_error_response(e).into()
+                HandlerOutcome::Ready(make_error_response(e)).into()
             }
         };
         let (exec_details, exec_details_v2) = tracker.get_exec_details();
         tracker.on_finish_all_items();
         record_logical_read_bytes(exec_details_v2.get_scan_detail_v2().processed_versions_size);
-        resp.set_exec_details(exec_details);
-        resp.set_exec_details_v2(exec_details_v2);
-        resp.set_latest_buckets_version(buckets_version);
+        let response = resp.response_mut();
+        response.set_exec_details(exec_details);
+        response.set_exec_details_v2(exec_details_v2);
+        response.set_latest_buckets_version(buckets_version);
         Ok(resp)
     }
 
@@ -636,10 +934,16 @@ impl<E: Engine> Endpoint<E> {
     ///
     /// Returns `Err(err)` if the read pool is full. Returns `Ok(future)` in
     /// other cases. The future inside may be an error however.
+    ///
+    /// Note that the read pool task is enqueued only once the returned
+    /// future is first polled, while the request's deadline is already
+    /// counting down; the caller must not sit on the future.
+    /// `serialize_outcome` is described on `handle_unary_request_impl`.
     fn handle_unary_request(
         &self,
         r: ParseCopRequestResult<E::IMSnap>,
-    ) -> impl Future<Output = Result<MemoryTraceGuard<coppb::Response>>> {
+        serialize_outcome: bool,
+    ) -> impl Future<Output = Result<HandlerOutput>> {
         let req_ctx = r.req_ctx;
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
@@ -672,12 +976,16 @@ impl<E: Engine> Endpoint<E> {
         allocated_bytes += tracker.approximate_mem_size();
 
         let (tx, rx) = oneshot::channel();
-        let future =
-            Self::handle_unary_request_impl(self.semaphore.clone(), tracker, r.handler_builder)
-                .in_resource_metering_tag(resource_tag)
-                .map(move |res| {
-                    let _ = tx.send(res);
-                });
+        let future = Self::handle_unary_request_impl(
+            self.semaphore.clone(),
+            tracker,
+            r.handler_builder,
+            serialize_outcome,
+        )
+        .in_resource_metering_tag(resource_tag)
+        .map(move |res| {
+            let _ = tx.send(res);
+        });
         let spawn_fut_result = self.read_pool_spawn_with_memory_quota_check(
             allocated_bytes,
             future,
@@ -717,53 +1025,101 @@ impl<E: Engine> Endpoint<E> {
             return Either::Left(async move { resp.into() });
         }
 
-        let result_of_batch = self.process_batch_tasks(&mut req, &peer);
+        // Merging batched results into the top response can happen only when
+        // the client allows it and there are batched tasks; every other
+        // request serializes its outcome inside its own read pool task (see
+        // `handle_unary_request_impl`).
+        let merge_batch_tasks =
+            req.get_allow_batch_task_data_merge() && !req.get_tasks().is_empty();
+        let finalize_context = merge_batch_tasks.then(|| req.get_context().clone());
+        let batch_outputs = self.process_batch_tasks(&mut req, &peer);
         set_tls_tracker_token(tracker);
         with_tls_tracker(|tracker| {
             tracker.metrics.grpc_req_size = req.compute_size() as u64;
         });
+        let mut top_deadline = None;
+        let mut top_task_id = 0;
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
-            .map(|r| self.handle_unary_request(r));
+            .map(|r| {
+                top_deadline = Some(r.req_ctx.deadline);
+                top_task_id = r.req_ctx.build_task_id();
+                self.handle_unary_request(r, !merge_batch_tasks)
+            });
         with_tls_tracker(|tracker| {
             tracker.metrics.grpc_process_nanos =
                 tracker.req_info.begin.saturating_elapsed().as_nanos() as u64;
         });
+        let batch_finalizer = finalize_context.map(|ctx| {
+            self.batch_merge_finalizer(
+                ctx,
+                // Parsing the top request may have failed; the batched
+                // results are then finalized under a fresh default deadline.
+                top_deadline.unwrap_or_else(|| Deadline::from_now(self.max_handle_duration)),
+                top_task_id,
+            )
+        });
         let fut = async move {
-            let res = match result_of_future {
-                Err(e) => {
-                    let mut res = make_error_response(e);
-                    let batch_res = result_of_batch.await;
-                    res.set_batch_responses(batch_res.into());
-                    res.into()
-                }
-                Ok(handle_fut) => {
-                    let (handle_res, batch_res) = futures::join!(handle_fut, result_of_batch);
-                    let mut res = handle_res.unwrap_or_else(|e| make_error_response(e).into());
-                    res.set_batch_responses(batch_res.into());
-                    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-                        let exec_detail_v2 = res.mut_exec_details_v2();
-                        tracker.write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
-                        tracker.merge_time_detail(exec_detail_v2.mut_time_detail_v2());
-                    });
-                    res
+            let collect_top_details = result_of_future.is_ok();
+            let top_output = async move {
+                match result_of_future {
+                    Err(e) => HandlerOutcome::Ready(make_error_response(e)).into(),
+                    Ok(handle_fut) => handle_fut
+                        .await
+                        .unwrap_or_else(|e| HandlerOutcome::Ready(make_error_response(e)).into()),
                 }
             };
+            let (output, batch_outputs) =
+                collect_batch_task_outputs(top_output, batch_outputs).await;
+            let mut res = match batch_finalizer {
+                Some(finalizer) => finalizer.finalize(output, batch_outputs, tracker).await,
+                // No merging can happen: every outcome was serialized inside
+                // its own read pool task (see `handle_unary_request_impl`),
+                // so the ready responses only need to be attached. A
+                // leftover mergeable result is still resolved defensively.
+                None => {
+                    debug_assert!(!matches!(&*output, HandlerOutcome::Mergeable { .. }));
+                    let batch_responses = batch_outputs
+                        .into_iter()
+                        .map(|output| resolve_batch_task_output(output, tracker))
+                        .collect();
+                    build_batched_response(output, batch_responses, tracker, false)
+                }
+            };
+            if collect_top_details {
+                GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                    let exec_detail_v2 = res.mut_exec_details_v2();
+                    tracker.write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
+                    tracker.merge_time_detail(exec_detail_v2.mut_time_detail_v2());
+                });
+            }
+            // Finalizing may serialize response data (see
+            // `HandlerOutcome::Mergeable`), which was not yet recorded when
+            // the response details were produced.
+            GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                res.mut_exec_details_v2()
+                    .mut_ru_v2()
+                    .set_coprocessor_response_bytes(tracker.metrics.coprocessor_response_bytes);
+            });
             GLOBAL_TRACKERS.remove(tracker);
             res
         };
         Either::Right(fut)
     }
 
-    // process_batch_tasks process the input batched coprocessor tasks if any,
-    // prepare all the requests and schedule them into the read pool, then
-    // collect all the responses and convert them into the `StoreBatchResponse`
-    // type.
-    pub fn process_batch_tasks(
+    // Prepare all batched coprocessor tasks and stream their outputs in
+    // completion order. The tasks are scheduled into the read pool when the
+    // stream is first polled, so the caller must poll it promptly (see
+    // `collect_batch_task_outputs`).
+    fn process_batch_tasks(
         &self,
         req: &mut coppb::Request,
         peer: &Option<String>,
-    ) -> impl Future<Output = Vec<coppb::StoreBatchTaskResponse>> {
+    ) -> impl Stream<Item = BatchTaskOutput> {
+        // Without merging, every task serializes its result inside its own
+        // read pool task; with it, results stay unserialized for
+        // `merge_batch_task_responses`.
+        let serialize_outcome = !req.get_allow_batch_task_data_merge();
         let mut batch_futs = Vec::with_capacity(req.tasks.len());
         let batch_reqs: Vec<(coppb::Request, u64)> = req
             .take_tasks()
@@ -793,11 +1149,22 @@ impl<E: Engine> Endpoint<E> {
                 Ok(r) => {
                     let cur_tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(request_info));
                     set_tls_tracker_token(cur_tracker);
-                    let fut = self.handle_unary_request(r);
+                    let fut = self.handle_unary_request(r, serialize_outcome);
                     let fut = async move {
                         let res = fut.await;
+                        let mut mergeable_result = None;
                         match res {
-                            Ok(mut resp) => {
+                            Ok(mut output) => {
+                                let mut resp = match output.consume() {
+                                    HandlerOutcome::Ready(response) => response,
+                                    HandlerOutcome::Mergeable {
+                                        partial_response,
+                                        result,
+                                    } => {
+                                        mergeable_result = Some(result);
+                                        partial_response
+                                    }
+                                };
                                 response.set_data(resp.take_data());
                                 if let Some(err) = resp.region_error.take() {
                                     response.set_region_error(err);
@@ -819,18 +1186,50 @@ impl<E: Engine> Endpoint<E> {
                             }
                         }
                         GLOBAL_TRACKERS.remove(cur_tracker);
-                        response
+                        BatchTaskOutput {
+                            response,
+                            mergeable_result,
+                        }
                     };
 
                     batch_futs.push(future::Either::Left(fut));
                 }
                 Err(e) => batch_futs.push(future::Either::Right(async move {
                     make_error_batch_response(&mut response, e);
-                    response
+                    BatchTaskOutput {
+                        response,
+                        mergeable_result: None,
+                    }
                 })),
             }
         }
-        stream::FuturesOrdered::from_iter(batch_futs).collect()
+        stream::FuturesUnordered::from_iter(batch_futs)
+    }
+
+    /// Builds the runner of the deferred merge/serialization of a batched
+    /// request (see `BatchMergeFinalizer`) from the top request's context.
+    fn batch_merge_finalizer(
+        &self,
+        ctx: kvrpcpb::Context,
+        deadline: Deadline,
+        task_id: u64,
+    ) -> BatchMergeFinalizer {
+        BatchMergeFinalizer {
+            read_pool: self.read_pool.clone(),
+            semaphore: self.semaphore.clone(),
+            resource_tag: self.resource_tag_factory.new_tag(&ctx),
+            priority: ctx.get_priority(),
+            metadata: TaskMetadata::from_ctx(ctx.get_resource_control_context()).deep_clone(),
+            resource_limiter: self.resource_ctl.as_ref().and_then(|r| {
+                r.get_resource_limiter(
+                    ctx.get_resource_control_context().get_resource_group_name(),
+                    ctx.get_request_source(),
+                    ctx.get_resource_control_context().get_override_priority(),
+                )
+            }),
+            deadline,
+            task_id,
+        }
     }
 
     /// The real implementation of handling a stream request.
@@ -1408,11 +1807,21 @@ mod tests {
         }
     }
 
+    /// Resolves the output of `handle_unary_request` into its response,
+    /// which must be ready.
+    fn unwrap_ready(output: HandlerOutput) -> MemoryTraceGuard<coppb::Response> {
+        output.map(|outcome| match outcome {
+            HandlerOutcome::Ready(response) => response,
+            HandlerOutcome::Mergeable { .. } => panic!("expected a ready response"),
+        })
+    }
+
     /// A mergeable result that concatenates task values.
     #[derive(Default)]
     struct ConcatMergeable {
         values: Vec<u8>,
         fail_serialize: bool,
+        merge_count: Option<Arc<atomic::AtomicUsize>>,
     }
 
     impl MergeableResult for ConcatMergeable {
@@ -1421,6 +1830,9 @@ mod tests {
                 .downcast::<ConcatMergeable>()
                 .unwrap();
             self.values.extend(other.values);
+            if let Some(merge_count) = &self.merge_count {
+                merge_count.fetch_add(1, atomic::Ordering::SeqCst);
+            }
         }
 
         fn into_data(mut self: Box<Self>) -> Result<Vec<u8>> {
@@ -1428,7 +1840,7 @@ mod tests {
                 return Err(box_err!("cannot serialize"));
             }
             // This fixture obeys `MergeableResult`'s order-independent
-            // contract even when merge order changes.
+            // contract even when task completion order changes.
             self.values.sort_unstable();
             Ok(self.values)
         }
@@ -1440,7 +1852,33 @@ mod tests {
             result: Box::new(ConcatMergeable {
                 values,
                 fail_serialize,
+                merge_count: None,
             }),
+        }
+    }
+
+    fn observed_mergeable_outcome(
+        values: Vec<u8>,
+        merge_count: Arc<atomic::AtomicUsize>,
+    ) -> HandlerOutcome {
+        HandlerOutcome::Mergeable {
+            partial_response: coppb::Response::default(),
+            result: Box::new(ConcatMergeable {
+                values,
+                fail_serialize: false,
+                merge_count: Some(merge_count),
+            }),
+        }
+    }
+
+    fn mergeable_batch_output(values: Vec<u8>, fail_serialize: bool) -> BatchTaskOutput {
+        BatchTaskOutput {
+            response: coppb::StoreBatchTaskResponse::default(),
+            mergeable_result: Some(Box::new(ConcatMergeable {
+                values,
+                fail_serialize,
+                merge_count: None,
+            })),
         }
     }
 
@@ -1457,16 +1895,251 @@ mod tests {
         }
     }
 
+    fn merge_batch_task_responses_for_test(
+        output: HandlerOutput,
+        batch_outputs: Vec<BatchTaskOutput>,
+    ) -> MemoryTraceGuard<coppb::Response> {
+        block_on(merge_batch_task_responses(
+            output,
+            batch_outputs,
+            ::tracker::INVALID_TRACKER_TOKEN,
+            Deadline::from_now(Duration::from_secs(60)),
+        ))
+    }
+
+    /// Sets every detail counter to `value`, so tests catch a task's
+    /// details being dropped or mixed up while attaching.
+    fn filled_exec_details_v2(value: u64) -> kvrpcpb::ExecDetailsV2 {
+        let mut details = kvrpcpb::ExecDetailsV2::default();
+        let scan = details.mut_scan_detail_v2();
+        scan.processed_versions = value;
+        scan.processed_versions_size = value;
+        scan.total_versions = value;
+        scan.rocksdb_delete_skipped_count = value;
+        scan.rocksdb_key_skipped_count = value;
+        scan.rocksdb_block_cache_hit_count = value;
+        scan.rocksdb_block_read_count = value;
+        scan.rocksdb_block_read_byte = value;
+        scan.rocksdb_block_read_nanos = value;
+        scan.get_snapshot_nanos = value;
+        scan.read_index_propose_wait_nanos = value;
+        scan.read_index_confirm_wait_nanos = value;
+        scan.read_pool_schedule_wait_nanos = value;
+        let time = details.mut_time_detail_v2();
+        time.wait_wall_time_ns = value;
+        time.process_wall_time_ns = value;
+        time.process_suspend_wall_time_ns = value;
+        time.kv_read_wall_time_ns = value;
+        details
+    }
+
+    #[test]
+    fn test_collect_batch_task_outputs_polls_batch_tasks_concurrently() {
+        // The top task must not gate the batched tasks: their read pool
+        // tasks are enqueued only when the stream is polled while their
+        // deadlines are already counting down. Here the top task completes
+        // only after the batched task ran, so awaiting the top task first
+        // would hang forever.
+        let (tx, rx) = oneshot::channel::<()>();
+        let top = async move {
+            rx.await.unwrap();
+            HandlerOutput::from(HandlerOutcome::Ready(coppb::Response::default()))
+        };
+        let mut tx = Some(tx);
+        let batch_outputs = stream::iter([2u8, 3]).then(move |value| {
+            if let Some(tx) = tx.take() {
+                tx.send(()).unwrap();
+            }
+            future::ready(mergeable_batch_output(vec![value], false))
+        });
+        let (output, batch_outputs) = block_on(collect_batch_task_outputs(top, batch_outputs));
+        assert!(matches!(&*output, HandlerOutcome::Ready(_)));
+        // Outputs are collected in completion order with their results.
+        let values: Vec<_> = batch_outputs
+            .into_iter()
+            .map(|output| output.mergeable_result.unwrap().into_data().unwrap())
+            .collect();
+        assert_eq!(values, vec![vec![2], vec![3]]);
+    }
+
+    #[test]
+    fn test_merge_batch_task_responses_merge() {
+        // Successful mergeable results are merged into the top result and
+        // acknowledged data-less, keeping the collected (completion) order
+        // and their own execution details. The serialized merged data
+        // becomes traced by the guard's memory trace.
+        let merge_count = Arc::new(atomic::AtomicUsize::new(0));
+        let mut outcome = observed_mergeable_outcome(vec![1], merge_count.clone());
+        outcome
+            .response_mut()
+            .set_exec_details_v2(filled_exec_details_v2(1));
+        let mut batch_outputs = vec![
+            mergeable_batch_output(vec![3], false),
+            mergeable_batch_output(vec![2], false),
+        ];
+        batch_outputs[0]
+            .response
+            .set_exec_details_v2(filled_exec_details_v2(100));
+        batch_outputs[1]
+            .response
+            .set_exec_details_v2(filled_exec_details_v2(10));
+
+        let trace = tikv_alloc::mem_trace!(test_merge_batch_responses);
+        let output = trace.trace_guard(outcome, 0);
+        let resp = merge_batch_task_responses_for_test(output, batch_outputs);
+        assert_eq!(merge_count.load(atomic::Ordering::SeqCst), 2);
+        assert_eq!(resp.get_data(), &[1, 2, 3]);
+        assert!(!response_has_error(&resp));
+        assert_eq!(resp.get_exec_details_v2(), &filled_exec_details_v2(1));
+        let batch_resps = resp.get_batch_responses();
+        assert_eq!(batch_resps.len(), 2);
+        for (batch_resp, value) in batch_resps.iter().zip([100, 10]) {
+            assert!(batch_resp.get_data_merged_into_response());
+            assert!(batch_resp.get_data().is_empty());
+            assert_eq!(
+                batch_resp.get_exec_details_v2(),
+                &filled_exec_details_v2(value)
+            );
+        }
+        assert_eq!(trace.sum(), 3);
+        drop(resp);
+        assert_eq!(trace.sum(), 0);
+    }
+
+    #[test]
+    fn test_merge_batch_task_responses_top_error_blocks_merge() {
+        // A failed top task blocks merging even when every batched
+        // task kept a mergeable result.
+        let mut outcome = mergeable_outcome(vec![1], false);
+        outcome
+            .response_mut()
+            .set_other_error("top failed".to_owned());
+        let resp = merge_batch_task_responses_for_test(
+            outcome.into(),
+            vec![mergeable_batch_output(vec![2], false)],
+        );
+        assert_eq!(resp.get_other_error(), "top failed");
+        assert_eq!(resp.get_data(), &[1]);
+        let batch_resps = resp.get_batch_responses();
+        assert_eq!(batch_resps.len(), 1);
+        assert!(!batch_resps[0].get_data_merged_into_response());
+        assert_eq!(batch_resps[0].get_data(), &[2]);
+    }
+
+    #[test]
+    fn test_merge_batch_task_responses_deadline() {
+        // An exceeded deadline degrades the whole response to a plain error
+        // without data, acknowledgements or batch responses: the top error
+        // makes the client retry every task, so nothing is lost or
+        // double-counted. The consumed results release their traces.
+        let deadline = Deadline::from_now(Duration::ZERO);
+        thread::sleep(Duration::from_millis(200));
+        let trace = tikv_alloc::mem_trace!(test_merge_deadline);
+        let output = trace.trace_guard(mergeable_outcome(vec![1], false), 5);
+        let resp = block_on(merge_batch_task_responses(
+            output,
+            vec![mergeable_batch_output(vec![2], false)],
+            ::tracker::INVALID_TRACKER_TOKEN,
+            deadline,
+        ));
+        assert!(resp.has_region_error());
+        assert!(resp.get_data().is_empty());
+        assert!(resp.get_batch_responses().is_empty());
+        assert_eq!(trace.sum(), 0);
+    }
+
+    #[test]
+    fn test_merge_batch_task_responses_partial_merge() {
+        // A failed task stays separate while successful mergeable tasks are
+        // merged and acknowledged. Errors and details remain on their tasks.
+        let mut outcome = mergeable_outcome(vec![1], false);
+        outcome
+            .response_mut()
+            .set_exec_details_v2(filled_exec_details_v2(1));
+        let mut failed = mergeable_batch_output(vec![3], false);
+        failed.response.set_other_error("boom".to_owned());
+        failed
+            .response
+            .set_exec_details_v2(filled_exec_details_v2(100));
+        let mut batch_outputs = vec![mergeable_batch_output(vec![2], false), failed];
+        batch_outputs[0]
+            .response
+            .set_exec_details_v2(filled_exec_details_v2(10));
+
+        let resp = merge_batch_task_responses_for_test(outcome.into(), batch_outputs);
+        assert_eq!(resp.get_data(), &[1, 2]);
+        assert_eq!(resp.get_exec_details_v2(), &filled_exec_details_v2(1));
+        let batch_resps = resp.get_batch_responses();
+        assert_eq!(batch_resps.len(), 2);
+        assert!(batch_resps[0].get_data_merged_into_response());
+        assert!(batch_resps[0].get_data().is_empty());
+        assert_eq!(
+            batch_resps[0].get_exec_details_v2(),
+            &filled_exec_details_v2(10)
+        );
+        assert!(!batch_resps[1].get_data_merged_into_response());
+        assert_eq!(batch_resps[1].get_data(), &[3]);
+        assert_eq!(batch_resps[1].get_other_error(), "boom");
+        assert_eq!(
+            batch_resps[1].get_exec_details_v2(),
+            &filled_exec_details_v2(100)
+        );
+    }
+
+    #[test]
+    fn test_merge_batch_task_responses_serialize_errors_confined() {
+        // When the top result cannot carry merged data, a task whose result
+        // cannot be serialized turns into that task's error; the other
+        // tasks are unaffected.
+        let batch_outputs = vec![
+            mergeable_batch_output(vec![2], true),
+            mergeable_batch_output(vec![3], false),
+        ];
+        let resp = merge_batch_task_responses_for_test(
+            HandlerOutcome::Ready(coppb::Response::default()).into(),
+            batch_outputs,
+        );
+        assert!(!response_has_error(&resp));
+        let batch_resps = resp.get_batch_responses();
+        assert_eq!(batch_resps.len(), 2);
+        assert!(!batch_resps[0].get_other_error().is_empty());
+        assert!(batch_resps[0].get_data().is_empty());
+        assert_eq!(batch_resps[1].get_data(), &[3]);
+
+        // A top task whose result cannot be serialized turns into an error
+        // response that still carries the batch responses.
+        let resp = merge_batch_task_responses_for_test(
+            mergeable_outcome(vec![1], true).into(),
+            vec![BatchTaskOutput {
+                response: coppb::StoreBatchTaskResponse::default(),
+                mergeable_result: None,
+            }],
+        );
+        assert!(!resp.get_other_error().is_empty());
+        assert_eq!(resp.get_batch_responses().len(), 1);
+
+        // When the merged result cannot be serialized, the tasks' results
+        // are already consumed: the whole response degrades to an error
+        // without acknowledging the tasks as merged.
+        let resp = merge_batch_task_responses_for_test(
+            mergeable_outcome(vec![1], true).into(),
+            vec![mergeable_batch_output(vec![2], false)],
+        );
+        assert!(!resp.get_other_error().is_empty());
+        assert!(resp.get_batch_responses().is_empty());
+    }
+
     #[test]
     fn test_serialize_handler_outcome() {
         // A mergeable outcome is serialized into a ready response and the
         // guard's trace is resized to the serialized data.
         let trace = tikv_alloc::mem_trace!(test_serialize_outcome);
         let output = trace.trace_guard(mergeable_outcome(vec![3, 1, 2], false), 0);
-        let resp = serialize_handler_outcome(output).unwrap();
-        assert_eq!(resp.get_data(), &[1, 2, 3]);
+        let output = serialize_handler_outcome(output).unwrap();
+        assert!(matches!(&*output, HandlerOutcome::Ready(_)));
+        assert_eq!(output.response().get_data(), &[1, 2, 3]);
         assert_eq!(trace.sum(), 3);
-        drop(resp);
+        drop(output);
         assert_eq!(trace.sum(), 0);
 
         // A serialization failure surfaces as the handler's error and
@@ -1479,8 +2152,8 @@ mod tests {
         let mut ready = coppb::Response::default();
         ready.set_data(vec![7]);
         let output = trace.trace_guard(HandlerOutcome::Ready(ready), 5);
-        let resp = serialize_handler_outcome(output).unwrap();
-        assert_eq!(resp.get_data(), &[7]);
+        let output = serialize_handler_outcome(output).unwrap();
+        assert_eq!(output.response().get_data(), &[7]);
         assert_eq!(trace.sum(), 5);
     }
 
@@ -1501,8 +2174,8 @@ mod tests {
             None,
         );
 
-        // The handler's mergeable result is serialized inside the request's
-        // own read pool task and returned as ordinary response data.
+        // With `serialize_outcome`, a `Mergeable` outcome is serialized into
+        // its response inside the request's own read pool task.
         let handler_builder = Box::new(|_, _: &_| {
             Ok(MergeableFixture {
                 values: vec![3, 1, 2],
@@ -1510,11 +2183,29 @@ mod tests {
             }
             .into_boxed())
         });
-        let resp = block_on(
-            copr.handle_unary_request(ParseCopRequestResult::default_for_test(handler_builder)),
-        )
-        .unwrap();
+        let resp = unwrap_ready(
+            block_on(copr.handle_unary_request(
+                ParseCopRequestResult::default_for_test(handler_builder),
+                true,
+            ))
+            .unwrap(),
+        );
         assert_eq!(resp.get_data(), &[1, 2, 3]);
+
+        // Without it, the result stays unserialized for batched merging.
+        let handler_builder = Box::new(|_, _: &_| {
+            Ok(MergeableFixture {
+                values: vec![1],
+                fail_serialize: false,
+            }
+            .into_boxed())
+        });
+        let output = block_on(copr.handle_unary_request(
+            ParseCopRequestResult::default_for_test(handler_builder),
+            false,
+        ))
+        .unwrap();
+        assert!(matches!(&*output, HandlerOutcome::Mergeable { .. }));
 
         // An in-place serialization failure surfaces like a handler error.
         let handler_builder = Box::new(|_, _: &_| {
@@ -1524,11 +2215,50 @@ mod tests {
             }
             .into_boxed())
         });
-        let resp = block_on(
-            copr.handle_unary_request(ParseCopRequestResult::default_for_test(handler_builder)),
-        )
-        .unwrap();
+        let resp = unwrap_ready(
+            block_on(copr.handle_unary_request(
+                ParseCopRequestResult::default_for_test(handler_builder),
+                true,
+            ))
+            .unwrap(),
+        );
         assert!(!resp.get_other_error().is_empty());
+    }
+
+    #[test]
+    fn test_batch_merge_finalizer() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cm = ConcurrencyManager::new_for_test(1.into());
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            None,
+        );
+
+        // The finalizer runs the merge as a read pool task and hands the
+        // response back to the caller.
+        let finalizer = copr.batch_merge_finalizer(
+            kvrpcpb::Context::default(),
+            Deadline::from_now(Duration::from_secs(60)),
+            0,
+        );
+        let resp = block_on(finalizer.finalize(
+            mergeable_outcome(vec![1], false).into(),
+            vec![mergeable_batch_output(vec![2], false)],
+            ::tracker::INVALID_TRACKER_TOKEN,
+        ));
+        assert_eq!(resp.get_data(), &[1, 2]);
+        let batch_resps = resp.get_batch_responses();
+        assert_eq!(batch_resps.len(), 1);
+        assert!(batch_resps[0].get_data_merged_into_response());
+        assert!(batch_resps[0].get_data().is_empty());
     }
 
     /// A streaming `RequestHandler` that always produces a fixture.
@@ -1639,10 +2369,13 @@ mod tests {
         // a normal request
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed()));
-        let resp = block_on(
-            copr.handle_unary_request(ParseCopRequestResult::default_for_test(handler_builder)),
-        )
-        .unwrap();
+        let resp = unwrap_ready(
+            block_on(copr.handle_unary_request(
+                ParseCopRequestResult::default_for_test(handler_builder),
+                true,
+            ))
+            .unwrap(),
+        );
         assert!(resp.get_other_error().is_empty());
 
         // an outdated request
@@ -1659,11 +2392,14 @@ mod tests {
             PerfLevel::EnableCount,
             false,
         );
-        block_on(copr.handle_unary_request(ParseCopRequestResult {
-            req_ctx: outdated_req_ctx,
-            req_tag: ReqTag::test,
-            handler_builder,
-        }))
+        block_on(copr.handle_unary_request(
+            ParseCopRequestResult {
+                req_ctx: outdated_req_ctx,
+                req_tag: ReqTag::test,
+                handler_builder,
+            },
+            true,
+        ))
         .unwrap_err();
     }
 
@@ -1812,8 +2548,10 @@ mod tests {
                         .into_boxed(),
                 )
             });
-            let future =
-                copr.handle_unary_request(ParseCopRequestResult::default_for_test(handler_builder));
+            let future = copr.handle_unary_request(
+                ParseCopRequestResult::default_for_test(handler_builder),
+                true,
+            );
             let tx = tx.clone();
             thread::spawn(move || {
                 tx.send(block_on(future)).unwrap();
@@ -1826,7 +2564,7 @@ mod tests {
             rx.recv().unwrap().unwrap_err();
         }
         for i in 0..2 {
-            let resp = rx.recv().unwrap().unwrap();
+            let resp = unwrap_ready(rx.recv().unwrap().unwrap());
             assert_eq!(resp.get_data(), [1, 2, i]);
             assert!(!resp.has_region_error());
         }
@@ -1851,10 +2589,13 @@ mod tests {
 
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Err(box_err!("foo"))).into_boxed()));
-        let resp = block_on(
-            copr.handle_unary_request(ParseCopRequestResult::default_for_test(handler_builder)),
-        )
-        .unwrap();
+        let resp = unwrap_ready(
+            block_on(copr.handle_unary_request(
+                ParseCopRequestResult::default_for_test(handler_builder),
+                true,
+            ))
+            .unwrap(),
+        );
         assert_eq!(resp.get_data().len(), 0);
         assert!(!resp.get_other_error().is_empty());
     }
@@ -1895,10 +2636,13 @@ mod tests {
             response.set_data(vec![1, 2, 3, 4]);
             Ok(UnaryFixture::new(Ok(response)).into_boxed())
         });
-        let resp = block_on(
-            copr.handle_unary_request(ParseCopRequestResult::default_for_test(handler_builder)),
-        )
-        .unwrap();
+        let resp = unwrap_ready(
+            block_on(copr.handle_unary_request(
+                ParseCopRequestResult::default_for_test(handler_builder),
+                true,
+            ))
+            .unwrap(),
+        );
 
         assert_eq!(
             resp.get_exec_details_v2()
@@ -2199,13 +2943,20 @@ mod tests {
                         .into_boxed(),
                 )
             });
-            let resp_future_1 = copr.handle_unary_request(ParseCopRequestResult {
-                req_tag: ReqTag::test,
-                req_ctx: req_with_exec_detail.clone(),
-                handler_builder,
-            });
+            let resp_future_1 = copr.handle_unary_request(
+                ParseCopRequestResult {
+                    req_tag: ReqTag::test,
+                    req_ctx: req_with_exec_detail.clone(),
+                    handler_builder,
+                },
+                true,
+            );
             let sender = tx.clone();
-            thread::spawn(move || sender.send(vec![block_on(resp_future_1).unwrap()]).unwrap());
+            thread::spawn(move || {
+                sender
+                    .send(vec![unwrap_ready(block_on(resp_future_1).unwrap())])
+                    .unwrap()
+            });
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
             thread::sleep(SNAPSHOT_DURATION);
 
@@ -2216,13 +2967,20 @@ mod tests {
                         .into_boxed(),
                 )
             });
-            let resp_future_2 = copr.handle_unary_request(ParseCopRequestResult {
-                req_tag: ReqTag::test,
-                req_ctx: req_with_exec_detail.clone(),
-                handler_builder,
-            });
+            let resp_future_2 = copr.handle_unary_request(
+                ParseCopRequestResult {
+                    req_tag: ReqTag::test,
+                    req_ctx: req_with_exec_detail.clone(),
+                    handler_builder,
+                },
+                true,
+            );
             let sender = tx.clone();
-            thread::spawn(move || sender.send(vec![block_on(resp_future_2).unwrap()]).unwrap());
+            thread::spawn(move || {
+                sender
+                    .send(vec![unwrap_ready(block_on(resp_future_2).unwrap())])
+                    .unwrap()
+            });
             thread::sleep(SNAPSHOT_DURATION);
 
             // Response 1
@@ -2325,13 +3083,20 @@ mod tests {
                 )
                 .into_boxed())
             });
-            let resp_future_1 = copr.handle_unary_request(ParseCopRequestResult {
-                req_tag: ReqTag::test,
-                req_ctx: req_with_exec_detail.clone(),
-                handler_builder,
-            });
+            let resp_future_1 = copr.handle_unary_request(
+                ParseCopRequestResult {
+                    req_tag: ReqTag::test,
+                    req_ctx: req_with_exec_detail.clone(),
+                    handler_builder,
+                },
+                true,
+            );
             let sender = tx.clone();
-            thread::spawn(move || sender.send(vec![block_on(resp_future_1).unwrap()]).unwrap());
+            thread::spawn(move || {
+                sender
+                    .send(vec![unwrap_ready(block_on(resp_future_1).unwrap())])
+                    .unwrap()
+            });
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
             thread::sleep(SNAPSHOT_DURATION);
 
@@ -2342,13 +3107,20 @@ mod tests {
                         .into_boxed(),
                 )
             });
-            let resp_future_2 = copr.handle_unary_request(ParseCopRequestResult {
-                req_tag: ReqTag::test,
-                req_ctx: req_with_exec_detail.clone(),
-                handler_builder,
-            });
+            let resp_future_2 = copr.handle_unary_request(
+                ParseCopRequestResult {
+                    req_tag: ReqTag::test,
+                    req_ctx: req_with_exec_detail.clone(),
+                    handler_builder,
+                },
+                true,
+            );
             let sender = tx.clone();
-            thread::spawn(move || sender.send(vec![block_on(resp_future_2).unwrap()]).unwrap());
+            thread::spawn(move || {
+                sender
+                    .send(vec![unwrap_ready(block_on(resp_future_2).unwrap())])
+                    .unwrap()
+            });
             thread::sleep(SNAPSHOT_DURATION);
 
             // Response 1
@@ -2408,13 +3180,20 @@ mod tests {
                         .into_boxed(),
                 )
             });
-            let resp_future_1 = copr.handle_unary_request(ParseCopRequestResult {
-                req_tag: ReqTag::test,
-                req_ctx: req_with_exec_detail.clone(),
-                handler_builder,
-            });
+            let resp_future_1 = copr.handle_unary_request(
+                ParseCopRequestResult {
+                    req_tag: ReqTag::test,
+                    req_ctx: req_with_exec_detail.clone(),
+                    handler_builder,
+                },
+                true,
+            );
             let sender = tx.clone();
-            thread::spawn(move || sender.send(vec![block_on(resp_future_1).unwrap()]).unwrap());
+            thread::spawn(move || {
+                sender
+                    .send(vec![unwrap_ready(block_on(resp_future_1).unwrap())])
+                    .unwrap()
+            });
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
             thread::sleep(SNAPSHOT_DURATION);
 
@@ -2592,12 +3371,17 @@ mod tests {
             inner.deadline = Deadline::from_now(Duration::from_millis(500));
             let config: ReqContext = inner.into();
 
-            let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
-                req_tag: ReqTag::test,
-                req_ctx: config,
-                handler_builder,
-            }))
-            .unwrap();
+            let resp = unwrap_ready(
+                block_on(copr.handle_unary_request(
+                    ParseCopRequestResult {
+                        req_tag: ReqTag::test,
+                        req_ctx: config,
+                        handler_builder,
+                    },
+                    true,
+                ))
+                .unwrap(),
+            );
             assert_eq!(resp.get_data().len(), 0);
             let region_err = resp.get_region_error();
             assert_eq!(
@@ -2619,12 +3403,17 @@ mod tests {
             inner.deadline = Deadline::from_now(Duration::from_millis(500));
             let config: ReqContext = inner.into();
 
-            let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
-                req_tag: ReqTag::test,
-                req_ctx: config,
-                handler_builder,
-            }))
-            .unwrap();
+            let resp = unwrap_ready(
+                block_on(copr.handle_unary_request(
+                    ParseCopRequestResult {
+                        req_tag: ReqTag::test,
+                        req_ctx: config,
+                        handler_builder,
+                    },
+                    true,
+                ))
+                .unwrap(),
+            );
             assert_eq!(resp.get_data().len(), 0);
             let region_err = resp.get_region_error();
             assert_eq!(
@@ -2818,12 +3607,17 @@ mod tests {
             inner.deadline = Deadline::from_now(Duration::from_millis(500));
             let config: ReqContext = inner.into();
 
-            let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
-                req_tag: ReqTag::test,
-                req_ctx: config,
-                handler_builder,
-            }))
-            .unwrap();
+            let resp = unwrap_ready(
+                block_on(copr.handle_unary_request(
+                    ParseCopRequestResult {
+                        req_tag: ReqTag::test,
+                        req_ctx: config,
+                        handler_builder,
+                    },
+                    true,
+                ))
+                .unwrap(),
+            );
             assert!(!resp.has_region_error(), "{:?}", resp);
         }
 
@@ -2838,11 +3632,14 @@ mod tests {
             inner.deadline = Deadline::from_now(Duration::from_millis(500));
             let config: ReqContext = inner.into();
 
-            let res = block_on(copr.handle_unary_request(ParseCopRequestResult {
-                req_tag: ReqTag::test,
-                req_ctx: config,
-                handler_builder,
-            }));
+            let res = block_on(copr.handle_unary_request(
+                ParseCopRequestResult {
+                    req_tag: ReqTag::test,
+                    req_ctx: config,
+                    handler_builder,
+                },
+                true,
+            ));
             assert!(res.is_err(), "{:?}", res);
             let resp = make_error_response(res.unwrap_err());
             assert_eq!(resp.get_data().len(), 0);
