@@ -486,6 +486,10 @@ fn test_batched_full_sampling_responses() {
         .clone()
         .map(|details| details.get_scan_detail_v2().get_rocksdb_key_skipped_count())
         .sum::<u64>();
+    assert!(
+        expected_rocksdb_key_skipped > 0,
+        "fixture must exercise tracker-owned RocksDB details"
+    );
     let expected_table_scan_iterations = all_unmerged_details
         .map(|details| {
             details
