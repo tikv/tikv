@@ -263,6 +263,19 @@ impl<T: Default> MemoryTraceGuard<T> {
         }
         std::mem::take(&mut self.item)
     }
+
+    /// Adjusts the traced size to `size`, e.g. after replacing the item with
+    /// one of a different size. Does nothing if the guard traces no memory.
+    pub fn retrace(&mut self, size: usize) {
+        if let Some(node) = &self.node {
+            if size > self.size {
+                node.trace(TraceEvent::Add(size - self.size));
+            } else if size < self.size {
+                node.trace(TraceEvent::Sub(self.size - size));
+            }
+            self.size = size;
+        }
+    }
 }
 
 impl<T: Default> Drop for MemoryTraceGuard<T> {
@@ -342,6 +355,24 @@ mod tests {
             .sub_trace(Id::Name("mid2"))
             .trace(TraceEvent::Add(100));
         assert_eq!(111, trace.sum());
+    }
+
+    #[test]
+    fn test_trace_guard_retrace() {
+        let trace = mem_trace!(root);
+        let mut guard = trace.trace_guard(vec![0u8; 4], 4);
+        assert_eq!(trace.sum(), 4);
+        guard.retrace(10);
+        assert_eq!(trace.sum(), 10);
+        guard.retrace(2);
+        assert_eq!(trace.sum(), 2);
+        drop(guard);
+        assert_eq!(trace.sum(), 0);
+
+        // A guard without a trace node ignores retrace.
+        let mut guard = crate::trace::MemoryTraceGuard::from(vec![0u8; 4]);
+        guard.retrace(10);
+        drop(guard);
     }
 
     #[test]

@@ -79,6 +79,16 @@ impl FmSketch {
             self.mask = mask;
         }
     }
+
+    pub(crate) fn merge(&mut self, other: &FmSketch) {
+        if self.mask < other.mask {
+            self.mask = other.mask;
+            self.hash_set.retain(|&x| x & self.mask == 0);
+        }
+        for hash in &other.hash_set {
+            self.insert_hash_value(*hash);
+        }
+    }
 }
 
 impl From<FmSketch> for tipb::FmSketch {
@@ -185,5 +195,29 @@ mod tests {
         assert_eq!(sketch.hash_set.len(), max_size);
         sketch.insert_hash_value(4);
         assert_eq!(sketch.hash_set.len(), max_size);
+    }
+
+    #[test]
+    fn test_merge() {
+        // Sketches over halves of the data merge into the same sketch as one
+        // built over all of it, whether the mask grows on the left (small
+        // max_size forces levels) or the right side.
+        let data = TestData::default();
+        let max_size = 100;
+        let whole = build_fmsketch(&data.samples, max_size).unwrap();
+        let (left, right) = data.samples.split_at(data.samples.len() / 2);
+        let mut merged = build_fmsketch(left, max_size).unwrap();
+        merged.merge(&build_fmsketch(right, max_size).unwrap());
+        assert_eq!(merged.mask, whole.mask);
+        assert_eq!(merged.ndv(), whole.ndv());
+
+        // Merging a leveled-up sketch (bigger mask) prunes the receiver.
+        let small = build_fmsketch(&data.samples, 2).unwrap();
+        let mut receiver = FmSketch::new(2);
+        receiver.insert_hash_value(1);
+        assert_eq!(receiver.mask, 0);
+        receiver.merge(&small);
+        assert!(receiver.mask >= small.mask);
+        assert!(receiver.hash_set.iter().all(|h| h & receiver.mask == 0));
     }
 }
