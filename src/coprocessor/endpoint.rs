@@ -2145,6 +2145,27 @@ mod tests {
         }
     }
 
+    fn unfinished_analyze_output(owner: TrackerToken) -> AnalyzeScanOutput<RocksEngine> {
+        let mut tracker = Box::new(Tracker::<RocksEngine>::new(
+            ReqContextInner::default_for_test().into(),
+            ReqTag::test,
+            Duration::from_secs(3600),
+        ));
+        let previous = get_tls_tracker_token();
+        set_tls_tracker_token(owner);
+        tracker.on_scheduled();
+        tracker.on_snapshot_finished();
+        tracker.on_begin_all_items();
+        tracker.on_begin_item();
+        tracker.on_finish_item(None);
+        set_tls_tracker_token(previous);
+        AnalyzeScanOutput {
+            response: coppb::Response::default(),
+            result: AnalyzeSamplingResult::default(),
+            tracker: Some(TokenTrackedTracker::new(tracker, owner)),
+        }
+    }
+
     #[test]
     fn test_collect_batch_task_outputs_polls_batch_tasks_concurrently() {
         // The top task must not gate the batched tasks: their read pool
@@ -2179,6 +2200,176 @@ mod tests {
         let mut details = filled_exec_details_v2(u64::MAX - 1);
         merge_exec_details_v2(&mut details, &filled_exec_details_v2(10));
         assert_eq!(details, filled_exec_details_v2(u64::MAX));
+    }
+
+    #[test]
+    fn test_token_tracked_tracker_drop_restores_tls_and_uses_owner() {
+        let context = kvrpcpb::Context::default();
+        let owner = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
+            &context,
+            RequestType::CoprocessorAnalyze,
+            1,
+        )));
+        let sibling = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
+            &context,
+            RequestType::CoprocessorAnalyze,
+            2,
+        )));
+        let original = get_tls_tracker_token();
+        let local_tracker = Box::new(Tracker::<RocksEngine>::new(
+            ReqContextInner::default_for_test().into(),
+            ReqTag::test,
+            Duration::from_secs(3600),
+        ));
+        thread::sleep(Duration::from_millis(1));
+
+        set_tls_tracker_token(sibling);
+        drop(TokenTrackedTracker::new(local_tracker, owner));
+
+        assert_eq!(get_tls_tracker_token(), sibling);
+        let owner_wait = GLOBAL_TRACKERS
+            .with_tracker(owner, |tracker| {
+                tracker.metrics.read_pool_schedule_wait_nanos
+            })
+            .unwrap();
+        let sibling_wait = GLOBAL_TRACKERS
+            .with_tracker(sibling, |tracker| {
+                tracker.metrics.read_pool_schedule_wait_nanos
+            })
+            .unwrap();
+        assert!(owner_wait > 0);
+        assert_eq!(sibling_wait, 0);
+
+        set_tls_tracker_token(original);
+        GLOBAL_TRACKERS.remove(owner);
+        GLOBAL_TRACKERS.remove(sibling);
+    }
+
+    #[test]
+    fn test_analyze_finalizer_waits_for_eager_semaphore_permit() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let context = kvrpcpb::Context::default();
+        let owner = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
+            &context,
+            RequestType::CoprocessorAnalyze,
+            1,
+        )));
+        let semaphore = Arc::new(Semaphore::new(0));
+        let finalizer = AnalyzeBatchFinalizer {
+            read_pool: read_pool.handle(),
+            semaphore: Some(semaphore.clone()),
+            resource_tag: ResourceTagFactory::new_for_test().new_tag(&context),
+            priority: CommandPri::Normal,
+            metadata: TaskMetadata::default(),
+            resource_limiter: None,
+            deadline: Deadline::from_now(Duration::from_secs(60)),
+            task_id: 0,
+        };
+        let mut future = Box::pin(finalizer.finalize(
+            unfinished_analyze_output(owner),
+            vec![BatchTaskOutput {
+                ordinal: 0,
+                response: coppb::StoreBatchTaskResponse::default(),
+                analyze_result: Some(AnalyzeSamplingResult::default()),
+            }],
+            owner,
+        ));
+        let waker = futures::task::noop_waker();
+        let mut context = std::task::Context::from_waker(&waker);
+        assert!(future.as_mut().poll(&mut context).is_pending());
+        thread::sleep(Duration::from_millis(50));
+        assert!(future.as_mut().poll(&mut context).is_pending());
+
+        semaphore.add_permits(1);
+        let (response, scan_detail_written) = block_on(future);
+        assert!(scan_detail_written);
+        assert!(!response.has_region_error(), "{:?}", response);
+        assert_eq!(response.get_batch_responses().len(), 1);
+        assert!(response.get_batch_responses()[0].get_data_merged_into_response());
+        GLOBAL_TRACKERS.remove(owner);
+    }
+
+    #[test]
+    fn test_analyze_finalizer_rejection_has_no_inline_fallback() {
+        use tikv_util::yatp_pool::{DefaultTicker, YatpPoolBuilder};
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = ReadPool::from(
+            CoprReadPoolConfig {
+                normal_concurrency: 1,
+                max_tasks_per_worker_normal: 2,
+                ..CoprReadPoolConfig::default_for_test()
+            }
+            .to_yatp_pool_configs()
+            .into_iter()
+            .map(|config| {
+                let engine = Arc::new(Mutex::new(engine.clone()));
+                YatpPoolBuilder::new(DefaultTicker::default())
+                    .config(config)
+                    .name_prefix("analyze_finalizer_rejection")
+                    .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
+                    // Safety: the paired hooks use the same engine type.
+                    .before_stop(|| unsafe { destroy_tls_engine::<RocksEngine>() })
+                    .build_future_pool()
+            })
+            .collect::<Vec<_>>(),
+        );
+        let handle = read_pool.handle();
+        let (release_first, wait_first) = oneshot::channel::<()>();
+        let (release_second, wait_second) = oneshot::channel::<()>();
+        block_on(handle.spawn(
+            async move {
+                let _ = wait_first.await;
+            },
+            CommandPri::Normal,
+            1,
+            TaskMetadata::default(),
+            None,
+        ))
+        .unwrap();
+        block_on(handle.spawn(
+            async move {
+                let _ = wait_second.await;
+            },
+            CommandPri::Normal,
+            2,
+            TaskMetadata::default(),
+            None,
+        ))
+        .unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        let context = kvrpcpb::Context::default();
+        let owner = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
+            &context,
+            RequestType::CoprocessorAnalyze,
+            1,
+        )));
+        let finalizer = AnalyzeBatchFinalizer {
+            read_pool: handle,
+            semaphore: None,
+            resource_tag: ResourceTagFactory::new_for_test().new_tag(&context),
+            priority: CommandPri::Normal,
+            metadata: TaskMetadata::default(),
+            resource_limiter: None,
+            deadline: Deadline::from_now(Duration::from_secs(60)),
+            task_id: 3,
+        };
+        let (response, scan_detail_written) =
+            block_on(finalizer.finalize(unfinished_analyze_output(owner), Vec::new(), owner));
+        assert!(!scan_detail_written);
+        assert!(response.has_region_error(), "{:?}", response);
+        assert!(response.get_region_error().has_server_is_busy());
+        assert!(response.get_data().is_empty());
+        assert!(response.get_batch_responses().is_empty());
+
+        release_first.send(()).unwrap();
+        release_second.send(()).unwrap();
+        GLOBAL_TRACKERS.remove(owner);
     }
 
     #[test]
