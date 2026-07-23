@@ -2414,6 +2414,9 @@ mod tests {
         analyze.set_tp(AnalyzeType::TypeFullSampling);
         req.set_data(analyze.write_to_bytes().unwrap());
         assert!(allows_full_sampling_analyze_merge(&req));
+        req.set_is_cache_enabled(true);
+        assert!(!allows_full_sampling_analyze_merge(&req));
+        req.set_is_cache_enabled(false);
         req.set_allow_batch_task_data_merge(false);
         assert!(!allows_full_sampling_analyze_merge(&req));
     }

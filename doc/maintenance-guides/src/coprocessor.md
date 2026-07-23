@@ -57,52 +57,45 @@ It is a read-heavy hot path and directly impacts query latency.
 - Cache-match version, flashback allowance, and lock-bypass/access sets are all
   correctness-sensitive metadata, not optional optimization flags.
 
-### Handler outcomes and batched-task merging
+### Typed full-sampling Analyze batching
 
-- `RequestHandler::handle_request` returns a `HandlerOutcome`; today only
-  full-sampling analyze opts into the `Mergeable` outcome
-  (`statistics/analyze_context.rs`).
-- Merging happens only when the client allows it
-  (`Request.allow_batch_task_data_merge`), the request carries batched
-  tasks, and the top task kept an error-free mergeable result. Results of
-  one request must have the same concrete type; the endpoint relies on this
-  handler invariant rather than checking it at runtime. Merge
-  implementations must be logically order-independent. Batch responses
-  follow task completion order on the wire.
-- Wire contract: the top response carries its result merged with every
-  eligible successful batched task. Each merged task is acknowledged by a
-  data-less batch response with `data_merged_into_response` set and keeps its
-  execution details; failed or non-mergeable tasks keep normal batch
-  responses so the client can retry or consume them independently. Clients
-  that never set the request field keep receiving one response per task.
-- Scheduling invariant: a unary read pool task is enqueued only when its
-  future is first polled, while its deadline starts at parse time.
-  `endpoint.rs::collect_batch_task_outputs` therefore drives the top task
-  and the batched tasks concurrently (as `futures::join!` did before
-  batched merging existed); awaiting the top task first would leave every
-  batched task unscheduled behind it and could expire their deadlines
-  before they run.
-- Serialization and merging are CPU work that must keep the protections
-  handlers run under (read pool scheduling, resource metering tag,
-  deadline, coprocessor semaphore, execution tracking), not run on the gRPC
-  event loop. A request that cannot take part in merging — no batched
-  tasks, client did not allow merging — serializes its `Mergeable` outcome
-  inside its own read pool task (`handle_unary_request_impl`, inside the
-  deadline/track/concurrency wrappers). When merging can happen, results
-  stay unserialized until every output is collected, then
-  `merge_batch_task_responses` runs as a read pool task under the request's
-  deadline, resource tag and the coprocessor semaphore
-  (`BatchMergeFinalizer`), degrading to inline execution only if the pool
-  rejects the task. Outputs that finish early are buffered until the merge
-  runs, so peak memory is the collected unserialized results.
-- If the merge task's deadline expires, or serializing a result after
-  consuming any batched result fails, the endpoint returns a plain error
-  with neither partial data nor task acknowledgements, so a retry cannot
-  lose or double-count data.
-- The canonical contracts (merge order, downcast safety, memory and metrics
-  accounting) live on `HandlerOutcome`/`MergeableResult` in
-  `src/coprocessor/mod.rs` and on `collect_batch_task_outputs`/
-  `merge_batch_task_responses`/`BatchMergeFinalizer` in
+- The ordinary `RequestHandler::handle_request` contract still returns a
+  serialized `Response`. The endpoint has a separate, concrete
+  `FullSamplingAnalyzeHandler` path whose scan phase returns an
+  `AnalyzeSamplingResult`; generic handlers and other request types cannot opt
+  into result merging.
+- Merging is enabled only for a valid full-sampling Analyze request that sets
+  `Request.allow_batch_task_data_merge`, disables cache lookup, and carries at
+  least one batched task. All other requests keep the ordinary one-response-
+  per-task behavior. A negotiated request may carry at most four child tasks;
+  a wider request is rejected before any scan starts so the whole batch remains
+  retryable.
+- The top scan and child scans are polled concurrently because read-pool work
+  is enqueued only when its future is first polled, while its deadline starts
+  at parse time. At most four child scans run concurrently (five physical
+  scans including the top task). Completed children are restored to request
+  ordinal before merging and attachment; protocol task IDs may be absent or
+  duplicated and are not used for ordering.
+- Wire contract: the top response carries the sampling result merged in
+  request order with every successful child result. Each merged child becomes
+  a data-less acknowledgement with `data_merged_into_response` set. Failed or
+  non-mergeable children keep normal responses so the client can retry or
+  consume them independently.
+- The top response is the single accounting owner for merged work: its
+  execution details combine the top scan with every acknowledged child.
+  Acknowledgements retain their per-child details for diagnostics, but a
+  supporting client must not charge those details again.
+- Merging and protobuf encoding run in a second read-pool task under the
+  preserved top tracker, resource-metering tag, deadline, resource control,
+  and an eagerly acquired coprocessor semaphore permit. The finalizer never
+  falls back to inline execution. Pool rejection, permit/deadline failure, or
+  encode failure returns one top-level error with no child acknowledgements,
+  so the client retries the whole batch. Response bytes and acknowledgements
+  are committed only after encoding finishes and the deadline is rechecked.
+- The canonical contracts live on `FullSamplingAnalyzeHandler` and
+  `AnalyzeSamplingResult` in `src/coprocessor/statistics/`, and on
+  `collect_batch_task_outputs`, `merge_and_encode_analyze_batch`,
+  `finish_analyze_batch`, and `AnalyzeBatchFinalizer` in
   `src/coprocessor/endpoint.rs`.
 
 ## Start Here
