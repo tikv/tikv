@@ -461,11 +461,7 @@ fn test_batched_full_sampling_responses() {
         .sum::<u64>();
     let expected_processed_versions_size = all_unmerged_details
         .clone()
-        .map(|details| {
-            details
-                .get_scan_detail_v2()
-                .get_processed_versions_size()
-        })
+        .map(|details| details.get_scan_detail_v2().get_processed_versions_size())
         .sum::<u64>();
     let expected_total_versions = all_unmerged_details
         .clone()

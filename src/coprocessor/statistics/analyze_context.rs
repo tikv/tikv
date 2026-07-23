@@ -6,9 +6,12 @@ use api_version::{KvFormat, keyspace::KvPairEntry};
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
-use tidb_query_common::storage::{
-    Range,
-    scanner::{RangesScanner, RangesScannerOptions},
+use tidb_query_common::{
+    execute_stats::ExecSummary,
+    storage::{
+        Range,
+        scanner::{RangesScanner, RangesScannerOptions},
+    },
 };
 use tidb_query_datatype::codec::{datum::split_datum, table};
 use tidb_query_executors::interface::BatchExecutor;
@@ -56,6 +59,19 @@ pub struct AnalyzeContext<S: Snapshot, F: KvFormat> {
     // is_auto_analyze is used to indicate whether the analyze request is sent by TiDB itself.
     is_auto_analyze: bool,
     _phantom: PhantomData<F>,
+}
+
+/// The typed handler used only by negotiated full-sampling Analyze batches.
+///
+/// Ordinary and non-batched Analyze requests continue through
+/// [`RequestHandler`] and return a serialized [`Response`].
+#[async_trait]
+pub(crate) trait FullSamplingAnalyzeHandler: Send {
+    async fn handle_full_sampling(&mut self) -> Result<AnalyzeSamplingResult>;
+
+    fn collect_scan_statistics(&mut self, _dest: &mut Statistics) {}
+
+    fn collect_scan_summary(&mut self, _dest: &mut ExecSummary) {}
 }
 
 impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
@@ -125,6 +141,27 @@ impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
         builder: &mut RowSampleBuilder<S, F>,
     ) -> Result<AnalyzeSamplingResult> {
         builder.collect_column_stats().await
+    }
+
+    async fn handle_full_sampling_result(&mut self) -> Result<AnalyzeSamplingResult> {
+        let col_req = self.req.take_col_req();
+        let storage = self.storage.take().unwrap();
+        let ranges = std::mem::take(&mut self.ranges);
+        let mut builder = RowSampleBuilder::<_, F>::new(
+            col_req,
+            storage,
+            ranges,
+            self.quota_limiter.clone(),
+            self.is_auto_analyze,
+        )?;
+        let result = AnalyzeContext::handle_full_sampling(&mut builder).await;
+        builder.merge_storage_stats_into(&mut self.storage_stats);
+        result
+    }
+
+    fn take_storage_statistics(&mut self, dest: &mut Statistics) {
+        dest.add(&self.storage_stats);
+        self.storage_stats = Statistics::default();
     }
 
     // handle_index is used to handle `AnalyzeIndexReq`,
@@ -219,12 +256,7 @@ impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
 
 #[async_trait]
 impl<S: Snapshot, F: KvFormat> RequestHandler for AnalyzeContext<S, F> {
-    async fn handle_request(&mut self) -> Result<MemoryTraceGuard<HandlerOutcome>> {
-        let ready = |data| {
-            let mut response = Response::default();
-            response.set_data(data);
-            HandlerOutcome::Ready(response)
-        };
+    async fn handle_request(&mut self) -> Result<MemoryTraceGuard<Response>> {
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex | AnalyzeType::TypeCommonHandle => {
                 let req = self.req.take_idx_req();
@@ -248,7 +280,7 @@ impl<S: Snapshot, F: KvFormat> RequestHandler for AnalyzeContext<S, F> {
                 )
                 .await;
                 scanner.collect_storage_stats(&mut self.storage_stats);
-                res.map(ready)
+                res
             }
 
             AnalyzeType::TypeColumn => {
@@ -258,7 +290,7 @@ impl<S: Snapshot, F: KvFormat> RequestHandler for AnalyzeContext<S, F> {
                 let mut builder = SampleBuilder::<_, F>::new(col_req, None, storage, ranges)?;
                 let res = AnalyzeContext::handle_column(&mut builder).await;
                 builder.data.collect_storage_stats(&mut self.storage_stats);
-                res.map(ready)
+                res
             }
 
             // Type mixed is analyze common handle and columns by scan table rows once.
@@ -271,48 +303,47 @@ impl<S: Snapshot, F: KvFormat> RequestHandler for AnalyzeContext<S, F> {
                     SampleBuilder::<_, F>::new(col_req, Some(idx_req), storage, ranges)?;
                 let res = AnalyzeContext::handle_mixed(&mut builder).await;
                 builder.data.collect_storage_stats(&mut self.storage_stats);
-                res.map(ready)
+                res
             }
 
-            AnalyzeType::TypeFullSampling => {
-                let col_req = self.req.take_col_req();
-                let storage = self.storage.take().unwrap();
-                let ranges = std::mem::take(&mut self.ranges);
-                let mut builder = RowSampleBuilder::<_, F>::new(
-                    col_req,
-                    storage,
-                    ranges,
-                    self.quota_limiter.clone(),
-                    self.is_auto_analyze,
-                )?;
-                let res = AnalyzeContext::handle_full_sampling(&mut builder).await;
-                builder.merge_storage_stats_into(&mut self.storage_stats);
-                res.map(|sampling_result| HandlerOutcome::Mergeable {
-                    partial_response: Response::default(),
-                    result: Box::new(sampling_result),
-                })
-            }
+            AnalyzeType::TypeFullSampling => self
+                .handle_full_sampling_result()
+                .await
+                .and_then(AnalyzeSamplingResult::into_data),
 
             AnalyzeType::TypeSampleIndex => Err(Error::Other(
                 "Analyze of this kind not implemented".to_string(),
             )),
         };
         match ret {
-            Ok(outcome) => {
-                let memory_size = outcome.response().get_data().len();
-                Ok(MEMTRACE_ANALYZE.trace_guard(outcome, memory_size))
+            Ok(data) => {
+                let memory_size = data.capacity();
+                let mut response = Response::default();
+                response.set_data(data);
+                Ok(MEMTRACE_ANALYZE.trace_guard(response, memory_size))
             }
             Err(Error::Other(e)) => {
                 let mut resp = Response::default();
                 resp.set_other_error(e);
-                Ok(HandlerOutcome::Ready(resp).into())
+                Ok(resp.into())
             }
             Err(e) => Err(e),
         }
     }
 
     fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
-        dest.add(&self.storage_stats);
-        self.storage_stats = Statistics::default();
+        self.take_storage_statistics(dest);
+    }
+}
+
+#[async_trait]
+impl<S: Snapshot, F: KvFormat> FullSamplingAnalyzeHandler for AnalyzeContext<S, F> {
+    async fn handle_full_sampling(&mut self) -> Result<AnalyzeSamplingResult> {
+        debug_assert_eq!(self.req.get_tp(), AnalyzeType::TypeFullSampling);
+        self.handle_full_sampling_result().await
+    }
+
+    fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
+        self.take_storage_statistics(dest);
     }
 }

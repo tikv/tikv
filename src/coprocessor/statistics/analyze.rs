@@ -910,21 +910,16 @@ impl AnalyzeSamplingResult {
             row_sample_collector,
         }
     }
-}
 
-impl MergeableResult for AnalyzeSamplingResult {
-    fn merge(&mut self, other: Box<dyn MergeableResult>) {
-        // Results of one request have the same concrete type by the
-        // `MergeableResult::merge` contract, so the downcast cannot fail.
-        let other = (other as Box<dyn std::any::Any>)
-            .downcast::<AnalyzeSamplingResult>()
-            .unwrap();
+    /// Merges another region's full-sampling collector into this result.
+    pub(crate) fn merge(&mut self, other: AnalyzeSamplingResult) {
         self.row_sample_collector
             .merge_collector(other.row_sample_collector);
     }
 
-    fn into_data(self: Box<Self>) -> Result<Vec<u8>> {
-        let resp: tipb::AnalyzeColumnsResp = (*self).into();
+    /// Serializes the completed full-sampling result.
+    pub(crate) fn into_data(self) -> Result<Vec<u8>> {
+        let resp: tipb::AnalyzeColumnsResp = self.into();
         Ok(box_try!(resp.write_to_bytes()))
     }
 }
@@ -1220,7 +1215,7 @@ mod tests {
         let b = 20;
         let c = 30;
         let mut result = test_sampling_result(2, 1, 10, &[1, 3], &[a, b]);
-        result.merge(Box::new(test_sampling_result(2, 2, 20, &[4], &[a, c])));
+        result.merge(test_sampling_result(2, 2, 20, &[4], &[a, c]));
 
         let resp: tipb::AnalyzeColumnsResp = result.into();
         let collector = resp.get_row_collector();
@@ -1266,13 +1261,7 @@ mod tests {
         let b = 20;
         let c = 30;
         let mut result = test_bernoulli_sampling_result(2, 1, 10, &[1, 3], &[a, b]);
-        result.merge(Box::new(test_bernoulli_sampling_result(
-            2,
-            2,
-            20,
-            &[4],
-            &[a, c],
-        )));
+        result.merge(test_bernoulli_sampling_result(2, 2, 20, &[4], &[a, c]));
 
         let resp: tipb::AnalyzeColumnsResp = result.into();
         let collector = resp.get_row_collector();

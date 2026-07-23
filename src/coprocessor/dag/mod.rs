@@ -21,7 +21,7 @@ use tipb::{DagRequest, SelectResponse, StreamResponse};
 
 pub use self::storage_impl::TikvStorage;
 use crate::{
-    coprocessor::{Deadline, HandlerOutcome, RequestHandler, Result, metrics::*},
+    coprocessor::{Deadline, RequestHandler, Result, metrics::*},
     storage::{Statistics, Store},
     tikv_util::quota_limiter::QuotaLimiter,
 };
@@ -198,10 +198,10 @@ impl BatchDagHandler {
 
 #[async_trait]
 impl RequestHandler for BatchDagHandler {
-    async fn handle_request(&mut self) -> Result<MemoryTraceGuard<HandlerOutcome>> {
+    async fn handle_request(&mut self) -> Result<MemoryTraceGuard<Response>> {
         let result = self.runner.handle_request().await;
         handle_qe_response(result, self.runner.can_be_cached(), self.data_version)
-            .map(|x| HandlerOutcome::Ready(x).into())
+            .map(MemoryTraceGuard::from)
     }
 
     async fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
