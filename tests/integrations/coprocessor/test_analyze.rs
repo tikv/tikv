@@ -439,6 +439,21 @@ fn test_batched_full_sampling_responses() {
     assert_eq!(parse_collector(resp.get_data()).get_count(), 2);
     assert!(resp.get_batch_responses().is_empty());
 
+    // A negotiated batch wider than the supported four children must be
+    // rejected as one retryable top error before any collector is consumed.
+    // Reusing regions and task IDs is intentional: the whole-batch response
+    // must remain unambiguous even when task IDs cannot identify a subset.
+    let mut over_width_req = build_req(true);
+    let duplicate_task = over_width_req.tasks[0].clone();
+    over_width_req.tasks.push(duplicate_task.clone());
+    over_width_req.tasks.push(duplicate_task.clone());
+    over_width_req.tasks.push(duplicate_task);
+    let resp = handle_request(&endpoint, over_width_req);
+    assert!(resp.has_region_error(), "{:?}", resp);
+    assert!(resp.get_region_error().has_server_is_busy(), "{:?}", resp);
+    assert!(resp.get_data().is_empty());
+    assert!(resp.get_batch_responses().is_empty());
+
     // Establish the exact accounting baseline from the ordinary per-task
     // response shape. The merged shape below must expose the same total once
     // in its outer execution details.
@@ -545,8 +560,12 @@ fn test_batched_full_sampling_responses() {
     }
 
     // A failed task remains separate for retry while successful tasks are
-    // still merged and acknowledged.
+    // still merged and acknowledged. Duplicate/default task IDs deliberately
+    // make IDs unusable for ordering; acknowledgements must follow input
+    // ordinal (successful first, failed second).
     let mut req = build_req(true);
+    req.tasks[0].set_task_id(0);
+    req.tasks[1].set_task_id(0);
     req.tasks[1].mut_region_epoch().set_version(0);
     let mut resp = handle_request(&endpoint, req);
     assert!(!resp.has_region_error(), "{:?}", resp);
@@ -562,13 +581,12 @@ fn test_batched_full_sampling_responses() {
             .get_processed_versions(),
         4
     );
-    let mut batch_resps = resp.take_batch_responses().into_vec();
-    batch_resps.sort_unstable_by_key(|resp| resp.get_task_id());
+    let batch_resps = resp.take_batch_responses().into_vec();
     assert_eq!(batch_resps.len(), 2);
-    assert_eq!(batch_resps[0].get_task_id(), 1);
+    assert_eq!(batch_resps[0].get_task_id(), 0);
     assert!(batch_resps[0].get_data_merged_into_response());
     assert!(batch_resps[0].get_data().is_empty());
-    assert_eq!(batch_resps[1].get_task_id(), 2);
+    assert_eq!(batch_resps[1].get_task_id(), 0);
     assert!(!batch_resps[1].get_data_merged_into_response());
     assert!(batch_resps[1].has_region_error());
 
