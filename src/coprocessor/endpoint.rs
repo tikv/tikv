@@ -123,15 +123,10 @@ fn batch_response_has_error(resp: &coppb::StoreBatchTaskResponse) -> bool {
     resp.has_region_error() || resp.has_locked() || !resp.get_other_error().is_empty()
 }
 
-/// Serializes a full-sampling Analyze result and records the bytes against the
-/// outer request tracker.
-fn serialize_analyze_result(
-    result: AnalyzeSamplingResult,
-    tracker: TrackerToken,
-) -> Result<Vec<u8>> {
-    let data = result.into_data()?;
-    record_coprocessor_response_size(data.len() as u64, tracker);
-    Ok(data)
+/// Serializes a full-sampling Analyze result. The caller records the bytes
+/// only after every remaining deadline/error check has passed.
+fn serialize_analyze_result(result: AnalyzeSamplingResult) -> Result<Vec<u8>> {
+    result.into_data()
 }
 
 /// Completes after one poll, waking its task immediately. Placed between
@@ -380,9 +375,9 @@ fn resolve_batch_task_output(
     tracker: TrackerToken,
 ) -> Result<coppb::StoreBatchTaskResponse> {
     if let Some(result) = output.analyze_result {
-        output
-            .response
-            .set_data(serialize_analyze_result(result, tracker)?);
+        let data = serialize_analyze_result(result)?;
+        record_coprocessor_response_size(data.len() as u64, tracker);
+        output.response.set_data(data);
     }
     Ok(output.response)
 }
@@ -435,7 +430,13 @@ async fn merge_and_encode_analyze_batch<E: Engine>(
         yield_once().await;
     }
     deadline.check()?;
-    let data = serialize_analyze_result(output.result, tracker_token)?;
+    let data = serialize_analyze_result(output.result)?;
+    // `DeadlineChecker` checks only before polling its inner future. The
+    // protobuf encode above is synchronous and may itself cross the deadline,
+    // so check again before acknowledging collectors or charging response
+    // bytes.
+    deadline.check()?;
+    record_coprocessor_response_size(data.len() as u64, tracker_token);
     let memory_size = data.capacity();
     output.response.set_data(data);
     output.response.set_batch_responses(batch_responses.into());
