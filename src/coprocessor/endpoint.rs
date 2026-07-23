@@ -66,6 +66,46 @@ use crate::{
 /// execution.
 const LIGHT_TASK_THRESHOLD: Duration = Duration::from_millis(5);
 
+/// Serializes a `Mergeable` outcome's result into its response data,
+/// resizing the guard's memory trace to the serialized data. A `Ready`
+/// outcome is returned unchanged. The response size is not recorded here:
+/// the caller records it once the data is in the response, exactly as for
+/// a `Ready` outcome.
+fn serialize_handler_outcome(
+    outcome: MemoryTraceGuard<HandlerOutcome>,
+) -> Result<MemoryTraceGuard<coppb::Response>> {
+    let mergeable = matches!(&*outcome, HandlerOutcome::Mergeable { .. });
+    let mut serialize_err = None;
+    let mut resp = outcome.map(|outcome| match outcome {
+        HandlerOutcome::Ready(response) => response,
+        HandlerOutcome::Mergeable {
+            mut partial_response,
+            result,
+        } => {
+            debug_assert!(partial_response.get_data().is_empty());
+            match result.into_data() {
+                Ok(data) => {
+                    partial_response.set_data(data);
+                    partial_response
+                }
+                Err(e) => {
+                    serialize_err = Some(e);
+                    coppb::Response::default()
+                }
+            }
+        }
+    });
+    if let Some(e) = serialize_err {
+        // Dropping the placeholder response releases the guard's trace.
+        return Err(e);
+    }
+    if mergeable {
+        let data_len = resp.get_data().len();
+        resp.retrace(data_len);
+    }
+    Ok(resp)
+}
+
 /// A pool to build and run Coprocessor request handlers.
 #[derive(Clone)]
 pub struct Endpoint<E: Engine> {
@@ -479,6 +519,10 @@ impl<E: Engine> Endpoint<E> {
     /// snapshot and the given `handler_builder`. Finally, it calls the unary
     /// request interface of the `RequestHandler` to process the request and
     /// produce a result.
+    ///
+    /// A `Mergeable` outcome is serialized into its response right here —
+    /// inside the deadline, tracking, concurrency and resource protections
+    /// of the request, like any `Ready` response's data.
     async fn handle_unary_request_impl(
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker<E>>,
@@ -533,13 +577,18 @@ impl<E: Engine> Endpoint<E> {
         tracker.on_begin_all_items();
 
         let deadline = tracker.req_ctx.deadline;
-        let handle_request_future = check_deadline(handler.handle_request(), deadline);
-        let handle_request_future = track(handle_request_future, tracker.as_mut());
+        let handle_request_future = handler.handle_request();
+        let process_future = async move {
+            let outcome = handle_request_future.await?;
+            serialize_handler_outcome(outcome)
+        };
+        let process_future = check_deadline(process_future, deadline);
+        let process_future = track(process_future, tracker.as_mut());
 
         let deadline_res = if let Some(semaphore) = &semaphore {
-            limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await
+            limit_concurrency(process_future, semaphore, LIGHT_TASK_THRESHOLD).await
         } else {
-            handle_request_future.await
+            process_future.await
         };
         let result = deadline_res.map_err(Error::from).and_then(|res| res);
 
@@ -552,10 +601,7 @@ impl<E: Engine> Endpoint<E> {
         handler.collect_scan_statistics(&mut storage_stats);
         tracker.collect_storage_statistics(storage_stats);
         let mut resp = match result {
-            Ok(output) => {
-                let resp = output.map(|outcome| match outcome {
-                    HandlerOutcome::Ready(resp) => resp,
-                });
+            Ok(resp) => {
                 let resp_size = resp.data.len() as u64;
                 COPR_RESP_SIZE.inc_by(resp_size);
                 record_network_out_bytes(resp_size);
@@ -1360,6 +1406,129 @@ mod tests {
                 .unwrap()
                 .map(|x| HandlerOutcome::Ready(x).into())
         }
+    }
+
+    /// A mergeable result that concatenates task values.
+    #[derive(Default)]
+    struct ConcatMergeable {
+        values: Vec<u8>,
+        fail_serialize: bool,
+    }
+
+    impl MergeableResult for ConcatMergeable {
+        fn merge(&mut self, other: Box<dyn MergeableResult>) {
+            let other = (other as Box<dyn std::any::Any>)
+                .downcast::<ConcatMergeable>()
+                .unwrap();
+            self.values.extend(other.values);
+        }
+
+        fn into_data(mut self: Box<Self>) -> Result<Vec<u8>> {
+            if self.fail_serialize {
+                return Err(box_err!("cannot serialize"));
+            }
+            // This fixture obeys `MergeableResult`'s order-independent
+            // contract even when merge order changes.
+            self.values.sort_unstable();
+            Ok(self.values)
+        }
+    }
+
+    fn mergeable_outcome(values: Vec<u8>, fail_serialize: bool) -> HandlerOutcome {
+        HandlerOutcome::Mergeable {
+            partial_response: coppb::Response::default(),
+            result: Box::new(ConcatMergeable {
+                values,
+                fail_serialize,
+            }),
+        }
+    }
+
+    /// A unary `RequestHandler` that produces a `Mergeable` outcome.
+    struct MergeableFixture {
+        values: Vec<u8>,
+        fail_serialize: bool,
+    }
+
+    #[async_trait]
+    impl RequestHandler for MergeableFixture {
+        async fn handle_request(&mut self) -> Result<MemoryTraceGuard<HandlerOutcome>> {
+            Ok(mergeable_outcome(mem::take(&mut self.values), self.fail_serialize).into())
+        }
+    }
+
+    #[test]
+    fn test_serialize_handler_outcome() {
+        // A mergeable outcome is serialized into a ready response and the
+        // guard's trace is resized to the serialized data.
+        let trace = tikv_alloc::mem_trace!(test_serialize_outcome);
+        let output = trace.trace_guard(mergeable_outcome(vec![3, 1, 2], false), 0);
+        let resp = serialize_handler_outcome(output).unwrap();
+        assert_eq!(resp.get_data(), &[1, 2, 3]);
+        assert_eq!(trace.sum(), 3);
+        drop(resp);
+        assert_eq!(trace.sum(), 0);
+
+        // A serialization failure surfaces as the handler's error and
+        // releases the trace.
+        let output = trace.trace_guard(mergeable_outcome(vec![1], true), 5);
+        serialize_handler_outcome(output).unwrap_err();
+        assert_eq!(trace.sum(), 0);
+
+        // A ready outcome passes through with its traced size untouched.
+        let mut ready = coppb::Response::default();
+        ready.set_data(vec![7]);
+        let output = trace.trace_guard(HandlerOutcome::Ready(ready), 5);
+        let resp = serialize_handler_outcome(output).unwrap();
+        assert_eq!(resp.get_data(), &[7]);
+        assert_eq!(trace.sum(), 5);
+    }
+
+    #[test]
+    fn test_handle_unary_request_serialize_outcome() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cm = ConcurrencyManager::new_for_test(1.into());
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            None,
+        );
+
+        // The handler's mergeable result is serialized inside the request's
+        // own read pool task and returned as ordinary response data.
+        let handler_builder = Box::new(|_, _: &_| {
+            Ok(MergeableFixture {
+                values: vec![3, 1, 2],
+                fail_serialize: false,
+            }
+            .into_boxed())
+        });
+        let resp = block_on(
+            copr.handle_unary_request(ParseCopRequestResult::default_for_test(handler_builder)),
+        )
+        .unwrap();
+        assert_eq!(resp.get_data(), &[1, 2, 3]);
+
+        // An in-place serialization failure surfaces like a handler error.
+        let handler_builder = Box::new(|_, _: &_| {
+            Ok(MergeableFixture {
+                values: vec![1],
+                fail_serialize: true,
+            }
+            .into_boxed())
+        });
+        let resp = block_on(
+            copr.handle_unary_request(ParseCopRequestResult::default_for_test(handler_builder)),
+        )
+        .unwrap();
+        assert!(!resp.get_other_error().is_empty());
     }
 
     /// A streaming `RequestHandler` that always produces a fixture.
