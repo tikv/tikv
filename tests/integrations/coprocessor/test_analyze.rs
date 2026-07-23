@@ -482,6 +482,10 @@ fn test_batched_full_sampling_responses() {
         .clone()
         .map(|details| details.get_scan_detail_v2().get_total_versions())
         .sum::<u64>();
+    let expected_rocksdb_key_skipped = all_unmerged_details
+        .clone()
+        .map(|details| details.get_scan_detail_v2().get_rocksdb_key_skipped_count())
+        .sum::<u64>();
     let expected_table_scan_iterations = all_unmerged_details
         .map(|details| {
             details
@@ -520,6 +524,15 @@ fn test_batched_full_sampling_responses() {
             .get_scan_detail_v2()
             .get_total_versions(),
         expected_total_versions
+    );
+    // Unlike processed/total versions, this counter is written from the
+    // global tracker. It guards against the outer wrapper overwriting the
+    // already-aggregated child RocksDB details with top-only values.
+    assert_eq!(
+        resp.get_exec_details_v2()
+            .get_scan_detail_v2()
+            .get_rocksdb_key_skipped_count(),
+        expected_rocksdb_key_skipped
     );
     assert_eq!(
         resp.get_exec_details_v2()
