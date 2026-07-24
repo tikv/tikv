@@ -42,6 +42,12 @@ impl KeyValueCodec {
 
     // only support conversion from non-apiv2 to apiv2.
     pub fn check_backup_api_version(&self, start_key: &[u8], end_key: &[u8]) -> bool {
+        // API V3 is not supported by this TiKV build. Reject it here so that
+        // an unsupported version never reaches `dispatch_api_version!`, which
+        // panics on V3. Note `dst_api_ver` comes from the backup request.
+        if self.cur_api_ver == ApiVersion::V3 || self.dst_api_ver == ApiVersion::V3 {
+            return false;
+        }
         if self.is_raw_kv
             && self.cur_api_ver != self.dst_api_ver
             && self.dst_api_ver != ApiVersion::V2
@@ -325,6 +331,34 @@ pub mod tests {
                 b"".to_vec(),
                 false,
                 true,
+            ),
+            // API V3 is not supported by this TiKV build, always reject it.
+            (
+                true,
+                ApiVersion::V1,
+                ApiVersion::V3,
+                b"".to_vec(),
+                b"".to_vec(),
+                false,
+                false,
+            ),
+            (
+                false,
+                ApiVersion::V1,
+                ApiVersion::V3,
+                b"".to_vec(),
+                b"".to_vec(),
+                false,
+                false,
+            ),
+            (
+                true,
+                ApiVersion::V3,
+                ApiVersion::V3,
+                b"".to_vec(),
+                b"".to_vec(),
+                false,
+                false,
             ),
         ];
         for (is_raw, cur_api, dst_api, ref start_key, ref end_key, expect_ret, use_mvcc) in

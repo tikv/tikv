@@ -176,6 +176,12 @@ impl<E: Engine> Endpoint<E> {
         peer: Option<String>,
         is_streaming: bool,
     ) -> Result<ParseCopRequestResult<E::IMSnap>> {
+        // Reject unsupported API versions before dispatching, so that a
+        // request-provided `ApiVersion::V3` gets a graceful error instead of
+        // hitting the panic branch in `dispatch_api_version!`.
+        if req.get_context().get_api_version() == kvrpcpb::ApiVersion::V3 {
+            return Err(box_err!("API V3 is not supported by this TiKV build"));
+        }
         dispatch_api_version!(req.get_context().get_api_version(), {
             self.parse_request_and_check_memory_locks_impl::<API>(req, peer, is_streaming)
         })
