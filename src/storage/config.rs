@@ -99,6 +99,10 @@ pub struct Config {
     pub reserve_raft_space: ReadableSize,
     #[online_config(skip)]
     pub enable_async_apply_prewrite: bool,
+    /// Records bounded transaction command history for diagnosing MVCC
+    /// invariants. Disabled by default because it retains additional in-memory
+    /// metadata and adds work to the transaction scheduler.
+    pub enable_txn_command_flight_recorder: bool,
     #[online_config(skip)]
     pub api_version: u8,
     #[online_config(skip)]
@@ -138,6 +142,7 @@ impl Default for Config {
             reserve_space: ReadableSize::gb(DEFAULT_RESERVED_SPACE_GB),
             reserve_raft_space: ReadableSize::gb(DEFAULT_RESERVED_RAFT_SPACE_GB),
             enable_async_apply_prewrite: false,
+            enable_txn_command_flight_recorder: false,
             api_version: 1,
             enable_ttl: false,
             ttl_check_poll_interval: ReadableDuration::hours(12),
