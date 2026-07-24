@@ -103,6 +103,12 @@ It is a read-heavy hot path and directly impacts query latency.
 - wait-time and snapshot-time metrics
 - request-type metrics and execution summaries
 - slow-log behavior driven by endpoint thresholds
+- Resource metering / TopSQL records the per-request RocksDB PerfContext
+  `block_read_count` delta as `rocksdb_block_read_count` when
+  `resource-metering.enable-network-io-collection` is enabled. It is a
+  physical-read-IO approximation rather than device IOPS. Unary and streaming
+  handler futures must keep this PerfContext accounting poll-scoped so TLS
+  metrics cannot be attributed to another request.
 - Start with `src/coprocessor/metrics.rs`. High-value signals include:
   `tikv_coprocessor_request_duration_seconds` family,
   `tikv_coprocessor_request_wait_seconds`,

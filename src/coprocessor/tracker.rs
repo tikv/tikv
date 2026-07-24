@@ -7,6 +7,7 @@ use engine_traits::{PerfContext, PerfContextExt, PerfContextKind};
 use kvproto::{kvrpcpb, kvrpcpb::ScanDetailV2};
 use pd_client::BucketMeta;
 use protobuf::Message;
+use resource_metering::record_rocksdb_block_read_count;
 use tikv_kv::Engine;
 use tikv_util::{
     memory::HeapSize,
@@ -181,9 +182,10 @@ impl<E: Engine> Tracker<E> {
             if let Some(storage_stats) = some_storage_stats {
                 self.total_storage_stats.add(&storage_stats);
             }
-            self.with_perf_context(|perf_context| {
-                perf_context.report_metrics(&[get_tls_tracker_token()]);
+            let report = self.with_perf_context(|perf_context| {
+                perf_context.report_metrics(&[get_tls_tracker_token()])
             });
+            record_rocksdb_block_read_count(report.block_read_count);
             self.current_stage = TrackerState::ItemFinished(now);
         } else {
             unreachable!()

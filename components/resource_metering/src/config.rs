@@ -31,7 +31,12 @@ pub struct Config {
     /// Data reporting interval.
     pub report_receiver_interval: ReadableDuration,
 
-    /// The maximum number of groups by [ResourceMeteringTag].
+    /// The maximum number of candidate groups by [ResourceMeteringTag] for
+    /// each resource dimension.
+    ///
+    /// When network IO collection is enabled, the reported groups are the
+    /// union of candidates selected by CPU, network IO, logical read, logical
+    /// write, and RocksDB block read count. The union can exceed this value.
     ///
     /// [ResourceMeteringTag]: crate::ResourceMeteringTag
     pub max_resource_groups: usize,
@@ -39,7 +44,7 @@ pub struct Config {
     /// Sampling window. (only for cpu module)
     pub precision: ReadableDuration,
 
-    /// Whether to collect network traffic and logical io
+    /// Whether to collect network traffic, logical IO and RocksDB block read
     pub enable_network_io_collection: bool,
 }
 

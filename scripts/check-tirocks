@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Compile the workspace-excluded TiRocks implementation in an isolated
+# workspace configuration. The original manifest and lockfile are restored
+# even when Cargo fails.
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+tmpdir=$(mktemp -d)
+manifest_backup="$tmpdir/Cargo.toml"
+lockfile_backup="$tmpdir/Cargo.lock"
+workspace_lock="$repo_root/target/check-tirocks.lock"
+
+mkdir -p "$(dirname "$workspace_lock")"
+while ! mkdir "$workspace_lock" 2>/dev/null; do
+    echo "waiting for another TiRocks workspace check to finish"
+    sleep 1
+done
+
+cleanup() {
+    local status=$?
+    set +e
+    if [[ -f "$manifest_backup" ]]; then
+        cp "$manifest_backup" "$repo_root/Cargo.toml"
+        if [[ -f "$lockfile_backup" ]]; then
+            cp "$lockfile_backup" "$repo_root/Cargo.lock"
+        else
+            rm -f "$repo_root/Cargo.lock"
+        fi
+    fi
+    rmdir "$workspace_lock" 2>/dev/null || true
+    rm -rf "$tmpdir"
+    exit "$status"
+}
+trap cleanup EXIT
+
+cp "$repo_root/Cargo.toml" "$manifest_backup"
+if [[ -f "$repo_root/Cargo.lock" ]]; then
+    cp "$repo_root/Cargo.lock" "$lockfile_backup"
+fi
+
+sed -i.bak '/"components\/engine_tirocks",/d' "$repo_root/Cargo.toml"
+rm -f "$repo_root/Cargo.toml.bak"
+
+cd "$repo_root"
+CARGO_TARGET_DIR="$repo_root/target/tirocks-check" cargo check -p engine_tirocks

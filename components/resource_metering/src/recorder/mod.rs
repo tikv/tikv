@@ -31,7 +31,8 @@ pub use self::{
         cpu::CpuRecorder,
         summary::{
             SummaryRecorder, record_logical_read_bytes, record_logical_write_bytes,
-            record_network_in_bytes, record_network_out_bytes, record_read_keys, record_write_keys,
+            record_network_in_bytes, record_network_out_bytes, record_read_keys,
+            record_rocksdb_block_read_count, record_write_keys,
         },
     },
 };

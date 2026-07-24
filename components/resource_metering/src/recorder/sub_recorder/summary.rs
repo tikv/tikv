@@ -85,6 +85,20 @@ pub fn record_logical_write_bytes(bytes: u64) {
     })
 }
 
+/// Records RocksDB block read count (physical read IO approximation) in the
+/// current context.
+pub fn record_rocksdb_block_read_count(count: u64) {
+    if count == 0 || !ENABLE_NETWORK_IO_COLLECTION.load(Relaxed) {
+        return;
+    }
+    STORAGE.with(|s| {
+        s.borrow()
+            .summary_cur_record
+            .rocksdb_block_read_count
+            .fetch_add(count, Relaxed);
+    })
+}
+
 /// An implementation of [SubRecorder] for collecting summary data.
 ///
 /// `SummaryRecorder` uses some special methods
@@ -146,5 +160,49 @@ impl SubRecorder for SummaryRecorder {
 
     fn thread_created(&mut self, _id: Pid, store: &LocalStorage) {
         store.summary_enable.store(self.enabled, SeqCst);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::Ordering::Relaxed;
+
+    use super::*;
+    use crate::{NETWORK_IO_COLLECTION_TEST_LOCK, NetworkIoCollectionConfigGuard};
+
+    #[test]
+    fn test_record_rocksdb_block_read_count_respects_config() {
+        let _test_guard = NETWORK_IO_COLLECTION_TEST_LOCK.lock().unwrap();
+        let _config_guard = NetworkIoCollectionConfigGuard::set(false);
+        std::thread::spawn(|| {
+            STORAGE.with(|s| {
+                s.borrow().summary_cur_record.reset();
+            });
+            record_rocksdb_block_read_count(7);
+            STORAGE.with(|s| {
+                assert_eq!(
+                    s.borrow()
+                        .summary_cur_record
+                        .rocksdb_block_read_count
+                        .load(Relaxed),
+                    0
+                );
+            });
+
+            ENABLE_NETWORK_IO_COLLECTION.store(true, Relaxed);
+            record_rocksdb_block_read_count(7);
+            record_rocksdb_block_read_count(0);
+            STORAGE.with(|s| {
+                assert_eq!(
+                    s.borrow()
+                        .summary_cur_record
+                        .rocksdb_block_read_count
+                        .load(Relaxed),
+                    7
+                );
+            });
+        })
+        .join()
+        .unwrap();
     }
 }
