@@ -20,8 +20,8 @@ use kvproto::{errorpb, kvrpcpb::CommandPri};
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
 use prometheus::{Histogram, IntCounter, IntGauge, core::Metric};
 use resource_control::{
-    AdmissionDecision, ControlledFuture, ResourceController, ResourceGroupManager, ResourceLimiter,
-    TaskPriority, with_resource_limiter,
+    AdmissionDecision, ControlledFuture, READ_POOL_CPU_VEC, ResourceController,
+    ResourceGroupManager, ResourceLimiter, TaskPriority, with_resource_limiter,
 };
 use thiserror::Error;
 use tikv_util::{
@@ -817,6 +817,19 @@ impl ReadPoolConfigRunner {
             return;
         }
 
+        let resource_manager = match &self.handle {
+            ReadPoolHandle::Yatp {
+                resource_manager, ..
+            } => resource_manager.clone(),
+            _ => None,
+        };
+        // Only fold the ResourceGroupManager into this ladder when two-phase
+        // scheduling is actually enabled — otherwise it has no opinion worth
+        // consulting and the pool behaves exactly as it does without one.
+        let scheduling_rm = resource_manager
+            .as_ref()
+            .filter(|rm| rm.get_config().value().enable_fair_scheduling);
+
         let read_pool_cpu = self.cpu_time_tracker.get_unified_read_pool_cpu();
         let thread_usage = self.cpu_time_tracker.prev_avg_thread_usage();
         let running_tasks = self.running_tasks();
@@ -827,14 +840,37 @@ impl ReadPoolConfigRunner {
                 return;
             }
         };
-        let target_cpu_cores = if self.cpu_threshold > 0.0 {
+        let mut target_cpu_cores = if self.cpu_threshold > 0.0 {
             self.cpu_threshold * SysQuota::cpu_cores_quota()
         } else {
             SysQuota::cpu_cores_quota()
         };
 
+        // With scheduling enabled, fold the ResourceGroupManager's own
+        // foreground-pressure-driven CPU target into the local ceiling —
+        // whichever is tighter wins.
+        if let Some(rm) = scheduling_rm {
+            let rm_target_cpu =
+                rm.compute_read_pool_target_cpu(read_pool_cpu, self.interval.as_secs_f64());
+            target_cpu_cores = target_cpu_cores.min(rm_target_cpu);
+        }
+        READ_POOL_CPU_VEC
+            .with_label_values(&["target"])
+            .set(target_cpu_cores);
+
+        // Scaling out is otherwise a purely local decision (process CPU,
+        // thread usage, task queue depth, or read_pool_cpu vs
+        // target_cpu_cores). With scheduling enabled, additionally defer to
+        // the ResourceGroupManager's own idle signal so the pool doesn't
+        // grow while it's still trying to protect foreground latency.
+        let scale_out_allowed = match scheduling_rm {
+            Some(rm) => rm.read_pool_scale_up_allowed(),
+            None => true,
+        };
+
         // Base scaling conditions (process CPU, thread usage, task queue depth)
         let busy_thread_scale_out = self.cur_thread_count < self.max_thread_count
+            && scale_out_allowed
             && process_cpu * (self.cur_thread_count as f64 + 1.0) / (self.cur_thread_count as f64)
                 < target_cpu_cores
             && thread_usage > self.cur_thread_count as f64 * READ_POOL_THREAD_HIGH_THRESHOLD
@@ -848,7 +884,8 @@ impl ReadPoolConfigRunner {
         let busy_cpu_scale_in =
             self.cpu_threshold > 0.0 && read_pool_cpu > (leeway + 1.0) * target_cpu_cores;
         let busy_cpu_scale_out = read_pool_cpu < (1.0 - leeway) * target_cpu_cores
-            && self.cur_thread_count < self.core_thread_count;
+            && self.cur_thread_count < self.core_thread_count
+            && scale_out_allowed;
 
         let new_thread_count = if busy_cpu_scale_in {
             // CPU threshold takes precedence over busy thread scaling conditions
@@ -874,6 +911,16 @@ impl ReadPoolConfigRunner {
             self.handle.scale_pool_size(new_thread_count);
             self.notify_pool_size_change(new_thread_count);
             self.cur_thread_count = new_thread_count;
+        }
+
+        // While we haven't scaled back up to core_thread_count, keep noisy
+        // resource groups deprioritized. Once recovered, release everyone.
+        if let Some(rm) = scheduling_rm {
+            if self.cur_thread_count < self.core_thread_count {
+                rm.deprioritize_over_quota_groups();
+            } else {
+                rm.reset_group_priorities();
+            }
         }
     }
 
@@ -1362,6 +1409,181 @@ mod tests {
                 "Thread count should not decrease further when CPU is low"
             );
         }
+
+        worker.stop();
+    }
+
+    #[test]
+    fn test_read_pool_pressure_scale_down_with_resource_manager() {
+        use tikv_util::worker::Worker;
+
+        let config = UnifiedReadPoolConfig {
+            min_thread_count: 1,
+            max_thread_count: 8,
+            max_tasks_per_worker: 4,
+            // Must be > 0: the ResourceGroupManager's target CPU only ever
+            // tightens the local cpu_threshold ceiling (busy_cpu_scale_in),
+            // it never causes a scale-down on its own.
+            cpu_threshold: 1.0,
+            auto_adjust_pool_size: true,
+            ..Default::default()
+        };
+        // Two-phase scheduling must be enabled for adjust_pool_size to fold
+        // the ResourceGroupManager's target CPU into target_cpu_cores at all.
+        let rm_config = resource_control::config::Config {
+            enable_fair_scheduling: true,
+            ..Default::default()
+        };
+        let resource_manager = Arc::new(ResourceGroupManager::new(rm_config));
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let pool = build_yatp_read_pool(
+            &config,
+            DummyReporter,
+            engine,
+            None,
+            Some(resource_manager.clone()),
+            CleanupMethod::InPlace,
+            false,
+        );
+
+        let handle = pool.handle();
+        let worker = Worker::new("test-worker");
+        let mut runner = ReadPoolConfigRunner {
+            interval: Duration::from_secs(10),
+            sender: std::sync::mpsc::sync_channel(10).0,
+            handle: handle.clone(),
+            cpu_time_tracker: ReadPoolCpuTimeTracker::new("test-pool"),
+            process_stats: ProcessStat::cur_proc_stat().unwrap(),
+            min_thread_count: config.min_thread_count,
+            core_thread_count: 8,
+            cur_thread_count: 8,
+            max_thread_count: config.max_thread_count,
+            auto_adjust: true,
+            cpu_threshold: config.cpu_threshold,
+        };
+
+        // Drive online_adjust_resource_quota so read_pool_cpu_pressure() > 0,
+        // matching how the real GroupQuotaAdjustWorker tick would set it.
+        resource_manager.set_bg_cpu_at_floor(true);
+        resource_manager.online_adjust_resource_quota(90.0);
+        assert!(resource_manager.read_pool_cpu_pressure() > 0.0);
+
+        // With pressure engaged, the ResourceGroupManager's target CPU is
+        // 10% below the currently measured read_pool_cpu and forces
+        // busy_cpu_scale_in to fire (it otherwise never would, since
+        // cpu_threshold's own ceiling is a generous 100% of cores). Give the
+        // read pool a non-zero measured CPU reading to scale down from — a
+        // cold/idle pool has nothing to reduce. This reading is a fixed test
+        // override that does not track cur_thread_count, unlike real
+        // measured usage, which is why convergence stops at a floor derived
+        // from this fixed value rather than continuing to the configured
+        // minimum (see compute_read_pool_target_cpu's doc comment).
+        runner.cpu_time_tracker.set_test_cpu_utilization(4.0);
+
+        let before_first_tick = runner.cur_thread_count;
+        runner.adjust_pool_size();
+
+        assert!(
+            runner.cur_thread_count < before_first_tick && runner.cur_thread_count > 1,
+            "a single tick should reduce the pool gradually, not collapse it straight to the \
+             minimum; before: {}, after: {}",
+            before_first_tick,
+            runner.cur_thread_count
+        );
+
+        // Repeated ticks keep reducing cur_thread_count relative to itself
+        // each time (via the read pool's own cur_thread_count * ratio math),
+        // until it stabilizes at floor(0.9 * 4.0) = 3 — the target ceiling's
+        // own floor, since the fixed test reading never drops further to
+        // push the ceiling down any more.
+        for _ in 0..20 {
+            runner.adjust_pool_size();
+        }
+        assert_eq!(
+            runner.cur_thread_count, 3,
+            "sustained pressure should converge to and stabilize at the target ceiling's floor, got {}",
+            runner.cur_thread_count
+        );
+
+        worker.stop();
+    }
+
+    #[test]
+    fn test_read_pool_scale_out_blocked_until_resource_manager_allows_it() {
+        use tikv_util::worker::Worker;
+
+        let config = UnifiedReadPoolConfig {
+            min_thread_count: 1,
+            max_thread_count: 8,
+            max_tasks_per_worker: 4,
+            cpu_threshold: 0.0,
+            auto_adjust_pool_size: true,
+            ..Default::default()
+        };
+        // Two-phase scheduling must be enabled for adjust_pool_size to defer
+        // to the resource manager's read_pool_scale_up_allowed() signal.
+        let rm_config = resource_control::config::Config {
+            enable_fair_scheduling: true,
+            ..Default::default()
+        };
+        let resource_manager = Arc::new(ResourceGroupManager::new(rm_config));
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let pool = build_yatp_read_pool(
+            &config,
+            DummyReporter,
+            engine,
+            None,
+            Some(resource_manager.clone()),
+            CleanupMethod::InPlace,
+            false,
+        );
+
+        let handle = pool.handle();
+        let worker = Worker::new("test-worker");
+        let mut runner = ReadPoolConfigRunner {
+            interval: Duration::from_secs(10),
+            sender: std::sync::mpsc::sync_channel(10).0,
+            handle: handle.clone(),
+            cpu_time_tracker: ReadPoolCpuTimeTracker::new("test-pool"),
+            process_stats: ProcessStat::cur_proc_stat().unwrap(),
+            // min_thread_count == cur_thread_count so busy_thread_scale_in
+            // (unrelated to the resource manager) can't confound the result.
+            min_thread_count: 2,
+            core_thread_count: 8,
+            cur_thread_count: 2,
+            max_thread_count: config.max_thread_count,
+            auto_adjust: true,
+            cpu_threshold: config.cpu_threshold,
+        };
+
+        // Comfortably idle read-pool CPU: with no ResourceGroupManager, this
+        // alone would trigger busy_cpu_scale_out. read_pool_scale_up_allowed()
+        // defaults to false, so scheduling must block the grow.
+        assert!(!resource_manager.read_pool_scale_up_allowed());
+        runner.cpu_time_tracker.set_test_cpu_utilization(0.01);
+
+        runner.adjust_pool_size();
+
+        assert_eq!(
+            runner.cur_thread_count, 2,
+            "scheduling should block scale-out until the resource manager allows it, got {}",
+            runner.cur_thread_count
+        );
+
+        // Once the resource manager reports the system is comfortably idle,
+        // scale-out proceeds normally.
+        resource_manager.online_adjust_resource_quota(0.0);
+        assert!(resource_manager.read_pool_scale_up_allowed());
+
+        runner.adjust_pool_size();
+
+        assert_eq!(
+            runner.cur_thread_count, 3,
+            "scale-out should proceed once the resource manager allows it, got {}",
+            runner.cur_thread_count
+        );
 
         worker.stop();
     }

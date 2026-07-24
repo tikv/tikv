@@ -6,7 +6,7 @@ use prometheus::*;
 lazy_static! {
     pub static ref BACKGROUND_QUOTA_LIMIT_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_resource_control_background_quota_limiter",
-        "The quota limiter for all background tasks per resource type",
+        "The quota limit for all background tasks per resource type, in centi-cores (cores * 100) for CPU or bytes/s for IO",
         &["type"]
     )
     .unwrap();
@@ -14,11 +14,6 @@ lazy_static! {
         "tikv_resource_control_background_resource_consumption",
         "Total resource consumed by all background tasks (aggregated across all background resource groups) per resource type",
         &["type"]
-    )
-    .unwrap();
-    pub static ref BACKGROUND_TASKS_WAIT_DURATION: IntCounter = register_int_counter!(
-        "tikv_resource_control_background_task_wait_duration",
-        "Total wait duration of all background tasks (aggregated across all background resource groups)"
     )
     .unwrap();
     pub static ref PRIORITY_QUOTA_LIMIT_VEC: IntGaugeVec = register_int_gauge_vec!(
@@ -43,7 +38,7 @@ lazy_static! {
 
     pub static ref BACKGROUND_TASK_RESOURCE_UTILIZATION_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_resource_control_bg_resource_utilization",
-        "The total resource utilization percentage of background tasks",
+        "The total resource consumed by background tasks, in centi-cores (cores * 100) for CPU or bytes/s for IO",
         &["type"]
     )
     .unwrap();
@@ -99,6 +94,20 @@ lazy_static! {
         "Histogram of delay duration imposed by admission control",
         &["resource_group"],
         exponential_buckets(1e-4, 2.0, 20).unwrap() // 100us ~ 52s
+    )
+    .unwrap();
+
+    pub static ref READ_POOL_CPU_VEC: GaugeVec = register_gauge_vec!(
+        "tikv_resource_control_read_pool_cpu_percent",
+        "Unified read pool CPU usage as a percentage of one core (100 = 1 core): historical (floor), current (measured), and target (foreground-pressure-driven ceiling)",
+        &["type"]
+    )
+    .unwrap();
+
+    pub static ref RESOURCE_SCORE_VEC: GaugeVec = register_gauge_vec!(
+        "tikv_resource_control_resource_score",
+        "Common 0-100 resource-pressure score computed by compute_resource_scores, per resource type (cpu, io, compaction)",
+        &["type"]
     )
     .unwrap();
 }

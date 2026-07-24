@@ -10653,18 +10653,6 @@ def ResourceControl() -> RowPanel:
     layout.row(
         [
             graph_panel(
-                title="Background Task Total Wait Duration",
-                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
-                targets=[
-                    target(
-                        expr=expr_sum_rate(
-                            "tikv_resource_control_background_task_wait_duration",
-                            by_labels=["instance"],
-                        ),
-                    ),
-                ],
-            ),
-            graph_panel(
                 title="Priority Quota Limit",
                 description="The memory usage of the resource control module.",
                 yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
@@ -10761,14 +10749,42 @@ def LoadShedding() -> RowPanel:
             ),
             graph_panel(
                 title="Background Resource Utilization",
-                description="Total resource utilization percentage of background tasks.",
-                yaxes=yaxes(left_format=UNITS.PERCENT_FORMAT),
+                description="Total resource consumed by background tasks, in centi-cores (cores * 100) for CPU or bytes/s for IO.",
+                yaxes=yaxes(left_format=UNITS.SHORT),
                 targets=[
                     target(
                         expr=expr_sum(
                             "tikv_resource_control_bg_resource_utilization",
                             by_labels=["type"],
                         ).extra(" > 0"),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Unified Read Pool CPU",
+                description="Historical (floor), current (measured), and target (foreground-pressure-driven ceiling) CPU usage of the unified read pool, in cores.",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resource_control_read_pool_cpu_cores",
+                            by_labels=["instance", "type"],
+                        ),
+                        legend_format="{{type}}-{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Resource Pressure Scores",
+                description="Common 0-100 resource-pressure score per resource type (cpu, io, compaction) used to drive background/foreground throttling.",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resource_control_resource_score",
+                            by_labels=["instance", "type"],
+                        ),
+                        legend_format="{{type}}-{{instance}}",
                     ),
                 ],
             ),
@@ -10791,7 +10807,7 @@ def LoadShedding() -> RowPanel:
             ),
             graph_panel(
                 title="Background Quota Limit",
-                description="Current quota limit for background resource groups.",
+                description="Current quota limit for background resource groups, in centi-cores (cores * 100) for CPU or bytes/s for IO.",
                 targets=[
                     target(
                         expr=expr_sum(
@@ -10821,16 +10837,16 @@ def LoadShedding() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_resource_control_admission_delayed_requests_total",
-                            by_labels=["resource_group", "is_background"],
+                            by_labels=["resource_group"],
                         ).extra(" > 0"),
-                        legend_format="delayed-{{resource_group}}-{{is_background}}",
+                        legend_format="delayed-{{resource_group}}",
                     ),
                     target(
                         expr=expr_sum_rate(
                             "tikv_resource_control_admission_rejected_requests_total",
-                            by_labels=["resource_group", "is_background"],
+                            by_labels=["resource_group"],
                         ).extra(" > 0"),
-                        legend_format="rejected-{{resource_group}}-{{is_background}}",
+                        legend_format="rejected-{{resource_group}}",
                     ),
                 ],
             ),
@@ -10847,27 +10863,39 @@ def LoadShedding() -> RowPanel:
             ),
         ]
     )
-    # Row 4: Delay duration + background wait duration
+    # Row 4: Delay duration
     layout.row(
         [
-            graph_panel_histogram_quantiles(
+            graph_panel(
                 title="Admission Delay Duration",
                 description="Delay duration imposed by foreground admission control.",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
-                metric="tikv_resource_control_admission_delay_duration_seconds",
-                label_selectors=['is_background="false"'],
-                by_labels=["resource_group"],
-            ),
-            graph_panel(
-                title="Background Task Wait Duration",
-                description="Total wait duration of background tasks per resource group.",
-                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
                 targets=[
                     target(
-                        expr=expr_sum_rate(
-                            "tikv_resource_control_background_task_wait_duration",
+                        expr=expr_histogram_quantile(
+                            0.9999,
+                            "tikv_resource_control_admission_delay_duration_seconds",
                             by_labels=["resource_group"],
-                        ).extra(" > 0"),
+                        ),
+                        legend_format="99.99%-{{resource_group}}",
+                        additional_groupby=True,
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_resource_control_admission_delay_duration_seconds",
+                            by_labels=["resource_group"],
+                        ),
+                        legend_format="99%-{{resource_group}}",
+                        additional_groupby=True,
+                    ),
+                    target(
+                        expr=expr_histogram_avg(
+                            "tikv_resource_control_admission_delay_duration_seconds",
+                            by_labels=["resource_group"],
+                        ),
+                        legend_format="avg-{{resource_group}}",
+                        additional_groupby=True,
                     ),
                 ],
             ),
