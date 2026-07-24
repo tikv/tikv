@@ -61,7 +61,7 @@ use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler};
 
 use crate::{
     CdcObserver, Error,
-    channel::{CdcEvent, SendError},
+    channel::{Barrier, CdcEvent, SendError},
     delegate::{Delegate, Downstream, DownstreamId, DownstreamState, MiniLock, on_init_downstream},
     initializer::Initializer,
     metrics::*,
@@ -204,11 +204,10 @@ pub enum Task {
         observe_id: ObserveId,
         downstream_id: DownstreamId,
         downstream_state: Arc<AtomicCell<DownstreamState>>,
-        sink: crate::channel::Sink,
         build_resolver: Arc<AtomicBool>,
         // `incremental_scan_barrier` will be sent into `sink` to ensure all delta changes
         // are delivered to the downstream. And then incremental scan can start.
-        incremental_scan_barrier: CdcEvent,
+        incremental_scan_barrier: Barrier,
         cb: InitCallback,
     },
     TxnExtra(TxnExtra),
@@ -1259,44 +1258,57 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 observe_id,
                 downstream_id,
                 downstream_state,
-                sink,
                 build_resolver,
                 incremental_scan_barrier,
                 cb,
             } => {
-                match self.capture_regions.get_mut(&region_id) {
-                    Some(delegate) if delegate.handle.id == observe_id => {
-                        if delegate.init_lock_tracker() {
-                            build_resolver.store(true, Ordering::Release);
-                        }
-                    }
+                // `InitDownstream` is queued asynchronously. When it runs, the
+                // delegate or downstream may already have been removed by a
+                // stale observe generation, connection teardown, or region error.
+                // early return dropping `cb` cancels the paired oneshot receiver and wakes
+                // `Initializer::initialize` with an error.
+                let delegate = match self.capture_regions.get_mut(&region_id) {
+                    Some(delegate) if delegate.handle.id == observe_id => delegate,
                     _ => return,
+                };
+                if delegate.init_lock_tracker() {
+                    build_resolver.store(true, Ordering::Release);
                 }
-                if let Err(e) = sink.unbounded_send(incremental_scan_barrier, true) {
-                    warn!("cdc failed to schedule barrier for delta before delta scan";
-                        "error" => ?e,
-                        "observe_id" => ?observe_id,
-                        "downstream_id" => ?downstream_id,
-                        "request_id" => ?request_id,
-                        "region_id" => region_id,
-                        "conn_id" => ?conn_id);
+
+                // The downstream may still exist but no longer be uninitialized before this
+                // queued task runs.
+                if downstream_state.load() != DownstreamState::Uninitialized {
                     return;
                 }
-                if on_init_downstream(&downstream_state) {
-                    info!("cdc downstream starts to initialize";
-                        "observe_id" => ?observe_id,
-                        "downstream_id" => ?downstream_id,
-                        "request_id" => ?request_id,
-                        "region_id" => region_id,
-                        "conn_id" => ?conn_id);
-                } else {
-                    warn!("cdc downstream fails to initialize: canceled";
-                        "observe_id" => ?observe_id,
-                        "downstream_id" => ?downstream_id,
-                        "request_id" => ?request_id,
-                        "region_id" => region_id,
-                        "conn_id" => ?conn_id);
+                let downstream = match delegate.downstream(downstream_id) {
+                    Some(d) => d,
+                    None => return,
+                };
+                if let Err(e) = downstream.sink_barrier(incremental_scan_barrier) {
+                    warn!("cdc failed to schedule barrier for delta before delta scan";
+                            "error" => ?e,
+                            "observe_id" => ?observe_id,
+                            "downstream_id" => ?downstream_id,
+                            "request_id" => ?request_id,
+                            "region_id" => region_id,
+                            "conn_id" => ?conn_id);
+                    return;
                 }
+                if !on_init_downstream(&downstream_state) {
+                    warn!("cdc downstream fails to initialize: canceled";
+                            "observe_id" => ?observe_id,
+                            "downstream_id" => ?downstream_id,
+                            "request_id" => ?request_id,
+                            "region_id" => region_id,
+                            "conn_id" => ?conn_id);
+                    return;
+                }
+                info!("cdc downstream starts to initialize";
+                        "observe_id" => ?observe_id,
+                        "downstream_id" => ?downstream_id,
+                        "request_id" => ?request_id,
+                        "region_id" => region_id,
+                        "conn_id" => ?conn_id);
                 cb();
             }
             Task::TxnExtra(txn_extra) => {
@@ -1403,8 +1415,10 @@ mod tests {
     use kvproto::{
         cdcpb::{ChangeDataRequestKvApi, Header},
         errorpb::Error as ErrorHeader,
+        raft_cmdpb::{CmdType, PutRequest, RaftCmdRequest, Request},
     };
     use raftstore::{
+        coprocessor::{Cmd, ObserveLevel},
         errors::{DiscardReason, Error as RaftStoreError},
         router::{CdcRaftRouter, RaftStoreRouter},
         store::{PeerMsg, ReadDelegate, fsm::StoreMeta, msg::CasualMessage},
@@ -1419,6 +1433,7 @@ mod tests {
         config::{ReadableDuration, ReadableSize},
         worker::{ReceiverWrapper, dummy_scheduler},
     };
+    use txn_types::{Lock, LockType};
 
     use super::*;
     use crate::{
@@ -1432,6 +1447,38 @@ mod tests {
             conn_id,
             version,
             explicit_features: vec![],
+        }
+    }
+
+    fn lock_multibatch(region_id: u64, observe_id: ObserveId) -> CmdBatch {
+        let key = Key::from_raw(b"key").into_encoded();
+        let mut put = PutRequest::default();
+        put.key = key.clone();
+        put.cf = "lock".to_owned();
+        put.value = Lock::new(
+            LockType::Put,
+            key,
+            1.into(),
+            10,
+            None,
+            TimeStamp::zero(),
+            0,
+            TimeStamp::zero(),
+            false,
+        )
+        .to_bytes();
+        let mut request = Request::default();
+        request.set_cmd_type(CmdType::Put);
+        request.set_put(put);
+        let mut raft_request = RaftCmdRequest::default();
+        raft_request.mut_requests().push(request);
+        CmdBatch {
+            level: ObserveLevel::All,
+            cdc_id: observe_id,
+            rts_id: ObserveId::default(),
+            pitr_id: ObserveId::default(),
+            region_id,
+            cmds: vec![Cmd::new(1, 1, raft_request, Default::default())],
         }
     }
 
@@ -1474,6 +1521,57 @@ mod tests {
 
         fn raft_rx(&self, region_id: u64) -> &tikv_util::mpsc::Receiver<PeerMsg<RocksEngine>> {
             self.raft_rxs.get(&region_id).unwrap()
+        }
+    }
+
+    struct Downstream4Test {
+        conn_id: ConnId,
+        request_id: RequestId,
+        downstream_id: DownstreamId,
+        state: Arc<AtomicCell<DownstreamState>>,
+        drain: channel::Drain,
+    }
+
+    fn register_downstream(
+        suite: &mut TestEndpointSuite,
+        region_id: u64,
+        request_id: RequestId,
+        quota: Arc<MemoryQuota>,
+    ) -> Downstream4Test {
+        let (sink, drain) = channel::channel(ConnId::default(), 1, quota);
+        let conn = Conn::new(ConnId::default(), sink, String::new());
+        let conn_id = conn.get_id();
+        suite.run(Task::OpenConn { conn });
+        suite.run(set_conn_version_task(
+            conn_id,
+            FeatureGate::batch_resolved_ts(),
+        ));
+
+        let mut request = ChangeDataRequest::default();
+        request.set_region_id(region_id);
+        request.set_request_id(request_id.0);
+        let downstream = Downstream::new(
+            String::new(),
+            request.get_region_epoch().clone(),
+            request_id,
+            conn_id,
+            ChangeDataRequestKvApi::TiDb,
+            false,
+            ObservedRange::default(),
+        );
+        let downstream_id = downstream.id;
+        let state = downstream.get_state();
+        suite.run(Task::Register {
+            request,
+            downstream,
+        });
+
+        Downstream4Test {
+            conn_id,
+            request_id,
+            downstream_id,
+            state,
+            drain,
         }
     }
 
@@ -3146,5 +3244,263 @@ mod tests {
             downstream,
         });
         assert!(suite.connections.is_empty());
+    }
+
+    #[test]
+    fn test_init_downstream() {
+        let cfg = CdcConfig {
+            min_ts_interval: ReadableDuration(Duration::from_secs(60)),
+            ..Default::default()
+        };
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
+        suite.add_region(1, 100);
+
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let request_id = RequestId(1);
+        let Downstream4Test {
+            conn_id,
+            downstream_id,
+            state: downstream_state,
+            mut drain,
+            ..
+        } = register_downstream(&mut suite, 1, request_id, quota);
+
+        let observe_id = suite.capture_regions[&1].handle.id;
+        let build_resolver = Arc::new(AtomicBool::new(false));
+        let (barrier_tx, barrier_rx) = std::sync::mpsc::channel();
+        let (response_tx, response_rx) = std::sync::mpsc::channel();
+        suite.run(Task::InitDownstream {
+            conn_id,
+            region_id: 1,
+            request_id,
+            observe_id,
+            downstream_id,
+            downstream_state: downstream_state.clone(),
+            build_resolver: build_resolver.clone(),
+            incremental_scan_barrier: Some(Box::new(move |()| {
+                barrier_tx.send(()).unwrap();
+            })),
+            cb: Box::new(move || {
+                response_tx.send(()).unwrap();
+            }),
+        });
+
+        assert_eq!(downstream_state.load(), DownstreamState::Initializing);
+        assert!(build_resolver.load(Ordering::Acquire));
+        response_rx.try_recv().unwrap();
+        assert_eq!(
+            barrier_rx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        );
+
+        let mut drain = drain.drain();
+        assert!(matches!(
+            block_on(futures::StreamExt::next(&mut drain)),
+            Some((CdcEvent::Barrier(_), _))
+        ));
+        barrier_rx.try_recv().unwrap();
+
+        let duplicate_build_resolver = Arc::new(AtomicBool::new(false));
+        let (barrier_cb, barrier_fut) = tikv_util::future::paired_future_callback::<()>();
+        let (response_cb, response_fut) = tikv_util::future::paired_future_callback::<()>();
+        suite.run(Task::InitDownstream {
+            conn_id,
+            region_id: 1,
+            request_id,
+            observe_id,
+            downstream_id,
+            downstream_state: downstream_state.clone(),
+            build_resolver: duplicate_build_resolver.clone(),
+            incremental_scan_barrier: Some(barrier_cb),
+            cb: Box::new(move || response_cb(())),
+        });
+
+        assert_eq!(downstream_state.load(), DownstreamState::Initializing);
+        assert!(!duplicate_build_resolver.load(Ordering::Acquire));
+        assert!(matches!(
+            tikv_util::future::block_on_timeout(barrier_fut, Duration::from_millis(100)),
+            Ok(Err(_))
+        ));
+        assert!(matches!(
+            tikv_util::future::block_on_timeout(response_fut, Duration::from_millis(100)),
+            Ok(Err(_))
+        ));
+    }
+
+    #[test]
+    fn test_init_downstream_sink_barrier_error() {
+        let cfg = CdcConfig {
+            min_ts_interval: ReadableDuration(Duration::from_secs(60)),
+            ..Default::default()
+        };
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
+        suite.add_region(1, 100);
+
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let request_id = RequestId(1);
+        let Downstream4Test {
+            conn_id,
+            downstream_id,
+            state: downstream_state,
+            drain,
+            ..
+        } = register_downstream(&mut suite, 1, request_id, quota);
+
+        let observe_id = suite.capture_regions[&1].handle.id;
+        let build_resolver = Arc::new(AtomicBool::new(false));
+        let (barrier_cb, barrier_fut) = tikv_util::future::paired_future_callback::<()>();
+        let (response_cb, response_fut) = tikv_util::future::paired_future_callback::<()>();
+        drop(drain);
+        suite.run(Task::InitDownstream {
+            conn_id,
+            region_id: 1,
+            request_id,
+            observe_id,
+            downstream_id,
+            downstream_state: downstream_state.clone(),
+            build_resolver: build_resolver.clone(),
+            incremental_scan_barrier: Some(barrier_cb),
+            cb: Box::new(move || response_cb(())),
+        });
+
+        assert_eq!(downstream_state.load(), DownstreamState::Uninitialized);
+        let batch = lock_multibatch(1, observe_id);
+        suite.sink_memory_quota.alloc_force(batch.size());
+        suite.run(Task::MultiBatch {
+            multi: vec![batch],
+            old_value_cb: Box::new(|_, _, _, _| Ok(None)),
+        });
+        assert!(build_resolver.load(Ordering::Acquire));
+        assert!(
+            !suite
+                .capture_regions
+                .get_mut(&1)
+                .unwrap()
+                .init_lock_tracker()
+        );
+        assert!(matches!(
+            tikv_util::future::block_on_timeout(barrier_fut, Duration::from_millis(100)),
+            Ok(Err(_))
+        ));
+        assert!(matches!(
+            tikv_util::future::block_on_timeout(response_fut, Duration::from_millis(100)),
+            Ok(Err(_))
+        ));
+    }
+
+    #[test]
+    fn test_late_init_downstream_tracks_multibatch_after_conn_deregistered() {
+        let cfg = CdcConfig {
+            min_ts_interval: ReadableDuration(Duration::from_secs(60)),
+            ..Default::default()
+        };
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
+        suite.add_region(1, 100);
+
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let downstream_a = register_downstream(&mut suite, 1, RequestId(1), quota.clone());
+        let observe_id = suite.capture_regions[&1].handle.id;
+        let downstream_b = register_downstream(&mut suite, 1, RequestId(2), quota);
+
+        let build_resolver = Arc::new(AtomicBool::new(false));
+        let (barrier_cb, barrier_fut) = tikv_util::future::paired_future_callback::<()>();
+        let (response_cb, response_fut) = tikv_util::future::paired_future_callback::<()>();
+        let late_task = Task::InitDownstream {
+            conn_id: downstream_a.conn_id,
+            region_id: 1,
+            request_id: downstream_a.request_id,
+            observe_id,
+            downstream_id: downstream_a.downstream_id,
+            downstream_state: downstream_a.state.clone(),
+            build_resolver: build_resolver.clone(),
+            incremental_scan_barrier: Some(barrier_cb),
+            cb: Box::new(move || response_cb(())),
+        };
+
+        suite.run(Task::Deregister(Deregister::Conn(downstream_a.conn_id)));
+        suite.run(late_task);
+
+        assert!(!suite.connections.contains_key(&downstream_a.conn_id));
+        assert_eq!(downstream_a.state.load(), DownstreamState::Stopped);
+        assert!(build_resolver.load(Ordering::Acquire));
+
+        // The capture-change callback enables observation before it schedules
+        // `InitDownstream`, so a lock update can be the next endpoint task even
+        // when the original downstream has already been deregistered. The
+        // delegate must leave `LockTracker::Pending` before returning above.
+        let batch = lock_multibatch(1, observe_id);
+        suite.sink_memory_quota.alloc_force(batch.size());
+        suite.run(Task::MultiBatch {
+            multi: vec![batch],
+            old_value_cb: Box::new(|_, _, _, _| Ok(None)),
+        });
+        assert!(
+            !suite
+                .capture_regions
+                .get_mut(&1)
+                .unwrap()
+                .init_lock_tracker()
+        );
+
+        let delegate = &suite.capture_regions[&1];
+        assert!(delegate.downstream(downstream_a.downstream_id).is_none());
+        assert_eq!(delegate.downstreams().len(), 1);
+        assert_eq!(delegate.downstreams()[0].id, downstream_b.downstream_id);
+        assert!(matches!(
+            tikv_util::future::block_on_timeout(barrier_fut, Duration::from_millis(100)),
+            Ok(Err(_))
+        ));
+        assert!(matches!(
+            tikv_util::future::block_on_timeout(response_fut, Duration::from_millis(100)),
+            Ok(Err(_))
+        ));
+    }
+
+    #[test]
+    fn test_init_downstream_rejects_stale_observe_id() {
+        let cfg = CdcConfig {
+            min_ts_interval: ReadableDuration(Duration::from_secs(60)),
+            ..Default::default()
+        };
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
+        suite.add_region(1, 100);
+
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let request_id = RequestId(1);
+        let Downstream4Test {
+            conn_id,
+            downstream_id,
+            state: downstream_state,
+            drain: _drain,
+            ..
+        } = register_downstream(&mut suite, 1, request_id, quota);
+
+        let stale_observe_id = ObserveId::new();
+        assert_ne!(stale_observe_id, suite.capture_regions[&1].handle.id);
+        let build_resolver = Arc::new(AtomicBool::new(false));
+        let (barrier_cb, barrier_fut) = tikv_util::future::paired_future_callback::<()>();
+        let (response_cb, response_fut) = tikv_util::future::paired_future_callback::<()>();
+        suite.run(Task::InitDownstream {
+            conn_id,
+            region_id: 1,
+            request_id,
+            observe_id: stale_observe_id,
+            downstream_id,
+            downstream_state: downstream_state.clone(),
+            build_resolver: build_resolver.clone(),
+            incremental_scan_barrier: Some(barrier_cb),
+            cb: Box::new(move || response_cb(())),
+        });
+
+        assert_eq!(downstream_state.load(), DownstreamState::Uninitialized);
+        assert!(!build_resolver.load(Ordering::Acquire));
+        assert!(matches!(
+            tikv_util::future::block_on_timeout(barrier_fut, Duration::from_millis(100)),
+            Ok(Err(_))
+        ));
+        assert!(matches!(
+            tikv_util::future::block_on_timeout(response_fut, Duration::from_millis(100)),
+            Ok(Err(_))
+        ));
     }
 }
