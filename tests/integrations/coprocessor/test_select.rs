@@ -2245,6 +2245,8 @@ fn test_batch_request() {
                 let batch_leader = cluster.leader_of_region(batch_region.get_id()).unwrap();
                 let batch_key_ranges =
                     vec![product.get_record_range(handle_range.start, handle_range.end)];
+                // `task_id` stays at its protobuf default to exercise legacy
+                // positional response association.
                 let mut store_batch_task = StoreBatchTask::new();
                 store_batch_task.set_region_id(batch_region.get_id());
                 store_batch_task.set_region_epoch(batch_region.get_region_epoch().clone());
@@ -2326,6 +2328,9 @@ fn test_batch_request() {
 
     for (ranges, results, invalid_epoch, key_is_locked) in cases.iter() {
         let mut req = prepare_req(&mut cluster, ranges);
+        // Legacy clients may leave every task ID at its protobuf default.
+        // Their responses must therefore remain associated by request order.
+        assert!(req.get_tasks().iter().all(|task| task.get_task_id() == 0));
         if *invalid_epoch {
             req.context
                 .as_mut()
@@ -2357,6 +2362,12 @@ fn test_batch_request() {
         }
         let mut resp = handle_request(&endpoint, req);
         let mut batch_results = resp.take_batch_responses().to_vec();
+        assert_eq!(batch_results.len(), results.len() - 1);
+        assert!(
+            batch_results
+                .iter()
+                .all(|response| response.get_task_id() == 0)
+        );
         for (i, result) in results.iter().enumerate() {
             if i == 0 {
                 verify_response(result, &resp);
