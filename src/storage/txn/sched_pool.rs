@@ -118,6 +118,7 @@ impl PriorityQueue {
         priority_level: CommandPri,
         f: impl futures::Future<Output = ()> + Send + 'static,
         write_bytes: u64,
+        measure_only: bool,
     ) -> Result<(), Full> {
         let fixed_level = match priority_level {
             CommandPri::High => Some(0),
@@ -135,12 +136,17 @@ impl PriorityQueue {
             request_source,
             override_priority,
         );
+        let is_background = resource_limiter
+            .as_ref()
+            .is_some_and(|limiter| limiter.is_background());
+        let measure_only = measure_only || !is_background;
+        let skip_compaction_pressure = !is_background;
         self.worker_pool.spawn_with_extras(
             with_resource_limiter(
                 ControlledFuture::new(f, self.resource_ctl.clone(), group_name),
                 resource_limiter,
-                true, // skip compaction pressure for foreground jobs
-                true, // measure-only: build debt, never sleep inside pool
+                skip_compaction_pressure,
+                measure_only,
                 Some(self.resource_mgr.clone()),
                 write_bytes,
             ),
@@ -236,6 +242,25 @@ impl SchedPool {
         f: impl futures::Future<Output = ()> + Send + 'static,
         write_bytes: u64,
     ) -> Result<(), Full> {
+        self.spawn_opt(
+            request_source,
+            metadata,
+            priority_level,
+            f,
+            write_bytes,
+            false,
+        )
+    }
+
+    pub fn spawn_opt(
+        &self,
+        request_source: &str,
+        metadata: TaskMetadata<'_>,
+        priority_level: CommandPri,
+        f: impl futures::Future<Output = ()> + Send + 'static,
+        write_bytes: u64,
+        measure_only: bool,
+    ) -> Result<(), Full> {
         match self.queue_type {
             QueueType::Vanilla => self.vanilla.spawn(priority_level, f),
             QueueType::Dynamic => {
@@ -247,13 +272,53 @@ impl SchedPool {
                         priority_level,
                         f,
                         write_bytes,
+                        measure_only,
                     )
                 } else {
                     fail_point!("single_queue_pool_task");
-                    self.vanilla.spawn(priority_level, f)
+                    self.spawn_vanilla_with_background_control(
+                        request_source,
+                        metadata,
+                        priority_level,
+                        f,
+                        write_bytes,
+                        measure_only,
+                    )
                 }
             }
         }
+    }
+
+    fn spawn_vanilla_with_background_control(
+        &self,
+        request_source: &str,
+        metadata: TaskMetadata<'_>,
+        priority_level: CommandPri,
+        f: impl futures::Future<Output = ()> + Send + 'static,
+        write_bytes: u64,
+        measure_only: bool,
+    ) -> Result<(), Full> {
+        if request_source.is_empty() {
+            return self.vanilla.spawn(priority_level, f);
+        }
+        let resource_mgr = &self.priority.as_ref().unwrap().resource_mgr;
+        let group_name = std::str::from_utf8(metadata.group_name()).unwrap_or_default();
+        let resource_limiter =
+            resource_mgr.get_background_resource_limiter(group_name, request_source);
+        if let Some(resource_limiter) = resource_limiter {
+            return self.vanilla.spawn(
+                priority_level,
+                with_resource_limiter(
+                    f,
+                    Some(resource_limiter),
+                    false, // enforce compaction-pressure limits for background writes
+                    measure_only,
+                    None,
+                    write_bytes,
+                ),
+            );
+        }
+        self.vanilla.spawn(priority_level, f)
     }
 
     pub fn scale_pool_size(&self, pool_size: usize) {
