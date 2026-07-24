@@ -313,6 +313,25 @@
 ## Set to 0 to disable this feature if you want to panic immediately when encountering such an error.
 # background-error-recovery-window = "1h"
 
+## Test-only transaction anomaly checker. When enabled, every
+## transaction write command is checked for anomalous states where a committed
+## write record and a normal lock coexist for the same key and start_ts. It is
+## disabled by default and has zero overhead when disabled. Do not enable in
+## production.
+[storage.txn-anomaly-checker]
+## Master switch of the checker.
+# enabled = false
+
+## Whether to panic (and freeze the scene) when an anomaly is found.
+# panic-on-hit = true
+
+## Whether to also check whether the snapshot's pre-existing state already
+## satisfies the anomaly predicate.
+# check-pre-state = true
+
+## Directory to write JSON evidence files into. Empty means only logging.
+# evidence-dir = ""
+
 ## Block cache is used by RocksDB to cache uncompressed blocks. Big block cache can speed up read.
 ## It is recommended to turn on shared block cache. Since only the total cache size need to be
 ## set, it is easier to config. In most cases it should be able to auto-balance cache usage

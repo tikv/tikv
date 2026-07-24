@@ -620,7 +620,11 @@ impl<S: EngineSnapshot> MvccReader<S> {
         }
     }
 
-    fn get_txn_commit_record(&mut self, key: &Key, start_ts: TimeStamp) -> Result<TxnCommitRecord> {
+    pub fn get_txn_commit_record(
+        &mut self,
+        key: &Key,
+        start_ts: TimeStamp,
+    ) -> Result<TxnCommitRecord> {
         // It's possible a txn with a small `start_ts` has a greater `commit_ts` than a
         // txn with a greater `start_ts` in pessimistic transaction.
         // I.e., txn_1.commit_ts > txn_2.commit_ts > txn_2.start_ts > txn_1.start_ts.

@@ -64,7 +64,7 @@ use super::task::Task;
 use crate::{
     server::lock_manager::waiter_manager,
     storage::{
-        config::Config,
+        config::{Config, TxnAnomalyCheckerConfig},
         errors::SharedError,
         get_causal_ts, get_priority_tag, get_raw_key_guard,
         kv::{
@@ -88,6 +88,7 @@ use crate::{
             flow_controller::FlowController,
             latch::{Latches, Lock},
             sched_pool::{tls_collect_query, tls_collect_scan_details, SchedPool},
+            txn_anomaly_checker,
             txn_status_cache::TxnStatusCache,
             Error, ErrorInner, ProcessResult,
         },
@@ -274,6 +275,8 @@ struct TxnSchedulerInner<L: LockManager> {
     in_memory_pessimistic_lock: Arc<AtomicBool>,
 
     enable_async_apply_prewrite: bool,
+
+    txn_anomaly_checker: TxnAnomalyCheckerConfig,
 
     pessimistic_lock_wake_up_delay_duration_ms: Arc<AtomicU64>,
 
@@ -476,6 +479,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             pipelined_pessimistic_lock: dynamic_configs.pipelined_pessimistic_lock,
             in_memory_pessimistic_lock: dynamic_configs.in_memory_pessimistic_lock,
             enable_async_apply_prewrite: config.enable_async_apply_prewrite,
+            txn_anomaly_checker: config.txn_anomaly_checker.clone(),
             pessimistic_lock_wake_up_delay_duration_ms: dynamic_configs.wake_up_delay_duration_ms,
             flow_controller,
             causal_ts_provider,
@@ -492,6 +496,16 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         SCHED_TXN_MEMORY_QUOTA
             .capacity
             .set(config.memory_quota.0 as i64);
+
+        if config.txn_anomaly_checker.enabled {
+            info!("{}", txn_anomaly_checker::CHECKER_BUILD_MARKER;
+                "version" => env!("CARGO_PKG_VERSION"),
+                "checker_version" => txn_anomaly_checker::CHECKER_VERSION,
+                "panic_on_hit" => config.txn_anomaly_checker.panic_on_hit,
+                "check_pre_state" => config.txn_anomaly_checker.check_pre_state,
+                "evidence_dir" => config.txn_anomaly_checker.evidence_dir.as_str(),
+            );
+        }
 
         slow_log!(
             t.saturating_elapsed(),
@@ -1441,10 +1455,25 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 raw_ext,
                 txn_status_cache: txn_scheduler.inner.txn_status_cache.clone(),
             };
+            // Only cloned when the test-only anomaly checker is enabled, so the
+            // default path keeps zero extra cost.
+            let checker_snapshot = if txn_scheduler.inner.txn_anomaly_checker.enabled {
+                Some(snapshot.clone())
+            } else {
+                None
+            };
             let begin_instant = Instant::now();
             let res = unsafe {
                 with_perf_context::<E, _, _>(tag, || task.process_write(snapshot, context))
             };
+            if let (Some(snapshot), Ok(write_result)) = (checker_snapshot, &res) {
+                txn_anomaly_checker::check_write_result(
+                    &snapshot,
+                    tag,
+                    write_result,
+                    &txn_scheduler.inner.txn_anomaly_checker,
+                );
+            }
             let cmd_process_duration = begin_instant.saturating_elapsed();
             sched_details.cmd_process_nanos = cmd_process_duration.as_nanos() as u64;
             sched_details.block_read_nanos = GLOBAL_TRACKERS
