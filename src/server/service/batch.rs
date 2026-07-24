@@ -2,6 +2,7 @@
 
 // #[PerformanceCriticalPath]
 use std::collections::HashMap;
+use std::time::Duration;
 
 use api_version::KvFormat;
 use kvproto::kvrpcpb::*;
@@ -17,12 +18,15 @@ use txn_types::ValueEntry;
 use crate::{
     server::{
         metrics::{GrpcTypeKind, REQUEST_BATCH_SIZE_HISTOGRAM_VEC, ResourcePriority},
-        service::kv::{GrpcRequestDuration, MeasuredSingleResponse, batch_commands_response},
+        service::kv::{
+            GrpcRequestDuration, MeasuredSingleResponse, batch_commands_response,
+            slow_kv_times,
+        },
     },
     storage::{
-        ResponseBatchConsumer, Result, Storage,
+        KvGetStatistics, ResponseBatchConsumer, Result, Storage,
         errors::{extract_key_error, extract_region_error},
-        kv::{Engine, Statistics},
+        kv::Engine,
         lock_manager::LockManager,
     },
 };
@@ -30,6 +34,14 @@ use crate::{
 pub const MAX_BATCH_GET_REQUEST_COUNT: usize = 10;
 pub const MIN_BATCH_GET_REQUEST_COUNT: usize = 4;
 pub const MAX_QUEUE_SIZE_PER_WORKER: usize = 16;
+
+/// Per-request context for slow-log emission in the ReqBatcher path.
+pub(crate) struct SlowKvRequestContext {
+    pub(crate) region_id: u64,
+    pub(crate) peer_id: u64,
+    pub(crate) store_id: u64,
+    pub(crate) txn_start_ts: u64,
+}
 
 pub struct ReqBatcher {
     gets: Vec<GetRequest>,
@@ -39,10 +51,16 @@ pub struct ReqBatcher {
     raw_get_ids: Vec<u64>,
     begin_instant: Instant,
     batch_size: usize,
+    slow_log_threshold: Duration,
+    remote_host: String,
 }
 
 impl ReqBatcher {
-    pub fn new(batch_size: usize) -> ReqBatcher {
+    pub fn new(
+        batch_size: usize,
+        slow_log_threshold: Duration,
+        remote_host: String,
+    ) -> ReqBatcher {
         let begin_instant = Instant::now();
         ReqBatcher {
             gets: vec![],
@@ -52,6 +70,8 @@ impl ReqBatcher {
             raw_get_ids: vec![],
             begin_instant,
             batch_size: std::cmp::min(batch_size, MAX_BATCH_GET_REQUEST_COUNT),
+            slow_log_threshold,
+            remote_host,
         }
     }
 
@@ -91,7 +111,16 @@ impl ReqBatcher {
             let gets = std::mem::take(&mut self.gets);
             let ids = std::mem::take(&mut self.get_ids);
             let trackers = std::mem::take(&mut self.get_trackers);
-            future_batch_get_command(storage, ids, gets, trackers, tx.clone(), self.begin_instant);
+            future_batch_get_command(
+                storage,
+                ids,
+                gets,
+                trackers,
+                tx.clone(),
+                self.begin_instant,
+                self.slow_log_threshold,
+                self.remote_host.clone(),
+            );
         }
 
         if self.raw_gets.len() >= self.batch_size {
@@ -114,6 +143,8 @@ impl ReqBatcher {
                 self.get_trackers,
                 tx.clone(),
                 self.begin_instant,
+                self.slow_log_threshold,
+                self.remote_host,
             );
         }
         if !self.raw_gets.is_empty() {
@@ -131,13 +162,17 @@ impl ReqBatcher {
 pub struct BatcherBuilder {
     pool_size: usize,
     enable_batch: bool,
+    slow_log_threshold: Duration,
+    remote_host: String,
 }
 
 impl BatcherBuilder {
-    pub fn new(enable_batch: bool, pool_size: usize) -> Self {
+    pub fn new(enable_batch: bool, pool_size: usize, slow_log_threshold: Duration, remote_host: String) -> Self {
         BatcherBuilder {
             enable_batch,
             pool_size,
+            slow_log_threshold,
+            remote_host,
         }
     }
     pub fn build(&self, queue_per_worker: usize, req_batch_size: usize) -> Option<ReqBatcher> {
@@ -147,12 +182,20 @@ impl BatcherBuilder {
         if req_batch_size > self.pool_size * MIN_BATCH_GET_REQUEST_COUNT
             && queue_per_worker >= MIN_BATCH_GET_REQUEST_COUNT
         {
-            return Some(ReqBatcher::new(req_batch_size / self.pool_size));
+            return Some(ReqBatcher::new(
+                req_batch_size / self.pool_size,
+                self.slow_log_threshold,
+                self.remote_host.clone(),
+            ));
         }
         if req_batch_size >= MIN_BATCH_GET_REQUEST_COUNT
             && queue_per_worker >= MAX_QUEUE_SIZE_PER_WORKER
         {
-            return Some(ReqBatcher::new(req_batch_size));
+            return Some(ReqBatcher::new(
+                req_batch_size,
+                self.slow_log_threshold,
+                self.remote_host.clone(),
+            ));
         }
         None
     }
@@ -161,28 +204,35 @@ impl BatcherBuilder {
 pub struct GetCommandResponseConsumer {
     tx: Sender<MeasuredSingleResponse>,
     trackers: HashMap<u64, TrackerToken>,
+    slow_log_threshold: Duration,
+    remote_host: String,
+    slow_log_ctx: HashMap<u64, SlowKvRequestContext>,
+    // Per-request enqueue instants from tracker req_info.begin (std Instant),
+    // used for accurate total_lifetime in the slow log.
+    req_begins: HashMap<u64, std::time::Instant>,
 }
 
-impl ResponseBatchConsumer<(Option<ValueEntry>, Statistics)> for GetCommandResponseConsumer {
+impl ResponseBatchConsumer<(Option<ValueEntry>, KvGetStatistics)> for GetCommandResponseConsumer {
     fn consume(
         &self,
         id: u64,
-        res: Result<(Option<ValueEntry>, Statistics)>,
+        res: Result<(Option<ValueEntry>, KvGetStatistics)>,
         begin: Instant,
         request_source: String,
         resource_priority: ResourcePriority,
     ) {
         let mut resp = GetResponse::default();
+        let mut slow = None;
         if let Some(err) = extract_region_error(&res) {
             resp.set_region_error(err);
         } else {
             match res {
-                Ok((val, statistics)) => {
+                Ok((val, kv_stats)) => {
                     let exec_detail_v2 = resp.mut_exec_details_v2();
                     let tracker = self.trackers.get(&id).copied();
                     {
                         let scan_detail_v2 = exec_detail_v2.mut_scan_detail_v2();
-                        statistics.write_scan_detail(scan_detail_v2);
+                        kv_stats.stats.write_scan_detail(scan_detail_v2);
                         if let Some(tracker) = tracker {
                             let _ = GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
                                 tracker.write_scan_detail(scan_detail_v2);
@@ -194,6 +244,7 @@ impl ResponseBatchConsumer<(Option<ValueEntry>, Statistics)> for GetCommandRespo
                             tracker.write_ru_v2(exec_detail_v2.mut_ru_v2());
                         });
                     }
+                    slow = slow_kv_times(&kv_stats.latency_stats, self.slow_log_threshold);
                     match val {
                         Some(val) => {
                             resp.set_value(val.value);
@@ -206,6 +257,27 @@ impl ResponseBatchConsumer<(Option<ValueEntry>, Statistics)> for GetCommandRespo
                 }
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
+        }
+
+        if let Some(times) = slow {
+            let ctx = self.slow_log_ctx.get(&id);
+            // Per-request total_lifetime from the tracker's req_info.begin,
+            // not the shared batch begin_instant.
+            let total_time = self
+                .req_begins
+                .get(&id)
+                .map(|b| b.elapsed())
+                .unwrap_or_else(|| begin.saturating_elapsed());
+            info!(#"slow_log", "slow-query";
+                "region_id" => ctx.map_or(0, |c| c.region_id),
+                "peer_id" => ctx.map_or(0, |c| c.peer_id),
+                "store_id" => ctx.map_or(0, |c| c.store_id),
+                "command" => "kv_batch_get_command",
+                "remote" => &self.remote_host,
+                "total_time" => ?total_time,
+                "wait_time" => ?times.wait_time,
+                "process_time" => ?times.process_time,
+            );
         }
 
         let res = batch_commands_response::Response {
@@ -268,6 +340,8 @@ fn future_batch_get_command<E: Engine, L: LockManager, F: KvFormat>(
     trackers: Vec<TrackerToken>,
     tx: Sender<MeasuredSingleResponse>,
     begin_instant: tikv_util::time::Instant,
+    slow_log_threshold: Duration,
+    remote_host: String,
 ) {
     REQUEST_BATCH_SIZE_HISTOGRAM_VEC
         .kv_get
@@ -291,6 +365,37 @@ fn future_batch_get_command<E: Engine, L: LockManager, F: KvFormat>(
         .copied()
         .zip(trackers.iter().copied())
         .collect();
+
+    let slow_log_ctx: HashMap<u64, SlowKvRequestContext> = gets
+        .iter()
+        .zip(requests.iter())
+        .map(|(req, id)| {
+            let ctx = req.get_context();
+            let peer = ctx.get_peer();
+            (
+                *id,
+                SlowKvRequestContext {
+                    region_id: ctx.get_region_id(),
+                    peer_id: peer.get_id(),
+                    store_id: peer.get_store_id(),
+                    txn_start_ts: req.get_version(),
+                },
+            )
+        })
+        .collect();
+
+    // Per-request enqueue instants from tracker req_info.begin, used for
+    // accurate total_lifetime in slow logs.
+    let req_begins: HashMap<u64, std::time::Instant> = trackers
+        .iter()
+        .zip(requests.iter())
+        .filter_map(|(tracker, id)| {
+            GLOBAL_TRACKERS
+                .with_tracker(*tracker, |t| t.req_info.begin)
+                .map(|begin| (*id, begin))
+        })
+        .collect();
+
     let res = storage.batch_get_command(
         gets,
         requests,
@@ -298,6 +403,10 @@ fn future_batch_get_command<E: Engine, L: LockManager, F: KvFormat>(
         GetCommandResponseConsumer {
             tx: tx.clone(),
             trackers: trackers_by_id,
+            slow_log_threshold,
+            remote_host,
+            slow_log_ctx,
+            req_begins,
         },
         begin_instant,
     );
@@ -361,6 +470,10 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager, F: KvFormat>(
         GetCommandResponseConsumer {
             tx: tx.clone(),
             trackers: HashMap::default(),
+            slow_log_threshold: Duration::ZERO,
+            remote_host: String::new(),
+            slow_log_ctx: HashMap::default(),
+            req_begins: HashMap::default(),
         },
     );
     let f = async move {
@@ -398,7 +511,6 @@ mod tests {
     use txn_types::{TimeStamp, ValueEntry};
 
     use super::*;
-    use crate::storage::kv::Statistics;
 
     #[test]
     fn test_get_command_response_consumer_sets_commit_ts() {
@@ -406,13 +518,17 @@ mod tests {
         let consumer = GetCommandResponseConsumer {
             tx,
             trackers: HashMap::default(),
+            slow_log_threshold: Duration::ZERO,
+            remote_host: String::new(),
+            slow_log_ctx: HashMap::default(),
+            req_begins: HashMap::default(),
         };
 
         consumer.consume(
             7,
             Ok((
                 Some(ValueEntry::new(b"v".to_vec(), Some(TimeStamp::new(42)))),
-                Statistics::default(),
+                KvGetStatistics::default(),
             )),
             Instant::now(),
             "".to_string(),
@@ -434,13 +550,17 @@ mod tests {
         let consumer = GetCommandResponseConsumer {
             tx,
             trackers: HashMap::default(),
+            slow_log_threshold: Duration::ZERO,
+            remote_host: String::new(),
+            slow_log_ctx: HashMap::default(),
+            req_begins: HashMap::default(),
         };
 
         consumer.consume(
             8,
             Ok((
                 Some(ValueEntry::from_value(b"v".to_vec())),
-                Statistics::default(),
+                KvGetStatistics::default(),
             )),
             Instant::now(),
             "".to_string(),

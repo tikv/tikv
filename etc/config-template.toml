@@ -258,9 +258,15 @@
 ## The default value is 2 if the number of CPU cores is less than 16, otherwise 3.
 # background-thread-count = 2
 
-## If handle time is larger than the threshold, it will print slow log in endpoint.
+## If wait time + process time of a coprocessor request exceeds the threshold,
+## it will print slow log.
 ## The default value is 1s.
 # end-point-slow-log-threshold = "1s"
+
+## If wait time + process time of KvGet or KvBatchGet exceeds the threshold,
+## it will print slow log.
+## The default value is 300ms.
+# kv-command-slow-log-threshold = "300ms"
 
 [storage]
 ## The path to RocksDB directory.

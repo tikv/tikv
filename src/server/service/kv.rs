@@ -141,6 +141,9 @@ pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
     health_feedback_seq: Arc<AtomicU64>,
 
     raft_message_filter: Arc<dyn RaftGrpcMessageFilter>,
+
+    // If handle time of KvGet/KvBatchGet exceeds this threshold, a slow log will be printed.
+    kv_slow_log_threshold: Duration,
 }
 
 impl<E: Engine, L: LockManager, F: KvFormat> Drop for Service<E, L, F> {
@@ -169,6 +172,7 @@ impl<E: Engine + Clone, L: LockManager + Clone, F: KvFormat> Clone for Service<E
             health_feedback_seq: self.health_feedback_seq.clone(),
             health_feedback_interval: self.health_feedback_interval,
             raft_message_filter: self.raft_message_filter.clone(),
+            kv_slow_log_threshold: self.kv_slow_log_threshold,
         }
     }
 }
@@ -192,6 +196,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
         health_controller: HealthController,
         health_feedback_interval: Option<Duration>,
         raft_message_filter: Arc<dyn RaftGrpcMessageFilter>,
+        kv_slow_log_threshold: Duration,
     ) -> Self {
         let now_unix = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -215,6 +220,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
             health_feedback_interval,
             health_feedback_seq: Arc::new(AtomicU64::new(now_unix)),
             raft_message_filter,
+            kv_slow_log_threshold,
         }
     }
 
@@ -279,6 +285,10 @@ macro_rules! handle_request {
         handle_request!($fn_name, $future_name, $req_ty, $resp_ty, no_time_detail);
     };
     ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident, $time_detail: tt) => {
+        handle_request!($fn_name, $future_name(), $req_ty, $resp_ty, $time_detail);
+    };
+    // Arm with extra args for the future function (e.g. slow_log_threshold).
+    ($fn_name: ident, $future_name: ident ( $($extra_arg: expr),* ), $req_ty: ident, $resp_ty: ident, $time_detail: tt) => {
         fn $fn_name(&mut self, ctx: RpcContext<'_>, req: $req_ty, sink: UnarySink<$resp_ty>) {
             reject_if_cluster_id_mismatch!(req, self, ctx, sink);
             forward_unary!(self.proxy, $fn_name, ctx, req, sink);
@@ -294,7 +304,7 @@ macro_rules! handle_request {
             GRPC_RESOURCE_GROUP_COUNTER_VEC
                     .with_label_values(&[resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
                     .inc();
-            let resp = $future_name(&self.storage, req);
+            let resp = $future_name(&self.storage, $($extra_arg,)* req);
             let task = async move {
                 let resp = resp.await?;
                 let elapsed = begin_instant.saturating_elapsed();
@@ -336,7 +346,7 @@ macro_rules! set_total_time {
 }
 
 impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
-    handle_request!(kv_get, future_get, GetRequest, GetResponse, has_time_detail);
+    handle_request!(kv_get, future_get(self.kv_slow_log_threshold), GetRequest, GetResponse, has_time_detail);
     handle_request!(kv_scan, future_scan, ScanRequest, ScanResponse);
     handle_request!(
         kv_prewrite,
@@ -367,12 +377,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         has_time_detail
     );
     handle_request!(kv_cleanup, future_cleanup, CleanupRequest, CleanupResponse);
-    handle_request!(
-        kv_batch_get,
-        future_batch_get,
-        BatchGetRequest,
-        BatchGetResponse
-    );
+    handle_request!(kv_batch_get, future_batch_get(self.kv_slow_log_threshold), BatchGetRequest, BatchGetResponse, no_time_detail);
+
     handle_request!(
         kv_batch_rollback,
         future_batch_rollback,
@@ -1042,13 +1048,19 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
 
         let (tx, rx) = unbounded(WakePolicy::TillReach(GRPC_MSG_NOTIFY_SIZE));
         let ctx = Arc::new(ctx);
-        let peer = ctx.peer();
+        let peer = ctx.peer().to_owned();
         let storage = self.storage.clone();
         let copr = self.copr.clone();
         let copr_v2 = self.copr_v2.clone();
         let pool_size = storage.get_normal_pool_size();
-        let batch_builder = BatcherBuilder::new(self.enable_req_batch, pool_size);
+        let batch_builder = BatcherBuilder::new(
+            self.enable_req_batch,
+            pool_size,
+            self.kv_slow_log_threshold,
+            peer.clone(),
+        );
         let resource_manager = self.resource_manager.clone();
+        let kv_slow_log_threshold = self.kv_slow_log_threshold;
         let cluster_id = self.cluster_id;
         let mut health_feedback_attacher = HealthFeedbackAttacher::new(
             self.store_id,
@@ -1075,6 +1087,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                         req,
                         &tx,
                         &resource_manager,
+                        kv_slow_log_threshold,
                     )
                 {
                     let e = RpcStatus::with_message(
@@ -1351,6 +1364,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
     req: batch_commands_request::Request,
     tx: &Sender<MeasuredSingleResponse>,
     resource_manager: &Option<Arc<ResourceGroupManager>>,
+    slow_log_threshold: Duration,
 ) -> Result<(), Error> {
     macro_rules! handle_cluster_id_mismatch {
         ($cluster_id:expr, $req:expr) => {
@@ -1406,7 +1420,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     } else {
                        let begin_instant = Instant::now();
                        let source = req.get_context().get_request_source().to_owned();
-                       let resp = future_get(storage, req)
+                       let resp = future_get(storage, slow_log_threshold, req)
                             .map_ok(oneof!(batch_commands_response::response::Cmd::Get))
                             .map_err(|e| {GRPC_MSG_FAIL_COUNTER.kv_get.inc(); e});
                         response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::kv_get, source, resource_group_priority);
@@ -1511,7 +1525,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
         Prewrite, future_prewrite(storage), kv_prewrite;
         Commit, future_commit(storage), kv_commit;
         Cleanup, future_cleanup(storage), kv_cleanup;
-        BatchGet, future_batch_get(storage), kv_batch_get;
+        BatchGet, future_batch_get(storage, slow_log_threshold), kv_batch_get;
         BatchRollback, future_batch_rollback(storage), kv_batch_rollback;
         TxnHeartBeat, future_txn_heart_beat(storage), kv_txn_heart_beat;
         CheckTxnStatus, future_check_txn_status(storage), kv_check_txn_status;
@@ -1611,8 +1625,31 @@ async fn future_handle_empty(
     Ok(res)
 }
 
+/// Breakdown of a slow kv operation's wait and process times.
+pub(crate) struct SlowKvTimes {
+    pub(crate) wait_time: Duration,
+    pub(crate) process_time: Duration,
+}
+
+/// Returns the wait + process wall times if the combined duration meets or
+/// exceeds `threshold`. Returns `None` for fast operations so callers can
+/// skip slow-log construction entirely.
+pub(crate) fn slow_kv_times(stats: &StageLatencyStats, threshold: Duration) -> Option<SlowKvTimes> {
+    let total_ns = stats
+        .wait_wall_time_ns
+        .saturating_add(stats.process_wall_time_ns);
+    if Duration::from_nanos(total_ns) < threshold {
+        return None;
+    }
+    Some(SlowKvTimes {
+        wait_time: Duration::from_nanos(stats.wait_wall_time_ns),
+        process_time: Duration::from_nanos(stats.process_wall_time_ns),
+    })
+}
+
 fn future_get<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
+    slow_log_threshold: Duration,
     mut req: GetRequest,
 ) -> impl Future<Output = ServerResult<GetResponse>> {
     let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
@@ -1624,6 +1661,11 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
     with_tls_tracker(|tracker| {
         tracker.metrics.grpc_req_size = req.compute_size() as u64;
     });
+
+    let region_id = req.get_context().get_region_id();
+    let peer = req.get_context().get_peer();
+    let peer_id = peer.get_id();
+    let store_id = peer.get_store_id();
     let start = Instant::now();
     let v = storage.get_entry(
         req.take_context(),
@@ -1636,6 +1678,7 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
         let v = v.await;
         let duration = start.saturating_elapsed();
         let mut resp = GetResponse::default();
+        let mut slow = None;
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
@@ -1651,6 +1694,7 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
                         tracker.write_ru_v2(exec_detail_v2.mut_ru_v2());
                     });
                     set_time_detail(exec_detail_v2, duration, &stats.latency_stats);
+                    slow = slow_kv_times(&stats.latency_stats, slow_log_threshold);
                     match val {
                         Some(val) => {
                             resp.set_value(val.value);
@@ -1663,6 +1707,17 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
                 }
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
+        }
+        if let Some(times) = slow {
+            info!(#"slow_log", "slow-query";
+                "region_id" => region_id,
+                "peer_id" => peer_id,
+                "store_id" => store_id,
+                "command" => "kv_get",
+                "total_time" => ?duration,
+                "wait_time" => ?times.wait_time,
+                "process_time" => ?times.process_time,
+            );
         }
         GLOBAL_TRACKERS.remove(tracker);
         Ok(resp)
@@ -1745,6 +1800,7 @@ fn future_scan<E: Engine, L: LockManager, F: KvFormat>(
 
 fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
+    slow_log_threshold: Duration,
     mut req: BatchGetRequest,
 ) -> impl Future<Output = ServerResult<BatchGetResponse>> {
     let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
@@ -1753,6 +1809,12 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
         req.get_version(),
     )));
     set_tls_tracker_token(tracker);
+
+    let region_id = req.get_context().get_region_id();
+    let peer = req.get_context().get_peer();
+    let peer_id = peer.get_id();
+    let store_id = peer.get_store_id();
+    let key_count = req.get_keys().len();
     let start = Instant::now();
     with_tls_tracker(|tracker| {
         tracker.metrics.grpc_req_size = req.compute_size() as u64;
@@ -1769,6 +1831,7 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
         let v = v.await;
         let duration = start.saturating_elapsed();
         let mut resp = BatchGetResponse::default();
+        let mut slow = None;
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
@@ -1785,6 +1848,7 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
                         tracker.write_ru_v2(exec_detail_v2.mut_ru_v2());
                     });
                     set_time_detail(exec_detail_v2, duration, &stats.latency_stats);
+                    slow = slow_kv_times(&stats.latency_stats, slow_log_threshold);
                     resp.set_pairs(pairs.into());
                 }
                 Err(e) => {
@@ -1796,6 +1860,18 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
                     resp.mut_pairs().push(pair);
                 }
             }
+        }
+        if let Some(times) = slow {
+            info!(#"slow_log", "slow-query";
+                "region_id" => region_id,
+                "peer_id" => peer_id,
+                "store_id" => store_id,
+                "command" => "kv_batch_get",
+                "key_count" => key_count,
+                "total_time" => ?duration,
+                "wait_time" => ?times.wait_time,
+                "process_time" => ?times.process_time,
+            );
         }
         GLOBAL_TRACKERS.remove(tracker);
         Ok(resp)
@@ -2823,7 +2899,7 @@ mod tests {
         req.set_context(Context::default());
         req.set_key(b"ruv2_get".to_vec());
         req.set_version(10);
-        let resp = block_on(future_get(&storage, req)).unwrap();
+        let resp = block_on(future_get(&storage, Duration::MAX, req)).unwrap();
         assert_eq!(
             resp.get_exec_details_v2()
                 .get_ru_v2()
@@ -2844,7 +2920,7 @@ mod tests {
         req.set_version(10);
         req.mut_keys().push(b"ruv2_batch_get_1".to_vec());
         req.mut_keys().push(b"ruv2_batch_get_2".to_vec());
-        let resp = block_on(future_batch_get(&storage, req)).unwrap();
+        let resp = block_on(future_batch_get(&storage, Duration::MAX, req)).unwrap();
         assert_eq!(
             resp.get_exec_details_v2()
                 .get_ru_v2()
@@ -3032,5 +3108,110 @@ mod tests {
                 i
             );
         }
+    }
+
+    #[test]
+    fn test_slow_kv_times_below_threshold() {
+        // 50ms combined < 300ms threshold -> None
+        let threshold = Duration::from_millis(300);
+        let stats = StageLatencyStats {
+            wait_wall_time_ns: 25_000_000,
+            process_wall_time_ns: 25_000_000,
+            ..Default::default()
+        };
+        assert!(slow_kv_times(&stats, threshold).is_none());
+    }
+
+    #[test]
+    fn test_slow_kv_times_above_threshold() {
+        // 500ms combined > 300ms threshold -> Some
+        let threshold = Duration::from_millis(300);
+        let stats = StageLatencyStats {
+            wait_wall_time_ns: 250_000_000,
+            process_wall_time_ns: 250_000_000,
+            ..Default::default()
+        };
+        let times = slow_kv_times(&stats, threshold).unwrap();
+        assert_eq!(times.wait_time, Duration::from_millis(250));
+        assert_eq!(times.process_time, Duration::from_millis(250));
+    }
+
+    #[test]
+    fn test_slow_kv_times_exactly_at_threshold() {
+        // Exactly 300ms combined >= 300ms -> Some
+        let threshold = Duration::from_millis(300);
+        let stats = StageLatencyStats {
+            wait_wall_time_ns: 150_000_000,
+            process_wall_time_ns: 150_000_000,
+            ..Default::default()
+        };
+        let times = slow_kv_times(&stats, threshold).unwrap();
+        assert_eq!(times.wait_time, Duration::from_millis(150));
+        assert_eq!(times.process_time, Duration::from_millis(150));
+    }
+
+    #[test]
+    fn test_slow_kv_times_zero_threshold() {
+        // Any wait+process >= 0 -> Some
+        let stats = StageLatencyStats {
+            wait_wall_time_ns: 1,
+            process_wall_time_ns: 0,
+            ..Default::default()
+        };
+        assert!(slow_kv_times(&stats, Duration::ZERO).is_some());
+        // 0ns + 0ns >= 0ns -> Some
+        let stats = StageLatencyStats::default();
+        assert!(slow_kv_times(&stats, Duration::ZERO).is_some());
+    }
+
+    #[test]
+    fn test_slow_kv_times_saturating_u64_max() {
+        // u64::MAX + u64::MAX is extremely large, saturating_add handles it.
+        let threshold = Duration::from_secs(1);
+        let stats = StageLatencyStats {
+            wait_wall_time_ns: u64::MAX,
+            process_wall_time_ns: u64::MAX,
+            ..Default::default()
+        };
+        let times = slow_kv_times(&stats, threshold).unwrap();
+        // Both saturated to u64::MAX nanos (approx 584 years in Duration).
+        assert_eq!(times.wait_time, Duration::from_nanos(u64::MAX));
+        assert_eq!(times.process_time, Duration::from_nanos(u64::MAX));
+    }
+
+    #[test]
+    fn test_future_get_with_slow_log_threshold() {
+        // Verifies future_get doesn't panic with a real threshold.
+        // The mock storage won't produce real latency stats but the path
+        // exercises slow_kv_times with whatever stats come back.
+        let storage = crate::storage::TestStorageBuilderApiV1::new(
+            crate::storage::lock_manager::MockLockManager::new(),
+        )
+        .build()
+        .unwrap();
+        let mut req = GetRequest::default();
+        req.set_context(Context::default());
+        req.set_key(b"slow_get".to_vec());
+        req.set_version(10);
+        let resp = block_on(future_get(&storage, Duration::from_millis(300), req)).unwrap();
+        assert!(resp.get_not_found());
+        // No assertion on slow-log output; this just proves the path compiles
+        // and runs to completion with the real threshold wired in.
+    }
+
+    #[test]
+    fn test_future_batch_get_with_slow_log_threshold() {
+        let storage = crate::storage::TestStorageBuilderApiV1::new(
+            crate::storage::lock_manager::MockLockManager::new(),
+        )
+        .build()
+        .unwrap();
+        let mut req = BatchGetRequest::default();
+        req.set_context(Context::default());
+        req.set_version(10);
+        req.mut_keys().push(b"slow_batch_1".to_vec());
+        let resp =
+            block_on(future_batch_get(&storage, Duration::from_millis(300), req)).unwrap();
+        assert_eq!(resp.get_pairs().len(), 0);
     }
 }
