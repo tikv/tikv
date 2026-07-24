@@ -360,6 +360,15 @@ pub mod tests {
                 false,
                 false,
             ),
+            (
+                true,
+                ApiVersion::V3,
+                ApiVersion::V1,
+                b"".to_vec(),
+                b"".to_vec(),
+                false,
+                false,
+            ),
         ];
         for (is_raw, cur_api, dst_api, ref start_key, ref end_key, expect_ret, use_mvcc) in
             test_cases
