@@ -289,6 +289,10 @@
 ## latency jittering when apply duration is not stable.
 # enable-async-apply-prewrite = false
 
+## Records a bounded in-memory history of transaction commands and their lock/write
+## modifications. Enable it only while diagnosing transaction consistency issues.
+# enable-txn-command-flight-recorder = false
+
 ## Reserve some space to ensure recovering the store from `no space left` must succeed.
 ## `max(reserve-space, capacity * 5%)` will be reserved exactly.
 ##

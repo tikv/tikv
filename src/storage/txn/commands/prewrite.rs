@@ -506,10 +506,19 @@ impl<K: PrewriteKind> Prewriter<K> {
         // Handle special cases about retried prewrite requests for pessimistic
         // transactions.
         if let TransactionKind::Pessimistic(_) = self.kind.txn_kind() {
-            if let Some(commit_ts) = context
+            let committed_ts = context
                 .txn_status_cache
-                .get_committed_no_promote(self.start_ts)
-            {
+                .get_committed_no_promote(self.start_ts);
+            crate::storage::txn::flight_recorder::TXN_COMMAND_FLIGHT_RECORDER
+                .record_txn_status_cache_lookup(
+                    self.mutations.iter().map(MutationLock::key),
+                    &self.primary,
+                    self.start_ts,
+                    committed_ts,
+                    &self.ctx,
+                    snapshot.ext().get_data_version(),
+                );
+            if let Some(commit_ts) = committed_ts {
                 fail_point!("before_prewrite_txn_status_cache_hit");
                 if self.ctx.is_retry_request {
                     MVCC_PREWRITE_REQUEST_AFTER_COMMIT_COUNTER_VEC
@@ -886,12 +895,17 @@ impl PrewriteKind for Pessimistic {
 /// For pessimistic txns, this is `PessimisticMutation` which contains a
 /// `Mutation` and some other extra information necessary for pessimistic txns.
 trait MutationLock {
+    fn key(&self) -> &Key;
     fn pessimistic_action(&self) -> PrewriteRequestPessimisticAction;
     fn pessimistic_expected_for_update_ts(&self) -> Option<TimeStamp>;
     fn into_mutation(self) -> Mutation;
 }
 
 impl MutationLock for Mutation {
+    fn key(&self) -> &Key {
+        Mutation::key(self)
+    }
+
     fn pessimistic_action(&self) -> PrewriteRequestPessimisticAction {
         SkipPessimisticCheck
     }
@@ -919,6 +933,10 @@ pub struct PessimisticMutation {
 }
 
 impl MutationLock for PessimisticMutation {
+    fn key(&self) -> &Key {
+        self.mutation.key()
+    }
+
     fn pessimistic_action(&self) -> PrewriteRequestPessimisticAction {
         self.pessimistic_action
     }
