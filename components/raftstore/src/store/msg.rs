@@ -600,6 +600,9 @@ pub enum CampaignType {
     UnsafeSplitCampaign,
 }
 
+/// Source used by load-based auto-split requests.
+pub(super) const AUTO_SPLIT_SOURCE: &str = "auto_split";
+
 /// Message that will be sent to a peer.
 ///
 /// These messages are not significant and can be dropped occasionally.
