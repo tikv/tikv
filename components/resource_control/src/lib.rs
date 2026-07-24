@@ -2,13 +2,14 @@
 #![feature(test)]
 #![feature(let_chains)]
 
-use std::sync::Arc;
+use std::sync::{atomic::AtomicU32, Arc};
 
 use pd_client::RpcClient;
 
 mod resource_group;
 pub use resource_group::{
-    ResourceConsumeType, ResourceController, ResourceGroupManager, MIN_PRIORITY_UPDATE_INTERVAL,
+    AdmissionDecision, DelaySlotGuard, ResourceConsumeType, ResourceController,
+    ResourceGroupManager, MIN_PRIORITY_UPDATE_INTERVAL,
 };
 pub use tikv_util::resource_control::*;
 
@@ -29,7 +30,7 @@ pub mod config;
 mod resource_limiter;
 pub use resource_limiter::ResourceLimiter;
 use tikv_util::worker::Worker;
-use worker::{GroupQuotaAdjustWorker, BACKGROUND_LIMIT_ADJUST_DURATION};
+use worker::{GroupQuotaAdjustWorker, QUOTA_ADJUST_DURATION};
 
 mod metrics;
 pub mod worker;
@@ -39,6 +40,7 @@ pub fn start_periodic_tasks(
     pd_client: Arc<RpcClient>,
     bg_worker: &Worker,
     io_bandwidth: u64,
+    compaction_pending_bytes_ratio: Arc<AtomicU32>,
 ) {
     let resource_mgr_service = ResourceManagerService::new(mgr.clone(), pd_client);
     // spawn a task to periodically update the minimal virtual time of all resource
@@ -54,11 +56,12 @@ pub fn start_periodic_tasks(
     });
     // spawn a task to auto adjust background quota limiter and priority quota
     // limiter.
-    let mut worker = GroupQuotaAdjustWorker::new(mgr.clone(), io_bandwidth);
+    let mut worker =
+        GroupQuotaAdjustWorker::new(mgr.clone(), io_bandwidth, compaction_pending_bytes_ratio);
     // We disable the priority worker by default because the current adjust
     // algorithm is buggy. We may reenable it only we find a better algorithm.
     // let mut priority_worker = PriorityLimiterAdjustWorker::new(mgr.clone());
-    bg_worker.spawn_interval_task(BACKGROUND_LIMIT_ADJUST_DURATION, move || {
+    bg_worker.spawn_interval_task(QUOTA_ADJUST_DURATION, move || {
         worker.adjust_quota();
         // priority_worker.adjust();
     });

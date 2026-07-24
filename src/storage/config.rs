@@ -111,6 +111,40 @@ pub struct Config {
     pub block_cache: BlockCacheConfig,
     #[online_config(submodule)]
     pub io_rate_limit: IoRateLimitConfig,
+    #[online_config(skip)]
+    pub txn_anomaly_checker: TxnAnomalyCheckerConfig,
+}
+
+/// Test-only configuration of the transaction anomaly checker.
+///
+/// The checker inspects the staged writes of every transaction command and
+/// reports (and optionally panics on) anomalous states where a committed
+/// write record and a normal lock coexist for the same key and start_ts.
+/// It is disabled by default; when disabled it has zero overhead.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct TxnAnomalyCheckerConfig {
+    /// Master switch of the checker.
+    pub enabled: bool,
+    /// Whether to panic (and freeze the scene) when an anomaly is found.
+    pub panic_on_hit: bool,
+    /// Whether to also check whether the snapshot's pre-existing state already
+    /// satisfies the anomaly predicate.
+    pub check_pre_state: bool,
+    /// Directory to write JSON evidence files into. Empty means only logging.
+    pub evidence_dir: String,
+}
+
+impl Default for TxnAnomalyCheckerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            panic_on_hit: true,
+            check_pre_state: true,
+            evidence_dir: String::new(),
+        }
+    }
 }
 
 impl Default for Config {
@@ -140,6 +174,7 @@ impl Default for Config {
             io_rate_limit: IoRateLimitConfig::default(),
             background_error_recovery_window: ReadableDuration::hours(1),
             memory_quota: DEFAULT_TXN_MEMORY_QUOTA_CAPACITY,
+            txn_anomaly_checker: TxnAnomalyCheckerConfig::default(),
         }
     }
 }
