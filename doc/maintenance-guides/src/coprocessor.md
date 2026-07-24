@@ -57,6 +57,82 @@ It is a read-heavy hot path and directly impacts query latency.
 - Cache-match version, flashback allowance, and lock-bypass/access sets are all
   correctness-sensitive metadata, not optional optimization flags.
 
+### Handler outcomes and batched-task merging
+
+- `RequestHandler::handle_request` returns a `HandlerOutcome`; today only
+  full-sampling analyze opts into the `Mergeable` outcome
+  (`statistics/analyze_context.rs`).
+- Merging happens only when the client allows it
+  (`Request.allow_batch_task_data_merge`), the request carries batched
+  tasks, and the top task kept an error-free mergeable result. Results of
+  one request must have the same concrete type; the endpoint relies on this
+  handler invariant rather than checking it at runtime. Merging and batch
+  responses preserve request-task order even when handlers complete out of
+  order, including for legacy callers whose task IDs are not unique.
+- Wire contract: the top response carries its result merged with every
+  eligible successful batched task. Each merged task is acknowledged by a
+  data-less batch response with `data_merged_into_response` set and keeps its
+  execution details; failed or non-mergeable tasks keep normal batch
+  responses so the client can retry or consume them independently. Clients
+  that never set the request field keep receiving one response per task.
+- Scheduling invariant: a unary read pool task is enqueued only when its
+  future is first polled, while its deadline starts at parse time.
+  `endpoint.rs::collect_batch_task_outputs` therefore drives the top task
+  and the batched tasks concurrently (as `futures::join!` did before
+  batched merging existed); awaiting the top task first would leave every
+  batched task unscheduled behind it and could expire their deadlines
+  before they run.
+- Serialization and merging are CPU work that must keep the protections
+  handlers run under (read pool scheduling, resource metering tag,
+  deadline, coprocessor semaphore, execution tracking), not run on the gRPC
+  event loop. A request that cannot take part in merging — no batched
+  tasks, client did not allow merging — serializes its `Mergeable` outcome
+  inside its own read pool task (`handle_unary_request_impl`, inside the
+  deadline/track/concurrency wrappers). When merging can happen, results
+  stay unserialized until every output is collected, then
+  `merge_batch_task_responses` runs as a read pool task under the request's
+  deadline, resource tag, resource limiter and the coprocessor semaphore
+  (`BatchMergeFinalizer`). The semaphore permit is taken before the first
+  merge step — merging never uses `limit_concurrency`'s permit-free fast
+  path, whose accounting cannot stop the merge's coarse first chunk — with
+  the wait bounded by the deadline (expiry before the permit is retry-safe:
+  nothing is consumed yet). If the pool rejects or drops the merge task,
+  the finalizer sheds the request with a retryable server-busy error,
+  exactly like an ordinary admission failure: the collected results are
+  dropped, the client retries every task, and merge work never runs on the
+  caller's executor (reserve finalizer capacity instead of inlining if
+  re-scans must be avoided). Collected outputs remain in a handoff slot
+  owned by the caller until the pool task starts. Both read-pool admission
+  and the subsequent queue/response wait use the request's remaining
+  deadline. If either wait expires before the pool task claims the slot,
+  the caller removes and drops the outputs; a queued task that later
+  observes an empty slot exits without merging. Once the pool task has
+  claimed the slot, the caller cannot cancel that running work; the
+  worker's own semaphore and commit deadline checks prevent an expired
+  result from being committed. If the pool already committed and sent the
+  response before a delayed caller poll, the receiver is checked once
+  after the timer fires and that completed response wins; a missing sender
+  without a response is treated as a retryable admission failure. Its poll
+  time is attributed to the request tracker (`TokenFutureTracker`), which
+  folds it into the top task's `TimeDetailV2` process and suspend time.
+  A finalizer dropped before its first pool poll has no poll callback, so
+  that admission wait is not reported in `TimeDetailV2`.
+  Outputs that finish early are buffered until the merge runs, so peak
+  memory is the collected unserialized results.
+- The batched response is committed — per-task data and acknowledgments
+  attached, response bytes accounted, memory retraced — only after a
+  deadline check that follows the synchronous top-result encoding. If the
+  merge task's deadline expires (including during that encoding), or
+  serializing a result after consuming any batched result fails, the
+  endpoint returns a plain error with neither partial data, task
+  acknowledgments nor response-byte charges, so a retry cannot lose,
+  double-count or overcharge data.
+- The canonical contracts (merge order, downcast safety, memory and metrics
+  accounting) live on `HandlerOutcome`/`MergeableResult` in
+  `src/coprocessor/mod.rs` and on `collect_batch_task_outputs`/
+  `merge_batch_task_responses`/`BatchMergeFinalizer` in
+  `src/coprocessor/endpoint.rs`.
+
 ## Start Here
 
 - `src/coprocessor/mod.rs`
@@ -97,6 +173,8 @@ It is a read-heavy hot path and directly impacts query latency.
 - Memory quota and concurrency limiters must remain cheap and correct.
 - Streaming and unary response handling must preserve stats and partial-progress
   semantics.
+- Merged batched responses must keep the wire contract described in
+  "Handler outcomes and batched-task merging".
 
 ## Observability And Operational Signals
 
