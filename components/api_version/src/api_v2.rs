@@ -1,10 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use codec::byte::MemComparableByteCodec;
-use engine_traits::Result;
-use tikv_util::codec::{
-    Error, bytes,
-    number::{self, NumberEncoder},
+use engine_traits::{Error as EngineError, Result};
+use tikv_util::{
+    box_err,
+    codec::{
+        Error, bytes,
+        number::{self, NumberEncoder},
+    },
 };
 use txn_types::{Key, TimeStamp};
 
@@ -188,6 +191,9 @@ impl KvFormat for ApiV2 {
                 Ok(Self::encode_raw_key_owned(apiv2_key, ts))
             }
             ApiVersion::V2 => Ok(Key::from_encoded_slice(key)),
+            ApiVersion::V3 => Err(EngineError::Other(box_err!(
+                "unsupported conversion from v3 to v2"
+            ))),
         }
     }
 
@@ -207,6 +213,9 @@ impl KvFormat for ApiV2 {
                 Ok((start_key, end_key))
             }
             ApiVersion::V2 => Ok((start_key, end_key)),
+            ApiVersion::V3 => Err(EngineError::Other(box_err!(
+                "unsupported conversion from v3 to v2"
+            ))),
         }
     }
 }

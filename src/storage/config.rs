@@ -255,6 +255,9 @@ impl Config {
                 self.api_version = 2;
                 self.enable_ttl = true;
             }
+            ApiVersion::V3 => {
+                unreachable!("API V3 is not supported by this TiKV build")
+            }
         }
     }
 }

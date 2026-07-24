@@ -174,6 +174,9 @@ macro_rules! dispatch_api_version {
             ],
             match $api_version {
                 kvproto::kvrpcpb::ApiVersion::API => $e,
+                kvproto::kvrpcpb::ApiVersion::V3 => {
+                    panic!("API V3 is not supported by this TiKV build")
+                }
             }
         }
     }};
@@ -267,6 +270,19 @@ impl<T: AsRef<[u8]>> RawValue<T> {
 mod tests {
     use super::*;
     use crate::api_v2::*;
+
+    #[test]
+    #[should_panic(expected = "API V3 is not supported by this TiKV build")]
+    fn test_api_v3_dispatch_is_rejected() {
+        dispatch_api_version!(ApiVersion::V3, ());
+    }
+
+    #[test]
+    fn test_api_v3_conversion_is_rejected() {
+        ApiV1::convert_raw_encoded_key_version_from(ApiVersion::V3, b"key", None).unwrap_err();
+        ApiV1Ttl::convert_raw_encoded_key_version_from(ApiVersion::V3, b"key", None).unwrap_err();
+        ApiV2::convert_raw_encoded_key_version_from(ApiVersion::V3, b"key", None).unwrap_err();
+    }
 
     #[test]
     fn test_parse() {
