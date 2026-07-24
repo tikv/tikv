@@ -7668,6 +7668,13 @@ mod tests {
 
         let err = cfg.validate().unwrap_err().to_string();
         assert!(err.contains("sample_num should be less than qps_threshold"));
+
+        cfg.split.qps_threshold = Some(3000);
+        cfg.split.sample_num = 20;
+        cfg.split.detect_times = 10;
+        cfg.split.sample_threshold = 201;
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("sample_threshold should not exceed sample_num * detect_times"));
     }
 
     #[test]
@@ -7675,14 +7682,29 @@ mod tests {
         let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
         cfg.split.qps_threshold = Some(10);
         cfg.split.sample_num = 1;
+        cfg.split.sample_threshold = 10;
         cfg.validate().unwrap();
 
         let cfg_controller = ConfigController::new(cfg.clone());
+        let err = cfg_controller
+            .update_config("split.sample-num", "1025")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("sample_num should be between 1 and 1024"));
+        assert_eq!(cfg_controller.get_current().split, cfg.split);
+
         let err = cfg_controller
             .update_config("split.sample-num", "10")
             .unwrap_err()
             .to_string();
         assert!(err.contains("sample_num should be less than qps_threshold"));
+        assert_eq!(cfg_controller.get_current().split, cfg.split);
+
+        let err = cfg_controller
+            .update_config("split.sample-threshold", "11")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("sample_threshold should not exceed sample_num * detect_times"));
         assert_eq!(cfg_controller.get_current().split, cfg.split);
     }
 
