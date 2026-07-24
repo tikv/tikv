@@ -311,14 +311,7 @@ pub fn rollback_lock(
         TxnCommitRecord::SingleRecord { write, commit_ts }
             if write.write_type != WriteType::Rollback =>
         {
-            panic!(
-                "txn record found but not expected: {:?} {} {:?} {:?} [region_id={}]",
-                write,
-                commit_ts,
-                txn,
-                lock,
-                reader.reader.snapshot_ext().get_region_id().unwrap_or(0)
-            )
+            panic_txn_record_found(txn, reader, &key, lock, &write, commit_ts)
         }
         _ => return Ok(txn.unlock_key(key, is_pessimistic_txn, TimeStamp::zero())),
     };
@@ -382,14 +375,7 @@ pub fn rollback_shared_lock(
         TxnCommitRecord::SingleRecord { write, commit_ts }
             if write.write_type != WriteType::Rollback =>
         {
-            panic!(
-                "txn record found but not expected: {:?} {} {:?} {:?} [region_id={}]",
-                write,
-                commit_ts,
-                txn,
-                lock,
-                reader.reader.snapshot_ext().get_region_id().unwrap_or(0)
-            )
+            panic_txn_record_found(txn, reader, &key, &lock, &write, commit_ts)
         }
         _ => {
             return if shared_locks.is_empty() {
@@ -493,4 +479,85 @@ impl MissingLockAction {
     ) -> Option<Write> {
         make_rollback(ts, !self.collapse_rollback(), overlapped_write)
     }
+}
+
+const MAX_INVARIANT_PANIC_WRITE_HISTORY: usize = 32;
+
+fn log_bounded_write_history(reader: &mut SnapshotReader<impl Snapshot>, key: &Key) {
+    let mut next_ts = TimeStamp::max();
+    for _ in 0..MAX_INVARIANT_PANIC_WRITE_HISTORY {
+        match reader.seek_write(key, next_ts) {
+            Ok(Some((commit_ts, write))) => {
+                error!(
+                    "txn record found but not expected: mvcc write history";
+                    "commit_ts" => commit_ts,
+                    "write" => ?write,
+                );
+                if commit_ts.is_zero() {
+                    return;
+                }
+                next_ts = commit_ts.prev();
+            }
+            Ok(None) => return,
+            Err(err) => {
+                error!(
+                    "txn record found but not expected: failed to read mvcc write history";
+                    "error" => ?err,
+                );
+                return;
+            }
+        }
+    }
+    error!(
+        "txn record found but not expected: mvcc write history reached record limit";
+        "limit" => MAX_INVARIANT_PANIC_WRITE_HISTORY,
+    );
+}
+
+#[cold]
+#[inline(never)]
+fn panic_txn_record_found(
+    txn: &MvccTxn,
+    reader: &mut SnapshotReader<impl Snapshot>,
+    key: &Key,
+    lock: &Lock,
+    write: &Write,
+    commit_ts: TimeStamp,
+) -> ! {
+    let (region_id, term, snapshot_data_version) = {
+        let ext = reader.reader.snapshot_ext();
+        (
+            ext.get_region_id().unwrap_or(0),
+            ext.get_term().map(|term| term.get()).unwrap_or(0),
+            ext.get_data_version().unwrap_or(0),
+        )
+    };
+    let flight_events =
+        crate::storage::txn::flight_recorder::TXN_COMMAND_FLIGHT_RECORDER.events_for_key(key);
+    let overwritten_events =
+        crate::storage::txn::flight_recorder::TXN_COMMAND_FLIGHT_RECORDER.overwritten_events();
+
+    error!(
+        "txn record found but not expected: diagnostic summary";
+        "key" => ?key,
+        "start_ts" => reader.start_ts,
+        "commit_ts" => commit_ts,
+        "region_id" => region_id,
+        "term" => term,
+        "snapshot_data_version" => snapshot_data_version,
+        "flight_event_count" => flight_events.len(),
+        "flight_recorder_overwritten_events" => overwritten_events,
+    );
+    for event in &flight_events {
+        error!(
+            "txn record found but not expected: flight recorder event";
+            "event" => ?event,
+        );
+    }
+    log_bounded_write_history(reader, key);
+
+    panic!(
+        "txn record found but not expected: {:?} {} {:?} {:?} [region_id={}]",
+        write, commit_ts, txn, lock, region_id
+    )
 }
