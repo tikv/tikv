@@ -279,11 +279,9 @@ mod tests {
 
     #[test]
     fn test_api_v3_conversion_is_rejected() {
-        assert!(ApiV1::convert_raw_encoded_key_version_from(ApiVersion::V3, b"key", None).is_err());
-        assert!(
-            ApiV1Ttl::convert_raw_encoded_key_version_from(ApiVersion::V3, b"key", None).is_err()
-        );
-        assert!(ApiV2::convert_raw_encoded_key_version_from(ApiVersion::V3, b"key", None).is_err());
+        ApiV1::convert_raw_encoded_key_version_from(ApiVersion::V3, b"key", None).unwrap_err();
+        ApiV1Ttl::convert_raw_encoded_key_version_from(ApiVersion::V3, b"key", None).unwrap_err();
+        ApiV2::convert_raw_encoded_key_version_from(ApiVersion::V3, b"key", None).unwrap_err();
     }
 
     #[test]
