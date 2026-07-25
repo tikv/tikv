@@ -1285,6 +1285,24 @@ fn run_sst_dump_command(args: Vec<String>, cfg: &TikvConfig) {
     engine_rocks::raw::run_sst_dump_tool(&args, &build_rocks_opts(cfg));
 }
 
+fn build_bad_sst_manifest_dump_args(
+    db: &str,
+    sst_file_number: &str,
+    manifest: Option<&str>,
+) -> Vec<String> {
+    let mut args = vec![
+        "ldb".to_string(),
+        "--hex".to_string(),
+        "manifest_dump".to_string(),
+        format!("--db={}", db),
+        format!("--sst_file_number={}", sst_file_number),
+    ];
+    if let Some(manifest_path) = manifest {
+        args.push(format!("--path={}", manifest_path));
+    }
+    args
+}
+
 fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &TikvConfig) {
     let db = &cfg.infer_kv_engine_path(Some(data_dir)).unwrap();
     println!(
@@ -1359,16 +1377,7 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
                 }
             }
         };
-        let mut args1 = vec![
-            "ldb".to_string(),
-            "--hex".to_string(),
-            "manifest_dump".to_string(),
-        ];
-        args1.push(format!("--db={}", db));
-        args1.push(format!("--sst_file_number={}", sst_file_number));
-        if let Some(manifest_path) = manifest {
-            args1.push(format!("--manifest={}", manifest_path));
-        }
+        let args1 = build_bad_sst_manifest_dump_args(db, sst_file_number, manifest);
 
         let stdout = BufferRedirect::stdout().unwrap();
         let stderr = BufferRedirect::stderr().unwrap();
@@ -1549,4 +1558,50 @@ fn validate_storage_data_dir(config: &mut TikvConfig, data_dir: Option<String>) 
         return false;
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_bad_sst_manifest_dump_args;
+
+    #[test]
+    fn test_build_bad_sst_manifest_dump_args_with_manifest() {
+        let args = build_bad_sst_manifest_dump_args(
+            "/path/to/db",
+            "57155",
+            Some("/path/to/db/MANIFEST-000001"),
+        );
+
+        assert_eq!(
+            args,
+            vec![
+                "ldb",
+                "--hex",
+                "manifest_dump",
+                "--db=/path/to/db",
+                "--sst_file_number=57155",
+                "--path=/path/to/db/MANIFEST-000001",
+            ]
+        );
+        assert!(args.iter().any(|arg| arg.starts_with("--path=")));
+        assert!(!args.iter().any(|arg| arg.starts_with("--manifest=")));
+    }
+
+    #[test]
+    fn test_build_bad_sst_manifest_dump_args_without_manifest() {
+        let args = build_bad_sst_manifest_dump_args("/path/to/db", "57155", None);
+
+        assert_eq!(
+            args,
+            vec![
+                "ldb",
+                "--hex",
+                "manifest_dump",
+                "--db=/path/to/db",
+                "--sst_file_number=57155",
+            ]
+        );
+        assert!(!args.iter().any(|arg| arg.starts_with("--path=")));
+        assert!(!args.iter().any(|arg| arg.starts_with("--manifest=")));
+    }
 }
