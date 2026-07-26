@@ -170,6 +170,7 @@ pub fn must_prewrite_put_impl_with_should_not_exist<E: Engine>(
             is_retry_request,
             assertion_level,
             txn_source,
+            txn_lock_consistency_check: false,
         },
         mutation,
         secondary_keys,
@@ -265,6 +266,7 @@ pub fn flush_put_impl_with_assertion<E: Engine>(
         async_apply_prewrite: false,
         raw_ext: None,
         txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+        txn_lock_consistency_check: false,
     };
     let snapshot = engine.snapshot(Default::default()).unwrap();
     cmd.cmd.process_write(snapshot.clone(), context)
@@ -587,6 +589,7 @@ fn default_txn_props(
         is_retry_request: false,
         assertion_level: AssertionLevel::Off,
         txn_source: 0,
+        txn_lock_consistency_check: false,
     }
 }
 

@@ -188,12 +188,24 @@ pub fn prewrite_with_generation<S: Snapshot>(
         }
     }
 
+    // For a pessimistic prewrite that skips the constraint check, the
+    // transaction's own pessimistic lock may still exist even if the
+    // transaction has already been committed on this key (e.g. a second
+    // prewrite arrives after the transaction's commit record was written).
+    // Upgrading the stale pessimistic lock in that case would resurrect the
+    // committed key. When `txn_lock_consistency_check` is set, load the
+    // latest write record anyway so that `check_for_newer_version` can
+    // reject the prewrite on a newer committed version.
+    let force_check_newer_version = txn_props.txn_lock_consistency_check
+        && txn_props.is_pessimistic()
+        && matches!(pessimistic_action, DoPessimisticCheck);
     // Note that the `prev_write` may have invalid GC fence.
-    let (mut prev_write, mut prev_write_loaded) = if !mutation.skip_constraint_check() {
-        (mutation.check_for_newer_version(reader)?, true)
-    } else {
-        (None, false)
-    };
+    let (mut prev_write, mut prev_write_loaded) =
+        if force_check_newer_version || !mutation.skip_constraint_check() {
+            (mutation.check_for_newer_version(reader)?, true)
+        } else {
+            (None, false)
+        };
 
     // Check assertion if necessary. There are couple of different cases:
     // * If the write is already loaded, then assertion can be checked without
@@ -298,6 +310,12 @@ pub struct TransactionProperties<'a> {
     pub is_retry_request: bool,
     pub assertion_level: AssertionLevel,
     pub txn_source: u64,
+    /// When set, creating the prewrite lock is guarded against the key's
+    /// write records: for pessimistic transactions with `DoPessimisticCheck`,
+    /// the latest write record is always loaded and the prewrite is rejected
+    /// if a newer version has been committed, even if the transaction's own
+    /// pessimistic lock still exists.
+    pub txn_lock_consistency_check: bool,
 }
 
 impl<'a> TransactionProperties<'a> {
@@ -1075,6 +1093,7 @@ pub mod tests {
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
             txn_source: 0,
+            txn_lock_consistency_check: false,
         }
     }
 
@@ -1102,6 +1121,7 @@ pub mod tests {
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
             txn_source: 0,
+            txn_lock_consistency_check: false,
         }
     }
 
@@ -1124,6 +1144,7 @@ pub mod tests {
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
             txn_source: 0,
+            txn_lock_consistency_check: false,
         }
     }
 
@@ -1479,6 +1500,7 @@ pub mod tests {
                 is_retry_request: false,
                 assertion_level: AssertionLevel::Off,
                 txn_source: 0,
+                txn_lock_consistency_check: false,
             },
             Mutation::make_check_not_exists(Key::from_raw(key)),
             &None,
@@ -1513,6 +1535,7 @@ pub mod tests {
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
             txn_source: 0,
+            txn_lock_consistency_check: false,
         };
         // calculated commit_ts = 43 ≤ 50, ok
         let (_, old_value) = prewrite(
@@ -1566,6 +1589,7 @@ pub mod tests {
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
             txn_source: 0,
+            txn_lock_consistency_check: false,
         };
         // calculated commit_ts = 43 ≤ 50, ok
         let (_, old_value) = prewrite(
@@ -1678,6 +1702,7 @@ pub mod tests {
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
             txn_source: 0,
+            txn_lock_consistency_check: false,
         };
 
         let cases = vec![
@@ -1741,6 +1766,7 @@ pub mod tests {
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
             txn_source: 0,
+            txn_lock_consistency_check: false,
         };
 
         let cases: Vec<_> = vec![
@@ -2014,6 +2040,7 @@ pub mod tests {
                 is_retry_request: false,
                 assertion_level: AssertionLevel::Off,
                 txn_source: 0,
+                txn_lock_consistency_check: false,
             };
             let snapshot = engine.snapshot(Default::default()).unwrap();
             let cm = ConcurrencyManager::new(start_ts);
@@ -2070,6 +2097,7 @@ pub mod tests {
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
             txn_source: 0,
+            txn_lock_consistency_check: false,
         };
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let cm = ConcurrencyManager::new(start_ts);
@@ -2212,6 +2240,7 @@ pub mod tests {
                     is_retry_request: false,
                     assertion_level: AssertionLevel::Off,
                     txn_source: 0,
+                    txn_lock_consistency_check: false,
                 };
                 let (_, old_value) = prewrite(
                     &mut txn,
@@ -2250,6 +2279,7 @@ pub mod tests {
                     is_retry_request: false,
                     assertion_level: AssertionLevel::Off,
                     txn_source: 0,
+                    txn_lock_consistency_check: false,
                 };
                 let (_, old_value) = prewrite(
                     &mut txn,
@@ -2931,6 +2961,250 @@ pub mod tests {
         must_unlocked(&mut engine, key);
         prewrite_err(&mut engine, key, value, key, 120, 130, Some(130));
         must_unlocked(&mut engine, key);
+    }
+
+    #[cfg(test)]
+    fn pessimistic_prewrite_props(
+        primary: &[u8],
+        start_ts: TimeStamp,
+        for_update_ts: TimeStamp,
+        txn_lock_consistency_check: bool,
+    ) -> TransactionProperties<'_> {
+        TransactionProperties {
+            start_ts,
+            kind: TransactionKind::Pessimistic(for_update_ts),
+            commit_kind: CommitKind::TwoPc,
+            primary,
+            txn_size: 0,
+            lock_ttl: 2000,
+            min_commit_ts: TimeStamp::zero(),
+            need_old_value: false,
+            is_retry_request: false,
+            assertion_level: AssertionLevel::Off,
+            txn_source: 0,
+            txn_lock_consistency_check,
+        }
+    }
+
+    // Runs a single-mutation pessimistic prewrite with the given
+    // `txn_lock_consistency_check` setting and persists the
+    // result on success.
+    #[cfg(test)]
+    fn try_pessimistic_prewrite_put_with_check<E: Engine>(
+        engine: &mut E,
+        key: &[u8],
+        value: &[u8],
+        pk: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        for_update_ts: impl Into<TimeStamp>,
+        pessimistic_action: PrewriteRequestPessimisticAction,
+        txn_lock_consistency_check: bool,
+    ) -> Result<OldValue> {
+        let ctx = Context::default();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let start_ts = start_ts.into();
+        let cm = ConcurrencyManager::new(start_ts);
+        let mut txn = MvccTxn::new(start_ts, cm);
+        let mut reader = SnapshotReader::new(start_ts, snapshot, false);
+        let props = pessimistic_prewrite_props(
+            pk,
+            start_ts,
+            for_update_ts.into(),
+            txn_lock_consistency_check,
+        );
+        let (_, old_value) = prewrite(
+            &mut txn,
+            &mut reader,
+            &props,
+            Mutation::make_put(Key::from_raw(key), value.to_vec()),
+            &None,
+            pessimistic_action,
+            None,
+        )?;
+        write(engine, &ctx, txn.into_modifies());
+        Ok(old_value)
+    }
+
+    // A second prewrite arrives after the transaction's commit record has
+    // been written to the key, while the transaction's own pessimistic lock
+    // still exists. With the consistency check enabled, the prewrite must be
+    // rejected instead of upgrading the stale lock and resurrecting the
+    // committed key.
+    #[test]
+    fn test_pessimistic_prewrite_consistency_check_rejects_committed_key() {
+        for check in [true, false] {
+            let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+            let key = b"k";
+            must_acquire_pessimistic_lock(&mut engine, key, key, 10, 10);
+            must_write_committed_record(&mut engine, key, 10, 15, WriteType::Put);
+
+            let res = try_pessimistic_prewrite_put_with_check(
+                &mut engine,
+                key,
+                b"v2",
+                key,
+                10,
+                10,
+                DoPessimisticCheck,
+                check,
+            );
+            if check {
+                match res.unwrap_err() {
+                    Error(box ErrorInner::PessimisticLockNotFound {
+                        reason: PessimisticLockNotFoundReason::NonLockKeyConflict,
+                        ..
+                    }) => (),
+                    e => panic!("unexpected error: {:?}", e),
+                }
+                // The stale pessimistic lock is left untouched.
+                must_pessimistic_locked(&mut engine, key, 10, 10);
+            } else {
+                // With the check disabled the old behavior remains: the stale
+                // pessimistic lock is upgraded without noticing the commit
+                // record.
+                res.unwrap();
+                let lock = must_locked(&mut engine, key, 10);
+                assert_eq!(lock.lock_type, LockType::Put);
+            }
+        }
+    }
+
+    // Normal pessimistic prewrites are not affected: with no newer committed
+    // version on the key, the prewrite succeeds and writes the same lock no
+    // matter whether the check is enabled.
+    #[test]
+    fn test_pessimistic_prewrite_consistency_check_no_false_positive() {
+        let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        for (key, check) in [(b"k1", true), (b"k2", false)] {
+            must_acquire_pessimistic_lock(&mut engine, key, key, 10, 10);
+            let old_value = try_pessimistic_prewrite_put_with_check(
+                &mut engine,
+                key,
+                b"v",
+                key,
+                10,
+                15,
+                DoPessimisticCheck,
+                check,
+            )
+            .unwrap();
+            // Pessimistic prewrite still doesn't read the old value.
+            assert_eq!(old_value, OldValue::Unspecified);
+            let lock = must_locked(&mut engine, key, 10);
+            assert_eq!(lock.lock_type, LockType::Put);
+            assert_eq!(lock.for_update_ts, 15.into());
+            assert_eq!(lock.ttl, 2000);
+        }
+    }
+
+    // Versions committed before the pessimistic lock was acquired are not
+    // newer than the lock's for_update_ts and must not fail the check.
+    #[test]
+    fn test_pessimistic_prewrite_consistency_check_allows_older_commits() {
+        let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        // The second case is the boundary: commit_ts == for_update_ts is not
+        // "newer" either.
+        for (key, commit_ts, for_update_ts) in [(b"k1", 8u64, 12u64), (b"k2", 8, 8)] {
+            must_prewrite_put(&mut engine, key, b"v0", key, 5);
+            must_commit(&mut engine, key, 5, commit_ts);
+            must_acquire_pessimistic_lock(&mut engine, key, key, 10, for_update_ts);
+            try_pessimistic_prewrite_put_with_check(
+                &mut engine,
+                key,
+                b"v",
+                key,
+                10,
+                for_update_ts,
+                DoPessimisticCheck,
+                true,
+            )
+            .unwrap();
+            must_locked(&mut engine, key, 10);
+        }
+    }
+
+    // A rollback record of the transaction itself must still be detected.
+    #[test]
+    fn test_pessimistic_prewrite_consistency_check_self_rollback() {
+        let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+
+        // Without any lock, the prewrite fails in the amend path as before,
+        // regardless of the check setting.
+        must_rollback(&mut engine, b"k1", 10, false);
+        for check in [true, false] {
+            let e = try_pessimistic_prewrite_put_with_check(
+                &mut engine,
+                b"k1",
+                b"v",
+                b"k1",
+                10,
+                10,
+                DoPessimisticCheck,
+                check,
+            )
+            .unwrap_err();
+            match e {
+                Error(box ErrorInner::PessimisticLockNotFound {
+                    reason: PessimisticLockNotFoundReason::LockMissingAmendFail,
+                    ..
+                }) => (),
+                e => panic!("unexpected error: {:?}", e),
+            }
+        }
+
+        // With the stale pessimistic lock present, the forced write-CF check
+        // detects the transaction's own rollback record.
+        for (key, check, expect_err) in [(b"k2", true, true), (b"k3", false, false)] {
+            must_acquire_pessimistic_lock(&mut engine, key, key, 20, 20);
+            must_write_committed_record(&mut engine, key, 20, 20, WriteType::Rollback);
+            let res = try_pessimistic_prewrite_put_with_check(
+                &mut engine,
+                key,
+                b"v",
+                key,
+                20,
+                20,
+                DoPessimisticCheck,
+                check,
+            );
+            if expect_err {
+                match res.unwrap_err() {
+                    Error(box ErrorInner::WriteConflict {
+                        reason: WriteConflictReason::SelfRolledBack,
+                        ..
+                    }) => (),
+                    e => panic!("unexpected error: {:?}", e),
+                }
+            } else {
+                // Without the check the rollback record is not read at all.
+                res.unwrap();
+                must_locked(&mut engine, key, 20);
+            }
+        }
+    }
+
+    // Mutations with `SkipPessimisticCheck` are not affected by the
+    // consistency check: a non-retry request still skips reading the write
+    // CF, even in the committed-key shape above.
+    #[test]
+    fn test_pessimistic_prewrite_consistency_check_skip_action_unaffected() {
+        let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        let key = b"k";
+        must_acquire_pessimistic_lock(&mut engine, key, key, 10, 10);
+        must_write_committed_record(&mut engine, key, 10, 15, WriteType::Put);
+        try_pessimistic_prewrite_put_with_check(
+            &mut engine,
+            key,
+            b"v",
+            key,
+            10,
+            10,
+            SkipPessimisticCheck,
+            true,
+        )
+        .unwrap();
+        let lock = must_locked(&mut engine, key, 10);
+        assert_eq!(lock.lock_type, LockType::Put);
     }
 
     #[test]

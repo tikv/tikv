@@ -94,6 +94,15 @@ pub struct Config {
     pub reserve_raft_space: ReadableSize,
     #[online_config(skip)]
     pub enable_async_apply_prewrite: bool,
+    /// When enabled, before creating or rewriting a normal (prewrite) lock
+    /// on a key, TiKV checks the key's write records and rejects or skips
+    /// the write if a commit record of the same transaction already exists.
+    /// This prevents rebuilding a lock of an already committed transaction,
+    /// e.g. when a second prewrite or a lock refresh arrives after the
+    /// transaction's commit record has been written. The cost is extra
+    /// Write CF seeks on the guarded paths.
+    #[online_config(skip)]
+    pub txn_lock_consistency_check: bool,
     #[online_config(skip)]
     pub api_version: u8,
     #[online_config(skip)]
@@ -131,6 +140,7 @@ impl Default for Config {
             reserve_space: ReadableSize::gb(DEFAULT_RESERVED_SPACE_GB),
             reserve_raft_space: ReadableSize::gb(DEFAULT_RESERVED_RAFT_SPACE_GB),
             enable_async_apply_prewrite: false,
+            txn_lock_consistency_check: true,
             api_version: 1,
             enable_ttl: false,
             ttl_check_poll_interval: ReadableDuration::hours(12),

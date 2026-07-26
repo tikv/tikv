@@ -289,6 +289,14 @@
 ## latency jittering when apply duration is not stable.
 # enable-async-apply-prewrite = false
 
+## Before creating or rewriting a normal (prewrite) lock on a key, check the
+## key's write records and reject or skip the write if a commit record of the
+## same transaction already exists. This prevents rebuilding a lock of an
+## already committed transaction, e.g. when a second prewrite or a lock
+## refresh arrives after the transaction's commit record has been written.
+## The cost is extra Write CF seeks on the guarded paths.
+# txn-lock-consistency-check = true
+
 ## Reserve some space to ensure recovering the store from `no space left` must succeed.
 ## `max(reserve-space, capacity * 5%)` will be reserved exactly.
 ##

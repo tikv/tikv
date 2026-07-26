@@ -275,6 +275,8 @@ struct TxnSchedulerInner<L: LockManager> {
 
     enable_async_apply_prewrite: bool,
 
+    txn_lock_consistency_check: bool,
+
     pessimistic_lock_wake_up_delay_duration_ms: Arc<AtomicU64>,
 
     resource_tag_factory: ResourceTagFactory,
@@ -476,6 +478,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             pipelined_pessimistic_lock: dynamic_configs.pipelined_pessimistic_lock,
             in_memory_pessimistic_lock: dynamic_configs.in_memory_pessimistic_lock,
             enable_async_apply_prewrite: config.enable_async_apply_prewrite,
+            txn_lock_consistency_check: config.txn_lock_consistency_check,
             pessimistic_lock_wake_up_delay_duration_ms: dynamic_configs.wake_up_delay_duration_ms,
             flow_controller,
             causal_ts_provider,
@@ -1440,6 +1443,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 async_apply_prewrite: txn_scheduler.inner.enable_async_apply_prewrite,
                 raw_ext,
                 txn_status_cache: txn_scheduler.inner.txn_status_cache.clone(),
+                txn_lock_consistency_check: txn_scheduler
+                    .inner
+                    .txn_lock_consistency_check,
             };
             let begin_instant = Instant::now();
             let res = unsafe {

@@ -2,12 +2,14 @@
 
 // #[PerformanceCriticalPath]
 use tikv_util::Either;
-use txn_types::{Key, TimeStamp};
+use txn_types::{Key, TimeStamp, WriteType};
 
 use crate::storage::{
     kv::WriteData,
     lock_manager::LockManager,
-    mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader},
+    mvcc::{
+        Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader, TxnCommitRecord,
+    },
     txn::{
         commands::{
             Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
@@ -74,22 +76,46 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
 
         let lock = match reader.load_lock(&self.primary_key)? {
             Some(Either::Left(mut lock)) if lock.ts == self.start_ts => {
+                // If a commit record of the lock's own transaction already
+                // exists on this key, the lock is stale: refreshing its ttl
+                // or min_commit_ts would prolong the anomalous lock beyond
+                // the transaction's commit. Skip the update and return the
+                // lock as-is. Rollback records belong to normal transaction
+                // cleanup and don't trigger the guard.
+                let already_committed = context.txn_lock_consistency_check
+                    && match reader.get_txn_commit_record(&self.primary_key)? {
+                        TxnCommitRecord::SingleRecord { commit_ts, write }
+                            if write.write_type != WriteType::Rollback =>
+                        {
+                            warn!(
+                                "skip updating lock: the transaction is already committed on this key";
+                                "key" => %self.primary_key,
+                                "lock" => ?&lock,
+                                "commit_ts" => commit_ts,
+                            );
+                            true
+                        }
+                        _ => false,
+                    };
+
                 let mut updated = false;
 
-                if lock.ttl < self.advise_ttl {
-                    lock.ttl = self.advise_ttl;
-                    updated = true;
-                }
+                if !already_committed {
+                    if lock.ttl < self.advise_ttl {
+                        lock.ttl = self.advise_ttl;
+                        updated = true;
+                    }
 
-                // only for non-async-commit pipelined transactions, we can update the
-                // min_commit_ts
-                if !lock.use_async_commit
-                    && lock.generation > 0
-                    && self.min_commit_ts > 0
-                    && lock.min_commit_ts < self.min_commit_ts.into()
-                {
-                    lock.min_commit_ts = self.min_commit_ts.into();
-                    updated = true;
+                    // only for non-async-commit pipelined transactions, we can update the
+                    // min_commit_ts
+                    if !lock.use_async_commit
+                        && lock.generation > 0
+                        && self.min_commit_ts > 0
+                        && lock.min_commit_ts < self.min_commit_ts.into()
+                    {
+                        lock.min_commit_ts = self.min_commit_ts.into();
+                        updated = true;
+                    }
                 }
 
                 if updated {
@@ -164,6 +190,24 @@ pub mod tests {
         advise_ttl: u64,
         min_commit_ts: u64,
     ) -> Result<WriteResult> {
+        txn_heart_beat_with_lock_consistency_check(
+            engine,
+            primary_key,
+            start_ts,
+            advise_ttl,
+            min_commit_ts,
+            false,
+        )
+    }
+
+    fn txn_heart_beat_with_lock_consistency_check<E: Engine>(
+        engine: &mut E,
+        primary_key: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        advise_ttl: u64,
+        min_commit_ts: u64,
+        txn_lock_consistency_check: bool,
+    ) -> Result<WriteResult> {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
@@ -185,6 +229,7 @@ pub mod tests {
                 async_apply_prewrite: false,
                 raw_ext: None,
                 txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+                txn_lock_consistency_check,
             },
         )
     }
@@ -360,6 +405,7 @@ pub mod tests {
                     async_apply_prewrite: false,
                     raw_ext: None,
                     txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+                    txn_lock_consistency_check: false,
                 },
             )
             .unwrap();
@@ -415,5 +461,72 @@ pub mod tests {
         assert_eq!(lock_after.ttl, lock_before.ttl);
         assert_eq!(lock_after.min_commit_ts, lock_before.min_commit_ts);
         assert_eq!(lock_after.generation, lock_before.generation);
+    }
+
+    // A commit record of the lock's own transaction already exists on the key
+    // while the stale lock is still there. With the lock consistency check
+    // enabled, the heartbeat must not refresh the stale lock; with the check
+    // disabled the old behavior (update persisted) remains.
+    #[test]
+    fn test_txn_heart_beat_skips_update_on_committed_key() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let v = b"v1";
+
+        for (k, check) in [(b"k1", true), (b"k2", false)] {
+            // A pipelined-flush lock so both ttl and min_commit_ts are
+            // refreshable by the heartbeat.
+            must_flush_put(&mut engine, k, v, k, 5, 1);
+            let lock_before = must_locked(&mut engine, k, 5);
+            // The anomalous commit record of the same transaction.
+            must_write_committed_record(&mut engine, k, 5, 10, WriteType::Put);
+
+            let result =
+                txn_heart_beat_with_lock_consistency_check(&mut engine, k, 5, 3333, 10, check)
+                    .unwrap();
+            if let ProcessResult::TxnStatus {
+                txn_status: TxnStatus::Uncommitted { lock, .. },
+            } = result.pr
+            {
+                write(&engine, &Context::default(), result.to_be_write.modifies);
+                let lock_after = must_locked(&mut engine, k, 5);
+                if check {
+                    // Neither the response nor the stored lock is refreshed.
+                    assert_eq!(lock.ttl, lock_before.ttl);
+                    assert_eq!(lock.min_commit_ts, lock_before.min_commit_ts);
+                    assert_eq!(lock_after.ttl, lock_before.ttl);
+                    assert_eq!(lock_after.min_commit_ts, lock_before.min_commit_ts);
+                } else {
+                    // Old behavior: ttl and min_commit_ts are updated.
+                    assert_eq!(lock.ttl, 3333);
+                    assert_eq!(lock.min_commit_ts, 10.into());
+                    assert_eq!(lock_after.ttl, 3333);
+                    assert_eq!(lock_after.min_commit_ts, 10.into());
+                }
+            } else {
+                unreachable!();
+            }
+        }
+    }
+
+    // With no commit record on the key, the guard does not alter the normal
+    // heartbeat refresh.
+    #[test]
+    fn test_txn_heart_beat_lock_consistency_check_no_false_positive() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let (k, v) = (b"k1", b"v1");
+
+        must_prewrite_put(&mut engine, k, v, k, 5);
+        let result =
+            txn_heart_beat_with_lock_consistency_check(&mut engine, k, 5, 100, 0, true).unwrap();
+        if let ProcessResult::TxnStatus {
+            txn_status: TxnStatus::Uncommitted { lock, .. },
+        } = result.pr
+        {
+            write(&engine, &Context::default(), result.to_be_write.modifies);
+            assert_eq!(lock.ttl, 100);
+        } else {
+            unreachable!();
+        }
+        assert_eq!(must_locked(&mut engine, k, 5).ttl, 100);
     }
 }

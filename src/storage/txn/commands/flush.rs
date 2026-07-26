@@ -131,6 +131,7 @@ impl Flush {
             is_retry_request: self.ctx.is_retry_request,
             assertion_level: self.assertion_level,
             txn_source: self.ctx.get_txn_source(),
+            txn_lock_consistency_check: false,
         };
         let mut locks = Vec::new();
         // If there are other errors, return other error prior to `AssertionFailed`.

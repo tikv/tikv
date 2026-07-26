@@ -834,6 +834,7 @@ pub(crate) mod tests {
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
             txn_source: 0,
+            txn_lock_consistency_check: false,
         }
     }
 

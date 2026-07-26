@@ -102,6 +102,7 @@ pub fn check_txn_status_lock_exists(
     resolving_pessimistic_lock: bool,
     verify_is_primary: bool,
     rollback_if_not_exist: bool,
+    txn_lock_consistency_check: bool,
 ) -> Result<(TxnStatus, Option<ReleasedLock>)> {
     if verify_is_primary && !primary_key.is_encoded_from(&lock.primary) {
         // If the resolving lock is a prewrite lock and the current lock is a
@@ -196,14 +197,37 @@ pub fn check_txn_status_lock_exists(
         // Push forward the min_commit_ts so that reading won't be blocked by locks.
         && caller_start_ts >= lock.min_commit_ts
     {
-        lock.min_commit_ts = caller_start_ts.next();
+        // If a commit record of the lock's own transaction already exists on
+        // this key, the lock is stale: rewriting it would push its
+        // min_commit_ts beyond the transaction's commit_ts and prolong the
+        // anomalous lock. Skip the rewrite in that case and return the lock
+        // as-is. Rollback records belong to normal transaction cleanup and
+        // don't trigger the guard.
+        let already_committed = txn_lock_consistency_check
+            && match reader.get_txn_commit_record(&primary_key)? {
+                TxnCommitRecord::SingleRecord { commit_ts, write }
+                    if write.write_type != WriteType::Rollback =>
+                {
+                    warn!(
+                        "skip pushing min_commit_ts: the transaction is already committed on this key";
+                        "key" => %primary_key,
+                        "lock" => ?&lock,
+                        "commit_ts" => commit_ts,
+                    );
+                    true
+                }
+                _ => false,
+            };
+        if !already_committed {
+            lock.min_commit_ts = caller_start_ts.next();
 
-        if lock.min_commit_ts < current_ts {
-            lock.min_commit_ts = current_ts;
+            if lock.min_commit_ts < current_ts {
+                lock.min_commit_ts = current_ts;
+            }
+
+            txn.put_lock(primary_key, &lock, false);
+            MVCC_CHECK_TXN_STATUS_COUNTER_VEC.update_ts.inc();
         }
-
-        txn.put_lock(primary_key, &lock, false);
-        MVCC_CHECK_TXN_STATUS_COUNTER_VEC.update_ts.inc();
     }
 
     // As long as the primary lock's min_commit_ts > caller_start_ts, locks belong

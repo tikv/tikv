@@ -123,6 +123,7 @@ mod tests {
             async_apply_prewrite: false,
             raw_ext,
             txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+            txn_lock_consistency_check: false,
         };
         let cmd: Command = cmd.into();
         let write_result = cmd.process_write(snap, context).unwrap();

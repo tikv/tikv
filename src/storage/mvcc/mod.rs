@@ -485,6 +485,7 @@ pub enum PessimisticLockNotFoundReason {
 pub mod tests {
     use std::borrow::Cow;
 
+    use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_WRITE;
     use kvproto::kvrpcpb::Context;
     use txn_types::Key;
@@ -498,6 +499,31 @@ pub mod tests {
                 .write(ctx, WriteData::from_modifies(modifies))
                 .unwrap();
         }
+    }
+
+    // Directly writes a commit/rollback record at the engine level, without
+    // touching any lock on the same key. Used to build the anomalous state
+    // where a transaction's write record coexists with its own lock.
+    pub fn must_write_committed_record<E: Engine>(
+        engine: &mut E,
+        key: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        commit_ts: impl Into<TimeStamp>,
+        write_type: WriteType,
+    ) {
+        let ctx = Context::default();
+        let start_ts = start_ts.into();
+        let cm = ConcurrencyManager::new(start_ts);
+        let mut txn = MvccTxn::new(start_ts, cm);
+        let short_value = (write_type == WriteType::Put).then(|| b"v".to_vec());
+        txn.put_write(
+            Key::from_raw(key),
+            commit_ts.into(),
+            Write::new(write_type, start_ts, short_value)
+                .as_ref()
+                .to_bytes(),
+        );
+        write(engine, &ctx, txn.into_modifies());
     }
 
     pub fn must_get<E: Engine>(

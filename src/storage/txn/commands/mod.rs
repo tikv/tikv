@@ -657,6 +657,9 @@ pub struct WriteContext<'a, L: LockManager> {
     pub raw_ext: Option<RawExt>,
     // use for apiv2
     pub txn_status_cache: Arc<TxnStatusCache>,
+    /// Whether to guard creating or rewriting normal (prewrite) locks against
+    /// keys on which a commit record of the same transaction already exists.
+    pub txn_lock_consistency_check: bool,
 }
 
 pub struct ReaderWithStats<'a, S: Snapshot> {
@@ -945,6 +948,7 @@ pub mod test_util {
             async_apply_prewrite: false,
             raw_ext: None,
             txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+            txn_lock_consistency_check: false,
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         let res = match ret.pr {
@@ -1106,6 +1110,7 @@ pub mod test_util {
             async_apply_prewrite: false,
             raw_ext: None,
             txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+            txn_lock_consistency_check: false,
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
@@ -1132,6 +1137,7 @@ pub mod test_util {
             async_apply_prewrite: false,
             raw_ext: None,
             txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+            txn_lock_consistency_check: false,
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
@@ -1177,6 +1183,7 @@ pub mod test_util {
             async_apply_prewrite: false,
             raw_ext: None,
             txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+            txn_lock_consistency_check: false,
         };
 
         let ret = cmd.cmd.process_write(snap, context).unwrap();

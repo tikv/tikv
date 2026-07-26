@@ -505,6 +505,7 @@ mod tests {
                 is_retry_request: false,
                 assertion_level: AssertionLevel::Off,
                 txn_source: 0,
+                txn_lock_consistency_check: false,
             },
             Mutation::make_put(k1.clone(), b"v4".to_vec()),
             &None,

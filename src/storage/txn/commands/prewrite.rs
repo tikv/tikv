@@ -549,7 +549,12 @@ impl<K: PrewriteKind> Prewriter<K> {
         // prewrite.
 
         let rows = self.mutations.len();
-        let res = self.prewrite(&mut txn, &mut reader, context.extra_op);
+        let res = self.prewrite(
+            &mut txn,
+            &mut reader,
+            context.extra_op,
+            context.txn_lock_consistency_check,
+        );
         let (locks, final_min_commit_ts) = res?;
 
         Ok(self.write_result(
@@ -587,6 +592,7 @@ impl<K: PrewriteKind> Prewriter<K> {
         txn: &mut MvccTxn,
         reader: &mut SnapshotReader<impl Snapshot>,
         extra_op: ExtraOp,
+        txn_lock_consistency_check: bool,
     ) -> Result<(Vec<std::result::Result<(), StorageError>>, TimeStamp)> {
         let commit_kind = match (&self.secondary_keys, self.try_one_pc) {
             (_, true) => CommitKind::OnePc(self.max_commit_ts),
@@ -606,6 +612,7 @@ impl<K: PrewriteKind> Prewriter<K> {
             is_retry_request: self.ctx.is_retry_request,
             assertion_level: self.assertion_level,
             txn_source: self.ctx.get_txn_source(),
+            txn_lock_consistency_check,
         };
 
         let async_commit_pk = self
@@ -1680,6 +1687,7 @@ mod tests {
                     async_apply_prewrite: false,
                     raw_ext: None,
                     txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+                    txn_lock_consistency_check: false,
                 }
             };
         }
@@ -1852,6 +1860,7 @@ mod tests {
                 async_apply_prewrite: case.async_apply_prewrite,
                 raw_ext: None,
                 txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+                txn_lock_consistency_check: false,
             };
             let mut engine = TestEngineBuilder::new().build().unwrap();
             let snap = engine.snapshot(Default::default()).unwrap();
@@ -1963,6 +1972,7 @@ mod tests {
             async_apply_prewrite: false,
             raw_ext: None,
             txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+            txn_lock_consistency_check: false,
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let result = cmd.cmd.process_write(snap, context).unwrap();
@@ -1992,6 +2002,7 @@ mod tests {
             async_apply_prewrite: false,
             raw_ext: None,
             txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+            txn_lock_consistency_check: false,
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let result = cmd.cmd.process_write(snap, context).unwrap();
@@ -2076,6 +2087,7 @@ mod tests {
             async_apply_prewrite: false,
             raw_ext: None,
             txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+            txn_lock_consistency_check: false,
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let result = cmd.cmd.process_write(snap, context).unwrap();
@@ -2109,6 +2121,7 @@ mod tests {
             async_apply_prewrite: false,
             raw_ext: None,
             txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+            txn_lock_consistency_check: false,
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let result = cmd.cmd.process_write(snap, context).unwrap();
@@ -2380,6 +2393,7 @@ mod tests {
             async_apply_prewrite: false,
             raw_ext: None,
             txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+            txn_lock_consistency_check: false,
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         assert!(prewrite_cmd.cmd.process_write(snap, context).is_err());
@@ -2405,6 +2419,7 @@ mod tests {
             async_apply_prewrite: false,
             raw_ext: None,
             txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+            txn_lock_consistency_check: false,
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         assert!(prewrite_cmd.cmd.process_write(snap, context).is_err());
@@ -2612,6 +2627,7 @@ mod tests {
             async_apply_prewrite: false,
             raw_ext: None,
             txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+            txn_lock_consistency_check: false,
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let res = prewrite_cmd.cmd.process_write(snap, context).unwrap();

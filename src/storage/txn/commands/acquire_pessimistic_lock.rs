@@ -531,6 +531,7 @@ mod tests {
             async_apply_prewrite: false,
             raw_ext: None,
             txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+            txn_lock_consistency_check: false,
         };
         cmd.cmd.process_write(snap, context).unwrap()
     }

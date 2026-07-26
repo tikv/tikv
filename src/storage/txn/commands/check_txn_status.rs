@@ -125,6 +125,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
                 self.resolving_pessimistic_lock,
                 self.verify_is_primary,
                 self.rollback_if_not_exist,
+                context.txn_lock_consistency_check,
             )?,
             Some(Either::Right(shared_locks)) => {
                 // a shared-locked key cannot be the primary key of a transaction thus reject
@@ -226,6 +227,32 @@ pub mod tests {
         resolving_pessimistic_lock: bool,
         status_pred: impl FnOnce(TxnStatus) -> bool,
     ) {
+        must_success_with_lock_consistency_check(
+            engine,
+            primary_key,
+            lock_ts,
+            caller_start_ts,
+            current_ts,
+            rollback_if_not_exist,
+            force_sync_commit,
+            resolving_pessimistic_lock,
+            false,
+            status_pred,
+        )
+    }
+
+    fn must_success_with_lock_consistency_check<E: Engine>(
+        engine: &mut E,
+        primary_key: &[u8],
+        lock_ts: impl Into<TimeStamp>,
+        caller_start_ts: impl Into<TimeStamp>,
+        current_ts: impl Into<TimeStamp>,
+        rollback_if_not_exist: bool,
+        force_sync_commit: bool,
+        resolving_pessimistic_lock: bool,
+        txn_lock_consistency_check: bool,
+        status_pred: impl FnOnce(TxnStatus) -> bool,
+    ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let current_ts = current_ts.into();
@@ -254,6 +281,7 @@ pub mod tests {
                     async_apply_prewrite: false,
                     raw_ext: None,
                     txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+                    txn_lock_consistency_check,
                 },
             )
             .unwrap();
@@ -308,6 +336,7 @@ pub mod tests {
                     async_apply_prewrite: false,
                     raw_ext: None,
                     txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
+                    txn_lock_consistency_check: false,
                 },
             )
             .map(|r| {
@@ -1537,5 +1566,96 @@ pub mod tests {
                 panic!("unexpected error: {:?}", e);
             }
         }
+    }
+
+    // A commit record of the lock's own transaction already exists on the key
+    // while the stale lock is still there. With the lock consistency check
+    // enabled, check_txn_status must not push the stale lock's min_commit_ts
+    // forward; with the check disabled the old behavior (bump persisted)
+    // remains.
+    #[test]
+    fn test_check_txn_status_skips_min_commit_ts_push_on_committed_key() {
+        let ts = TimeStamp::compose;
+        for check in [true, false] {
+            let mut engine = TestEngineBuilder::new().build().unwrap();
+            let k = b"k";
+            // Lock with min_commit_ts = ts(5, 1) and ttl = 100.
+            must_prewrite_put_for_large_txn(&mut engine, k, b"v", k, ts(5, 0), 100, 0);
+            must_large_txn_locked(&mut engine, k, ts(5, 0), 100, ts(5, 1), false);
+            // The anomalous commit record of the same transaction.
+            must_write_committed_record(&mut engine, k, ts(5, 0), ts(6, 0), WriteType::Put);
+
+            must_success_with_lock_consistency_check(
+                &mut engine,
+                k,
+                ts(5, 0),
+                ts(7, 0),
+                ts(7, 0),
+                false,
+                false,
+                false,
+                check,
+                if check {
+                    // The response reports the lock as-is.
+                    uncommitted(100, ts(5, 1), false)
+                } else {
+                    uncommitted(100, ts(7, 1), true)
+                },
+            );
+            if check {
+                // The stale lock is not rewritten.
+                must_large_txn_locked(&mut engine, k, ts(5, 0), 100, ts(5, 1), false);
+            } else {
+                // Old behavior: min_commit_ts is pushed and persisted.
+                must_large_txn_locked(&mut engine, k, ts(5, 0), 100, ts(7, 1), false);
+            }
+        }
+    }
+
+    // With no commit record on the key, the guard does not alter the normal
+    // min_commit_ts push.
+    #[test]
+    fn test_check_txn_status_lock_consistency_check_no_false_positive() {
+        let ts = TimeStamp::compose;
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let k = b"k";
+        must_prewrite_put_for_large_txn(&mut engine, k, b"v", k, ts(5, 0), 100, 0);
+        must_success_with_lock_consistency_check(
+            &mut engine,
+            k,
+            ts(5, 0),
+            ts(7, 0),
+            ts(7, 0),
+            false,
+            false,
+            false,
+            true,
+            uncommitted(100, ts(7, 1), true),
+        );
+        must_large_txn_locked(&mut engine, k, ts(5, 0), 100, ts(7, 1), false);
+    }
+
+    // A rollback record of the same transaction belongs to normal cleanup and
+    // must not block the min_commit_ts push.
+    #[test]
+    fn test_check_txn_status_lock_consistency_check_ignores_rollback() {
+        let ts = TimeStamp::compose;
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let k = b"k";
+        must_prewrite_put_for_large_txn(&mut engine, k, b"v", k, ts(5, 0), 100, 0);
+        must_write_committed_record(&mut engine, k, ts(5, 0), ts(5, 0), WriteType::Rollback);
+        must_success_with_lock_consistency_check(
+            &mut engine,
+            k,
+            ts(5, 0),
+            ts(7, 0),
+            ts(7, 0),
+            false,
+            false,
+            false,
+            true,
+            uncommitted(100, ts(7, 1), true),
+        );
+        must_large_txn_locked(&mut engine, k, ts(5, 0), 100, ts(7, 1), false);
     }
 }
