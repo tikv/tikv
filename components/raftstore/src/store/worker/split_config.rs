@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::{convert::TryFrom, sync::Arc};
 
 use lazy_static::lazy_static;
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
@@ -14,6 +14,16 @@ use tikv_util::{
 const DEFAULT_DETECT_TIMES: u64 = 10;
 const DEFAULT_SAMPLE_THRESHOLD: u64 = 100;
 pub(crate) const DEFAULT_SAMPLE_NUM: usize = 20;
+// Item-count limits, not global byte limits. Key payloads, spare Vec capacity,
+// producer threads, and active Regions add memory beyond these counts.
+// 1024 leaves more than 50x tuning room over the default per-round reservoir.
+const MAX_SAMPLE_NUM: usize = 1024;
+// 4096 leaves more than 20x tuning room over the default 20 * 10 history while
+// bounding both a Region's retained sample items and split-key selection work.
+// `Recorder::collect` can compare up to 2 * sample_num candidate keys with
+// sample_num * detect_times retained ranges. Benchmark before raising either
+// limit.
+const MAX_RECORDED_SAMPLES_PER_REGION: usize = 4096;
 pub const DEFAULT_QPS_THRESHOLD: usize = 3000;
 pub const DEFAULT_BIG_REGION_QPS_THRESHOLD: usize = 7000;
 pub const DEFAULT_BYTE_THRESHOLD: usize = 30 * 1024 * 1024;
@@ -115,6 +125,35 @@ impl Default for SplitConfig {
 
 impl SplitConfig {
     pub fn validate(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        if !(1..=MAX_SAMPLE_NUM).contains(&self.sample_num) {
+            return Err(format!(
+                "sample_num should be between 1 and {} for load-base-split.",
+                MAX_SAMPLE_NUM
+            )
+            .into());
+        }
+        if self.detect_times == 0 {
+            return Err("detect_times must be greater than 0 for load-base-split.".into());
+        }
+        let recorded_sample_num = usize::try_from(self.detect_times)
+            .ok()
+            .and_then(|detect_times| self.sample_num.checked_mul(detect_times));
+        let recorded_sample_num = match recorded_sample_num {
+            Some(sample_num) if sample_num <= MAX_RECORDED_SAMPLES_PER_REGION => sample_num,
+            _ => {
+                return Err(format!(
+                    "sample_num * detect_times should not exceed {} for load-base-split.",
+                    MAX_RECORDED_SAMPLES_PER_REGION
+                )
+                .into());
+            }
+        };
+        if self.sample_threshold > recorded_sample_num as u64 {
+            return Err(
+                "sample_threshold should not exceed sample_num * detect_times for load-base-split."
+                    .into(),
+            );
+        }
         if self.split_balance_score > 1.0
             || self.split_balance_score < 0.0
             || self.split_contained_score > 1.0
@@ -208,8 +247,18 @@ impl ConfigManager for SplitConfigManager {
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         {
             let change = change.clone();
-            self.0
-                .update(move |cfg: &mut SplitConfig| cfg.update(change))?;
+            self.0.update(
+                move |cfg: &mut SplitConfig| -> std::result::Result<_, Box<dyn std::error::Error>> {
+                    // ConfigController validates before acquiring its commit lock, so
+                    // another update can make that snapshot stale. Validate the combined
+                    // value while holding VersionTrack's write lock.
+                    let mut candidate = cfg.clone();
+                    candidate.update(change)?;
+                    candidate.validate()?;
+                    *cfg = candidate;
+                    Ok(())
+                },
+            )?;
         }
         info!(
             "load base split config changed";
@@ -236,7 +285,10 @@ mod tests {
 
     use crate::store::{
         SplitConfig, SplitConfigManager,
-        worker::split_config::{DEFAULT_SAMPLE_NUM, get_sample_num},
+        worker::split_config::{
+            DEFAULT_DETECT_TIMES, DEFAULT_SAMPLE_NUM, MAX_RECORDED_SAMPLES_PER_REGION,
+            MAX_SAMPLE_NUM, get_sample_num,
+        },
     };
 
     #[test]
@@ -254,5 +306,64 @@ mod tests {
         cfg_manager.dispatch(config_change).unwrap();
 
         assert_eq!(get_sample_num(), 50);
+    }
+
+    #[test]
+    fn test_validate_sampling_memory_budget() {
+        let mut config = SplitConfig {
+            qps_threshold: Some(usize::MAX),
+            ..Default::default()
+        };
+
+        config.sample_num = 0;
+        assert!(config.validate().is_err());
+
+        config.sample_num = MAX_SAMPLE_NUM + 1;
+        assert!(config.validate().is_err());
+
+        config.sample_num = MAX_SAMPLE_NUM;
+        config.detect_times = (MAX_RECORDED_SAMPLES_PER_REGION / MAX_SAMPLE_NUM) as u64;
+        config.validate().unwrap();
+
+        config.detect_times += 1;
+        assert!(config.validate().is_err());
+
+        config.sample_num = 1;
+        config.detect_times = 0;
+        assert!(config.validate().is_err());
+
+        config.detect_times = u64::MAX;
+        assert!(config.validate().is_err());
+
+        config.sample_num = DEFAULT_SAMPLE_NUM;
+        config.detect_times = DEFAULT_DETECT_TIMES;
+        config.sample_threshold = (DEFAULT_SAMPLE_NUM as u64) * DEFAULT_DETECT_TIMES;
+        config.validate().unwrap();
+
+        config.sample_threshold += 1;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_online_update_validates_current_sampling_budget() {
+        let config = Arc::new(VersionTrack::new(SplitConfig::default()));
+        // Avoid changing the process-wide producer sampling configuration in this
+        // manager-only test.
+        let mut cfg_manager = SplitConfigManager(config);
+
+        // Each value is valid with the defaults, but their combination exceeds
+        // the retained-sample budget.
+        let mut config_change = ConfigChange::new();
+        config_change.insert(String::from("sample_num"), ConfigValue::Usize(300));
+        cfg_manager.dispatch(config_change).unwrap();
+        let before_rejected_update = cfg_manager.value().clone();
+
+        let mut config_change = ConfigChange::new();
+        config_change.insert(String::from("detect_times"), ConfigValue::U64(14));
+        let err = cfg_manager.dispatch(config_change).unwrap_err().to_string();
+        assert!(err.contains("sample_num * detect_times should not exceed"));
+
+        let current = cfg_manager.value();
+        assert_eq!(&*current, &before_rejected_update);
     }
 }
