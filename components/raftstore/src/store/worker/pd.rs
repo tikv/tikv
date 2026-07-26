@@ -643,10 +643,24 @@ where
     }
 
     fn auto_split(&self, split_infos: Vec<SplitInfo>) {
+        if split_infos.is_empty() {
+            return;
+        }
+        let candidate_count = split_infos.len() as u64;
+        // CPU half-split candidates are accounted by the split checker stage;
+        // split_failed tracks normal split-key candidates only.
+        let split_key_candidate_count = split_infos
+            .iter()
+            .filter(|split_info| split_info.split_key.is_some())
+            .count() as u64;
         let task = Task::AutoSplit { split_infos };
         if let Err(e) = self.0.schedule(task) {
+            LOAD_BASE_SPLIT_EVENT
+                .split_failed
+                .inc_by(split_key_candidate_count);
             warn!(
                 "failed to send split infos to pd worker";
+                "candidate_count" => candidate_count,
                 "err" => ?e,
             );
         }
@@ -2606,8 +2620,30 @@ where
                 let f = async move {
                     for mut split_info in split_infos {
                         let region_id = split_info.region_id;
-                        let Ok(Some(region)) = pd_client.get_region_by_id(region_id).await else {
-                            continue;
+                        let is_split_key = split_info.split_key.is_some();
+                        let region = match pd_client.get_region_by_id(region_id).await {
+                            Ok(Some(region)) => region,
+                            Ok(None) => {
+                                if is_split_key {
+                                    LOAD_BASE_SPLIT_EVENT.split_failed.inc();
+                                }
+                                warn!(
+                                    "region disappeared before auto split dispatch";
+                                    "region_id" => region_id,
+                                );
+                                continue;
+                            }
+                            Err(e) => {
+                                if is_split_key {
+                                    LOAD_BASE_SPLIT_EVENT.split_failed.inc();
+                                }
+                                warn!(
+                                    "failed to load region before auto split dispatch";
+                                    "region_id" => region_id,
+                                    "err" => ?e,
+                                );
+                                continue;
+                            }
                         };
                         // Try to split the region with the given split key.
                         // Classic raftstore intentionally ignores the telemetry peer here.
@@ -2619,6 +2655,7 @@ where
                         ) {
                             let result = router.send_casual_msg(region_id, msg);
                             if let Err(e) = result {
+                                LOAD_BASE_SPLIT_EVENT.split_failed.inc();
                                 warn!(
                                     "failed to route auto split through current peer";
                                     "region_id" => region_id,
@@ -3087,12 +3124,42 @@ mod tests {
 
     use kvproto::{kvrpcpb, pdpb::QueryKind};
     use pd_client::{BucketMeta, new_bucket_stats};
-    use tikv_util::worker::LazyWorker;
+    use tikv_util::worker::{LazyWorker, dummy_scheduler};
 
     use super::*;
     use crate::store::util::build_key_range;
 
     const DEFAULT_TEST_STORE_ID: u64 = 1;
+
+    #[test]
+    fn test_auto_split_schedule_failure_only_records_split_key_candidates() {
+        let (scheduler, receiver) = dummy_scheduler::<Task<KvTestEngine>>();
+        let reporter = WrappedScheduler(scheduler);
+        drop(receiver);
+
+        let failed_before = LOAD_BASE_SPLIT_EVENT.split_failed.get();
+        reporter.auto_split(vec![SplitInfo {
+            region_id: 42,
+            peer: metapb::Peer::default(),
+            split_key: None,
+            start_key: Some(b"a".to_vec()),
+            end_key: Some(b"z".to_vec()),
+        }]);
+        assert_eq!(
+            LOAD_BASE_SPLIT_EVENT.split_failed.get(),
+            failed_before,
+            "CPU half-split candidates are accounted by the split checker stage"
+        );
+
+        reporter.auto_split(vec![SplitInfo {
+            region_id: 42,
+            peer: metapb::Peer::default(),
+            split_key: Some(b"k".to_vec()),
+            start_key: None,
+            end_key: None,
+        }]);
+        assert_eq!(LOAD_BASE_SPLIT_EVENT.split_failed.get(), failed_before + 1);
+    }
 
     #[test]
     fn test_auto_split_message_ignores_sampled_peer() {

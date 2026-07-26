@@ -6706,6 +6706,9 @@ where
             "source" => source,
         );
 
+        // A load-based split candidate that is rejected here never creates an
+        // admin command, so it is counted as failed at the rejection point.
+        let is_load_split = split_reason_for_source(source) == SplitReason::Load;
         if !self.fsm.peer.is_leader() {
             // region on this store is no longer leader, skipped.
             info!(
@@ -6713,6 +6716,9 @@ where
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
             );
+            if is_load_split {
+                LOAD_BASE_SPLIT_EVENT.split_failed.inc();
+            }
             cb.invoke_with_response(new_error(Error::NotLeader(
                 self.region_id(),
                 self.fsm.peer.get_peer_from_cache(self.fsm.peer.leader_id()),
@@ -6734,6 +6740,9 @@ where
                 "peer_id" => self.fsm.peer_id(),
                 "source" => %source
             );
+            if is_load_split {
+                LOAD_BASE_SPLIT_EVENT.split_failed.inc();
+            }
             cb.invoke_with_response(new_error(e));
             return;
         }
@@ -6753,6 +6762,9 @@ where
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
             );
+            if is_load_split {
+                LOAD_BASE_SPLIT_EVENT.split_failed.inc();
+            }
             match t {
                 PdTask::AskBatchSplit { callback, .. } => {
                     callback.invoke_with_response(new_error(box_err!(
