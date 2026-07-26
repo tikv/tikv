@@ -643,7 +643,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
             &ctx,
-            vec![(key.as_encoded().to_vec(), key.as_encoded().to_vec())],
+            key.to_raw()
+                .map(|raw| vec![(raw.clone(), raw)])
+                .unwrap_or_default(),
         );
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
@@ -858,10 +860,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         // representative.
         let rand_index = rand::thread_rng().gen_range(0, requests.len());
         let rand_ctx = requests[rand_index].get_context();
-        let rand_key = requests[rand_index].get_key().to_vec();
+        let raw_rand_key = requests[rand_index].get_key().to_vec();
         let resource_tag = self
             .resource_tag_factory
-            .new_tag_with_key_ranges(rand_ctx, vec![(rand_key.clone(), rand_key)]);
+            .new_tag_with_key_ranges(rand_ctx, vec![(raw_rand_key.clone(), raw_rand_key)]);
         // Unset the TLS tracker because the future below does not belong to any
         // specific request
         clear_tls_tracker_token();
@@ -1067,13 +1069,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let priority_tag = get_priority_tag(priority);
         keys.sort();
         keys.dedup();
-        let key_ranges = keys
+        let raw_key_ranges = keys
             .iter()
-            .map(|k| (k.as_encoded().to_vec(), k.as_encoded().to_vec()))
+            .filter_map(|key| key.to_raw().ok().map(|raw| (raw.clone(), raw)))
             .collect();
         let resource_tag = self
             .resource_tag_factory
-            .new_tag_with_key_ranges(&ctx, key_ranges);
+            .new_tag_with_key_ranges(&ctx, raw_key_ranges);
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
         let busy_threshold = Duration::from_millis(ctx.busy_threshold_ms as u64);
@@ -1280,13 +1282,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             )
         });
         let priority_tag = get_priority_tag(priority);
-        let key_ranges = keys
+        let raw_key_ranges = keys
             .iter()
-            .map(|k| (k.as_encoded().to_vec(), k.as_encoded().to_vec()))
+            .filter_map(|key| key.to_raw().ok().map(|raw| (raw.clone(), raw)))
             .collect();
         let resource_tag = self
             .resource_tag_factory
-            .new_tag_with_key_ranges(&ctx, key_ranges);
+            .new_tag_with_key_ranges(&ctx, raw_key_ranges);
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
         let busy_threshold = Duration::from_millis(ctx.busy_threshold_ms as u64);
@@ -1508,13 +1510,21 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
             &ctx,
-            vec![(
-                start_key.as_encoded().to_vec(),
-                match &end_key {
-                    Some(k) => k.as_encoded().to_vec(),
-                    None => vec![],
-                },
-            )],
+            start_key
+                .to_raw()
+                .map(|start| {
+                    let end = end_key
+                        .as_ref()
+                        .and_then(|key| key.to_raw().ok())
+                        .unwrap_or_default();
+                    // Normalize to [lower, upper) regardless of scan direction.
+                    if reverse_scan {
+                        vec![(end, start)]
+                    } else {
+                        vec![(start, end)]
+                    }
+                })
+                .unwrap_or_default(),
         );
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
@@ -1700,16 +1710,18 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
             &ctx,
-            vec![(
-                match &start_key {
-                    Some(k) => k.as_encoded().to_vec(),
-                    None => vec![],
-                },
-                match &end_key {
-                    Some(k) => k.as_encoded().to_vec(),
-                    None => vec![],
-                },
-            )],
+            start_key
+                .as_ref()
+                .map(|key| key.to_raw())
+                .transpose()
+                .and_then(|start| {
+                    end_key
+                        .as_ref()
+                        .map(|key| key.to_raw())
+                        .transpose()
+                        .map(|end| vec![(start.unwrap_or_default(), end.unwrap_or_default())])
+                })
+                .unwrap_or_default(),
         );
         let concurrency_manager = self.concurrency_manager.clone();
         // Do not allow replica read for scan_lock.
