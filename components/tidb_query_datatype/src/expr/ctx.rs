@@ -49,6 +49,9 @@ bitflags! {
         const DIVIDED_BY_ZERO_AS_WARNING = 1 << 8;
         /// `IN_LOAD_DATA_STMT` indicates if this is a LOAD DATA statement.
         const IN_LOAD_DATA_STMT = 1 << 10;
+
+        /// `ENABLE_SHORT_CIRCUIT_EXPRESSION` indicates whether the expression requires short-circuit calculation. 
+        const ENABLE_SHORT_CIRCUIT_EXPRESSION = 1 << 12;
     }
 }
 

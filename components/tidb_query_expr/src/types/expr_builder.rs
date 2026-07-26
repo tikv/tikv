@@ -10,7 +10,7 @@ use tidb_query_datatype::{
         data_type::*,
         mysql::{EnumDecoder, JsonDecoder, MAX_FSP, VectorFloat32Decoder},
     },
-    expr::EvalContext,
+    expr::{EvalContext, Flag},
     match_template_evaltype,
 };
 use tipb::{Expr, ExprType, FieldType, ScalarFuncSig};
@@ -333,57 +333,60 @@ where
     let args: Vec<_> = tree_node.take_children().into();
     let args_len = args.len();
 
-    if let Some(short_circuit_func_meta) = short_circuit_func_meta {
-        let mut parsed_args = Vec::with_capacity(args_len);
-        for arg in args {
-            let mut arg_nodes = Vec::new();
-            append_rpn_nodes_recursively(
-                arg,
-                &mut arg_nodes,
-                ctx,
-                fn_mapper,
-                sc_fn_mapper,
-                max_columns,
-            )?;
-            parsed_args.push(arg_nodes);
-        }
-
-        if is_short_circuit_worthwhile(short_circuit_func_meta, &parsed_args) {
-            let mut short_circuit_args = Vec::with_capacity(args_len);
-            for arg_nodes in parsed_args {
-                append_short_circuit_arg(
-                    short_circuit_func_meta,
-                    arg_nodes,
-                    &mut short_circuit_args,
-                );
+    match short_circuit_func_meta {
+        Some(short_circuit_func_meta) if ctx.cfg.flag.contains(Flag::ENABLE_SHORT_CIRCUIT_EXPRESSION) => {
+            let mut parsed_args = Vec::with_capacity(args_len);
+            for arg in args {
+                let mut arg_nodes = Vec::new();
+                append_rpn_nodes_recursively(
+                    arg,
+                    &mut arg_nodes,
+                    ctx,
+                    fn_mapper,
+                    sc_fn_mapper,
+                    max_columns,
+                )?;
+                parsed_args.push(arg_nodes);
             }
 
-            rpn_nodes.push(RpnExpressionNode::ShortCircuitFnCall {
-                func_meta: short_circuit_func_meta,
-                args: short_circuit_args.into_boxed_slice(),
-                field_type: tree_node.take_field_type(),
-            });
-            return Ok(());
-        }
+            if is_short_circuit_worthwhile(short_circuit_func_meta, &parsed_args) {
+                let mut short_circuit_args = Vec::with_capacity(args_len);
+                for arg_nodes in parsed_args {
+                    append_short_circuit_arg(
+                        short_circuit_func_meta,
+                        arg_nodes,
+                        &mut short_circuit_args,
+                    );
+                }
 
-        // The children have already been converted to RPN while deciding whether
-        // short-circuit evaluation is worthwhile. Reuse them for the regular call
-        // instead of traversing the expression tree again.
-        for mut arg_nodes in parsed_args {
-            rpn_nodes.append(&mut arg_nodes);
+                rpn_nodes.push(RpnExpressionNode::ShortCircuitFnCall {
+                    func_meta: short_circuit_func_meta,
+                    args: short_circuit_args.into_boxed_slice(),
+                    field_type: tree_node.take_field_type(),
+                });
+                return Ok(());
+            }
+
+            // The children have already been converted to RPN while deciding whether
+            // short-circuit evaluation is worthwhile. Reuse them for the regular call
+            // instead of traversing the expression tree again.
+            for mut arg_nodes in parsed_args {
+                rpn_nodes.append(&mut arg_nodes);
+            }
         }
-    } else {
-        // Visit children first, then push current node, so that it is a post-order
-        // traversal.
-        for arg in args {
-            append_rpn_nodes_recursively(
-                arg,
-                rpn_nodes,
-                ctx,
-                fn_mapper,
-                sc_fn_mapper,
-                max_columns,
-            )?;
+        _ => {
+            // Visit children first, then push current node, so that it is a post-order
+            // traversal.
+            for arg in args {
+                append_rpn_nodes_recursively(
+                    arg,
+                    rpn_nodes,
+                    ctx,
+                    fn_mapper,
+                    sc_fn_mapper,
+                    max_columns,
+                )?;
+            }
         }
     }
 
