@@ -564,6 +564,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             futures_timer::Delay::new(delay).await;
             guard.release();
             let cid = sched.inner.gen_id();
+            TXN_FLIGHT_RECORDER.record_received(&cmd, cid);
             if let Ok(task) = Task::allocate(cid, cmd, mem_quota) {
                 sched.schedule_command(task, cb, None);
             } else {
@@ -577,7 +578,6 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     }
 
     pub(in crate::storage) fn run_cmd(&self, cmd: Command, callback: StorageCallback) {
-        TXN_FLIGHT_RECORDER.record_received(&cmd);
         let tag = cmd.tag();
         // write flow control
         //
@@ -602,6 +602,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             _ => {}
         }
         let cid = self.inner.gen_id();
+        // Record after `gen_id` so the Received event shares the command's cid
+        // with its subsequent lock/write events.
+        TXN_FLIGHT_RECORDER.record_received(&cmd, cid);
         if let Ok(task) = Task::allocate(cid, cmd, self.inner.memory_quota.clone()) {
             self.schedule_command(
                 task,
