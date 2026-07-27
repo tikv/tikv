@@ -274,6 +274,10 @@ impl TxnCommandEventMetadata {
                 event.commit_ts = commit_ts.into_inner();
                 event.write_type = Some(write.write_type);
                 event.txn_start_ts = write.start_ts.into_inner();
+                // An overlapped rollback reuses the older transaction's write
+                // record; without this flag the event looks like a normal
+                // commit of that older transaction at `commit_ts`.
+                event.has_overlapped_rollback = write.has_overlapped_rollback;
                 Some(event)
             }
             Modify::Delete(cf, key) if *cf == CF_WRITE => {
@@ -342,6 +346,7 @@ pub(crate) struct TxnCommandEvent {
     pessimistic_action: Option<PrewriteRequestPessimisticAction>,
     lock_type: Option<LockType>,
     write_type: Option<WriteType>,
+    has_overlapped_rollback: bool,
     generation: u64,
 }
 
@@ -379,6 +384,7 @@ impl TxnCommandEvent {
             pessimistic_action: None,
             lock_type: None,
             write_type: None,
+            has_overlapped_rollback: false,
             generation: 0,
         }
     }
@@ -438,8 +444,8 @@ impl TxnCommandFlightRecorder {
     }
 
     #[inline]
-    pub(crate) fn record_received(&self, cmd: &Command) {
-        if let Some(metadata) = self.command_metadata(cmd, 0, None) {
+    pub(crate) fn record_received(&self, cmd: &Command, cid: u64) {
+        if let Some(metadata) = self.command_metadata(cmd, cid, None) {
             self.record(
                 metadata
                     .keys
@@ -642,6 +648,23 @@ mod tests {
         let events = metadata.events_for_modifies(&modifies);
         assert_eq!(events.len(), 2);
         assert!(events.iter().all(|event| event.key_hash == key_hash));
+        assert!(events.iter().all(|event| !event.has_overlapped_rollback));
+
+        // An overlapped rollback record keeps the older transaction's write
+        // type/start_ts; the event must carry the flag so it is not mistaken
+        // for a normal commit of that older transaction.
+        let overlapped =
+            Write::new(WriteType::Put, 10.into(), None).set_overlapped_rollback(true, None);
+        let events = metadata.events_for_modifies(&[Modify::Put(
+            CF_WRITE,
+            key.clone().append_ts(30.into()),
+            overlapped.as_ref().to_bytes(),
+        )]);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, TxnCommandEventKind::PutWrite);
+        assert_eq!(events[0].commit_ts, 30);
+        assert_eq!(events[0].txn_start_ts, 10);
+        assert!(events[0].has_overlapped_rollback);
     }
 
     #[test]
