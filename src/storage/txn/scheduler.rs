@@ -1871,11 +1871,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             false
         };
         let txn_ext = snapshot.ext().get_txn_ext().cloned();
-        let flight_metadata = TXN_FLIGHT_RECORDER.command_metadata(
-            task.cmd(),
-            cid,
-            snapshot.ext().get_data_version(),
-        );
+        let flight_metadata = if TXN_FLIGHT_RECORDER.is_enabled() {
+            TXN_FLIGHT_RECORDER.command_metadata(task.cmd(), cid, snapshot.ext().get_data_version())
+        } else {
+            None
+        };
         let deadline = task.cmd().deadline();
         let write_result = Self::handle_task(self.clone(), snapshot, task, sched_details).await;
 
