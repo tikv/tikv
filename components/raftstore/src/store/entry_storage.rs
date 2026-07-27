@@ -416,6 +416,16 @@ struct TermCache {
     capacity: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TermLookupSource {
+    TruncatedState,
+    LastTermRange,
+    LastIndex,
+    EntryCache,
+    TermCache,
+    RaftEngine,
+}
+
 impl Default for TermCache {
     fn default() -> Self {
         TermCache {
@@ -781,6 +791,8 @@ pub struct EntryStorage<EK: KvEngine, ER> {
     read_scheduler: Scheduler<ReadTask<EK>>,
     raftlog_fetch_stats: AsyncFetchStats,
     async_fetch_results: RefCell<HashMap<u64, RaftlogFetchState>>,
+    last_commit_index: u64,
+    last_commit_term: u64,
 
     io_read_raft_term: LocalHistogram,
     io_read_raft_fetch_log: LocalHistogram,
@@ -819,6 +831,8 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
             read_scheduler,
             raftlog_fetch_stats: AsyncFetchStats::default(),
             async_fetch_results: RefCell::new(HashMap::default()),
+            last_commit_index: 0,
+            last_commit_term: 0,
             io_read_raft_term: raft_metrics.io_read_raft_term.clone(),
             io_read_raft_fetch_log: raft_metrics.io_read_raft_fetch_log.clone(),
         })
@@ -1094,23 +1108,26 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
         Ok(ents)
     }
 
-    pub fn term(&self, idx: u64) -> raft::Result<u64> {
+    fn term_with_source(&self, idx: u64) -> raft::Result<(u64, TermLookupSource)> {
         if idx == self.truncated_index() {
-            return Ok(self.truncated_term());
+            return Ok((self.truncated_term(), TermLookupSource::TruncatedState));
         }
         self.check_range(idx, idx + 1)?;
-        if self.truncated_term() == self.last_term || idx == self.last_index() {
-            return Ok(self.last_term);
+        if self.truncated_term() == self.last_term {
+            return Ok((self.last_term, TermLookupSource::LastTermRange));
+        }
+        if idx == self.last_index() {
+            return Ok((self.last_term, TermLookupSource::LastIndex));
         }
         if let Some(e) = self.cache.entry(idx) {
-            Ok(e.get_term())
+            Ok((e.get_term(), TermLookupSource::EntryCache))
         } else {
             // Try to fetch it from caching terms.
             if let Some(term) = self.term_cache.entry(idx) {
-                return Ok(term);
+                return Ok((term, TermLookupSource::TermCache));
             }
             let _timer = self.io_read_raft_term.start_timer();
-            Ok(self
+            let term = self
                 .raft_engine
                 .get_entry(self.region_id, idx)
                 .unwrap()
@@ -1120,8 +1137,75 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
                         self.region_id, self.peer_id
                     )
                 })
-                .get_term())
+                .get_term();
+            Ok((term, TermLookupSource::RaftEngine))
         }
+    }
+
+    pub fn term(&self, idx: u64) -> raft::Result<u64> {
+        self.term_with_source(idx).map(|(term, _)| term)
+    }
+
+    /// Returns the term of a commit index and records enough context to
+    /// diagnose a commit state regression without adding RaftEngine reads
+    /// to the normal path.
+    pub fn commit_term(
+        &mut self,
+        idx: u64,
+        raft_committed: u64,
+        raft_persisted: u64,
+    ) -> raft::Result<u64> {
+        let (term, source) = self.term_with_source(idx)?;
+        if idx < self.last_commit_index || term < self.last_commit_term {
+            // These reads only happen after detecting an invariant violation. Comparing
+            // the cached result with RaftEngine tells us whether the bad term came from
+            // an in-memory lookup or had already reached the persisted Raft log.
+            let previous_raft_engine_term = self
+                .raft_engine
+                .get_entry(self.region_id, self.last_commit_index)
+                .map(|entry| entry.map(|entry| entry.get_term()));
+            let current_raft_engine_term = self
+                .raft_engine
+                .get_entry(self.region_id, idx)
+                .map(|entry| entry.map(|entry| entry.get_term()));
+            let entry_cache_term = |index: u64| {
+                let first_index = self.cache.first_index()?;
+                let offset = index.checked_sub(first_index)? as usize;
+                self.cache.cache.get(offset).map(|entry| entry.get_term())
+            };
+            let previous_entry_cache_term = entry_cache_term(self.last_commit_index);
+            let current_entry_cache_term = entry_cache_term(idx);
+
+            error!(
+                "commit state lookup moved backward";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer_id,
+                "previous_index" => self.last_commit_index,
+                "previous_term" => self.last_commit_term,
+                "current_index" => idx,
+                "current_term" => term,
+                "current_source" => ?source,
+                "raft_committed" => raft_committed,
+                "raft_persisted" => raft_persisted,
+                "previous_raft_engine_term" => ?previous_raft_engine_term,
+                "current_raft_engine_term" => ?current_raft_engine_term,
+                "previous_entry_cache_term" => ?previous_entry_cache_term,
+                "current_entry_cache_term" => ?current_entry_cache_term,
+                "term_cache" => ?self.term_cache.cache,
+                "entry_cache_first_index" => ?self.cache.first_index(),
+                "entry_cache_persisted" => self.cache.persisted,
+                "truncated_index" => self.truncated_index(),
+                "truncated_term" => self.truncated_term(),
+                "last_index" => self.last_index(),
+                "last_term" => self.last_term,
+                "raft_state" => ?self.raft_state,
+                "apply_state" => ?self.apply_state,
+            );
+        }
+
+        self.last_commit_index = idx;
+        self.last_commit_term = term;
+        Ok(term)
     }
 
     #[inline]
@@ -1423,6 +1507,8 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
     pub fn clear(&mut self) {
         self.cache = EntryCache::default();
         self.term_cache = TermCache::default();
+        self.last_commit_index = 0;
+        self.last_commit_term = 0;
     }
 
     pub fn read_scheduler(&self) -> Scheduler<ReadTask<EK>> {
@@ -1697,6 +1783,43 @@ pub mod tests {
             assert_eq!(cache.entry(18), None);
             assert_eq!(cache.entry(19), Some(9));
         }
+    }
+
+    #[test]
+    fn test_commit_term_lookup_tracks_regression_source() {
+        let ents = vec![
+            new_entry(3, 3),
+            new_entry(4, 10),
+            new_entry(5, 10),
+            new_entry(6, 10),
+        ];
+        let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
+        let region_worker = Worker::new("snap-manager").lazy_build("snap-manager");
+        let region_scheduler = region_worker.scheduler();
+        let (dummy_scheduler, _rx) = dummy_scheduler();
+        let mut store = new_storage_from_ents(region_scheduler, dummy_scheduler, &td, &ents);
+
+        store.cache.compact_to(7);
+        store.term_cache = TermCache::default();
+
+        assert_eq!(store.commit_term(4, 4, 6), Ok(10));
+        assert_eq!(store.last_commit_index, 4);
+        assert_eq!(store.last_commit_term, 10);
+
+        // Model a stale TermCache entry: the persisted log says term 10, while
+        // TermCache reports term 9 for a larger commit index.
+        store.term_cache.append(5, 9);
+        assert_eq!(
+            store.term_with_source(5),
+            Ok((9, TermLookupSource::TermCache))
+        );
+        assert_eq!(store.commit_term(5, 5, 6), Ok(9));
+        assert_eq!(store.last_commit_index, 5);
+        assert_eq!(store.last_commit_term, 9);
+
+        store.clear();
+        assert_eq!(store.last_commit_index, 0);
+        assert_eq!(store.last_commit_term, 0);
     }
 
     #[test]

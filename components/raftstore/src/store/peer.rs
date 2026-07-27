@@ -3324,11 +3324,13 @@ where
             // Note that the `commit_index` and `commit_term` here may be used to
             // forward the commit index. So it must be less than or equal to persist
             // index.
-            let commit_index = cmp::min(
-                self.raft_group.raft.raft_log.committed,
-                self.raft_group.raft.raft_log.persisted,
-            );
-            let commit_term = self.get_store().term(commit_index).unwrap();
+            let raft_committed = self.raft_group.raft.raft_log.committed;
+            let raft_persisted = self.raft_group.raft.raft_log.persisted;
+            let commit_index = cmp::min(raft_committed, raft_persisted);
+            let commit_term = self
+                .mut_store()
+                .commit_term(commit_index, raft_committed, raft_persisted)
+                .unwrap();
 
             let mut apply = Apply::new(
                 self.peer_id(),

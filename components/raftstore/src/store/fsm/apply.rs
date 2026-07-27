@@ -3640,12 +3640,37 @@ impl<C: WriteCallback> Apply<C> {
                 self.bucket_meta = other.bucket_meta.take();
             }
 
-            assert!(other.term >= self.term);
-            self.term = other.term;
+            assert!(
+                other.term >= self.term,
+                "raft term moved backward for region {} peer {}: current {}, incoming {}",
+                self.region_id,
+                self.peer_id,
+                self.term,
+                other.term,
+            );
+            assert!(
+                other.commit_index >= self.commit_index,
+                "commit index moved backward for region {} peer {}: current ({}, {}), incoming ({}, {})",
+                self.region_id,
+                self.peer_id,
+                self.commit_index,
+                self.commit_term,
+                other.commit_index,
+                other.commit_term,
+            );
+            assert!(
+                other.commit_term >= self.commit_term,
+                "commit term moved backward for region {} peer {}: current ({}, {}), incoming ({}, {})",
+                self.region_id,
+                self.peer_id,
+                self.commit_index,
+                self.commit_term,
+                other.commit_index,
+                other.commit_term,
+            );
 
-            assert!(other.commit_index >= self.commit_index);
+            self.term = other.term;
             self.commit_index = other.commit_index;
-            assert!(other.commit_term >= self.commit_term);
             self.commit_term = other.commit_term;
 
             self.entries.append(&mut other.entries);
@@ -4159,9 +4184,24 @@ where
         );
         let cur_state = (apply.commit_index, apply.commit_term);
         if prev_state.0 > cur_state.0 || prev_state.1 > cur_state.1 {
+            let previous_raft_engine_term = self
+                .delegate
+                .raft_engine
+                .get_entry(self.delegate.region_id(), prev_state.0)
+                .map(|entry| entry.map(|entry| entry.get_term()));
+            let current_raft_engine_term = self
+                .delegate
+                .raft_engine
+                .get_entry(self.delegate.region_id(), cur_state.0)
+                .map(|entry| entry.map(|entry| entry.get_term()));
             panic!(
-                "{} commit state jump backward {:?} -> {:?}",
-                self.delegate.tag, prev_state, cur_state
+                "{} commit state jump backward {:?} -> {:?}, raft term {}, raft engine terms {:?} -> {:?}",
+                self.delegate.tag,
+                prev_state,
+                cur_state,
+                apply.term,
+                previous_raft_engine_term,
+                current_raft_engine_term,
             );
         }
         self.delegate.apply_state.set_commit_index(cur_state.0);
