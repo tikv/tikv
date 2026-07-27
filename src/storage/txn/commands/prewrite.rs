@@ -37,6 +37,7 @@ use crate::storage::{
             Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand,
             WriteContext, WriteResult,
         },
+        flight_recorder::TXN_COMMAND_FLIGHT_RECORDER,
     },
     types::PrewriteResult,
 };
@@ -509,15 +510,14 @@ impl<K: PrewriteKind> Prewriter<K> {
             let committed_ts = context
                 .txn_status_cache
                 .get_committed_no_promote(self.start_ts);
-            crate::storage::txn::flight_recorder::TXN_COMMAND_FLIGHT_RECORDER
-                .record_txn_status_cache_lookup(
-                    self.mutations.iter().map(MutationLock::key),
-                    &self.primary,
-                    self.start_ts,
-                    committed_ts,
-                    &self.ctx,
-                    snapshot.ext().get_data_version(),
-                );
+            TXN_COMMAND_FLIGHT_RECORDER.record_txn_status_cache_lookup(
+                self.mutations.iter().map(MutationLock::key),
+                &self.primary,
+                self.start_ts,
+                committed_ts,
+                &self.ctx,
+                snapshot.ext().get_data_version(),
+            );
             if let Some(commit_ts) = committed_ts {
                 fail_point!("before_prewrite_txn_status_cache_hit");
                 if self.ctx.is_retry_request {

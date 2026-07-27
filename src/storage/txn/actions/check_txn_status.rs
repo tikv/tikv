@@ -10,6 +10,7 @@ use crate::storage::{
         ErrorInner, LockType, MvccTxn, ReleasedLock, Result, SnapshotReader, TxnCommitRecord,
         metrics::MVCC_CHECK_TXN_STATUS_COUNTER_VEC, reader::OverlappedWrite,
     },
+    txn::flight_recorder::TXN_COMMAND_FLIGHT_RECORDER,
 };
 
 // The returned `TxnStatus` is Some(..) if the transaction status is already
@@ -532,10 +533,8 @@ fn panic_txn_record_found(
             ext.get_data_version().unwrap_or(0),
         )
     };
-    let flight_events =
-        crate::storage::txn::flight_recorder::TXN_COMMAND_FLIGHT_RECORDER.events_for_key(key);
-    let overwritten_events =
-        crate::storage::txn::flight_recorder::TXN_COMMAND_FLIGHT_RECORDER.overwritten_events();
+    let flight_events = TXN_COMMAND_FLIGHT_RECORDER.events_for_key(key);
+    let overwritten_events = TXN_COMMAND_FLIGHT_RECORDER.overwritten_events();
 
     error!(
         "txn record found but not expected: diagnostic summary";

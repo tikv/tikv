@@ -18,7 +18,11 @@ use tikv_util::{
 use crate::{
     config::ConfigurableDb,
     server::{CONFIG_ROCKSDB_GAUGE, ttl::TtlCheckerTask},
-    storage::{TxnScheduler, lock_manager::LockManager, txn::flow_controller::FlowController},
+    storage::{
+        TxnScheduler,
+        lock_manager::LockManager,
+        txn::{flight_recorder::TXN_COMMAND_FLIGHT_RECORDER, flow_controller::FlowController},
+    },
 };
 
 pub struct StorageConfigManger<E: Engine, K, L: LockManager> {
@@ -94,7 +98,7 @@ impl<EK: Engine, K: ConfigurableDb, L: LockManager> ConfigManager
         }
         if let Some(v) = change.remove("enable_txn_command_flight_recorder") {
             let enabled: bool = v.into();
-            crate::storage::txn::flight_recorder::TXN_COMMAND_FLIGHT_RECORDER.set_enabled(enabled);
+            TXN_COMMAND_FLIGHT_RECORDER.set_enabled(enabled);
         }
         if let Some(ConfigValue::Module(mut io_rate_limit)) = change.remove("io_rate_limit") {
             let limiter = match get_io_rate_limiter() {
