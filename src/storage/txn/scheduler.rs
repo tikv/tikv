@@ -549,6 +549,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         cmd: Command,
         callback: StorageCallback,
         delay: Duration,
+        cid: u64,
     ) {
         let tag = cmd.tag();
         let sched = self.clone();
@@ -563,8 +564,6 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             let mut guard = rm.delay_slot_guard();
             futures_timer::Delay::new(delay).await;
             guard.release();
-            let cid = sched.inner.gen_id();
-            TXN_FLIGHT_RECORDER.record_received(&cmd, cid);
             if let Ok(task) = Task::allocate(cid, cmd, mem_quota) {
                 sched.schedule_command(task, cb, None);
             } else {
@@ -578,6 +577,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     }
 
     pub(in crate::storage) fn run_cmd(&self, cmd: Command, callback: StorageCallback) {
+        // Allocate the cid and record at arrival, so the Received event keeps
+        // the command's true arrival time, shares its cid with subsequent
+        // lock/write events, and also covers commands rejected below.
+        let cid = self.inner.gen_id();
+        TXN_FLIGHT_RECORDER.record_received(&cmd, cid);
         let tag = cmd.tag();
         // write flow control
         //
@@ -596,15 +600,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 return;
             }
             Some(resource_control::AdmissionDecision::Delay(delay)) => {
-                self.schedule_after_admission_delay(cmd, callback, delay);
+                self.schedule_after_admission_delay(cmd, callback, delay, cid);
                 return;
             }
             _ => {}
         }
-        let cid = self.inner.gen_id();
-        // Record after `gen_id` so the Received event shares the command's cid
-        // with its subsequent lock/write events.
-        TXN_FLIGHT_RECORDER.record_received(&cmd, cid);
         if let Ok(task) = Task::allocate(cid, cmd, self.inner.memory_quota.clone()) {
             self.schedule_command(
                 task,
