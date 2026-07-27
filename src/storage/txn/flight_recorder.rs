@@ -494,6 +494,12 @@ impl TxnCommandFlightRecorder {
         }))
     }
 
+    /// Records a txn-status-cache lookup observed while processing a prewrite.
+    ///
+    /// The command cid is not plumbed into command processing, so the event
+    /// keeps `cid == 0` as an auxiliary record; correlate it with the owning
+    /// command through its key hash, `txn_start_ts`, `is_retry_request`, and
+    /// timestamp.
     pub(crate) fn record_txn_status_cache_lookup<'a>(
         &self,
         keys: impl IntoIterator<Item = &'a Key>,
