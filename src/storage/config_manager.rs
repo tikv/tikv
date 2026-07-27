@@ -25,7 +25,7 @@ use crate::{
     storage::{
         TxnScheduler,
         lock_manager::LockManager,
-        txn::{flight_recorder::TXN_COMMAND_FLIGHT_RECORDER, flow_controller::FlowController},
+        txn::{flight_recorder::TXN_FLIGHT_RECORDER, flow_controller::FlowController},
     },
 >>>>>>> 78d1887b9 (u)
 };
@@ -101,10 +101,6 @@ impl<EK: Engine, K: ConfigurableDb, L: LockManager> ConfigManager
             let cap: ReadableSize = v.into();
             self.scheduler.set_memory_quota_capacity(cap.0 as usize);
         }
-        if let Some(v) = change.remove("enable_txn_command_flight_recorder") {
-            let enabled: bool = v.into();
-            TXN_COMMAND_FLIGHT_RECORDER.set_enabled(enabled);
-        }
         if let Some(ConfigValue::Module(mut io_rate_limit)) = change.remove("io_rate_limit") {
             let limiter = match get_io_rate_limiter() {
                 None => return Err("IO rate limiter is not present".into()),
@@ -123,6 +119,7 @@ impl<EK: Engine, K: ConfigurableDb, L: LockManager> ConfigManager
                 }
             }
         }
+<<<<<<< HEAD
         if let Some(v) = change.remove("action_on_invalid_max_ts") {
             let str_v: String = v.into();
             let action: concurrency_manager::ActionOnInvalidMaxTs = str_v.try_into()?;
@@ -132,6 +129,11 @@ impl<EK: Engine, K: ConfigurableDb, L: LockManager> ConfigManager
         if let Some(v) = change.remove("max_ts_drift_allowance") {
             let dur_v: ReadableDuration = v.into();
             self.concurrency_manager.set_max_ts_drift_allowance(dur_v.0);
+=======
+        dispatch_max_ts_config_change(&self.concurrency_manager, &mut change)?;
+        if let Some(v) = change.remove("enable_txn_command_flight_recorder") {
+            TXN_FLIGHT_RECORDER.set_enabled(v.into());
+>>>>>>> 958078793 (record primary key command)
         }
         Ok(())
     }

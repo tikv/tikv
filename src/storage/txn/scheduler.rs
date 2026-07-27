@@ -85,7 +85,7 @@ use crate::{
                 Command, RawExt, ReleasedLocks, ResponsePolicy, WriteContext, WriteResult,
                 WriteResultLockInfo,
             },
-            flight_recorder::{TXN_COMMAND_FLIGHT_RECORDER, TxnCommandEvent},
+            flight_recorder::{TXN_FLIGHT_RECORDER, TxnCommandEvent},
             flow_controller::FlowController,
             latch::{Latches, Lock},
             sched_pool::{tls_collect_query, tls_collect_scan_details, SchedPool},
@@ -525,7 +525,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     }
 
     pub(in crate::storage) fn run_cmd(&self, cmd: Command, callback: StorageCallback) {
-        TXN_COMMAND_FLIGHT_RECORDER.record_received(&cmd);
+        TXN_FLIGHT_RECORDER.record_received(&cmd);
         let tag = cmd.tag();
         // write flow control
         //
@@ -1531,7 +1531,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     engine.schedule_txn_extra(to_be_write.extra);
                 })
             }
-            TXN_COMMAND_FLIGHT_RECORDER.record_in_memory_pessimistic_locks(flight_events);
+            TXN_FLIGHT_RECORDER.record_in_memory_pessimistic_locks(flight_events);
             txn_scheduler.on_write_finished(
                 cid,
                 Some(pr),
@@ -1793,7 +1793,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     fail_point!("scheduler_async_write_finish");
                     let ok = res.is_ok();
                     if ok {
-                        TXN_COMMAND_FLIGHT_RECORDER.record_persistent_modifies(flight_events);
+                        TXN_FLIGHT_RECORDER.record_persistent_modifies(flight_events);
                     }
 
                     txn_scheduler.on_write_finished(
@@ -1871,7 +1871,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             false
         };
         let txn_ext = snapshot.ext().get_txn_ext().cloned();
-        let flight_metadata = TXN_COMMAND_FLIGHT_RECORDER.command_metadata(
+        let flight_metadata = TXN_FLIGHT_RECORDER.command_metadata(
             task.cmd(),
             cid,
             snapshot.ext().get_data_version(),
@@ -1899,7 +1899,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             Ok(res) => res,
         };
         let flight_events = flight_metadata
-            .map(|metadata| metadata.events_for_modifies(&write_result.to_be_write.modifies))
+            .map(|mut metadata| {
+                metadata
+                    .set_primary_key_hash(write_result.released_locks.flight_primary_key_hash());
+                metadata.events_for_modifies(&write_result.to_be_write.modifies)
+            })
             .unwrap_or_default();
         SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
         debug!("process_write task handle result";

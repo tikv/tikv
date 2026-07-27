@@ -36,10 +36,14 @@ use crate::storage::{
             WriteContext, WriteResult,
         },
 <<<<<<< HEAD
+<<<<<<< HEAD
         Error, ErrorInner, Result,
 =======
         flight_recorder::TXN_COMMAND_FLIGHT_RECORDER,
 >>>>>>> 78d1887b9 (u)
+=======
+        flight_recorder::TXN_FLIGHT_RECORDER,
+>>>>>>> 958078793 (record primary key command)
     },
     types::PrewriteResult,
     Context, Error as StorageError, ProcessResult, Snapshot,
@@ -513,7 +517,7 @@ impl<K: PrewriteKind> Prewriter<K> {
             let committed_ts = context
                 .txn_status_cache
                 .get_committed_no_promote(self.start_ts);
-            TXN_COMMAND_FLIGHT_RECORDER.record_txn_status_cache_lookup(
+            TXN_FLIGHT_RECORDER.record_txn_status_cache_lookup(
                 self.mutations.iter().map(MutationLock::key),
                 &self.primary,
                 self.start_ts,
