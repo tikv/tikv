@@ -50,7 +50,8 @@ bitflags! {
         /// `IN_LOAD_DATA_STMT` indicates if this is a LOAD DATA statement.
         const IN_LOAD_DATA_STMT = 1 << 10;
 
-        /// `ENABLE_SHORT_CIRCUIT_EXPRESSION` indicates whether the expression requires short-circuit calculation. 
+        /// `ENABLE_SHORT_CIRCUIT_EXPRESSION` enables short-circuit evaluation for logical
+        /// expressions that benefit from lazy argument evaluation.
         const ENABLE_SHORT_CIRCUIT_EXPRESSION = 1 << 12;
     }
 }
@@ -347,6 +348,17 @@ mod tests {
     use std::sync::Arc;
 
     use super::{super::Error, *};
+
+    #[test]
+    fn test_short_circuit_flag_from_dag_request() {
+        assert_eq!(Flag::ENABLE_SHORT_CIRCUIT_EXPRESSION.bits(), 1 << 12);
+
+        let mut req = DagRequest::default();
+        req.set_flags(Flag::ENABLE_SHORT_CIRCUIT_EXPRESSION.bits());
+
+        let cfg = EvalConfig::from_request(&req).unwrap();
+        assert!(cfg.flag.contains(Flag::ENABLE_SHORT_CIRCUIT_EXPRESSION));
+    }
 
     #[test]
     fn test_handle_truncate() {

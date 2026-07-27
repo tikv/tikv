@@ -270,6 +270,7 @@ impl RpnExpression {
         // A single-node expression does not need the temporary RPN stack below.
         // This is especially common for short-circuit arguments such as constants
         // and column references, so evaluate it directly to avoid a heap allocation.
+        // TODO: Maybe import SmallVec is better?
         if self.len() == 1 {
             let (_, result) = Self::eval_one_node(
                 ctx,
@@ -283,7 +284,7 @@ impl RpnExpression {
             return Ok(result);
         }
 
-        // Is this stack can be reused?
+        // TODO: Is this stack can be reused?
         let mut stack = Vec::with_capacity(self.len());
 
         for node in self.as_ref() {
@@ -393,7 +394,10 @@ impl RpnExpression {
 mod tests {
     #![allow(clippy::float_cmp)]
 
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     use test::{Bencher, black_box};
     use tidb_query_codegen::rpn_fn;
@@ -405,15 +409,21 @@ mod tests {
             data_type::*,
             datum::{Datum, DatumEncoder},
         },
-        expr::EvalContext,
+        expr::{EvalConfig, EvalContext, Flag},
     };
-    use tipb::FieldType;
+    use tipb::{FieldType, ScalarFuncSig};
     use tipb_helper::ExprDefBuilder;
 
     use super::*;
     use crate::{RpnExpressionBuilder, RpnFnMeta, impl_arithmetic::*, impl_compare::*};
 
     static SHORT_CIRCUIT_RHS_EVAL_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    fn short_circuit_context() -> EvalContext {
+        EvalContext::new(Arc::new(EvalConfig::from_flag(
+            Flag::ENABLE_SHORT_CIRCUIT_EXPRESSION,
+        )))
+    }
 
     #[rpn_fn(nullable)]
     fn short_circuit_counted_identity(v: Option<&Int>) -> Result<Option<Int>> {
@@ -479,11 +489,13 @@ mod tests {
                         .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::LongLong)),
                 )
                 .build();
-            let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 2)
-                .unwrap();
+            let mut ctx = short_circuit_context();
+            let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper_and_ctx(
+                node, &mut ctx, fn_mapper, 2,
+            )
+            .unwrap();
             let mut columns = LazyBatchColumnVec::from(vec![int_column(lhs), int_column(rhs)]);
             let schema = &[FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()];
-            let mut ctx = EvalContext::default();
 
             SHORT_CIRCUIT_RHS_EVAL_COUNT.store(0, Ordering::SeqCst);
             let result = exp
@@ -610,9 +622,11 @@ mod tests {
                     .push_child(ExprDefBuilder::constant_int(0)),
             )
             .build();
-        let exp =
-            RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0).unwrap();
-        let mut ctx = EvalContext::default();
+        let mut ctx = short_circuit_context();
+        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper_and_ctx(
+            node, &mut ctx, fn_mapper, 0,
+        )
+        .unwrap();
         let mut columns = LazyBatchColumnVec::empty();
 
         let result = exp.eval(&mut ctx, &[], &mut columns, &[], 10).unwrap();
@@ -639,10 +653,8 @@ mod tests {
                 .push_child(constant(lhs))
                 .push_child(constant(rhs))
                 .build();
-            let exp =
-                RpnExpressionBuilder::build_from_expr_tree(node, &mut EvalContext::default(), 0)
-                    .unwrap();
-            let mut ctx = EvalContext::default();
+            let mut ctx = short_circuit_context();
+            let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut ctx, 0).unwrap();
             let mut columns = LazyBatchColumnVec::empty();
 
             let result = exp.eval(&mut ctx, &[], &mut columns, &[], 3).unwrap();
@@ -662,6 +674,38 @@ mod tests {
     }
 
     #[test]
+    fn test_short_circuit_suppresses_cast_warning() {
+        fn run_case(flag: Flag) -> usize {
+            let node = ExprDefBuilder::scalar_func(ScalarFuncSig::LogicalOr, FieldTypeTp::LongLong)
+                .push_child(ExprDefBuilder::constant_int(1))
+                .push_child(
+                    ExprDefBuilder::scalar_func(
+                        ScalarFuncSig::CastStringAsInt,
+                        FieldTypeTp::LongLong,
+                    )
+                    .push_child(ExprDefBuilder::constant_bytes(b"invalid-int".to_vec())),
+                )
+                .build();
+            let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(flag)));
+            let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut ctx, 0).unwrap();
+            let mut columns = LazyBatchColumnVec::empty();
+
+            let result = exp.eval(&mut ctx, &[], &mut columns, &[], 3).unwrap();
+            assert_eq!(
+                result.vector_value().unwrap().as_ref().to_int_vec(),
+                vec![Some(1); 3]
+            );
+            ctx.warnings.warning_cnt
+        }
+
+        assert_eq!(
+            run_case(Flag::ENABLE_SHORT_CIRCUIT_EXPRESSION | Flag::TRUNCATE_AS_WARNING),
+            0
+        );
+        assert!(run_case(Flag::TRUNCATE_AS_WARNING) > 0);
+    }
+
+    #[test]
     fn test_normal_parent_consumes_short_circuit_result() {
         use tipb::ScalarFuncSig;
 
@@ -669,19 +713,23 @@ mod tests {
             .push_child(
                 ExprDefBuilder::scalar_func(ScalarFuncSig::LogicalOr, FieldTypeTp::LongLong)
                     .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
-                    .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::LongLong)),
+                    .push_child(
+                        ExprDefBuilder::scalar_func(
+                            ScalarFuncSig::CastIntAsInt,
+                            FieldTypeTp::LongLong,
+                        )
+                        .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::LongLong)),
+                    ),
             )
             .push_child(ExprDefBuilder::constant_int(10))
             .build();
-        let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut EvalContext::default(), 2)
-            .unwrap();
+        let mut ctx = short_circuit_context();
+        let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut ctx, 2).unwrap();
         let mut columns = LazyBatchColumnVec::from(vec![
             VectorValue::Int(vec![Some(0), Some(1), None].into()),
             VectorValue::Int(vec![Some(0), None, Some(0)].into()),
         ]);
         let schema = &[FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()];
-        let mut ctx = EvalContext::default();
-
         let result = exp
             .eval(&mut ctx, schema, &mut columns, &[2, 0, 1], 3)
             .unwrap();
@@ -700,12 +748,18 @@ mod tests {
             .push_child(
                 ExprDefBuilder::scalar_func(ScalarFuncSig::LogicalOr, FieldTypeTp::LongLong)
                     .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
-                    .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::LongLong)),
+                    .push_child(
+                        ExprDefBuilder::scalar_func(
+                            ScalarFuncSig::CastIntAsInt,
+                            FieldTypeTp::LongLong,
+                        )
+                        .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::LongLong)),
+                    ),
             )
             .push_child(ExprDefBuilder::column_ref(2, FieldTypeTp::LongLong))
             .build();
-        let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut EvalContext::default(), 3)
-            .unwrap();
+        let mut ctx = short_circuit_context();
+        let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut ctx, 3).unwrap();
         let mut columns = LazyBatchColumnVec::from(vec![
             VectorValue::Int(vec![Some(1), Some(0), None, Some(0)].into()),
             VectorValue::Int(vec![Some(0), Some(0), Some(0), None].into()),
@@ -716,8 +770,6 @@ mod tests {
             FieldTypeTp::LongLong.into(),
             FieldTypeTp::LongLong.into(),
         ];
-        let mut ctx = EvalContext::default();
-
         let result = exp
             .eval(&mut ctx, schema, &mut columns, &[3, 1, 2, 0], 4)
             .unwrap();
@@ -740,8 +792,8 @@ mod tests {
             )
             .push_child(ExprDefBuilder::column_ref(2, FieldTypeTp::LongLong))
             .build();
-        let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut EvalContext::default(), 3)
-            .unwrap();
+        let mut ctx = short_circuit_context();
+        let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut ctx, 3).unwrap();
         let mut columns = LazyBatchColumnVec::from(vec![
             VectorValue::Int(vec![Some(1), Some(0), None, Some(0)].into()),
             VectorValue::Int(vec![Some(0), Some(0), Some(0), None].into()),
@@ -752,8 +804,6 @@ mod tests {
             FieldTypeTp::LongLong.into(),
             FieldTypeTp::LongLong.into(),
         ];
-        let mut ctx = EvalContext::default();
-
         let result = exp
             .eval(&mut ctx, schema, &mut columns, &[3, 1, 2, 0], 4)
             .unwrap();
@@ -783,8 +833,8 @@ mod tests {
             )
             .push_child(ExprDefBuilder::column_ref(3, FieldTypeTp::LongLong))
             .build();
-        let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut EvalContext::default(), 4)
-            .unwrap();
+        let mut ctx = short_circuit_context();
+        let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut ctx, 4).unwrap();
         let mut columns = LazyBatchColumnVec::from(vec![
             VectorValue::Int(vec![Some(1), Some(0), None, Some(0), Some(0), Some(1)].into()),
             VectorValue::Int(vec![Some(0); 6].into()),
@@ -797,8 +847,6 @@ mod tests {
             FieldTypeTp::LongLong.into(),
             FieldTypeTp::LongLong.into(),
         ];
-        let mut ctx = EvalContext::default();
-
         let result = exp
             .eval(&mut ctx, schema, &mut columns, &[5, 2, 0, 4, 1, 3], 6)
             .unwrap();

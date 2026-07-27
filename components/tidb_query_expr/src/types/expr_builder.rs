@@ -108,11 +108,31 @@ impl RpnExpressionBuilder {
     where
         F: Fn(&Expr) -> Result<RpnFnMeta> + Copy,
     {
+        Self::build_from_expr_tree_with_fn_mapper_and_ctx(
+            tree_node,
+            &mut EvalContext::default(),
+            fn_mapper,
+            max_columns,
+        )
+    }
+
+    /// Only used in tests, with a customized function mapper and evaluation
+    /// context. The context controls request flags used while building.
+    #[cfg(test)]
+    pub fn build_from_expr_tree_with_fn_mapper_and_ctx<F>(
+        tree_node: Expr,
+        ctx: &mut EvalContext,
+        fn_mapper: F,
+        max_columns: usize,
+    ) -> Result<RpnExpression>
+    where
+        F: Fn(&Expr) -> Result<RpnFnMeta> + Copy,
+    {
         let mut expr_nodes = Vec::new();
         append_rpn_nodes_recursively(
             tree_node,
             &mut expr_nodes,
-            &mut EvalContext::default(),
+            ctx,
             fn_mapper,
             super::super::map_expr_node_to_sc_func,
             max_columns,
@@ -334,7 +354,9 @@ where
     let args_len = args.len();
 
     match short_circuit_func_meta {
-        Some(short_circuit_func_meta) if ctx.cfg.flag.contains(Flag::ENABLE_SHORT_CIRCUIT_EXPRESSION) => {
+        Some(short_circuit_func_meta)
+            if ctx.cfg.flag.contains(Flag::ENABLE_SHORT_CIRCUIT_EXPRESSION) =>
+        {
             let mut parsed_args = Vec::with_capacity(args_len);
             for arg in args {
                 let mut arg_nodes = Vec::new();
@@ -405,19 +427,15 @@ fn should_flatten(father_func: ShortCircuitFnMeta, arg: &[RpnExpressionNode]) ->
         return false;
     }
 
-    match arg.last().unwrap() {
+    matches!(
+        arg.last().unwrap(),
         RpnExpressionNode::ShortCircuitFnCall {
             func_meta: son_func,
-            args,
             ..
         } if son_func.sig == father_func.sig
             && (son_func.sig == ScalarFuncSig::LogicalOr
-                || son_func.sig == ScalarFuncSig::LogicalAnd) =>
-        {
-            true
-        }
-        _ => false,
-    }
+                || son_func.sig == ScalarFuncSig::LogicalAnd)
+    )
 }
 
 /// Returns whether a binary AND/OR call benefits from short-circuit evaluation.
@@ -636,13 +654,24 @@ fn extract_scalar_value_vector_float32(val: Vec<u8>) -> Result<ScalarValue> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use tidb_query_codegen::rpn_fn;
     use tidb_query_common::Result;
-    use tidb_query_datatype::FieldTypeTp;
+    use tidb_query_datatype::{
+        FieldTypeTp,
+        expr::{EvalConfig, Flag},
+    };
     use tipb::ScalarFuncSig;
     use tipb_helper::ExprDefBuilder;
 
     use super::*;
+
+    fn short_circuit_context() -> EvalContext {
+        EvalContext::new(Arc::new(EvalConfig::from_flag(
+            Flag::ENABLE_SHORT_CIRCUIT_EXPRESSION,
+        )))
+    }
 
     /// An RPN function for test. It accepts 1 int argument, returns float.
     #[rpn_fn(nullable)]
@@ -969,8 +998,10 @@ mod tests {
             .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
             .build();
 
-        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
+        let mut ctx = short_circuit_context();
+        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper_and_ctx(
             node,
+            &mut ctx,
             crate::map_expr_node_to_rpn_func,
             1,
         )
@@ -997,8 +1028,22 @@ mod tests {
             .push_child(ExprDefBuilder::constant_int(3))
             .build();
 
-        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
+        let eager_exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
+            node.clone(),
+            crate::map_expr_node_to_rpn_func,
+            0,
+        )
+        .unwrap();
+        assert!(
+            eager_exp
+                .iter()
+                .all(|node| !matches!(node, RpnExpressionNode::ShortCircuitFnCall { .. }))
+        );
+
+        let mut ctx = short_circuit_context();
+        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper_and_ctx(
             node,
+            &mut ctx,
             crate::map_expr_node_to_rpn_func,
             0,
         )
@@ -1036,8 +1081,10 @@ mod tests {
             .push_child(ExprDefBuilder::column_ref(3, FieldTypeTp::LongLong))
             .build();
 
-        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
+        let mut ctx = short_circuit_context();
+        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper_and_ctx(
             node,
+            &mut ctx,
             crate::map_expr_node_to_rpn_func,
             4,
         )

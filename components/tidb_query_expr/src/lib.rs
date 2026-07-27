@@ -983,6 +983,7 @@ fn map_expr_node_to_sc_func(expr: &Expr) -> Option<ShortCircuitFnMeta> {
             sig: ScalarFuncSig::LogicalAnd,
             fn_ptr: sc_logical_and,
         }),
+        // TODO: Supports IF, IFPULL, CASE WHEN, COALESCE, etc
         _ => None,
     }
 }
