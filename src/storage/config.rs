@@ -133,7 +133,7 @@ impl Default for Config {
             reserve_space: ReadableSize::gb(DEFAULT_RESERVED_SPACE_GB),
             reserve_raft_space: ReadableSize::gb(DEFAULT_RESERVED_RAFT_SPACE_GB),
             enable_async_apply_prewrite: false,
-            enable_txn_command_flight_recorder: false,
+            enable_txn_command_flight_recorder: true,
             api_version: 1,
             enable_ttl: false,
             ttl_check_poll_interval: ReadableDuration::hours(12),
