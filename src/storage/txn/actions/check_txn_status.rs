@@ -1,8 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use engine_traits::CF_LOCK;
 use tikv_kv::SnapshotExt;
 // #[PerformanceCriticalPath]
-use txn_types::{Key, Lock, SharedLocks, TimeStamp, Write, WriteType};
+use txn_types::{Key, Lock, SharedLocks, TimeStamp, Write, WriteType, parse_lock};
 
 use crate::storage::{
     Snapshot, TxnStatus,
@@ -516,6 +517,68 @@ fn log_write_history(reader: &mut SnapshotReader<impl Snapshot>, key: &Key) {
 }
 
 #[cold]
+fn log_lock_sources(reader: &SnapshotReader<impl Snapshot>, key: &Key) {
+    let txn_ext = reader.reader.snapshot_ext().get_txn_ext().cloned();
+    match txn_ext {
+        Some(txn_ext) => match txn_ext.pessimistic_locks.try_read() {
+            Some(locks) => {
+                let entry = locks.get(key);
+                error!(
+                    "txn record found but not expected: panic-time in-memory pessimistic lock";
+                    "lock" => ?entry.map(|(lock, _)| lock),
+                    "deleted" => ?entry.map(|(_, deleted)| *deleted),
+                    "table_status" => ?locks.status,
+                    "table_term" => locks.term,
+                    "table_version" => locks.version,
+                );
+            }
+            None => {
+                error!(
+                    "txn record found but not expected: failed to inspect panic-time in-memory pessimistic lock";
+                    "reason" => "lock table is locked",
+                );
+            }
+        },
+        None => {
+            error!(
+                "txn record found but not expected: failed to inspect panic-time in-memory pessimistic lock";
+                "reason" => "transaction extension is unavailable",
+            );
+        }
+    }
+
+    match reader.reader.snapshot().get_cf(CF_LOCK, key) {
+        Ok(Some(value)) => match parse_lock(&value) {
+            Ok(lock) => {
+                error!(
+                    "txn record found but not expected: snapshot CF_LOCK";
+                    "lock" => ?lock,
+                );
+            }
+            Err(err) => {
+                error!(
+                    "txn record found but not expected: failed to parse snapshot CF_LOCK";
+                    "error" => ?err,
+                    "value_len" => value.len(),
+                );
+            }
+        },
+        Ok(None) => {
+            error!(
+                "txn record found but not expected: snapshot CF_LOCK";
+                "lock" => "None",
+            );
+        }
+        Err(err) => {
+            error!(
+                "txn record found but not expected: failed to read snapshot CF_LOCK";
+                "error" => ?err,
+            );
+        }
+    }
+}
+
+#[cold]
 #[inline(never)]
 fn panic_txn_record_found(
     txn: &MvccTxn,
@@ -545,6 +608,7 @@ fn panic_txn_record_found(
         "snapshot_data_version" => snapshot_data_version,
         "flight_event_count" => flight_events.len(),
     );
+    log_lock_sources(reader, key);
     for event in &flight_events {
         error!(
             "txn record found but not expected: flight recorder event";
