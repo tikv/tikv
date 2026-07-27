@@ -8,7 +8,7 @@
 use std::{
     collections::{VecDeque, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+    sync::atomic::{AtomicBool, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -23,8 +23,8 @@ use txn_types::{Key, LockType, TimeStamp, WriteRef, WriteType, parse_lock};
 
 use crate::storage::{Context, metrics::CommandKind, txn::commands::Command};
 
-const TXN_COMMAND_FLIGHT_RECORDER_SHARDS: usize = 128;
-const TXN_COMMAND_FLIGHT_RECORDER_EVENTS_PER_SHARD: usize = 4096;
+const SHARD_COUNT: usize = 128;
+const EVENTS_PER_SHARD: usize = 4096;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TxnCommandEventKind {
@@ -38,30 +38,15 @@ enum TxnCommandEventKind {
     TxnStatusCacheMiss,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RecordedPessimisticAction {
-    Unknown,
-    SkipPessimisticCheck,
-    DoPessimisticCheck,
-    DoConstraintCheck,
+pub(crate) fn hash_key(key: &Key) -> u64 {
+    hash_encoded_key(key.as_encoded())
 }
 
-impl From<PrewriteRequestPessimisticAction> for RecordedPessimisticAction {
-    fn from(action: PrewriteRequestPessimisticAction) -> Self {
-        use PrewriteRequestPessimisticAction::*;
-        match action {
-            SkipPessimisticCheck => Self::SkipPessimisticCheck,
-            DoPessimisticCheck => Self::DoPessimisticCheck,
-            DoConstraintCheck => Self::DoConstraintCheck,
-        }
-    }
-}
-
-fn hash_key(key: &Key) -> u64 {
+fn hash_encoded_key(key: &[u8]) -> u64 {
     // Hash the encoded key so diagnostics cannot panic on a malformed
     // memcomparable key.
     let mut hasher = DefaultHasher::new();
-    key.as_encoded().hash(&mut hasher);
+    key.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -72,241 +57,178 @@ fn hash_raw_key(raw_key: &[u8]) -> u64 {
 #[derive(Clone, Copy)]
 struct CommandKey {
     key_hash: u64,
-    pessimistic_action: RecordedPessimisticAction,
+    pessimistic_action: Option<PrewriteRequestPessimisticAction>,
     txn_start_ts: u64,
 }
 
 /// Metadata captured before a command is moved into its MVCC command handler.
 pub(crate) struct TxnCommandEventMetadata {
-    cid: u64,
-    command: CommandKind,
-    txn_start_ts: u64,
-    commit_ts: u64,
-    caller_start_ts: u64,
-    current_ts: u64,
-    for_update_ts: u64,
-    min_commit_ts: u64,
-    lock_ttl: u64,
-    primary_key_hash: u64,
-    region_id: u64,
-    term: u64,
-    snapshot_data_version: u64,
-    is_retry_request: bool,
-    skip_constraint_check: bool,
-    try_one_pc: bool,
-    rollback_if_not_exist: bool,
-    force_sync_commit: bool,
-    resolving_pessimistic_lock: bool,
-    verify_is_primary: bool,
+    event: TxnCommandEvent,
     keys: Vec<CommandKey>,
 }
 
 impl TxnCommandEventMetadata {
-    fn from_command(cmd: &Command, cid: u64, snapshot_data_version: Option<u64>) -> Self {
+    fn from_command(cmd: &Command, cid: u64, snapshot_data_version: Option<u64>) -> Option<Self> {
         let ctx = cmd.ctx();
         let mut metadata = Self {
-            cid,
-            command: cmd.tag(),
-            txn_start_ts: cmd.ts().into_inner(),
-            commit_ts: 0,
-            caller_start_ts: 0,
-            current_ts: 0,
-            for_update_ts: 0,
-            min_commit_ts: 0,
-            lock_ttl: 0,
-            primary_key_hash: 0,
-            region_id: ctx.get_region_id(),
-            term: ctx.get_term(),
-            snapshot_data_version: snapshot_data_version.unwrap_or(0),
-            is_retry_request: ctx.get_is_retry_request(),
-            skip_constraint_check: false,
-            try_one_pc: false,
-            rollback_if_not_exist: false,
-            force_sync_commit: false,
-            resolving_pessimistic_lock: false,
-            verify_is_primary: false,
+            event: TxnCommandEvent::new(cmd.tag(), cid, ctx, snapshot_data_version),
             keys: Vec::new(),
         };
+        metadata.event.txn_start_ts = cmd.ts().into_inner();
 
         match cmd {
             Command::Prewrite(c) => {
-                metadata.txn_start_ts = c.start_ts.into_inner();
-                metadata.lock_ttl = c.lock_ttl;
-                metadata.min_commit_ts = c.min_commit_ts.into_inner();
-                metadata.primary_key_hash = hash_raw_key(&c.primary);
-                metadata.skip_constraint_check = c.skip_constraint_check;
-                metadata.try_one_pc = c.try_one_pc;
-                metadata
-                    .keys
-                    .extend(c.mutations.iter().map(|mutation| CommandKey {
+                metadata.event.lock_ttl = c.lock_ttl;
+                metadata.event.min_commit_ts = c.min_commit_ts.into_inner();
+                metadata.event.skip_constraint_check = c.skip_constraint_check;
+                metadata.event.try_one_pc = c.try_one_pc;
+                let primary_key = Key::from_raw(&c.primary);
+                if let Some(mutation) = c
+                    .mutations
+                    .iter()
+                    .find(|mutation| mutation.key() == &primary_key)
+                {
+                    metadata.keys.push(CommandKey {
                         key_hash: hash_key(mutation.key()),
-                        pessimistic_action: RecordedPessimisticAction::SkipPessimisticCheck,
-                        txn_start_ts: c.start_ts.into_inner(),
-                    }));
+                        pessimistic_action: Some(
+                            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+                        ),
+                        txn_start_ts: 0,
+                    });
+                }
             }
             Command::PrewritePessimistic(c) => {
-                metadata.txn_start_ts = c.start_ts.into_inner();
-                metadata.for_update_ts = c.for_update_ts.into_inner();
-                metadata.lock_ttl = c.lock_ttl;
-                metadata.min_commit_ts = c.min_commit_ts.into_inner();
-                metadata.primary_key_hash = hash_raw_key(&c.primary);
-                metadata.try_one_pc = c.try_one_pc;
-                metadata
-                    .keys
-                    .extend(c.mutations.iter().map(|(mutation, action)| CommandKey {
+                metadata.event.for_update_ts = c.for_update_ts.into_inner();
+                metadata.event.lock_ttl = c.lock_ttl;
+                metadata.event.min_commit_ts = c.min_commit_ts.into_inner();
+                metadata.event.try_one_pc = c.try_one_pc;
+                let primary_key = Key::from_raw(&c.primary);
+                if let Some((mutation, action)) = c
+                    .mutations
+                    .iter()
+                    .find(|(mutation, _)| mutation.key() == &primary_key)
+                {
+                    metadata.keys.push(CommandKey {
                         key_hash: hash_key(mutation.key()),
-                        pessimistic_action: (*action).into(),
-                        txn_start_ts: c.start_ts.into_inner(),
-                    }));
+                        pessimistic_action: Some(*action),
+                        txn_start_ts: 0,
+                    });
+                }
             }
             Command::AcquirePessimisticLock(c) => {
-                metadata.txn_start_ts = c.start_ts.into_inner();
-                metadata.for_update_ts = c.for_update_ts.into_inner();
-                metadata.lock_ttl = c.lock_ttl;
-                metadata.min_commit_ts = c.min_commit_ts.into_inner();
-                metadata.primary_key_hash = hash_raw_key(&c.primary);
-                metadata
-                    .keys
-                    .extend(c.keys.iter().map(|(key, ..)| command_key(key, c.start_ts)));
+                metadata.event.for_update_ts = c.for_update_ts.into_inner();
+                metadata.event.lock_ttl = c.lock_ttl;
+                metadata.event.min_commit_ts = c.min_commit_ts.into_inner();
+                let primary_key = Key::from_raw(&c.primary);
+                if let Some((key, ..)) = c.keys.iter().find(|(key, ..)| key == &primary_key) {
+                    metadata.keys.push(command_key(key));
+                }
             }
             Command::AcquirePessimisticLockResumed(c) => {
-                metadata.keys.extend(c.items.iter().map(|item| CommandKey {
-                    key_hash: hash_key(&item.key),
-                    pessimistic_action: RecordedPessimisticAction::Unknown,
-                    txn_start_ts: item.params.start_ts.into_inner(),
-                }));
-            }
-            Command::Commit(c) => {
-                metadata.txn_start_ts = c.lock_ts.into_inner();
-                metadata.commit_ts = c.commit_ts.into_inner();
-                metadata
-                    .keys
-                    .extend(c.keys.iter().map(|key| command_key(key, c.lock_ts)));
-            }
-            Command::Cleanup(c) => {
-                metadata.txn_start_ts = c.start_ts.into_inner();
-                metadata.keys.push(command_key(&c.key, c.start_ts));
-            }
-            Command::Rollback(c) => {
-                metadata.txn_start_ts = c.start_ts.into_inner();
-                metadata
-                    .keys
-                    .extend(c.keys.iter().map(|key| command_key(key, c.start_ts)));
-            }
-            Command::PessimisticRollback(c) => {
-                metadata.txn_start_ts = c.start_ts.into_inner();
-                metadata.for_update_ts = c.for_update_ts.into_inner();
-                metadata
-                    .keys
-                    .extend(c.keys.iter().map(|key| command_key(key, c.start_ts)));
-            }
-            Command::TxnHeartBeat(c) => {
-                metadata.txn_start_ts = c.start_ts.into_inner();
-                metadata.min_commit_ts = c.min_commit_ts;
-                metadata.keys.push(command_key(&c.primary_key, c.start_ts));
-                metadata.primary_key_hash = hash_key(&c.primary_key);
-            }
-            Command::CheckTxnStatus(c) => {
-                metadata.txn_start_ts = c.lock_ts.into_inner();
-                metadata.caller_start_ts = c.caller_start_ts.into_inner();
-                metadata.current_ts = c.current_ts.into_inner();
-                metadata.rollback_if_not_exist = c.rollback_if_not_exist;
-                metadata.force_sync_commit = c.force_sync_commit;
-                metadata.resolving_pessimistic_lock = c.resolving_pessimistic_lock;
-                metadata.verify_is_primary = c.verify_is_primary;
-                metadata.keys.push(command_key(&c.primary_key, c.lock_ts));
-                metadata.primary_key_hash = hash_key(&c.primary_key);
-            }
-            Command::CheckSecondaryLocks(c) => {
-                metadata.txn_start_ts = c.start_ts.into_inner();
-                metadata
-                    .keys
-                    .extend(c.keys.iter().map(|key| command_key(key, c.start_ts)));
-            }
-            Command::ResolveLock(c) => {
-                metadata
-                    .keys
-                    .extend(c.key_locks.iter().map(|(key, lock)| CommandKey {
-                        key_hash: hash_key(key),
-                        pessimistic_action: RecordedPessimisticAction::Unknown,
-                        txn_start_ts: lock.ts.into_inner(),
-                    }));
-            }
-            Command::ResolveLockLite(c) => {
-                metadata.txn_start_ts = c.start_ts.into_inner();
-                metadata.commit_ts = c.commit_ts.into_inner();
                 metadata.keys.extend(
-                    c.resolve_keys
+                    c.items
                         .iter()
-                        .map(|key| command_key(key, c.start_ts)),
+                        .filter(|item| item.key.is_encoded_from(&item.params.primary))
+                        .map(|item| CommandKey {
+                            key_hash: hash_key(&item.key),
+                            pessimistic_action: None,
+                            txn_start_ts: item.params.start_ts.into_inner(),
+                        }),
                 );
             }
+            Command::Commit(c) => {
+                metadata.event.txn_start_ts = c.lock_ts.into_inner();
+                metadata.event.commit_ts = c.commit_ts.into_inner();
+                // A Commit request does not identify its primary key. It is
+                // populated after the command reads the lock, so only its
+                // successfully applied primary-key modifies are recorded.
+            }
+            Command::TxnHeartBeat(c) => {
+                metadata.event.min_commit_ts = c.min_commit_ts;
+                metadata.keys.push(command_key(&c.primary_key));
+            }
+            Command::CheckTxnStatus(c) => {
+                metadata.event.caller_start_ts = c.caller_start_ts.into_inner();
+                metadata.event.current_ts = c.current_ts.into_inner();
+                metadata.event.rollback_if_not_exist = c.rollback_if_not_exist;
+                metadata.event.force_sync_commit = c.force_sync_commit;
+                metadata.event.resolving_pessimistic_lock = c.resolving_pessimistic_lock;
+                metadata.event.verify_is_primary = c.verify_is_primary;
+                metadata.keys.push(command_key(&c.primary_key));
+            }
+            Command::ResolveLock(c) => {
+                metadata.keys.extend(
+                    c.key_locks
+                        .iter()
+                        .filter(|(key, lock)| key.is_encoded_from(&lock.primary))
+                        .map(|(key, lock)| CommandKey {
+                            key_hash: hash_key(key),
+                            pessimistic_action: None,
+                            txn_start_ts: lock.ts.into_inner(),
+                        }),
+                );
+            }
+            Command::ResolveLockLite(c) => {
+                metadata.event.commit_ts = c.commit_ts.into_inner();
+                // ResolveLockLite also learns the primary key only after
+                // reading the lock, so only its successfully applied
+                // primary-key modifies are recorded.
+            }
             Command::Flush(c) => {
-                metadata.txn_start_ts = c.start_ts.into_inner();
-                metadata.lock_ttl = c.lock_ttl;
-                metadata.primary_key_hash = hash_raw_key(&c.primary);
-                metadata
-                    .keys
-                    .extend(c.mutations.iter().map(|mutation| CommandKey {
+                metadata.event.lock_ttl = c.lock_ttl;
+                let primary_key = Key::from_raw(&c.primary);
+                if let Some(mutation) = c
+                    .mutations
+                    .iter()
+                    .find(|mutation| mutation.key() == &primary_key)
+                {
+                    metadata.keys.push(CommandKey {
                         key_hash: hash_key(mutation.key()),
-                        pessimistic_action: RecordedPessimisticAction::Unknown,
-                        txn_start_ts: c.start_ts.into_inner(),
-                    }));
+                        pessimistic_action: None,
+                        txn_start_ts: 0,
+                    });
+                }
             }
             _ => {}
         }
 
         metadata.keys.sort_unstable_by_key(|key| key.key_hash);
-        metadata
+        let identifies_primary_while_processing = matches!(cmd, Command::Commit(_))
+            || matches!(cmd, Command::ResolveLockLite(c) if !c.commit_ts.is_zero());
+        (!metadata.keys.is_empty() || identifies_primary_while_processing).then_some(metadata)
+    }
+
+    pub(crate) fn set_primary_key_hash(&mut self, key_hash: u64) {
+        if key_hash == 0 || !self.keys.is_empty() {
+            return;
+        }
+        self.keys.push(CommandKey {
+            key_hash,
+            pessimistic_action: None,
+            txn_start_ts: self.event.txn_start_ts,
+        });
     }
 
     pub(crate) fn events_for_modifies(&self, modifies: &[Modify]) -> Vec<TxnCommandEvent> {
+        if self.keys.is_empty() {
+            return Vec::new();
+        }
         modifies
             .iter()
             .filter_map(|modify| self.event_for_modify(modify))
             .collect()
     }
 
-    fn event_for_command_key(&self, key: CommandKey) -> TxnCommandEvent {
-        self.base_event(key.key_hash, TxnCommandEventKind::Received)
-    }
-
-    fn base_event(&self, key_hash: u64, kind: TxnCommandEventKind) -> TxnCommandEvent {
-        let command_key = self.command_key(key_hash);
-        TxnCommandEvent {
-            unix_time_ms: 0,
-            kind,
-            command: self.command,
-            cid: self.cid,
-            key_hash,
-            primary_key_hash: self.primary_key_hash,
-            txn_start_ts: command_key
-                .map(|key| key.txn_start_ts)
-                .filter(|ts| *ts != 0)
-                .unwrap_or(self.txn_start_ts),
-            commit_ts: self.commit_ts,
-            caller_start_ts: self.caller_start_ts,
-            current_ts: self.current_ts,
-            for_update_ts: self.for_update_ts,
-            min_commit_ts: self.min_commit_ts,
-            lock_ttl: self.lock_ttl,
-            region_id: self.region_id,
-            term: self.term,
-            snapshot_data_version: self.snapshot_data_version,
-            is_retry_request: self.is_retry_request,
-            skip_constraint_check: self.skip_constraint_check,
-            try_one_pc: self.try_one_pc,
-            rollback_if_not_exist: self.rollback_if_not_exist,
-            force_sync_commit: self.force_sync_commit,
-            resolving_pessimistic_lock: self.resolving_pessimistic_lock,
-            verify_is_primary: self.verify_is_primary,
-            pessimistic_action: command_key
-                .map(|key| key.pessimistic_action)
-                .unwrap_or(RecordedPessimisticAction::Unknown),
-            lock_type: None,
-            write_type: None,
-            generation: 0,
+    fn base_event(&self, command_key: CommandKey, kind: TxnCommandEventKind) -> TxnCommandEvent {
+        let mut event = self.event;
+        event.kind = kind;
+        event.key_hash = command_key.key_hash;
+        event.primary_key_hash = command_key.key_hash;
+        if command_key.txn_start_ts != 0 {
+            event.txn_start_ts = command_key.txn_start_ts;
         }
+        event.pessimistic_action = command_key.pessimistic_action;
+        event
     }
 
     fn command_key(&self, key_hash: u64) -> Option<CommandKey> {
@@ -319,7 +241,9 @@ impl TxnCommandEventMetadata {
     fn event_for_modify(&self, modify: &Modify) -> Option<TxnCommandEvent> {
         match modify {
             Modify::Put(cf, key, value) if *cf == CF_LOCK => {
-                let mut event = self.base_event(hash_key(key), TxnCommandEventKind::PutLock);
+                let key_hash = hash_key(key);
+                let command_key = self.command_key(key_hash)?;
+                let mut event = self.base_event(command_key, TxnCommandEventKind::PutLock);
                 match parse_lock(value).ok()? {
                     Either::Left(lock) => {
                         event.lock_type = Some(lock.lock_type);
@@ -327,7 +251,9 @@ impl TxnCommandEventMetadata {
                         event.for_update_ts = lock.for_update_ts.into_inner();
                         event.min_commit_ts = lock.min_commit_ts.into_inner();
                         event.lock_ttl = lock.ttl;
-                        event.primary_key_hash = hash_raw_key(&lock.primary);
+                        if !key.is_encoded_from(&lock.primary) {
+                            event.primary_key_hash = hash_raw_key(&lock.primary);
+                        }
                         event.generation = lock.generation;
                     }
                     Either::Right(_) => event.lock_type = Some(LockType::Shared),
@@ -335,34 +261,41 @@ impl TxnCommandEventMetadata {
                 Some(event)
             }
             Modify::Delete(cf, key) if *cf == CF_LOCK => {
-                Some(self.base_event(hash_key(key), TxnCommandEventKind::DeleteLock))
+                let key_hash = hash_key(key);
+                let command_key = self.command_key(key_hash)?;
+                Some(self.base_event(command_key, TxnCommandEventKind::DeleteLock))
             }
             Modify::Put(cf, key, value) if *cf == CF_WRITE => {
-                let commit_ts = key.decode_ts().ok()?;
-                let user_key = key.clone().truncate_ts().ok()?;
+                let (user_key, commit_ts) = Key::split_on_ts_for(key.as_encoded()).ok()?;
+                let key_hash = hash_encoded_key(user_key);
+                let command_key = self.command_key(key_hash)?;
                 let write = WriteRef::parse(value).ok()?;
-                let mut event = self.base_event(hash_key(&user_key), TxnCommandEventKind::PutWrite);
+                let mut event = self.base_event(command_key, TxnCommandEventKind::PutWrite);
                 event.commit_ts = commit_ts.into_inner();
                 event.write_type = Some(write.write_type);
                 event.txn_start_ts = write.start_ts.into_inner();
                 Some(event)
             }
             Modify::Delete(cf, key) if *cf == CF_WRITE => {
-                let commit_ts = key.decode_ts().ok()?;
-                let user_key = key.clone().truncate_ts().ok()?;
-                let mut event =
-                    self.base_event(hash_key(&user_key), TxnCommandEventKind::DeleteWrite);
+                let (user_key, commit_ts) = Key::split_on_ts_for(key.as_encoded()).ok()?;
+                let key_hash = hash_encoded_key(user_key);
+                let command_key = self.command_key(key_hash)?;
+                let mut event = self.base_event(command_key, TxnCommandEventKind::DeleteWrite);
                 event.commit_ts = commit_ts.into_inner();
                 Some(event)
             }
             Modify::PessimisticLock(key, lock) => {
-                let mut event = self.base_event(hash_key(key), TxnCommandEventKind::PutLock);
+                let key_hash = hash_key(key);
+                let command_key = self.command_key(key_hash)?;
+                let mut event = self.base_event(command_key, TxnCommandEventKind::PutLock);
                 event.lock_type = Some(LockType::Pessimistic);
                 event.txn_start_ts = lock.start_ts.into_inner();
                 event.for_update_ts = lock.for_update_ts.into_inner();
                 event.min_commit_ts = lock.min_commit_ts.into_inner();
                 event.lock_ttl = lock.ttl;
-                event.primary_key_hash = hash_raw_key(&lock.primary);
+                if !key.is_encoded_from(&lock.primary) {
+                    event.primary_key_hash = hash_raw_key(&lock.primary);
+                }
                 Some(event)
             }
             _ => None,
@@ -370,17 +303,17 @@ impl TxnCommandEventMetadata {
     }
 }
 
-fn command_key(key: &Key, start_ts: TimeStamp) -> CommandKey {
+fn command_key(key: &Key) -> CommandKey {
     CommandKey {
         key_hash: hash_key(key),
-        pessimistic_action: RecordedPessimisticAction::Unknown,
-        txn_start_ts: start_ts.into_inner(),
+        pessimistic_action: None,
+        txn_start_ts: 0,
     }
 }
 
 /// A single immutable record. It deliberately contains no raw key or user
 /// value.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 #[allow(dead_code)] // Fields are consumed by the derived Debug output in panic diagnostics.
 pub(crate) struct TxnCommandEvent {
     unix_time_ms: u64,
@@ -406,10 +339,49 @@ pub(crate) struct TxnCommandEvent {
     force_sync_commit: bool,
     resolving_pessimistic_lock: bool,
     verify_is_primary: bool,
-    pessimistic_action: RecordedPessimisticAction,
+    pessimistic_action: Option<PrewriteRequestPessimisticAction>,
     lock_type: Option<LockType>,
     write_type: Option<WriteType>,
     generation: u64,
+}
+
+impl TxnCommandEvent {
+    fn new(
+        command: CommandKind,
+        cid: u64,
+        ctx: &Context,
+        snapshot_data_version: Option<u64>,
+    ) -> Self {
+        Self {
+            unix_time_ms: 0,
+            kind: TxnCommandEventKind::Received,
+            command,
+            cid,
+            key_hash: 0,
+            primary_key_hash: 0,
+            txn_start_ts: 0,
+            commit_ts: 0,
+            caller_start_ts: 0,
+            current_ts: 0,
+            for_update_ts: 0,
+            min_commit_ts: 0,
+            lock_ttl: 0,
+            region_id: ctx.get_region_id(),
+            term: ctx.get_term(),
+            snapshot_data_version: snapshot_data_version.unwrap_or(0),
+            is_retry_request: ctx.get_is_retry_request(),
+            skip_constraint_check: false,
+            try_one_pc: false,
+            rollback_if_not_exist: false,
+            force_sync_commit: false,
+            resolving_pessimistic_lock: false,
+            verify_is_primary: false,
+            pessimistic_action: None,
+            lock_type: None,
+            write_type: None,
+            generation: 0,
+        }
+    }
 }
 
 pub(crate) struct TxnCommandFlightRecorder {
@@ -417,7 +389,6 @@ pub(crate) struct TxnCommandFlightRecorder {
     shards: Vec<CachePadded<Mutex<VecDeque<TxnCommandEvent>>>>,
     shard_mask: usize,
     events_per_shard: usize,
-    overwritten_events: AtomicU64,
 }
 
 impl TxnCommandFlightRecorder {
@@ -431,12 +402,11 @@ impl TxnCommandFlightRecorder {
             shards,
             shard_mask: shard_count - 1,
             events_per_shard,
-            overwritten_events: AtomicU64::new(0),
         }
     }
 
     #[inline]
-    fn is_enabled(&self) -> bool {
+    pub(crate) fn is_enabled(&self) -> bool {
         self.enabled.load(Ordering::Relaxed)
     }
 
@@ -447,14 +417,8 @@ impl TxnCommandFlightRecorder {
                 return;
             }
             for shard in &self.shards {
-                let mut shard = shard.lock();
-                shard.clear();
-                shard.shrink_to_fit();
+                *shard.lock() = VecDeque::new();
             }
-            self.overwritten_events.store(0, Ordering::Relaxed);
-            return;
-        }
-        if self.enabled.load(Ordering::Acquire) {
             return;
         }
         self.enabled.store(true, Ordering::Release);
@@ -467,8 +431,10 @@ impl TxnCommandFlightRecorder {
         cid: u64,
         snapshot_data_version: Option<u64>,
     ) -> Option<TxnCommandEventMetadata> {
-        self.is_enabled()
-            .then(|| TxnCommandEventMetadata::from_command(cmd, cid, snapshot_data_version))
+        if !self.is_enabled() {
+            return None;
+        }
+        TxnCommandEventMetadata::from_command(cmd, cid, snapshot_data_version)
     }
 
     #[inline]
@@ -478,7 +444,7 @@ impl TxnCommandFlightRecorder {
                 metadata
                     .keys
                     .iter()
-                    .map(|key| metadata.event_for_command_key(*key)),
+                    .map(|key| metadata.base_event(*key, TxnCommandEventKind::Received)),
             );
         }
     }
@@ -506,24 +472,17 @@ impl TxnCommandFlightRecorder {
             event.unix_time_ms = unix_time_ms;
             if shard.len() == self.events_per_shard {
                 shard.pop_front();
-                self.overwritten_events.fetch_add(1, Ordering::Relaxed);
             }
             shard.push_back(event);
         }
     }
 
     pub(crate) fn record_persistent_modifies(&self, events: &[TxnCommandEvent]) {
-        if events.is_empty() {
-            return;
-        }
-        self.record(events.iter().cloned())
+        self.record(events.iter().copied())
     }
 
     pub(crate) fn record_in_memory_pessimistic_locks(&self, events: &[TxnCommandEvent]) {
-        if events.is_empty() {
-            return;
-        }
-        self.record(events.iter().cloned().map(|mut event| {
+        self.record(events.iter().copied().map(|mut event| {
             event.kind = TxnCommandEventKind::PutInMemoryPessimisticLock;
             event
         }))
@@ -541,38 +500,23 @@ impl TxnCommandFlightRecorder {
         if !self.is_enabled() {
             return;
         }
-        let metadata = TxnCommandEventMetadata {
-            cid: 0,
-            command: CommandKind::prewrite,
-            txn_start_ts: start_ts.into_inner(),
-            commit_ts: committed_ts.unwrap_or_default().into_inner(),
-            caller_start_ts: 0,
-            current_ts: 0,
-            for_update_ts: 0,
-            min_commit_ts: 0,
-            lock_ttl: 0,
-            primary_key_hash: hash_raw_key(primary_key),
-            region_id: ctx.get_region_id(),
-            term: ctx.get_term(),
-            snapshot_data_version: snapshot_data_version.unwrap_or(0),
-            is_retry_request: ctx.get_is_retry_request(),
-            skip_constraint_check: false,
-            try_one_pc: false,
-            rollback_if_not_exist: false,
-            force_sync_commit: false,
-            resolving_pessimistic_lock: false,
-            verify_is_primary: false,
-            keys: Vec::new(),
-        };
+        let primary_key = Key::from_raw(primary_key);
         let kind = if committed_ts.is_some() {
             TxnCommandEventKind::TxnStatusCacheHit
         } else {
             TxnCommandEventKind::TxnStatusCacheMiss
         };
-        self.record(
-            keys.into_iter()
-                .map(|key| metadata.base_event(hash_key(key), kind)),
-        );
+        if let Some(key) = keys.into_iter().find(|key| *key == &primary_key) {
+            let key_hash = hash_key(key);
+            let mut event =
+                TxnCommandEvent::new(CommandKind::prewrite, 0, ctx, snapshot_data_version);
+            event.kind = kind;
+            event.key_hash = key_hash;
+            event.primary_key_hash = key_hash;
+            event.txn_start_ts = start_ts.into_inner();
+            event.commit_ts = committed_ts.unwrap_or_default().into_inner();
+            self.record([event]);
+        }
     }
 
     pub(crate) fn events_for_key(&self, key: &Key) -> Vec<TxnCommandEvent> {
@@ -582,22 +526,14 @@ impl TxnCommandFlightRecorder {
             .lock()
             .iter()
             .filter(|event| event.key_hash == key_hash)
-            .cloned()
+            .copied()
             .collect()
-    }
-
-    pub(crate) fn overwritten_events(&self) -> u64 {
-        self.overwritten_events.load(Ordering::Relaxed)
     }
 }
 
 lazy_static! {
-    pub(crate) static ref TXN_COMMAND_FLIGHT_RECORDER: TxnCommandFlightRecorder =
-        TxnCommandFlightRecorder::new(
-            TXN_COMMAND_FLIGHT_RECORDER_SHARDS,
-            TXN_COMMAND_FLIGHT_RECORDER_EVENTS_PER_SHARD,
-            false,
-        );
+    pub(crate) static ref TXN_FLIGHT_RECORDER: TxnCommandFlightRecorder =
+        TxnCommandFlightRecorder::new(SHARD_COUNT, EVENTS_PER_SHARD, false);
 }
 
 #[cfg(test)]
@@ -609,35 +545,9 @@ mod tests {
     use super::*;
 
     fn event_for_key(key: &Key, cid: u64) -> TxnCommandEvent {
-        TxnCommandEvent {
-            unix_time_ms: 0,
-            kind: TxnCommandEventKind::Received,
-            command: CommandKind::prewrite,
-            cid,
-            key_hash: hash_key(key),
-            primary_key_hash: 0,
-            txn_start_ts: 0,
-            commit_ts: 0,
-            caller_start_ts: 0,
-            current_ts: 0,
-            for_update_ts: 0,
-            min_commit_ts: 0,
-            lock_ttl: 0,
-            region_id: 0,
-            term: 0,
-            snapshot_data_version: 0,
-            is_retry_request: false,
-            skip_constraint_check: false,
-            try_one_pc: false,
-            rollback_if_not_exist: false,
-            force_sync_commit: false,
-            resolving_pessimistic_lock: false,
-            verify_is_primary: false,
-            pessimistic_action: RecordedPessimisticAction::Unknown,
-            lock_type: None,
-            write_type: None,
-            generation: 0,
-        }
+        let mut event = TxnCommandEvent::new(CommandKind::prewrite, cid, &Context::default(), None);
+        event.key_hash = hash_key(key);
+        event
     }
 
     #[test]
@@ -655,37 +565,24 @@ mod tests {
         assert!(events.len() <= 4);
         assert_eq!(events.last().unwrap().cid, 5);
         assert!(events.iter().all(|event| event.cid != 100));
-        assert!(recorder.overwritten_events() >= 1);
     }
 
     #[test]
     fn test_modify_events_are_normalized_to_user_key() {
         let key = Key::from_raw(b"key");
+        let secondary_key = Key::from_raw(b"secondary-key");
         let key_hash = hash_key(&key);
-        let metadata = TxnCommandEventMetadata {
-            cid: 42,
-            command: CommandKind::prewrite,
-            txn_start_ts: 10,
-            commit_ts: 0,
-            caller_start_ts: 0,
-            current_ts: 0,
-            for_update_ts: 11,
-            min_commit_ts: 12,
-            lock_ttl: 20_000,
-            primary_key_hash: key_hash,
-            region_id: 1,
-            term: 2,
-            snapshot_data_version: 4,
-            is_retry_request: true,
-            skip_constraint_check: false,
-            try_one_pc: false,
-            rollback_if_not_exist: false,
-            force_sync_commit: false,
-            resolving_pessimistic_lock: false,
-            verify_is_primary: false,
+        let mut event =
+            TxnCommandEvent::new(CommandKind::prewrite, 42, &Context::default(), Some(4));
+        event.txn_start_ts = 10;
+        event.for_update_ts = 11;
+        event.min_commit_ts = 12;
+        event.lock_ttl = 20_000;
+        let mut metadata = TxnCommandEventMetadata {
+            event,
             keys: vec![CommandKey {
                 key_hash,
-                pessimistic_action: RecordedPessimisticAction::DoPessimisticCheck,
+                pessimistic_action: Some(PrewriteRequestPessimisticAction::DoPessimisticCheck),
                 txn_start_ts: 10,
             }],
         };
@@ -700,12 +597,29 @@ mod tests {
             12.into(),
             false,
         );
+        let secondary_lock = Lock::new(
+            LockType::Put,
+            b"key".to_vec(),
+            10.into(),
+            20_000,
+            None,
+            11.into(),
+            1,
+            12.into(),
+            false,
+        );
         let write = Write::new(WriteType::Put, 10.into(), None);
         let modifies = vec![
             Modify::Put(CF_LOCK, key.clone(), lock.to_bytes()),
+            Modify::Put(CF_LOCK, secondary_key.clone(), secondary_lock.to_bytes()),
             Modify::Put(
                 CF_WRITE,
                 key.clone().append_ts(20.into()),
+                write.as_ref().to_bytes(),
+            ),
+            Modify::Put(
+                CF_WRITE,
+                secondary_key.clone().append_ts(20.into()),
                 write.as_ref().to_bytes(),
             ),
         ];
@@ -717,11 +631,17 @@ mod tests {
         assert_eq!(events[0].txn_start_ts, 10);
         assert_eq!(
             events[0].pessimistic_action,
-            RecordedPessimisticAction::DoPessimisticCheck
+            Some(PrewriteRequestPessimisticAction::DoPessimisticCheck)
         );
         assert_eq!(events[1].kind, TxnCommandEventKind::PutWrite);
         assert_eq!(events[1].commit_ts, 20);
         assert_eq!(events[1].write_type, Some(WriteType::Put));
+
+        metadata.keys.clear();
+        metadata.set_primary_key_hash(key_hash);
+        let events = metadata.events_for_modifies(&modifies);
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|event| event.key_hash == key_hash));
     }
 
     #[test]
@@ -736,12 +656,13 @@ mod tests {
     fn test_txn_status_cache_lookup_event() {
         let recorder = TxnCommandFlightRecorder::new(2, 4, true);
         let key = Key::from_raw(b"key");
+        let secondary_key = Key::from_raw(b"secondary-key");
         let mut ctx = Context::default();
         ctx.set_region_id(7);
         ctx.set_is_retry_request(true);
 
         recorder.record_txn_status_cache_lookup(
-            [&key],
+            [&secondary_key, &key],
             b"key",
             10.into(),
             Some(20.into()),
@@ -756,6 +677,7 @@ mod tests {
         assert_eq!(events[0].commit_ts, 20);
         assert_eq!(events[0].snapshot_data_version, 30);
         assert!(events[0].is_retry_request);
+        assert!(recorder.events_for_key(&secondary_key).is_empty());
     }
 
     #[test]

@@ -10,7 +10,7 @@ use crate::storage::{
         ErrorInner, LockType, MvccTxn, ReleasedLock, Result, SnapshotReader, TxnCommitRecord,
         metrics::MVCC_CHECK_TXN_STATUS_COUNTER_VEC, reader::OverlappedWrite,
     },
-    txn::flight_recorder::TXN_COMMAND_FLIGHT_RECORDER,
+    txn::flight_recorder::TXN_FLIGHT_RECORDER,
 };
 
 // The returned `TxnStatus` is Some(..) if the transaction status is already
@@ -482,11 +482,11 @@ impl MissingLockAction {
     }
 }
 
-const MAX_INVARIANT_PANIC_WRITE_HISTORY: usize = 32;
+const MAX_PANIC_WRITE_HISTORY: usize = 32;
 
-fn log_bounded_write_history(reader: &mut SnapshotReader<impl Snapshot>, key: &Key) {
+fn log_write_history(reader: &mut SnapshotReader<impl Snapshot>, key: &Key) {
     let mut next_ts = TimeStamp::max();
-    for _ in 0..MAX_INVARIANT_PANIC_WRITE_HISTORY {
+    for _ in 0..MAX_PANIC_WRITE_HISTORY {
         match reader.seek_write(key, next_ts) {
             Ok(Some((commit_ts, write))) => {
                 error!(
@@ -511,7 +511,7 @@ fn log_bounded_write_history(reader: &mut SnapshotReader<impl Snapshot>, key: &K
     }
     error!(
         "txn record found but not expected: mvcc write history reached record limit";
-        "limit" => MAX_INVARIANT_PANIC_WRITE_HISTORY,
+        "limit" => MAX_PANIC_WRITE_HISTORY,
     );
 }
 
@@ -533,8 +533,7 @@ fn panic_txn_record_found(
             ext.get_data_version().unwrap_or(0),
         )
     };
-    let flight_events = TXN_COMMAND_FLIGHT_RECORDER.events_for_key(key);
-    let overwritten_events = TXN_COMMAND_FLIGHT_RECORDER.overwritten_events();
+    let flight_events = TXN_FLIGHT_RECORDER.events_for_key(key);
 
     error!(
         "txn record found but not expected: diagnostic summary";
@@ -545,7 +544,6 @@ fn panic_txn_record_found(
         "term" => term,
         "snapshot_data_version" => snapshot_data_version,
         "flight_event_count" => flight_events.len(),
-        "flight_recorder_overwritten_events" => overwritten_events,
     );
     for event in &flight_events {
         error!(
@@ -553,7 +551,7 @@ fn panic_txn_record_found(
             "event" => ?event,
         );
     }
-    log_bounded_write_history(reader, key);
+    log_write_history(reader, key);
 
     panic!(
         "txn record found but not expected: {:?} {} {:?} {:?} [region_id={}]",

@@ -21,7 +21,7 @@ use crate::{
     storage::{
         TxnScheduler,
         lock_manager::LockManager,
-        txn::{flight_recorder::TXN_COMMAND_FLIGHT_RECORDER, flow_controller::FlowController},
+        txn::{flight_recorder::TXN_FLIGHT_RECORDER, flow_controller::FlowController},
     },
 };
 
@@ -96,10 +96,6 @@ impl<EK: Engine, K: ConfigurableDb, L: LockManager> ConfigManager
             let cap: ReadableSize = v.into();
             self.scheduler.set_memory_quota_capacity(cap.0 as usize);
         }
-        if let Some(v) = change.remove("enable_txn_command_flight_recorder") {
-            let enabled: bool = v.into();
-            TXN_COMMAND_FLIGHT_RECORDER.set_enabled(enabled);
-        }
         if let Some(ConfigValue::Module(mut io_rate_limit)) = change.remove("io_rate_limit") {
             let limiter = match get_io_rate_limiter() {
                 None => return Err("IO rate limiter is not present".into()),
@@ -119,6 +115,9 @@ impl<EK: Engine, K: ConfigurableDb, L: LockManager> ConfigManager
             }
         }
         dispatch_max_ts_config_change(&self.concurrency_manager, &mut change)?;
+        if let Some(v) = change.remove("enable_txn_command_flight_recorder") {
+            TXN_FLIGHT_RECORDER.set_enabled(v.into());
+        }
         Ok(())
     }
 }

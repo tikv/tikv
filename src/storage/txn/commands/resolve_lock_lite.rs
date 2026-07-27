@@ -9,12 +9,15 @@ use crate::storage::{
     lock_manager::LockManager,
     mvcc::{MvccTxn, SnapshotReader},
     txn::{
-        Result, cleanup,
+        Result,
+        actions::commit::commit_with_primary,
+        cleanup,
         commands::{
             Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
             WriteCommand, WriteContext, WriteResult,
         },
         commit,
+        flight_recorder::TXN_FLIGHT_RECORDER,
     },
 };
 
@@ -61,12 +64,21 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockLite {
         // ti-client guarantees the size of resolve_keys will not too large, so no
         // necessary to control the write_size as ResolveLock.
         let mut released_locks = ReleasedLocks::new();
-        for key in self.resolve_keys {
-            released_locks.push(if !self.commit_ts.is_zero() {
-                commit(&mut txn, &mut reader, key, self.commit_ts)?
-            } else {
-                cleanup(&mut txn, &mut reader, key, TimeStamp::zero(), false)?
-            });
+        if !self.commit_ts.is_zero() && TXN_FLIGHT_RECORDER.is_enabled() {
+            for key in self.resolve_keys {
+                let (released, primary_key_hash) =
+                    commit_with_primary(&mut txn, &mut reader, key, self.commit_ts)?;
+                released_locks.set_flight_primary_key_hash(primary_key_hash);
+                released_locks.push(released);
+            }
+        } else {
+            for key in self.resolve_keys {
+                released_locks.push(if !self.commit_ts.is_zero() {
+                    commit(&mut txn, &mut reader, key, self.commit_ts)?
+                } else {
+                    cleanup(&mut txn, &mut reader, key, TimeStamp::zero(), false)?
+                });
+            }
         }
 
         let known_txn_status = if !self.commit_ts.is_zero() {

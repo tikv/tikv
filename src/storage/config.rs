@@ -99,9 +99,7 @@ pub struct Config {
     pub reserve_raft_space: ReadableSize,
     #[online_config(skip)]
     pub enable_async_apply_prewrite: bool,
-    /// Records bounded transaction command history for diagnosing MVCC
-    /// invariants. Disabled by default because it retains additional in-memory
-    /// metadata and adds work to the transaction scheduler.
+    /// Enables bounded in-memory transaction history for MVCC diagnostics.
     pub enable_txn_command_flight_recorder: bool,
     #[online_config(skip)]
     pub api_version: u8,
