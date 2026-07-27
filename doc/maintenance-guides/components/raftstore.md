@@ -111,7 +111,8 @@ High-risk contracts:
 ### Persistent region/raft state
 
 - `store/peer_storage.rs` owns apply/raft state persistence and snapshot state.
-- `store/entry_storage.rs` owns raft log entry storage and fetch behavior.
+- `store/entry_storage.rs` owns raft log entry storage, cache-assisted fetches,
+  and term lookup fallback to the Raft log engine.
 - `store/region_meta.rs` models persisted region and raft metadata.
 
 ### Reads, snapshots, and async IO
@@ -141,6 +142,11 @@ High-risk contracts:
   safety depends on this.
 - A `Peer` must preserve role, applied index, raft log, and lease/read-progress
   consistency across ticks and messages.
+- `EntryStorage` caches are performance hints, not an authority for unknown
+  Raft-log state. `TermCache` may answer a lookup only within its explicitly
+  known index interval; in particular, its final cached term must not be
+  inferred to cover later indices. A miss must fall back to the Raft log
+  engine.
 - Snapshot lifecycle must not leak:
   generation, transport, application, and cleanup are all coupled.
 - Local reads must only bypass raft when lease and read-progress guarantees are
