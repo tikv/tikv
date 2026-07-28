@@ -97,6 +97,11 @@ Hot contracts to review carefully:
 - `worker.rs` adjusts background quota and related runtime state periodically.
 - `config.rs` defines dynamic policy knobs such as fair scheduling and
   admission-control thresholds.
+- Background quota limiting is independent of priority-queue selection. A
+  background limiter can throttle a task in place even when the transaction
+  scheduler uses its vanilla queue.
+- `ResourceController::is_customized` reflects non-default resource groups;
+  background configuration is tracked separately by `ResourceGroupManager`.
 
 ## Critical Invariants
 

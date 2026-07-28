@@ -98,6 +98,9 @@ High-risk contracts:
   handoff.
 - `txn/commands/*` defines concrete transactional commands.
 - `txn/task.rs`, `txn/sched_pool.rs`, and `txn/tracker.rs` support execution.
+- `txn/sched_pool.rs` selects the priority queue only for customized resource
+  groups. Background-only control stays on the vanilla queue and throttles
+  matching long-running tasks inside the pool.
 
 ### MVCC
 
