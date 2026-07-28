@@ -2,8 +2,9 @@
 
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
+
 use futures::{SinkExt, StreamExt, executor::block_on};
 use grpcio::{RpcStatus, RpcStatusCode};
 use kvproto::meta_storagepb as mpb;
@@ -17,7 +18,10 @@ pub struct MetaStorage {
     /// When true, the next Watch call will immediately fail with the
     /// same gRPC error that etcd sends on compaction in production.
     pub inject_compaction_error: Arc<AtomicBool>,
-
+    /// Start revisions received by Watch calls.
+    pub watch_start_revisions: Arc<Mutex<Vec<i64>>>,
+    /// Number of Get calls received by meta storage.
+    pub get_call_count: Arc<AtomicUsize>,
 }
 
 fn convert_kv(from: KeyValue) -> mpb::KeyValue {
@@ -45,6 +49,7 @@ impl PdMocker for MetaStorage {
         if let Err(err) = check_header(req.get_header()) {
             return Some(Err(err));
         }
+        self.get_call_count.fetch_add(1, Ordering::Relaxed);
 
         let store = self.store.lock().unwrap();
         let key = if req.get_range_end().is_empty() {
@@ -102,8 +107,12 @@ impl PdMocker for MetaStorage {
             });
             return true;
         }
+        self.watch_start_revisions
+            .lock()
+            .unwrap()
+            .push(req.get_start_revision());
         // Simulate etcd sending compaction as a gRPC transport error.
-        if self.inject_compaction_error.load(Ordering::Acquire) {
+        if self.inject_compaction_error.swap(false, Ordering::AcqRel) {
             ctx.spawn(async move {
                 sink.fail(RpcStatus::with_message(
                     RpcStatusCode::UNKNOWN,
