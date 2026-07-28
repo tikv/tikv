@@ -85,7 +85,7 @@ use crate::{
                 Command, RawExt, ReleasedLocks, ResponsePolicy, WriteContext, WriteResult,
                 WriteResultLockInfo,
             },
-            flight_recorder::{TXN_FLIGHT_RECORDER, TxnCommandEvent},
+            flight_recorder::{TxnCommandEvent, TXN_FLIGHT_RECORDER},
             flow_controller::FlowController,
             latch::{Latches, Lock},
             sched_pool::{tls_collect_query, tls_collect_scan_details, SchedPool},

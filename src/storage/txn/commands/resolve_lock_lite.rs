@@ -8,7 +8,6 @@ use crate::storage::{
     lock_manager::LockManager,
     mvcc::{MvccTxn, SnapshotReader},
     txn::{
-        Result,
         actions::commit::commit_with_primary,
         cleanup,
         commands::{
@@ -17,6 +16,7 @@ use crate::storage::{
         },
         commit,
         flight_recorder::TXN_FLIGHT_RECORDER,
+        Result,
     },
     ProcessResult, Snapshot,
 };

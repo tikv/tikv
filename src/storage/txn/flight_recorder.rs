@@ -6,7 +6,7 @@
 //! lock/write modifications. It stores neither raw keys nor user values.
 
 use std::{
-    collections::{VecDeque, hash_map::DefaultHasher},
+    collections::{hash_map::DefaultHasher, VecDeque},
     hash::{Hash, Hasher},
     sync::atomic::{AtomicBool, Ordering},
     time::{SystemTime, UNIX_EPOCH},
@@ -19,9 +19,9 @@ use lazy_static::lazy_static;
 use parking_lot::Mutex;
 use tikv_kv::Modify;
 use tikv_util::Either;
-use txn_types::{Key, LockType, TimeStamp, WriteRef, WriteType, parse_lock};
+use txn_types::{parse_lock, Key, LockType, TimeStamp, WriteRef, WriteType};
 
-use crate::storage::{Context, metrics::CommandKind, txn::commands::Command};
+use crate::storage::{metrics::CommandKind, txn::commands::Command, Context};
 
 const SHARD_COUNT: usize = 128;
 const EVENTS_PER_SHARD: usize = 4096;

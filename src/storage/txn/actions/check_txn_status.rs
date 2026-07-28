@@ -3,7 +3,7 @@
 use engine_traits::CF_LOCK;
 use tikv_kv::SnapshotExt;
 // #[PerformanceCriticalPath]
-use txn_types::{Key, Lock, SharedLocks, TimeStamp, Write, WriteType, parse_lock};
+use txn_types::{parse_lock, Key, Lock, SharedLocks, TimeStamp, Write, WriteType};
 
 use crate::storage::{
     mvcc::{

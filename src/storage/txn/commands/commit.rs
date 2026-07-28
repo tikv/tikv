@@ -8,7 +8,6 @@ use crate::storage::{
     lock_manager::LockManager,
     mvcc::{MvccTxn, SnapshotReader},
     txn::{
-        Error, ErrorInner, Result,
         actions::commit::commit_with_primary,
         commands::{
             Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
@@ -16,6 +15,7 @@ use crate::storage::{
         },
         commit,
         flight_recorder::TXN_FLIGHT_RECORDER,
+        Error, ErrorInner, Result,
     },
     ProcessResult, Snapshot, TxnStatus,
 };
