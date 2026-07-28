@@ -8,21 +8,14 @@ use crate::storage::{
     lock_manager::LockManager,
     mvcc::{MvccTxn, SnapshotReader},
     txn::{
-<<<<<<< HEAD
-=======
         Error, ErrorInner, Result,
         actions::commit::commit_with_primary,
->>>>>>> 958078793 (record primary key command)
         commands::{
             Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
             WriteCommand, WriteContext, WriteResult,
         },
-<<<<<<< HEAD
-        commit, Error, ErrorInner, Result,
-=======
         commit,
         flight_recorder::TXN_FLIGHT_RECORDER,
->>>>>>> 958078793 (record primary key command)
     },
     ProcessResult, Snapshot, TxnStatus,
 };

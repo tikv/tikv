@@ -524,59 +524,6 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         });
     }
 
-<<<<<<< HEAD
-=======
-    /// Returns true if admission control consumed the command (reject or
-    /// delay); the caller should return without further processing.
-    fn apply_admission_control(
-        &self,
-        cmd: &Command,
-    ) -> Option<resource_control::AdmissionDecision> {
-        let rm = self.inner.resource_manager.as_ref()?;
-        let rc_ctx = cmd.resource_control_ctx();
-        let rg = rc_ctx.get_resource_group_name();
-        let request_source = cmd.ctx().request_source.clone();
-        let limiter =
-            rm.get_resource_limiter(rg, &request_source, rc_ctx.get_override_priority())?;
-        Some(rm.admission_decision(false, &limiter))
-    }
-
-    /// Spawns an async task on the sched pool that sleeps for `delay` then
-    /// calls `schedule_command`. The latch is acquired only after the sleep so
-    /// the delay does not block concurrent writers with overlapping keys.
-    fn schedule_after_admission_delay(
-        &self,
-        cmd: Command,
-        callback: StorageCallback,
-        delay: Duration,
-        cid: u64,
-    ) {
-        let tag = cmd.tag();
-        let sched = self.clone();
-        let cb = SchedulerTaskCallback::NormalRequestCallback(callback);
-        let metadata = TaskMetadata::from_ctx(cmd.resource_control_ctx());
-        let priority = cmd.priority();
-        let write_bytes = cmd.write_bytes() as u64;
-        let request_source = cmd.ctx().request_source.clone();
-        let mem_quota = self.inner.memory_quota.clone();
-        let rm = self.inner.resource_manager.as_ref().unwrap().clone();
-        let execution = async move {
-            let mut guard = rm.delay_slot_guard();
-            futures_timer::Delay::new(delay).await;
-            guard.release();
-            if let Ok(task) = Task::allocate(cid, cmd, mem_quota) {
-                sched.schedule_command(task, cb, None);
-            } else {
-                Self::fail_with_busy(tag, cb);
-            }
-        };
-        self.inner
-            .sched_worker_pool
-            .spawn(&request_source, metadata, priority, execution, write_bytes)
-            .unwrap();
-    }
-
->>>>>>> 1638b8384 (txn: fix flight recorder event fidelity for rollback and command correlation)
     pub(in crate::storage) fn run_cmd(&self, cmd: Command, callback: StorageCallback) {
         // Allocate the cid and record at arrival, so the Received event keeps
         // the command's true arrival time, shares its cid with subsequent
@@ -593,26 +540,6 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             Self::fail_with_busy(tag, callback.into());
             return;
         }
-<<<<<<< HEAD
-        let cid = self.inner.gen_id();
-        // Record after `gen_id` so the Received event shares the command's cid
-        // with its subsequent lock/write events.
-        TXN_FLIGHT_RECORDER.record_received(&cmd, cid);
-=======
-        // Admission control before latch acquisition so a delayed command does
-        // not block concurrent writers sharing the same keys.
-        match self.apply_admission_control(&cmd) {
-            Some(resource_control::AdmissionDecision::Reject) => {
-                Self::fail_with_busy(tag, callback.into());
-                return;
-            }
-            Some(resource_control::AdmissionDecision::Delay(delay)) => {
-                self.schedule_after_admission_delay(cmd, callback, delay, cid);
-                return;
-            }
-            _ => {}
-        }
->>>>>>> cce3f5185 (txn: record flight-recorder command arrival with entry-allocated cid)
         if let Ok(task) = Task::allocate(cid, cmd, self.inner.memory_quota.clone()) {
             self.schedule_command(
                 task,

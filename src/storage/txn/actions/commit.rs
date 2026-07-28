@@ -9,11 +9,8 @@ use crate::storage::{
         metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
         ErrorInner, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader,
     },
-<<<<<<< HEAD
-    Snapshot,
-=======
     txn::flight_recorder::hash_key,
->>>>>>> 958078793 (record primary key command)
+    Snapshot,
 };
 
 /// Helper function to handle the case when the lock is not found for our

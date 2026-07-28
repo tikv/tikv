@@ -35,15 +35,8 @@ use crate::storage::{
             Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand,
             WriteContext, WriteResult,
         },
-<<<<<<< HEAD
-<<<<<<< HEAD
-        Error, ErrorInner, Result,
-=======
-        flight_recorder::TXN_COMMAND_FLIGHT_RECORDER,
->>>>>>> 78d1887b9 (u)
-=======
         flight_recorder::TXN_FLIGHT_RECORDER,
->>>>>>> 958078793 (record primary key command)
+        Error, ErrorInner, Result,
     },
     types::PrewriteResult,
     Context, Error as StorageError, ProcessResult, Snapshot,

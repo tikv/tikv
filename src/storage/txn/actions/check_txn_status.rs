@@ -10,15 +10,8 @@ use crate::storage::{
         metrics::MVCC_CHECK_TXN_STATUS_COUNTER_VEC, reader::OverlappedWrite, ErrorInner, LockType,
         MvccTxn, ReleasedLock, Result, SnapshotReader, TxnCommitRecord,
     },
-<<<<<<< HEAD
-<<<<<<< HEAD
-    Snapshot, TxnStatus,
-=======
-    txn::flight_recorder::TXN_COMMAND_FLIGHT_RECORDER,
->>>>>>> 78d1887b9 (u)
-=======
     txn::flight_recorder::TXN_FLIGHT_RECORDER,
->>>>>>> 958078793 (record primary key command)
+    Snapshot, TxnStatus,
 };
 
 // The returned `TxnStatus` is Some(..) if the transaction status is already

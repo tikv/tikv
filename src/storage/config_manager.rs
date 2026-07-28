@@ -17,17 +17,12 @@ use tikv_util::{
 
 use crate::{
     config::ConfigurableDb,
-<<<<<<< HEAD
     server::{ttl::TtlCheckerTask, CONFIG_ROCKSDB_GAUGE},
-    storage::{lock_manager::LockManager, txn::flow_controller::FlowController, TxnScheduler},
-=======
-    server::{CONFIG_ROCKSDB_GAUGE, ttl::TtlCheckerTask},
     storage::{
-        TxnScheduler,
         lock_manager::LockManager,
         txn::{flight_recorder::TXN_FLIGHT_RECORDER, flow_controller::FlowController},
+        TxnScheduler,
     },
->>>>>>> 78d1887b9 (u)
 };
 
 pub struct StorageConfigManger<E: Engine, K, L: LockManager> {
@@ -119,7 +114,6 @@ impl<EK: Engine, K: ConfigurableDb, L: LockManager> ConfigManager
                 }
             }
         }
-<<<<<<< HEAD
         if let Some(v) = change.remove("action_on_invalid_max_ts") {
             let str_v: String = v.into();
             let action: concurrency_manager::ActionOnInvalidMaxTs = str_v.try_into()?;
@@ -129,11 +123,9 @@ impl<EK: Engine, K: ConfigurableDb, L: LockManager> ConfigManager
         if let Some(v) = change.remove("max_ts_drift_allowance") {
             let dur_v: ReadableDuration = v.into();
             self.concurrency_manager.set_max_ts_drift_allowance(dur_v.0);
-=======
-        dispatch_max_ts_config_change(&self.concurrency_manager, &mut change)?;
+        }
         if let Some(v) = change.remove("enable_txn_command_flight_recorder") {
             TXN_FLIGHT_RECORDER.set_enabled(v.into());
->>>>>>> 958078793 (record primary key command)
         }
         Ok(())
     }
