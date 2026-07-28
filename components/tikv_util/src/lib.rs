@@ -31,7 +31,7 @@ use std::{
 
 use lazy_static::lazy_static;
 use nix::{
-    sys::wait::{WaitStatus, wait},
+    sys::wait::{WaitStatus, waitpid},
     unistd::{ForkResult, fork},
 };
 use serde::Serialize;
@@ -638,10 +638,17 @@ pub fn check_environment_variables() {
 /// Create a child process and wait to get its exit code.
 pub fn run_and_wait_child_process(child: impl Fn()) -> Result<i32, String> {
     match unsafe { fork() } {
-        Ok(ForkResult::Parent { .. }) => match wait().unwrap() {
-            WaitStatus::Exited(_, status) => Ok(status),
-            v => Err(format!("{:?}", v)),
-        },
+        Ok(ForkResult::Parent { child }) => {
+            let status = waitpid(child, None)
+                .map_err(|e| format!("failed to wait for child process {child}: {e}"))?;
+            match status {
+                WaitStatus::Exited(_, status) => Ok(status),
+                WaitStatus::Signaled(pid, signal, core_dumped) => Err(format!(
+                    "child process {pid} was terminated by signal {signal:?}, core dumped: {core_dumped}"
+                )),
+                status => Err(format!("unexpected child process status: {status:?}")),
+            }
+        }
         Ok(ForkResult::Child) => {
             child();
             std::process::exit(0);
@@ -782,6 +789,16 @@ mod tests {
         let mut panic = String::new();
         stderr.read_to_string(&mut panic).unwrap();
         assert!(!panic.is_empty());
+    }
+
+    #[test]
+    fn test_run_and_wait_child_process_reports_signal() {
+        let err = run_and_wait_child_process(|| unsafe {
+            libc::raise(libc::SIGTERM);
+        })
+        .unwrap_err();
+
+        assert!(err.contains("SIGTERM"), "{err}");
     }
 
     #[test]
