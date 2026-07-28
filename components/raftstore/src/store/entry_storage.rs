@@ -413,6 +413,10 @@ impl Drop for EntryCache {
 /// term information.
 struct TermCache {
     cache: VecDeque<(u64, u64)>, // (term, start_index)
+    // The greatest index covered by the last cached term. The final cache
+    // entry has no following start_index from which an end can be inferred,
+    // so it must not be considered to extend to infinity.
+    tail_index: u64,
     capacity: usize,
 }
 
@@ -420,6 +424,7 @@ impl Default for TermCache {
     fn default() -> Self {
         TermCache {
             cache: Default::default(),
+            tail_index: 0,
             capacity: 8, /* 8 is enough for the recent updated terms.
                           * Small capacity will make the extra memory
                           * cost negligible. */
@@ -455,17 +460,22 @@ impl TermCache {
                         if cached_start_idx > index {
                             self.cache[pos].1 = index;
                         }
+                        if pos + 1 == self.cache.len() {
+                            self.tail_index = self.tail_index.max(index);
+                        }
                         return;
                     } else if self.cache.back().unwrap().0 + 1 < term {
                         // Detected a term jump indicating potential network partition.
                         // Clear the cache to prevent serving stale term information.
                         self.cache.clear();
+                        self.tail_index = 0;
                     }
                 }
             }
         }
         // New term.
         self.cache.push_back((term, index));
+        self.tail_index = index;
         if self.cache.len() > self.capacity {
             self.cache.pop_front();
         }
@@ -492,6 +502,9 @@ impl TermCache {
         // Meanwhile, the capacity of `TermCache` is limited to 8, so the
         // traversal cost is low.
         self.cache.retain(|(_, start_idx)| *start_idx >= index);
+        if self.cache.is_empty() {
+            self.tail_index = 0;
+        }
     }
 
     /// Return the term of the given index.
@@ -502,7 +515,7 @@ impl TermCache {
             return None;
         }
         let (_, start_idx) = self.cache.front().unwrap();
-        if idx < *start_idx {
+        if idx < *start_idx || idx > self.tail_index {
             return None;
         }
         let (end_term, end_idx) = self.cache.back().unwrap();
@@ -1591,7 +1604,7 @@ pub mod tests {
             }
             assert_eq!(cache.entry(0), None);
             assert_eq!(cache.entry(20), Some(8));
-            assert_eq!(cache.entry(21), Some(8));
+            assert_eq!(cache.entry(21), None);
             // index [1..2] => term 1
             assert_eq!(cache.entry(1), Some(1));
             assert_eq!(cache.entry(2), Some(1));
@@ -1622,7 +1635,7 @@ pub mod tests {
                 new_entry(6, 6),
             ];
             cache.prepend(&ents);
-            assert_eq!(cache.entry(46), Some(11));
+            assert_eq!(cache.entry(46), None);
             assert_eq!(cache.entry(3), None);
             assert_eq!(cache.entry(4), Some(4));
             assert_eq!(cache.entry(5), Some(5));
@@ -1649,7 +1662,7 @@ pub mod tests {
             assert_eq!(cache.entry(48), None);
             assert_eq!(cache.entry(49), Some(12));
             assert_eq!(cache.entry(56), Some(19));
-            assert_eq!(cache.entry(57), Some(19));
+            assert_eq!(cache.entry(57), None);
         }
         // Abnormal cases: index hopping
         {
@@ -1662,7 +1675,7 @@ pub mod tests {
             assert_eq!(cache.entry(8), Some(6));
             cache.append(6, 8);
             assert_eq!(cache.cache.len(), 1);
-            assert_eq!(cache.entry(8), Some(8));
+            assert_eq!(cache.entry(8), None);
             drop(cache);
 
             let mut cache = TermCache::default();
@@ -1697,6 +1710,36 @@ pub mod tests {
             assert_eq!(cache.entry(18), None);
             assert_eq!(cache.entry(19), Some(9));
         }
+    }
+
+    #[test]
+    fn test_term_cache_does_not_cover_uncached_tail() {
+        let ents = vec![
+            new_entry(3, 3),
+            new_entry(4, 4),
+            new_entry(5, 4),
+            new_entry(6, 5),
+            new_entry(7, 5),
+        ];
+        let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
+        let worker = LazyWorker::new("snap-manager");
+        let sched = worker.scheduler();
+        let (dummy_scheduler, _) = dummy_scheduler();
+        let mut store = new_storage_from_ents(sched, dummy_scheduler, &td, &ents);
+
+        // Simulate a partial committed-entry batch: only term 4 has reached
+        // TermCache, while the RaftEngine already contains term 5 at index 6.
+        store.term_cache = TermCache::default();
+        store.update_term_cache(4, 4);
+
+        // EntryCache correctly serves the newer term before eviction.
+        assert_eq!(store.term(6).unwrap(), 5);
+
+        // Once all persisted entries are evicted from EntryCache, TermCache
+        // must miss index 6 and fall back to RaftEngine.
+        store.evict_entry_cache(false);
+        assert!(store.is_entry_cache_empty());
+        assert_eq!(store.term(6).unwrap(), 5);
     }
 
     #[test]
