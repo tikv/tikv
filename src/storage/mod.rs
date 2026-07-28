@@ -138,6 +138,7 @@ use crate::{
         test_util::latest_feature_gate,
         txn::{
             commands::{RawAtomicStore, RawCompareAndSwap, TypedCommand},
+            flight_recorder::TXN_FLIGHT_RECORDER,
             flow_controller::{EngineFlowController, FlowController},
             scheduler::TxnScheduler,
             txn_status_cache::{TxnState, TxnStatusCache},
@@ -288,6 +289,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         txn_status_cache: Arc<TxnStatusCache>,
     ) -> Result<Self> {
         assert_eq!(config.api_version(), F::TAG, "Api version not match");
+        TXN_FLIGHT_RECORDER.set_enabled(config.enable_txn_command_flight_recorder);
 
         let sched = TxnScheduler::new(
             engine.clone(),

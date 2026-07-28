@@ -1,14 +1,16 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use engine_traits::CF_LOCK;
 use tikv_kv::SnapshotExt;
 // #[PerformanceCriticalPath]
-use txn_types::{Key, Lock, SharedLocks, TimeStamp, Write, WriteType};
+use txn_types::{parse_lock, Key, Lock, SharedLocks, TimeStamp, Write, WriteType};
 
 use crate::storage::{
     mvcc::{
         metrics::MVCC_CHECK_TXN_STATUS_COUNTER_VEC, reader::OverlappedWrite, ErrorInner, LockType,
         MvccTxn, ReleasedLock, Result, SnapshotReader, TxnCommitRecord,
     },
+    txn::flight_recorder::TXN_FLIGHT_RECORDER,
     Snapshot, TxnStatus,
 };
 
@@ -313,14 +315,7 @@ pub fn rollback_lock(
         TxnCommitRecord::SingleRecord { write, commit_ts }
             if write.write_type != WriteType::Rollback =>
         {
-            panic!(
-                "txn record found but not expected: {:?} {} {:?} {:?} [region_id={}]",
-                write,
-                commit_ts,
-                txn,
-                lock,
-                reader.reader.snapshot_ext().get_region_id().unwrap_or(0)
-            )
+            panic_txn_record_found(txn, reader, &key, lock, &write, commit_ts)
         }
         _ => return Ok(txn.unlock_key(key, is_pessimistic_txn, TimeStamp::zero())),
     };
@@ -384,14 +379,7 @@ pub fn rollback_shared_lock(
         TxnCommitRecord::SingleRecord { write, commit_ts }
             if write.write_type != WriteType::Rollback =>
         {
-            panic!(
-                "txn record found but not expected: {:?} {} {:?} {:?} [region_id={}]",
-                write,
-                commit_ts,
-                txn,
-                lock,
-                reader.reader.snapshot_ext().get_region_id().unwrap_or(0)
-            )
+            panic_txn_record_found(txn, reader, &key, &lock, &write, commit_ts)
         }
         _ => {
             return if shared_locks.is_empty() {
@@ -495,4 +483,144 @@ impl MissingLockAction {
     ) -> Option<Write> {
         make_rollback(ts, !self.collapse_rollback(), overlapped_write)
     }
+}
+
+const MAX_PANIC_WRITE_HISTORY: usize = 32;
+
+fn log_write_history(reader: &mut SnapshotReader<impl Snapshot>, key: &Key) {
+    let mut next_ts = TimeStamp::max();
+    for _ in 0..MAX_PANIC_WRITE_HISTORY {
+        match reader.seek_write(key, next_ts) {
+            Ok(Some((commit_ts, write))) => {
+                error!(
+                    "txn record found but not expected: mvcc write history";
+                    "commit_ts" => commit_ts,
+                    "write" => ?write,
+                );
+                if commit_ts.is_zero() {
+                    return;
+                }
+                next_ts = commit_ts.prev();
+            }
+            Ok(None) => return,
+            Err(err) => {
+                error!(
+                    "txn record found but not expected: failed to read mvcc write history";
+                    "error" => ?err,
+                );
+                return;
+            }
+        }
+    }
+    error!(
+        "txn record found but not expected: mvcc write history reached record limit";
+        "limit" => MAX_PANIC_WRITE_HISTORY,
+    );
+}
+
+#[cold]
+fn log_lock_sources(reader: &SnapshotReader<impl Snapshot>, key: &Key) {
+    let txn_ext = reader.reader.snapshot_ext().get_txn_ext().cloned();
+    match txn_ext {
+        Some(txn_ext) => match txn_ext.pessimistic_locks.try_read() {
+            Some(locks) => {
+                let entry = locks.get(key);
+                error!(
+                    "txn record found but not expected: panic-time in-memory pessimistic lock";
+                    "lock" => ?entry.map(|(lock, _)| lock),
+                    "deleted" => ?entry.map(|(_, deleted)| *deleted),
+                    "table_status" => ?locks.status,
+                    "table_term" => locks.term,
+                    "table_version" => locks.version,
+                );
+            }
+            None => {
+                error!(
+                    "txn record found but not expected: failed to inspect panic-time in-memory pessimistic lock";
+                    "reason" => "lock table is locked",
+                );
+            }
+        },
+        None => {
+            error!(
+                "txn record found but not expected: failed to inspect panic-time in-memory pessimistic lock";
+                "reason" => "transaction extension is unavailable",
+            );
+        }
+    }
+
+    match reader.reader.snapshot().get_cf(CF_LOCK, key) {
+        Ok(Some(value)) => match parse_lock(&value) {
+            Ok(lock) => {
+                error!(
+                    "txn record found but not expected: snapshot CF_LOCK";
+                    "lock" => ?lock,
+                );
+            }
+            Err(err) => {
+                error!(
+                    "txn record found but not expected: failed to parse snapshot CF_LOCK";
+                    "error" => ?err,
+                    "value_len" => value.len(),
+                );
+            }
+        },
+        Ok(None) => {
+            error!(
+                "txn record found but not expected: snapshot CF_LOCK";
+                "lock" => "None",
+            );
+        }
+        Err(err) => {
+            error!(
+                "txn record found but not expected: failed to read snapshot CF_LOCK";
+                "error" => ?err,
+            );
+        }
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn panic_txn_record_found(
+    txn: &MvccTxn,
+    reader: &mut SnapshotReader<impl Snapshot>,
+    key: &Key,
+    lock: &Lock,
+    write: &Write,
+    commit_ts: TimeStamp,
+) -> ! {
+    let (region_id, term, snapshot_data_version) = {
+        let ext = reader.reader.snapshot_ext();
+        (
+            ext.get_region_id().unwrap_or(0),
+            ext.get_term().map(|term| term.get()).unwrap_or(0),
+            ext.get_data_version().unwrap_or(0),
+        )
+    };
+    let flight_events = TXN_FLIGHT_RECORDER.events_for_key(key);
+
+    error!(
+        "txn record found but not expected: diagnostic summary";
+        "key" => ?key,
+        "start_ts" => reader.start_ts,
+        "commit_ts" => commit_ts,
+        "region_id" => region_id,
+        "term" => term,
+        "snapshot_data_version" => snapshot_data_version,
+        "flight_event_count" => flight_events.len(),
+    );
+    log_lock_sources(reader, key);
+    for event in &flight_events {
+        error!(
+            "txn record found but not expected: flight recorder event";
+            "event" => ?event,
+        );
+    }
+    log_write_history(reader, key);
+
+    panic!(
+        "txn record found but not expected: {:?} {} {:?} {:?} [region_id={}]",
+        write, commit_ts, txn, lock, region_id
+    )
 }

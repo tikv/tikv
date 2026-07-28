@@ -8,11 +8,14 @@ use crate::storage::{
     lock_manager::LockManager,
     mvcc::{MvccTxn, SnapshotReader},
     txn::{
+        actions::commit::commit_with_primary,
         commands::{
             Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
             WriteCommand, WriteContext, WriteResult,
         },
-        commit, Error, ErrorInner, Result,
+        commit,
+        flight_recorder::TXN_FLIGHT_RECORDER,
+        Error, ErrorInner, Result,
     },
     ProcessResult, Snapshot, TxnStatus,
 };
@@ -63,8 +66,17 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
         let rows = self.keys.len();
         // Pessimistic txn needs key_hashes to wake up waiters
         let mut released_locks = ReleasedLocks::new();
-        for k in self.keys {
-            released_locks.push(commit(&mut txn, &mut reader, k, self.commit_ts)?);
+        if TXN_FLIGHT_RECORDER.is_enabled() {
+            for k in self.keys {
+                let (released, primary_key_hash) =
+                    commit_with_primary(&mut txn, &mut reader, k, self.commit_ts)?;
+                released_locks.set_flight_primary_key_hash(primary_key_hash);
+                released_locks.push(released);
+            }
+        } else {
+            for k in self.keys {
+                released_locks.push(commit(&mut txn, &mut reader, k, self.commit_ts)?);
+            }
         }
 
         let pr = ProcessResult::TxnStatus {
