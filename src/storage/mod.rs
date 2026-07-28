@@ -4421,7 +4421,7 @@ mod tests {
         metapb::RegionEpoch,
     };
     use parking_lot::Mutex;
-    use tikv_util::config::ReadableSize;
+    use tikv_util::{Either, config::ReadableSize};
     use tracker::INVALID_TRACKER_TOKEN;
     use txn_types::{LastChange, Mutation, PessimisticLock, SHORT_VALUE_MAX_LEN, WriteType};
 
@@ -11869,6 +11869,86 @@ mod tests {
             let pessimistic_locks = txn_ext.pessimistic_locks.read();
             assert!(pessimistic_locks.get(&k1).is_none());
         }
+    }
+
+    #[test]
+    fn test_raft_fallback_removes_stale_in_memory_pessimistic_lock() {
+        let txn_ext = Arc::new(TxnExt::default());
+        let builder = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .pipelined_pessimistic_lock(true)
+            .in_memory_pessimistic_lock(true);
+        let in_memory_peer_size_limit = builder.in_memory_peer_size_limit.clone();
+        let storage = builder.build_for_txn(txn_ext.clone()).unwrap();
+        let key = Key::from_raw(b"k1");
+
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                new_acquire_pessimistic_lock_command(
+                    vec![(key.clone(), false)],
+                    10,
+                    10,
+                    false,
+                    false,
+                ),
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Make overwriting the existing in-memory lock exceed the peer quota so the
+        // next request falls back to Raft.
+        in_memory_peer_size_limit.store(0, Ordering::Relaxed);
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                new_acquire_pessimistic_lock_command(
+                    vec![(key.clone(), false)],
+                    10,
+                    20,
+                    false,
+                    false,
+                ),
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Pipelined pessimistic locking may respond before apply. Wait until the
+        // fallback lock is visible in CF_LOCK before comparing the two copies.
+        let mut engine = storage.get_engine().engine;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let snapshot = engine.snapshot(Default::default()).unwrap();
+            let mut reader = mvcc::MvccReader::new(snapshot, None, true);
+            match reader.load_lock(&key).unwrap() {
+                Some(Either::Left(lock)) if lock.for_update_ts == 20.into() => break,
+                _ if std::time::Instant::now() < deadline => thread::yield_now(),
+                lock => panic!("fallback lock was not applied to CF_LOCK: {:?}", lock),
+            }
+        }
+
+        // Applying the fallback lock must remove the old in-memory lock so the
+        // newer lock in CF_LOCK is visible.
+        assert!(txn_ext.pessimistic_locks.read().get(&key).is_none());
+
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::PrewritePessimistic::with_for_update_ts_constraints(
+                    vec![(
+                        Mutation::make_put(key.clone(), b"v".to_vec()),
+                        DoPessimisticCheck,
+                    )],
+                    key.to_raw().unwrap(),
+                    10.into(),
+                    20.into(),
+                    [(0, 20.into())],
+                ),
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
     }
 
     #[test]
