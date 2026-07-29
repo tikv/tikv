@@ -18,6 +18,7 @@ use engine_traits::{CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::PrewriteRequestPessimisticAction;
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
+use smallvec::SmallVec;
 use tikv_kv::Modify;
 use tikv_util::{Either, config::ReadableSize};
 use txn_types::{Key, LockType, TimeStamp, WriteRef, WriteType, parse_lock};
@@ -61,7 +62,7 @@ struct CommandKey {
 /// Metadata captured before a command is moved into its MVCC command handler.
 pub(crate) struct TxnCommandEventMetadata {
     event: TxnCommandEvent,
-    keys: Vec<CommandKey>,
+    keys: SmallVec<[CommandKey; 1]>,
 }
 
 impl TxnCommandEventMetadata {
@@ -69,7 +70,7 @@ impl TxnCommandEventMetadata {
         let ctx = cmd.ctx();
         let mut metadata = Self {
             event: TxnCommandEvent::new(cmd.tag(), cid, ctx, snapshot_data_version),
-            keys: Vec::new(),
+            keys: SmallVec::new(),
         };
         metadata.event.txn_start_ts = cmd.ts().into_inner();
 
@@ -153,6 +154,12 @@ impl TxnCommandEventMetadata {
                 metadata.event.verify_is_primary = c.verify_is_primary;
                 metadata.keys.push(command_key(&c.primary_key));
             }
+            Command::Cleanup(c) => {
+                metadata.event.current_ts = c.current_ts.into_inner();
+            }
+            Command::PessimisticRollback(c) => {
+                metadata.event.for_update_ts = c.for_update_ts.into_inner();
+            }
             Command::ResolveLock(c) => {
                 metadata.keys.extend(
                     c.key_locks
@@ -167,9 +174,9 @@ impl TxnCommandEventMetadata {
             }
             Command::ResolveLockLite(c) => {
                 metadata.event.commit_ts = c.commit_ts.into_inner();
-                // ResolveLockLite also learns the primary key only after
-                // reading the lock, so only its successfully applied
-                // primary-key modifies are recorded.
+                // ResolveLockLite learns the primary key only after reading
+                // the lock, so only its successfully applied primary-key
+                // modifies are recorded.
             }
             Command::Flush(c) => {
                 metadata.event.lock_ttl = c.lock_ttl;
@@ -190,8 +197,16 @@ impl TxnCommandEventMetadata {
         }
 
         metadata.keys.sort_unstable_by_key(|key| key.key_hash);
-        let identifies_primary_while_processing = matches!(cmd, Command::Commit(_))
-            || matches!(cmd, Command::ResolveLockLite(c) if !c.commit_ts.is_zero());
+        // These commands can identify the primary only after reading a
+        // matching lock.
+        let identifies_primary_while_processing = matches!(
+            cmd,
+            Command::Commit(_)
+                | Command::Cleanup(_)
+                | Command::Rollback(_)
+                | Command::PessimisticRollback(_)
+                | Command::ResolveLockLite(_)
+        );
         (!metadata.keys.is_empty() || identifies_primary_while_processing).then_some(metadata)
     }
 
@@ -641,6 +656,9 @@ mod tests {
     use txn_types::{Lock, Write};
 
     use super::*;
+    use crate::storage::txn::commands::{
+        Cleanup, Commit, PessimisticRollback, ResolveLockLite, Rollback,
+    };
 
     fn event_for_key(key: &Key, cid: u64) -> TxnCommandEvent {
         let mut event = TxnCommandEvent::new(CommandKind::prewrite, cid, &Context::default(), None);
@@ -669,6 +687,33 @@ mod tests {
     }
 
     #[test]
+    fn test_processing_identified_primary_uses_inline_key() {
+        let key = Key::from_raw(b"key");
+        let commands: [Command; 5] = [
+            Commit::new(vec![key.clone()], 10.into(), 20.into(), Context::default()).into(),
+            Cleanup::new(key.clone(), 10.into(), 20.into(), Context::default()).into(),
+            Rollback::new(vec![key.clone()], 10.into(), Context::default()).into(),
+            PessimisticRollback::new(
+                vec![key.clone()],
+                10.into(),
+                15.into(),
+                None,
+                Context::default(),
+            )
+            .into(),
+            ResolveLockLite::new(10.into(), 0.into(), vec![key], Context::default()).into(),
+        ];
+
+        for command in commands {
+            let mut metadata = TxnCommandEventMetadata::from_command(&command, 1, None).unwrap();
+            assert!(metadata.keys.is_empty());
+            metadata.set_primary_key_hash(1);
+            assert_eq!(metadata.keys.len(), 1);
+            assert!(!metadata.keys.spilled());
+        }
+    }
+
+    #[test]
     fn test_modify_events_are_normalized_to_user_key() {
         let key = Key::from_raw(b"key");
         let secondary_key = Key::from_raw(b"secondary-key");
@@ -681,11 +726,11 @@ mod tests {
         event.lock_ttl = 20_000;
         let mut metadata = TxnCommandEventMetadata {
             event,
-            keys: vec![CommandKey {
+            keys: SmallVec::from_buf([CommandKey {
                 key_hash,
                 pessimistic_action: Some(PrewriteRequestPessimisticAction::DoPessimisticCheck),
                 txn_start_ts: 10,
-            }],
+            }]),
         };
         let lock = Lock::new(
             LockType::Put,

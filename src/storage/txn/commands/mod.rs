@@ -540,7 +540,8 @@ impl WriteResultLockInfo {
 }
 
 // The second field is an optional flight-recorder primary-key hash, identified
-// while preparing commit and consumed before the locks reach the lock manager.
+// while processing a write command and consumed before the locks reach the lock
+// manager.
 #[derive(Default, Debug)]
 pub struct ReleasedLocks(Vec<ReleasedLock>, u64);
 

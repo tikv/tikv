@@ -10,11 +10,14 @@ use crate::storage::{
     lock_manager::LockManager,
     mvcc::{MvccTxn, SnapshotReader},
     txn::{
-        Result, cleanup,
+        Result,
+        actions::cleanup::cleanup_with_primary,
+        cleanup,
         commands::{
             Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
             WriteCommand, WriteContext, WriteResult,
         },
+        flight_recorder::TXN_FLIGHT_RECORDER,
     },
 };
 
@@ -66,13 +69,15 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Cleanup {
         let mut released_locks = ReleasedLocks::new();
         // The rollback must be protected, see more on
         // [issue #7364](https://github.com/tikv/tikv/issues/7364)
-        released_locks.push(cleanup(
-            &mut txn,
-            &mut reader,
-            self.key,
-            self.current_ts,
-            true,
-        )?);
+        let released = if TXN_FLIGHT_RECORDER.is_enabled() {
+            let (released, primary_key_hash) =
+                cleanup_with_primary(&mut txn, &mut reader, self.key, self.current_ts, true)?;
+            released_locks.set_flight_primary_key_hash(primary_key_hash);
+            released
+        } else {
+            cleanup(&mut txn, &mut reader, self.key, self.current_ts, true)?
+        };
+        released_locks.push(released);
 
         let new_acquired_locks = txn.take_new_locks();
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
