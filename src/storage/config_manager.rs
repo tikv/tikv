@@ -20,7 +20,10 @@ use crate::{
     server::{ttl::TtlCheckerTask, CONFIG_ROCKSDB_GAUGE},
     storage::{
         lock_manager::LockManager,
-        txn::{flight_recorder::TXN_FLIGHT_RECORDER, flow_controller::FlowController},
+        txn::{
+            flight_recorder::{MIN_TXN_COMMAND_FLIGHT_RECORDER_CAPACITY, TXN_FLIGHT_RECORDER},
+            flow_controller::FlowController,
+        },
         TxnScheduler,
     },
 };
@@ -123,6 +126,17 @@ impl<EK: Engine, K: ConfigurableDb, L: LockManager> ConfigManager
         if let Some(v) = change.remove("max_ts_drift_allowance") {
             let dur_v: ReadableDuration = v.into();
             self.concurrency_manager.set_max_ts_drift_allowance(dur_v.0);
+        }
+        if let Some(v) = change.remove("txn_command_flight_recorder_capacity") {
+            let capacity: ReadableSize = v.into();
+            if capacity.0 < MIN_TXN_COMMAND_FLIGHT_RECORDER_CAPACITY as u64 {
+                return Err(format!(
+                    "storage.txn-command-flight-recorder-capacity must be at least {} bytes",
+                    MIN_TXN_COMMAND_FLIGHT_RECORDER_CAPACITY
+                )
+                .into());
+            }
+            TXN_FLIGHT_RECORDER.set_capacity(capacity.0 as usize);
         }
         if let Some(v) = change.remove("enable_txn_command_flight_recorder") {
             TXN_FLIGHT_RECORDER.set_enabled(v.into());

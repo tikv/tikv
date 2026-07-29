@@ -8,7 +8,8 @@
 use std::{
     collections::{hash_map::DefaultHasher, VecDeque},
     hash::{Hash, Hasher},
-    sync::atomic::{AtomicBool, Ordering},
+    mem::size_of,
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -18,13 +19,13 @@ use kvproto::kvrpcpb::PrewriteRequestPessimisticAction;
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
 use tikv_kv::Modify;
-use tikv_util::Either;
+use tikv_util::{config::ReadableSize, Either};
 use txn_types::{parse_lock, Key, LockType, TimeStamp, WriteRef, WriteType};
 
 use crate::storage::{metrics::CommandKind, txn::commands::Command, Context};
 
-const SHARD_COUNT: usize = 128;
-const EVENTS_PER_SHARD: usize = 4096;
+const SHARD_COUNT: usize = 256;
+pub(crate) const DEFAULT_TXN_COMMAND_FLIGHT_RECORDER_CAPACITY: ReadableSize = ReadableSize::mb(100);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TxnCommandEventKind {
@@ -350,6 +351,9 @@ pub(crate) struct TxnCommandEvent {
     generation: u64,
 }
 
+pub(crate) const MIN_TXN_COMMAND_FLIGHT_RECORDER_CAPACITY: usize =
+    SHARD_COUNT * size_of::<TxnCommandEvent>();
+
 impl TxnCommandEvent {
     fn new(
         command: CommandKind,
@@ -394,21 +398,36 @@ pub(crate) struct TxnCommandFlightRecorder {
     enabled: AtomicBool,
     shards: Vec<CachePadded<Mutex<VecDeque<TxnCommandEvent>>>>,
     shard_mask: usize,
-    events_per_shard: usize,
+    events_per_shard: AtomicUsize,
 }
 
 impl TxnCommandFlightRecorder {
     fn new(shard_count: usize, events_per_shard: usize, enabled: bool) -> Self {
         assert!(shard_count.is_power_of_two() && events_per_shard > 0);
         let shards = (0..shard_count)
-            .map(|_| CachePadded::new(Mutex::new(VecDeque::new())))
+            .map(|_| {
+                let events = if enabled {
+                    VecDeque::with_capacity(events_per_shard)
+                } else {
+                    VecDeque::new()
+                };
+                CachePadded::new(Mutex::new(events))
+            })
             .collect();
         Self {
             enabled: AtomicBool::new(enabled),
             shards,
             shard_mask: shard_count - 1,
-            events_per_shard,
+            events_per_shard: AtomicUsize::new(events_per_shard),
         }
+    }
+
+    fn with_capacity(shard_count: usize, capacity: usize, enabled: bool) -> Self {
+        Self::new(
+            shard_count,
+            events_per_shard(shard_count, capacity),
+            enabled,
+        )
     }
 
     #[inline]
@@ -427,7 +446,48 @@ impl TxnCommandFlightRecorder {
             }
             return;
         }
+        if self.is_enabled() {
+            return;
+        }
+        let events_per_shard = self.events_per_shard.load(Ordering::Relaxed);
+        for shard in &self.shards {
+            *shard.lock() = VecDeque::with_capacity(events_per_shard);
+        }
         self.enabled.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn set_capacity(&self, capacity: usize) {
+        let events_per_shard = events_per_shard(self.shards.len(), capacity);
+        let old_events_per_shard = self.events_per_shard.load(Ordering::Relaxed);
+        if events_per_shard == old_events_per_shard {
+            return;
+        }
+        if !self.is_enabled() {
+            self.events_per_shard
+                .store(events_per_shard, Ordering::Relaxed);
+            return;
+        }
+
+        // Keep the old limit until all shards have been enlarged so recorders
+        // cannot trigger a runtime allocation. Publish a smaller limit first
+        // so recorders stop growing the retained history while shards are trimmed.
+        if events_per_shard < old_events_per_shard {
+            self.events_per_shard
+                .store(events_per_shard, Ordering::Release);
+        }
+        for shard in &self.shards {
+            let mut shard = shard.lock();
+            while shard.len() > events_per_shard {
+                shard.pop_front();
+            }
+            let mut resized = VecDeque::with_capacity(events_per_shard);
+            resized.extend(shard.drain(..));
+            *shard = resized;
+        }
+        if events_per_shard > old_events_per_shard {
+            self.events_per_shard
+                .store(events_per_shard, Ordering::Release);
+        }
     }
 
     #[inline]
@@ -476,7 +536,8 @@ impl TxnCommandFlightRecorder {
                 continue;
             }
             event.unix_time_ms = unix_time_ms;
-            if shard.len() == self.events_per_shard {
+            let events_per_shard = self.events_per_shard.load(Ordering::Relaxed);
+            if shard.len() >= events_per_shard {
                 shard.pop_front();
             }
             shard.push_back(event);
@@ -543,9 +604,17 @@ impl TxnCommandFlightRecorder {
     }
 }
 
+fn events_per_shard(shard_count: usize, capacity: usize) -> usize {
+    (capacity / shard_count / size_of::<TxnCommandEvent>()).max(1)
+}
+
 lazy_static! {
     pub(crate) static ref TXN_FLIGHT_RECORDER: TxnCommandFlightRecorder =
-        TxnCommandFlightRecorder::new(SHARD_COUNT, EVENTS_PER_SHARD, false);
+        TxnCommandFlightRecorder::with_capacity(
+            SHARD_COUNT,
+            DEFAULT_TXN_COMMAND_FLIGHT_RECORDER_CAPACITY.0 as usize,
+            false,
+        );
 }
 
 #[cfg(test)]
@@ -675,10 +744,45 @@ mod tests {
 
     #[test]
     fn test_event_size_is_bounded() {
-        // 128 * 4096 records should remain below roughly 80 MiB, excluding the small
-        // per-shard VecDeque bookkeeping.
         let size = size_of::<TxnCommandEvent>();
         assert!(size <= 160, "event size is {size}");
+
+        let events_per_shard = events_per_shard(
+            SHARD_COUNT,
+            DEFAULT_TXN_COMMAND_FLIGHT_RECORDER_CAPACITY.0 as usize,
+        );
+        let retained_event_bytes = SHARD_COUNT * events_per_shard * size;
+        assert!(retained_event_bytes <= DEFAULT_TXN_COMMAND_FLIGHT_RECORDER_CAPACITY.0 as usize);
+        assert!(
+            DEFAULT_TXN_COMMAND_FLIGHT_RECORDER_CAPACITY.0 as usize - retained_event_bytes
+                < MIN_TXN_COMMAND_FLIGHT_RECORDER_CAPACITY
+        );
+    }
+
+    #[test]
+    fn test_resize_capacity() {
+        let recorder = TxnCommandFlightRecorder::new(2, 4, true);
+        let key = Key::from_raw(b"key");
+
+        for cid in 1..=4 {
+            recorder.record([event_for_key(&key, cid)]);
+        }
+
+        recorder.set_capacity(2 * 2 * size_of::<TxnCommandEvent>());
+        assert_eq!(recorder.events_per_shard.load(Ordering::Relaxed), 2);
+        let events = recorder.events_for_key(&key);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].cid, 3);
+        assert_eq!(events[1].cid, 4);
+
+        recorder.set_capacity(2 * 4 * size_of::<TxnCommandEvent>());
+        for cid in 5..=6 {
+            recorder.record([event_for_key(&key, cid)]);
+        }
+        let events = recorder.events_for_key(&key);
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0].cid, 3);
+        assert_eq!(events[3].cid, 6);
     }
 
     #[test]
@@ -713,16 +817,34 @@ mod tests {
     fn test_disabled_recorder_does_not_record_and_enable_starts_fresh() {
         let recorder = TxnCommandFlightRecorder::new(2, 4, false);
         let key = Key::from_raw(b"key");
+        assert!(
+            recorder
+                .shards
+                .iter()
+                .all(|shard| shard.lock().capacity() == 0)
+        );
 
         recorder.record([event_for_key(&key, 1)]);
         assert!(recorder.events_for_key(&key).is_empty());
 
         recorder.set_enabled(true);
+        assert!(
+            recorder
+                .shards
+                .iter()
+                .all(|shard| shard.lock().capacity() >= 4)
+        );
         recorder.record([event_for_key(&key, 2)]);
         assert_eq!(recorder.events_for_key(&key).len(), 1);
 
         recorder.set_enabled(false);
         assert!(recorder.events_for_key(&key).is_empty());
+        assert!(
+            recorder
+                .shards
+                .iter()
+                .all(|shard| shard.lock().capacity() == 0)
+        );
         recorder.set_enabled(true);
         assert!(recorder.events_for_key(&key).is_empty());
     }

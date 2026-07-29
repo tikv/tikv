@@ -100,7 +100,6 @@ scheduler-concurrency = 123
 scheduler-worker-pool-size = 1
 scheduler-pending-write-threshold = "123KB"
 enable-async-apply-prewrite = true
-enable-txn-command-flight-recorder = false
 reserve-space = "10GB"
 reserve-raft-space = "2GB"
 enable-ttl = true
