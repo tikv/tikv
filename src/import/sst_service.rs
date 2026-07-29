@@ -1314,6 +1314,9 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 ),
                 resource_limiter,
                 true,
+                false,
+                None,
+                0,
             )
             .await;
 
