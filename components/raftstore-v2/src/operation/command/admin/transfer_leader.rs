@@ -313,7 +313,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let max_wait_duration =
             std::cmp::max(half_election_timeout, cfg.max_entry_cache_warmup_duration.0);
         let deadline = Instant::now() + max_wait_duration;
-        self.transfer_leader_state_mut().transfer_leader_msg = Some((msg.clone(), deadline));
+        self.transfer_leader_state_mut()
+            .set_pending_message(msg, deadline);
     }
 
     /// Before ack the transfer leader message sent by the leader.
