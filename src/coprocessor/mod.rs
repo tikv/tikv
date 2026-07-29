@@ -62,8 +62,9 @@ pub const REQ_FLAG_TIDB_SYSSESSION: u64 = 2048;
 
 type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
 
-/// A task result that can be combined with results of the same request and
-/// serialized after merging.
+/// A task result that a `RequestHandler` returns unserialized, so that the
+/// endpoint can merge the results of a batched request's tasks (one per region)
+/// and serialize the merged result only once.
 pub trait MergeableResult: Any + Send {
     /// Merges another result of the same concrete type. Callers may choose any
     /// merge order, so implementations must produce the same logical result
@@ -79,15 +80,23 @@ pub trait MergeableResult: Any + Send {
 pub type TracedResponse = MemoryTraceGuard<coppb::Response>;
 
 /// The output of handling a unary request. It always owns the response and
-/// records separately whether its data is ready for transport.
+/// records separately whether its data is ready or still mergeable.
 pub struct HandlerOutput {
     response: TracedResponse,
     state: HandlerOutputState,
 }
 
-/// Whether the response data is ready for transport.
+/// Whether the response data is ready or still mergeable and unserialized.
 enum HandlerOutputState {
     Ready,
+    Mergeable(Box<dyn MergeableResult>),
+}
+
+/// A serialization failure that retains the partial response's trace guard so
+/// batch finalization can reuse it when constructing an error response.
+struct ResponseMaterializationFailure {
+    error: Error,
+    partial_response: Box<TracedResponse>,
 }
 
 impl HandlerOutput {
@@ -101,10 +110,46 @@ impl HandlerOutput {
 
     /// Creates a ready response whose data is attributed to `trace`.
     pub fn ready_with_trace(response: coppb::Response, trace: &Arc<MemoryTrace>) -> Self {
-        let data_capacity = response.data.capacity();
+        let data_len = response.get_data().len();
         Self {
-            response: trace.trace_guard(response, data_capacity),
+            response: trace.trace_guard(response, data_len),
             state: HandlerOutputState::Ready,
+        }
+    }
+
+    /// Creates a mergeable output whose eventual response data is attributed
+    /// to `trace`.
+    pub fn mergeable_with_trace(
+        partial_response: coppb::Response,
+        result: Box<dyn MergeableResult>,
+        trace: &Arc<MemoryTrace>,
+    ) -> Self {
+        debug_assert!(partial_response.get_data().is_empty());
+        Self {
+            response: trace.trace_guard(partial_response, 0),
+            state: HandlerOutputState::Mergeable(result),
+        }
+    }
+
+    fn into_response(self) -> std::result::Result<TracedResponse, ResponseMaterializationFailure> {
+        let Self {
+            mut response,
+            state,
+        } = self;
+        match state {
+            HandlerOutputState::Ready => Ok(response),
+            HandlerOutputState::Mergeable(result) => match result.into_data() {
+                Ok(data) => {
+                    response.set_data(data);
+                    let data_len = response.get_data().len();
+                    response.retrace(data_len);
+                    Ok(response)
+                }
+                Err(error) => Err(ResponseMaterializationFailure {
+                    error,
+                    partial_response: Box::new(response),
+                }),
+            },
         }
     }
 }
@@ -112,7 +157,8 @@ impl HandlerOutput {
 /// An interface for all kind of Coprocessor request handlers.
 #[async_trait]
 pub trait RequestHandler: Send {
-    /// Processes current request and produces a unary output.
+    /// Processes current request and produces either a ready response or a
+    /// result kept unserialized for merging.
     async fn handle_request(&mut self) -> Result<HandlerOutput> {
         panic!("unary request is not supported for this handler");
     }
