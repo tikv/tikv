@@ -25,7 +25,7 @@ use txn_types::{parse_lock, Key, LockType, TimeStamp, WriteRef, WriteType};
 use crate::storage::{metrics::CommandKind, txn::commands::Command, Context};
 
 const SHARD_COUNT: usize = 256;
-pub(crate) const DEFAULT_TXN_COMMAND_FLIGHT_RECORDER_CAPACITY: ReadableSize = ReadableSize::mb(100);
+pub(crate) const DEFAULT_TXN_COMMAND_FLIGHT_RECORDER_CAPACITY: ReadableSize = ReadableSize::gb(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TxnCommandEventKind {
