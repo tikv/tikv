@@ -79,6 +79,10 @@ pub const BACKUP_META_MIN_BEGIN_TS_PREFIX: char = 'd';
 pub const BACKUP_META_MIN_TS_PREFIX: char = 'l';
 pub const BACKUP_META_MAX_TS_PREFIX: char = 'u';
 pub const BACKUP_META_FLAG_PREFIX: char = 'p';
+/// The backupmeta does not reference any TiKV meta CF log file.
+pub const BACKUP_META_FLAG_NO_META_FILES: u64 = 1;
+/// The backupmeta does not reference any log file.
+pub const BACKUP_META_FLAG_EMPTY: u64 = 1 << 1;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ParsedBackupMetaFileName {
