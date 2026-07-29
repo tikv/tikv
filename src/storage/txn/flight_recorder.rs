@@ -210,8 +210,11 @@ impl TxnCommandEventMetadata {
         (!metadata.keys.is_empty() || identifies_primary_while_processing).then_some(metadata)
     }
 
-    pub(crate) fn set_primary_key_hash(&mut self, key_hash: u64) {
-        if key_hash == 0 || !self.keys.is_empty() {
+    pub(crate) fn set_primary_key_hash(&mut self, key_hash: Option<u64>) {
+        let Some(key_hash) = key_hash else {
+            return;
+        };
+        if !self.keys.is_empty() {
             return;
         }
         self.keys.push(CommandKey {
@@ -707,8 +710,9 @@ mod tests {
         for command in commands {
             let mut metadata = TxnCommandEventMetadata::from_command(&command, 1, None).unwrap();
             assert!(metadata.keys.is_empty());
-            metadata.set_primary_key_hash(1);
+            metadata.set_primary_key_hash(Some(0));
             assert_eq!(metadata.keys.len(), 1);
+            assert_eq!(metadata.keys[0].key_hash, 0);
             assert!(!metadata.keys.spilled());
         }
     }
@@ -784,7 +788,7 @@ mod tests {
         assert_eq!(events[1].write_type, Some(WriteType::Put));
 
         metadata.keys.clear();
-        metadata.set_primary_key_hash(key_hash);
+        metadata.set_primary_key_hash(Some(key_hash));
         let events = metadata.events_for_modifies(&modifies);
         assert_eq!(events.len(), 2);
         assert!(events.iter().all(|event| event.key_hash == key_hash));

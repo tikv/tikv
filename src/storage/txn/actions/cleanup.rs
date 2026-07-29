@@ -35,15 +35,15 @@ pub fn cleanup<S: Snapshot>(
 }
 
 /// Returns the flight-recorder hash when `key` is the primary key recorded in
-/// its lock, or zero otherwise.
+/// its lock.
 pub(crate) fn cleanup_with_primary<S: Snapshot>(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<S>,
     key: Key,
     current_ts: TimeStamp,
     protect_rollback: bool,
-) -> MvccResult<(Option<ReleasedLock>, u64)> {
-    let mut primary_key_hash = 0;
+) -> MvccResult<(Option<ReleasedLock>, Option<u64>)> {
+    let mut primary_key_hash = None;
     let released = cleanup_inner(
         txn,
         reader,
@@ -52,7 +52,7 @@ pub(crate) fn cleanup_with_primary<S: Snapshot>(
         protect_rollback,
         |key, primary| {
             if key.is_encoded_from(primary) {
-                primary_key_hash = hash_key(key);
+                primary_key_hash = Some(hash_key(key));
             }
         },
     )?;
@@ -352,7 +352,7 @@ pub mod tests {
             true,
         )
         .unwrap();
-        assert_eq!(primary_key_hash, hash_key(&Key::from_raw(primary)));
+        assert_eq!(primary_key_hash, Some(hash_key(&Key::from_raw(primary))));
 
         let (_, primary_key_hash) = cleanup_with_primary(
             &mut txn,
@@ -362,7 +362,7 @@ pub mod tests {
             true,
         )
         .unwrap();
-        assert_eq!(primary_key_hash, 0);
+        assert_eq!(primary_key_hash, None);
 
         let (_, primary_key_hash) = cleanup_with_primary(
             &mut txn,
@@ -372,7 +372,7 @@ pub mod tests {
             true,
         )
         .unwrap();
-        assert_eq!(primary_key_hash, 0);
+        assert_eq!(primary_key_hash, None);
     }
 
     #[test]
