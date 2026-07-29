@@ -56,17 +56,17 @@ pub fn commit<S: Snapshot>(
 }
 
 /// Returns the flight-recorder hash when `key` is the primary key recorded in
-/// its lock, or zero otherwise.
+/// its lock.
 pub(crate) fn commit_with_primary<S: Snapshot>(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<S>,
     key: Key,
     commit_ts: TimeStamp,
-) -> MvccResult<(Option<ReleasedLock>, u64)> {
-    let mut primary_key_hash = 0;
+) -> MvccResult<(Option<ReleasedLock>, Option<u64>)> {
+    let mut primary_key_hash = None;
     let released = commit_inner(txn, reader, key, commit_ts, |key, primary| {
         if key.is_encoded_from(primary) {
-            primary_key_hash = hash_key(key);
+            primary_key_hash = Some(hash_key(key));
         }
     })?;
     Ok((released, primary_key_hash))
@@ -373,12 +373,12 @@ pub mod tests {
 
         let (_, primary_key_hash) =
             commit_with_primary(&mut txn, &mut reader, Key::from_raw(primary), 20.into()).unwrap();
-        assert_eq!(primary_key_hash, hash_key(&Key::from_raw(primary)));
+        assert_eq!(primary_key_hash, Some(hash_key(&Key::from_raw(primary))));
 
         let (_, primary_key_hash) =
             commit_with_primary(&mut txn, &mut reader, Key::from_raw(secondary), 20.into())
                 .unwrap();
-        assert_eq!(primary_key_hash, 0);
+        assert_eq!(primary_key_hash, None);
     }
 
     #[cfg(test)]

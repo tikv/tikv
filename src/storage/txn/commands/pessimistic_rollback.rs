@@ -88,7 +88,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
                             && lock.for_update_ts <= self.for_update_ts
                         {
                             if record_primary && key.is_encoded_from(&lock.primary) {
-                                released_locks.set_flight_primary_key_hash(hash_key(&key));
+                                released_locks.set_flight_primary_key_hash(Some(hash_key(&key)));
                             }
                             Ok(txn.unlock_key(key, true, TimeStamp::zero()))
                         } else {
