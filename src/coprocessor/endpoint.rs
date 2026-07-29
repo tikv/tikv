@@ -647,14 +647,12 @@ impl<E: Engine> Endpoint<E> {
         Ok(output)
     }
 
-    /// Handle a unary request and run on the read pool.
-    ///
-    /// Returns `Err(err)` if the read pool is full. Returns `Ok(future)` in
-    /// other cases. The future inside may be an error however.
-    fn handle_unary_request(
+    /// Schedules a unary request on the read pool and returns its handler
+    /// output.
+    fn schedule_unary_request(
         &self,
         r: ParseCopRequestResult<E::IMSnap>,
-    ) -> impl Future<Output = Result<TracedResponse>> {
+    ) -> impl Future<Output = Result<HandlerOutput>> {
         let ParseCopRequestResult {
             req_tag,
             req_ctx,
@@ -712,8 +710,19 @@ impl<E: Engine> Endpoint<E> {
         );
         async move {
             spawn_fut_result?.await?;
-            let HandlerOutput { response, state } =
-                rx.map_err(|_| Error::MaxPendingTasksExceeded).await??;
+            rx.map_err(|_| Error::MaxPendingTasksExceeded).await?
+        }
+    }
+
+    /// Handles a unary request whose response is materialized in its read pool
+    /// task.
+    fn handle_unary_request(
+        &self,
+        r: ParseCopRequestResult<E::IMSnap>,
+    ) -> impl Future<Output = Result<TracedResponse>> {
+        let future = self.schedule_unary_request(r);
+        async move {
+            let HandlerOutput { response, state } = future.await?;
             match state {
                 HandlerOutputState::Ready => Ok(response),
                 HandlerOutputState::Mergeable(_) => {
