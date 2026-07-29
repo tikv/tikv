@@ -289,6 +289,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         txn_status_cache: Arc<TxnStatusCache>,
     ) -> Result<Self> {
         assert_eq!(config.api_version(), F::TAG, "Api version not match");
+        TXN_FLIGHT_RECORDER.set_capacity(config.txn_command_flight_recorder_capacity.0 as usize);
         TXN_FLIGHT_RECORDER.set_enabled(config.enable_txn_command_flight_recorder);
 
         let sched = TxnScheduler::new(
