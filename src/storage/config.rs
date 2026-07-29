@@ -14,7 +14,12 @@ use tikv_util::{
     sys::SysQuota,
 };
 
-use crate::config::{DEFAULT_ROCKSDB_SUB_DIR, DEFAULT_TABLET_SUB_DIR, MIN_BLOCK_CACHE_SHARD_SIZE};
+use crate::{
+    config::{DEFAULT_ROCKSDB_SUB_DIR, DEFAULT_TABLET_SUB_DIR, MIN_BLOCK_CACHE_SHARD_SIZE},
+    storage::txn::flight_recorder::{
+        DEFAULT_TXN_COMMAND_FLIGHT_RECORDER_CAPACITY, MIN_TXN_COMMAND_FLIGHT_RECORDER_CAPACITY,
+    },
+};
 
 pub const DEFAULT_DATA_DIR: &str = "./";
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
@@ -96,6 +101,8 @@ pub struct Config {
     pub enable_async_apply_prewrite: bool,
     /// Enables bounded in-memory transaction history for MVCC diagnostics.
     pub enable_txn_command_flight_recorder: bool,
+    /// Memory allocated for retained transaction command history when enabled.
+    pub txn_command_flight_recorder_capacity: ReadableSize,
     #[online_config(skip)]
     pub api_version: u8,
     #[online_config(skip)]
@@ -133,7 +140,8 @@ impl Default for Config {
             reserve_space: ReadableSize::gb(DEFAULT_RESERVED_SPACE_GB),
             reserve_raft_space: ReadableSize::gb(DEFAULT_RESERVED_RAFT_SPACE_GB),
             enable_async_apply_prewrite: false,
-            enable_txn_command_flight_recorder: true,
+            enable_txn_command_flight_recorder: false,
+            txn_command_flight_recorder_capacity: DEFAULT_TXN_COMMAND_FLIGHT_RECORDER_CAPACITY,
             api_version: 1,
             enable_ttl: false,
             ttl_check_poll_interval: ReadableDuration::hours(12),
@@ -220,6 +228,15 @@ impl Config {
                 self.memory_quota, self.scheduler_pending_write_threshold,
             );
             self.memory_quota = self.scheduler_pending_write_threshold;
+        }
+        if self.txn_command_flight_recorder_capacity.0
+            < MIN_TXN_COMMAND_FLIGHT_RECORDER_CAPACITY as u64
+        {
+            return Err(format!(
+                "storage.txn-command-flight-recorder-capacity must be at least {} bytes",
+                MIN_TXN_COMMAND_FLIGHT_RECORDER_CAPACITY
+            )
+            .into());
         }
 
         Ok(())
@@ -480,6 +497,11 @@ mod tests {
         cfg.validate().unwrap_err();
 
         cfg.scheduler_worker_pool_size = max_pool_size + 1;
+        cfg.validate().unwrap_err();
+
+        let mut cfg = Config::default();
+        cfg.txn_command_flight_recorder_capacity =
+            ReadableSize(MIN_TXN_COMMAND_FLIGHT_RECORDER_CAPACITY as u64 - 1);
         cfg.validate().unwrap_err();
     }
 

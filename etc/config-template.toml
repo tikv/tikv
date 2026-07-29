@@ -291,8 +291,11 @@
 
 ## Records a bounded in-memory history of transaction commands and their lock/write
 ## modifications. Enable it only while diagnosing transaction consistency issues.
-## NOTE: this debug build enables it by default.
-# enable-txn-command-flight-recorder = true
+# enable-txn-command-flight-recorder = false
+
+## Memory allocated for retained transaction command history when the flight recorder
+## is enabled.
+# txn-command-flight-recorder-capacity = "100MB"
 
 ## Reserve some space to ensure recovering the store from `no space left` must succeed.
 ## `max(reserve-space, capacity * 5%)` will be reserved exactly.

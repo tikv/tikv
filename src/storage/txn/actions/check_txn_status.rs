@@ -598,7 +598,9 @@ fn panic_txn_record_found(
             ext.get_data_version().unwrap_or(0),
         )
     };
-    let flight_events = TXN_FLIGHT_RECORDER.events_for_key(key);
+    let flight_history = TXN_FLIGHT_RECORDER.history_for_key(key);
+    let flight_history_complete_by_eviction =
+        flight_history.is_complete_by_eviction(reader.start_ts);
 
     error!(
         "txn record found but not expected: diagnostic summary";
@@ -608,10 +610,13 @@ fn panic_txn_record_found(
         "region_id" => region_id,
         "term" => term,
         "snapshot_data_version" => snapshot_data_version,
-        "flight_event_count" => flight_events.len(),
+        "flight_recorder_enabled" => flight_history.recorder_enabled,
+        "flight_event_count" => flight_history.events.len(),
+        "flight_shard_max_evicted_start_ts" => flight_history.max_evicted_start_ts,
+        "flight_history_complete_by_eviction" => flight_history_complete_by_eviction,
     );
     log_lock_sources(reader, key);
-    for event in &flight_events {
+    for event in &flight_history.events {
         error!(
             "txn record found but not expected: flight recorder event";
             "event" => ?event,

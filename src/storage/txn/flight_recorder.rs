@@ -8,7 +8,8 @@
 use std::{
     collections::{hash_map::DefaultHasher, VecDeque},
     hash::{Hash, Hasher},
-    sync::atomic::{AtomicBool, Ordering},
+    mem::size_of,
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -18,13 +19,13 @@ use kvproto::kvrpcpb::PrewriteRequestPessimisticAction;
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
 use tikv_kv::Modify;
-use tikv_util::Either;
+use tikv_util::{config::ReadableSize, Either};
 use txn_types::{parse_lock, Key, LockType, TimeStamp, WriteRef, WriteType};
 
 use crate::storage::{metrics::CommandKind, txn::commands::Command, Context};
 
-const SHARD_COUNT: usize = 128;
-const EVENTS_PER_SHARD: usize = 4096;
+const SHARD_COUNT: usize = 256;
+pub(crate) const DEFAULT_TXN_COMMAND_FLIGHT_RECORDER_CAPACITY: ReadableSize = ReadableSize::mb(100);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TxnCommandEventKind {
@@ -48,10 +49,6 @@ fn hash_encoded_key(key: &[u8]) -> u64 {
     let mut hasher = DefaultHasher::new();
     key.hash(&mut hasher);
     hasher.finish()
-}
-
-fn hash_raw_key(raw_key: &[u8]) -> u64 {
-    hash_key(&Key::from_raw(raw_key))
 }
 
 #[derive(Clone, Copy)]
@@ -223,7 +220,6 @@ impl TxnCommandEventMetadata {
         let mut event = self.event;
         event.kind = kind;
         event.key_hash = command_key.key_hash;
-        event.primary_key_hash = command_key.key_hash;
         if command_key.txn_start_ts != 0 {
             event.txn_start_ts = command_key.txn_start_ts;
         }
@@ -251,9 +247,6 @@ impl TxnCommandEventMetadata {
                         event.for_update_ts = lock.for_update_ts.into_inner();
                         event.min_commit_ts = lock.min_commit_ts.into_inner();
                         event.lock_ttl = lock.ttl;
-                        if !key.is_encoded_from(&lock.primary) {
-                            event.primary_key_hash = hash_raw_key(&lock.primary);
-                        }
                         event.generation = lock.generation;
                     }
                     Either::Right(_) => event.lock_type = Some(LockType::Shared),
@@ -297,9 +290,6 @@ impl TxnCommandEventMetadata {
                 event.for_update_ts = lock.for_update_ts.into_inner();
                 event.min_commit_ts = lock.min_commit_ts.into_inner();
                 event.lock_ttl = lock.ttl;
-                if !key.is_encoded_from(&lock.primary) {
-                    event.primary_key_hash = hash_raw_key(&lock.primary);
-                }
                 Some(event)
             }
             _ => None,
@@ -325,7 +315,6 @@ pub(crate) struct TxnCommandEvent {
     command: CommandKind,
     cid: u64,
     key_hash: u64,
-    primary_key_hash: u64,
     txn_start_ts: u64,
     commit_ts: u64,
     caller_start_ts: u64,
@@ -350,6 +339,9 @@ pub(crate) struct TxnCommandEvent {
     generation: u64,
 }
 
+pub(crate) const MIN_TXN_COMMAND_FLIGHT_RECORDER_CAPACITY: usize =
+    SHARD_COUNT * size_of::<TxnCommandEvent>();
+
 impl TxnCommandEvent {
     fn new(
         command: CommandKind,
@@ -363,7 +355,6 @@ impl TxnCommandEvent {
             command,
             cid,
             key_hash: 0,
-            primary_key_hash: 0,
             txn_start_ts: 0,
             commit_ts: 0,
             caller_start_ts: 0,
@@ -390,25 +381,75 @@ impl TxnCommandEvent {
     }
 }
 
+struct RecorderShard {
+    events: VecDeque<TxnCommandEvent>,
+    max_evicted_start_ts: u64,
+}
+
+impl RecorderShard {
+    fn new(capacity: usize) -> Self {
+        Self {
+            events: VecDeque::with_capacity(capacity),
+            max_evicted_start_ts: 0,
+        }
+    }
+
+    fn evict_oldest(&mut self) {
+        if let Some(event) = self.events.pop_front() {
+            let max_start_ts = if event.has_overlapped_rollback {
+                // The write key's commit_ts is also the start_ts of the
+                // rollback that overlapped this write record.
+                event.txn_start_ts.max(event.commit_ts)
+            } else {
+                event.txn_start_ts
+            };
+            self.max_evicted_start_ts = self.max_evicted_start_ts.max(max_start_ts);
+        }
+    }
+}
+
+pub(crate) struct TxnCommandHistory {
+    pub(crate) events: Vec<TxnCommandEvent>,
+    pub(crate) max_evicted_start_ts: u64,
+    pub(crate) recorder_enabled: bool,
+}
+
+impl TxnCommandHistory {
+    /// Returns whether this recorder session has not evicted an event whose
+    /// transaction start_ts is at least `start_ts`.
+    pub(crate) fn is_complete_by_eviction(&self, start_ts: TimeStamp) -> bool {
+        self.recorder_enabled && self.max_evicted_start_ts < start_ts.into_inner()
+    }
+}
+
 pub(crate) struct TxnCommandFlightRecorder {
     enabled: AtomicBool,
-    shards: Vec<CachePadded<Mutex<VecDeque<TxnCommandEvent>>>>,
+    shards: Vec<CachePadded<Mutex<RecorderShard>>>,
     shard_mask: usize,
-    events_per_shard: usize,
+    configured_events_per_shard: AtomicUsize,
 }
 
 impl TxnCommandFlightRecorder {
     fn new(shard_count: usize, events_per_shard: usize, enabled: bool) -> Self {
         assert!(shard_count.is_power_of_two() && events_per_shard > 0);
+        let capacity = if enabled { events_per_shard } else { 0 };
         let shards = (0..shard_count)
-            .map(|_| CachePadded::new(Mutex::new(VecDeque::new())))
+            .map(|_| CachePadded::new(Mutex::new(RecorderShard::new(capacity))))
             .collect();
         Self {
             enabled: AtomicBool::new(enabled),
             shards,
             shard_mask: shard_count - 1,
-            events_per_shard,
+            configured_events_per_shard: AtomicUsize::new(events_per_shard),
         }
+    }
+
+    fn with_capacity(shard_count: usize, capacity: usize, enabled: bool) -> Self {
+        Self::new(
+            shard_count,
+            events_per_shard(shard_count, capacity),
+            enabled,
+        )
     }
 
     #[inline]
@@ -416,18 +457,49 @@ impl TxnCommandFlightRecorder {
         self.enabled.load(Ordering::Relaxed)
     }
 
-    /// Disabling clears retained events and releases their ring-buffer memory.
+    /// Disabling clears the current history session and releases its memory.
     pub(crate) fn set_enabled(&self, enabled: bool) {
         if !enabled {
             if !self.enabled.swap(false, Ordering::AcqRel) {
                 return;
             }
             for shard in &self.shards {
-                *shard.lock() = VecDeque::new();
+                *shard.lock() = RecorderShard::new(0);
             }
             return;
         }
+        if self.is_enabled() {
+            return;
+        }
+        let events_per_shard = self.configured_events_per_shard.load(Ordering::Relaxed);
+        for shard in &self.shards {
+            *shard.lock() = RecorderShard::new(events_per_shard);
+        }
         self.enabled.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn set_capacity(&self, capacity: usize) {
+        let events_per_shard = events_per_shard(self.shards.len(), capacity);
+        if self
+            .configured_events_per_shard
+            .swap(events_per_shard, Ordering::Relaxed)
+            == events_per_shard
+        {
+            return;
+        }
+        if !self.is_enabled() {
+            return;
+        }
+
+        for shard in &self.shards {
+            let mut shard = shard.lock();
+            let mut resized = VecDeque::with_capacity(events_per_shard);
+            while shard.events.len() > resized.capacity() {
+                shard.evict_oldest();
+            }
+            resized.extend(shard.events.drain(..));
+            shard.events = resized;
+        }
     }
 
     #[inline]
@@ -468,6 +540,7 @@ impl TxnCommandFlightRecorder {
             .unwrap_or_default()
             .as_millis() as u64;
         for mut event in events {
+            debug_assert_ne!(event.txn_start_ts, 0);
             let shard_index = event.key_hash as usize & self.shard_mask;
             let mut shard = self.shards[shard_index].lock();
             // Pair with set_enabled(false): a recorder that passed the first
@@ -476,10 +549,10 @@ impl TxnCommandFlightRecorder {
                 continue;
             }
             event.unix_time_ms = unix_time_ms;
-            if shard.len() == self.events_per_shard {
-                shard.pop_front();
+            if shard.events.len() == shard.events.capacity() {
+                shard.evict_oldest();
             }
-            shard.push_back(event);
+            shard.events.push_back(event);
         }
     }
 
@@ -524,28 +597,41 @@ impl TxnCommandFlightRecorder {
                 TxnCommandEvent::new(CommandKind::prewrite, 0, ctx, snapshot_data_version);
             event.kind = kind;
             event.key_hash = key_hash;
-            event.primary_key_hash = key_hash;
             event.txn_start_ts = start_ts.into_inner();
             event.commit_ts = committed_ts.unwrap_or_default().into_inner();
             self.record([event]);
         }
     }
 
-    pub(crate) fn events_for_key(&self, key: &Key) -> Vec<TxnCommandEvent> {
+    pub(crate) fn history_for_key(&self, key: &Key) -> TxnCommandHistory {
         let key_hash = hash_key(key);
         let shard_index = key_hash as usize & self.shard_mask;
-        self.shards[shard_index]
-            .lock()
+        let shard = self.shards[shard_index].lock();
+        let events = shard
+            .events
             .iter()
             .filter(|event| event.key_hash == key_hash)
             .copied()
-            .collect()
+            .collect();
+        TxnCommandHistory {
+            events,
+            max_evicted_start_ts: shard.max_evicted_start_ts,
+            recorder_enabled: self.is_enabled(),
+        }
     }
+}
+
+fn events_per_shard(shard_count: usize, capacity: usize) -> usize {
+    (capacity / shard_count / size_of::<TxnCommandEvent>()).max(1)
 }
 
 lazy_static! {
     pub(crate) static ref TXN_FLIGHT_RECORDER: TxnCommandFlightRecorder =
-        TxnCommandFlightRecorder::new(SHARD_COUNT, EVENTS_PER_SHARD, false);
+        TxnCommandFlightRecorder::with_capacity(
+            SHARD_COUNT,
+            DEFAULT_TXN_COMMAND_FLIGHT_RECORDER_CAPACITY.0 as usize,
+            false,
+        );
 }
 
 #[cfg(test)]
@@ -559,6 +645,7 @@ mod tests {
     fn event_for_key(key: &Key, cid: u64) -> TxnCommandEvent {
         let mut event = TxnCommandEvent::new(CommandKind::prewrite, cid, &Context::default(), None);
         event.key_hash = hash_key(key);
+        event.txn_start_ts = cid;
         event
     }
 
@@ -573,10 +660,12 @@ mod tests {
         }
         recorder.record([event_for_key(&other_key, 100)]);
 
-        let events = recorder.events_for_key(&key);
-        assert!(events.len() <= 4);
-        assert_eq!(events.last().unwrap().cid, 5);
-        assert!(events.iter().all(|event| event.cid != 100));
+        let history = recorder.history_for_key(&key);
+        assert!(history.events.len() <= 4);
+        assert_eq!(history.events.last().unwrap().cid, 5);
+        assert!(history.events.iter().all(|event| event.cid != 100));
+        assert!(!history.is_complete_by_eviction(1.into()));
+        assert!(history.is_complete_by_eviction(3.into()));
     }
 
     #[test]
@@ -657,8 +746,8 @@ mod tests {
         assert!(events.iter().all(|event| !event.has_overlapped_rollback));
 
         // An overlapped rollback record keeps the older transaction's write
-        // type/start_ts; the event must carry the flag so it is not mistaken
-        // for a normal commit of that older transaction.
+        // type/start_ts. Its commit_ts is also the overlapped rollback's
+        // start_ts, and both timestamps contribute to the eviction watermark.
         let overlapped =
             Write::new(WriteType::Put, 10.into(), None).set_overlapped_rollback(true, None);
         let events = metadata.events_for_modifies(&[Modify::Put(
@@ -671,14 +760,72 @@ mod tests {
         assert_eq!(events[0].commit_ts, 30);
         assert_eq!(events[0].txn_start_ts, 10);
         assert!(events[0].has_overlapped_rollback);
+
+        let recorder = TxnCommandFlightRecorder::new(1, 1, true);
+        recorder.record([events[0]]);
+        recorder.record([event_for_key(&key, 31)]);
+        let history = recorder.history_for_key(&key);
+        assert_eq!(history.max_evicted_start_ts, 30);
+        assert!(!history.is_complete_by_eviction(30.into()));
+        assert!(history.is_complete_by_eviction(31.into()));
     }
 
     #[test]
     fn test_event_size_is_bounded() {
-        // 128 * 4096 records should remain below roughly 80 MiB, excluding the small
-        // per-shard VecDeque bookkeeping.
         let size = size_of::<TxnCommandEvent>();
         assert!(size <= 160, "event size is {size}");
+
+        let events_per_shard = events_per_shard(
+            SHARD_COUNT,
+            DEFAULT_TXN_COMMAND_FLIGHT_RECORDER_CAPACITY.0 as usize,
+        );
+        let retained_event_bytes = SHARD_COUNT * events_per_shard * size;
+        assert!(retained_event_bytes <= DEFAULT_TXN_COMMAND_FLIGHT_RECORDER_CAPACITY.0 as usize);
+        assert!(
+            DEFAULT_TXN_COMMAND_FLIGHT_RECORDER_CAPACITY.0 as usize - retained_event_bytes
+                < MIN_TXN_COMMAND_FLIGHT_RECORDER_CAPACITY
+        );
+    }
+
+    #[test]
+    fn test_resize_capacity() {
+        let recorder = TxnCommandFlightRecorder::new(2, 4, true);
+        let key = Key::from_raw(b"key");
+
+        for cid in 1..=4 {
+            recorder.record([event_for_key(&key, cid)]);
+        }
+
+        recorder.set_capacity(2 * 2 * size_of::<TxnCommandEvent>());
+        assert!(
+            recorder
+                .shards
+                .iter()
+                .all(|shard| shard.lock().events.capacity() >= 2)
+        );
+        let history = recorder.history_for_key(&key);
+        assert_eq!(history.events.len(), 2);
+        assert_eq!(history.events[0].cid, 3);
+        assert_eq!(history.events[1].cid, 4);
+        assert_eq!(history.max_evicted_start_ts, 2);
+        assert!(!history.is_complete_by_eviction(2.into()));
+        assert!(history.is_complete_by_eviction(3.into()));
+
+        recorder.set_capacity(2 * 4 * size_of::<TxnCommandEvent>());
+        assert!(
+            recorder
+                .shards
+                .iter()
+                .all(|shard| shard.lock().events.capacity() >= 4)
+        );
+        for cid in 5..=6 {
+            recorder.record([event_for_key(&key, cid)]);
+        }
+        let history = recorder.history_for_key(&key);
+        assert_eq!(history.events.len(), 4);
+        assert_eq!(history.events[0].cid, 3);
+        assert_eq!(history.events[3].cid, 6);
+        assert_eq!(history.max_evicted_start_ts, 2);
     }
 
     #[test]
@@ -699,31 +846,69 @@ mod tests {
             Some(30),
         );
 
-        let events = recorder.events_for_key(&key);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].kind, TxnCommandEventKind::TxnStatusCacheHit);
-        assert_eq!(events[0].txn_start_ts, 10);
-        assert_eq!(events[0].commit_ts, 20);
-        assert_eq!(events[0].snapshot_data_version, 30);
-        assert!(events[0].is_retry_request);
-        assert!(recorder.events_for_key(&secondary_key).is_empty());
+        let history = recorder.history_for_key(&key);
+        assert_eq!(history.events.len(), 1);
+        assert_eq!(
+            history.events[0].kind,
+            TxnCommandEventKind::TxnStatusCacheHit
+        );
+        assert_eq!(history.events[0].txn_start_ts, 10);
+        assert_eq!(history.events[0].commit_ts, 20);
+        assert_eq!(history.events[0].snapshot_data_version, 30);
+        assert!(history.events[0].is_retry_request);
+        assert!(recorder.history_for_key(&secondary_key).events.is_empty());
     }
 
     #[test]
     fn test_disabled_recorder_does_not_record_and_enable_starts_fresh() {
         let recorder = TxnCommandFlightRecorder::new(2, 4, false);
         let key = Key::from_raw(b"key");
+        assert!(
+            recorder
+                .shards
+                .iter()
+                .all(|shard| shard.lock().events.capacity() == 0)
+        );
 
         recorder.record([event_for_key(&key, 1)]);
-        assert!(recorder.events_for_key(&key).is_empty());
+        let history = recorder.history_for_key(&key);
+        assert!(history.events.is_empty());
+        assert!(!history.is_complete_by_eviction(1.into()));
 
         recorder.set_enabled(true);
-        recorder.record([event_for_key(&key, 2)]);
-        assert_eq!(recorder.events_for_key(&key).len(), 1);
+        assert!(
+            recorder
+                .shards
+                .iter()
+                .all(|shard| shard.lock().events.capacity() >= 4)
+        );
+        for cid in 2..=6 {
+            recorder.record([event_for_key(&key, cid)]);
+        }
+        let history = recorder.history_for_key(&key);
+        assert_eq!(history.events.len(), 4);
+        assert_eq!(history.max_evicted_start_ts, 2);
 
         recorder.set_enabled(false);
-        assert!(recorder.events_for_key(&key).is_empty());
+        let history = recorder.history_for_key(&key);
+        assert!(history.events.is_empty());
+        assert!(!history.recorder_enabled);
+        assert!(
+            recorder
+                .shards
+                .iter()
+                .all(|shard| shard.lock().events.capacity() == 0)
+        );
+        recorder.set_capacity(2 * 2 * size_of::<TxnCommandEvent>());
         recorder.set_enabled(true);
-        assert!(recorder.events_for_key(&key).is_empty());
+        let history = recorder.history_for_key(&key);
+        assert!(history.events.is_empty());
+        assert_eq!(history.max_evicted_start_ts, 0);
+        assert!(
+            recorder
+                .shards
+                .iter()
+                .all(|shard| shard.lock().events.capacity() >= 2)
+        );
     }
 }
