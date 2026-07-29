@@ -26,8 +26,14 @@ crossbeam-skiplist = { workspace = true }
 bytes = { workspace = true }
 crossbeam = { workspace = true }
 futures = { version = "0.3", features = ["compat"] }
+<<<<<<< HEAD
 tikv_util = { workspace = true }
 txn_types = { workspace = true }
+=======
+grpcio = { workspace = true }
+hex = "0.4"
+keys = { workspace = true }
+>>>>>>> abdf106516 (ime: recover watch after etcd gRPC compaction error (#19800))
 kvproto = { workspace = true }
 log_wrappers = { workspace = true }
 pd_client = { workspace = true }
