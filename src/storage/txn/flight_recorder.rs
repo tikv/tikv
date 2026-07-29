@@ -398,7 +398,7 @@ pub(crate) struct TxnCommandFlightRecorder {
     enabled: AtomicBool,
     shards: Vec<CachePadded<Mutex<VecDeque<TxnCommandEvent>>>>,
     shard_mask: usize,
-    events_per_shard: AtomicUsize,
+    configured_events_per_shard: AtomicUsize,
 }
 
 impl TxnCommandFlightRecorder {
@@ -418,7 +418,7 @@ impl TxnCommandFlightRecorder {
             enabled: AtomicBool::new(enabled),
             shards,
             shard_mask: shard_count - 1,
-            events_per_shard: AtomicUsize::new(events_per_shard),
+            configured_events_per_shard: AtomicUsize::new(events_per_shard),
         }
     }
 
@@ -449,7 +449,7 @@ impl TxnCommandFlightRecorder {
         if self.is_enabled() {
             return;
         }
-        let events_per_shard = self.events_per_shard.load(Ordering::Relaxed);
+        let events_per_shard = self.configured_events_per_shard.load(Ordering::Relaxed);
         for shard in &self.shards {
             *shard.lock() = VecDeque::with_capacity(events_per_shard);
         }
@@ -458,35 +458,25 @@ impl TxnCommandFlightRecorder {
 
     pub(crate) fn set_capacity(&self, capacity: usize) {
         let events_per_shard = events_per_shard(self.shards.len(), capacity);
-        let old_events_per_shard = self.events_per_shard.load(Ordering::Relaxed);
-        if events_per_shard == old_events_per_shard {
+        if self
+            .configured_events_per_shard
+            .swap(events_per_shard, Ordering::Relaxed)
+            == events_per_shard
+        {
             return;
         }
         if !self.is_enabled() {
-            self.events_per_shard
-                .store(events_per_shard, Ordering::Relaxed);
             return;
         }
 
-        // Keep the old limit until all shards have been enlarged so recorders
-        // cannot trigger a runtime allocation. Publish a smaller limit first
-        // so recorders stop growing the retained history while shards are trimmed.
-        if events_per_shard < old_events_per_shard {
-            self.events_per_shard
-                .store(events_per_shard, Ordering::Release);
-        }
         for shard in &self.shards {
             let mut shard = shard.lock();
-            while shard.len() > events_per_shard {
+            let mut resized = VecDeque::with_capacity(events_per_shard);
+            while shard.len() > resized.capacity() {
                 shard.pop_front();
             }
-            let mut resized = VecDeque::with_capacity(events_per_shard);
             resized.extend(shard.drain(..));
             *shard = resized;
-        }
-        if events_per_shard > old_events_per_shard {
-            self.events_per_shard
-                .store(events_per_shard, Ordering::Release);
         }
     }
 
@@ -536,8 +526,7 @@ impl TxnCommandFlightRecorder {
                 continue;
             }
             event.unix_time_ms = unix_time_ms;
-            let events_per_shard = self.events_per_shard.load(Ordering::Relaxed);
-            if shard.len() >= events_per_shard {
+            if shard.len() == shard.capacity() {
                 shard.pop_front();
             }
             shard.push_back(event);
@@ -769,13 +758,24 @@ mod tests {
         }
 
         recorder.set_capacity(2 * 2 * size_of::<TxnCommandEvent>());
-        assert_eq!(recorder.events_per_shard.load(Ordering::Relaxed), 2);
+        assert!(
+            recorder
+                .shards
+                .iter()
+                .all(|shard| shard.lock().capacity() >= 2)
+        );
         let events = recorder.events_for_key(&key);
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].cid, 3);
         assert_eq!(events[1].cid, 4);
 
         recorder.set_capacity(2 * 4 * size_of::<TxnCommandEvent>());
+        assert!(
+            recorder
+                .shards
+                .iter()
+                .all(|shard| shard.lock().capacity() >= 4)
+        );
         for cid in 5..=6 {
             recorder.record([event_for_key(&key, cid)]);
         }
@@ -845,7 +845,14 @@ mod tests {
                 .iter()
                 .all(|shard| shard.lock().capacity() == 0)
         );
+        recorder.set_capacity(2 * 2 * size_of::<TxnCommandEvent>());
         recorder.set_enabled(true);
         assert!(recorder.events_for_key(&key).is_empty());
+        assert!(
+            recorder
+                .shards
+                .iter()
+                .all(|shard| shard.lock().capacity() >= 2)
+        );
     }
 }
