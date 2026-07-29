@@ -32,6 +32,7 @@ use tidb_query_common::{
     execute_stats::ExecSummary,
     storage::{FindRegionResult, RegionStorageAccessor, Result as StorageResult},
 };
+use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::{ExtraRegionOverride, SnapshotExt};
 use tikv_util::{
     DeferContext,
@@ -786,15 +787,12 @@ impl<E: Engine> Endpoint<E> {
             let _tracker_guard = tracker_guard;
             let res = match result_of_future {
                 Err(e) => {
-                    let mut res = make_error_response(e);
-                    let batch_res = result_of_batch.await;
-                    res.set_batch_responses(batch_res.into());
-                    res.into()
+                    attach_batch_responses(make_error_response(e).into(), result_of_batch.await)
                 }
                 Ok(handle_fut) => {
                     let (handle_res, batch_res) = futures::join!(handle_fut, result_of_batch);
-                    let mut res = handle_res.unwrap_or_else(|e| make_error_response(e).into());
-                    res.set_batch_responses(batch_res.into());
+                    let res = handle_res.unwrap_or_else(|e| make_error_response(e).into());
+                    let mut res = attach_batch_responses(res, batch_res);
                     GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
                         let exec_detail_v2 = res.mut_exec_details_v2();
                         tracker.write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
@@ -816,7 +814,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req: &mut coppb::Request,
         peer: &Option<String>,
-    ) -> impl Future<Output = Vec<coppb::StoreBatchTaskResponse>> {
+    ) -> impl Future<Output = Vec<MemoryTraceGuard<coppb::StoreBatchTaskResponse>>> {
         let mut batch_futs = Vec::with_capacity(req.tasks.len());
         let batch_reqs: Vec<(coppb::Request, u64)> = req
             .take_tasks()
@@ -853,28 +851,37 @@ impl<E: Engine> Endpoint<E> {
                     let fut = async move {
                         let _tracker_guard = tracker_guard;
                         let res = fut.await;
-                        match res {
-                            Ok(mut resp) => {
-                                response.set_data(resp.take_data());
-                                if let Some(err) = resp.region_error.take() {
-                                    response.set_region_error(err);
-                                }
-                                if let Some(lock_info) = resp.locked.take() {
-                                    response.set_locked(lock_info);
-                                }
-                                response.set_other_error(resp.take_other_error());
-                                // keep the exec details already generated.
-                                response.set_exec_details_v2(resp.take_exec_details_v2());
+                        let response = match res {
+                            Ok(resp) => {
+                                // Carry the trace guard along so the moved data
+                                // stays accounted until attachment.
+                                let mut response = resp.map(|mut resp| {
+                                    response.set_data(resp.take_data());
+                                    if let Some(err) = resp.region_error.take() {
+                                        response.set_region_error(err);
+                                    }
+                                    if let Some(lock_info) = resp.locked.take() {
+                                        response.set_locked(lock_info);
+                                    }
+                                    response.set_other_error(resp.take_other_error());
+                                    // Keep the execution details the handler
+                                    // collected; the client reads this task's
+                                    // stats from them.
+                                    response.set_exec_details_v2(resp.take_exec_details_v2());
+                                    response
+                                });
                                 GLOBAL_TRACKERS.with_tracker(cur_tracker, |tracker| {
                                     tracker.write_scan_detail(
                                         response.mut_exec_details_v2().mut_scan_detail_v2(),
                                     );
                                 });
+                                response
                             }
                             Err(e) => {
                                 make_error_batch_response(&mut response, e);
+                                response.into()
                             }
-                        }
+                        };
                         response
                     };
 
@@ -882,7 +889,7 @@ impl<E: Engine> Endpoint<E> {
                 }
                 Err(e) => batch_futs.push(future::Either::Right(async move {
                     make_error_batch_response(&mut response, e);
-                    response
+                    response.into()
                 })),
             }
         }
@@ -1211,6 +1218,49 @@ macro_rules! make_error_response_common {
         };
         COPR_REQ_ERROR.with_label_values(&[$tag]).inc();
     }};
+}
+
+/// Attaches per-task responses and rebuilds the trace guard so the combined
+/// data stays accounted until the response drops. The guard keeps the top
+/// response's node, adopting the first tracked batch response's node when the
+/// top is untracked (e.g. a top task error); with no tracked participant the
+/// response stays untracked. Attaching nothing returns the response unchanged.
+fn attach_batch_responses(
+    mut response: TracedResponse,
+    batch_responses: Vec<MemoryTraceGuard<coppb::StoreBatchTaskResponse>>,
+) -> TracedResponse {
+    // Ordinary unary requests carry no batch tasks; keep their original guard
+    // rather than rebuilding an identical one.
+    if batch_responses.is_empty() {
+        return response;
+    }
+    let node = response
+        .trace_node()
+        .or_else(|| batch_responses.iter().find_map(|r| r.trace_node()));
+    // Batched tasks are clones of the top request, so every tracked
+    // participant shares one node and adoption cannot misattribute memory.
+    debug_assert!(node.as_ref().is_none_or(|node| {
+        batch_responses
+            .iter()
+            .filter_map(|r| r.trace_node())
+            .all(|child| Arc::ptr_eq(node, &child))
+    }));
+    let mut response = response.consume();
+    response.set_batch_responses(
+        batch_responses
+            .into_iter()
+            .map(|mut r| r.consume())
+            .collect::<Vec<_>>()
+            .into(),
+    );
+    let mut data_capacity = response.mut_data().capacity();
+    for batch_response in response.mut_batch_responses().iter_mut() {
+        data_capacity = data_capacity.saturating_add(batch_response.mut_data().capacity());
+    }
+    match node {
+        Some(node) => node.trace_guard(response, data_capacity),
+        None => response.into(),
+    }
 }
 
 fn make_error_batch_response(batch_resp: &mut coppb::StoreBatchTaskResponse, e: Error) {
