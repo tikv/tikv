@@ -241,6 +241,19 @@ pub struct ReqContextInner {
     pub allowed_in_flashback: bool,
 }
 
+#[inline]
+fn deadline_from_request_context(
+    context: &kvrpcpb::Context,
+    default_max_handle_duration: Duration,
+) -> Deadline {
+    let duration = if context.max_execution_duration_ms > 0 {
+        Duration::from_millis(context.max_execution_duration_ms)
+    } else {
+        default_max_handle_duration
+    };
+    Deadline::from_now(duration)
+}
+
 impl ReqContextInner {
     #[inline]
     pub fn new(
@@ -254,11 +267,7 @@ impl ReqContextInner {
         perf_level: PerfLevel,
         allowed_in_flashback: bool,
     ) -> Self {
-        let mut deadline_duration = max_handle_duration;
-        if context.max_execution_duration_ms > 0 {
-            deadline_duration = Duration::from_millis(context.max_execution_duration_ms);
-        }
-        let deadline = Deadline::from_now(deadline_duration);
+        let deadline = deadline_from_request_context(&context, max_handle_duration);
         let bypass_locks = TsSet::from_u64s(context.take_resolved_locks());
         let access_locks = TsSet::from_u64s(context.take_committed_locks());
         let lower_bound = match ranges.first().as_ref() {
