@@ -10,10 +10,7 @@ impl Collator for CollatorGb18030Bin {
     type Charset = CharsetGb18030;
     type Weight = u32;
     const IS_CASE_INSENSITIVE: bool = false;
-<<<<<<< HEAD
-=======
     const LIKE_PATTERN_MODE: LikePatternMode = LikePatternMode::Bytes;
->>>>>>> 0c96285516 (copr: align LIKE pattern modes with TiDB (#19827))
 
     #[inline]
     fn char_weight(ch: char) -> u32 {

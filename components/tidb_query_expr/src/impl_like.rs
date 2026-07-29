@@ -4,6 +4,23 @@ use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::{collation::*, data_type::*};
 
+const UTF8_REPLACEMENT_CHARACTER: &[u8] = b"\xEF\xBF\xBD";
+
+// TiDB decodes malformed UTF-8 as U+FFFD when matching with a character
+// collation. Canonicalize only that case; collators using byte-wise LIKE
+// literal matching must continue to compare the original bytes.
+#[inline]
+fn char_bytes_for_compare<C: Collator, CS: Charset>(data: &[u8], ch: CS::Char) -> &[u8] {
+    if <C::Charset as Charset>::charset() == tidb_query_datatype::Charset::Utf8Mb4
+        && ch.into() == char::REPLACEMENT_CHARACTER as u32
+        && data.len() == 1
+    {
+        UTF8_REPLACEMENT_CHARACTER
+    } else {
+        data
+    }
+}
+
 #[rpn_fn]
 #[inline]
 pub fn like<C: Collator, CS: Charset>(
@@ -17,11 +34,6 @@ pub fn like<C: Collator, CS: Charset>(
     // positions for backtrace.
     let (mut next_px, mut next_tx) = (0, 0);
     while px < pattern.len() || tx < target.len() {
-<<<<<<< HEAD
-        if let Some((c, mut poff)) = CS::decode_one(&pattern[px..]) {
-            let code: u32 = c.into();
-            if code == '_' as u32 {
-=======
         if let Some((mut pattern_char, mut poff)) = CS::decode_one(&pattern[px..]) {
             let code: u32 = pattern_char.into();
             let is_escape = code == escape;
@@ -34,7 +46,6 @@ pub fn like<C: Collator, CS: Charset>(
                 };
             }
             if !is_escape && code == '_' as u32 {
->>>>>>> 0c96285516 (copr: align LIKE pattern modes with TiDB (#19827))
                 if let Some((_, toff)) = CS::decode_one(&target[tx..]) {
                     px += poff;
                     tx += toff;
@@ -42,30 +53,15 @@ pub fn like<C: Collator, CS: Charset>(
                 }
             } else if !is_escape && code == '%' as u32 {
                 // update the backtrace point.
-                next_px = px;
                 px += poff;
+                next_px = px;
+                // Last '%' can match all left characters
+                if next_px >= pattern.len() {
+                    return Ok(Some(true as i64));
+                }
                 next_tx = tx;
-                next_tx += if let Some((_, toff)) = CS::decode_one(&target[tx..]) {
-                    toff
-                } else {
-                    1
-                };
                 continue;
             } else {
-<<<<<<< HEAD
-                if code == escape && px + poff < pattern.len() {
-                    px += poff;
-                    poff = if let Some((_, off)) = CS::decode_one(&pattern[px..]) {
-                        off
-                    } else {
-                        break;
-                    }
-                }
-                if let Some((_, toff)) = CS::decode_one(&target[tx..]) {
-                    if let Ok(std::cmp::Ordering::Equal) =
-                        C::sort_compare(&target[tx..tx + toff], &pattern[px..px + poff], true)
-                    {
-=======
                 if let Some((target_char, toff)) = CS::decode_one(&target[tx..]) {
                     let target_bytes = &target[tx..tx + toff];
                     let pattern_bytes = &pattern[px..px + poff];
@@ -79,7 +75,6 @@ pub fn like<C: Collator, CS: Charset>(
                         C::like_pattern_compare(target_char_bytes, pattern_char_bytes)?
                     };
                     if matches {
->>>>>>> 0c96285516 (copr: align LIKE pattern modes with TiDB (#19827))
                         tx += toff;
                         px += poff;
                         continue;
@@ -87,8 +82,13 @@ pub fn like<C: Collator, CS: Charset>(
                 }
             }
         }
-        // mismatch and backtrace to last %.
-        if 0 < next_tx && next_tx <= target.len() {
+        // mismatch and backtrace to position after last %.
+        if 0 < next_px && next_tx < target.len() {
+            next_tx += if let Some((_, toff)) = CS::decode_one(&target[next_tx..]) {
+                toff
+            } else {
+                1
+            };
             px = next_px;
             tx = next_tx;
             continue;
@@ -176,6 +176,10 @@ mod tests {
             (r#"test"#, r#"te%%st"#, '\\', Collation::Binary, Some(1)),
             (r#"test"#, r#"test%"#, '\\', Collation::Binary, Some(1)),
             (r#"test"#, r#"%test%"#, '\\', Collation::Binary, Some(1)),
+            (r#"test"#, r#"%%test%"#, '\\', Collation::Binary, Some(1)),
+            (r#"test"#, r#"%test%%"#, '\\', Collation::Binary, Some(1)),
+            (r#"testAAA"#, r#"%test%"#, '\\', Collation::Binary, Some(1)),
+            (r#"testBBB"#, r#"%test%%"#, '\\', Collation::Binary, Some(1)),
             (r#"test"#, r#"t%e%s%t"#, '\\', Collation::Binary, Some(1)),
             (r#"test"#, r#"_%_%_%_"#, '\\', Collation::Binary, Some(1)),
             (r#"test"#, r#"_%_%st"#, '\\', Collation::Binary, Some(1)),
@@ -310,6 +314,13 @@ mod tests {
                 Collation::Utf8Mb4UnicodeCi,
                 Some(1),
             ),
+            (
+                r#"abcabcabcd"#,
+                r#"%abcd%"#,
+                '\\',
+                Collation::Utf8Mb4UnicodeCi,
+                Some(1),
+            ),
         ];
         for (target, pattern, escape, collation, expected) in cases {
             let ret_ft = FieldTypeBuilder::new()
@@ -336,8 +347,6 @@ mod tests {
     }
 
     #[test]
-<<<<<<< HEAD
-=======
     fn test_like_invalid_utf8() {
         fn eval_like(
             target: &[u8],
@@ -564,7 +573,6 @@ mod tests {
     }
 
     #[test]
->>>>>>> 0c96285516 (copr: align LIKE pattern modes with TiDB (#19827))
     fn test_like_wide_character() {
         const LEGACY_BINARY: i32 = Collation::Binary as i32;
         const NEW_BINARY: i32 = -(Collation::Binary as i32);
