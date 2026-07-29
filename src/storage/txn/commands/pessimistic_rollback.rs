@@ -15,6 +15,7 @@ use crate::storage::{
             Command, CommandExt, PessimisticRollbackReadPhase, ReaderWithStats, ReleasedLocks,
             ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
         },
+        flight_recorder::{hash_key, TXN_FLIGHT_RECORDER},
         Result,
     },
     ProcessResult, Result as StorageResult, Snapshot,
@@ -69,6 +70,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
 
         let rows = keys.len();
         let mut released_locks = ReleasedLocks::new();
+        let record_primary = TXN_FLIGHT_RECORDER.is_enabled();
         for key in keys {
             fail_point!("pessimistic_rollback", |err| Err(
                 crate::storage::mvcc::Error::from(crate::storage::mvcc::txn::make_txn_error(
@@ -85,6 +87,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
                             && lock.ts == self.start_ts
                             && lock.for_update_ts <= self.for_update_ts
                         {
+                            if record_primary && key.is_encoded_from(&lock.primary) {
+                                released_locks.set_flight_primary_key_hash(hash_key(&key));
+                            }
                             Ok(txn.unlock_key(key, true, TimeStamp::zero()))
                         } else {
                             Ok(None)
