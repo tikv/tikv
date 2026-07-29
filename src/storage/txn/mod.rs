@@ -21,6 +21,10 @@ use kvproto::kvrpcpb::LockInfo;
 use thiserror::Error;
 use txn_types::{Key, TimeStamp, Value};
 
+#[cfg(any(test, feature = "testexport"))]
+pub use self::actions::{
+    check_txn_status::check_txn_status_lock_exists, mvcc::collect_mvcc_info_for_debug,
+};
 pub use self::{
     actions::{
         acquire_pessimistic_lock::acquire_pessimistic_lock,

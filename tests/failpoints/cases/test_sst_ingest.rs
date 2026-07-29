@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    panic::{AssertUnwindSafe, catch_unwind},
     sync::{
         Arc,
         mpsc::{Receiver, RecvTimeoutError, sync_channel},
@@ -10,17 +11,84 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::MiscExt;
+use concurrency_manager::ConcurrencyManager;
+use engine_rocks::{
+    RocksSstWriterBuilder, test_disable_pause_before_ingest_set_last_sequence,
+    test_enable_pause_before_ingest_set_last_sequence,
+    test_resume_pause_before_ingest_set_last_sequence,
+    test_wait_for_pause_before_ingest_set_last_sequence,
+};
+use engine_traits::{
+    CF_DEFAULT, CF_LOCK, CF_WRITE, ImportExt, MiscExt, Peekable, SnapshotMiscExt, SstWriter,
+    SstWriterBuilder, SyncMutable,
+};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     kvrpcpb::{Context, Op},
     metapb::{Peer, Region},
     tikvpb::TikvClient,
 };
+use tempfile::Builder;
 use test_pd_client::TestPdClient;
 use test_raftstore::*;
-use tikv::server::gc_worker::TestGcRunner;
-use tikv_util::HandyRwLock;
+use tikv::{
+    server::gc_worker::TestGcRunner,
+    storage::{
+        mvcc::{MvccTxn, SnapshotReader, TxnCommitRecord, Write},
+        txn::check_txn_status_lock_exists,
+    },
+};
+use tikv_util::{Either, HandyRwLock};
+use txn_types::{Key, TimeStamp, WriteType};
+
+struct PauseBeforeSetLastSequenceGuard;
+
+impl PauseBeforeSetLastSequenceGuard {
+    fn new() -> Self {
+        test_enable_pause_before_ingest_set_last_sequence();
+        Self
+    }
+
+    fn wait(&self, timeout: Duration) {
+        assert!(
+            test_wait_for_pause_before_ingest_set_last_sequence(timeout.as_millis() as u64),
+            "timed out waiting for ingest to reach BeforeSetLastSequence"
+        );
+    }
+
+    fn resume(&self) {
+        test_resume_pause_before_ingest_set_last_sequence();
+    }
+}
+
+impl Drop for PauseBeforeSetLastSequenceGuard {
+    fn drop(&mut self) {
+        test_disable_pause_before_ingest_set_last_sequence();
+    }
+}
+
+fn inject_commit_write_on_store_engine(
+    engine: &engine_rocks::RocksEngine,
+    key: &[u8],
+    start_ts: TimeStamp,
+    commit_ts: TimeStamp,
+) {
+    let write_key = keys::data_key(Key::from_raw(key).append_ts(commit_ts).as_encoded());
+    let write_value = Write::new(WriteType::Put, start_ts, Some(b"v".to_vec()))
+        .as_ref()
+        .to_bytes();
+    engine.put_cf(CF_WRITE, &write_key, &write_value).unwrap();
+
+    let dummy_key = keys::data_key(
+        Key::from_raw(b"repro-dummy")
+            .append_ts(commit_ts.next())
+            .as_encoded(),
+    );
+    let dummy_value = Write::new(WriteType::Put, commit_ts, Some(b"dummy".to_vec()))
+        .as_ref()
+        .to_bytes();
+    engine.put_cf(CF_WRITE, &dummy_key, &dummy_value).unwrap();
+}
 
 // Prepares test data for verifying the behavior of the compaction filter.
 //
@@ -144,6 +212,14 @@ fn verify_pending(rx: &Receiver<bool>, duration: u64) {
 
 fn verify_completed(rx: &Receiver<bool>) {
     assert_eq!(rx.recv_timeout(Duration::from_millis(500)), Ok(true));
+}
+
+fn make_context(region: &Region, leader: Peer) -> Context {
+    let mut ctx = Context::default();
+    ctx.set_region_id(region.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(leader);
+    ctx
 }
 
 // Test whether ingestion blocks the compaction filter based on
@@ -465,4 +541,170 @@ fn test_destroy_peer_must_wait_ongoing_foreground_writes() {
     // Verify that apply-snapshot is finished
     assert_eq!(rx.recv_timeout(Duration::from_millis(500)), Ok(true));
     destroy_handle.join().expect("destroy thread panicked");
+}
+
+#[test]
+fn test_allow_write_ingest_can_reproduce_committed_write_plus_stale_lock() {
+    let env = Arc::new(Environment::new(1));
+    let (mut cluster, ..) = must_new_cluster_mul(3);
+    cluster.pd_client.disable_default_operator();
+
+    cluster.must_put(b"a", b"base");
+    cluster.must_split(&cluster.get_region(b"a"), b"m");
+
+    let region_b = cluster.get_region(b"z");
+    let peer_b_on_store_3 = find_peer(&region_b, 3).unwrap().clone();
+    cluster.must_transfer_leader(region_b.get_id(), peer_b_on_store_3.clone());
+
+    let leader_b = cluster.leader_of_region(region_b.get_id()).unwrap();
+    assert_eq!(leader_b.get_store_id(), 3);
+    let ctx_b = make_context(&region_b, leader_b);
+    let client_b = TikvClient::new(ChannelBuilder::new(env).connect(&cluster.get_addr(3)));
+    let key = b"z".to_vec();
+    let start_ts = TimeStamp::compose(100, 0);
+    let commit_ts = TimeStamp::compose(101, 0);
+    let muts = vec![new_mutation(Op::Put, &key, b"v")];
+    must_kv_prewrite(
+        &client_b,
+        ctx_b.clone(),
+        muts,
+        key.clone(),
+        start_ts.into_inner(),
+    );
+    let lock_key = Key::from_raw(&key);
+    let mut prewrite_lock_visible = false;
+    for _ in 0..100 {
+        let snapshot = cluster.must_get_snapshot_of_region(region_b.get_id());
+        let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+        if reader.load_lock(&lock_key).unwrap().is_some() {
+            prewrite_lock_visible = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        prewrite_lock_visible,
+        "prewrite lock should exist on store 3 before ingest"
+    );
+
+    let engine = cluster.get_engine(3);
+    let overlap_key = b"repro-overlap-key";
+    engine.put_cf(CF_DEFAULT, overlap_key, b"base").unwrap();
+    let sst_dir = Builder::new()
+        .prefix("test_allow_write_ingest_sequence_rollback")
+        .tempdir()
+        .unwrap();
+    let sst_path = sst_dir.path().join("overlap.sst");
+    let mut writer = RocksSstWriterBuilder::new()
+        .set_db(&engine)
+        .set_cf(CF_DEFAULT)
+        .build(sst_path.to_str().unwrap())
+        .unwrap();
+    writer.put(overlap_key, b"ingested").unwrap();
+    writer.finish().unwrap();
+
+    let pause = PauseBeforeSetLastSequenceGuard::new();
+    let ingest_engine = engine.clone();
+    let ingest_path = sst_path.to_str().unwrap().to_owned();
+    let ingest_handle = thread::spawn(move || {
+        ingest_engine
+            .ingest_external_file_cf(
+                CF_DEFAULT,
+                &[ingest_path.as_str()],
+                None,
+                true, // force_allow_write
+            )
+            .unwrap();
+    });
+
+    pause.wait(Duration::from_secs(5));
+    eprintln!("repro: ingest paused before SetLastSequence");
+
+    inject_commit_write_on_store_engine(&engine, &key, start_ts, commit_ts);
+    eprintln!("repro: injected write record while ingest paused");
+
+    let seq_after_commit = engine.as_inner().get_latest_sequence_number();
+    eprintln!("repro: seq after injected write = {seq_after_commit}");
+    pause.resume();
+    eprintln!("repro: resumed paused ingest");
+    ingest_handle.join().expect("ingest thread panicked");
+    eprintln!("repro: ingest thread joined");
+
+    let rolled_back_seq = engine.as_inner().get_latest_sequence_number();
+    eprintln!("repro: final seq after ingest = {rolled_back_seq}");
+    assert!(
+        rolled_back_seq < seq_after_commit,
+        "expected sequence rollback after allow_write ingest, got final seq {} and commit seq {}",
+        rolled_back_seq,
+        seq_after_commit
+    );
+
+    let snapshot = cluster.must_get_snapshot_of_region(region_b.get_id());
+    assert_eq!(snapshot.get_snapshot().sequence_number(), rolled_back_seq);
+    let raw_lock_key = keys::data_key(Key::from_raw(&key).as_encoded());
+    let raw_write_key = keys::data_key(Key::from_raw(&key).append_ts(commit_ts).as_encoded());
+    eprintln!(
+        "repro: raw lock visible without snapshot = {}",
+        engine
+            .get_value_cf(CF_LOCK, &raw_lock_key)
+            .unwrap()
+            .is_some()
+    );
+    eprintln!(
+        "repro: raw write visible without snapshot = {}",
+        engine
+            .get_value_cf(CF_WRITE, &raw_write_key)
+            .unwrap()
+            .is_some()
+    );
+    let key = Key::from_raw(&key);
+    let mut debug_reader = SnapshotReader::new(start_ts, snapshot.clone(), true);
+    let lock = match debug_reader.load_lock(&key).unwrap().unwrap() {
+        Either::Left(lock) => lock,
+        Either::Right(_) => panic!("expected a single lock, got shared locks"),
+    };
+    assert_eq!(lock.ts, start_ts);
+    match debug_reader.get_txn_commit_record(&key).unwrap() {
+        TxnCommitRecord::SingleRecord {
+            commit_ts: found_commit_ts,
+            write,
+        } => {
+            assert_eq!(found_commit_ts, commit_ts);
+            assert_eq!(write.start_ts, start_ts);
+            assert_eq!(write.write_type, WriteType::Put);
+        }
+        record => panic!(
+            "expected committed write in stale snapshot, got {:?}",
+            record
+        ),
+    }
+
+    let snapshot = cluster.must_get_snapshot_of_region(region_b.get_id());
+    let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+    let key = Key::from_raw(b"z");
+    let lock = match reader.load_lock(&key).unwrap().unwrap() {
+        Either::Left(lock) => lock,
+        Either::Right(_) => panic!("expected a single lock, got shared locks"),
+    };
+    let current_ts = TimeStamp::compose(5000, 0);
+    let mut txn = MvccTxn::new(start_ts, ConcurrencyManager::new_for_test(current_ts));
+    let panic_result = catch_unwind(AssertUnwindSafe(|| {
+        check_txn_status_lock_exists(
+            &mut txn,
+            &mut reader,
+            key,
+            lock,
+            current_ts,
+            TimeStamp::zero(),
+            false, // force_sync_commit
+            false, // resolving_pessimistic_lock
+            true,  // verify_is_primary
+            true,  // rollback_if_not_exist
+        )
+        .unwrap();
+    }));
+    assert!(
+        panic_result.is_err(),
+        "check_txn_status should panic on committed write + stale lock"
+    );
 }

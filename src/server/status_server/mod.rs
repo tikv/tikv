@@ -84,11 +84,28 @@ static MISSING_NAME: &[u8] = b"Missing param name";
 static MISSING_ACTIONS: &[u8] = b"Missing param actions";
 #[cfg(feature = "failpoints")]
 static FAIL_POINTS_REQUEST_PATH: &str = "/fail";
+#[cfg(feature = "testexport")]
+static TEST_SYNC_BEFORE_SET_LAST_SEQUENCE_REQUEST_PATH: &str =
+    "/debug/test_sync/before_set_last_sequence";
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct LogLevelRequest {
     pub log_level: LogLevel,
+}
+
+#[cfg(feature = "testexport")]
+#[derive(Deserialize)]
+struct InjectCommitWriteRequest {
+    key_hex: String,
+    start_ts: u64,
+    commit_ts: u64,
+}
+
+#[cfg(feature = "testexport")]
+#[derive(Deserialize)]
+struct IngestDefaultCfRequest {
+    entry_count: usize,
 }
 
 pub struct StatusServer<R> {
@@ -785,6 +802,14 @@ where
                             }
                         }
 
+                        #[cfg(feature = "testexport")]
+                        {
+                            if path.starts_with(TEST_SYNC_BEFORE_SET_LAST_SEQUENCE_REQUEST_PATH) {
+                                return handle_before_set_last_sequence_test_sync_request(req)
+                                    .await;
+                            }
+                        }
+
                         // 1. POST "/config" will modify the configuration of TiKV.
                         // 2. GET "/region" will get start key and end key. These keys could be
                         // actual user data since in some cases the data itself is stored in the
@@ -1296,6 +1321,100 @@ async fn handle_fail_points_request(req: Request<Body>) -> hyper::Result<Respons
     }
 }
 
+#[cfg(feature = "testexport")]
+async fn handle_before_set_last_sequence_test_sync_request(
+    req: Request<Body>,
+) -> hyper::Result<Response<Body>> {
+    let path = req.uri().path().to_owned();
+    let method = req.method().to_owned();
+    let prefix = format!("{}/", TEST_SYNC_BEFORE_SET_LAST_SEQUENCE_REQUEST_PATH);
+    let action = path
+        .strip_prefix(&prefix)
+        .unwrap_or_default()
+        .trim_end_matches('/');
+
+    match (method, action) {
+        (Method::PUT, "enable") => {
+            engine_rocks::test_enable_pause_before_ingest_set_last_sequence();
+            Ok(Response::new("enabled".into()))
+        }
+        (Method::PUT, "inject_commit_write") => {
+            let body_bytes = hyper::body::to_bytes(req.into_body()).await?;
+            let request: InjectCommitWriteRequest = match serde_json::from_slice(&body_bytes) {
+                Ok(request) => request,
+                Err(err) => {
+                    return Ok(make_response(StatusCode::BAD_REQUEST, err.to_string()));
+                }
+            };
+            let key = match hex::decode(request.key_hex.trim()) {
+                Ok(key) => key,
+                Err(err) => {
+                    return Ok(make_response(StatusCode::BAD_REQUEST, err.to_string()));
+                }
+            };
+            match engine_rocks::test_inject_commit_write_on_current_ingest_db(
+                key,
+                request.start_ts,
+                request.commit_ts,
+            ) {
+                Ok(()) => Ok(Response::new("injected".into())),
+                Err(err) => Ok(make_response(StatusCode::BAD_REQUEST, err)),
+            }
+        }
+        (Method::PUT, "ingest_default_cf") => {
+            let body_bytes = hyper::body::to_bytes(req.into_body()).await?;
+            let request: IngestDefaultCfRequest = match serde_json::from_slice(&body_bytes) {
+                Ok(request) => request,
+                Err(err) => {
+                    return Ok(make_response(StatusCode::BAD_REQUEST, err.to_string()));
+                }
+            };
+            match engine_rocks::test_start_ingest_overlapping_default_cf_entries(
+                request.entry_count,
+            ) {
+                Ok(()) => Ok(Response::new("started".into())),
+                Err(err) => Ok(make_response(StatusCode::BAD_REQUEST, err)),
+            }
+        }
+        (Method::GET, "ingest_result") => match engine_rocks::test_async_ingest_result() {
+            Some(Ok(result)) => Ok(Response::new(result.into())),
+            Some(Err(err)) => Ok(make_response(StatusCode::INTERNAL_SERVER_ERROR, err)),
+            None => Ok(Response::new("running".into())),
+        },
+        (Method::GET, "sequence") => match engine_rocks::test_registered_engine_latest_sequence() {
+            Ok(seq) => Ok(Response::new(seq.to_string().into())),
+            Err(err) => Ok(make_response(StatusCode::BAD_REQUEST, err)),
+        },
+        (Method::GET, "wait") => {
+            let timeout_ms = req
+                .uri()
+                .query()
+                .and_then(|query| {
+                    url::form_urlencoded::parse(query.as_bytes()).find_map(|(k, v)| {
+                        (k == "timeout_ms").then(|| v.parse::<u64>().ok()).flatten()
+                    })
+                })
+                .unwrap_or(5000);
+            let paused =
+                engine_rocks::test_wait_for_pause_before_ingest_set_last_sequence(timeout_ms);
+            let body = if paused { "paused" } else { "timeout" };
+            Ok(Response::new(body.into()))
+        }
+        (Method::PUT, "resume") => {
+            engine_rocks::test_resume_pause_before_ingest_set_last_sequence();
+            Ok(Response::new("resumed".into()))
+        }
+        (Method::DELETE, "") | (Method::DELETE, "disable") => {
+            engine_rocks::test_disable_pause_before_ingest_set_last_sequence();
+            Ok(Response::new("disabled".into()))
+        }
+        _ => Ok(Response::builder()
+            .status(StatusCode::METHOD_NOT_ALLOWED)
+            .body(Body::empty())
+            .unwrap()),
+    }
+}
+
 // check if the client allow return response with gzip compression
 // the following logic is port from prometheus's golang:
 // https://github.com/prometheus/client_golang/blob/24172847e35ba46025c49d90b8846b59eb5d9ead/prometheus/promhttp/http.go#L155-L176
@@ -1670,6 +1789,129 @@ mod tests {
             assert_eq!("and_another_name=panic", list);
         });
 
+        block_on(handle).unwrap();
+        status_server.stop();
+    }
+
+    #[cfg(feature = "testexport")]
+    #[test]
+    fn test_status_service_before_set_last_sequence_test_sync_endpoints() {
+        let mut status_server = StatusServer::new(
+            1,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+            None,
+            GrpcServiceManager::dummy(),
+            None,
+            Default::default(),
+        )
+        .unwrap();
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr);
+        let client = Client::new();
+        let addr = status_server.listening_addr().to_string();
+
+        let handle = status_server.thread_pool.spawn(async move {
+            let enable_uri = Uri::builder()
+                .scheme("http")
+                .authority(addr.as_str())
+                .path_and_query("/debug/test_sync/before_set_last_sequence/enable")
+                .build()
+                .unwrap();
+            let mut enable_req = Request::default();
+            *enable_req.method_mut() = Method::PUT;
+            *enable_req.uri_mut() = enable_uri;
+            let enable_res = client.request(enable_req).await.unwrap();
+            assert_eq!(enable_res.status(), StatusCode::OK);
+
+            let wait_uri = Uri::builder()
+                .scheme("http")
+                .authority(addr.as_str())
+                .path_and_query("/debug/test_sync/before_set_last_sequence/wait?timeout_ms=1")
+                .build()
+                .unwrap();
+            let wait_res = client.get(wait_uri).await.unwrap();
+            assert_eq!(wait_res.status(), StatusCode::OK);
+            let mut wait_body = Vec::new();
+            wait_res
+                .into_body()
+                .try_for_each(|bytes| {
+                    wait_body.extend(bytes);
+                    ok(())
+                })
+                .await
+                .unwrap();
+            assert_eq!(String::from_utf8(wait_body).unwrap(), "timeout");
+
+            let resume_uri = Uri::builder()
+                .scheme("http")
+                .authority(addr.as_str())
+                .path_and_query("/debug/test_sync/before_set_last_sequence/resume")
+                .build()
+                .unwrap();
+            let mut resume_req = Request::default();
+            *resume_req.method_mut() = Method::PUT;
+            *resume_req.uri_mut() = resume_uri;
+            let resume_res = client.request(resume_req).await.unwrap();
+            assert_eq!(resume_res.status(), StatusCode::OK);
+
+            let inject_uri = Uri::builder()
+                .scheme("http")
+                .authority(addr.as_str())
+                .path_and_query("/debug/test_sync/before_set_last_sequence/inject_commit_write")
+                .build()
+                .unwrap();
+            let mut inject_req = Request::new(Body::from(
+                "{\"key_hex\":\"7a\",\"start_ts\":100,\"commit_ts\":101}",
+            ));
+            *inject_req.method_mut() = Method::PUT;
+            *inject_req.uri_mut() = inject_uri;
+            let inject_res = client.request(inject_req).await.unwrap();
+            assert_eq!(inject_res.status(), StatusCode::BAD_REQUEST);
+
+            let ingest_uri = Uri::builder()
+                .scheme("http")
+                .authority(addr.as_str())
+                .path_and_query("/debug/test_sync/before_set_last_sequence/ingest_default_cf")
+                .build()
+                .unwrap();
+            let mut ingest_req = Request::new(Body::from("{\"entry_count\":2}"));
+            *ingest_req.method_mut() = Method::PUT;
+            *ingest_req.uri_mut() = ingest_uri;
+            let ingest_res = client.request(ingest_req).await.unwrap();
+            assert_eq!(ingest_res.status(), StatusCode::BAD_REQUEST);
+
+            let ingest_result_uri = Uri::builder()
+                .scheme("http")
+                .authority(addr.as_str())
+                .path_and_query("/debug/test_sync/before_set_last_sequence/ingest_result")
+                .build()
+                .unwrap();
+            let ingest_result_res = client.get(ingest_result_uri).await.unwrap();
+            assert_eq!(ingest_result_res.status(), StatusCode::OK);
+
+            let sequence_uri = Uri::builder()
+                .scheme("http")
+                .authority(addr.as_str())
+                .path_and_query("/debug/test_sync/before_set_last_sequence/sequence")
+                .build()
+                .unwrap();
+            let sequence_res = client.get(sequence_uri).await.unwrap();
+            assert_eq!(sequence_res.status(), StatusCode::BAD_REQUEST);
+
+            let disable_uri = Uri::builder()
+                .scheme("http")
+                .authority(addr.as_str())
+                .path_and_query("/debug/test_sync/before_set_last_sequence")
+                .build()
+                .unwrap();
+            let mut disable_req = Request::default();
+            *disable_req.method_mut() = Method::DELETE;
+            *disable_req.uri_mut() = disable_uri;
+            let disable_res = client.request(disable_req).await.unwrap();
+            assert_eq!(disable_res.status(), StatusCode::OK);
+        });
         block_on(handle).unwrap();
         status_server.stop();
     }

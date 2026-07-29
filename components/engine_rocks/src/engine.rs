@@ -157,13 +157,18 @@ pub struct RocksEngine {
 impl RocksEngine {
     pub fn new(db: DB) -> RocksEngine {
         let db = Arc::new(db);
-        RocksEngine {
+        let engine = RocksEngine {
             support_multi_batch_write: db.get_db_options().is_enable_multi_batch_write(),
             #[cfg(feature = "trace-lifetime")]
             _id: trace::TabletTraceId::new(db.path(), &db),
             db,
             ingest_latch: Arc::new(RangeLatch::new()),
+        };
+        #[cfg(feature = "testexport")]
+        {
+            *TEST_REGISTERED_ENGINE.lock().unwrap() = Some(engine.clone());
         }
+        engine
     }
 
     pub fn as_inner(&self) -> &Arc<DB> {
@@ -182,6 +187,17 @@ impl RocksEngine {
     pub fn trace(region_id: u64) -> Vec<String> {
         trace::list(region_id)
     }
+}
+
+#[cfg(feature = "testexport")]
+lazy_static::lazy_static! {
+    static ref TEST_REGISTERED_ENGINE: std::sync::Mutex<Option<RocksEngine>> =
+        std::sync::Mutex::new(None);
+}
+
+#[cfg(feature = "testexport")]
+pub fn test_registered_engine() -> Option<RocksEngine> {
+    TEST_REGISTERED_ENGINE.lock().unwrap().clone()
 }
 
 impl KvEngine for RocksEngine {

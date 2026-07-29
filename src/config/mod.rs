@@ -1612,6 +1612,8 @@ impl DbConfig {
         opts.set_stats_dump_period_sec(
             self.stats_dump_period.unwrap_or_default().as_secs() as usize
         );
+        #[cfg(feature = "testexport")]
+        opts.set_stats_persist_period_sec(0);
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
         opts.set_bytes_per_sync(self.bytes_per_sync.0);
         opts.set_wal_bytes_per_sync(self.wal_bytes_per_sync.0);
@@ -2129,6 +2131,8 @@ impl RaftDbConfig {
             None => opts.set_statistics(&RocksStatistics::new_titan()),
         }
         opts.set_stats_dump_period_sec(self.stats_dump_period.as_secs() as usize);
+        #[cfg(feature = "testexport")]
+        opts.set_stats_persist_period_sec(0);
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
         opts.set_info_log(RaftDbLogger);
         opts.set_max_subcompactions(self.max_sub_compactions);
