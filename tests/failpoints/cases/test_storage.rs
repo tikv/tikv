@@ -366,9 +366,11 @@ fn test_scheduler_pool_auto_switch_for_resource_ctl() {
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(cluster.leader_of_region(region.id).unwrap());
 
-    let do_prewrite = |key: &[u8], val: &[u8]| {
+    let do_prewrite = |key: &[u8], val: &[u8], request_source: &str| {
         // prewrite
         let (prewrite_tx, prewrite_rx) = channel();
+        let mut request_ctx = ctx.clone();
+        request_ctx.set_request_source(request_source.to_owned());
         storage
             .sched_txn_command(
                 commands::Prewrite::new(
@@ -383,7 +385,7 @@ fn test_scheduler_pool_auto_switch_for_resource_ctl() {
                     None,
                     false,
                     AssertionLevel::Off,
-                    ctx.clone(),
+                    request_ctx,
                 ),
                 Box::new(move |res: storage::Result<_>| {
                     let _ = prewrite_tx.send(res);
@@ -408,14 +410,41 @@ fn test_scheduler_pool_auto_switch_for_resource_ctl() {
     .unwrap();
 
     // Default is use single queue
-    assert_eq!(do_prewrite(b"k1", b"v1").is_ok(), true);
+    assert_eq!(do_prewrite(b"k1", b"v1", "").is_ok(), true);
     assert_eq!(
         receiver.recv_timeout(Duration::from_millis(500)).unwrap(),
         "single_queue"
     );
 
-    // Add group use priority queue
+    // Background control alone keeps using the single queue. The background
+    // limiter is applied independently of queue selection.
     use kvproto::resource_manager::{GroupMode, GroupRequestUnitSettings, ResourceGroup};
+    let mut default_group = ResourceGroup::new();
+    default_group.set_name("default".to_string());
+    default_group.set_mode(GroupMode::RuMode);
+    default_group.set_priority(8);
+    let mut default_ru_setting = GroupRequestUnitSettings::new();
+    default_ru_setting
+        .mut_r_u()
+        .mut_settings()
+        .set_fill_rate(i32::MAX as u64);
+    default_group.set_r_u_settings(default_ru_setting);
+    default_group
+        .mut_background_settings()
+        .set_job_types(vec!["br".to_string()].into());
+    resource_manager.add_resource_group(default_group);
+    assert!(
+        resource_manager
+            .get_background_resource_limiter("default", "br")
+            .is_some()
+    );
+    assert_eq!(do_prewrite(b"k2", b"v2", "br").is_ok(), true);
+    assert_eq!(
+        receiver.recv_timeout(Duration::from_millis(500)).unwrap(),
+        "single_queue"
+    );
+
+    // Add a custom group to switch to the priority queue.
     let mut group = ResourceGroup::new();
     group.set_name("rg1".to_string());
     group.set_mode(GroupMode::RuMode);
@@ -424,7 +453,7 @@ fn test_scheduler_pool_auto_switch_for_resource_ctl() {
     group.set_r_u_settings(ru_setting);
     resource_manager.add_resource_group(group);
     thread::sleep(Duration::from_millis(200));
-    assert_eq!(do_prewrite(b"k2", b"v2").is_ok(), true);
+    assert_eq!(do_prewrite(b"k3", b"v3", "").is_ok(), true);
     assert_eq!(
         receiver.recv_timeout(Duration::from_millis(500)).unwrap(),
         "priority_queue"
@@ -433,7 +462,7 @@ fn test_scheduler_pool_auto_switch_for_resource_ctl() {
     // Delete group use single queue
     resource_manager.remove_resource_group("rg1");
     thread::sleep(Duration::from_millis(200));
-    assert_eq!(do_prewrite(b"k3", b"v3").is_ok(), true);
+    assert_eq!(do_prewrite(b"k4", b"v4", "br").is_ok(), true);
     assert_eq!(
         receiver.recv_timeout(Duration::from_millis(500)).unwrap(),
         "single_queue"

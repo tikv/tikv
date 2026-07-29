@@ -11,6 +11,7 @@ impl Collator for CollatorBinary {
     type Weight = u8;
 
     const IS_CASE_INSENSITIVE: bool = false;
+    const LIKE_PATTERN_MODE: LikePatternMode = LikePatternMode::Bytes;
 
     #[inline]
     fn char_weight(ch: u8) -> Self::Weight {
