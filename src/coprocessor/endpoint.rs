@@ -584,19 +584,36 @@ impl<E: Engine> Endpoint<E> {
         tracker.on_begin_all_items();
 
         let deadline = tracker.req_ctx.deadline;
-        let handle_request_future = check_deadline(handler.handle_request(), deadline);
-        let handle_request_future = track(handle_request_future, tracker.as_mut());
+        let handle_request_future = handler.handle_request();
+        let process_future = async move {
+            let output = handle_request_future.await?;
+            match output.into_response() {
+                Ok(response) => Ok(HandlerOutput {
+                    response,
+                    state: HandlerOutputState::Ready,
+                }),
+                Err(ResponseMaterializationFailure {
+                    error,
+                    partial_response,
+                }) => {
+                    drop(partial_response);
+                    Err(error)
+                }
+            }
+        };
+        let process_future = check_deadline(process_future, deadline);
+        let process_future = track(process_future, tracker.as_mut());
 
         let deadline_res = if let Some(semaphore) = &semaphore {
             limit_concurrency(
-                handle_request_future,
+                process_future,
                 semaphore,
                 semaphore_group,
                 LIGHT_TASK_THRESHOLD,
             )
             .await
         } else {
-            handle_request_future.await
+            process_future.await
         };
         let result = deadline_res.map_err(Error::from).and_then(|res| res);
 
@@ -709,6 +726,9 @@ impl<E: Engine> Endpoint<E> {
                 rx.map_err(|_| Error::MaxPendingTasksExceeded).await??;
             match state {
                 HandlerOutputState::Ready => Ok(response),
+                HandlerOutputState::Mergeable(_) => {
+                    unreachable!("unary response must be materialized in the read pool")
+                }
             }
         }
     }

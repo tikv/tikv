@@ -21,7 +21,8 @@ use crate::{
         MEMTRACE_ANALYZE,
         dag::TikvStorage,
         statistics::analyze::{
-            AnalyzeIndexResult, AnalyzeMixedResult, RowSampleBuilder, SampleBuilder,
+            AnalyzeIndexResult, AnalyzeMixedResult, AnalyzeSamplingResult, RowSampleBuilder,
+            SampleBuilder,
         },
         *,
     },
@@ -119,13 +120,10 @@ impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
         Ok(res_data)
     }
 
-    async fn handle_full_sampling(builder: &mut RowSampleBuilder<S, F>) -> Result<Vec<u8>> {
-        let sample_res = builder.collect_column_stats().await?;
-        let res_data = {
-            let res: tipb::AnalyzeColumnsResp = sample_res.into();
-            box_try!(res.write_to_bytes())
-        };
-        Ok(res_data)
+    async fn handle_full_sampling(
+        builder: &mut RowSampleBuilder<S, F>,
+    ) -> Result<AnalyzeSamplingResult> {
+        builder.collect_column_stats().await
     }
 
     // handle_index is used to handle `AnalyzeIndexReq`,
@@ -221,6 +219,11 @@ impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
 #[async_trait]
 impl<S: Snapshot, F: KvFormat> RequestHandler for AnalyzeContext<S, F> {
     async fn handle_request(&mut self) -> Result<HandlerOutput> {
+        let ready = |data| {
+            let mut response = Response::default();
+            response.set_data(data);
+            HandlerOutput::ready_with_trace(response, &MEMTRACE_ANALYZE)
+        };
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex | AnalyzeType::TypeCommonHandle => {
                 let req = self.req.take_idx_req();
@@ -244,7 +247,7 @@ impl<S: Snapshot, F: KvFormat> RequestHandler for AnalyzeContext<S, F> {
                 )
                 .await;
                 scanner.collect_storage_stats(&mut self.storage_stats);
-                res
+                res.map(ready)
             }
 
             AnalyzeType::TypeColumn => {
@@ -254,7 +257,7 @@ impl<S: Snapshot, F: KvFormat> RequestHandler for AnalyzeContext<S, F> {
                 let mut builder = SampleBuilder::<_, F>::new(col_req, None, storage, ranges)?;
                 let res = AnalyzeContext::handle_column(&mut builder).await;
                 builder.data.collect_storage_stats(&mut self.storage_stats);
-                res
+                res.map(ready)
             }
 
             // Type mixed is analyze common handle and columns by scan table rows once.
@@ -267,7 +270,7 @@ impl<S: Snapshot, F: KvFormat> RequestHandler for AnalyzeContext<S, F> {
                     SampleBuilder::<_, F>::new(col_req, Some(idx_req), storage, ranges)?;
                 let res = AnalyzeContext::handle_mixed(&mut builder).await;
                 builder.data.collect_storage_stats(&mut self.storage_stats);
-                res
+                res.map(ready)
             }
 
             AnalyzeType::TypeFullSampling => {
@@ -285,7 +288,13 @@ impl<S: Snapshot, F: KvFormat> RequestHandler for AnalyzeContext<S, F> {
 
                 let res = AnalyzeContext::handle_full_sampling(&mut builder).await;
                 builder.merge_storage_stats_into(&mut self.storage_stats);
-                res
+                res.map(|sampling_result| {
+                    HandlerOutput::mergeable_with_trace(
+                        Response::default(),
+                        Box::new(sampling_result),
+                        &MEMTRACE_ANALYZE,
+                    )
+                })
             }
 
             AnalyzeType::TypeSampleIndex => Err(Error::Other(
@@ -293,11 +302,7 @@ impl<S: Snapshot, F: KvFormat> RequestHandler for AnalyzeContext<S, F> {
             )),
         };
         match ret {
-            Ok(data) => {
-                let mut resp = Response::default();
-                resp.set_data(data);
-                Ok(HandlerOutput::ready_with_trace(resp, &MEMTRACE_ANALYZE))
-            }
+            Ok(output) => Ok(output),
             Err(Error::Other(e)) => {
                 let mut resp = Response::default();
                 resp.set_other_error(e);
