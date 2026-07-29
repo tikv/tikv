@@ -8,7 +8,7 @@ use crate::storage::{
     lock_manager::LockManager,
     mvcc::{MvccTxn, SnapshotReader},
     txn::{
-        actions::commit::commit_with_primary,
+        actions::{cleanup::cleanup_with_primary, commit::commit_with_primary},
         cleanup,
         commands::{
             Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
@@ -64,10 +64,13 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockLite {
         // ti-client guarantees the size of resolve_keys will not too large, so no
         // necessary to control the write_size as ResolveLock.
         let mut released_locks = ReleasedLocks::new();
-        if !self.commit_ts.is_zero() && TXN_FLIGHT_RECORDER.is_enabled() {
+        if TXN_FLIGHT_RECORDER.is_enabled() {
             for key in self.resolve_keys {
-                let (released, primary_key_hash) =
-                    commit_with_primary(&mut txn, &mut reader, key, self.commit_ts)?;
+                let (released, primary_key_hash) = if self.commit_ts.is_zero() {
+                    cleanup_with_primary(&mut txn, &mut reader, key, TimeStamp::zero(), false)?
+                } else {
+                    commit_with_primary(&mut txn, &mut reader, key, self.commit_ts)?
+                };
                 released_locks.set_flight_primary_key_hash(primary_key_hash);
                 released_locks.push(released);
             }

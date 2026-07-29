@@ -540,9 +540,10 @@ impl WriteResultLockInfo {
 }
 
 // The second field is an optional flight-recorder primary-key hash, identified
-// while preparing commit and consumed before the locks reach the lock manager.
+// while processing a write command and consumed before the locks reach the lock
+// manager.
 #[derive(Default, Debug)]
-pub struct ReleasedLocks(Vec<ReleasedLock>, u64);
+pub struct ReleasedLocks(Vec<ReleasedLock>, Option<u64>);
 
 impl ReleasedLocks {
     pub fn new() -> Self {
@@ -561,21 +562,21 @@ impl ReleasedLocks {
 
     pub fn clear(&mut self) {
         self.0.clear();
-        self.1 = 0;
+        self.1 = None;
     }
 
     pub fn into_iter(self) -> impl Iterator<Item = ReleasedLock> {
         self.0.into_iter()
     }
 
-    pub(crate) fn set_flight_primary_key_hash(&mut self, key_hash: u64) {
-        if key_hash != 0 {
-            debug_assert!(self.1 == 0 || self.1 == key_hash);
-            self.1 = key_hash;
+    pub(crate) fn set_flight_primary_key_hash(&mut self, key_hash: Option<u64>) {
+        if let Some(key_hash) = key_hash {
+            debug_assert!(self.1.is_none() || self.1 == Some(key_hash));
+            self.1 = Some(key_hash);
         }
     }
 
-    pub(crate) fn flight_primary_key_hash(&self) -> u64 {
+    pub(crate) fn flight_primary_key_hash(&self) -> Option<u64> {
         self.1
     }
 }

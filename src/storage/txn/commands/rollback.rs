@@ -8,11 +8,13 @@ use crate::storage::{
     lock_manager::LockManager,
     mvcc::{MvccTxn, SnapshotReader},
     txn::{
+        actions::cleanup::cleanup_with_primary,
         cleanup,
         commands::{
             Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
             WriteCommand, WriteContext, WriteResult,
         },
+        flight_recorder::TXN_FLIGHT_RECORDER,
         Result,
     },
     ProcessResult, Snapshot,
@@ -57,11 +59,20 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Rollback {
 
         let rows = self.keys.len();
         let mut released_locks = ReleasedLocks::new();
-        for k in self.keys {
-            // Rollback is called only if the transaction is known to fail. Under the
-            // circumstances, the rollback record needn't be protected.
-            let released_lock = cleanup(&mut txn, &mut reader, k, TimeStamp::zero(), false)?;
-            released_locks.push(released_lock);
+        // Rollback is called only if the transaction is known to fail. Under the
+        // circumstances, the rollback record needn't be protected.
+        if TXN_FLIGHT_RECORDER.is_enabled() {
+            for k in self.keys {
+                let (released, primary_key_hash) =
+                    cleanup_with_primary(&mut txn, &mut reader, k, TimeStamp::zero(), false)?;
+                released_locks.set_flight_primary_key_hash(primary_key_hash);
+                released_locks.push(released);
+            }
+        } else {
+            for k in self.keys {
+                let released = cleanup(&mut txn, &mut reader, k, TimeStamp::zero(), false)?;
+                released_locks.push(released);
+            }
         }
 
         let new_acquired_locks = txn.take_new_locks();
