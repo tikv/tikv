@@ -6,7 +6,8 @@ use std::{
 };
 
 use ::tracker::{
-    GLOBAL_TRACKERS, RequestInfo, RequestType, set_tls_tracker_token, track, with_tls_tracker,
+    GLOBAL_TRACKERS, RequestInfo, RequestType, get_tls_tracker_token, set_tls_tracker_token, track,
+    with_tls_tracker,
 };
 use anyhow::anyhow;
 use api_version::{KvFormat, dispatch_api_version};
@@ -627,15 +628,10 @@ impl<E: Engine> Endpoint<E> {
         tracker.collect_storage_statistics(storage_stats);
         let mut output = match result {
             Ok(output) => {
-                let resp_size = output.response.data.len() as u64;
-                COPR_RESP_SIZE.inc_by(resp_size);
-                record_network_out_bytes(resp_size);
-                with_tls_tracker(|tracker| {
-                    tracker.metrics.coprocessor_response_bytes = tracker
-                        .metrics
-                        .coprocessor_response_bytes
-                        .saturating_add(resp_size);
-                });
+                record_coprocessor_response_size(
+                    output.response.get_data().len() as u64,
+                    get_tls_tracker_token(),
+                );
                 output
             }
             Err(e) => {
