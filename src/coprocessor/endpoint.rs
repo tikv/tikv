@@ -32,7 +32,6 @@ use tidb_query_common::{
     execute_stats::ExecSummary,
     storage::{FindRegionResult, RegionStorageAccessor, Result as StorageResult},
 };
-use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::{ExtraRegionOverride, SnapshotExt};
 use tikv_util::{
     DeferContext,
@@ -49,7 +48,7 @@ use tokio::sync::Semaphore;
 use super::config_manager::CopConfigManager;
 use crate::{
     coprocessor::{
-        cache::CachedRequestHandler, interceptors::*, metrics::*,
+        batch::*, cache::CachedRequestHandler, interceptors::*, metrics::*,
         statistics::analyze_context::AnalyzeContext, tracker::Tracker, *,
     },
     read_pool::ReadPoolHandle,
@@ -754,7 +753,7 @@ impl<E: Engine> Endpoint<E> {
             return Either::Left(async move { resp.into() });
         }
 
-        let result_of_batch = self.process_batch_tasks(&mut req, &peer);
+        let batch_outputs = self.process_batch_tasks(&mut req, &peer);
         set_tls_tracker_token(tracker);
         with_tls_tracker(|tracker| {
             tracker.metrics.grpc_req_size = req.compute_size() as u64;
@@ -770,36 +769,54 @@ impl<E: Engine> Endpoint<E> {
             // Moving the guard into the future ties removal to the future's
             // lifetime, so cancellation cleans up as well as completion.
             let _tracker_guard = tracker_guard;
-            let res = match result_of_future {
-                Err(e) => {
-                    attach_batch_responses(make_error_response(e).into(), result_of_batch.await)
-                }
-                Ok(handle_fut) => {
-                    let (handle_res, batch_res) = futures::join!(handle_fut, result_of_batch);
-                    let res = handle_res.unwrap_or_else(|e| make_error_response(e).into());
-                    let mut res = attach_batch_responses(res, batch_res);
-                    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-                        let exec_detail_v2 = res.mut_exec_details_v2();
-                        tracker.write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
-                        tracker.merge_time_detail(exec_detail_v2.mut_time_detail_v2());
-                    });
-                    res
+            let collect_top_details = result_of_future.is_ok();
+            let top_output = async move {
+                match result_of_future {
+                    Err(e) => HandlerOutput::ready(make_error_response(e)),
+                    Ok(handle_fut) => match handle_fut.await {
+                        Ok(response) => HandlerOutput {
+                            response,
+                            state: HandlerOutputState::Ready,
+                        },
+                        Err(e) => HandlerOutput::ready(make_error_response(e)),
+                    },
                 }
             };
+            let (output, batch_outputs) =
+                collect_batch_task_outputs(top_output, batch_outputs).await;
+            let batch_responses = batch_outputs
+                .into_iter()
+                .map(BatchTaskOutput::into_response)
+                .collect();
+            let response = match output.into_response() {
+                Ok(response) => response,
+                Err(ResponseMaterializationFailure {
+                    error,
+                    partial_response,
+                }) => (*partial_response).map(|_| make_error_response(error)),
+            };
+            let mut res = attach_batch_responses(response, batch_responses);
+            if collect_top_details {
+                GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                    let exec_detail_v2 = res.mut_exec_details_v2();
+                    tracker.write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
+                    tracker.merge_time_detail(exec_detail_v2.mut_time_detail_v2());
+                });
+            }
             res
         };
         Either::Right(fut)
     }
 
-    // process_batch_tasks process the input batched coprocessor tasks if any,
-    // prepare all the requests and schedule them into the read pool, then
-    // collect all the responses and convert them into the `StoreBatchResponse`
-    // type.
-    pub fn process_batch_tasks(
+    // All batched coprocessor tasks are prepared and their outputs are streamed
+    // in request order. FuturesOrdered still polls the tasks concurrently when
+    // the stream is polled, so the caller must poll it promptly (see
+    // `collect_batch_task_outputs`).
+    fn process_batch_tasks(
         &self,
         req: &mut coppb::Request,
         peer: &Option<String>,
-    ) -> impl Future<Output = Vec<MemoryTraceGuard<coppb::StoreBatchTaskResponse>>> {
+    ) -> impl Stream<Item = BatchTaskOutput> {
         let mut batch_futs = Vec::with_capacity(req.tasks.len());
         let batch_reqs: Vec<(coppb::Request, u64)> = req
             .take_tasks()
@@ -867,18 +884,24 @@ impl<E: Engine> Endpoint<E> {
                                 response.into()
                             }
                         };
-                        response
+                        BatchTaskOutput {
+                            response,
+                            mergeable_result: None,
+                        }
                     };
 
                     batch_futs.push(future::Either::Left(fut));
                 }
                 Err(e) => batch_futs.push(future::Either::Right(async move {
                     make_error_batch_response(&mut response, e);
-                    response.into()
+                    BatchTaskOutput {
+                        response: response.into(),
+                        mergeable_result: None,
+                    }
                 })),
             }
         }
-        stream::FuturesOrdered::from_iter(batch_futs).collect()
+        stream::FuturesOrdered::from_iter(batch_futs)
     }
 
     /// The real implementation of handling a stream request.
@@ -1201,47 +1224,7 @@ macro_rules! make_error_response_common {
     }};
 }
 
-/// Attaches per-task responses and rebuilds the trace guard so the combined
-/// data stays accounted until the response drops. The guard keeps the top
-/// response's node, adopting the first tracked batch response's node when the
-/// top is untracked (e.g. a top task error); with no tracked participant the
-/// response stays untracked.
-fn attach_batch_responses(
-    mut response: TracedResponse,
-    batch_responses: Vec<MemoryTraceGuard<coppb::StoreBatchTaskResponse>>,
-) -> TracedResponse {
-    let node = response
-        .trace_node()
-        .or_else(|| batch_responses.iter().find_map(|r| r.trace_node()));
-    // Batched tasks are clones of the top request, so every tracked
-    // participant shares one node and adoption cannot misattribute memory.
-    debug_assert!(node.as_ref().is_none_or(|node| {
-        batch_responses
-            .iter()
-            .filter_map(|r| r.trace_node())
-            .all(|child| Arc::ptr_eq(node, &child))
-    }));
-    let mut response = response.consume();
-    response.set_batch_responses(
-        batch_responses
-            .into_iter()
-            .map(|mut r| r.consume())
-            .collect::<Vec<_>>()
-            .into(),
-    );
-    let data_len = response
-        .get_batch_responses()
-        .iter()
-        .fold(response.get_data().len(), |len, batch_response| {
-            len.saturating_add(batch_response.get_data().len())
-        });
-    match node {
-        Some(node) => node.trace_guard(response, data_len),
-        None => response.into(),
-    }
-}
-
-fn make_error_batch_response(batch_resp: &mut coppb::StoreBatchTaskResponse, e: Error) {
+pub(super) fn make_error_batch_response(batch_resp: &mut coppb::StoreBatchTaskResponse, e: Error) {
     debug!(
         "batch cop task error-response";
         "err" => %e

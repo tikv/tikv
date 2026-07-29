@@ -23,6 +23,7 @@
 
 #![allow(clippy::diverging_sub_expression)]
 
+mod batch;
 mod cache;
 mod checksum;
 mod config_manager;
