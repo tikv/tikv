@@ -874,11 +874,7 @@ impl IterableStorage for S3Storage {
 
 #[cfg(test)]
 mod tests {
-<<<<<<< HEAD
-    use std::assert_matches::assert_matches;
-=======
-    use std::ffi::OsString;
->>>>>>> 446ad02ccb (cloud/aws: fix custom S3 endpoints with FIPS mode (#19841))
+    use std::{assert_matches::assert_matches, ffi::OsString};
 
     use aws_sdk_s3::{config::Credentials, primitives::SdkBody};
     use aws_smithy_runtime::{
@@ -889,8 +885,6 @@ mod tests {
 
     use super::*;
 
-<<<<<<< HEAD
-=======
     // Serialize multipart-related tests because they assert deltas on the global
     // metric CLOUD_REQUEST_HISTOGRAM_VEC, which is shared across tests.
     static MULTI_PART_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -921,7 +915,6 @@ mod tests {
         }
     }
 
->>>>>>> 446ad02ccb (cloud/aws: fix custom S3 endpoints with FIPS mode (#19841))
     #[test]
     fn test_s3_get_content_md5() {
         // base64 encode md5sum "helloworld"
