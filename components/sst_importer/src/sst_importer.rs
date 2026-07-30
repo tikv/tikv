@@ -465,8 +465,9 @@ impl<E: KvEngine> SstImporter<E> {
         }
     }
 
-    pub fn verify_checksum(&self, metas: &[SstMeta]) -> Result<()> {
-        self.dir.verify_checksum(metas, self.key_manager.clone())
+    pub fn verify_checksum(&self, metas: &[SstMeta], use_direct_io: bool) -> Result<()> {
+        self.dir
+            .verify_checksum(metas, self.key_manager.clone(), use_direct_io)
     }
 
     pub fn exist(&self, meta: &SstMeta) -> bool {
@@ -2256,6 +2257,7 @@ impl<E: KvEngine> SstImporter<E> {
         db: &E,
         meta: SstMeta,
         txn_source: u64,
+        use_direct_io: bool,
     ) -> Result<TxnSstWriter<E>> {
         let mut default_meta = meta.clone();
         default_meta.set_cf_name(CF_DEFAULT.to_owned());
@@ -2264,6 +2266,7 @@ impl<E: KvEngine> SstImporter<E> {
             .set_db(db)
             .set_cf(CF_DEFAULT)
             .set_compression_type(self.compression_types.get(CF_DEFAULT).copied())
+            .set_use_direct_writes(use_direct_io)
             .build(default_path.temp.to_str().unwrap())
             .unwrap();
 
@@ -2274,6 +2277,7 @@ impl<E: KvEngine> SstImporter<E> {
             .set_db(db)
             .set_cf(CF_WRITE)
             .set_compression_type(self.compression_types.get(CF_WRITE).copied())
+            .set_use_direct_writes(use_direct_io)
             .build(write_path.temp.to_str().unwrap())
             .unwrap();
 
@@ -2290,7 +2294,13 @@ impl<E: KvEngine> SstImporter<E> {
         ))
     }
 
-    pub fn new_raw_writer(&self, db: &E, mut meta: SstMeta, _: u64) -> Result<RawSstWriter<E>> {
+    pub fn new_raw_writer(
+        &self,
+        db: &E,
+        mut meta: SstMeta,
+        _: u64,
+        _: bool,
+    ) -> Result<RawSstWriter<E>> {
         meta.set_cf_name(CF_DEFAULT.to_owned());
         let default_path = self.dir.join_for_write(&meta)?;
         let default = E::SstWriterBuilder::new()
@@ -5423,7 +5433,7 @@ mod tests {
         let db_path = importer_dir.path().join("db");
         let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
 
-        let mut w = importer.new_txn_writer(&db, meta, 0).unwrap();
+        let mut w = importer.new_txn_writer(&db, meta, 0, false).unwrap();
         let mut batch = WriteBatch::default();
         let mut pairs = vec![];
 
