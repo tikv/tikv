@@ -29,11 +29,10 @@ impl ImportExt for RocksEngine {
         let allow_write = ENABLE_INGEST_ALLOW_WRITE && (range.is_some() || force_allow_write);
         // Acquire latch to prevent concurrency with compaction-filter operations
         // when using RocksDB IngestExternalFileOptions.allow_write = true.
-        let _region_inject_latch_guard =
-            range.as_ref().filter(|_| allow_write).map(|r| {
-                self.ingest_latch
-                    .acquire(r.start_key.to_vec(), r.end_key.to_vec())
-            });
+        let _region_inject_latch_guard = range.as_ref().filter(|_| allow_write).map(|r| {
+            self.ingest_latch
+                .acquire(r.start_key.to_vec(), r.end_key.to_vec())
+        });
         fail_point!("after_apply_snapshot_ingest_latch_acquired");
 
         let cf = util::get_cf_handle(self.as_inner(), cf_name)?;
