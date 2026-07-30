@@ -75,10 +75,20 @@ pub fn sc_logical_or(
 trait ScLogicalOp {
     const IDENTITY: Int;
 
+    #[inline]
     fn normalize_value(value: Option<Int>) -> Option<Int> {
         value.map(|v| if v != 0 { 1 } else { 0 })
     }
 
+    #[inline]
+    fn is_short_circuit(value: Option<Int>) -> bool {
+        matches!(
+            value,
+            Some(value) if value != Self::IDENTITY
+        )
+    }
+
+    #[inline]
     fn handle_res_value(
         result: &mut ChunkedVecSized<Int>,
         idx: usize,
@@ -122,15 +132,10 @@ fn eval_logical_short_circuit<Op: ScLogicalOp>(
 ) -> Result<VectorValue> {
     assert!(args.len() >= 2);
     assert!(input_logical_rows.is_empty() || input_logical_rows.len() == output_rows);
-
-    let mut result = ChunkedVecSized::<Int>::with_capacity(output_rows);
-    for _ in 0..output_rows {
-        result.push(Some(Op::IDENTITY));
-    }
-
     if output_rows == 0 {
-        return Ok(VectorValue::Int(result));
+        return Ok(VectorValue::from_scalar(&ScalarValue::Int(Some(0)), 0));
     }
+    let mut result = ChunkedVecSized::<Int>::with_capacity(0);
 
     // `None` means all output rows are still pending. Keep this state implicit
     // until an argument resolves only part of the rows, so the common no-short-
@@ -156,27 +161,60 @@ fn eval_logical_short_circuit<Op: ScLogicalOp>(
         )?;
 
         let mut resolved_count = 0;
+        let is_first = result.is_empty();
         match arg_result {
             RpnStackNode::Scalar { value, .. } => {
-                let value = value.as_int().copied();
-                for i in 0..pending_len {
-                    let output_index = pending_positions.map_or(i, |positions| positions[i]);
-                    Op::handle_res_value(&mut result, output_index, value, &mut resolved_count);
+                let value = Op::normalize_value(value.as_int().copied());
+                resolved_count = if Op::is_short_circuit(value) {
+                    pending_len
+                } else {
+                    0
+                };
+                if is_first {
+                    result = ChunkedVecSized::with_capacity(output_rows);
+                    for _ in 0..pending_len {
+                        result.push(value);
+                    }
+                } else if resolved_count == pending_len || value.is_none() {
+                    for i in 0..pending_len {
+                        let output_index = pending_positions.map_or(i, |positions| positions[i]);
+                        result.set(output_index, value);
+                    }
                 }
             }
             RpnStackNode::Vector {
-                value: RpnStackNodeVectorValue::Generated { physical_value },
+                value:
+                    RpnStackNodeVectorValue::Generated {
+                        physical_value: VectorValue::Int(vec_result),
+                    },
                 ..
             } => {
-                let ints = Int::borrow_vector_value(&physical_value);
-                for i in 0..pending_len {
-                    let output_index = pending_positions.map_or(i, |positions| positions[i]);
-                    Op::handle_res_value(
-                        &mut result,
-                        output_index,
-                        ints.get_option_ref(i).copied(),
-                        &mut resolved_count,
-                    );
+                if is_first {
+                    result = vec_result;
+
+                    for i in 0..pending_len {
+                        let value = result.get_option_ref(i).copied();
+                        let normalized = Op::normalize_value(value);
+
+                        if normalized != value {
+                            result.set(i, normalized);
+                        }
+
+                        if Op::is_short_circuit(normalized) {
+                            resolved_count += 1;
+                        }
+                    }
+                } else {
+                    for i in 0..pending_len {
+                        let output_index = pending_positions.map_or(i, |positions| positions[i]);
+
+                        Op::handle_res_value(
+                            &mut result,
+                            output_index,
+                            vec_result.get_option_ref(i).copied(),
+                            &mut resolved_count,
+                        );
+                    }
                 }
             }
             RpnStackNode::Vector {
@@ -187,17 +225,31 @@ fn eval_logical_short_circuit<Op: ScLogicalOp>(
                     },
                 ..
             } => {
-                let ints = Int::borrow_vector_value(physical_value);
-                for i in 0..pending_len {
-                    let output_index = pending_positions.map_or(i, |positions| positions[i]);
-                    Op::handle_res_value(
-                        &mut result,
-                        output_index,
-                        ints.get_option_ref(logical_rows[i]).copied(),
-                        &mut resolved_count,
-                    );
+                let vec_result = Int::borrow_vector_value(physical_value);
+                if is_first {
+                    result = ChunkedVecSized::<Int>::with_capacity(output_rows);
+                    for i in 0..pending_len {
+                        let value = Op::normalize_value(
+                            vec_result.get_option_ref(logical_rows[i]).copied(),
+                        );
+                        if Op::is_short_circuit(value) {
+                            resolved_count += 1;
+                        }
+                        result.push(value);
+                    }
+                } else {
+                    for i in 0..pending_len {
+                        let output_index = pending_positions.map_or(i, |positions| positions[i]);
+                        Op::handle_res_value(
+                            &mut result,
+                            output_index,
+                            vec_result.get_option_ref(logical_rows[i]).copied(),
+                            &mut resolved_count,
+                        );
+                    }
                 }
             }
+            _ => unreachable!("logical expression must produce Int"),
         }
 
         if resolved_count == 0 {
