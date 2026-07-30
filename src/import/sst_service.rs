@@ -626,13 +626,14 @@ macro_rules! impl_write {
             let timer = Instant::now_coarse();
             let label = stringify!($fn);
             let resource_manager = self.resource_manager.clone();
+            let direct_io_enabled = self.cfg.rl().use_direct_io_for_ingest;
             let handle_task = async move {
                 let (res, rx) = async move {
                     let first_req = match rx.try_next().await {
                         Ok(r) => r,
                         Err(e) => return (Err(e), Some(rx)),
                     };
-                    let (meta, resource_limiter, txn_source) = match first_req {
+                    let (meta, resource_limiter, txn_source, use_direct_io) = match first_req {
                         Some(r) => {
                             let limiter = resource_manager.as_ref().and_then(|m| {
                                 m.get_background_resource_limiter(
@@ -643,8 +644,20 @@ macro_rules! impl_write {
                                 )
                             });
                             let txn_source = r.get_context().get_txn_source();
+                            // Only DDL-sourced ingest bypasses the page cache. The task
+                            // name is the trailing `_`-separated component of
+                            // request_source, which is
+                            // `{external|internal}_{tidb_req_source}_{source_task_name}`
+                            // -- the same convention resource control uses to recognise
+                            // background jobs.
+                            let use_direct_io = direct_io_enabled
+                                && r.get_context()
+                                    .get_request_source()
+                                    .rsplit('_')
+                                    .next()
+                                    .is_some_and(|task_name| task_name == "ddl");
                             match r.chunk {
-                                Some($chunk_ty::Meta(m)) => (m, limiter, txn_source),
+                                Some($chunk_ty::Meta(m)) => (m, limiter, txn_source, use_direct_io),
                                 _ => return (Err(Error::InvalidChunk), Some(rx)),
                             }
                         }
@@ -695,7 +708,8 @@ macro_rules! impl_write {
                         return (Err(e), Some(rx));
                     }
 
-                    let writer = match import.$writer_fn(&*tablet, meta, txn_source) {
+                    let writer = match import.$writer_fn(&*tablet, meta, txn_source, use_direct_io)
+                    {
                         Ok(w) => w,
                         Err(e) => {
                             error!("build writer failed {:?}", e);
@@ -727,7 +741,7 @@ macro_rules! impl_write {
 
                     let finish_fn = async {
                         let metas = writer.finish()?;
-                        import.verify_checksum(&metas)?;
+                        import.verify_checksum(&metas, use_direct_io)?;
                         Ok(metas)
                     };
 

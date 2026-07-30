@@ -229,8 +229,10 @@ sysinfo = { git = "https://github.com/tikv/sysinfo", branch = "0.26-fix-cpu" }
 # kvproto = { git = "https://github.com/your_github_id/kvproto", branch = "your_branch" }
 #
 # After the PR to rust-rocksdb is merged, remember to comment this out and run `cargo update -p rocksdb`.
-# [patch.'https://github.com/tikv/rust-rocksdb']
-# rocksdb = { git = "https://github.com/your_github_id/rust-rocksdb", branch = "your_branch" }
+# TODO: remove once tikv/rust-rocksdb#856 (direct-IO setters for the SST writer and
+# reader) is merged; this PR cannot build without it.
+[patch.'https://github.com/tikv/rust-rocksdb']
+rocksdb = { git = "https://github.com/sanketkedia/rust-rocksdb", branch = "sst-direct-io-setters" }
 
 [workspace]
 # See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md

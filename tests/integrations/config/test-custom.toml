@@ -639,6 +639,7 @@ linux-user = "hadoop"
 num-threads = 123
 stream-channel-window = 123
 import-mode-timeout = "1453s"
+use-direct-io-for-ingest = true
 
 [gc]
 ratio-threshold = 1.2
