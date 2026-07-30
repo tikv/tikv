@@ -1923,12 +1923,30 @@ impl PdClient for TestPdClient {
         safepoint: TimeStamp,
         ttl: Duration,
     ) -> PdFuture<()> {
+        let mut gc_safepoints = self.gc_safepoints.wl();
+        if ttl.is_zero() {
+            gc_safepoints.retain(|sp| sp.service != name);
+            return Box::pin(ok(()));
+        }
         if ttl.as_secs() > 0 {
+<<<<<<< HEAD
             self.gc_safepoints.wl().push(GcSafePoint {
                 serivce: name,
                 ttl,
                 safepoint,
             });
+=======
+            if let Some(sp) = gc_safepoints.iter_mut().find(|sp| sp.service == name) {
+                sp.ttl = ttl;
+                sp.safepoint = safepoint;
+            } else {
+                gc_safepoints.push(ServiceSafePoint {
+                    service: name,
+                    ttl,
+                    safepoint,
+                });
+            }
+>>>>>>> b45aa9b93c (backup-stream: remove safepoint if log backup task is stopped (#19829))
         }
         Box::pin(ok(()))
     }

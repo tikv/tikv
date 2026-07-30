@@ -488,15 +488,41 @@ impl<PD> BasicFlushObserver<PD> {
     }
 }
 
-#[async_trait::async_trait]
-impl<PD: PdClient + 'static> FlushObserver for BasicFlushObserver<PD> {
-    async fn before(&mut self, _checkpoints: Vec<ResolveResult>) {}
+fn flush_safe_point_service_id(task: &str, store_id: u64) -> String {
+    format!("{}-{}-{}", BACKUP_STREAM_THREAD, task, store_id)
+}
 
-    async fn after(&mut self, task: &str, rts: u64) -> Result<()> {
+pub(crate) async fn remove_flush_safe_point<PD: PdClient + 'static>(
+    pd_cli: Arc<PD>,
+    store_id: u64,
+    task: &str,
+) {
+    if let Err(err) = pd_cli
+        .update_service_safe_point(
+            flush_safe_point_service_id(task, store_id),
+            TimeStamp::zero(),
+            Duration::new(0, 0),
+        )
+        .await
+        .map_err(Error::from)
+    {
+        err.report(format!(
+            "failed to remove flush safe point for task {}",
+            task
+        ));
+    }
+}
+
+impl<PD: PdClient + 'static> BasicFlushObserver<PD> {
+    async fn update_after_flush(&self, task: &str, rts: u64) {
         if let Err(err) = self
             .pd_cli
             .update_service_safe_point(
+<<<<<<< HEAD
                 format!("backup-stream-{}-{}", task, self.store_id),
+=======
+                flush_safe_point_service_id(task, self.store_id),
+>>>>>>> b45aa9b93c (backup-stream: remove safepoint if log backup task is stopped (#19829))
                 TimeStamp::new(rts.saturating_sub(1)),
                 // Add a service safe point for 2 hours.
                 // We make it the same duration as we meet fatal errors because TiKV may be
@@ -511,6 +537,15 @@ impl<PD: PdClient + 'static> FlushObserver for BasicFlushObserver<PD> {
             Error::from(err).report("failed to update service safe point!");
             // don't give up?
         }
+    }
+}
+
+#[async_trait::async_trait]
+impl<PD: PdClient + 'static> FlushObserver for BasicFlushObserver<PD> {
+    async fn before(&mut self, _checkpoints: Vec<ResolveResult>) {}
+
+    async fn after(&mut self, task: &str, rts: u64) -> Result<()> {
+        self.update_after_flush(task, rts).await;
 
         // Currently, we only support one task at the same time,
         // so use the task as label would be ok.
@@ -615,7 +650,7 @@ pub mod tests {
     use pd_client::{PdClient, PdFuture};
     use txn_types::TimeStamp;
 
-    use super::{BasicFlushObserver, FlushObserver, RegionIdWithVersion};
+    use super::{BasicFlushObserver, FlushObserver, RegionIdWithVersion, remove_flush_safe_point};
     use crate::{
         subscription_track::{CheckpointType, ResolveResult},
         GetCheckpointResult,
@@ -886,8 +921,8 @@ pub mod tests {
     async fn test_after() {
         let store_id = 1;
         let pd_cli = Arc::new(MockPdClient::new());
-        let mut flush_observer = BasicFlushObserver::new(pd_cli.clone(), store_id);
         let task = String::from("test");
+        let mut flush_observer = BasicFlushObserver::new(pd_cli.clone(), store_id);
         let rts = 12345;
 
         let r = flush_observer.after(&task, rts).await;
@@ -896,5 +931,30 @@ pub mod tests {
         let serivce_id = format!("backup-stream-{}-{}", task, store_id);
         let r = pd_cli.get_service_safe_point(serivce_id).unwrap();
         assert_eq!(r.into_inner(), rts - 1);
+    }
+
+    #[tokio::test]
+    async fn test_remove_flush_safe_point() {
+        let store_id = 1;
+        let pd_cli = Arc::new(MockPdClient::new());
+        let task = String::from("test");
+        let service_id = format!("{}-{}-{}", BACKUP_STREAM_THREAD, task, store_id);
+
+        let mut flush_observer = BasicFlushObserver::new(pd_cli.clone(), store_id);
+        flush_observer.after(&task, 12345).await.unwrap();
+        let r = pd_cli.get_service_safe_point(service_id.clone()).unwrap();
+        assert_eq!(r.into_inner(), 12344);
+
+        remove_flush_safe_point(pd_cli.clone(), store_id, &task).await;
+        let r = pd_cli.get_service_safe_point(service_id.clone()).unwrap();
+        assert_eq!(r.into_inner(), 0);
+
+        flush_observer.after(&task, 34567).await.unwrap();
+        let r = pd_cli.get_service_safe_point(service_id.clone()).unwrap();
+        assert_eq!(r.into_inner(), 34566);
+
+        remove_flush_safe_point(pd_cli.clone(), store_id, &task).await;
+        let r = pd_cli.get_service_safe_point(service_id).unwrap();
+        assert_eq!(r.into_inner(), 0);
     }
 }
