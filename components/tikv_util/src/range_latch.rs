@@ -106,7 +106,6 @@ impl RangeLatch {
                 // Safety: `_mutex_guard` is declared before `handle` in `KeyHandleGuard`.
                 // So the mutex guard will be released earlier than the `Arc<KeyHandle>`.
                 // Then we can make sure the mutex guard doesn't point to released memory.
-=======
                 // Safety: `transmute` just change the lifetime, do not change
                 // the type.
                 // `_mutex_guard` points to the `Mutex<()>`
@@ -116,8 +115,6 @@ impl RangeLatch {
                 // released memory.
                 // We use `ManuallyDrop` to promise it.
 
-                #[allow(clippy::missing_transmute_annotations)]
->>>>>>> 663846dd02 (tikv_util: fix RangeLatch invalid memory access (#18765))
                 let mutex_guard = unsafe { std::mem::transmute(mutex_guard) };
 
                 return RangeLatchGuard {
