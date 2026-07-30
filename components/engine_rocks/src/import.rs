@@ -13,6 +13,9 @@ use crate::{
     r2e, util,
 };
 
+// Temporarily disabled due to https://github.com/tikv/tikv/issues/19891.
+const ENABLE_INGEST_ALLOW_WRITE: bool = false;
+
 impl ImportExt for RocksEngine {
     type IngestExternalFileOptions = RocksIngestExternalFileOptions;
 
@@ -23,18 +26,19 @@ impl ImportExt for RocksEngine {
         range: Option<Range<'_>>,
         force_allow_write: bool,
     ) -> Result<()> {
+        let allow_write = ENABLE_INGEST_ALLOW_WRITE && (range.is_some() || force_allow_write);
         // Acquire latch to prevent concurrency with compaction-filter operations
         // when using RocksDB IngestExternalFileOptions.allow_write = true.
-        let _region_inject_latch_guard = range.as_ref().map(|r| {
-            self.ingest_latch
-                .acquire(r.start_key.to_vec(), r.end_key.to_vec())
-        });
+        let _region_inject_latch_guard =
+            range.as_ref().filter(|_| allow_write).map(|r| {
+                self.ingest_latch
+                    .acquire(r.start_key.to_vec(), r.end_key.to_vec())
+            });
         fail_point!("after_apply_snapshot_ingest_latch_acquired");
 
         let cf = util::get_cf_handle(self.as_inner(), cf_name)?;
         let mut opts = RocksIngestExternalFileOptions::new();
         opts.move_files(true);
-        let allow_write = range.is_some() || force_allow_write;
         opts.allow_write(allow_write);
         if allow_write {
             INGEST_EXTERNAL_FILE_ALLOW_WRITE_COUNTER
