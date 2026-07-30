@@ -9,6 +9,9 @@ use crate::{
     engine::RocksEngine, perf_context_metrics::INGEST_EXTERNAL_FILE_ALLOW_WRITE_COUNTER, r2e, util,
 };
 
+// Temporarily disabled due to https://github.com/tikv/tikv/issues/19891.
+const ENABLE_INGEST_ALLOW_WRITE: bool = false;
+
 impl ImportExt for RocksEngine {
     type IngestExternalFileOptions = RocksIngestExternalFileOptions;
 
@@ -29,8 +32,12 @@ impl ImportExt for RocksEngine {
         let cf = util::get_cf_handle(self.as_inner(), cf_name)?;
         let mut opts = RocksIngestExternalFileOptions::new();
         opts.move_files(true);
+<<<<<<< HEAD
         opts.set_write_global_seqno(false);
         let allow_write = range.is_some();
+=======
+        let allow_write = ENABLE_INGEST_ALLOW_WRITE && (range.is_some() || force_allow_write);
+>>>>>>> 8da5fce59d (engine_rocks: temporarily disable `allow_write` during SST ingestion (#19906))
         opts.allow_write(allow_write);
         if allow_write {
             INGEST_EXTERNAL_FILE_ALLOW_WRITE_COUNTER
