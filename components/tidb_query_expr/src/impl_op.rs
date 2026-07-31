@@ -164,7 +164,16 @@ fn eval_logical_short_circuit<Op: ScLogicalOp>(
         let is_first = result.is_empty();
         match arg_result {
             RpnStackNode::Scalar { value, .. } => {
-                let value = Op::normalize_value(value.as_int().copied());
+                let value = match value {
+                    ScalarValue::Int(_) | ScalarValue::Enum(_) => value.as_int().copied(),
+                    _ => {
+                        return Err(other_err!(
+                            "logical expression must produce Int, got {}",
+                            value.eval_type()
+                        ));
+                    }
+                };
+                let value = Op::normalize_value(value);
                 resolved_count = if Op::is_short_circuit(value) {
                     pending_len
                 } else {
@@ -183,12 +192,19 @@ fn eval_logical_short_circuit<Op: ScLogicalOp>(
                 }
             }
             RpnStackNode::Vector {
-                value:
-                    RpnStackNodeVectorValue::Generated {
-                        physical_value: VectorValue::Int(vec_result),
-                    },
+                value: RpnStackNodeVectorValue::Generated { physical_value },
                 ..
             } => {
+                let vec_result = match physical_value {
+                    VectorValue::Int(vec_result) => vec_result,
+                    VectorValue::Enum(vec_result) => vec_result.as_vec_int().clone(),
+                    _ => {
+                        return Err(other_err!(
+                            "logical expression must produce Int, got {}",
+                            physical_value.eval_type()
+                        ));
+                    }
+                };
                 if is_first {
                     result = vec_result;
 
@@ -257,12 +273,6 @@ fn eval_logical_short_circuit<Op: ScLogicalOp>(
                         );
                     }
                 }
-            }
-            RpnStackNode::Vector { value, .. } => {
-                return Err(other_err!(
-                    "logical expression must produce Int, got {}",
-                    value.as_ref().eval_type()
-                ));
             }
         }
 
@@ -592,6 +602,7 @@ fn right_shift(lhs: Option<&Int>, rhs: Option<&Int>) -> Result<Option<Int>> {
 
 #[cfg(test)]
 mod tests {
+    use tidb_query_codegen::rpn_fn;
     use tidb_query_datatype::{
         FieldTypeFlag, FieldTypeTp, builder::FieldTypeBuilder, codec::mysql::TimeType,
         expr::EvalContext,
@@ -600,6 +611,11 @@ mod tests {
 
     use super::*;
     use crate::test_util::RpnFnScalarEvaluator;
+
+    #[rpn_fn(nullable)]
+    fn enum_identity(arg: Option<EnumRef>) -> Result<Option<Enum>> {
+        Ok(arg.map(EnumRef::to_owned))
+    }
 
     #[test]
     fn test_logical_and() {
@@ -676,6 +692,55 @@ mod tests {
             crate::RpnExpressionBuilder::new_for_test()
                 .push_constant_for_test(1.0)
                 .push_fn_call_for_test(unary_minus_real_fn_meta(), 1, FieldTypeTp::Double)
+                .build_for_test(),
+            crate::RpnExpressionBuilder::new_for_test()
+                .push_constant_for_test(0_i64)
+                .build_for_test(),
+        ];
+
+        let err = sc_logical_or(
+            &mut EvalContext::default(),
+            &[],
+            &LazyBatchColumnVec::empty(),
+            &[],
+            1,
+            &args,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("must produce Int, got Real"));
+    }
+
+    #[test]
+    fn test_logical_short_circuit_accepts_generated_enum_vector() {
+        let args = vec![
+            crate::RpnExpressionBuilder::new_for_test()
+                .push_constant_for_test(ScalarValue::Enum(Some(Enum::new(b"one".to_vec(), 1))))
+                .push_fn_call_for_test(enum_identity_fn_meta(), 1, FieldTypeTp::Enum)
+                .build_for_test(),
+            crate::RpnExpressionBuilder::new_for_test()
+                .push_constant_for_test(0_i64)
+                .build_for_test(),
+        ];
+
+        let result = sc_logical_or(
+            &mut EvalContext::default(),
+            &[],
+            &LazyBatchColumnVec::empty(),
+            &[],
+            2,
+            &args,
+        )
+        .unwrap();
+
+        assert_eq!(result.to_int_vec(), vec![Some(1), Some(1)]);
+    }
+
+    #[test]
+    fn test_logical_short_circuit_rejects_non_int_scalar() {
+        let args = vec![
+            crate::RpnExpressionBuilder::new_for_test()
+                .push_constant_for_test(1.0)
                 .build_for_test(),
             crate::RpnExpressionBuilder::new_for_test()
                 .push_constant_for_test(0_i64)
