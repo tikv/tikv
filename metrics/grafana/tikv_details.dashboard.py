@@ -4910,6 +4910,7 @@ def CoprocessorDetail() -> RowPanel:
             graph_description="The time consumed on waiting for semaphore permits for heavy coprocessor requests",
             yaxis_format=UNITS.SECONDS,
             metric="tikv_coprocessor_semaphore_wait_time_duration_seconds",
+            graph_by_labels=["group"],
         ),
     )
     layout.row(
@@ -4923,6 +4924,7 @@ def CoprocessorDetail() -> RowPanel:
                             "tikv_coprocessor_waiting_for_semaphore",
                             "avg",
                             "30s",
+                            by_labels=["instance", "group"],
                         ),
                         additional_groupby=True,
                     ),

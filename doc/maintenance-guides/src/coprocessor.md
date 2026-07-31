@@ -39,9 +39,11 @@ It is a read-heavy hot path and directly impacts query latency.
   `server.end-point-max-concurrency` budget, while the dedicated
   background-limited semaphore is an extra bounded cap derived from the same
   setting at startup.
-- Because these two semaphores are independent, the total number of concurrent
-  heavy coprocessor tasks can exceed `server.end-point-max-concurrency` when
-  both ordinary traffic and background-limited traffic are active.
+- When `server.end-point-max-concurrency` > 1, these two semaphores are
+  independent, so the total number of concurrent heavy coprocessor tasks can
+  exceed `server.end-point-max-concurrency` when both ordinary traffic and
+  background-limited traffic are active. For
+  `server.end-point-max-concurrency` == 1, both groups reuse the same semaphore.
 - The dedicated cap does not automatically track unified read-pool worker
   autoscaling at runtime.
 - `build_read_pool` sets TLS engine state and marks threads as
@@ -131,9 +133,12 @@ It is a read-heavy hot path and directly impacts query latency.
   `tikv_coprocessor_scan_details`,
   `tikv_coprocessor_response_bytes`,
   `tikv_coprocessor_waiting_for_semaphore`, and
-  `tikv_coprocessor_semaphore_wait_seconds`.
-- The semaphore metrics aggregate waits from both the shared semaphore and the
-  dedicated background-limited semaphore.
+  `tikv_coprocessor_semaphore_wait_time_duration_seconds`.
+- The semaphore wait metrics use `group=shared|background_limited` to
+  distinguish ordinary Cop request pressure from full-sampling Analyze
+  throttling. Dashboard queries should preserve this label when diagnosing an
+  individual lane and aggregate it only when displaying total semaphore
+  pressure.
 - `tracker.rs` is the best place to understand slow logs, exec details, request
   lifetime accounting, and the distinction between schedule wait, snapshot
   wait, suspend time, and processing time.

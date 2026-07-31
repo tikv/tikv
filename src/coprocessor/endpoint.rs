@@ -65,23 +65,12 @@ use crate::{
 /// light ones, which means they don't need a permit from the semaphore before
 /// execution.
 const LIGHT_TASK_THRESHOLD: Duration = Duration::from_millis(5);
-/// Reserve at most one quarter of the configured heavy-task budget as an extra
-/// cap for request classes that are already throttled by the background quota
-/// limiter. The dedicated cap is computed once from
-/// `end_point_max_concurrency` during endpoint construction rather than
-/// following read-pool worker autoscaling at runtime.
+/// Reserve up to one quarter of the configured heavy-task budget (but never
+/// less than 1 permit) as an extra cap for request classes that are already
+/// throttled by the background quota limiter. The dedicated cap is computed
+/// once from `end_point_max_concurrency` during endpoint construction rather
+/// than following read-pool worker autoscaling at runtime.
 const BACKGROUND_LIMITED_CONCURRENCY_DIVISOR: usize = 4;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RequestSemaphoreGroup {
-    /// Ordinary coprocessor requests that contend on the shared heavy-task
-    /// budget.
-    Shared,
-    /// Request classes that intentionally report quota samples to the
-    /// background quota limiter and should not be fully blocked behind the
-    /// shared heavy-task queue.
-    BackgroundLimited,
-}
 
 /// A pool to build and run Coprocessor request handlers.
 #[derive(Clone)]
@@ -126,7 +115,7 @@ pub struct Endpoint<E: Engine> {
 pub struct ParseCopRequestResult<Snap> {
     req_tag: ReqTag,
     req_ctx: ReqContext,
-    semaphore_group: RequestSemaphoreGroup,
+    semaphore_group: SemaphoreGroup,
     handler_builder: RequestHandlerBuilder<Snap>,
 }
 
@@ -136,7 +125,7 @@ impl<Snap> ParseCopRequestResult<Snap> {
         Self {
             req_tag: ReqTag::test,
             req_ctx: ReqContext::default_for_test(),
-            semaphore_group: RequestSemaphoreGroup::Shared,
+            semaphore_group: SemaphoreGroup::Shared,
             handler_builder,
         }
     }
@@ -179,10 +168,10 @@ impl<E: Engine> Endpoint<E> {
         }
     }
 
-    fn request_semaphore(&self, group: RequestSemaphoreGroup) -> Option<Arc<Semaphore>> {
+    fn request_semaphore(&self, group: SemaphoreGroup) -> Option<Arc<Semaphore>> {
         match group {
-            RequestSemaphoreGroup::Shared => self.shared_semaphore.clone(),
-            RequestSemaphoreGroup::BackgroundLimited => self.background_limited_semaphore.clone(),
+            SemaphoreGroup::Shared => self.shared_semaphore.clone(),
+            SemaphoreGroup::BackgroundLimited => self.background_limited_semaphore.clone(),
         }
     }
 
@@ -273,7 +262,7 @@ impl<E: Engine> Endpoint<E> {
         let req_ctx: ReqContext;
         let handler_builder: RequestHandlerBuilder<E::IMSnap>;
         let req_tag: ReqTag;
-        let semaphore_group: RequestSemaphoreGroup;
+        let semaphore_group: SemaphoreGroup;
         match req.get_tp() {
             REQ_TYPE_DAG => {
                 let mut dag = DagRequest::default();
@@ -296,7 +285,7 @@ impl<E: Engine> Endpoint<E> {
                 } else {
                     ReqTag::index
                 };
-                semaphore_group = RequestSemaphoreGroup::Shared;
+                semaphore_group = SemaphoreGroup::Shared;
 
                 req_ctx = ReqContext::new(
                     context,
@@ -378,14 +367,14 @@ impl<E: Engine> Endpoint<E> {
 
                 (req_tag, semaphore_group) = match analyze.get_tp() {
                     AnalyzeType::TypeIndex | AnalyzeType::TypeCommonHandle => {
-                        (ReqTag::analyze_index, RequestSemaphoreGroup::Shared)
+                        (ReqTag::analyze_index, SemaphoreGroup::Shared)
                     }
                     AnalyzeType::TypeColumn | AnalyzeType::TypeMixed => {
-                        (ReqTag::analyze_table, RequestSemaphoreGroup::Shared)
+                        (ReqTag::analyze_table, SemaphoreGroup::Shared)
                     }
                     AnalyzeType::TypeFullSampling => (
                         ReqTag::analyze_full_sampling,
-                        RequestSemaphoreGroup::BackgroundLimited,
+                        SemaphoreGroup::BackgroundLimited,
                     ),
                     AnalyzeType::TypeSampleIndex => unimplemented!(),
                 };
@@ -434,7 +423,7 @@ impl<E: Engine> Endpoint<E> {
                 } else {
                     ReqTag::checksum_index
                 };
-                semaphore_group = RequestSemaphoreGroup::Shared;
+                semaphore_group = SemaphoreGroup::Shared;
                 req_ctx = ReqContext::new(
                     context,
                     ranges,
@@ -552,6 +541,7 @@ impl<E: Engine> Endpoint<E> {
     /// produce a result.
     async fn handle_unary_request_impl(
         semaphore: Option<Arc<Semaphore>>,
+        semaphore_group: SemaphoreGroup,
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::IMSnap>,
     ) -> Result<MemoryTraceGuard<coppb::Response>> {
@@ -608,7 +598,13 @@ impl<E: Engine> Endpoint<E> {
         let handle_request_future = track(handle_request_future, tracker.as_mut());
 
         let deadline_res = if let Some(semaphore) = &semaphore {
-            limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await
+            limit_concurrency(
+                handle_request_future,
+                semaphore,
+                semaphore_group,
+                LIGHT_TASK_THRESHOLD,
+            )
+            .await
         } else {
             handle_request_future.await
         };
@@ -701,6 +697,7 @@ impl<E: Engine> Endpoint<E> {
         let (tx, rx) = oneshot::channel();
         let future = Self::handle_unary_request_impl(
             self.request_semaphore(semaphore_group),
+            semaphore_group,
             tracker,
             handler_builder,
         )
@@ -1648,7 +1645,7 @@ mod tests {
         block_on(copr.handle_unary_request(ParseCopRequestResult {
             req_ctx: outdated_req_ctx,
             req_tag: ReqTag::test,
-            semaphore_group: RequestSemaphoreGroup::Shared,
+            semaphore_group: SemaphoreGroup::Shared,
             handler_builder,
         }))
         .unwrap_err();
@@ -1861,13 +1858,13 @@ mod tests {
         assert_eq!(background.available_permits(), 2);
         assert!(Arc::ptr_eq(
             shared,
-            copr.request_semaphore(RequestSemaphoreGroup::Shared)
+            copr.request_semaphore(SemaphoreGroup::Shared)
                 .as_ref()
                 .unwrap()
         ));
         assert!(Arc::ptr_eq(
             background,
-            copr.request_semaphore(RequestSemaphoreGroup::BackgroundLimited)
+            copr.request_semaphore(SemaphoreGroup::BackgroundLimited)
                 .as_ref()
                 .unwrap()
         ));
@@ -1901,10 +1898,7 @@ mod tests {
             .parse_request_and_check_memory_locks(req, None, false)
             .unwrap();
         assert_eq!(parsed.req_tag, ReqTag::analyze_full_sampling);
-        assert_eq!(
-            parsed.semaphore_group,
-            RequestSemaphoreGroup::BackgroundLimited
-        );
+        assert_eq!(parsed.semaphore_group, SemaphoreGroup::BackgroundLimited);
         assert!(Arc::ptr_eq(
             copr.background_limited_semaphore.as_ref().unwrap(),
             copr.request_semaphore(parsed.semaphore_group)
@@ -1921,7 +1915,7 @@ mod tests {
             .parse_request_and_check_memory_locks(req, None, false)
             .unwrap();
         assert_eq!(parsed.req_tag, ReqTag::analyze_table);
-        assert_eq!(parsed.semaphore_group, RequestSemaphoreGroup::Shared);
+        assert_eq!(parsed.semaphore_group, SemaphoreGroup::Shared);
         assert!(Arc::ptr_eq(
             copr.shared_semaphore.as_ref().unwrap(),
             copr.request_semaphore(parsed.semaphore_group)
@@ -1945,11 +1939,9 @@ mod tests {
         )
         .unwrap();
         let background_semaphore = copr
-            .request_semaphore(RequestSemaphoreGroup::BackgroundLimited)
+            .request_semaphore(SemaphoreGroup::BackgroundLimited)
             .unwrap();
-        let shared_semaphore = copr
-            .request_semaphore(RequestSemaphoreGroup::Shared)
-            .unwrap();
+        let shared_semaphore = copr.request_semaphore(SemaphoreGroup::Shared).unwrap();
         let slow_log_threshold = copr.slow_log_threshold;
         let engine = TestEngineBuilder::new().build().unwrap();
         let background_engine = engine.clone();
@@ -1971,6 +1963,7 @@ mod tests {
             });
             let background_future = Endpoint::<RocksEngine>::handle_unary_request_impl(
                 Some(background_semaphore),
+                SemaphoreGroup::BackgroundLimited,
                 Box::new(Tracker::new(
                     ReqContext::default_for_test(),
                     ReqTag::analyze_full_sampling,
@@ -1996,6 +1989,7 @@ mod tests {
             });
             let shared_future = Endpoint::<RocksEngine>::handle_unary_request_impl(
                 Some(shared_semaphore),
+                SemaphoreGroup::Shared,
                 Box::new(Tracker::new(
                     ReqContext::default_for_test(),
                     ReqTag::test,
@@ -2363,7 +2357,7 @@ mod tests {
             let resp_future_1 = copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: req_with_exec_detail.clone(),
-                semaphore_group: RequestSemaphoreGroup::Shared,
+                semaphore_group: SemaphoreGroup::Shared,
                 handler_builder,
             });
             let sender = tx.clone();
@@ -2381,7 +2375,7 @@ mod tests {
             let resp_future_2 = copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: req_with_exec_detail.clone(),
-                semaphore_group: RequestSemaphoreGroup::Shared,
+                semaphore_group: SemaphoreGroup::Shared,
                 handler_builder,
             });
             let sender = tx.clone();
@@ -2491,7 +2485,7 @@ mod tests {
             let resp_future_1 = copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: req_with_exec_detail.clone(),
-                semaphore_group: RequestSemaphoreGroup::Shared,
+                semaphore_group: SemaphoreGroup::Shared,
                 handler_builder,
             });
             let sender = tx.clone();
@@ -2509,7 +2503,7 @@ mod tests {
             let resp_future_2 = copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: req_with_exec_detail.clone(),
-                semaphore_group: RequestSemaphoreGroup::Shared,
+                semaphore_group: SemaphoreGroup::Shared,
                 handler_builder,
             });
             let sender = tx.clone();
@@ -2576,7 +2570,7 @@ mod tests {
             let resp_future_1 = copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: req_with_exec_detail.clone(),
-                semaphore_group: RequestSemaphoreGroup::Shared,
+                semaphore_group: SemaphoreGroup::Shared,
                 handler_builder,
             });
             let sender = tx.clone();
@@ -2600,7 +2594,7 @@ mod tests {
                 .handle_stream_request(ParseCopRequestResult {
                     req_tag: ReqTag::test,
                     req_ctx: req_with_exec_detail.clone(),
-                    semaphore_group: RequestSemaphoreGroup::Shared,
+                    semaphore_group: SemaphoreGroup::Shared,
                     handler_builder,
                 })
                 .unwrap()
@@ -2762,7 +2756,7 @@ mod tests {
             let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: config,
-                semaphore_group: RequestSemaphoreGroup::Shared,
+                semaphore_group: SemaphoreGroup::Shared,
                 handler_builder,
             }))
             .unwrap();
@@ -2790,7 +2784,7 @@ mod tests {
             let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: config,
-                semaphore_group: RequestSemaphoreGroup::Shared,
+                semaphore_group: SemaphoreGroup::Shared,
                 handler_builder,
             }))
             .unwrap();
@@ -2990,7 +2984,7 @@ mod tests {
             let resp = block_on(copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: config,
-                semaphore_group: RequestSemaphoreGroup::Shared,
+                semaphore_group: SemaphoreGroup::Shared,
                 handler_builder,
             }))
             .unwrap();
@@ -3011,7 +3005,7 @@ mod tests {
             let res = block_on(copr.handle_unary_request(ParseCopRequestResult {
                 req_tag: ReqTag::test,
                 req_ctx: config,
-                semaphore_group: RequestSemaphoreGroup::Shared,
+                semaphore_group: SemaphoreGroup::Shared,
                 handler_builder,
             }));
             assert!(res.is_err(), "{:?}", res);
