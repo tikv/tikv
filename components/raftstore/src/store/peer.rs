@@ -6564,6 +6564,9 @@ impl TransferLeaderState {
     ///
     /// The peer FSM checks pending messages before processing Ready, so the
     /// SoftState cleanup may not have run when this check is made.
+    /// This check must also happen before deadline evaluation: an expired
+    /// request from the previous leader must be discarded, not ACKed to the
+    /// current leader.
     pub fn reset_if_stale(&mut self, current_leader: u64) -> bool {
         let is_stale = match &self.transfer_leader_msg {
             Some((msg, _)) => msg.get_from() != current_leader,
@@ -6587,6 +6590,10 @@ impl TransferLeaderState {
     /// Records a pre-transfer-leader message without extending the deadline
     /// when the leader retries the same transfer attempt. A different sender
     /// or leader term starts a new attempt.
+    ///
+    /// The preserved deadline may already have elapsed. Callers immediately
+    /// check the pending message: a request from the current leader receives
+    /// its timeout ACK, while a stale request is discarded first.
     pub fn set_pending_message(&mut self, msg: &eraftpb::Message, deadline: Instant) {
         let is_retry = self
             .transfer_leader_msg
