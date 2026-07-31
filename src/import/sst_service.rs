@@ -1,7 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp::Ord,
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
     convert::identity,
     sync::{Arc, Mutex},
@@ -251,6 +250,12 @@ impl DownloadSpeedLimitManager {
         let task_key = req.get_task_id();
         let speed_limit = req.get_speed_limit();
         let ttl_seconds = req.get_ttl_seconds();
+        // speed_limit == 0 means removing this task's override.
+        if speed_limit == 0 {
+            self.task_limits.write().await.tree.remove(task_key);
+            return Ok(self.sync_effective_limit().await);
+        }
+
         if ttl_seconds == 0 && !task_key.is_empty() {
             return Err(Error::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -259,25 +264,20 @@ impl DownloadSpeedLimitManager {
         }
 
         let now_instant = StdInstant::now();
-        // speed_limit == 0 means removing this task's override.
-        if speed_limit == 0 {
-            self.task_limits.write().await.tree.remove(task_key);
+        let expire_at = if ttl_seconds == 0 {
+            None
         } else {
-            let expire_at = if ttl_seconds == 0 {
-                None
-            } else {
-                // Treat an unrealistically large TTL as non-expiring instead of
-                // immediately expiring the request due to Instant overflow.
-                now_instant.checked_add(Duration::from_secs(ttl_seconds))
-            };
-            self.task_limits.write().await.tree.insert(
-                task_key.to_owned(),
-                DownloadSpeedLimit {
-                    speed_limit,
-                    expire_at,
-                },
-            );
-        }
+            // Treat an unrealistically large TTL as non-expiring instead of
+            // immediately expiring the request due to Instant overflow.
+            now_instant.checked_add(Duration::from_secs(ttl_seconds))
+        };
+        self.task_limits.write().await.tree.insert(
+            task_key.to_owned(),
+            DownloadSpeedLimit {
+                speed_limit,
+                expire_at,
+            },
+        );
         Ok(self.sync_effective_limit().await)
     }
 
@@ -2506,7 +2506,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_download_speed_limit_manager_rejects_non_empty_task_without_ttl() {
+    async fn test_download_speed_limit_manager_rejects_non_empty_nonzero_task_without_ttl() {
         let manager = DownloadSpeedLimitManager::new();
 
         let req = build_download_speed_limit_req("task-a", 128, 0);
@@ -2517,7 +2517,12 @@ mod test {
         );
         assert!(manager.limiter().await.speed_limit().is_infinite());
 
+        let req = build_download_speed_limit_req("task-a", 128, 60);
+        manager.update_from_request(&req).await.unwrap();
+        assert_eq!(manager.limiter().await.speed_limit(), 128.0);
+
         let req = build_download_speed_limit_req("task-a", 0, 0);
-        manager.update_from_request(&req).await.unwrap_err();
+        manager.update_from_request(&req).await.unwrap();
+        assert!(manager.limiter().await.speed_limit().is_infinite());
     }
 }
