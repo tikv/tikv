@@ -3,7 +3,11 @@
 use std::{
     fs::File,
     io::Read,
-    sync::{Arc, Mutex, mpsc::sync_channel},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc::sync_channel,
+    },
     thread::sleep,
     time::Duration,
 };
@@ -37,8 +41,8 @@ use test_coprocessor::{
     DagChunkSpliter, DagSelect, ProductTable, handle_request, init_data_with_details_pd_client,
 };
 use test_raftstore::{
-    CloneFilterFactory, Cluster, Direction, RegionPacketFilter, ServerCluster, configure_for_merge,
-    get_tso, must_get_equal, new_learner_peer, new_peer, new_put_cf_cmd,
+    CloneFilterFactory, Cluster, Direction, RegionPacketFilter, ServerCluster, Simulator,
+    configure_for_merge, get_tso, must_get_equal, new_learner_peer, new_peer, new_put_cf_cmd,
     new_server_cluster_with_hybrid_engine, sleep_ms,
 };
 use test_util::eventually;
@@ -921,6 +925,89 @@ fn test_warmup_timeout_does_not_block_transfer_leader() {
             .snapshot(cache_region.clone(), 100, 100)
             .is_ok()
     });
+}
+
+#[test]
+fn test_new_leader_clears_pending_transfer_leader_warmup() {
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 3);
+    cluster.cfg.raft_store.max_entry_cache_warmup_duration.0 = Duration::from_secs(1000);
+    cluster.pd_client.disable_default_operator();
+    cluster.run();
+
+    let region = cluster.get_region(b"");
+    cluster.must_transfer_leader(region.id, new_peer(1, 1));
+    let cache_region = CacheRegion::from_region(&region);
+    let leader_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+    leader_cache_engine
+        .load_region(cache_region.clone())
+        .unwrap();
+    cluster.must_put(b"k", b"v");
+    eventually(Duration::from_millis(100), Duration::from_secs(5), || {
+        leader_cache_engine
+            .snapshot(cache_region.clone(), 100, 100)
+            .is_ok()
+    });
+
+    // Block only the first follower's IME load. The second transferee can
+    // finish loading and become leader while the first one still has a pending
+    // pre-transfer request from the old leader.
+    let first_load = Arc::new(AtomicBool::new(true));
+    let (blocked_tx, blocked_rx) = unbounded();
+    let (unblock_tx, unblock_rx) = unbounded();
+    let (finished_tx, finished_rx) = unbounded();
+    fail::cfg_callback("ime_on_snapshot_load_finished", move || {
+        if first_load.swap(false, Ordering::SeqCst) {
+            blocked_tx.send(()).unwrap();
+            unblock_rx.recv().unwrap();
+            finished_tx.send(()).unwrap();
+        }
+    })
+    .unwrap();
+
+    cluster.transfer_leader(region.id, new_peer(2, 2));
+    let first_load_blocked = blocked_rx.recv_timeout(Duration::from_secs(5)).is_ok();
+
+    cluster.transfer_leader(region.id, new_peer(3, 3));
+    let mut peer3_became_leader = false;
+    for _ in 0..50 {
+        cluster.reset_leader_of_region(region.id);
+        if cluster.leader_of_region(region.id) == Some(new_peer(3, 3)) {
+            peer3_became_leader = true;
+            break;
+        }
+        sleep(Duration::from_millis(100));
+    }
+
+    // Observe and drop a stale ACK from peer 2, if one is emitted after its
+    // blocked load finishes.
+    let (stale_ack_tx, stale_ack_rx) = unbounded();
+    let recv_filter = Box::new(
+        RegionPacketFilter::new(region.id, 3)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgTransferLeader)
+            .set_msg_callback(Arc::new(move |msg| {
+                if msg.get_from_peer().get_store_id() == 2 {
+                    stale_ack_tx.send(()).unwrap();
+                }
+            })),
+    );
+    cluster.sim.wl().add_recv_filter(3, recv_filter);
+
+    // Always release the failpoint before assertions so a failed setup cannot
+    // leave an IME worker blocked for other tests.
+    unblock_tx.send(()).unwrap();
+    let first_load_finished = finished_rx.recv_timeout(Duration::from_secs(5)).is_ok();
+    fail::remove("ime_on_snapshot_load_finished");
+
+    assert!(first_load_blocked, "peer 2 did not start loading IME");
+    assert!(peer3_became_leader, "peer 3 did not become leader");
+    assert!(first_load_finished, "peer 2 did not finish loading IME");
+    assert!(
+        stale_ack_rx.recv_timeout(Duration::from_secs(3)).is_err(),
+        "peer 2 ACKed a transfer request from the previous leader"
+    );
+    cluster.reset_leader_of_region(region.id);
+    assert_eq!(cluster.leader_of_region(region.id), Some(new_peer(3, 3)));
 }
 
 #[test]

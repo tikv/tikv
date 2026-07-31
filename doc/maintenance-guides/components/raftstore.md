@@ -153,6 +153,8 @@ High-risk contracts:
   valid.
 - FSM messages must preserve ordering assumptions between peer/store/apply
   workers.
+- Pending pre-transfer-leader messages and cache warm-up state belong to the
+  current Raft `SoftState` and must be discarded when it changes.
 - Any write-path change must preserve callback completion and region-error
   semantics.
 

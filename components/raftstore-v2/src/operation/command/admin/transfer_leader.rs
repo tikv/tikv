@@ -259,6 +259,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.transfer_leader_state_mut().transfer_leader_msg = None;
             return false;
         }
+        let current_leader = self.leader_id();
+        if self
+            .transfer_leader_state_mut()
+            .reset_if_stale(current_leader)
+        {
+            return false;
+        }
         let Some((msg, deadline)) = &self.transfer_leader_state().transfer_leader_msg else {
             // There is no pending transfer leader message, do not ack.
             return false;

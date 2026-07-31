@@ -2449,6 +2449,11 @@ where
     fn on_role_changed<T>(&mut self, ctx: &mut PollContext<EK, ER, T>, ready: &Ready) {
         // Update leader lease when the Raft state changes.
         if let Some(ss) = ready.ss() {
+            // A pending pre-transfer request belongs to the previous SoftState.
+            // In particular, a follower can learn about a new leader without
+            // changing its role. Do not let it ACK the old request to the new
+            // leader.
+            self.transfer_leader_state.reset_transferee_state();
             match ss.raft_state {
                 StateRole::Leader => {
                     // The local read can only be performed after a new leader has applied
@@ -2484,8 +2489,6 @@ where
                     self.require_updating_max_ts(&ctx.pd_scheduler);
                     // Init the in-memory pessimistic lock table when the peer becomes leader.
                     self.activate_in_memory_pessimistic_locks();
-                    // Exit entry cache warmup state when the peer becomes leader.
-                    self.transfer_leader_state.cache_warmup_state = None;
 
                     if !ctx.store_disk_usages.is_empty() {
                         self.refill_disk_full_peers(ctx);
@@ -4942,6 +4945,10 @@ where
             return false;
         }
 
+        let current_leader = self.leader_id();
+        if self.transfer_leader_state.reset_if_stale(current_leader) {
+            return false;
+        }
         let Some((msg, deadline)) = &self.transfer_leader_state.transfer_leader_msg else {
             // There is no pending transfer leader message, do not ack.
             return false;
@@ -6553,6 +6560,30 @@ pub struct TransferLeaderState {
 }
 
 impl TransferLeaderState {
+    /// Discards transferee state created for a previous leader.
+    ///
+    /// The peer FSM checks pending messages before processing Ready, so the
+    /// SoftState cleanup may not have run when this check is made.
+    pub fn reset_if_stale(&mut self, current_leader: u64) -> bool {
+        let is_stale = match &self.transfer_leader_msg {
+            Some((msg, _)) => msg.get_from() != current_leader,
+            None => false,
+        };
+        if is_stale {
+            self.reset_transferee_state();
+        }
+        is_stale
+    }
+
+    /// Clears state created while this peer was a leader transferee.
+    ///
+    /// The state is valid only while the Raft SoftState that accepted the
+    /// pre-transfer request remains current.
+    pub fn reset_transferee_state(&mut self) {
+        self.transfer_leader_msg = None;
+        self.cache_warmup_state = None;
+    }
+
     /// Records a pre-transfer-leader message without extending the deadline
     /// when the leader retries the same transfer attempt. A different sender
     /// or leader term starts a new attempt.
@@ -6646,6 +6677,34 @@ mod tests {
         assert_eq!(pending.get_index(), 20);
         assert_eq!(pending.get_log_term(), 2);
         assert_eq!(*deadline, next_deadline);
+    }
+
+    #[test]
+    fn test_reset_transfer_leader_transferee_state() {
+        let mut msg = eraftpb::Message::default();
+        msg.set_from(1);
+        let mut state = TransferLeaderState {
+            leader_transferee: 10,
+            transfer_leader_msg: Some((msg.clone(), Instant::now() - Duration::from_secs(1))),
+            cache_warmup_state: Some(CacheWarmupState::new(
+                1,
+                2,
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            )),
+        };
+
+        // Even an expired request must not be ACKed to a different leader.
+        assert!(state.reset_if_stale(2));
+
+        // The leader-side state is handled separately when Ready is processed.
+        assert_eq!(state.leader_transferee, 10);
+        assert!(state.transfer_leader_msg.is_none());
+        assert!(state.cache_warmup_state.is_none());
+
+        state.transfer_leader_msg = Some((msg, Instant::now() - Duration::from_secs(1)));
+        assert!(!state.reset_if_stale(1));
+        assert!(state.transfer_leader_msg.is_some());
     }
 
     #[test]

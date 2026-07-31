@@ -117,6 +117,8 @@ High-risk contracts:
   apply guarantees.
 - Tablet-backed state transitions must remain aligned with region/raft
   metadata.
+- Pending pre-transfer-leader messages and cache warm-up state belong to the
+  current Raft `SoftState` and must be discarded when it changes.
 - Split/merge/bootstrap/destroy flows must keep router, FSM, and tablet state
   mutually consistent.
 
