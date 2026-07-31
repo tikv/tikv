@@ -500,8 +500,8 @@ impl RouterInner {
         })
     }
 
-    pub fn has_task(&self, task_name: &str) -> bool {
-        self.tasks.contains_key(task_name)
+    pub async fn has_task(&self, task_name: &str) -> bool {
+        self.tasks.lock().await.contains_key(task_name)
     }
 
     /// get the task name by a key.

@@ -489,7 +489,7 @@ impl<PD> BasicFlushObserver<PD> {
 }
 
 fn flush_safe_point_service_id(task: &str, store_id: u64) -> String {
-    format!("{}-{}-{}", BACKUP_STREAM_THREAD, task, store_id)
+    format!("backup-stream-{}-{}", task, store_id)
 }
 
 pub(crate) async fn remove_flush_safe_point<PD: PdClient + 'static>(
@@ -518,11 +518,7 @@ impl<PD: PdClient + 'static> BasicFlushObserver<PD> {
         if let Err(err) = self
             .pd_cli
             .update_service_safe_point(
-<<<<<<< HEAD
-                format!("backup-stream-{}-{}", task, self.store_id),
-=======
                 flush_safe_point_service_id(task, self.store_id),
->>>>>>> b45aa9b93c (backup-stream: remove safepoint if log backup task is stopped (#19829))
                 TimeStamp::new(rts.saturating_sub(1)),
                 // Add a service safe point for 2 hours.
                 // We make it the same duration as we meet fatal errors because TiKV may be
@@ -650,7 +646,7 @@ pub mod tests {
     use pd_client::{PdClient, PdFuture};
     use txn_types::TimeStamp;
 
-    use super::{BasicFlushObserver, FlushObserver, RegionIdWithVersion, remove_flush_safe_point};
+    use super::{remove_flush_safe_point, BasicFlushObserver, FlushObserver, RegionIdWithVersion};
     use crate::{
         subscription_track::{CheckpointType, ResolveResult},
         GetCheckpointResult,
@@ -927,8 +923,8 @@ pub mod tests {
         let r = flush_observer.after(&task, rts).await;
         assert_eq!(r.is_ok(), true);
 
-        let serivce_id = format!("backup-stream-{}-{}", task, store_id);
-        let r = pd_cli.get_service_safe_point(serivce_id).unwrap();
+        let service_id = format!("backup-stream-{}-{}", task, store_id);
+        let r = pd_cli.get_service_safe_point(service_id).unwrap();
         assert_eq!(r.into_inner(), rts - 1);
     }
 
@@ -937,7 +933,7 @@ pub mod tests {
         let store_id = 1;
         let pd_cli = Arc::new(MockPdClient::new());
         let task = String::from("test");
-        let service_id = format!("{}-{}-{}", BACKUP_STREAM_THREAD, task, store_id);
+        let service_id = format!("backup-stream-{}-{}", task, store_id);
 
         let mut flush_observer = BasicFlushObserver::new(pd_cli.clone(), store_id);
         flush_observer.after(&task, 12345).await.unwrap();

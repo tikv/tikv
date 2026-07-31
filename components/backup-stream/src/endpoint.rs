@@ -48,8 +48,8 @@ use super::metrics::HANDLE_EVENT_DURATION_HISTOGRAM;
 use crate::{
     annotate,
     checkpoint_manager::{
-        BasicFlushObserver, CheckpointManager, CheckpointV3FlushObserver, FlushObserver,
-        GetCheckpointResult, RegionIdWithVersion, Subscription, remove_flush_safe_point,
+        remove_flush_safe_point, BasicFlushObserver, CheckpointManager, CheckpointV3FlushObserver,
+        FlushObserver, GetCheckpointResult, RegionIdWithVersion, Subscription,
     },
     errors::{Error, Result},
     event_loader::InitialDataLoader,
@@ -820,7 +820,7 @@ where
                 }
                 fail::fail_point!("before_flush_observer_after");
                 flush_ob.after(&task, rts).await?;
-                if !router.has_task(&task) {
+                if !router.has_task(&task).await {
                     // `router.do_flush` releases the task's flushing flag before this observer
                     // tail runs. An unregister, or another trailing flush for the same removed
                     // task, can race with `flush_ob.after` and recreate the safe point. The task
@@ -1013,47 +1013,21 @@ where
                 }
             }
             Task::MarkFailover(t) => self.failover_time = Some(t),
-<<<<<<< HEAD
             Task::ExecFlush(task, min_ts) => self.on_exec_flush(task, min_ts),
-            Task::RegionCheckpointsOp(s) => self.handle_region_checkpoints_op(s),
-            Task::UpdateGlobalCheckpoint(task) => self.on_update_global_checkpoint(task),
-=======
-            Task::ExecFlush(task, min_ts, flush_ts) => self.on_exec_flush(task, min_ts, flush_ts),
             Task::CleanupFlushSafePoint(task) => self.on_cleanup_flush_safe_point(&task),
             Task::RegionCheckpointsOp(s) => self.handle_region_checkpoints_op(s),
             Task::UpdateGlobalCheckpoint(task) => self.on_update_global_checkpoint(task),
-            Task::Flushed(result) => self.on_flushed(result),
         }
     }
 
     fn on_cleanup_flush_safe_point(&self, task: &str) {
-        if self.range_router.has_task(task) {
-            return;
-        }
-        self.pool.block_on(remove_flush_safe_point(
-            self.pd_client.clone(),
-            self.store_id,
-            task,
-        ));
-    }
-
-    fn on_flushed(&mut self, result: FlushResult) {
-        use tokio::sync::mpsc::error::TrySendError;
-        if let Some(sender) = self.flush_done_subscribers.remove(&result.task) {
-            // Send the message after the subscription manager have tried to sent this flush
-            // result to subscribers.
-            self.checkpoint_mgr.sync_with_subs_mgr(move |_| {
-                if let Err(err) = sender.try_send(result) {
-                    let err_msg = err.to_string();
-                    let res = match err {
-                        TrySendError::Closed(v) => v,
-                        TrySendError::Full(v) => v,
-                    };
-                    info!("failed to send flush result, waiter is gone or channel blocked"; "err" => %err_msg, "result" => ?res);
-                }
-            })
->>>>>>> b45aa9b93c (backup-stream: remove safepoint if log backup task is stopped (#19829))
-        }
+        fail::fail_point!("before_cleanup_flush_safe_point");
+        self.pool.block_on(async {
+            if self.range_router.has_task(task).await {
+                return;
+            }
+            remove_flush_safe_point(self.pd_client.clone(), self.store_id, task).await;
+        })
     }
 
     fn min_ts_worker(&self) -> future![()] {
@@ -1274,14 +1248,10 @@ pub enum Task {
     Flush(String),
     /// Execute the flush with the calculated resolved result.
     /// This is an internal command only issued by the `Flush` task.
-<<<<<<< HEAD
     ExecFlush(String, ResolvedRegions),
-=======
-    ExecFlush(String, ResolvedRegions, TimeStamp),
     /// Remove the flush safe point if the task is still absent in the endpoint
     /// actor.
     CleanupFlushSafePoint(String),
->>>>>>> b45aa9b93c (backup-stream: remove safepoint if log backup task is stopped (#19829))
     /// The command for getting region checkpoints.
     RegionCheckpointsOp(RegionCheckpointOperation),
     /// update global-checkpoint-ts to storage.

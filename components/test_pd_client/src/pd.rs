@@ -928,7 +928,7 @@ pub struct TestPdClient {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct GcSafePoint {
-    pub serivce: String,
+    pub service: String,
     pub ttl: Duration,
     pub safepoint: TimeStamp,
 }
@@ -1957,24 +1957,16 @@ impl PdClient for TestPdClient {
             return Box::pin(ok(()));
         }
         if ttl.as_secs() > 0 {
-<<<<<<< HEAD
-            self.gc_safepoints.wl().push(GcSafePoint {
-                serivce: name,
-                ttl,
-                safepoint,
-            });
-=======
             if let Some(sp) = gc_safepoints.iter_mut().find(|sp| sp.service == name) {
                 sp.ttl = ttl;
                 sp.safepoint = safepoint;
             } else {
-                gc_safepoints.push(ServiceSafePoint {
+                gc_safepoints.push(GcSafePoint {
                     service: name,
                     ttl,
                     safepoint,
                 });
             }
->>>>>>> b45aa9b93c (backup-stream: remove safepoint if log backup task is stopped (#19829))
         }
         Box::pin(ok(()))
     }
