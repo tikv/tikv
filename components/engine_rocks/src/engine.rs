@@ -7,8 +7,8 @@ use rocksdb::{DB, DBIterator, Writable};
 use tikv_util::range_latch::RangeLatch;
 
 use crate::{
-    RocksEngineIterator, RocksSnapshot, db_vector::RocksDbVector, options::RocksReadOptions, r2e,
-    util::get_cf_handle,
+    RocksEngineIterator, RocksSnapshot, SnapshotSequenceNumber, db_vector::RocksDbVector,
+    options::RocksReadOptions, r2e, util::get_cf_handle,
 };
 
 #[cfg(feature = "trace-lifetime")]
@@ -147,6 +147,10 @@ mod trace {
 pub struct RocksEngine {
     db: Arc<DB>,
     support_multi_batch_write: bool,
+    // RocksDB sequence numbers belong to one live DB instance. Engine clones share
+    // this state, while opening another DB (including reopening this path) starts a
+    // new history and must not compare against the old instance.
+    snapshot_sequence_number: Arc<SnapshotSequenceNumber>,
     #[cfg(feature = "trace-lifetime")]
     _id: trace::TabletTraceId,
     // Used to ensure mutual exclusivity between compaction filter writes and the SST ingestion
@@ -159,6 +163,7 @@ impl RocksEngine {
         let db = Arc::new(db);
         RocksEngine {
             support_multi_batch_write: db.get_db_options().is_enable_multi_batch_write(),
+            snapshot_sequence_number: Arc::new(SnapshotSequenceNumber::new(db.path().to_owned())),
             #[cfg(feature = "trace-lifetime")]
             _id: trace::TabletTraceId::new(db.path(), &db),
             db,
@@ -188,7 +193,7 @@ impl KvEngine for RocksEngine {
     type Snapshot = RocksSnapshot;
 
     fn snapshot(&self) -> RocksSnapshot {
-        RocksSnapshot::new(self.db.clone())
+        RocksSnapshot::new(self.db.clone(), &self.snapshot_sequence_number)
     }
 
     fn sync(&self) -> Result<()> {
@@ -285,7 +290,7 @@ mod tests {
     use tempfile::Builder;
     use tikv_util::config::ReadableSize;
 
-    use crate::{RocksSnapshot, util};
+    use crate::util;
 
     #[test]
     fn test_base() {
@@ -396,7 +401,7 @@ mod tests {
 
         assert_eq!(data.len(), 1);
 
-        let snap = RocksSnapshot::new(engine.get_sync_db());
+        let snap = engine.snapshot();
 
         engine.put(b"a3", b"v3").unwrap();
         assert!(engine.seek(CF_DEFAULT, b"a3").unwrap().is_some());
