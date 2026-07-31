@@ -580,6 +580,11 @@
 ## If the value is `true`, the database will be created if it is missing.
 # create-if-missing = true
 
+## Enables TiKV's defense-in-depth check that successfully created RocksDB snapshots have
+## monotonically non-decreasing sequence numbers. It is enabled by default in debug builds and
+## disabled by default in release builds.
+# enable-snapshot-sequence-number-check = false
+
 ## RocksDB Write-Ahead Logs (WAL) recovery mode.
 ## "tolerate-corrupted-tail-records", tolerate incomplete record in trailing data on all logs;
 ## "absolute-consistency", We don't expect to find any corruption in the WAL;
@@ -1084,6 +1089,11 @@
 # max-open-files = 40960
 # max-manifest-file-size = "20MB"
 # create-if-missing = true
+
+## Enables TiKV's defense-in-depth check that successfully created RocksDB snapshots have
+## monotonically non-decreasing sequence numbers. It is enabled by default in debug builds and
+## disabled by default in release builds.
+# enable-snapshot-sequence-number-check = false
 
 # stats-dump-period = "10m"
 

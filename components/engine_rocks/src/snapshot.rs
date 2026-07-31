@@ -32,7 +32,9 @@ pub struct RocksSnapshot {
 /// could publish first and make an earlier-created snapshot look like a
 /// regression. `RocksEngine` clones share this object, and a newly opened DB
 /// gets a new object because sequence numbers from different DB lifetimes are
-/// not necessarily comparable.
+/// not necessarily comparable. The tracker is enabled by default in debug
+/// builds and disabled by default in release builds, and can be overridden by
+/// the RocksDB configuration knob.
 #[derive(Debug)]
 pub(crate) struct SnapshotSequenceNumber {
     db_identity: String,
@@ -74,7 +76,7 @@ impl SnapshotSequenceNumber {
     }
 
     #[cfg(test)]
-    fn latest(&self) -> Option<u64> {
+    pub(crate) fn latest(&self) -> Option<u64> {
         *self.latest.lock()
     }
 }
@@ -83,19 +85,21 @@ unsafe impl Send for RocksSnapshot {}
 unsafe impl Sync for RocksSnapshot {}
 
 impl RocksSnapshot {
-    pub(crate) fn new(db: Arc<DB>, sequence_number: &SnapshotSequenceNumber) -> Self {
+    pub(crate) fn new(db: Arc<DB>) -> Self {
+        unsafe {
+            let snap = db.unsafe_snap();
+            assert!(
+                !snap.get_inner().is_null(),
+                "RocksDB failed to create snapshot: db={}",
+                db.path(),
+            );
+            RocksSnapshot { snap, db }
+        }
+    }
+
+    pub(crate) fn new_checked(db: Arc<DB>, sequence_number: &SnapshotSequenceNumber) -> Self {
         let result = sequence_number.with_new_snapshot(
-            || {
-                Ok::<_, Infallible>(unsafe {
-                    let snap = db.unsafe_snap();
-                    assert!(
-                        !snap.get_inner().is_null(),
-                        "RocksDB failed to create snapshot: db={}",
-                        db.path(),
-                    );
-                    RocksSnapshot { snap, db }
-                })
-            },
+            || Ok::<_, Infallible>(RocksSnapshot::new(db)),
             RocksSnapshot::sequence_number,
         );
         match result {

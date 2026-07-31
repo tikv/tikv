@@ -780,8 +780,13 @@ impl ConfiguredRaftEngine for RocksEngine {
         let statistics = Arc::new(RocksStatistics::new_titan());
         let raft_db_opts = config_raftdb.build_opt(env.clone(), Some(&statistics));
         let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
-        let raftdb = engine_rocks::util::new_engine_opt(raft_db_path, raft_db_opts, raft_cf_opts)
-            .expect("failed to open raftdb");
+        let raftdb = engine_rocks::util::new_engine_opt_with_snapshot_sequence_number_check(
+            raft_db_path,
+            raft_db_opts,
+            raft_cf_opts,
+            config_raftdb.enable_snapshot_sequence_number_check,
+        )
+        .expect("failed to open raftdb");
 
         if should_dump {
             let raft_engine =
@@ -834,10 +839,12 @@ impl ConfiguredRaftEngine for RaftLogEngine {
             let config_raftdb = &config.raftdb;
             let raft_db_opts = config_raftdb.build_opt(env.clone(), None);
             let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
-            let raftdb = engine_rocks::util::new_engine_opt(
+            let raftdb =
+                engine_rocks::util::new_engine_opt_with_snapshot_sequence_number_check(
                 &config.raft_store.raftdb_path,
                 raft_db_opts,
                 raft_cf_opts,
+                config_raftdb.enable_snapshot_sequence_number_check,
             )
             .expect("failed to open raftdb for migration");
             dump_raftdb_to_raft_engine(&raftdb, &raft_engine, 8 /* threads */);

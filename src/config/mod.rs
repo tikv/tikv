@@ -24,10 +24,11 @@ use causal_ts::Config as CausalTsConfig;
 pub use configurable::{ConfigRes, ConfigurableDb, loop_registry};
 use encryption_export::DataKeyManager;
 use engine_rocks::{
-    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE, RaftDbLogger,
-    RangePropertiesCollectorFactory, RawMvccPropertiesCollectorFactory, RocksCfOptions,
-    RocksDbOptions, RocksEngine, RocksEventListener, RocksStatistics, RocksTitanDbOptions,
-    RocksdbLogger, TtlPropertiesCollectorFactory,
+    DEFAULT_ENABLE_SNAPSHOT_SEQUENCE_NUMBER_CHECK, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+    DEFAULT_PROP_SIZE_INDEX_DISTANCE, RaftDbLogger, RangePropertiesCollectorFactory,
+    RawMvccPropertiesCollectorFactory, RocksCfOptions, RocksDbOptions, RocksEngine,
+    RocksEventListener, RocksStatistics, RocksTitanDbOptions, RocksdbLogger,
+    TtlPropertiesCollectorFactory,
     config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel as RocksLogLevel},
     get_env,
     properties::MvccPropertiesCollectorFactory,
@@ -1414,6 +1415,11 @@ pub struct DbConfig {
     pub write_buffer_flush_oldest_first: bool,
     #[online_config(skip)]
     pub track_and_verify_wals_in_manifest: bool,
+    /// Enables TiKV's defense-in-depth check that RocksDB snapshot sequence
+    /// numbers never regress. The build-dependent default is defined by
+    /// `DEFAULT_ENABLE_SNAPSHOT_SEQUENCE_NUMBER_CHECK`.
+    #[online_config(skip)]
+    pub enable_snapshot_sequence_number_check: bool,
     // Dangerous option only for programming use.
     #[online_config(skip)]
     #[serde(skip)]
@@ -1479,6 +1485,7 @@ impl Default for DbConfig {
             write_buffer_stall_ratio: 0.0,
             write_buffer_flush_oldest_first: true,
             track_and_verify_wals_in_manifest: true,
+            enable_snapshot_sequence_number_check: DEFAULT_ENABLE_SNAPSHOT_SEQUENCE_NUMBER_CHECK,
             paranoid_checks: None,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
@@ -1876,6 +1883,9 @@ impl DbConfig {
             .with_label_values(&["rocksdb", "track_and_verify_wals_in_manifest"])
             .set(self.track_and_verify_wals_in_manifest.into());
         CONFIG_ROCKSDB_DB_GAUGE
+            .with_label_values(&["rocksdb", "enable_snapshot_sequence_number_check"])
+            .set(self.enable_snapshot_sequence_number_check.into());
+        CONFIG_ROCKSDB_DB_GAUGE
             .with_label_values(&["rocksdb", "paranoid_checks"])
             .set(self.paranoid_checks.unwrap_or_default().into());
     }
@@ -2056,6 +2066,10 @@ pub struct RaftDbConfig {
     pub enable_unordered_write: bool,
     #[online_config(skip)]
     pub allow_concurrent_memtable_write: bool,
+    /// Enables TiKV's defense-in-depth check that RocksDB snapshot sequence
+    /// numbers never regress.
+    #[online_config(skip)]
+    pub enable_snapshot_sequence_number_check: bool,
     pub bytes_per_sync: ReadableSize,
     pub wal_bytes_per_sync: ReadableSize,
     #[online_config(submodule)]
@@ -2100,6 +2114,7 @@ impl Default for RaftDbConfig {
             enable_pipelined_write: true,
             enable_unordered_write: false,
             allow_concurrent_memtable_write: true,
+            enable_snapshot_sequence_number_check: DEFAULT_ENABLE_SNAPSHOT_SEQUENCE_NUMBER_CHECK,
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(512),
             defaultcf: RaftDefaultCfConfig::default(),
@@ -5311,6 +5326,31 @@ mod tests {
         },
     };
 
+    #[test]
+    fn test_snapshot_sequence_number_check_config() {
+        let default = TikvConfig::default();
+        assert_eq!(
+            default.rocksdb.enable_snapshot_sequence_number_check,
+            cfg!(debug_assertions)
+        );
+        assert_eq!(
+            default.raftdb.enable_snapshot_sequence_number_check,
+            cfg!(debug_assertions)
+        );
+
+        let config: TikvConfig = toml::from_str(
+            r#"
+                [rocksdb]
+                enable-snapshot-sequence-number-check = false
+                [raftdb]
+                enable-snapshot-sequence-number-check = true
+            "#,
+        )
+        .unwrap();
+        assert!(!config.rocksdb.enable_snapshot_sequence_number_check);
+        assert!(config.raftdb.enable_snapshot_sequence_number_check);
+    }
+
     fn create_mock_raftdb(path: &Path) {
         fs::create_dir_all(path).unwrap();
         fs::File::create(path.join("CURRENT")).unwrap();
@@ -7470,10 +7510,14 @@ mod tests {
         cfg.rocksdb.max_background_jobs = default_cfg.rocksdb.max_background_jobs;
         cfg.rocksdb.max_background_flushes = default_cfg.rocksdb.max_background_flushes;
         cfg.rocksdb.max_sub_compactions = default_cfg.rocksdb.max_sub_compactions;
+        cfg.rocksdb.enable_snapshot_sequence_number_check =
+            default_cfg.rocksdb.enable_snapshot_sequence_number_check;
         cfg.rocksdb.titan.max_background_gc = default_cfg.rocksdb.titan.max_background_gc;
         cfg.raftdb.max_background_jobs = default_cfg.raftdb.max_background_jobs;
         cfg.raftdb.max_background_flushes = default_cfg.raftdb.max_background_flushes;
         cfg.raftdb.max_sub_compactions = default_cfg.raftdb.max_sub_compactions;
+        cfg.raftdb.enable_snapshot_sequence_number_check =
+            default_cfg.raftdb.enable_snapshot_sequence_number_check;
         cfg.raftdb.titan.max_background_gc = default_cfg.raftdb.titan.max_background_gc;
         cfg.backup.num_threads = default_cfg.backup.num_threads;
         cfg.log_backup.num_threads = default_cfg.log_backup.num_threads;
