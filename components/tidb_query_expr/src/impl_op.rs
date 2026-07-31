@@ -225,7 +225,16 @@ fn eval_logical_short_circuit<Op: ScLogicalOp>(
                     },
                 ..
             } => {
-                let vec_result = Int::borrow_vector_value(physical_value);
+                let vec_result = match physical_value {
+                    VectorValue::Int(vec_result) => vec_result,
+                    VectorValue::Enum(vec_result) => vec_result.as_vec_int(),
+                    _ => {
+                        return Err(other_err!(
+                            "logical expression must produce Int, got {}",
+                            physical_value.eval_type()
+                        ));
+                    }
+                };
                 if is_first {
                     result = ChunkedVecSized::<Int>::with_capacity(output_rows);
                     for i in 0..pending_len {
@@ -249,7 +258,12 @@ fn eval_logical_short_circuit<Op: ScLogicalOp>(
                     }
                 }
             }
-            _ => unreachable!("logical expression must produce Int"),
+            RpnStackNode::Vector { value, .. } => {
+                return Err(other_err!(
+                    "logical expression must produce Int, got {}",
+                    value.as_ref().eval_type()
+                ));
+            }
         }
 
         if resolved_count == 0 {
@@ -625,6 +639,60 @@ mod tests {
                 .unwrap();
             assert_eq!(output, expect_output);
         }
+    }
+
+    #[test]
+    fn test_logical_short_circuit_rejects_non_int_column() {
+        let args = vec![
+            crate::RpnExpressionBuilder::new_for_test()
+                .push_column_ref_for_test(0)
+                .build_for_test(),
+            crate::RpnExpressionBuilder::new_for_test()
+                .push_column_ref_for_test(1)
+                .build_for_test(),
+        ];
+        let columns = LazyBatchColumnVec::from(vec![
+            VectorValue::Real(vec![Real::new(1.0).ok()].into()),
+            VectorValue::Int(vec![Some(0)].into()),
+        ]);
+        let schema = &[FieldTypeTp::Double.into(), FieldTypeTp::LongLong.into()];
+
+        let err = sc_logical_or(
+            &mut EvalContext::default(),
+            schema,
+            &columns,
+            &[0],
+            1,
+            &args,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("must produce Int, got Real"));
+    }
+
+    #[test]
+    fn test_logical_short_circuit_rejects_non_int_generated_vector() {
+        let args = vec![
+            crate::RpnExpressionBuilder::new_for_test()
+                .push_constant_for_test(1.0)
+                .push_fn_call_for_test(unary_minus_real_fn_meta(), 1, FieldTypeTp::Double)
+                .build_for_test(),
+            crate::RpnExpressionBuilder::new_for_test()
+                .push_constant_for_test(0_i64)
+                .build_for_test(),
+        ];
+
+        let err = sc_logical_or(
+            &mut EvalContext::default(),
+            &[],
+            &LazyBatchColumnVec::empty(),
+            &[],
+            1,
+            &args,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("must produce Int, got Real"));
     }
 
     #[test]
