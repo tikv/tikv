@@ -955,11 +955,14 @@ fn test_new_leader_clears_pending_transfer_leader_warmup() {
     let (blocked_tx, blocked_rx) = unbounded();
     let (unblock_tx, unblock_rx) = unbounded();
     let (finished_tx, finished_rx) = unbounded();
+    let (next_finished_tx, next_finished_rx) = unbounded();
     fail::cfg_callback("ime_on_snapshot_load_finished", move || {
         if first_load.swap(false, Ordering::SeqCst) {
             blocked_tx.send(()).unwrap();
             unblock_rx.recv().unwrap();
             finished_tx.send(()).unwrap();
+        } else {
+            next_finished_tx.send(()).unwrap();
         }
     })
     .unwrap();
@@ -968,6 +971,12 @@ fn test_new_leader_clears_pending_transfer_leader_warmup() {
     let first_load_blocked = blocked_rx.recv_timeout(Duration::from_secs(5)).is_ok();
 
     cluster.transfer_leader(region.id, new_peer(3, 3));
+    // Wait for peer 3's load to finish before checking leadership. The load is
+    // asynchronous and can legitimately take almost the entire old polling
+    // window, making the leadership check race with the transfer itself.
+    let peer3_load_finished = next_finished_rx
+        .recv_timeout(Duration::from_secs(10))
+        .is_ok();
     let mut peer3_became_leader = false;
     for _ in 0..50 {
         cluster.reset_leader_of_region(region.id);
@@ -1000,6 +1009,7 @@ fn test_new_leader_clears_pending_transfer_leader_warmup() {
     fail::remove("ime_on_snapshot_load_finished");
 
     assert!(first_load_blocked, "peer 2 did not start loading IME");
+    assert!(peer3_load_finished, "peer 3 did not finish loading IME");
     assert!(peer3_became_leader, "peer 3 did not become leader");
     assert!(first_load_finished, "peer 2 did not finish loading IME");
     assert!(
