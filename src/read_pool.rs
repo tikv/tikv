@@ -856,7 +856,7 @@ impl ReadPoolConfigRunner {
         }
         READ_POOL_CPU_VEC
             .with_label_values(&["target"])
-            .set(target_cpu_cores);
+            .set(target_cpu_cores * 100.0);
 
         // Scaling out is otherwise a purely local decision (process CPU,
         // thread usage, task queue depth, or read_pool_cpu vs

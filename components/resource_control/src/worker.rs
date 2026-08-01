@@ -422,8 +422,8 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
     /// toward `min_floor_score` as `resource_score` rises from
     /// `bg_scale_start` to `fg_cpu_throttle_threshold`, resets to
     /// `target_score` if the current limit exceeds it, ramps up
-    /// incrementally when idle, or holds otherwise. Always clamped to
-    /// `[min_floor_score, target_score]` by the caller.
+    /// incrementally when idle, or resets to `target_score` otherwise.
+    /// Always clamped to `[min_floor_score, target_score]` by the caller.
     fn compute_budget_score(
         current_limit_score: f64,
         target_score: f64,

@@ -62,12 +62,13 @@ const RESET_VT_THRESHOLD: u64 = (u64::MAX >> 4) / 2;
 /// [`ResourceGroupManager::adjust_group_throttling`] and
 /// [`ResourceGroupManager::adjust_group_scheduling`].
 ///
-/// Must stay strictly greater than [`THROTTLE_DECREASE_FACTOR`]: the tighten
+/// Must stay strictly less than [`THROTTLE_DECREASE_FACTOR`]: the tighten
 /// step below shrinks whatever's currently enforced by
-/// `1 - THROTTLE_DECREASE_FACTOR` each tick, so if that per-tick step were as
-/// large as (or larger than) this leeway gap, a single tick could swing
-/// straight through the dead zone and the engaged/disengaged state — and the
-/// throttle it drives — would just toggle every tick instead of settling.
+/// `1 - THROTTLE_DECREASE_FACTOR` each tick, so the leeway gap
+/// (`1 - LEEWAY_THRESHOLD_RATIO`) must stay larger than that per-tick step —
+/// otherwise a single tick could swing straight through the dead zone and
+/// the engaged/disengaged state — and the throttle it drives — would just
+/// toggle every tick instead of settling.
 const LEEWAY_THRESHOLD_RATIO: f64 = 0.85;
 
 /// Per-tick multiplicative step used to tighten the per-group CPU rate limit
@@ -696,7 +697,7 @@ impl ResourceGroupManager {
     /// Per-group CPU rate-limit throttling. Only groups whose current rate
     /// exceeds their historical rate are limited.
     ///
-    /// Ramp-up: when CPU drops below threshold, recover ×1.2/tick until
+    /// Ramp-up: when CPU drops below threshold, recover ×1.1/tick until
     /// NO_LIMIT is restored.
     fn adjust_group_throttling(&self, cpu_score: f64, now: u64) {
         const RAMP_FACTOR: f64 = 1.1;

@@ -10762,12 +10762,12 @@ def LoadShedding() -> RowPanel:
             ),
             graph_panel(
                 title="Unified Read Pool CPU",
-                description="Historical (floor), current (measured), and target (foreground-pressure-driven ceiling) CPU usage of the unified read pool, in cores.",
+                description="Historical (floor), current (measured), and target (foreground-pressure-driven ceiling) CPU usage of the unified read pool, in centi-cores (cores * 100).",
                 yaxes=yaxes(left_format=UNITS.SHORT),
                 targets=[
                     target(
                         expr=expr_sum(
-                            "tikv_resource_control_read_pool_cpu_cores",
+                            "tikv_resource_control_read_pool_cpu_percent",
                             by_labels=["instance", "type"],
                         ),
                         legend_format="{{type}}-{{instance}}",
