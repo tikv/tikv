@@ -281,9 +281,10 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         }
         let (bg_scale_start, fg_cpu_throttle_threshold) = {
             let config = self.resource_ctl.get_config().value();
-            let start = config.bg_cpu_throttle_threshold.clamp(1.0, 99.0);
-            let end = config.fg_cpu_throttle_threshold.clamp(start, 99.0);
-            (start, end)
+            (
+                config.bg_cpu_throttle_threshold,
+                config.fg_cpu_throttle_threshold,
+            )
         };
         // Cap utilization limit to fg_cpu_throttle_threshold. Background tasks should
         // never consume more than this fraction of total resources. Scale-down
@@ -462,7 +463,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
     /// ceiling.
     fn adjust_write_io_by_compaction_pressure(&self, pressure: f64) {
         let config = self.resource_ctl.get_config().value().clone();
-        let threshold = config.bg_compaction_pressure_threshold.clamp(1.0, 99.0);
+        let threshold = config.bg_compaction_pressure_threshold;
         let ceiling = config.bg_write_io_ceiling.0 as f64; // bytes/s
         let floor = config.bg_write_io_floor.0 as f64; // bytes/s
 
