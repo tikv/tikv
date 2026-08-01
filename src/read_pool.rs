@@ -881,15 +881,6 @@ impl ReadPoolConfigRunner {
             && running_tasks < self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD;
 
         let leeway = 0.1;
-        // Enforce the CPU ceiling whenever one actually exists, rather than only
-        // when the local `cpu_threshold` knob is set. `cpu_threshold` of 0.0 and
-        // 1.0 both leave `target_cpu_cores` at the full CPU quota, so gating on
-        // `cpu_threshold > 0.0` alone tests whether the operator set the knob,
-        // not whether there is a ceiling to enforce — which left the resource
-        // manager's target inert for scale-down under the default config.
-        // `compute_read_pool_target_cpu` returns `f64::INFINITY` when there is
-        // no foreground pressure, so the second disjunct only fires once the
-        // manager has genuinely lowered the target below the full quota.
         let has_cpu_ceiling =
             self.cpu_threshold > 0.0 || target_cpu_cores < SysQuota::cpu_cores_quota();
         let busy_cpu_scale_in =
@@ -1432,10 +1423,8 @@ mod tests {
             min_thread_count: 1,
             max_thread_count: 8,
             max_tasks_per_worker: 4,
-            // Deliberately left at the default (0.0, "no local ceiling") so
-            // this exercises the default config: the ResourceGroupManager's
-            // target alone must be enough to drive scale-down, without the
-            // operator having set cpu_threshold.
+            // cpu_threshold left at its 0.0 default on purpose: covers the
+            // default-config path.
             auto_adjust_pool_size: true,
             ..Default::default()
         };
@@ -1480,17 +1469,6 @@ mod tests {
         resource_manager.online_adjust_resource_quota(90.0);
         assert!(resource_manager.read_pool_cpu_pressure() > 0.0);
 
-        // With pressure engaged, the ResourceGroupManager's target CPU is 10%
-        // below the currently measured read_pool_cpu. That pulls
-        // target_cpu_cores below the full CPU quota, which is what satisfies
-        // `has_cpu_ceiling` and lets busy_cpu_scale_in fire even though
-        // cpu_threshold is 0.0. Give the read pool a non-zero measured CPU
-        // reading to scale down from — a cold/idle pool has nothing to reduce.
-        // This reading is a fixed test override that does not track
-        // cur_thread_count, unlike real measured usage, which is why
-        // convergence stops at a floor derived from this fixed value rather
-        // than continuing to the configured minimum (see
-        // compute_read_pool_target_cpu's doc comment).
         runner.cpu_time_tracker.set_test_cpu_utilization(4.0);
 
         let before_first_tick = runner.cur_thread_count;

@@ -4199,6 +4199,7 @@ impl TikvConfig {
         self.resource_metering.validate()?;
         self.quota.validate()?;
         self.causal_ts.validate()?;
+        self.resource_control.validate()?;
 
         // Disable in memory engine if api version is V1ttl or V2.
         if (self.storage.api_version() == ApiVersion::V2 || self.storage.enable_ttl)
