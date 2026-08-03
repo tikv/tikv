@@ -21,6 +21,9 @@ test-engines-rocksdb = ["tikv/test-engines-rocksdb"]
 test-engines-panic = ["tikv/test-engines-panic"]
 nortcheck = ["engine_rocks/nortcheck"]
 backup-stream-debug = ["backup-stream/backup-stream-debug"]
+# Forwards the FIPS feature down to gcp_v2 through every crate that depends on
+# it: tikv -> encryption_export, and backup / backup-stream -> external_storage.
+fips = ["tikv/fips", "backup/fips", "backup-stream/fips"]
 
 [dependencies]
 api_version = { workspace = true }
