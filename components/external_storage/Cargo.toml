@@ -20,6 +20,7 @@ azure = { workspace = true }
 chrono = { workspace = true }
 cloud = { workspace = true }
 encryption = { workspace = true }
+fail = "0.5"
 file_system = { workspace = true }
 futures = "0.3"
 futures-io = "0.3"
