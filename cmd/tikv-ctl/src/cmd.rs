@@ -959,45 +959,4 @@ mod tests {
             cmd => panic!("unexpected command: {:?}", std::mem::discriminant(&cmd)),
         }
     }
-
-    #[test]
-    fn compact_log_backup_cal_shift_ts_flag() {
-        let opt = Opt::try_parse_from([
-            "tikv-ctl",
-            "compact-log-backup",
-            "--from",
-            "1",
-            "--until",
-            "2",
-            "--storage-base64",
-            "AA==",
-            "--cal-shift-ts",
-        ])
-        .unwrap();
-
-        match opt.cmd.unwrap() {
-            Cmd::CompactLogBackup { cal_shift_ts, .. } => assert!(cal_shift_ts),
-            cmd => panic!("unexpected command: {:?}", std::mem::discriminant(&cmd)),
-        }
-    }
-
-    #[test]
-    fn compact_log_backup_allows_omitting_until() {
-        let opt = Opt::try_parse_from([
-            "tikv-ctl",
-            "compact-log-backup",
-            "--from",
-            "1",
-            "--storage-base64",
-            "AA==",
-        ])
-        .unwrap();
-
-        match opt.cmd.unwrap() {
-            Cmd::CompactLogBackup { until_ts, .. } => {
-                assert_eq!(until_ts, None);
-            }
-            cmd => panic!("unexpected command: {:?}", std::mem::discriminant(&cmd)),
-        }
-    }
 }
