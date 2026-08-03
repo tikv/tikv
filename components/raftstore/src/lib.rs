@@ -8,7 +8,7 @@
 #![feature(assert_matches)]
 #![feature(type_alias_impl_trait)]
 #![feature(impl_trait_in_assoc_type)]
-#![recursion_limit = "256"]
+#![recursion_limit = "400"]
 // `Instant` does not implement the "Ord" trait.
 // So type `TtlRange` can't derive Ord trait directly.
 #![allow(clippy::derive_ord_xor_partial_ord)]
