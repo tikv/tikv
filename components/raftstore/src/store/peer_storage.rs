@@ -1020,6 +1020,12 @@ where
             }
         }
 
+        write_task.set_must_sync(
+            &prev_raft_state,
+            self.raft_state(),
+            !ready.snapshot().is_empty(),
+        );
+
         // Save raft state if it has changed or there is a snapshot.
         if prev_raft_state != *self.raft_state() || !ready.snapshot().is_empty() {
             write_task.raft_state = Some(self.raft_state().clone());

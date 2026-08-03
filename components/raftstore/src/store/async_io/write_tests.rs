@@ -197,6 +197,7 @@ fn test_raft_kv(engine: &RaftTestEngine, key: u64) -> bool {
 
 struct TestWorker {
     worker: Worker<KvTestEngine, RaftTestEngine, TestNotifier, TestTransport>,
+    cfg: Arc<VersionTrack<Config>>,
     msg_rx: Receiver<RaftMessage>,
     notify_rx: Receiver<(u64, (u64, u64))>,
 }
@@ -208,6 +209,7 @@ impl TestWorker {
         let trans = TestTransport { tx: msg_tx };
         let (notify_tx, notify_rx) = unbounded();
         let notifier = TestNotifier { tx: notify_tx };
+        let cfg = Arc::new(VersionTrack::new(cfg.clone()));
         Self {
             worker: Worker::new(
                 1,
@@ -217,11 +219,22 @@ impl TestWorker {
                 task_rx,
                 notifier,
                 trans,
-                &Arc::new(VersionTrack::new(cfg.clone())),
+                &cfg,
             ),
+            cfg,
             msg_rx,
             notify_rx,
         }
+    }
+
+    /// Changes the tracked config the way `RaftstoreConfigManager` does.
+    fn update_cfg(&self, f: impl FnOnce(&mut Config)) {
+        self.cfg
+            .update(|cfg| {
+                f(cfg);
+                Ok::<(), ()>(())
+            })
+            .unwrap();
     }
 }
 
@@ -795,4 +808,96 @@ fn test_resource_group() {
 
     tx.send(()).unwrap();
     must_wait_same_notifies(vec![(region_1, (1, 10)), (region_2, (2, 20))], &t.notify_rx);
+}
+
+#[test]
+fn test_unsafe_no_raft_log_fsync_skips_only_entry_appends() {
+    let path = Builder::new().prefix("async-io-fsync").tempdir().unwrap();
+    let engines = new_temp_engine(&path);
+
+    let add_task = |t: &mut TestWorker, index: u64, must_sync: bool| {
+        let mut task = WriteTask::<KvTestEngine, RaftTestEngine>::new(1, 1, index);
+        init_write_batch(&engines, &mut task);
+        task.entries.push(new_entry(index, 5));
+        task.raft_state = Some(new_raft_state(5, 123, 6, index));
+        task.must_sync = must_sync;
+        t.worker.batch.add_write_task(&engines.raft, task);
+    };
+
+    // With the switch off, every batch is fsynced regardless of `must_sync`.
+    let mut t = TestWorker::new(&Config::default(), &engines);
+    add_task(&mut t, 10, false);
+    assert!(t.worker.need_raft_log_fsync());
+    t.worker.write_to_db(true);
+
+    let cfg = Config {
+        unsafe_no_raft_log_fsync: true,
+        ..Config::default()
+    };
+    let mut t = TestWorker::new(&cfg, &engines);
+
+    // A batch of plain entry appends skips the fsync.
+    add_task(&mut t, 11, false);
+    assert!(!t.worker.need_raft_log_fsync());
+
+    // A single task that requires durability makes the whole batch fsync.
+    add_task(&mut t, 12, true);
+    assert!(t.worker.need_raft_log_fsync());
+
+    // Writing the batch out resets the flag for the next batch.
+    t.worker.write_to_db(true);
+    assert!(!t.worker.batch.must_sync);
+    add_task(&mut t, 13, false);
+    assert!(!t.worker.need_raft_log_fsync());
+}
+
+#[test]
+fn test_worker_picks_up_switch_change_online() {
+    let path = Builder::new()
+        .prefix("async-io-fsync-online")
+        .tempdir()
+        .unwrap();
+    let engines = new_temp_engine(&path);
+
+    let add_append = |t: &mut TestWorker, index: u64| {
+        let mut task = WriteTask::<KvTestEngine, RaftTestEngine>::new(1, 1, index);
+        init_write_batch(&engines, &mut task);
+        task.entries.push(new_entry(index, 5));
+        task.raft_state = Some(new_raft_state(5, 123, 6, index));
+        task.must_sync = false;
+        t.worker.batch.add_write_task(&engines.raft, task);
+    };
+
+    let mut t = TestWorker::new(&Config::default(), &engines);
+    add_append(&mut t, 10);
+    assert!(t.worker.need_raft_log_fsync());
+
+    t.update_cfg(|cfg| cfg.unsafe_no_raft_log_fsync = true);
+
+    // The worker refreshes its config at the end of `write_to_db`, so the batch
+    // in flight still fsyncs and the change lands on the next one.
+    assert!(t.worker.need_raft_log_fsync());
+    t.worker.write_to_db(true);
+
+    add_append(&mut t, 11);
+    assert!(!t.worker.need_raft_log_fsync());
+}
+
+#[test]
+fn test_set_must_sync_covers_term_vote_and_snapshot() {
+    let mut task = WriteTask::<KvTestEngine, RaftTestEngine>::new(1, 1, 10);
+    let prev = new_raft_state(5, 123, 6, 8);
+
+    // A plain entry append only moves last_index and commit.
+    task.set_must_sync(&prev, &new_raft_state(5, 123, 7, 9), false);
+    assert!(!task.must_sync);
+
+    task.set_must_sync(&prev, &new_raft_state(6, 123, 6, 8), false);
+    assert!(task.must_sync);
+
+    task.set_must_sync(&prev, &new_raft_state(5, 124, 6, 8), false);
+    assert!(task.must_sync);
+
+    task.set_must_sync(&prev, &new_raft_state(5, 123, 6, 8), true);
+    assert!(task.must_sync);
 }
