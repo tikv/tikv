@@ -1545,7 +1545,7 @@ mod tests {
             CleanupMethod::InPlace,
             false,
         );
-        let cm = ConcurrencyManager::new_for_test(1.into());
+        let cm = ConcurrencyManager::new(1.into());
         let endpoint = Endpoint::<RocksEngine>::new(
             &config,
             read_pool.handle(),
