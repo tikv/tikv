@@ -744,6 +744,8 @@ fn test_serde_custom_tikv_config() {
         reserve_space: ReadableSize::gb(10),
         reserve_raft_space: ReadableSize::gb(2),
         enable_async_apply_prewrite: true,
+        enable_txn_command_flight_recorder: true,
+        txn_command_flight_recorder_capacity: ReadableSize::gb(1),
         api_version: 1,
         enable_ttl: true,
         ttl_check_poll_interval: ReadableDuration::hours(0),

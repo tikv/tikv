@@ -86,6 +86,7 @@ use crate::{
                 Command, RawExt, ReleasedLocks, ResponsePolicy, WriteContext, WriteResult,
                 WriteResultLockInfo,
             },
+            flight_recorder::{TXN_FLIGHT_RECORDER, TxnCommandEvent},
             flow_controller::FlowController,
             latch::{Latches, Lock},
             sched_pool::{SchedPool, tls_collect_query, tls_collect_scan_details},
@@ -548,6 +549,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         cmd: Command,
         callback: StorageCallback,
         delay: Duration,
+        cid: u64,
     ) {
         let tag = cmd.tag();
         let sched = self.clone();
@@ -561,7 +563,6 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             let mut guard = rm.delay_slot_guard();
             futures_timer::Delay::new(delay).await;
             guard.release();
-            let cid = sched.inner.gen_id();
             if let Ok(task) = Task::allocate(cid, cmd, mem_quota) {
                 sched.schedule_command(task, cb, None);
             } else {
@@ -584,6 +585,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     }
 
     pub(in crate::storage) fn run_cmd(&self, cmd: Command, callback: StorageCallback) {
+        // Allocate the cid and record at arrival, so the Received event keeps
+        // the command's true arrival time, shares its cid with subsequent
+        // lock/write events, and also covers commands rejected below.
+        let cid = self.inner.gen_id();
+        TXN_FLIGHT_RECORDER.record_received(&cmd, cid);
         let tag = cmd.tag();
         // write flow control
         //
@@ -602,12 +608,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 return;
             }
             Some(resource_control::AdmissionDecision::Delay(delay)) => {
-                self.schedule_after_admission_delay(cmd, callback, delay);
+                self.schedule_after_admission_delay(cmd, callback, delay, cid);
                 return;
             }
             _ => {}
         }
-        let cid = self.inner.gen_id();
         if let Ok(task) = Task::allocate(cid, cmd, self.inner.memory_quota.clone()) {
             self.schedule_command(
                 task,
@@ -1515,6 +1520,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         sched_details: &mut SchedulerDetails,
         txn_ext: Option<Arc<TxnExt>>,
         is_shared_lock_cmd: bool,
+        flight_events: &[TxnCommandEvent],
     ) -> Option<(WriteResult, TaskMetadata<'a>)> {
         let WriteResult {
             ctx,
@@ -1633,6 +1639,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     engine.schedule_txn_extra(to_be_write.extra);
                 })
             }
+            TXN_FLIGHT_RECORDER.record_in_memory_pessimistic_locks(flight_events);
             txn_scheduler.on_write_finished(
                 cid,
                 Some(pr),
@@ -1739,6 +1746,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         txn_ext: Option<Arc<TxnExt>>,
         sched_details: &mut SchedulerDetails,
         task_meta_data: TaskMetadata<'_>,
+        flight_events: &[TxnCommandEvent],
         mut write_result: WriteResult,
     ) {
         let region_id = write_result.ctx.region_id;
@@ -1892,6 +1900,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 WriteEvent::Finished(res) => {
                     fail_point!("scheduler_async_write_finish");
                     let ok = res.is_ok();
+                    if ok {
+                        TXN_FLIGHT_RECORDER.record_persistent_modifies(flight_events);
+                    }
 
                     txn_scheduler.on_write_finished(
                         cid,
@@ -1968,6 +1979,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             false
         };
         let txn_ext = snapshot.ext().get_txn_ext().cloned();
+        let flight_metadata = if TXN_FLIGHT_RECORDER.is_enabled() {
+            TXN_FLIGHT_RECORDER.command_metadata(task.cmd(), cid, snapshot.ext().get_data_version())
+        } else {
+            None
+        };
         let deadline = task.cmd().deadline();
         let write_result = Self::handle_task(self.clone(), snapshot, task, sched_details).await;
 
@@ -1990,6 +2006,13 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             // `WriteFinished` message when it finishes.
             Ok(res) => res,
         };
+        let flight_events = flight_metadata
+            .map(|mut metadata| {
+                metadata
+                    .set_primary_key_hash(write_result.released_locks.flight_primary_key_hash());
+                metadata.events_for_modifies(&write_result.to_be_write.modifies)
+            })
+            .unwrap_or_default();
         SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
         debug!("process_write task handle result";
             "req_info" => TrackerTokenArray::new(&[tracker_token]),
@@ -2010,6 +2033,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 sched_details,
                 txn_ext.clone(),
                 is_shared_lock_cmd,
+                &flight_events,
             )
         {
             write_result = write_result_res;
@@ -2032,6 +2056,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             txn_ext,
             sched_details,
             task_meta_data,
+            &flight_events,
             write_result,
         )
         .await;
@@ -2889,6 +2914,7 @@ mod tests {
             &mut sched_details,
             Some(txn_ext.clone()),
             false,
+            &[],
         )
         .expect("shared lock update should be persisted");
 

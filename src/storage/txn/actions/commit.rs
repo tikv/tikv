@@ -10,6 +10,7 @@ use crate::storage::{
         ErrorInner, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader,
         metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
     },
+    txn::flight_recorder::hash_key,
 };
 
 /// Helper function to handle the case when the lock is not found for our
@@ -51,6 +52,33 @@ pub fn commit<S: Snapshot>(
     key: Key,
     commit_ts: TimeStamp,
 ) -> MvccResult<Option<ReleasedLock>> {
+    commit_inner(txn, reader, key, commit_ts, |_, _| {})
+}
+
+/// Returns the flight-recorder hash when `key` is the primary key recorded in
+/// its lock.
+pub(crate) fn commit_with_primary<S: Snapshot>(
+    txn: &mut MvccTxn,
+    reader: &mut SnapshotReader<S>,
+    key: Key,
+    commit_ts: TimeStamp,
+) -> MvccResult<(Option<ReleasedLock>, Option<u64>)> {
+    let mut primary_key_hash = None;
+    let released = commit_inner(txn, reader, key, commit_ts, |key, primary| {
+        if key.is_encoded_from(primary) {
+            primary_key_hash = Some(hash_key(key));
+        }
+    })?;
+    Ok((released, primary_key_hash))
+}
+
+fn commit_inner<S: Snapshot>(
+    txn: &mut MvccTxn,
+    reader: &mut SnapshotReader<S>,
+    key: Key,
+    commit_ts: TimeStamp,
+    record_primary: impl FnOnce(&Key, &[u8]),
+) -> MvccResult<Option<ReleasedLock>> {
     fail_point!("commit", |err| Err(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts,).into()
     ));
@@ -91,6 +119,7 @@ pub fn commit<S: Snapshot>(
                     }
                 }
             };
+            record_primary(&key, &lock.primary);
             // A lock with larger min_commit_ts than current commit_ts can't be committed
             if commit_ts < lock.min_commit_ts {
                 info!(
@@ -327,6 +356,29 @@ pub mod tests {
 
         let long_value = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         test_commit_ok_imp(b"x", &long_value, b"y", b"z");
+    }
+
+    #[test]
+    fn test_commit_identifies_primary_key() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let primary = b"primary";
+        let secondary = b"secondary";
+        must_prewrite_put(&mut engine, primary, b"v1", primary, 10);
+        must_prewrite_put(&mut engine, secondary, b"v2", primary, 10);
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let cm = ConcurrencyManager::new(10.into());
+        let mut txn = MvccTxn::new(10.into(), cm);
+        let mut reader = SnapshotReader::new(10.into(), snapshot, true);
+
+        let (_, primary_key_hash) =
+            commit_with_primary(&mut txn, &mut reader, Key::from_raw(primary), 20.into()).unwrap();
+        assert_eq!(primary_key_hash, Some(hash_key(&Key::from_raw(primary))));
+
+        let (_, primary_key_hash) =
+            commit_with_primary(&mut txn, &mut reader, Key::from_raw(secondary), 20.into())
+                .unwrap();
+        assert_eq!(primary_key_hash, None);
     }
 
     #[cfg(test)]

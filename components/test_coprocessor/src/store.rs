@@ -225,13 +225,20 @@ impl<E: Engine> Store<E> {
     }
 
     pub fn put(&mut self, ctx: Context, mut kv: Vec<(Vec<u8>, Vec<u8>)>) {
+        // Reuse one primary for every prewrite batch in the transaction.
+        let primary = self
+            .handles
+            .first()
+            .cloned()
+            .unwrap_or_else(|| kv[0].0.clone());
         self.handles.extend(kv.iter().map(|(k, _)| k.clone()));
-        let pk = kv[0].0.clone();
         let kv = kv
             .drain(..)
             .map(|(k, v)| Mutation::make_put(Key::from_raw(&k), v))
             .collect();
-        self.store.prewrite(ctx, kv, pk, self.current_ts).unwrap();
+        self.store
+            .prewrite(ctx, kv, primary, self.current_ts)
+            .unwrap();
     }
 
     pub fn insert_into<'a>(&'a mut self, table: &'a Table) -> Insert<'a, E> {
@@ -240,14 +247,19 @@ impl<E: Engine> Store<E> {
 
     pub fn delete(&mut self, ctx: Context, mut keys: Vec<Vec<u8>>) {
         keys.dedup();
+        // Reuse one primary for every prewrite batch in the transaction.
+        let primary = self
+            .handles
+            .first()
+            .cloned()
+            .unwrap_or_else(|| keys[0].clone());
         self.handles.extend(keys.clone());
-        let pk = keys[0].clone();
         let mutations = keys
             .drain(..)
             .map(|k| Mutation::make_delete(Key::from_raw(&k)))
             .collect();
         self.store
-            .prewrite(ctx, mutations, pk, self.current_ts)
+            .prewrite(ctx, mutations, primary, self.current_ts)
             .unwrap();
     }
 

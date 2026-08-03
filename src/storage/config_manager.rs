@@ -18,7 +18,14 @@ use tikv_util::{
 use crate::{
     config::ConfigurableDb,
     server::{CONFIG_ROCKSDB_GAUGE, ttl::TtlCheckerTask},
-    storage::{TxnScheduler, lock_manager::LockManager, txn::flow_controller::FlowController},
+    storage::{
+        TxnScheduler,
+        lock_manager::LockManager,
+        txn::{
+            flight_recorder::{MIN_TXN_COMMAND_FLIGHT_RECORDER_CAPACITY, TXN_FLIGHT_RECORDER},
+            flow_controller::FlowController,
+        },
+    },
 };
 
 pub struct StorageConfigManger<E: Engine, K, L: LockManager> {
@@ -111,6 +118,20 @@ impl<EK: Engine, K: ConfigurableDb, L: LockManager> ConfigManager
             }
         }
         dispatch_max_ts_config_change(&self.concurrency_manager, &mut change)?;
+        if let Some(v) = change.remove("txn_command_flight_recorder_capacity") {
+            let capacity: ReadableSize = v.into();
+            if capacity.0 < MIN_TXN_COMMAND_FLIGHT_RECORDER_CAPACITY as u64 {
+                return Err(format!(
+                    "storage.txn-command-flight-recorder-capacity must be at least {} bytes",
+                    MIN_TXN_COMMAND_FLIGHT_RECORDER_CAPACITY
+                )
+                .into());
+            }
+            TXN_FLIGHT_RECORDER.set_capacity(capacity.0 as usize);
+        }
+        if let Some(v) = change.remove("enable_txn_command_flight_recorder") {
+            TXN_FLIGHT_RECORDER.set_enabled(v.into());
+        }
         Ok(())
     }
 }

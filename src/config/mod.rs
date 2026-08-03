@@ -5648,6 +5648,7 @@ mod tests {
         incoming.rocksdb.defaultcf.block_cache_size = Some(ReadableSize::mb(500));
         incoming.storage.io_rate_limit.import_priority = file_system::IoPriority::High;
         incoming.storage.max_ts.action_on_invalid_update = "log".to_owned();
+        incoming.storage.txn_command_flight_recorder_capacity = ReadableSize::gb(2);
         let diff = old.diff(&incoming);
         let mut change = HashMap::new();
         change.insert(
@@ -5666,6 +5667,10 @@ mod tests {
         change.insert(
             "storage.max-ts.action-on-invalid-update".to_owned(),
             "log".to_owned(),
+        );
+        change.insert(
+            "storage.txn-command-flight-recorder-capacity".to_owned(),
+            "2GB".to_owned(),
         );
         let res = to_config_change(change).unwrap();
         assert_eq!(diff, res);

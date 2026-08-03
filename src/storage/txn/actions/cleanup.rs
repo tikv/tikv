@@ -9,8 +9,11 @@ use crate::storage::{
         ErrorInner, Key, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader, TimeStamp,
         metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
     },
-    txn::actions::check_txn_status::{
-        MissingLockAction, check_txn_status_missing_lock, rollback_lock, rollback_shared_lock,
+    txn::{
+        actions::check_txn_status::{
+            MissingLockAction, check_txn_status_missing_lock, rollback_lock, rollback_shared_lock,
+        },
+        flight_recorder::hash_key,
     },
 };
 
@@ -27,6 +30,42 @@ pub fn cleanup<S: Snapshot>(
     key: Key,
     current_ts: TimeStamp,
     protect_rollback: bool,
+) -> MvccResult<Option<ReleasedLock>> {
+    cleanup_inner(txn, reader, key, current_ts, protect_rollback, |_, _| {})
+}
+
+/// Returns the flight-recorder hash when `key` is the primary key recorded in
+/// its lock.
+pub(crate) fn cleanup_with_primary<S: Snapshot>(
+    txn: &mut MvccTxn,
+    reader: &mut SnapshotReader<S>,
+    key: Key,
+    current_ts: TimeStamp,
+    protect_rollback: bool,
+) -> MvccResult<(Option<ReleasedLock>, Option<u64>)> {
+    let mut primary_key_hash = None;
+    let released = cleanup_inner(
+        txn,
+        reader,
+        key,
+        current_ts,
+        protect_rollback,
+        |key, primary| {
+            if key.is_encoded_from(primary) {
+                primary_key_hash = Some(hash_key(key));
+            }
+        },
+    )?;
+    Ok((released, primary_key_hash))
+}
+
+fn cleanup_inner<S: Snapshot>(
+    txn: &mut MvccTxn,
+    reader: &mut SnapshotReader<S>,
+    key: Key,
+    current_ts: TimeStamp,
+    protect_rollback: bool,
+    record_primary: impl FnOnce(&Key, &[u8]),
 ) -> MvccResult<Option<ReleasedLock>> {
     fail_point!("cleanup", |err| Err(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts).into()
@@ -64,6 +103,7 @@ pub fn cleanup<S: Snapshot>(
                     .into());
                 }
             }
+            record_primary(&key, &lock.primary);
             rollback_lock(
                 txn,
                 reader,
@@ -288,6 +328,51 @@ pub mod tests {
         let w = must_written(&mut engine, b"k", 10, 20, WriteType::Put);
         assert!(w.has_overlapped_rollback);
         assert_eq!(w.gc_fence.unwrap(), 30.into());
+    }
+
+    #[test]
+    fn test_cleanup_identifies_primary_key() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let primary = b"primary";
+        let secondary = b"secondary";
+        let start_ts = TimeStamp::new(10);
+        must_prewrite_put(&mut engine, primary, b"v1", primary, start_ts);
+        must_prewrite_put(&mut engine, secondary, b"v2", primary, start_ts);
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let cm = ConcurrencyManager::new(start_ts);
+        let mut txn = MvccTxn::new(start_ts, cm);
+        let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+
+        let (_, primary_key_hash) = cleanup_with_primary(
+            &mut txn,
+            &mut reader,
+            Key::from_raw(primary),
+            TimeStamp::zero(),
+            true,
+        )
+        .unwrap();
+        assert_eq!(primary_key_hash, Some(hash_key(&Key::from_raw(primary))));
+
+        let (_, primary_key_hash) = cleanup_with_primary(
+            &mut txn,
+            &mut reader,
+            Key::from_raw(secondary),
+            TimeStamp::zero(),
+            true,
+        )
+        .unwrap();
+        assert_eq!(primary_key_hash, None);
+
+        let (_, primary_key_hash) = cleanup_with_primary(
+            &mut txn,
+            &mut reader,
+            Key::from_raw(b"missing"),
+            TimeStamp::zero(),
+            true,
+        )
+        .unwrap();
+        assert_eq!(primary_key_hash, None);
     }
 
     #[test]

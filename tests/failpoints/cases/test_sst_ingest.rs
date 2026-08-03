@@ -46,9 +46,11 @@ fn prepare_data_used_by_compaction_filter(
         for start_ts in [101, 103] {
             let commit_ts = start_ts + 1;
 
-            for pk in &keys {
-                let muts = vec![new_mutation(Op::Put, pk.as_slice(), &large_value)];
-                must_kv_prewrite(client, ctx.clone(), muts, pk.clone(), start_ts);
+            // Prewrite the keys separately, but keep one transaction-wide primary.
+            let primary = keys[0].clone();
+            for key in &keys {
+                let muts = vec![new_mutation(Op::Put, key.as_slice(), &large_value)];
+                must_kv_prewrite(client, ctx.clone(), muts, primary.clone(), start_ts);
             }
             must_kv_commit(
                 client,
