@@ -411,46 +411,6 @@ fn main() {
                     );
                 }
             };
-<<<<<<< HEAD
-=======
-            let storage =
-                match compact_log::create_storage_with_gcp_v2(&external_storage, gcp_v2_enable) {
-                    Ok(storage) => storage,
-                    Err(err) => {
-                        exit_with_clap_error(
-                            ErrorKind::Io,
-                            format!("failed to create external storage: {}", err),
-                        );
-                    }
-                };
-            let runtime = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .expect("failed to build runtime for compact-log-backup");
-            let until_ts_unspecified = until_ts.is_none();
-            let until_ts = match until_ts {
-                Some(until_ts) => until_ts,
-                None => {
-                    match runtime
-                        .block_on(compact_log::load_until_ts_from_checkpoint(storage.as_ref()))
-                    {
-                        Ok(until_ts) => {
-                            tikv_util::info!(
-                                "Loaded compact log backup until-ts from checkpoint.";
-                                "until_ts" => until_ts,
-                            );
-                            until_ts
-                        }
-                        Err(err) => {
-                            exit_with_clap_error(
-                                ErrorKind::Io,
-                                format!("failed to load compact-log-backup checkpoint: {}", err),
-                            );
-                        }
-                    }
-                }
-            };
->>>>>>> eb51ff3230 (deny: replace `structopt` with `clap-v3` derives to resolve RUSTSEC-2022-0104 (#19744))
             let ccfg = compact_log::ExecutionConfig {
                 from_ts,
                 until_ts,
@@ -459,21 +419,6 @@ fn main() {
                 compression,
                 compression_level,
             };
-<<<<<<< HEAD
-=======
-            let out_prefix = ccfg.recommended_prefix(&name);
-            if force_regenerate {
-                exit_with_clap_error(
-                    ErrorKind::ValueValidation,
-                    format!(
-                        "--force-regenerate is no longer supported. Please use a different --name to generate a new compaction prefix, or manually clean the existing prefix `{}` before rerunning.",
-                        out_prefix
-                    ),
-                );
-            }
-            let tmp_engine =
-                TemporaryRocks::new(&cfg).expect("failed to create temp engine for writing SSTs.");
->>>>>>> eb51ff3230 (deny: replace `structopt` with `clap-v3` derives to resolve RUSTSEC-2022-0104 (#19744))
             let mut exec = compact_log::Execution {
                 out_prefix: ccfg.recommended_prefix(&name),
                 cfg: ccfg,

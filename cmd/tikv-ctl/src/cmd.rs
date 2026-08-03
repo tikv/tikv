@@ -647,20 +647,6 @@ pub enum Cmd {
         )]
         name: String,
         #[clap(
-            long,
-            value_name = "INDEX/TOTAL",
-            help(
-                "shard the compaction work by backup-stream store id. Prefer \
-                `Metadata.store_id`; if it is absent, fall back to the backup-stream metadata \
-                filename format \
-                (`v1/backupmeta/{flush_ts}{store_id}-d{min_begin_ts}l{min_ts}u{max_ts}p{flags}.meta`), \
-                then backup-stream physical log paths, then a stable metadata-path hash. Only \
-                data from stores assigned to this shard is compacted. Format: INDEX/TOTAL, \
-                where INDEX is 1-based (e.g. 1/3)."
-            )
-        )]
-        shard: Option<ShardConfig>,
-        #[clap(
             long = "from",
             help(
                 "from when we need to include files into the compaction.\
@@ -675,15 +661,7 @@ pub enum Cmd {
                 files contains any record within the [--from, --until) will be selected."
             )
         )]
-        until_ts: Option<u64>,
-        #[clap(
-            long = "cal-shift-ts",
-            help(
-                "extend the default CF scan lower bound to the minimum min_begin_default_ts in \
-                metadata overlapping [--from, --until)."
-            )
-        )]
-        cal_shift_ts: bool,
+        until_ts: u64,
         #[clap(
             short = 'N',
             long = "concurrency",
@@ -746,16 +724,6 @@ pub enum Cmd {
             help("specify the maximum count of spawning tasks to download a metadata")
         )]
         prefetch_buffer_count: u64,
-
-        #[clap(
-            long,
-            default_value = "0",
-            help(
-                "specify memory reserved for caching physical log files, such as 64G. \
-                Zero disables the cache."
-            )
-        )]
-        physical_file_cache_capacity: ReadableSize,
 
         #[clap(
             long = "gcp-v2-enable",
