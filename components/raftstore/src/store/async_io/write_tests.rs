@@ -888,6 +888,9 @@ fn test_set_must_sync_covers_term_vote_and_snapshot() {
     let mut task = WriteTask::<KvTestEngine, RaftTestEngine>::new(1, 1, 10);
     let prev = new_raft_state(5, 123, 6, 8);
 
+    // A task that never calls `set_must_sync` keeps the old always-fsync path.
+    assert!(task.must_sync);
+
     // A plain entry append only moves last_index and commit.
     task.set_must_sync(&prev, &new_raft_state(5, 123, 7, 9), false);
     assert!(!task.must_sync);
@@ -900,4 +903,141 @@ fn test_set_must_sync_covers_term_vote_and_snapshot() {
 
     task.set_must_sync(&prev, &new_raft_state(5, 123, 6, 8), true);
     assert!(task.must_sync);
+}
+
+/// Returns what one fsync costs on `dir`. Reported next to the speedup, because
+/// the speedup only means something in proportion to it: on storage where an
+/// fsync is nearly free, such as tmpfs, both settings take the same time and
+/// the ratio says nothing about the switch.
+fn measure_fsync_cost(dir: &str) -> Duration {
+    use std::io::Write;
+
+    const PROBES: u32 = 20;
+
+    std::fs::create_dir_all(dir).unwrap();
+    let probe_path = std::path::Path::new(dir).join("fsync_probe");
+    let mut file = std::fs::File::create(&probe_path).unwrap();
+    file.write_all(b"probe").unwrap();
+
+    let timer = Instant::now();
+    for _ in 0..PROBES {
+        file.sync_data().unwrap();
+    }
+    let per_fsync = timer.saturating_elapsed() / PROBES;
+    std::fs::remove_file(&probe_path).unwrap();
+    per_fsync
+}
+
+/// Compares raft log write throughput with `unsafe_no_raft_log_fsync` off and
+/// on. Ignored by default so it does not slow CI down. Run it explicitly with
+/// `--ignored --nocapture` to see the numbers.
+#[test]
+#[ignore = "benchmark, run explicitly with --ignored"]
+fn bench_unsafe_no_raft_log_fsync() {
+    const BATCHES: u64 = 500;
+    const ENTRIES_PER_BATCH: u64 = 8;
+    const ENTRY_SIZE: usize = 1024;
+    const ROUNDS: usize = 9;
+
+    let skipped_batches = || {
+        STORE_WRITE_RAFT_LOG_FSYNC_COUNTER_VEC
+            .with_label_values(&["skip"])
+            .get()
+    };
+
+    // The system temp dir is often tmpfs, so default to the workspace target
+    // dir, which sits on the same real storage as the repository.
+    let base_dir = std::env::var("TIKV_BENCH_DIR")
+        .unwrap_or_else(|_| format!("{}/../../target", env!("CARGO_MANIFEST_DIR")));
+    let fsync_cost = measure_fsync_cost(&base_dir);
+
+    let run = |unsafe_no_raft_log_fsync: bool| -> (Duration, u64) {
+        let path = Builder::new()
+            .prefix("bench-fsync")
+            .tempdir_in(&base_dir)
+            .unwrap();
+        let engines = new_temp_engine(&path);
+        let cfg = Config {
+            unsafe_no_raft_log_fsync,
+            ..Config::default()
+        };
+        let mut t = TestWorker::new(&cfg, &engines);
+
+        let skipped_before = skipped_batches();
+        let timer = Instant::now();
+        let mut index = 1;
+        for batch in 0..BATCHES {
+            let mut task = WriteTask::<KvTestEngine, RaftTestEngine>::new(1, 1, batch + 1);
+            init_write_batch(&engines, &mut task);
+            for _ in 0..ENTRIES_PER_BATCH {
+                let mut entry = new_entry(index, 5);
+                entry.set_data(vec![0u8; ENTRY_SIZE].into());
+                task.entries.push(entry);
+                index += 1;
+            }
+            let last_index = index - 1;
+            task.raft_state = Some(new_raft_state(5, 123, last_index, last_index));
+            // These batches stand for plain entry appends, the only case the
+            // switch is allowed to skip.
+            task.must_sync = false;
+            t.worker.batch.add_write_task(&engines.raft, task);
+            t.worker.write_to_db(false);
+        }
+        (
+            timer.saturating_elapsed(),
+            skipped_batches() - skipped_before,
+        )
+    };
+
+    let mut with_fsync = Vec::with_capacity(ROUNDS);
+    let mut without_fsync = Vec::with_capacity(ROUNDS);
+    let mut skipped = 0;
+
+    // Alternate the settings and drop the first round. A fixed order lets
+    // warm-up effects favour whichever setting runs second.
+    for round in 0..=ROUNDS {
+        let on = run(false).0;
+        let (off, round_skipped) = run(true);
+        if round == 0 {
+            continue;
+        }
+        with_fsync.push(on);
+        without_fsync.push(off);
+        skipped += round_skipped;
+    }
+
+    // Without this the two settings would be measuring the same thing and the
+    // comparison below would be meaningless. The counter is global, so a
+    // concurrent test can only push it higher.
+    assert!(skipped >= BATCHES * ROUNDS as u64);
+
+    let median = |mut samples: Vec<Duration>| {
+        samples.sort();
+        samples[samples.len() / 2]
+    };
+    let with_fsync = median(with_fsync);
+    let without_fsync = median(without_fsync);
+    let per_batch_us = |total: Duration| total.as_secs_f64() * 1e6 / BATCHES as f64;
+
+    println!(
+        "raft log fsync benchmark: {} batches x {} entries x {} B, median of {} rounds",
+        BATCHES, ENTRIES_PER_BATCH, ENTRY_SIZE, ROUNDS
+    );
+    println!(
+        "  fsync on  (default): {:?} total, {:.1} us per batch",
+        with_fsync,
+        per_batch_us(with_fsync)
+    );
+    println!(
+        "  fsync off (unsafe):  {:?} total, {:.1} us per batch",
+        without_fsync,
+        per_batch_us(without_fsync)
+    );
+    println!(
+        "  speedup: {:.2}x",
+        with_fsync.as_secs_f64() / without_fsync.as_secs_f64()
+    );
+    // A speedup near 1.00x against a near-zero fsync cost means the storage is
+    // too fast to measure on, not that the switch does nothing.
+    println!("  storage: {} ({:?} per fsync)", base_dir, fsync_cost);
 }
