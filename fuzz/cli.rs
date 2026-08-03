@@ -12,15 +12,15 @@
 //! Adopted from https://github.com/rust-fuzz/targets
 
 use std::{
-    env, fs,
+    env, fmt, fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
 
 use anyhow::{Context, Result, anyhow};
 use cargo_metadata::MetadataCommand;
+use clap::{ArgEnum, Parser, Subcommand};
 use lazy_static::lazy_static;
-use structopt::{StructOpt, clap::arg_enum};
 
 lazy_static! {
     static ref WORKSPACE_ROOT: PathBuf = MetadataCommand::new()
@@ -41,28 +41,33 @@ lazy_static! {
     static ref SEED_ROOT: PathBuf = FUZZ_ROOT.join("common/seeds");
 }
 
-#[derive(StructOpt, Debug)]
-enum Cli {
+#[derive(Parser, Debug)]
+#[clap(name = "fuzz")]
+struct Cli {
+    #[clap(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand, Debug)]
+#[clap(rename_all = "kebab-case")]
+enum Commands {
     /// List all available targets
-    #[structopt(name = "list-targets")]
     ListTargets,
     /// Run matched fuzz test with specific fuzzer.
-    #[structopt(name = "run")]
     Run {
         /// The fuzzer to use.
+        #[clap(arg_enum, ignore_case = true)]
         fuzzer: Fuzzer,
         /// The target fuzz to run.
         target: String,
     },
 }
 
-arg_enum! {
-    #[derive(Debug, PartialEq, Clone, Copy)]
-    enum Fuzzer {
-        Afl,
-        Honggfuzz,
-        Libfuzzer,
-    }
+#[derive(ArgEnum, Debug, PartialEq, Clone, Copy)]
+enum Fuzzer {
+    Afl,
+    Honggfuzz,
+    Libfuzzer,
 }
 
 impl Fuzzer {
@@ -81,14 +86,25 @@ impl Fuzzer {
     }
 }
 
+impl fmt::Display for Fuzzer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = match self {
+            Fuzzer::Afl => "Afl",
+            Fuzzer::Honggfuzz => "Honggfuzz",
+            Fuzzer::Libfuzzer => "Libfuzzer",
+        };
+        f.write_str(name)
+    }
+}
+
 fn main() -> Result<(), i32> {
-    match Cli::from_args() {
-        Cli::ListTargets => {
+    match Cli::parse().command {
+        Commands::ListTargets => {
             for target in &*FUZZ_TARGETS {
                 println!("{}", target);
             }
         }
-        Cli::Run { fuzzer, target } => {
+        Commands::Run { fuzzer, target } => {
             if let Err(error) = run(fuzzer, &target) {
                 eprintln!("Running fuzzer failed: {}", error);
                 return Err(1);
@@ -341,4 +357,29 @@ fn run_libfuzzer(target: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::{Cli, Commands, Fuzzer};
+
+    #[test]
+    fn accepts_documented_capitalized_fuzzer_names() {
+        for (input, expected) in [
+            ("Afl", Fuzzer::Afl),
+            ("Honggfuzz", Fuzzer::Honggfuzz),
+            ("Libfuzzer", Fuzzer::Libfuzzer),
+        ] {
+            let cli = Cli::try_parse_from(["fuzz", "run", input, "dummy-target"]).unwrap();
+            match cli.command {
+                Commands::Run { fuzzer, target } => {
+                    assert_eq!(fuzzer, expected);
+                    assert_eq!(target, "dummy-target");
+                }
+                _ => panic!("expected run command"),
+            }
+        }
+    }
 }
