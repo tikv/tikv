@@ -3,7 +3,6 @@
 use std::{borrow::ToOwned, str, sync::LazyLock};
 
 use clap::{Parser, Subcommand, crate_authors};
-use compact_log_backup::ShardConfig;
 use engine_traits::{CF_DEFAULT, SstCompressionType};
 use raft_engine::ReadableSize;
 const RAW_KEY_HINT: &str = "Raw key (generally starts with \"z\") in escaped form";
