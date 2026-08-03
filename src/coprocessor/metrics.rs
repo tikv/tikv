@@ -187,16 +187,23 @@ lazy_static! {
             &["type"],
         )
         .unwrap();
-    pub static ref COPR_WAITING_FOR_SEMAPHORE: IntGauge = register_int_gauge!(
-        "tikv_coprocessor_waiting_for_semaphore",
-        "The number of tasks waiting for the semaphore"
-    )
-    .unwrap();
-    pub static ref COPR_SEMAPHORE_WAIT_TIME: Histogram = register_histogram!(
-        "tikv_coprocessor_semaphore_wait_time_duration_seconds",
-        "The duration of heavy tasks waiting for the semaphore",
-        exponential_buckets(0.00001, 2.0, 26).unwrap()
-    ).unwrap();
+    pub static ref COPR_WAITING_FOR_SEMAPHORE: CoprWaitingForSemaphoreGaugeVec =
+        register_static_int_gauge_vec!(
+            CoprWaitingForSemaphoreGaugeVec,
+            "tikv_coprocessor_waiting_for_semaphore",
+            "The number of tasks waiting for the semaphore",
+            &["group"],
+        )
+        .unwrap();
+    pub static ref COPR_SEMAPHORE_WAIT_TIME: CoprSemaphoreWaitTimeHistogramVec =
+        register_static_histogram_vec!(
+            CoprSemaphoreWaitTimeHistogramVec,
+            "tikv_coprocessor_semaphore_wait_time_duration_seconds",
+            "The duration of heavy tasks waiting for the semaphore",
+            &["group"],
+            exponential_buckets(0.00001, 2.0, 26).unwrap(),
+        )
+        .unwrap();
     pub static ref MEM_LOCK_CHECK_HISTOGRAM_VEC: HistogramVec =
         register_histogram_vec!(
             "tikv_coprocessor_mem_lock_check_duration_seconds",
@@ -229,8 +236,21 @@ make_static_metric! {
         acquired,
     }
 
+    pub label_enum SemaphoreGroupLabel {
+        shared,
+        background_limited,
+    }
+
     pub struct CoprAcquireSemaphoreTypeCounterVec: IntCounter {
         "type" => AcquireSemaphoreType,
+    }
+
+    pub struct CoprWaitingForSemaphoreGaugeVec: IntGauge {
+        "group" => SemaphoreGroupLabel,
+    }
+
+    pub struct CoprSemaphoreWaitTimeHistogramVec: Histogram {
+        "group" => SemaphoreGroupLabel,
     }
 }
 
