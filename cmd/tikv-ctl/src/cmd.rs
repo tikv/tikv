@@ -2,12 +2,8 @@
 
 use std::{borrow::ToOwned, str, sync::LazyLock};
 
-<<<<<<< HEAD
-use clap::{AppSettings, crate_authors};
-=======
 use clap::{Parser, Subcommand, crate_authors};
 use compact_log_backup::ShardConfig;
->>>>>>> eb51ff3230 (deny: replace `structopt` with `clap-v3` derives to resolve RUSTSEC-2022-0104 (#19744))
 use engine_traits::{CF_DEFAULT, SstCompressionType};
 use raft_engine::ReadableSize;
 const RAW_KEY_HINT: &str = "Raw key (generally starts with \"z\") in escaped form";
@@ -650,9 +646,6 @@ pub enum Cmd {
             )
         )]
         name: String,
-<<<<<<< HEAD
-        #[structopt(
-=======
         #[clap(
             long,
             value_name = "INDEX/TOTAL",
@@ -668,7 +661,6 @@ pub enum Cmd {
         )]
         shard: Option<ShardConfig>,
         #[clap(
->>>>>>> eb51ff3230 (deny: replace `structopt` with `clap-v3` derives to resolve RUSTSEC-2022-0104 (#19744))
             long = "from",
             help(
                 "from when we need to include files into the compaction.\
@@ -683,11 +675,6 @@ pub enum Cmd {
                 files contains any record within the [--from, --until) will be selected."
             )
         )]
-<<<<<<< HEAD
-        until_ts: u64,
-        #[structopt(
-            short = "N",
-=======
         until_ts: Option<u64>,
         #[clap(
             long = "cal-shift-ts",
@@ -699,7 +686,6 @@ pub enum Cmd {
         cal_shift_ts: bool,
         #[clap(
             short = 'N',
->>>>>>> eb51ff3230 (deny: replace `structopt` with `clap-v3` derives to resolve RUSTSEC-2022-0104 (#19744))
             long = "concurrency",
             default_value = "32",
             help("how many compactions can be executed concurrently.")
@@ -761,9 +747,6 @@ pub enum Cmd {
         )]
         prefetch_buffer_count: u64,
 
-<<<<<<< HEAD
-        #[structopt(
-=======
         #[clap(
             long,
             default_value = "0",
@@ -775,7 +758,6 @@ pub enum Cmd {
         physical_file_cache_capacity: ReadableSize,
 
         #[clap(
->>>>>>> eb51ff3230 (deny: replace `structopt` with `clap-v3` derives to resolve RUSTSEC-2022-0104 (#19744))
             long = "gcp-v2-enable",
             parse(try_from_str),
             default_value = "true",
@@ -1009,8 +991,6 @@ mod tests {
             cmd => panic!("unexpected command: {:?}", std::mem::discriminant(&cmd)),
         }
     }
-<<<<<<< HEAD
-=======
 
     #[test]
     fn compact_log_backup_cal_shift_ts_flag() {
@@ -1052,5 +1032,4 @@ mod tests {
             cmd => panic!("unexpected command: {:?}", std::mem::discriminant(&cmd)),
         }
     }
->>>>>>> eb51ff3230 (deny: replace `structopt` with `clap-v3` derives to resolve RUSTSEC-2022-0104 (#19744))
 }
