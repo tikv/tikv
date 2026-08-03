@@ -1580,7 +1580,7 @@ mod tests {
         fn report_write_stats(&self, _: WriteStats) {}
     }
 
-    fn build_yatp_copr(config: Config) -> Endpoint<RocksEngine> {
+    fn build_yatp_copr(config: Config) -> (Endpoint<RocksEngine>, ReadPool) {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_yatp_read_pool(
             &UnifiedReadPoolConfig::default(),
@@ -1592,14 +1592,15 @@ mod tests {
             false,
         );
         let cm = ConcurrencyManager::new_for_test(1.into());
-        Endpoint::<RocksEngine>::new(
+        let endpoint = Endpoint::<RocksEngine>::new(
             &config,
             read_pool.handle(),
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
             None,
-        )
+        );
+        (endpoint, read_pool)
     }
 
     #[test]
@@ -1849,7 +1850,7 @@ mod tests {
             end_point_max_concurrency: 8,
             ..Default::default()
         };
-        let copr = build_yatp_copr(config);
+        let (copr, _read_pool) = build_yatp_copr(config);
 
         let shared = copr.shared_semaphore.as_ref().unwrap();
         let background = copr.background_limited_semaphore.as_ref().unwrap();
@@ -1876,7 +1877,7 @@ mod tests {
             end_point_max_concurrency: 1,
             ..Default::default()
         };
-        let copr = build_yatp_copr(config);
+        let (copr, _read_pool) = build_yatp_copr(config);
 
         let shared = copr.shared_semaphore.as_ref().unwrap();
         let background = copr.background_limited_semaphore.as_ref().unwrap();
@@ -1887,7 +1888,7 @@ mod tests {
 
     #[test]
     fn test_analyze_request_classification_matches_semaphore_group() {
-        let copr = build_yatp_copr(Config::default());
+        let (copr, _read_pool) = build_yatp_copr(Config::default());
 
         let mut full_sampling = AnalyzeReq::default();
         full_sampling.set_tp(AnalyzeType::TypeFullSampling);
@@ -1930,7 +1931,7 @@ mod tests {
             end_point_max_concurrency: 4,
             ..Default::default()
         };
-        let copr = build_yatp_copr(config);
+        let (copr, _read_pool) = build_yatp_copr(config);
         let shared = copr.shared_semaphore.as_ref().unwrap().clone();
         let shared_permits = block_on(
             shared
