@@ -1799,8 +1799,6 @@ mod tests {
     }
 
     #[test]
-<<<<<<< HEAD
-=======
     fn test_background_limited_semaphore_preserves_shared_capacity() {
         let config = Config {
             end_point_max_concurrency: 8,
@@ -1972,59 +1970,6 @@ mod tests {
     }
 
     #[test]
-    fn test_unary_response_bytes_in_ru_v2() {
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = ReadPool::from(build_read_pool_for_test(
-            &CoprReadPoolConfig::default_for_test(),
-            engine,
-        ));
-        let cm = ConcurrencyManager::new_for_test(1.into());
-        let copr = Endpoint::<RocksEngine>::new(
-            &Config::default(),
-            read_pool.handle(),
-            cm,
-            ResourceTagFactory::new_for_test(),
-            Arc::new(QuotaLimiter::default()),
-            None,
-        );
-
-        let prev_tracker = ::tracker::get_tls_tracker_token();
-        let req_info = RequestInfo {
-            region_id: 0,
-            start_ts: 0,
-            task_id: 0,
-            resource_group_tag: vec![],
-            begin: std::time::Instant::now(),
-            request_type: RequestType::CoprocessorDag,
-            cid: 0,
-            is_external_req: false,
-        };
-        let tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(req_info));
-        set_tls_tracker_token(tracker);
-
-        let handler_builder = Box::new(move |_, _: &_| {
-            let mut response = coppb::Response::default();
-            response.set_data(vec![1, 2, 3, 4]);
-            Ok(UnaryFixture::new(Ok(response)).into_boxed())
-        });
-        let resp = block_on(
-            copr.handle_unary_request(ParseCopRequestResult::default_for_test(handler_builder)),
-        )
-        .unwrap();
-
-        assert_eq!(
-            resp.get_exec_details_v2()
-                .get_ru_v2()
-                .get_coprocessor_response_bytes(),
-            4
-        );
-
-        set_tls_tracker_token(prev_tracker);
-        GLOBAL_TRACKERS.remove(tracker);
-    }
-
-    #[test]
->>>>>>> e707dce956 (coprocessor: use a dedicated semaphore for full-sampling analyze (#19823))
     fn test_error_streaming_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::from(build_read_pool_for_test(
