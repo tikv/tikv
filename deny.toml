@@ -123,6 +123,12 @@ ignore = [
     #
     # See: https://github.com/http-rs/http-types/issues/534
     "RUSTSEC-2026-0174",
+    "RUSTSEC-2026-0190",
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+    "RUSTSEC-2026-0204",
+    "RUSTSEC-2026-0221",
+    "spin@0.10.0",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,
