@@ -49,17 +49,6 @@ version = 2
 yanked = "deny"
 unmaintained = 'workspace'
 ignore = [
-    # Ignore RUSTSEC-2023-0072 as we ban the unsound `X509StoreRef::objects`.
-    #
-    # NB: Upgrading rust-openssl the latest version do fix the issue but it
-    # also upgrade the OpenSSL to v3.x which causes performance degradation.
-    # See https://github.com/openssl/openssl/issues/17064
-    "RUSTSEC-2023-0072",
-    # Ignore RUSTSEC-2024-0357 as there is no `MemBio::get_buf` in TiKV, also
-    # we ban all openssl (Rust) APIs that call `MemBio::get_buf`.
-    #
-    # See https://github.com/sfackler/rust-openssl/pull/2266
-    "RUSTSEC-2024-0357",
     # Ignore RUSTSEC-2021-0145 (unsound issue of "atty" crate) as it only
     # affects Windows plaform which is not supported offically by TiKV, and 2)
     # we have disabled the clap feature "color" so that the "atty" crate is not
@@ -67,20 +56,6 @@ ignore = [
     #
     # TODO: Upgrade clap to v4.x.
     "RUSTSEC-2021-0145",
-    # Ignore RUSTSEC-2025-0004, as it will trigger a recursive upgrade of OpenSSL
-    # to version 3.x.
-    #
-    # NB: Upgrading openssl the version >= 0.10.70 do fix the issue but it
-    # also upgrade the OpenSSL to v3.x which causes performance degradation.
-    # See https://github.com/openssl/openssl/issues/17064
-    "RUSTSEC-2025-0004",
-    # Ignore RUSTSEC-2025-0022, as it will trigger a recursive upgrade of OpenSSL
-    # to version 3.x.
-    #
-    # NB: Upgrading openssl the version >= 0.10.72 do fix the issue but it
-    # also upgrade the OpenSSL to v3.x which causes performance degradation.
-    # See https://github.com/openssl/openssl/issues/17064
-    "RUSTSEC-2025-0022",
     # Ignore RUSTSEC-2024-0436, as there is no widely used replacement of 
     # package 'paste', and the package itself is very stable.
     "RUSTSEC-2024-0436",
@@ -88,12 +63,6 @@ ignore = [
     # replace FxHash. Currently, this package is stable and there are no known
     # exploitable vulnerabilities affecting our use case.
     "RUSTSEC-2025-0057",
-    # Ignore RUSTSEC-2026-0009 temporarily. This advisory comes from the
-    # transitive cloud SDK dependency chain pulling in time 0.3.47. The fixed
-    # time release requires serde 1.0.220 through serde_core, but the current
-    # raft-engine revision in this workspace still hard-pins serde = 1.0.228,
-    # so this cannot be resolved with a lockfile-only update.
-    "RUSTSEC-2026-0009",
     # Ignore RUSTSEC-2026-0097 (unsound issue in rand with a custom logger using
     # rand::rng()). The vulnerability requires a custom logger that calls
     # rand::rng() / thread_rng() during logging, which TiKV does not do.
