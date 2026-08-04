@@ -48,17 +48,6 @@ version = 2
 yanked = "deny"
 unmaintained = 'workspace'
 ignore = [
-    # Ignore RUSTSEC-2023-0072 as we ban the unsound `X509StoreRef::objects`.
-    #
-    # NB: Upgrading rust-openssl the latest version do fix the issue but it
-    # also upgrade the OpenSSL to v3.x which causes performance degradation.
-    # See https://github.com/openssl/openssl/issues/17064
-    "RUSTSEC-2023-0072",
-    # Ignore RUSTSEC-2024-0357 as there is no `MemBio::get_buf` in TiKV, also
-    # we ban all openssl (Rust) APIs that call `MemBio::get_buf`.
-    #
-    # See https://github.com/sfackler/rust-openssl/pull/2266
-    "RUSTSEC-2024-0357",
     # Ignore RUSTSEC-2021-0145 (unsound issue of "atty" crate) as it only
     # affects Windows plaform which is not supported offically by TiKV, and 2)
     # we have disabled the clap feature "color" so that the "atty" crate is not
@@ -66,6 +55,7 @@ ignore = [
     #
     # TODO: Upgrade clap to v4.x.
     "RUSTSEC-2021-0145",
+<<<<<<< HEAD
     # Ignore RUSTSEC-2022-0104 because structopt is only used by tikv-ctl and
     # does not affect the server runtime. This is safe to ignore.
     #
@@ -116,6 +106,19 @@ ignore = [
     # azure_core transitively depends on http-types/rand, which triggers
     # RUSTSEC-2026-0097 (unsound with custom logger). Upstream dependency
     # constraints prevent upgrading at the moment.
+=======
+    # Ignore RUSTSEC-2024-0436, as there is no widely used replacement of 
+    # package 'paste', and the package itself is very stable.
+    "RUSTSEC-2024-0436",
+    # Ignore RUSTSEC-2025-0057 temporarily. We are evaluating alternatives to
+    # replace FxHash. Currently, this package is stable and there are no known
+    # exploitable vulnerabilities affecting our use case.
+    "RUSTSEC-2025-0057",
+    # Ignore RUSTSEC-2026-0097 (unsound issue in rand with a custom logger using
+    # rand::rng()). The vulnerability requires a custom logger that calls
+    # rand::rng() / thread_rng() during logging, which TiKV does not do.
+    # TODO: Upgrade rand to >=0.9.3 or >=0.10.1 when possible.
+>>>>>>> 1c18771c64 (*: upgrade vulnerable Rust dependencies (#19930))
     "RUSTSEC-2026-0097",
     # Ignore RUSTSEC-2026-0174, as it does not introduce safety issues, only
     # violating ASCII invariants. Meanwhile, it only affects the `azure` crate,
