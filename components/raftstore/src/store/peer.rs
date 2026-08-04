@@ -4946,7 +4946,11 @@ where
         }
 
         let current_leader = self.leader_id();
-        if self.transfer_leader_state.reset_if_stale(current_leader) {
+        let current_term = self.term();
+        if self
+            .transfer_leader_state
+            .reset_if_stale(current_leader, current_term)
+        {
             return false;
         }
         let Some((msg, deadline)) = &self.transfer_leader_state.transfer_leader_msg else {
@@ -6560,16 +6564,20 @@ pub struct TransferLeaderState {
 }
 
 impl TransferLeaderState {
-    /// Discards transferee state created for a previous leader.
+    /// Discards transferee state created for a previous leader or term.
     ///
     /// The peer FSM checks pending messages before processing Ready, so the
     /// SoftState cleanup may not have run when this check is made.
+    /// A term change with the same leader ID may not produce a new SoftState,
+    /// so the leader ID alone cannot establish that the request is current.
     /// This check must also happen before deadline evaluation: an expired
-    /// request from the previous leader must be discarded, not ACKed to the
-    /// current leader.
-    pub fn reset_if_stale(&mut self, current_leader: u64) -> bool {
+    /// request from a previous leader or term must be discarded, not ACKed to
+    /// the current leader.
+    pub fn reset_if_stale(&mut self, current_leader: u64, current_term: u64) -> bool {
         let is_stale = match &self.transfer_leader_msg {
-            Some((msg, _)) => msg.get_from() != current_leader,
+            Some((msg, _)) => {
+                msg.get_from() != current_leader || msg.get_log_term() != current_term
+            }
             None => false,
         };
         if is_stale {
@@ -6580,8 +6588,8 @@ impl TransferLeaderState {
 
     /// Clears state created while this peer was a leader transferee.
     ///
-    /// The state is valid only while the Raft SoftState that accepted the
-    /// pre-transfer request remains current.
+    /// The state is valid only while the leader ID and term that accepted the
+    /// pre-transfer request remain current.
     pub fn reset_transferee_state(&mut self) {
         self.transfer_leader_msg = None;
         self.cache_warmup_state = None;
@@ -6690,6 +6698,7 @@ mod tests {
     fn test_reset_transfer_leader_transferee_state() {
         let mut msg = eraftpb::Message::default();
         msg.set_from(1);
+        msg.set_log_term(5);
         let mut state = TransferLeaderState {
             leader_transferee: 10,
             transfer_leader_msg: Some((msg.clone(), Instant::now() - Duration::from_secs(1))),
@@ -6702,15 +6711,19 @@ mod tests {
         };
 
         // Even an expired request must not be ACKed to a different leader.
-        assert!(state.reset_if_stale(2));
+        assert!(state.reset_if_stale(2, 5));
 
         // The leader-side state is handled separately when Ready is processed.
         assert_eq!(state.leader_transferee, 10);
         assert!(state.transfer_leader_msg.is_none());
         assert!(state.cache_warmup_state.is_none());
 
+        state.transfer_leader_msg = Some((msg.clone(), Instant::now() - Duration::from_secs(1)));
+        assert!(state.reset_if_stale(1, 6));
+        assert!(state.transfer_leader_msg.is_none());
+
         state.transfer_leader_msg = Some((msg, Instant::now() - Duration::from_secs(1)));
-        assert!(!state.reset_if_stale(1));
+        assert!(!state.reset_if_stale(1, 5));
         assert!(state.transfer_leader_msg.is_some());
     }
 

@@ -30,7 +30,10 @@ use pd_client::PdClient;
 use protobuf::Message;
 use raft::eraftpb::MessageType;
 use raftstore::{
-    coprocessor::ObserveHandle,
+    coprocessor::{
+        Coprocessor, ObserveHandle, ObserverContext, TransferLeaderObserver,
+        dispatcher::BoxTransferLeaderObserver,
+    },
     store::{
         fsm::{ApplyTask, apply::ChangeObserver},
         msg::Callback,
@@ -42,8 +45,8 @@ use test_coprocessor::{
 };
 use test_raftstore::{
     CloneFilterFactory, Cluster, Direction, RegionPacketFilter, ServerCluster, Simulator,
-    configure_for_merge, get_tso, must_get_equal, new_learner_peer, new_peer, new_put_cf_cmd,
-    new_server_cluster_with_hybrid_engine, sleep_ms,
+    configure_for_merge, get_tso, must_get_equal, new_learner_peer, new_node_cluster, new_peer,
+    new_put_cf_cmd, new_server_cluster_with_hybrid_engine, sleep_ms,
 };
 use test_util::eventually;
 use tidb_query_datatype::{
@@ -1018,6 +1021,132 @@ fn test_new_leader_clears_pending_transfer_leader_warmup() {
     );
     cluster.reset_leader_of_region(region.id);
     assert_eq!(cluster.leader_of_region(region.id), Some(new_peer(3, 3)));
+}
+
+#[test]
+fn test_new_term_clears_pending_transfer_leader_warmup() {
+    #[derive(Clone)]
+    struct WarmupObserver {
+        started: Arc<AtomicBool>,
+        ready: Arc<AtomicBool>,
+    }
+
+    impl Coprocessor for WarmupObserver {}
+
+    impl TransferLeaderObserver for WarmupObserver {
+        fn pre_ack_transfer_leader(
+            &self,
+            _: &mut ObserverContext<'_>,
+            _: &raft::eraftpb::Message,
+        ) -> bool {
+            self.started.store(true, Ordering::SeqCst);
+            self.ready.load(Ordering::SeqCst)
+        }
+    }
+
+    // A node cluster keeps Raft traffic in-process. The observer blocks the
+    // same pre-ACK stage used by IME warmup without depending on server ports.
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.max_entry_cache_warmup_duration.0 = Duration::from_secs(1000);
+    cluster.pd_client.disable_default_operator();
+    let warmup_started = Arc::new(AtomicBool::new(false));
+    let warmup_ready = Arc::new(AtomicBool::new(false));
+    let started = Arc::clone(&warmup_started);
+    let ready = Arc::clone(&warmup_ready);
+    cluster
+        .sim
+        .wl()
+        .post_create_coprocessor_host(Box::new(move |store_id, host| {
+            if store_id == 2 {
+                host.registry.register_transfer_leader_observer(
+                    0,
+                    BoxTransferLeaderObserver::new(WarmupObserver {
+                        started: Arc::clone(&started),
+                        ready: Arc::clone(&ready),
+                    }),
+                );
+            }
+        }));
+    cluster.run();
+
+    let region = cluster.get_region(b"");
+    cluster.must_transfer_leader(region.id, new_peer(1, 1));
+    cluster.must_put(b"k", b"v");
+
+    cluster.transfer_leader(region.id, new_peer(2, 2));
+    eventually(Duration::from_millis(10), Duration::from_secs(5), || {
+        warmup_started.load(Ordering::SeqCst)
+    });
+    let original_term = cluster
+        .raft_local_state(region.id, 2)
+        .get_hard_state()
+        .get_term();
+
+    // Observe and drop a stale ACK from peer 2, if one is emitted after its
+    // blocked pre-ACK preparation finishes.
+    let (stale_ack_tx, stale_ack_rx) = unbounded();
+    let recv_filter = Box::new(
+        RegionPacketFilter::new(region.id, 1)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgTransferLeader)
+            .set_msg_callback(Arc::new(move |msg| {
+                if msg.get_from_peer().get_store_id() == 2 {
+                    stale_ack_tx.send(()).unwrap();
+                }
+            })),
+    );
+    cluster.sim.wl().add_recv_filter(1, recv_filter);
+
+    // Simulate peer 2 missing a peer 1 -> peer 3 -> peer 1 transition. Drop
+    // peer 2's responses so the synthetic newer term does not affect peer 1.
+    let send_filter = Box::new(
+        RegionPacketFilter::new(region.id, 2)
+            .direction(Direction::Send)
+            .skip(MessageType::MsgTransferLeader),
+    );
+    cluster.sim.wl().add_send_filter(2, send_filter);
+    let new_term = original_term + 1;
+    let mut message = raft::eraftpb::Message::default();
+    message.set_msg_type(MessageType::MsgHeartbeat);
+    message.set_from(1);
+    message.set_to(2);
+    message.set_term(new_term);
+    let mut raft_message = RaftMessage::default();
+    raft_message.set_region_id(region.id);
+    raft_message.set_from_peer(new_peer(1, 1));
+    raft_message.set_to_peer(new_peer(2, 2));
+    raft_message.set_region_epoch(region.get_region_epoch().clone());
+    raft_message.set_message(message);
+    cluster.send_raft_msg(raft_message.clone()).unwrap();
+
+    let mut peer2_observed_new_term = false;
+    for _ in 0..50 {
+        let peer2_term = cluster
+            .raft_local_state(region.id, 2)
+            .get_hard_state()
+            .get_term();
+        if peer2_term == new_term {
+            peer2_observed_new_term = true;
+            break;
+        }
+        sleep(Duration::from_millis(100));
+    }
+
+    assert!(
+        peer2_observed_new_term,
+        "peer 2 did not observe the new term"
+    );
+
+    // Let the pre-ACK preparation complete, then wake peer 2. Without the term
+    // check, it would ACK the pending request using the newer term.
+    warmup_ready.store(true, Ordering::SeqCst);
+    cluster.send_raft_msg(raft_message).unwrap();
+    assert!(
+        stale_ack_rx.recv_timeout(Duration::from_secs(1)).is_err(),
+        "peer 2 ACKed a transfer request from the previous term"
+    );
+    cluster.reset_leader_of_region(region.id);
+    assert_eq!(cluster.leader_of_region(region.id), Some(new_peer(1, 1)));
 }
 
 #[test]

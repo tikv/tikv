@@ -263,9 +263,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return false;
         }
         let current_leader = self.leader_id();
+        let current_term = self.term();
         if self
             .transfer_leader_state_mut()
-            .reset_if_stale(current_leader)
+            .reset_if_stale(current_leader, current_term)
         {
             return false;
         }
