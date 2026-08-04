@@ -38,7 +38,6 @@ mod all {
         HandyRwLock, box_err,
         config::{ReadableDuration, ReadableSize},
         defer,
-        thread_name_prefix::BACKUP_STREAM_THREAD,
     };
     use txn_types::Key;
     use walkdir::WalkDir;
@@ -622,7 +621,7 @@ mod all {
             .nodes(1)
             .build();
         let task = "unregister_during_flush";
-        let service_id = format!("{}-{}-{}", BACKUP_STREAM_THREAD, task, 1);
+        let service_id = format!("backup-stream-{}-{}", task, 1);
         let (paused_tx, paused_rx) = sync_channel(0);
         let (resume_tx, resume_rx) = sync_channel(0);
         let resume_rx = Mutex::new(resume_rx);
@@ -676,7 +675,7 @@ mod all {
             .nodes(1)
             .build();
         let task = "cleanup_same_name_task";
-        let service_id = format!("{}-{}-{}", BACKUP_STREAM_THREAD, task, 1);
+        let service_id = format!("backup-stream-{}-{}", task, 1);
         let (observer_paused_tx, observer_paused_rx) = sync_channel(0);
         let (observer_resume_tx, observer_resume_rx) = sync_channel(0);
         let observer_resume_rx = Mutex::new(observer_resume_rx);
