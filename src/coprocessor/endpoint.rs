@@ -32,7 +32,7 @@ use tidb_query_common::{
     storage::{FindRegionResult, RegionStorageAccessor, Result as StorageResult},
 };
 use tikv_alloc::trace::MemoryTraceGuard;
-use tikv_kv::{ExtraRegionOverride, SnapshotExt};
+use tikv_kv::{ExtraRegionOverride, LeaderHintProvider, SnapshotExt};
 use tikv_util::{
     deadline::set_deadline_exceeded_busy_error,
     future::async_timeout,
@@ -108,6 +108,12 @@ pub struct Endpoint<E: Engine> {
     quota_limiter: Arc<QuotaLimiter>,
     resource_ctl: Option<Arc<ResourceGroupManager>>,
 
+    /// Hints whether the local store is the leader of a region. Used to
+    /// report `NotLeader` instead of `ServerIsBusy` when a leader read is
+    /// rejected because the read pool is full, see
+    /// [`cop_pool_full_reject_error`].
+    leader_hint: Option<LeaderHintProvider>,
+
     _phantom: PhantomData<E>,
 }
 
@@ -182,6 +188,7 @@ impl<E: Engine> Endpoint<E> {
         resource_tag_factory: ResourceTagFactory,
         quota_limiter: Arc<QuotaLimiter>,
         resource_ctl: Option<Arc<ResourceGroupManager>>,
+        leader_hint: Option<LeaderHintProvider>,
     ) -> Self {
         let (shared_semaphore, background_limited_semaphore) =
             Self::build_request_semaphores(&read_pool, cfg.end_point_max_concurrency);
@@ -203,6 +210,7 @@ impl<E: Engine> Endpoint<E> {
             slow_log_threshold: cfg.end_point_slow_log_threshold.0,
             quota_limiter,
             resource_ctl,
+            leader_hint,
             _phantom: Default::default(),
         }
     }
@@ -691,6 +699,9 @@ impl<E: Engine> Endpoint<E> {
             )
         });
         // box the tracker so that moving it is cheap.
+        let region_id = req_ctx.context.get_region_id();
+        let is_leader_read =
+            !req_ctx.context.get_replica_read() && !req_ctx.context.get_stale_read();
         let tracker = Box::new(Tracker::new(req_ctx, req_tag, self.slow_log_threshold));
         allocated_bytes += tracker.approximate_mem_size();
 
@@ -707,6 +718,8 @@ impl<E: Engine> Endpoint<E> {
         });
         let spawn_fut_result = self.read_pool_spawn_with_memory_quota_check(
             allocated_bytes,
+            region_id,
+            is_leader_read,
             future,
             priority,
             task_id,
@@ -991,6 +1004,9 @@ impl<E: Engine> Endpoint<E> {
         let mut allocated_bytes = resource_tag.approximate_heap_size();
 
         let task_id = req_ctx.build_task_id();
+        let region_id = req_ctx.context.get_region_id();
+        let is_leader_read =
+            !req_ctx.context.get_replica_read() && !req_ctx.context.get_stale_read();
         let tracker = Box::new(Tracker::new(req_ctx, req_tag, self.slow_log_threshold));
         allocated_bytes += tracker.approximate_mem_size();
 
@@ -1008,6 +1024,8 @@ impl<E: Engine> Endpoint<E> {
 
         let spawn_fut = self.read_pool_spawn_with_memory_quota_check(
             allocated_bytes,
+            region_id,
+            is_leader_read,
             future,
             priority,
             task_id,
@@ -1018,10 +1036,9 @@ impl<E: Engine> Endpoint<E> {
         // On first poll, drives spawn_fut (sleep if delayed, then submit to
         // yatp). On error yields one error item. Then chains with rx items.
         let stream = futures::stream::once(Box::pin(async move {
-            spawn_fut
-                .await
-                .err()
-                .map(|_| Err(Error::MaxPendingTasksExceeded))
+            // Preserve the actual error (e.g. NotLeader) built by
+            // `read_pool_spawn_with_memory_quota_check`.
+            spawn_fut.await.err().map(Err)
         }))
         .filter_map(futures::future::ready)
         .chain(rx);
@@ -1060,6 +1077,8 @@ impl<E: Engine> Endpoint<E> {
     fn read_pool_spawn_with_memory_quota_check<F>(
         &self,
         mut allocated_bytes: usize,
+        region_id: u64,
+        is_leader_read: bool,
         future: F,
         priority: CommandPri,
         task_id: u64,
@@ -1076,11 +1095,39 @@ impl<E: Engine> Endpoint<E> {
             // Release quota after handle completed.
             drop(owned_quota);
         });
+        let leader_hint = self.leader_hint.clone();
         Ok(self
             .read_pool
             .spawn(fut, priority, task_id, metadata, resource_limiter)
-            .map(|r| r.map_err(|_| Error::MaxPendingTasksExceeded))
+            .map(move |r| {
+                r.map_err(move |_| {
+                    cop_pool_full_reject_error(leader_hint.as_ref(), is_leader_read, region_id)
+                })
+            })
             .boxed())
+    }
+}
+
+/// Builds the error for a coprocessor request rejected because the read pool
+/// cannot accept more tasks.
+///
+/// Same rationale as `storage::pool_full_reject_error`: the rejection happens
+/// before the request reaches the raft layer, so when this store locally
+/// knows it is no longer the leader of the region, a `NotLeader` region
+/// error is returned instead of `ServerIsBusy` (`MaxPendingTasksExceeded`)
+/// to let the client refresh its stale route. Only applies to leader reads;
+/// without a hint the behavior is unchanged.
+fn cop_pool_full_reject_error(
+    leader_hint: Option<&LeaderHintProvider>,
+    is_leader_read: bool,
+    region_id: u64,
+) -> Error {
+    if is_leader_read && leader_hint.and_then(|h| h(region_id)) == Some(false) {
+        let mut err = kvproto::errorpb::Error::default();
+        err.mut_not_leader().set_region_id(region_id);
+        Error::Region(err)
+    } else {
+        Error::MaxPendingTasksExceeded
     }
 }
 
@@ -1599,6 +1646,7 @@ mod tests {
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
             None,
+            None,
         );
         (endpoint, read_pool)
     }
@@ -1617,6 +1665,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
             None,
         );
 
@@ -1667,6 +1716,7 @@ mod tests {
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
             None,
+            None,
         );
         copr.recursion_limit = 100;
 
@@ -1706,6 +1756,7 @@ mod tests {
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
             None,
+            None,
         );
 
         let mut req = coppb::Request::default();
@@ -1729,6 +1780,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
             None,
         );
 
@@ -1778,6 +1830,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
             None,
         );
 
@@ -1831,6 +1884,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
             None,
         );
 
@@ -2030,6 +2084,7 @@ mod tests {
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
             None,
+            None,
         );
 
         let prev_tracker = ::tracker::get_tls_tracker_token();
@@ -2081,6 +2136,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
             None,
         );
 
@@ -2136,6 +2192,7 @@ mod tests {
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
             None,
+            None,
         );
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
@@ -2164,6 +2221,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
             None,
         );
 
@@ -2265,6 +2323,7 @@ mod tests {
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
             None,
+            None,
         );
 
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -2334,6 +2393,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
             None,
         );
 
@@ -2742,6 +2802,7 @@ mod tests {
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
             None,
+            None,
         );
 
         {
@@ -2829,6 +2890,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
             None,
         );
         let mut req = coppb::Request::default();
@@ -2969,6 +3031,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
             None,
         );
 
@@ -3499,5 +3562,38 @@ mod tests {
             assert_eq!(key, b"key".to_vec());
             true
         }));
+    }
+
+    #[test]
+    fn test_cop_pool_full_reject_error() {
+        let region_id = 42;
+        let not_leader_hint: LeaderHintProvider = Arc::new(|_| Some(false));
+        let leader_hint: LeaderHintProvider = Arc::new(|_| Some(true));
+
+        // Leader read on a store that is known not to be the leader: report
+        // NotLeader so that the client refreshes its stale route.
+        match cop_pool_full_reject_error(Some(&not_leader_hint), true, region_id) {
+            Error::Region(err) => {
+                assert!(err.has_not_leader());
+                assert_eq!(err.get_not_leader().get_region_id(), region_id);
+            }
+            other => panic!("expected NotLeader region error, got {:?}", other),
+        }
+
+        // The store is still the leader, or no hint is available: keep the
+        // previous MaxPendingTasksExceeded (ServerIsBusy) behavior.
+        for hint in [Some(&leader_hint), None] {
+            match cop_pool_full_reject_error(hint, true, region_id) {
+                Error::MaxPendingTasksExceeded => {}
+                other => panic!("expected MaxPendingTasksExceeded, got {:?}", other),
+            }
+        }
+
+        // Replica / stale reads may legitimately target followers: keep
+        // MaxPendingTasksExceeded.
+        match cop_pool_full_reject_error(Some(&not_leader_hint), false, region_id) {
+            Error::MaxPendingTasksExceeded => {}
+            other => panic!("expected MaxPendingTasksExceeded, got {:?}", other),
+        }
     }
 }

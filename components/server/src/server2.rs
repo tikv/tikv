@@ -833,6 +833,11 @@ where
         let node = self.node.as_ref().unwrap();
 
         // Create coprocessor endpoint.
+        let region_leaders = self.region_info_accessor.as_ref().unwrap().region_leaders();
+        let copr_leader_hint: tikv::storage::kv::LeaderHintProvider =
+            Arc::new(move |region_id: u64| {
+                Some(region_leaders.read().unwrap().contains(&region_id))
+            });
         let copr = coprocessor::Endpoint::new(
             &server_config.value(),
             cop_read_pool_handle,
@@ -840,6 +845,7 @@ where
             resource_tag_factory,
             self.quota_limiter.clone(),
             self.resource_manager.clone(),
+            Some(copr_leader_hint),
         );
         let copr_config_manager = copr.config_manager();
 

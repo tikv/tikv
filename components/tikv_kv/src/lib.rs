@@ -358,6 +358,14 @@ pub struct SnapContext<'a> {
     pub extra_region_override: Option<ExtraRegionOverride>,
 }
 
+/// Provides a best-effort hint about whether the local store currently
+/// believes it is the leader of a region. See [`Engine::local_leader_hint`].
+///
+/// Unlike [`Engine::local_leader_hint`], this is intended for components that
+/// do not hold an [`Engine`] instance (e.g. the coprocessor endpoint, which
+/// accesses the engine only through TLS on read-pool threads).
+pub type LeaderHintProvider = Arc<dyn Fn(u64) -> Option<bool> + Send + Sync>;
+
 /// Engine defines the common behaviour for a storage engine type.
 pub trait Engine: Send + Clone + 'static {
     type Snap: Snapshot;
@@ -410,7 +418,6 @@ pub trait Engine: Send + Clone + 'static {
     fn local_leader_hint(&self, _region_id: u64) -> Option<bool> {
         None
     }
-
     type WriteRes: Stream<Item = WriteEvent> + Unpin + Send + 'static;
     /// Writes data to the engine asynchronously.
     ///
