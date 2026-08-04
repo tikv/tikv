@@ -894,11 +894,18 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         // Unset the TLS tracker because the future below does not belong to any
         // specific request
         clear_tls_tracker_token();
+        // The pool-full rejection applies to the whole batch, so only convert
+        // it to NotLeader when every request is a leader read of the same
+        // region. `ReqBatcher` does not enforce same-region batching (it only
+        // filters by priority), so mixed batches fall back to SchedTooBusy.
+        let region_id = requests[0].get_context().get_region_id();
+        let uniform_leader_read = requests.iter().all(|r| {
+            let ctx = r.get_context();
+            ctx.get_region_id() == region_id && !ctx.get_replica_read() && !ctx.get_stale_read()
+        });
         self.read_pool_spawn_with_busy_check(
-            // All requests in a batch share the same region and read type.
-            requests[0].get_context().get_region_id(),
-            !requests[0].get_context().get_replica_read()
-                && !requests[0].get_context().get_stale_read(),
+            region_id,
+            uniform_leader_read,
             busy_threshold,
             async move {
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
@@ -2198,10 +2205,18 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .resource_tag_factory
             .new_tag_with_key_ranges(rand_ctx, vec![(rand_key.clone(), rand_key)]);
 
+        // The pool-full rejection applies to the whole batch, so only convert
+        // it to NotLeader when every request is a leader read of the same
+        // region. `ReqBatcher` does not enforce same-region batching (it only
+        // filters by priority), so mixed batches fall back to SchedTooBusy.
+        let region_id = gets[0].get_context().get_region_id();
+        let uniform_leader_read = gets.iter().all(|r| {
+            let ctx = r.get_context();
+            ctx.get_region_id() == region_id && !ctx.get_replica_read() && !ctx.get_stale_read()
+        });
         self.read_pool_spawn_with_busy_check(
-            // All requests in a batch share the same region and read type.
-            gets[0].get_context().get_region_id(),
-            !gets[0].get_context().get_replica_read() && !gets[0].get_context().get_stale_read(),
+            region_id,
+            uniform_leader_read,
             busy_threshold,
             async move {
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();

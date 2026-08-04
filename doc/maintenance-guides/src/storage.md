@@ -132,6 +132,23 @@ High-risk contracts:
   enforced.
 - Memory quota and pending-write thresholds must remain operationally effective.
 
+## Read-Pool Rejection Error Contract
+
+- Leader reads rejected because the unified read pool is full
+  (`read_pool_spawn_with_busy_check`, and the coprocessor
+  `read_pool_spawn_with_memory_quota_check`) return a `NotLeader` region error
+  instead of `ServerIsBusy` when the local `region_leaders` set says this
+  store is no longer the leader of the requested region. The rejection happens
+  before the raft layer, so without the conversion clients would keep retrying
+  a stale cached leader (tikv/client-go#2028).
+- The conversion only applies to leader reads (`!replica_read && !stale_read`);
+  replica/stale reads, engines without leader knowledge, and multi-region or
+  mixed-mode batches keep the previous `SchedTooBusy` /
+  `MaxPendingTasksExceeded` (`ServerIsBusy`) behavior.
+- The hint is best-effort and may lag raft role changes; a false `NotLeader`
+  only costs one extra PD re-resolution, and a missed conversion degrades to
+  the previous behavior.
+
 ## Observability And Operational Signals
 
 - scheduler latency, latch wait, and pending-write signals

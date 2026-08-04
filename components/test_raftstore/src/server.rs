@@ -560,6 +560,11 @@ impl ServerCluster {
             &tikv::config::CoprReadPoolConfig::default_for_test(),
             store.get_engine(),
         ));
+        let copr_region_leaders = region_info_accessor.region_leaders();
+        let copr_leader_hint: tikv::storage::kv::LeaderHintProvider =
+            Arc::new(move |region_id: u64| {
+                Some(copr_region_leaders.read().unwrap().contains(&region_id))
+            });
         let copr = coprocessor::Endpoint::new(
             &server_cfg.value().clone(),
             cop_read_pool.handle(),
@@ -567,6 +572,7 @@ impl ServerCluster {
             res_tag_factory,
             quota_limiter,
             resource_manager.clone(),
+            Some(copr_leader_hint),
         );
         let copr_v2 = coprocessor_v2::Endpoint::new(&cfg.coprocessor_v2);
         let mut server = None;
