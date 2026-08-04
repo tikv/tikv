@@ -519,7 +519,7 @@ impl<'client> S3Uploader<'client> {
         } else {
             // Otherwise, use multipart upload to improve robustness.
             self.upload_id = retry_and_count(|| self.begin(), "begin_upload").await?;
-            let upload_res = async {
+            let upload_res = Box::pin(async {
                 let mut buf = vec![0; effective_part_size];
                 let mut part_number = 1;
                 loop {
@@ -527,16 +527,16 @@ impl<'client> S3Uploader<'client> {
                     if data_size == 0 {
                         break;
                     }
-                    let part = retry_and_count(
+                    let part = Box::pin(retry_and_count(
                         || self.upload_part(part_number, &buf[..data_size]),
                         "upload_part",
-                    )
+                    ))
                     .await?;
                     self.parts.push(part);
                     part_number += 1;
                 }
                 Ok(())
-            }
+            })
             .await;
 
             if upload_res.is_ok() {
@@ -874,7 +874,7 @@ impl IterableStorage for S3Storage {
 
 #[cfg(test)]
 mod tests {
-    use std::{assert_matches::assert_matches, ffi::OsString};
+    use std::ffi::OsString;
 
     use aws_sdk_s3::{config::Credentials, primitives::SdkBody};
     use aws_smithy_runtime::{
@@ -1553,11 +1553,11 @@ mod tests {
 
         let mut data = AllowStdIo::new(ThrottleRead(Cursor::new(b"muthologia.")));
         let mut buf = vec![0u8; 6];
-        assert_matches!(try_read_exact(&mut data, &mut buf).await, Ok(6));
+        assert!(matches!(try_read_exact(&mut data, &mut buf).await, Ok(6)));
         assert_eq!(buf, b"muthol");
-        assert_matches!(try_read_exact(&mut data, &mut buf).await, Ok(5));
+        assert!(matches!(try_read_exact(&mut data, &mut buf).await, Ok(5)));
         assert_eq!(&buf[..5], b"ogia.");
-        assert_matches!(try_read_exact(&mut data, &mut buf).await, Ok(0));
+        assert!(matches!(try_read_exact(&mut data, &mut buf).await, Ok(0)));
     }
 
     #[test]

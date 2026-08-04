@@ -811,20 +811,20 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
             }
             true
         });
-        if let Some(s) = self.kv_statistics.as_ref()
-            && let Some(s) = s.to_string()
-        {
-            kv_str.push_str(&s);
+        if let Some(s) = self.kv_statistics.as_ref() {
+            if let Some(s) = s.to_string() {
+                kv_str.push_str(&s);
+            }
         }
         Ok(kv_str)
     }
 
     fn dump_raft_stats(&self) -> Result<String> {
         let mut raft_str = box_try!(RaftEngine::dump_stats(&self.raft_engine));
-        if let Some(s) = self.raft_statistics.as_ref()
-            && let Some(s) = s.to_string()
-        {
-            raft_str.push_str(&s);
+        if let Some(s) = self.raft_statistics.as_ref() {
+            if let Some(s) = s.to_string() {
+                raft_str.push_str(&s);
+            }
         }
         Ok(raft_str)
     }
@@ -841,7 +841,7 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
     fn get_store_ident(&self) -> Result<StoreIdent> {
         self.raft_engine
             .get_store_ident()
-            .map_err(|e| Error::EngineTrait(e))
+            .map_err(Error::EngineTrait)
             .and_then(|ident| match ident {
                 Some(ident) => Ok(ident),
                 None => Err(Error::NotFound("No store ident key".to_owned())),
@@ -930,7 +930,7 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
             let talbet = tablet_cache.latest().unwrap();
             let mut prop = dump_write_cf_properties(
                 talbet,
-                start_key.as_ref().map(|k| (k.as_bytes())).unwrap_or(start),
+                start_key.as_ref().map(|k| k.as_bytes()).unwrap_or(start),
                 end_key.as_ref().map(|k| k.as_bytes()).unwrap_or(end),
             )
             .unwrap();
@@ -1179,7 +1179,7 @@ fn deivde_regions_for_concurrency<ER: RaftEngine>(
         region_sizes.push((region_size, region_state));
         total_size += region_size;
     }
-    region_sizes.sort_by(|a, b| a.0.cmp(&b.0));
+    region_sizes.sort_by_key(|a| a.0);
 
     let group_size = total_size.div_ceil(threads);
     let mut cur_group = vec![];
@@ -1751,7 +1751,7 @@ mod tests {
         debugger.raft_engine.consume(&mut lb, true).unwrap();
 
         let mut bad_regions = debugger.bad_regions().unwrap();
-        bad_regions.sort_by(|a, b| a.0.cmp(&b.0));
+        bad_regions.sort_by_key(|a| a.0);
         assert_eq!(bad_regions.len(), 4);
         for (i, (region_id, _)) in bad_regions.into_iter().enumerate() {
             assert_eq!(region_id, (10 + i) as u64);

@@ -52,8 +52,11 @@ impl<T: Copy> PeekableRemoteStat<T> {
     /// The pointer should not be dangling. (i.e. the thread to be traced should
     /// be accessible.)
     unsafe fn peek(&self) -> Option<T> {
-        self.0
-            .map(|nlp| unsafe { core::intrinsics::atomic_load_seqcst(nlp.as_ptr()) })
+        self.0.map(|nlp| unsafe {
+            core::intrinsics::atomic_load::<T, { core::intrinsics::AtomicOrdering::SeqCst }>(
+                nlp.as_ptr(),
+            )
+        })
     }
 
     fn from_raw(ptr: *mut T) -> Self {

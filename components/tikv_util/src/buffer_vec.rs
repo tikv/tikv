@@ -341,12 +341,12 @@ impl<'a> Extend<&'a u8> for WithConcatExtend<'_> {
 
 impl BufferWriter for WithConcatExtend<'_> {
     unsafe fn bytes_mut(&mut self, size: usize) -> &mut [u8] {
-        self.0.data.bytes_mut(size)
+        unsafe { self.0.data.bytes_mut(size) }
     }
 
     #[inline]
     unsafe fn advance_mut(&mut self, count: usize) {
-        self.0.data.advance_mut(count)
+        unsafe { self.0.data.advance_mut(count) }
     }
 
     #[inline]

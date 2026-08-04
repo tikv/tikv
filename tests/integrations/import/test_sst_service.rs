@@ -642,7 +642,7 @@ fn test_suspend_import() {
         "{:?}",
         ingest_res
     );
-    let multi_ingest_res = multi_ingest(&[sst.clone()]).unwrap();
+    let multi_ingest_res = multi_ingest(std::slice::from_ref(&sst)).unwrap();
     assert!(
         multi_ingest_res.get_error().has_server_is_busy(),
         "{:?}",

@@ -630,6 +630,7 @@ impl AsyncRead for ForRead {
         defer! {
             TEMP_FILE_READ_POLL_DURATION.observe(begin.elapsed().as_secs_f64())
         }
+        #[allow(clippy::unnecessary_unwrap)]
         if this.read == 0 && this.myfile.is_some() {
             let old = buf.remaining();
             let ext_file = Pin::new(this.myfile.as_mut().unwrap());

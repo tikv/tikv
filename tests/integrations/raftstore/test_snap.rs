@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    assert_matches::assert_matches,
     fs,
     path::PathBuf,
     sync::{
@@ -1333,7 +1332,9 @@ fn test_extra_snapshot_override() {
         .snapshot(snap_ctx.clone())
         .err()
         .unwrap();
-    assert_matches!(err, Error(box ErrorInner::Request(header)) if header.stale_command.is_some());
+    assert!(
+        matches!(err, Error(box ErrorInner::Request(header)) if header.stale_command.is_some())
+    );
     snap_ctx.extra_region_override.as_mut().unwrap().check_term = None;
 
     // If `extra_snap_override`.`term` is set with a valid value, should return
@@ -1359,7 +1360,9 @@ fn test_extra_snapshot_override() {
         .snapshot(snap_ctx.clone())
         .err()
         .unwrap();
-    assert_matches!(err, Error(box ErrorInner::Request(header)) if header.epoch_not_match.is_some());
+    assert!(
+        matches!(err, Error(box ErrorInner::Request(header)) if header.epoch_not_match.is_some())
+    );
     snap_ctx
         .extra_region_override
         .as_mut()
@@ -1384,5 +1387,5 @@ fn test_extra_snapshot_override() {
         .snapshot(snap_ctx.clone())
         .err()
         .unwrap();
-    assert_matches!(err, Error(box ErrorInner::Request(header)) if header.not_leader.is_some());
+    assert!(matches!(err, Error(box ErrorInner::Request(header)) if header.not_leader.is_some()));
 }

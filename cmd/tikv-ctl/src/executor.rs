@@ -1319,14 +1319,14 @@ where
 
 fn handle_engine_error(err: EngineError) -> ! {
     error!("error while open kvdb: {}", err);
-    if let EngineError::Engine(s) = err {
-        if s.state().contains(LOCK_FILE_ERROR) {
-            error!(
-                "LOCK file conflict indicates TiKV process is running. \
+    if let EngineError::Engine(s) = err
+        && s.state().contains(LOCK_FILE_ERROR)
+    {
+        error!(
+            "LOCK file conflict indicates TiKV process is running. \
                 Do NOT delete the LOCK file and force the command to run. \
                 Doing so could cause data corruption."
-            );
-        }
+        );
     }
 
     tikv_util::logger::exit_process_gracefully(-1);

@@ -382,22 +382,19 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
 
     #[inline]
     fn incremental_get_take_statistics(&mut self) -> Statistics {
-        if self.point_getter_cache.is_none() {
-            Statistics::default()
+        if let Some(cache) = &mut self.point_getter_cache {
+            cache.take_statistics()
         } else {
-            self.point_getter_cache.as_mut().unwrap().take_statistics()
+            Statistics::default()
         }
     }
 
     #[inline]
     fn incremental_get_met_newer_ts_data(&self) -> NewerTsCheckState {
-        if self.point_getter_cache.is_none() {
-            NewerTsCheckState::Unknown
+        if let Some(ref cache) = self.point_getter_cache {
+            cache.met_newer_ts_data()
         } else {
-            self.point_getter_cache
-                .as_ref()
-                .unwrap()
-                .met_newer_ts_data()
+            NewerTsCheckState::Unknown
         }
     }
 
@@ -1306,7 +1303,7 @@ mod tests {
 
         FixtureStore::new(
             data.into_iter()
-                .map(|(k, v)| (k, v.map(|val| ValueEntry::from_value(val))))
+                .map(|(k, v)| (k, v.map(ValueEntry::from_value)))
                 .collect(),
         )
     }

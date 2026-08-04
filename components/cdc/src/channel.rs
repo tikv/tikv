@@ -484,7 +484,6 @@ where
 #[cfg(test)]
 mod tests {
     use std::{
-        assert_matches::assert_matches,
         sync::{Arc, mpsc},
         time::Duration,
     };
@@ -527,7 +526,10 @@ mod tests {
 
             let memory_quota = rx.memory_quota.clone();
             let mut drain = rx.drain();
-            assert_matches!(block_on(drain.next()), Some((CdcEvent::Event(_), _)));
+            assert!(matches!(
+                block_on(drain.next()),
+                Some((CdcEvent::Event(_), _))
+            ));
             assert_eq!(memory_quota.in_use(), size);
         }
         {
@@ -564,15 +566,27 @@ mod tests {
         let mut drain = rx.drain();
         brx1.recv_timeout(Duration::from_millis(100)).unwrap_err();
         brx2.recv_timeout(Duration::from_millis(100)).unwrap_err();
-        assert_matches!(block_on(drain.next()), Some((CdcEvent::Event(_), _)));
+        assert!(matches!(
+            block_on(drain.next()),
+            Some((CdcEvent::Event(_), _))
+        ));
         brx1.recv_timeout(Duration::from_millis(100)).unwrap_err();
         brx2.recv_timeout(Duration::from_millis(100)).unwrap_err();
-        assert_matches!(block_on(drain.next()), Some((CdcEvent::Barrier(_), _)));
+        assert!(matches!(
+            block_on(drain.next()),
+            Some((CdcEvent::Barrier(_), _))
+        ));
         brx1.recv_timeout(Duration::from_millis(100)).unwrap();
         brx2.recv_timeout(Duration::from_millis(100)).unwrap_err();
-        assert_matches!(block_on(drain.next()), Some((CdcEvent::ResolvedTs(_), _)));
+        assert!(matches!(
+            block_on(drain.next()),
+            Some((CdcEvent::ResolvedTs(_), _))
+        ));
         brx2.recv_timeout(Duration::from_millis(100)).unwrap_err();
-        assert_matches!(block_on(drain.next()), Some((CdcEvent::Barrier(_), _)));
+        assert!(matches!(
+            block_on(drain.next()),
+            Some((CdcEvent::Barrier(_), _))
+        ));
         brx2.recv_timeout(Duration::from_millis(100)).unwrap();
         brx1.recv_timeout(Duration::from_millis(100)).unwrap_err();
         brx2.recv_timeout(Duration::from_millis(100)).unwrap_err();
@@ -615,7 +629,10 @@ mod tests {
         for _ in 0..buffer {
             send(CdcEvent::Event(e.clone())).unwrap();
         }
-        assert_matches!(send(CdcEvent::Event(e)).unwrap_err(), SendError::Congested);
+        assert!(matches!(
+            send(CdcEvent::Event(e)).unwrap_err(),
+            SendError::Congested
+        ));
     }
 
     #[test]
@@ -636,10 +653,10 @@ mod tests {
                 send(CdcEvent::Event(e.clone())).unwrap();
             }
 
-            assert_matches!(
+            assert!(matches!(
                 send(CdcEvent::Event(e.clone())).unwrap_err(),
                 SendError::Congested
-            );
+            ));
 
             let memory_quota = rx.memory_quota.clone();
             assert_eq!(memory_quota.capacity(), 1024);
@@ -664,7 +681,10 @@ mod tests {
 
             let new_capacity = 1024 - event.size();
             memory_quota.set_capacity(new_capacity as usize);
-            assert_matches!(send(CdcEvent::Event(e)).unwrap_err(), SendError::Congested);
+            assert!(matches!(
+                send(CdcEvent::Event(e)).unwrap_err(),
+                SendError::Congested
+            ));
             assert_eq!(memory_quota.capacity(), new_capacity as usize);
         }
     }
@@ -684,11 +704,11 @@ mod tests {
             tx.unbounded_send(CdcEvent::Event(e.clone()), false)
                 .unwrap();
         }
-        assert_matches!(
+        assert!(matches!(
             tx.unbounded_send(CdcEvent::Event(e.clone()), false)
                 .unwrap_err(),
             SendError::Congested
-        );
+        ));
         tx.unbounded_send(CdcEvent::Event(e), true).unwrap();
     }
 
@@ -709,7 +729,7 @@ mod tests {
                 match send(CdcEvent::Event(e.clone())) {
                     Ok(_) => (),
                     Err(e) => {
-                        assert_matches!(e, SendError::Congested);
+                        assert!(matches!(e, SendError::Congested));
                         break;
                     }
                 }
@@ -726,7 +746,7 @@ mod tests {
                 match send(CdcEvent::Event(e.clone())) {
                     Ok(_) => (),
                     Err(e) => {
-                        assert_matches!(e, SendError::Congested);
+                        assert!(matches!(e, SendError::Congested));
                         break;
                     }
                 }

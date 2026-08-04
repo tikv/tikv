@@ -288,11 +288,11 @@ mod tests {
 
         // a acquire lock success
         let acquired_a = latches.acquire(&mut lock_a, cid_a);
-        assert_eq!(acquired_a, true);
+        assert!(acquired_a);
 
         // b acquire lock failed
         let mut acquired_b = latches.acquire(&mut lock_b, cid_b);
-        assert_eq!(acquired_b, false);
+        assert!(!acquired_b);
 
         // a release lock, and get wakeup list
         let wakeup = latches.release(&lock_a, cid_a, None);
@@ -300,7 +300,7 @@ mod tests {
 
         // b acquire lock success
         acquired_b = latches.acquire(&mut lock_b, cid_b);
-        assert_eq!(acquired_b, true);
+        assert!(acquired_b);
     }
 
     #[test]
@@ -319,15 +319,15 @@ mod tests {
 
         // a acquire lock success
         let acquired_a = latches.acquire(&mut lock_a, cid_a);
-        assert_eq!(acquired_a, true);
+        assert!(acquired_a);
 
         // b acquire lock success
         let acquired_b = latches.acquire(&mut lock_b, cid_b);
-        assert_eq!(acquired_b, true);
+        assert!(acquired_b);
 
         // c acquire lock failed, cause a occupied slot 3
         let mut acquired_c = latches.acquire(&mut lock_c, cid_c);
-        assert_eq!(acquired_c, false);
+        assert!(!acquired_c);
 
         // a release lock, and get wakeup list
         let wakeup = latches.release(&lock_a, cid_a, None);
@@ -335,7 +335,7 @@ mod tests {
 
         // c acquire lock failed again, cause b occupied slot 4
         acquired_c = latches.acquire(&mut lock_c, cid_c);
-        assert_eq!(acquired_c, false);
+        assert!(!acquired_c);
 
         // b release lock, and get wakeup list
         let wakeup = latches.release(&lock_b, cid_b, None);
@@ -343,7 +343,7 @@ mod tests {
 
         // finally c acquire lock success
         acquired_c = latches.acquire(&mut lock_c, cid_c);
-        assert_eq!(acquired_c, true);
+        assert!(acquired_c);
     }
 
     #[test]
@@ -364,19 +364,19 @@ mod tests {
         let cid_d: u64 = 4;
 
         let acquired_a = latches.acquire(&mut lock_a, cid_a);
-        assert_eq!(acquired_a, true);
+        assert!(acquired_a);
 
         // c acquire lock failed, cause a occupied slot 3
         let mut acquired_c = latches.acquire(&mut lock_c, cid_c);
-        assert_eq!(acquired_c, false);
+        assert!(!acquired_c);
 
         // b acquire lock success
         let acquired_b = latches.acquire(&mut lock_b, cid_b);
-        assert_eq!(acquired_b, true);
+        assert!(acquired_b);
 
         // d acquire lock failed, cause a occupied slot 7
         let mut acquired_d = latches.acquire(&mut lock_d, cid_d);
-        assert_eq!(acquired_d, false);
+        assert!(!acquired_d);
 
         // a release lock, and get wakeup list
         let wakeup = latches.release(&lock_a, cid_a, None);
@@ -384,7 +384,7 @@ mod tests {
 
         // c acquire lock success
         acquired_c = latches.acquire(&mut lock_c, cid_c);
-        assert_eq!(acquired_c, true);
+        assert!(acquired_c);
 
         // b release lock, and get wakeup list
         let wakeup = latches.release(&lock_b, cid_b, None);
@@ -392,7 +392,7 @@ mod tests {
 
         // finally d acquire lock success
         acquired_d = latches.acquire(&mut lock_d, cid_d);
-        assert_eq!(acquired_d, true);
+        assert!(acquired_d);
     }
 
     fn check_latch_holder(latches: &Latches, key: &[u8], expected_holder_cid: Option<u64>) {
