@@ -830,6 +830,10 @@ impl ReadPoolConfigRunner {
         // cycle, so it must keep ticking even with auto-adjust off — which is
         // the default. Only the thread-utilization ladder below is gated on it.
         if !self.auto_adjust && scheduling_rm.is_none() {
+            // Clear stale phase flags so they don't go live on re-enable.
+            if let Some(rm) = resource_manager.as_ref() {
+                rm.reset_group_priorities();
+            }
             return;
         }
 
@@ -1688,6 +1692,57 @@ mod tests {
         assert_eq!(
             runner.cur_thread_count, before,
             "pool must not scale when both fair scheduling and auto-adjust are off"
+        );
+
+        worker.stop();
+    }
+
+    #[test]
+    fn test_phase1_group_released_when_fair_scheduling_is_disabled() {
+        // With auto-adjust off too the tick returns early, so the release has
+        // to happen on that path or the flag goes live again on re-enable.
+        let rm_config = resource_control::config::Config {
+            enable_fair_scheduling: true,
+            ..Default::default()
+        };
+        let resource_manager = Arc::new(ResourceGroupManager::new(rm_config));
+        let ctl = resource_manager.derive_controller("read".into(), true);
+
+        let group = tikv_util::resource_control::DEFAULT_RESOURCE_GROUP_NAME;
+        resource_manager.record_ru_consumption(group, 1000);
+
+        let phase0 = ctl.get_priority(group.as_bytes(), CommandPri::Normal);
+        ctl.set_group_phase(group.as_bytes(), true);
+        let phase1 = ctl.get_priority(group.as_bytes(), CommandPri::Normal);
+        assert!(phase1 > phase0, "sanity: group should be in phase 1");
+
+        // Disable fair scheduling, as an online config update would.
+        resource_manager
+            .get_config()
+            .update(|c| -> Result<(), ()> {
+                c.enable_fair_scheduling = false;
+                Ok(())
+            })
+            .unwrap();
+
+        let (mut runner, worker) = runner_with_auto_adjust_off(Some(resource_manager.clone()));
+        runner.adjust_pool_size();
+
+        // Re-enable: a stale flag would come back deprioritized here.
+        resource_manager
+            .get_config()
+            .update(|c| -> Result<(), ()> {
+                c.enable_fair_scheduling = true;
+                Ok(())
+            })
+            .unwrap();
+
+        let after = ctl.get_priority(group.as_bytes(), CommandPri::Normal);
+        assert!(
+            after < phase1,
+            "disabling fair scheduling should clear phase 1; phase1: {}, after: {}",
+            phase1,
+            after
         );
 
         worker.stop();
