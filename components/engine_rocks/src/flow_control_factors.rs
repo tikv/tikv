@@ -29,4 +29,9 @@ impl FlowControlFactorsExt for RocksEngine {
             handle,
         ))
     }
+
+    fn get_cf_base_level(&self, cf: &str) -> Result<Option<u64>> {
+        let handle = util::get_cf_handle(self.as_inner(), cf)?;
+        Ok(crate::util::get_cf_base_level(self.as_inner(), handle))
+    }
 }

@@ -27,6 +27,8 @@ portable = ["tikv/portable"]
 sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
+# Forwards FIPS to gcp_v2 via external_storage. See external_storage/Cargo.toml.
+fips = ["external_storage/fips"]
 
 [dependencies]
 api_version = { workspace = true }

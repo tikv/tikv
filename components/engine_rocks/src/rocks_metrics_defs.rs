@@ -15,6 +15,7 @@ pub const ROCKSDB_OLDEST_SNAPSHOT_TIME: &str = "rocksdb.oldest-snapshot-time";
 pub const ROCKSDB_OLDEST_SNAPSHOT_SEQUENCE: &str = "rocksdb.oldest-snapshot-sequence";
 pub const ROCKSDB_NUM_FILES_AT_LEVEL: &str = "rocksdb.num-files-at-level";
 pub const ROCKSDB_NUM_IMMUTABLE_MEM_TABLE: &str = "rocksdb.num-immutable-mem-table";
+pub const ROCKSDB_BASE_LEVEL: &str = "rocksdb.base-level";
 
 pub const ROCKSDB_TITANDB_NUM_BLOB_FILES_AT_LEVEL: &str = "rocksdb.titandb.num-blob-files-at-level";
 pub const ROCKSDB_TITANDB_LIVE_BLOB_SIZE: &str = "rocksdb.titandb.live-blob-size";
