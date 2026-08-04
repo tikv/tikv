@@ -857,7 +857,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         begin_instant: Instant,
     ) -> impl Future<Output = Result<()>> {
         const CMD: CommandKind = CommandKind::batch_get_command;
-        // all requests in a batch have the same region, epoch, term, replica_read
+        // Requests in a batch are expected to share the same region, epoch,
+        // term and read type. Note `ReqBatcher` does not enforce this (it only
+        // filters by priority), so do not rely on it for correctness.
         let priority = requests[0].get_context().get_priority();
         let metadata =
             TaskMetadata::from_ctx(requests[0].get_context().get_resource_control_context());
@@ -2172,7 +2174,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         consumer: P,
     ) -> impl Future<Output = Result<()>> {
         const CMD: CommandKind = CommandKind::raw_batch_get_command;
-        // all requests in a batch have the same region, epoch, term, replica_read
+        // Requests in a batch are expected to share the same region, epoch,
+        // term and read type. Note `ReqBatcher` does not enforce this (it only
+        // filters by priority), so do not rely on it for correctness.
         let priority = gets[0].get_context().get_priority();
         let metadata = TaskMetadata::from_ctx(gets[0].get_context().get_resource_control_context());
         let resource_group_name = gets[0]
