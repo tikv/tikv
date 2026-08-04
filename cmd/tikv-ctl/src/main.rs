@@ -443,10 +443,7 @@ fn main() {
                         Err(err) => {
                             exit_with_clap_error(
                                 ErrorKind::Io,
-                                format!(
-                                    "failed to load compact-log-backup checkpoint: {}",
-                                    err
-                                ),
+                                format!("failed to load compact-log-backup checkpoint: {}", err),
                             );
                         }
                     }
