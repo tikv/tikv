@@ -813,10 +813,6 @@ impl ReadPoolConfigRunner {
 
     // Adjust pool size using based on thread utilization or cpu utilization.
     fn adjust_pool_size(&mut self) {
-        if !self.auto_adjust {
-            return;
-        }
-
         let resource_manager = match &self.handle {
             ReadPoolHandle::Yatp {
                 resource_manager, ..
@@ -829,6 +825,19 @@ impl ReadPoolConfigRunner {
         let scheduling_rm = resource_manager
             .as_ref()
             .filter(|rm| rm.get_config().value().enable_fair_scheduling);
+
+        // Fair scheduling deprioritizes noisy groups while the pool is scaled
+        // in and releases them once it recovers to `core_thread_count`, so the
+        // CPU ladder below has to keep running even with auto-adjustment off.
+        // Otherwise enabling `enable-fair-scheduling` on its own would do
+        // nothing (`auto-adjust-pool-size` defaults to false) and any group
+        // already deprioritized could never be released. The thread-
+        // utilization ladder stays gated on `auto_adjust` below: that one is
+        // the auto-adjustment feature proper, and it alone may grow the pool
+        // past `core_thread_count`.
+        if !self.auto_adjust && scheduling_rm.is_none() {
+            return;
+        }
 
         let read_pool_cpu = self.cpu_time_tracker.get_unified_read_pool_cpu();
         let thread_usage = self.cpu_time_tracker.prev_avg_thread_usage();
@@ -868,15 +877,20 @@ impl ReadPoolConfigRunner {
             None => true,
         };
 
-        // Base scaling conditions (process CPU, thread usage, task queue depth)
-        let busy_thread_scale_out = self.cur_thread_count < self.max_thread_count
+        // Base scaling conditions (process CPU, thread usage, task queue
+        // depth). Gated on `auto_adjust`: this is the auto-adjustment ladder,
+        // and it is the only path that may grow the pool past
+        // `core_thread_count`.
+        let busy_thread_scale_out = self.auto_adjust
+            && self.cur_thread_count < self.max_thread_count
             && scale_out_allowed
             && process_cpu * (self.cur_thread_count as f64 + 1.0) / (self.cur_thread_count as f64)
                 < target_cpu_cores
             && thread_usage > self.cur_thread_count as f64 * READ_POOL_THREAD_HIGH_THRESHOLD
             && running_tasks > self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD;
 
-        let busy_thread_scale_in = self.cur_thread_count > self.min_thread_count
+        let busy_thread_scale_in = self.auto_adjust
+            && self.cur_thread_count > self.min_thread_count
             && thread_usage < (self.cur_thread_count - 1) as f64 * READ_POOL_THREAD_LOW_THRESHOLD
             && running_tasks < self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD;
 
@@ -917,11 +931,22 @@ impl ReadPoolConfigRunner {
 
         // While we haven't scaled back up to core_thread_count, keep noisy
         // resource groups deprioritized. Once recovered, release everyone.
-        if let Some(rm) = scheduling_rm {
-            if self.cur_thread_count < self.core_thread_count {
-                rm.deprioritize_over_quota_groups();
-            } else {
-                rm.reset_group_priorities();
+        match scheduling_rm {
+            Some(rm) => {
+                if self.cur_thread_count < self.core_thread_count {
+                    rm.deprioritize_over_quota_groups();
+                } else {
+                    rm.reset_group_priorities();
+                }
+            }
+            // Fair scheduling is off (we only get here with auto-adjustment
+            // on). Phase flags are ignored while it's off, but clear them so
+            // re-enabling it later starts from a clean slate instead of
+            // inheriting whatever was set when it was last disabled.
+            None => {
+                if let Some(rm) = resource_manager.as_ref() {
+                    rm.reset_group_priorities();
+                }
             }
         }
     }
