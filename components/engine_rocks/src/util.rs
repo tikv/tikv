@@ -248,6 +248,11 @@ pub fn get_cf_pending_compaction_bytes(engine: &DB, handle: &CFHandle) -> Option
     engine.get_property_int_cf(handle, ROCKSDB_PENDING_COMPACTION_BYTES)
 }
 
+/// Gets the base level of given column family.
+pub fn get_cf_base_level(engine: &DB, handle: &CFHandle) -> Option<u64> {
+    engine.get_property_int_cf(handle, ROCKSDB_BASE_LEVEL)
+}
+
 pub struct FixedSuffixSliceTransform {
     pub suffix_len: usize,
 }

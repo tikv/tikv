@@ -860,8 +860,7 @@ fn test_warmup_when_transfer_leader() {
 #[test]
 fn test_warmup_timeout_does_not_block_transfer_leader() {
     let mut cluster = new_server_cluster_with_hybrid_engine(0, 3);
-    // Using a large warmup timeout to stable the test.
-    cluster.cfg.raft_store.max_entry_cache_warmup_duration.0 = Duration::from_secs(1);
+    cluster.cfg.raft_store.max_entry_cache_warmup_duration.0 = Duration::from_millis(500);
     cluster.run();
 
     let r = cluster.get_region(b"");
@@ -885,22 +884,36 @@ fn test_warmup_timeout_does_not_block_transfer_leader() {
     })
     .unwrap();
 
-    cluster.transfer_leader(r.id, new_peer(2, 2));
-    // Transfer leader will not block forever when warmup times out.
-    sleep(cluster.cfg.raft_store.max_entry_cache_warmup_duration.0);
-    eventually(Duration::from_millis(100), Duration::from_secs(50), || {
+    // Retry faster than the overall ACK deadline. The retries must not extend
+    // the deadline even though IME remains unready.
+    let mut transferred = false;
+    for _ in 0..20 {
         cluster.reset_leader_of_region(r.id);
-        let leader = cluster.leader_of_region(r.id).unwrap();
-        leader == new_peer(2, 2)
-    });
+        match cluster.leader_of_region(r.id) {
+            Some(leader) if leader == new_peer(2, 2) => {
+                transferred = true;
+                break;
+            }
+            Some(_) => cluster.transfer_leader(r.id, new_peer(2, 2)),
+            None => {}
+        }
+        sleep(Duration::from_millis(100));
+    }
     let region_cache_engine = cluster.sim.rl().get_region_cache_engine(2);
-    region_cache_engine
+    let cache_is_still_loading = region_cache_engine
         .snapshot(cache_region.clone(), 100, 100)
-        .unwrap_err();
+        .is_err();
 
-    // Unpause the snapshot load.
+    // Unpause the snapshot load before checking assertions so a failure does
+    // not leave the failpoint blocked for other tests.
     drop(tx);
     fail::remove("ime_on_snapshot_load_finished");
+    assert!(
+        transferred,
+        "repeated transfer requests extended the ACK deadline"
+    );
+    assert!(cache_is_still_loading);
+
     // put some key to trigger load
     cluster.must_put(b"k2", b"val");
     eventually(Duration::from_millis(100), Duration::from_secs(5), || {
