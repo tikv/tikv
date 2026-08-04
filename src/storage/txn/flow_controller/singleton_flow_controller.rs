@@ -493,22 +493,41 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
                     if let Some(before) = cf_checker.pending_bytes_before_unsafe_destroy_range {
                         let soft =
                             (current_cfg.soft_pending_compaction_bytes_limit.0 as f64).log2();
-                        let after = (self.engine.pending_compaction_bytes(self.region_id, cf)
-                            as f64)
-                            .log2();
+                        let current_pending_bytes =
+                            (self.engine.pending_compaction_bytes(self.region_id, cf) as f64)
+                                .log2();
+
+                        let avg_pending_bytes = if let Some(long_term_pending_bytes) =
+                            cf_checker.long_term_pending_bytes.as_ref()
+                        {
+                            long_term_pending_bytes.get_avg()
+                        } else {
+                            current_pending_bytes
+                        };
 
                         assert!(before < soft);
-                        if after >= soft {
-                            // there is a pending bytes jump
+                        if current_pending_bytes >= soft || avg_pending_bytes >= soft {
+                            // There is a pending bytes jump. Flow control for
+                            // compaction bytes won't be re-enabled until the
+                            // pending bytes drop below the soft limit.
                             SCHED_THROTTLE_ACTION_COUNTER
                                 .with_label_values(&[cf, "pending_bytes_jump"])
                                 .inc();
+                        } else {
+                            cf_checker.pending_bytes_before_unsafe_destroy_range = None;
+                            info!(
+                                "re-enabled compaction pending bytes flow control";
+                                "cf" => cf,
+                            );
                         }
+
                         info!(
                             "after unsafe destroy range";
                             "cf" => cf,
                             "before" => before,
-                            "after" => after
+                            "current_pending_bytes" => current_pending_bytes,
+                            "avg_pending_bytes" => avg_pending_bytes,
+                            "soft_limit" => soft,
                         );
                     }
                 }
@@ -684,27 +703,6 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
                 }
             }
 
-<<<<<<< HEAD
-            let pending_compaction_bytes = long_term_pending_bytes.get_avg();
-            let ignore = if let Some(before) = checker.pending_bytes_before_unsafe_destroy_range {
-                // It assumes that the long term average will eventually come down below the
-                // soft limit. If the general traffic flow increases during destroy, the long
-                // term average may never come down and the flow control will be turned off for
-                // a long time, which would be a rather rare case, so just ignore it.
-                if pending_compaction_bytes <= before && !self.wait_for_destroy_range_finish {
-                    info!(
-                        "pending compaction bytes is back to normal";
-                        "cf" => &cf,
-                        "pending_compaction_bytes" => pending_compaction_bytes,
-                        "before" => before
-                    );
-                    checker.pending_bytes_before_unsafe_destroy_range = None;
-                }
-                true
-            } else {
-                false
-            };
-=======
             let avg_pending_compaction_bytes_log2 = long_term_pending_bytes.get_avg();
             // Unsafe destroy range has a begin/end event pair. While the range
             // deletion is still running, keep the guard armed even if the current
@@ -731,23 +729,15 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
                     source,
                 )
             });
->>>>>>> dde64e0d5d (flow control: ignore base level pending bytes spikes (#19716))
 
             // The discard ratio is global. Let the CF with the largest recent
             // pending bytes sample update it, so a less pressured CF does not
             // overwrite the ratio chosen by the current bottleneck.
             for checker in self.cf_checkers.values() {
-<<<<<<< HEAD
                 if let Some(long_term_pending_bytes) = checker.long_term_pending_bytes.as_ref()
-                    && num < long_term_pending_bytes.get_recent()
+                    && recent_pending_compaction_bytes_log2 < long_term_pending_bytes.get_recent()
                 {
                     return;
-=======
-                if let Some(long_term_pending_bytes) = checker.long_term_pending_bytes.as_ref() {
-                    if recent_pending_compaction_bytes_log2 < long_term_pending_bytes.get_recent() {
-                        return;
-                    }
->>>>>>> dde64e0d5d (flow control: ignore base level pending bytes spikes (#19716))
                 }
             }
 
@@ -1570,9 +1560,6 @@ pub(super) mod tests {
         send_flow_info(&tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) > f64::EPSILON);
     }
-<<<<<<< HEAD
-=======
-
     #[test]
     fn test_flow_controller_pending_compaction_bytes_no_jump_control() {
         let region_id = 0;
@@ -1890,5 +1877,4 @@ pub(super) mod tests {
         send_flow_info(&tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) > f64::EPSILON);
     }
->>>>>>> dde64e0d5d (flow control: ignore base level pending bytes spikes (#19716))
 }
