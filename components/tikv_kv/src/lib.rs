@@ -400,6 +400,17 @@ pub trait Engine: Send + Clone + 'static {
         Ok(())
     }
 
+    /// Hints whether the local store currently believes it is the leader of
+    /// the given region.
+    ///
+    /// The hint is based on locally maintained information and may lag behind
+    /// the latest raft state. Returning `Some(false)` means the local store
+    /// is confident that it is *not* the leader. `None` means the information
+    /// is unavailable for this engine.
+    fn local_leader_hint(&self, _region_id: u64) -> Option<bool> {
+        None
+    }
+
     type WriteRes: Stream<Item = WriteEvent> + Unpin + Send + 'static;
     /// Writes data to the engine asynchronously.
     ///

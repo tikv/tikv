@@ -499,6 +499,10 @@ where
         }
     }
 
+    fn local_leader_hint(&self, region_id: u64) -> Option<bool> {
+        Some(self.region_leaders.read().unwrap().contains(&region_id))
+    }
+
     type WriteRes = impl Stream<Item = WriteEvent> + Send + Unpin;
     fn async_write(
         &self,

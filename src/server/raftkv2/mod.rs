@@ -384,6 +384,10 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
         }
     }
 
+    fn local_leader_hint(&self, region_id: u64) -> Option<bool> {
+        Some(self.region_leaders.read().unwrap().contains(&region_id))
+    }
+
     #[inline]
     fn schedule_txn_extra(&self, txn_extra: TxnExtra) {
         if let Some(tx) = self.txn_extra_scheduler.as_ref() {

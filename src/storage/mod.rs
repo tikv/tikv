@@ -268,6 +268,33 @@ impl<E: Engine, L: LockManager, F: KvFormat> Drop for Storage<E, L, F> {
     }
 }
 
+/// Builds the error for a request rejected because the read pool cannot
+/// accept more tasks.
+///
+/// The rejection happens before the request reaches the raft layer, so the
+/// client would never learn about a stale cached leader from it. When this
+/// store locally knows it is no longer the leader of the region (e.g. leaders
+/// have been evicted from this half-dead store), a `NotLeader` region error
+/// is returned instead of `ServerIsBusy`, so that the client refreshes its
+/// route instead of retrying this store until it becomes unreachable.
+///
+/// Only applies to leader reads: replica / stale reads may legitimately
+/// target followers, and engines that cannot provide the hint (e.g. raftstore
+/// v2 or test engines) keep the previous `SchedTooBusy` behavior.
+fn pool_full_reject_error(
+    local_leader_hint: Option<bool>,
+    is_leader_read: bool,
+    region_id: u64,
+) -> Error {
+    if is_leader_read && local_leader_hint == Some(false) {
+        let mut err = kvproto::errorpb::Error::default();
+        err.mut_not_leader().set_region_id(region_id);
+        Error::from(ErrorInner::Kv(err.into()))
+    } else {
+        Error::from(ErrorInner::SchedTooBusy)
+    }
+}
+
 impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     /// Create a `Storage` from given engine.
     pub fn from_engine<R: FlowStatsReporter>(
@@ -660,6 +687,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
         let stage_begin_ts = Instant::now();
         self.read_pool_spawn_with_busy_check(
+            ctx.get_region_id(),
+            !ctx.get_replica_read() && !ctx.get_stale_read(),
             busy_threshold,
             async move {
                 let stage_scheduled_ts = Instant::now();
@@ -866,6 +895,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         // specific request
         clear_tls_tracker_token();
         self.read_pool_spawn_with_busy_check(
+            // All requests in a batch share the same region and read type.
+            requests[0].get_context().get_region_id(),
+            !requests[0].get_context().get_replica_read()
+                && !requests[0].get_context().get_stale_read(),
             busy_threshold,
             async move {
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
@@ -1085,6 +1118,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         });
         let stage_begin_ts = Instant::now();
         self.read_pool_spawn_with_busy_check(
+            ctx.get_region_id(),
+            !ctx.get_replica_read() && !ctx.get_stale_read(),
             busy_threshold,
             async move {
                 let stage_scheduled_ts = Instant::now();
@@ -1298,6 +1333,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         });
         let stage_begin_ts = Instant::now();
         self.read_pool_spawn_with_busy_check(
+            ctx.get_region_id(),
+            !ctx.get_replica_read() && !ctx.get_stale_read(),
             busy_threshold,
             async move {
                 let stage_scheduled_ts = Instant::now();
@@ -1521,6 +1558,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let busy_threshold = Duration::from_millis(ctx.busy_threshold_ms as u64);
 
         self.read_pool_spawn_with_busy_check(
+            ctx.get_region_id(),
+            !ctx.get_replica_read() && !ctx.get_stale_read(),
             busy_threshold,
             async move {
                 {
@@ -2052,6 +2091,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let busy_threshold = Duration::from_millis(ctx.busy_threshold_ms as u64);
 
         self.read_pool_spawn_with_busy_check(
+            ctx.get_region_id(),
+            !ctx.get_replica_read() && !ctx.get_stale_read(),
             busy_threshold,
             async move {
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
@@ -2158,6 +2199,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .new_tag_with_key_ranges(rand_ctx, vec![(rand_key.clone(), rand_key)]);
 
         self.read_pool_spawn_with_busy_check(
+            // All requests in a batch share the same region and read type.
+            gets[0].get_context().get_region_id(),
+            !gets[0].get_context().get_replica_read() && !gets[0].get_context().get_stale_read(),
             busy_threshold,
             async move {
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
@@ -2300,6 +2344,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let busy_threshold = Duration::from_millis(ctx.busy_threshold_ms as u64);
 
         self.read_pool_spawn_with_busy_check(
+            ctx.get_region_id(),
+            !ctx.get_replica_read() && !ctx.get_stale_read(),
             busy_threshold,
             async move {
                 let mut key_ranges = vec![];
@@ -2803,6 +2849,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let busy_threshold = Duration::from_millis(ctx.busy_threshold_ms as u64);
 
         self.read_pool_spawn_with_busy_check(
+            ctx.get_region_id(),
+            !ctx.get_replica_read() && !ctx.get_stale_read(),
             busy_threshold,
             async move {
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
@@ -2947,6 +2995,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let busy_threshold = Duration::from_millis(ctx.busy_threshold_ms as u64);
 
         self.read_pool_spawn_with_busy_check(
+            ctx.get_region_id(),
+            !ctx.get_replica_read() && !ctx.get_stale_read(),
             busy_threshold,
             async move {
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
@@ -3106,6 +3156,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let busy_threshold = Duration::from_millis(ctx.busy_threshold_ms as u64);
 
         self.read_pool_spawn_with_busy_check(
+            ctx.get_region_id(),
+            !ctx.get_replica_read() && !ctx.get_stale_read(),
             busy_threshold,
             async move {
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
@@ -3367,6 +3419,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
     fn read_pool_spawn_with_busy_check<Fut, T>(
         &self,
+        region_id: u64,
+        is_leader_read: bool,
         busy_threshold: Duration,
         future: Fut,
         priority: CommandPri,
@@ -3384,12 +3438,25 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             return FuturesEither::Left(future::err(Error::from(ErrorInner::Kv(err.into()))));
         }
 
+        let engine = self.engine.clone();
         let metadata = metadata.deep_clone();
         let read_pool = self.read_pool.clone();
         FuturesEither::Right(async move {
             read_pool
                 .spawn_handle(future, priority, task_id, metadata, resource_limiter)
-                .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .map_err(move |_| {
+                    // The request is rejected at the read pool gate, before
+                    // reaching the raft layer. If the local store is no longer
+                    // the leader of the region (e.g. leaders have been evicted
+                    // from this half-dead store), report `NotLeader` instead
+                    // of `ServerIsBusy` so that the client refreshes its route
+                    // instead of retrying this store endlessly.
+                    pool_full_reject_error(
+                        engine.local_leader_hint(region_id),
+                        is_leader_read,
+                        region_id,
+                    )
+                })
                 .await?
         })
     }
@@ -12603,5 +12670,34 @@ mod tests {
             assert_eq!(shared_lock.get_lock_type(), op);
             assert_eq!(shared_lock.get_lock_for_update_ts(), for_update_ts);
         }
+    }
+
+    #[test]
+    fn test_pool_full_reject_error() {
+        use crate::storage::errors::extract_region_error_from_error;
+
+        let region_id = 42;
+
+        // Leader read on a store that is known not to be the leader: report
+        // NotLeader so that the client refreshes its stale route instead of
+        // retrying this store.
+        let err = pool_full_reject_error(Some(false), true, region_id);
+        let region_err = extract_region_error_from_error(&err).expect("region error");
+        assert!(region_err.has_not_leader());
+        assert_eq!(region_err.get_not_leader().get_region_id(), region_id);
+
+        // The store is still the leader, or the hint is unavailable: keep the
+        // previous SchedTooBusy (ServerIsBusy) behavior.
+        for hint in [Some(true), None] {
+            let err = pool_full_reject_error(hint, true, region_id);
+            let region_err = extract_region_error_from_error(&err).expect("region error");
+            assert!(region_err.has_server_is_busy());
+        }
+
+        // Replica / stale reads may legitimately target followers: keep
+        // SchedTooBusy.
+        let err = pool_full_reject_error(Some(false), false, region_id);
+        let region_err = extract_region_error_from_error(&err).expect("region error");
+        assert!(region_err.has_server_is_busy());
     }
 }
