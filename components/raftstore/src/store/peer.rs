@@ -4928,7 +4928,8 @@ where
         let max_wait_duration =
             std::cmp::max(half_election_timeout, cfg.max_entry_cache_warmup_duration.0);
         let deadline = Instant::now() + max_wait_duration;
-        self.transfer_leader_state.transfer_leader_msg = Some((msg.clone(), deadline));
+        self.transfer_leader_state
+            .set_pending_message(msg, deadline);
     }
 
     /// Ack transfer leader message if there is a pending transfer leader
@@ -6551,6 +6552,23 @@ pub struct TransferLeaderState {
     pub cache_warmup_state: Option<CacheWarmupState>,
 }
 
+impl TransferLeaderState {
+    /// Records a pre-transfer-leader message without extending the deadline
+    /// when the leader retries the same transfer attempt. A different sender
+    /// or leader term starts a new attempt.
+    pub fn set_pending_message(&mut self, msg: &eraftpb::Message, deadline: Instant) {
+        let is_retry = self
+            .transfer_leader_msg
+            .as_ref()
+            .is_some_and(|(pending, _)| {
+                pending.get_from() == msg.get_from() && pending.get_log_term() == msg.get_log_term()
+            });
+        if !is_retry {
+            self.transfer_leader_msg = Some((msg.clone(), deadline));
+        }
+    }
+}
+
 mod memtrace {
     use std::mem;
 
@@ -6597,6 +6615,38 @@ mod tests {
 
     use super::*;
     use crate::store::{msg::ExtCallback, util::u64_to_timespec};
+
+    #[test]
+    fn test_pending_transfer_leader_message_deadline() {
+        let mut state = TransferLeaderState::default();
+        let first_deadline = Instant::now() + Duration::from_secs(1);
+        let mut first = eraftpb::Message::default();
+        first.set_from(1);
+        first.set_log_term(1);
+        first.set_index(10);
+        state.set_pending_message(&first, first_deadline);
+
+        // A retry of the same transfer attempt must preserve the first message
+        // and deadline even if fields such as the cache warmup index change.
+        let retry_deadline = first_deadline + Duration::from_secs(1);
+        let mut retry = first.clone();
+        retry.set_index(20);
+        state.set_pending_message(&retry, retry_deadline);
+        let (pending, deadline) = state.transfer_leader_msg.as_ref().unwrap();
+        assert_eq!(pending.get_index(), 10);
+        assert_eq!(*deadline, first_deadline);
+
+        // A request from a new leader term is a new attempt and gets its own
+        // message and deadline.
+        let next_deadline = retry_deadline + Duration::from_secs(1);
+        let mut next = retry;
+        next.set_log_term(2);
+        state.set_pending_message(&next, next_deadline);
+        let (pending, deadline) = state.transfer_leader_msg.as_ref().unwrap();
+        assert_eq!(pending.get_index(), 20);
+        assert_eq!(pending.get_log_term(), 2);
+        assert_eq!(*deadline, next_deadline);
+    }
 
     #[test]
     fn test_sync_log() {

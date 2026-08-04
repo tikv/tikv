@@ -119,6 +119,11 @@ Hot contracts to review carefully:
   bug here silently skews both.
 - `config.rs` defines dynamic policy knobs such as fair scheduling and
   admission-control thresholds.
+- Background quota limiting is independent of priority-queue selection. A
+  background limiter can throttle a task in place even when the transaction
+  scheduler uses its vanilla queue.
+- `ResourceController::is_customized` reflects non-default resource groups;
+  background configuration is tracked separately by `ResourceGroupManager`.
 
 ## Cross-Component Contract: Unified Read Pool Coupling
 

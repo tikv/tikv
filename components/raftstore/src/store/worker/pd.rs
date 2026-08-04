@@ -43,6 +43,7 @@ use resource_metering::{
 use service::service_manager::GrpcServiceManager;
 use tikv_util::{
     GLOBAL_SERVER_READINESS, box_err, debug, error, info,
+    logger::{Level, get_log_level},
     metrics::ThreadInfoStatistics,
     store::QueryStats,
     sys::{SysQuota, disk, thread::StdThreadBuildWrapper},
@@ -1072,6 +1073,69 @@ fn collect_report_peers_for_store_heartbeat(
 
 /// Max limitation of delayed store_heartbeat.
 const STORE_HEARTBEAT_DELAY_LIMIT: u64 = 5 * 60;
+const STORE_HEARTBEAT_TOPN_LOG_LIMIT: usize = 5;
+const STORE_HEARTBEAT_TOPN_LOG_MIN_CPU: u64 = 10;
+
+#[derive(Debug)]
+struct TopReadCpuPeer {
+    region_id: u64,
+    read_cpu: u64,
+    sched_cpu: u64,
+}
+
+fn should_log_store_heartbeat_top_read_cpu() -> bool {
+    matches!(get_log_level(), Some(Level::Debug) | Some(Level::Trace))
+}
+
+fn log_store_heartbeat_top_read_cpu(
+    store_id: u64,
+    interval_seconds: u64,
+    report_peers: &HashMap<u64, pdpb::PeerStat>,
+) {
+    if report_peers.is_empty() {
+        return;
+    }
+
+    let mut top_peers: Vec<TopReadCpuPeer> = report_peers
+        .values()
+        .map(|stat| TopReadCpuPeer {
+            region_id: stat.get_region_id(),
+            read_cpu: stat.get_cpu_stats().get_unified_read(),
+            sched_cpu: stat.get_cpu_stats().get_scheduler(),
+        })
+        .collect();
+    top_peers.sort_unstable_by(|lhs, rhs| {
+        rhs.read_cpu
+            .cmp(&lhs.read_cpu)
+            .then_with(|| rhs.sched_cpu.cmp(&lhs.sched_cpu))
+            .then_with(|| lhs.region_id.cmp(&rhs.region_id))
+    });
+    if top_peers[0].read_cpu < STORE_HEARTBEAT_TOPN_LOG_MIN_CPU {
+        return;
+    }
+    top_peers.truncate(STORE_HEARTBEAT_TOPN_LOG_LIMIT);
+    let top_peers_max_cpu = top_peers[0].read_cpu;
+    let top_peers_avg_cpu =
+        top_peers.iter().map(|peer| peer.read_cpu).sum::<u64>() / top_peers.len() as u64;
+    let top_peers_p50_cpu = if top_peers.len() % 2 == 1 {
+        top_peers[top_peers.len() / 2].read_cpu
+    } else {
+        let upper = top_peers[(top_peers.len() / 2) - 1].read_cpu;
+        let lower = top_peers[top_peers.len() / 2].read_cpu;
+        (upper + lower) / 2
+    };
+
+    debug!(
+        "store heartbeat top read cpu peers";
+        "store_id" => store_id,
+        "interval_seconds" => interval_seconds,
+        "reported_peers_count" => report_peers.len(),
+        "top_peers_max_cpu" => top_peers_max_cpu,
+        "top_peers_avg_cpu" => top_peers_avg_cpu,
+        "top_peers_p50_cpu" => top_peers_p50_cpu,
+        "top_peers" => ?top_peers,
+    );
+}
 
 pub struct Runner<EK, ER, T>
 where
@@ -1490,6 +1554,9 @@ where
                     interval_seconds,
                 )
             };
+            if should_log_store_heartbeat_top_read_cpu() {
+                log_store_heartbeat_top_read_cpu(self.store_id, interval_seconds, &report_peers);
+            }
 
             // Emit per-pool CPU metrics: region-sum vs store-level.
             {

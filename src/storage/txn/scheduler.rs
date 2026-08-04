@@ -555,7 +555,6 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let cb = SchedulerTaskCallback::NormalRequestCallback(callback);
         let metadata = TaskMetadata::from_ctx(cmd.resource_control_ctx());
         let priority = cmd.priority();
-        let write_bytes = cmd.write_bytes() as u64;
         let request_source = cmd.ctx().request_source.clone();
         let mem_quota = self.inner.memory_quota.clone();
         let rm = self.inner.resource_manager.as_ref().unwrap().clone();
@@ -572,7 +571,16 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         };
         self.inner
             .sched_worker_pool
-            .spawn(&request_source, metadata, priority, execution, write_bytes)
+            .spawn_opt(
+                &request_source,
+                metadata,
+                priority,
+                execution,
+                // Timer only waits and enqueues; actual execution accounts write bytes in
+                // `self.execute(task)`
+                0,
+                true,
+            )
             .unwrap();
     }
 

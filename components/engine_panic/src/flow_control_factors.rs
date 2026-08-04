@@ -16,4 +16,8 @@ impl FlowControlFactorsExt for PanicEngine {
     fn get_cf_pending_compaction_bytes(&self, cf: &str) -> Result<Option<u64>> {
         panic!()
     }
+
+    fn get_cf_base_level(&self, cf: &str) -> Result<Option<u64>> {
+        panic!()
+    }
 }

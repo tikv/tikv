@@ -29,6 +29,7 @@ engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
 fail = "0.5"
 futures = { version = "0.3", features = ["compat"] }
+grpcio = { workspace = true }
 hex = "0.4"
 keys = { workspace = true }
 kvproto = { workspace = true }

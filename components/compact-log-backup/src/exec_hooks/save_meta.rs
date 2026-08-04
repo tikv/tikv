@@ -446,9 +446,13 @@ impl ExecHooks for SaveMeta {
     }
 
     async fn after_execution_finished(&mut self, cx: AfterFinishCtx<'_>) -> Result<()> {
-        if self.collector.is_empty() {
-            warn!("Nothing to write, skipping saving meta.");
-            return Ok(());
+        let collector_is_empty = self.collector.is_empty();
+        if collector_is_empty {
+            if cx.this.cfg.shard.is_none() {
+                warn!("Nothing to write, skipping saving meta.");
+                return Ok(());
+            }
+            info!("No subcompactions matched shard; saving an empty migration.");
         }
         let generated_cmeta_files_total_size = if let Some(writer) = self.meta_writer.as_mut() {
             writer.flush(cx.storage.as_ref()).await?;
@@ -464,9 +468,15 @@ impl ExecHooks for SaveMeta {
         meta.set_generated_sst_files_total_size(generated_file_sizes.sst_files_total_size);
         meta.set_comments(comments);
         let begin = Instant::now();
-        self.collector
-            .write_migration(Arc::clone(cx.storage), cx.this.cfg.shard)
-            .await?;
+        if collector_is_empty {
+            self.collector
+                .write_empty_migration(cx.storage.as_ref())
+                .await?;
+        } else {
+            self.collector
+                .write_migration(Arc::clone(cx.storage), cx.this.cfg.shard)
+                .await?;
+        }
         info!("Migration written."; "duration" => ?begin.elapsed());
         Ok(())
     }

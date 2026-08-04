@@ -47,7 +47,10 @@ use tidb_query_common::Result;
 use tidb_query_datatype::{
     Charset, Collation, FieldTypeAccessor, FieldTypeFlag,
     codec::{
-        collation::{Charset as _, Collator},
+        collation::{
+            Charset as _, Collator, LikePatternMode,
+            collator::{CollatorBinary, CollatorUtf8Mb4BinNoPadding},
+        },
         data_type::*,
     },
     match_template_charset, match_template_collator, match_template_multiple_collators,
@@ -97,6 +100,7 @@ fn map_compare_in_string_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
 }
 
 fn map_like_sig(ret_field_type: &FieldType, children: &[Expr]) -> Result<RpnFnMeta> {
+    let ret_collation_id = ret_field_type.get_collate();
     let ret_collation = ret_field_type
         .as_accessor()
         .collation()
@@ -112,22 +116,44 @@ fn map_like_sig(ret_field_type: &FieldType, children: &[Expr]) -> Result<RpnFnMe
         .collation()
         .map_err(tidb_query_datatype::codec::Error::from)?;
 
-    // If the target charset is the same with pattern charset, and is Utf8mb4,
-    // use their charset to decode bytes. If not, use the charset pushed down in
-    // the ret_field type to decode the bytes.
-    //
-    // This behavior is for the compatibility and correctness: The TiDB doesn't
-    // push down the collation information when the new collation framework is
-    // not enabled, and always use the binary collation. However, the `_`
-    // pattern considers not only the order of strings, but also the number of
-    // characters. Some characters more than 1 bytes cannot be matched by `_` if
-    // the new collation framework is not enabled.
+    // The original collation ID distinguishes TiDB's pattern implementations.
+    // The legacy framework pushes down a non-negative ID and always uses a
+    // derived binary pattern, which decodes runes without applying collation
+    // weights. The new framework uses byte patterns, derived binary rune
+    // patterns, or collator-defined patterns depending on the collation. For
+    // collator-defined patterns, decode with the argument charset when both
+    // arguments use the same charset, or with the return charset otherwise.
     Ok(match_template_multiple_collators! {
         (TT, TC, PC), (ret_collation, target_collation, pattern_collation), {
-            if <TC as Collator>::Charset::charset() == <PC as Collator>::Charset::charset() {
-                like_fn_meta::<TT, <TC as Collator>::Charset>()
+            if ret_collation_id >= 0 {
+                // TiDB uses a derived binary pattern for every collation when
+                // the legacy collation framework is enabled. Non-negative IDs
+                // in the pushed-down field type identify that compatibility path.
+                like_fn_meta::<
+                    CollatorUtf8Mb4BinNoPadding,
+                    <CollatorUtf8Mb4BinNoPadding as Collator>::Charset,
+                >()
             } else {
-                like_fn_meta::<TT, <TT as Collator>::Charset>()
+                match <TT as Collator>::LIKE_PATTERN_MODE {
+                    LikePatternMode::Bytes => {
+                        // A byte pattern applies to literals, single-character
+                        // wildcards, and '%' backtracking alike.
+                        like_fn_meta::<CollatorBinary, <CollatorBinary as Collator>::Charset>()
+                    }
+                    LikePatternMode::BinaryRunes => like_fn_meta::<
+                        CollatorUtf8Mb4BinNoPadding,
+                        <CollatorUtf8Mb4BinNoPadding as Collator>::Charset,
+                    >(),
+                    LikePatternMode::CollatorDefined => {
+                        if <TC as Collator>::Charset::charset()
+                            == <PC as Collator>::Charset::charset()
+                        {
+                            like_fn_meta::<TT, <TC as Collator>::Charset>()
+                        } else {
+                            like_fn_meta::<TT, <TT as Collator>::Charset>()
+                        }
+                    }
+                }
             }
         }
     })
