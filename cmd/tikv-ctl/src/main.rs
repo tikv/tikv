@@ -17,6 +17,7 @@ use std::{
     time::Duration,
 };
 
+use clap::{CommandFactory, ErrorKind, Parser};
 use collections::HashMap;
 use compact_log_backup::{
     TraceResultExt,
@@ -48,7 +49,6 @@ use raft_log_engine::ManagedFileSystem;
 use raftstore::store::util::build_key_range;
 use regex::Regex;
 use security::{SecurityConfig, SecurityManager};
-use structopt::{StructOpt, clap::ErrorKind};
 use tempfile::TempDir;
 use tikv::{
     config::TikvConfig,
@@ -71,11 +71,15 @@ mod executor;
 mod fork_readonly_tikv;
 mod util;
 
+fn exit_with_clap_error(kind: ErrorKind, message: impl std::fmt::Display) -> ! {
+    clap::Error::raw(kind, message).exit()
+}
+
 fn main() {
     // OpenSSL FIPS mode should be enabled at the very start.
     fips::maybe_enable();
 
-    let opt = Opt::from_args();
+    let opt = Opt::parse();
 
     // Initialize logger.
     init_ctl_logger(&opt.log_level, &opt.log_format);
@@ -116,7 +120,7 @@ fn main() {
             } else if let Some(decoded) = opt.encode.as_deref() {
                 println!("{}", Key::from_raw(&unescape(decoded)));
             } else {
-                Opt::clap().print_help().ok();
+                Opt::command().print_help().ok();
             }
             return;
         }
@@ -128,7 +132,7 @@ fn main() {
             match args[0].as_str() {
                 "ldb" => run_ldb_command(args, &cfg),
                 "sst_dump" => run_sst_dump_command(args, &cfg),
-                _ => Opt::clap().print_help().unwrap(),
+                _ => Opt::command().print_help().unwrap(),
             }
         }
         Cmd::RaftEngineCtl { args } => {
@@ -274,20 +278,16 @@ fn main() {
         }
         Cmd::ShowClusterId { data_dir } => {
             if opt.config.is_none() {
-                clap::Error {
-                    message: String::from("(--config) must be specified"),
-                    kind: ErrorKind::MissingRequiredArgument,
-                    info: None,
-                }
-                .exit();
+                exit_with_clap_error(
+                    ErrorKind::MissingRequiredArgument,
+                    "(--config) must be specified",
+                );
             }
             if data_dir.is_empty() {
-                clap::Error {
-                    message: String::from("(--data-dir) must be specified"),
-                    kind: ErrorKind::MissingRequiredArgument,
-                    info: None,
-                }
-                .exit();
+                exit_with_clap_error(
+                    ErrorKind::MissingRequiredArgument,
+                    "(--data-dir) must be specified",
+                );
             }
             cfg.storage.data_dir = data_dir;
             // Disable auto compactions and GCs to avoid modifications.
@@ -315,65 +315,46 @@ fn main() {
             rocksdb_files,
         } => {
             if opt.config.is_none() {
-                clap::Error {
-                    message: String::from("(--config) must be specified"),
-                    kind: ErrorKind::MissingRequiredArgument,
-                    info: None,
-                }
-                .exit();
+                exit_with_clap_error(
+                    ErrorKind::MissingRequiredArgument,
+                    "(--config) must be specified",
+                );
             }
             if data_dir.is_empty() {
-                clap::Error {
-                    message: String::from("(--data-dir) must be specified"),
-                    kind: ErrorKind::MissingRequiredArgument,
-                    info: None,
-                }
-                .exit();
+                exit_with_clap_error(
+                    ErrorKind::MissingRequiredArgument,
+                    "(--data-dir) must be specified",
+                );
             }
             cfg.storage.data_dir = data_dir;
             if cfg.storage.engine == EngineType::RaftKv2 {
-                clap::Error {
-                    message: String::from("storage.engine can only be raftkv"),
-                    kind: ErrorKind::InvalidValue,
-                    info: None,
-                }
-                .exit();
+                exit_with_clap_error(ErrorKind::InvalidValue, "storage.engine can only be raftkv");
             }
             if cfg.raft_engine.config().enable_log_recycle {
-                clap::Error {
-                    message: String::from("raft-engine.enable-log-recycle can only be false"),
-                    kind: ErrorKind::InvalidValue,
-                    info: None,
-                }
-                .exit();
+                exit_with_clap_error(
+                    ErrorKind::InvalidValue,
+                    "raft-engine.enable-log-recycle can only be false",
+                );
             }
             if cfg.raft_engine.config().recovery_mode != RecoveryMode::TolerateTailCorruption {
-                clap::Error {
-                    message: String::from(
-                        "raft-engine.recovery-mode can only be tolerate-tail-corruption",
-                    ),
-                    kind: ErrorKind::InvalidValue,
-                    info: None,
-                }
-                .exit();
+                exit_with_clap_error(
+                    ErrorKind::InvalidValue,
+                    "raft-engine.recovery-mode can only be tolerate-tail-corruption",
+                );
             }
             if snaps != fork_readonly_tikv::SYMLINK && snaps != fork_readonly_tikv::COPY {
-                clap::Error {
-                    message: String::from("(--snaps) can only be symlink or copy"),
-                    kind: ErrorKind::InvalidValue,
-                    info: None,
-                }
-                .exit();
+                exit_with_clap_error(
+                    ErrorKind::InvalidValue,
+                    "(--snaps) can only be symlink or copy",
+                );
             }
             if rocksdb_files != fork_readonly_tikv::SYMLINK
                 && rocksdb_files != fork_readonly_tikv::COPY
             {
-                clap::Error {
-                    message: String::from("(--rocksdb_files) can only be symlink or copy"),
-                    kind: ErrorKind::InvalidValue,
-                    info: None,
-                }
-                .exit();
+                exit_with_clap_error(
+                    ErrorKind::InvalidValue,
+                    "(--rocksdb_files) can only be symlink or copy",
+                );
             }
             fork_readonly_tikv::run(&cfg, &agent_dir, &snaps, &rocksdb_files)
         }
@@ -425,24 +406,20 @@ fn main() {
             let external_storage = match maybe_external_storage {
                 Ok(s) => s,
                 Err(err) => {
-                    clap::Error {
-                        message: format!("(-s, --storage-base64) is invalid: {:?}", err),
-                        kind: ErrorKind::InvalidValue,
-                        info: None,
-                    }
-                    .exit();
+                    exit_with_clap_error(
+                        ErrorKind::InvalidValue,
+                        format!("(-s, --storage-base64) is invalid: {:?}", err),
+                    );
                 }
             };
             let storage =
                 match compact_log::create_storage_with_gcp_v2(&external_storage, gcp_v2_enable) {
                     Ok(storage) => storage,
                     Err(err) => {
-                        clap::Error {
-                            message: format!("failed to create external storage: {}", err),
-                            kind: ErrorKind::Io,
-                            info: None,
-                        }
-                        .exit();
+                        exit_with_clap_error(
+                            ErrorKind::Io,
+                            format!("failed to create external storage: {}", err),
+                        );
                     }
                 };
             let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -464,15 +441,13 @@ fn main() {
                             until_ts
                         }
                         Err(err) => {
-                            clap::Error {
-                                message: format!(
+                            exit_with_clap_error(
+                                ErrorKind::Io,
+                                format!(
                                     "failed to load compact-log-backup checkpoint: {}",
                                     err
                                 ),
-                                kind: ErrorKind::Io,
-                                info: None,
-                            }
-                            .exit();
+                            );
                         }
                     }
                 }
@@ -492,15 +467,13 @@ fn main() {
             };
             let out_prefix = ccfg.recommended_prefix(&name);
             if force_regenerate {
-                clap::Error {
-                    message: format!(
+                exit_with_clap_error(
+                    ErrorKind::ValueValidation,
+                    format!(
                         "--force-regenerate is no longer supported. Please use a different --name to generate a new compaction prefix, or manually clean the existing prefix `{}` before rerunning.",
                         out_prefix
                     ),
-                    kind: ErrorKind::ValueValidation,
-                    info: None,
-                }
-                .exit();
+                );
             }
             let tmp_engine =
                 TemporaryRocks::new(&cfg).expect("failed to create temp engine for writing SSTs.");
@@ -576,12 +549,10 @@ fn main() {
             let host = opt.host.as_deref();
 
             if data_dir.is_none() && host.is_none() {
-                clap::Error {
-                    message: String::from("[host|data-dir] is not specified"),
-                    kind: ErrorKind::MissingRequiredArgument,
-                    info: None,
-                }
-                .exit();
+                exit_with_clap_error(
+                    ErrorKind::MissingRequiredArgument,
+                    "[host|data-dir] is not specified",
+                );
             }
 
             cfg.rocksdb.paranoid_checks = Some(!opt.skip_paranoid_checks);
@@ -912,12 +883,10 @@ fn dump_snap_meta_file(path: &str) {
 
 fn get_pd_rpc_client(pd: Option<String>, mgr: Arc<SecurityManager>) -> RpcClient {
     let pd = pd.unwrap_or_else(|| {
-        clap::Error {
-            message: String::from("--pd is required for this command"),
-            kind: ErrorKind::MissingRequiredArgument,
-            info: None,
-        }
-        .exit();
+        exit_with_clap_error(
+            ErrorKind::MissingRequiredArgument,
+            "--pd is required for this command",
+        );
     });
     let cfg = PdConfig::new(vec![pd]);
     cfg.validate().unwrap();
