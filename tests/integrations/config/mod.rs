@@ -855,6 +855,7 @@ fn test_serde_custom_tikv_config() {
         stream_channel_window: 123,
         import_mode_timeout: ReadableDuration::secs(1453),
         memory_use_ratio: 0.3,
+        use_direct_io_for_ingest: true,
     };
     value.panic_when_unexpected_key_or_data = true;
     value.gc = GcConfig {
