@@ -1285,6 +1285,57 @@ fn run_sst_dump_command(args: Vec<String>, cfg: &TikvConfig) {
     engine_rocks::raw::run_sst_dump_tool(&args, &build_rocks_opts(cfg));
 }
 
+fn build_bad_sst_manifest_dump_args(
+    db: &str,
+    sst_file_number: &str,
+    manifest: Option<&str>,
+) -> Vec<String> {
+    let mut args = vec![
+        "ldb".to_string(),
+        "--hex".to_string(),
+        "manifest_dump".to_string(),
+        format!("--db={}", db),
+        format!("--sst_file_number={}", sst_file_number),
+    ];
+    if let Some(manifest_path) = manifest {
+        args.push(format!("--path={}", manifest_path));
+    }
+    args
+}
+
+fn read_redirected_output(
+    stderr: BufferRedirect,
+    stdout: BufferRedirect,
+) -> io::Result<(String, String)> {
+    // Stop both redirects before reporting an error. Otherwise the diagnostic
+    // itself is written back into the temporary redirect and never reaches the
+    // terminal.
+    let mut stderr = stderr.into_inner();
+    let mut stdout = stdout.into_inner();
+    let mut stderr_bytes = Vec::new();
+    let mut stdout_bytes = Vec::new();
+    stderr.read_to_end(&mut stderr_bytes)?;
+    stdout.read_to_end(&mut stdout_bytes)?;
+    Ok((
+        String::from_utf8_lossy(&stderr_bytes).into_owned(),
+        String::from_utf8_lossy(&stdout_bytes).into_owned(),
+    ))
+}
+
+fn child_process_failure(result: Result<i32, String>, command: &[String]) -> Option<String> {
+    match result {
+        Ok(0) => None,
+        Ok(status) => Some(format!(
+            "child process returned status code {status}, failed to run {}",
+            command.join(" ")
+        )),
+        Err(e) => Some(format!(
+            "failed to run child process {}: {e}",
+            command.join(" ")
+        )),
+    }
+}
+
 fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &TikvConfig) {
     let db = &cfg.infer_kv_engine_path(Some(data_dir)).unwrap();
     println!(
@@ -1324,15 +1375,13 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
         }
     }
 
-    drop(stdout);
-    let mut stderr_buf = stderr.into_inner();
-    let mut buffer = Vec::new();
-    stderr_buf.read_to_end(&mut buffer).unwrap();
-    let corruptions = unsafe { String::from_utf8_unchecked(buffer) };
+    let (corruptions, _) = read_redirected_output(stderr, stdout)
+        .unwrap_or_else(|e| panic!("failed to read sst_dump output: {e}"));
 
     let r = Regex::new(r"/\w*\.sst").unwrap();
     let column_r = Regex::new(r"--------------- (.*) --------------\n(.*)").unwrap();
     let sst_stat_r = Regex::new(r".*\n\d+:\d+\[\d+ .. \d+\]\['(\w*)' seq:\d+, type:\d+ .. '(\w*)' seq:\d+, type:\d+\] at level \d+").unwrap();
+    let mut has_analysis_error = false;
     for line in corruptions.lines() {
         println!("--------------------------------------------------------");
         // The corruption format may like this:
@@ -1344,6 +1393,7 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
         let sst_file_number = match r.captures(line) {
             None => {
                 println!("skip bad line format");
+                has_analysis_error = true;
                 continue;
             }
             Some(parts) => {
@@ -1355,45 +1405,32 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
                         .unwrap()
                 } else {
                     println!("skip bad line format");
+                    has_analysis_error = true;
                     continue;
                 }
             }
         };
-        let mut args1 = vec![
-            "ldb".to_string(),
-            "--hex".to_string(),
-            "manifest_dump".to_string(),
-        ];
-        args1.push(format!("--db={}", db));
-        args1.push(format!("--sst_file_number={}", sst_file_number));
-        if let Some(manifest_path) = manifest {
-            args1.push(format!("--manifest={}", manifest_path));
-        }
+        let args1 = build_bad_sst_manifest_dump_args(db, sst_file_number, manifest);
 
         let stdout = BufferRedirect::stdout().unwrap();
         let stderr = BufferRedirect::stderr().unwrap();
-        match run_and_wait_child_process(|| engine_rocks::raw::run_ldb_tool(&args1, &opts)).unwrap()
-        {
-            0 => {}
-            status => {
-                let mut err = String::new();
-                let mut stderr_buf = stderr.into_inner();
-                drop(stdout);
-                stderr_buf.read_to_string(&mut err).unwrap();
+        let result = run_and_wait_child_process(|| engine_rocks::raw::run_ldb_tool(&args1, &opts));
+        let (err, output) = match read_redirected_output(stderr, stdout) {
+            Ok(output) => output,
+            Err(e) => {
                 println!(
-                    "ldb process return status code {}, failed to run {}:\n{}",
-                    status,
-                    args1.join(" "),
-                    err
+                    "failed to read ldb output after running {}: {e}",
+                    args1.join(" ")
                 );
+                has_analysis_error = true;
                 continue;
             }
         };
-
-        let mut stdout_buf = stdout.into_inner();
-        drop(stderr);
-        let mut output = String::new();
-        stdout_buf.read_to_string(&mut output).unwrap();
+        if let Some(failure) = child_process_failure(result, &args1) {
+            println!("{failure}\nldb stderr:\n{err}\nldb stdout:\n{output}");
+            has_analysis_error = true;
+            continue;
+        }
 
         println!("\nsst meta:");
         // The output may like this:
@@ -1410,6 +1447,7 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
             let matches = match sst_stat_r.captures(&output) {
                 None => {
                     println!("sst start key format is not correct: {}", output);
+                    has_analysis_error = true;
                     continue;
                 }
                 Some(v) => v,
@@ -1452,14 +1490,30 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
         } else {
             // it is expected when the sst is output of a compaction and the sst isn't added
             // to manifest yet.
-            println!(
-                "sst {} is not found in manifest: {}",
-                sst_file_number, output
-            );
+            if err.is_empty() {
+                println!(
+                    "sst {} is not found in manifest: {}",
+                    sst_file_number, output
+                );
+            } else if err.contains("NotFound") {
+                // RocksDB's manifest_dump writes NotFound to stderr but still
+                // exits with status code 0.
+                println!("sst {} is not found in manifest: {}", sst_file_number, err);
+            } else {
+                has_analysis_error = true;
+                println!(
+                    "failed to get sst {} metadata from manifest:\n{}",
+                    sst_file_number, err
+                );
+            }
         }
     }
     println!("--------------------------------------------------------");
-    println!("corruption analysis has completed");
+    if has_analysis_error {
+        println!("corruption analysis has completed with errors");
+    } else {
+        println!("corruption analysis has completed");
+    }
 }
 
 fn print_overlap_region_and_suggestions(
@@ -1506,16 +1560,11 @@ fn print_overlap_region_and_suggestions(
     }
 }
 
-fn flush_std_buffer_to_log(
-    msg: &str,
-    mut err_buffer: BufferRedirect,
-    mut out_buffer: BufferRedirect,
-) {
-    let mut err = String::new();
-    let mut out = String::new();
-    err_buffer.read_to_string(&mut err).unwrap();
-    out_buffer.read_to_string(&mut out).unwrap();
-    println!("{}, err redirect:{}, out redirect:{}", msg, err, out);
+fn flush_std_buffer_to_log(msg: &str, err_buffer: BufferRedirect, out_buffer: BufferRedirect) {
+    match read_redirected_output(err_buffer, out_buffer) {
+        Ok((err, out)) => println!("{msg}, err redirect:{err}, out redirect:{out}"),
+        Err(e) => println!("{msg}, failed to read redirected output: {e}"),
+    }
 }
 
 fn read_cluster_id(config: &TikvConfig) -> Result<u64, String> {
@@ -1549,4 +1598,65 @@ fn validate_storage_data_dir(config: &mut TikvConfig, data_dir: Option<String>) 
         return false;
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_bad_sst_manifest_dump_args, child_process_failure};
+
+    #[test]
+    fn test_build_bad_sst_manifest_dump_args_with_manifest() {
+        let args = build_bad_sst_manifest_dump_args(
+            "/path/to/db",
+            "57155",
+            Some("/path/to/db/MANIFEST-000001"),
+        );
+
+        assert_eq!(
+            args,
+            vec![
+                "ldb",
+                "--hex",
+                "manifest_dump",
+                "--db=/path/to/db",
+                "--sst_file_number=57155",
+                "--path=/path/to/db/MANIFEST-000001",
+            ]
+        );
+        assert!(args.iter().any(|arg| arg.starts_with("--path=")));
+        assert!(!args.iter().any(|arg| arg.starts_with("--manifest=")));
+    }
+
+    #[test]
+    fn test_build_bad_sst_manifest_dump_args_without_manifest() {
+        let args = build_bad_sst_manifest_dump_args("/path/to/db", "57155", None);
+
+        assert_eq!(
+            args,
+            vec![
+                "ldb",
+                "--hex",
+                "manifest_dump",
+                "--db=/path/to/db",
+                "--sst_file_number=57155",
+            ]
+        );
+        assert!(!args.iter().any(|arg| arg.starts_with("--path=")));
+        assert!(!args.iter().any(|arg| arg.starts_with("--manifest=")));
+    }
+
+    #[test]
+    fn test_child_process_failure() {
+        let command = vec!["ldb".to_string(), "manifest_dump".to_string()];
+
+        assert_eq!(child_process_failure(Ok(0), &command), None);
+        assert_eq!(
+            child_process_failure(Ok(2), &command).unwrap(),
+            "child process returned status code 2, failed to run ldb manifest_dump"
+        );
+        assert_eq!(
+            child_process_failure(Err("terminated by SIGSEGV".to_string()), &command).unwrap(),
+            "failed to run child process ldb manifest_dump: terminated by SIGSEGV"
+        );
+    }
 }
