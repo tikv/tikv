@@ -308,6 +308,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
     where
         T: Transport,
     {
+        let mut region_ids = None;
         for msg in store_msg_buf.drain(..) {
             match msg {
                 StoreMsg::Start => self.on_start(),
@@ -325,10 +326,19 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
                         false, // skip_if_exists
                     )
                 }
-                StoreMsg::StoreUnreachable { to_store_id } => self
-                    .fsm
-                    .store
-                    .on_store_unreachable(self.store_ctx, to_store_id),
+                StoreMsg::StoreUnreachable { to_store_id } => self.fsm.store.on_store_unreachable(
+                    self.store_ctx,
+                    to_store_id,
+                    &mut region_ids,
+                ),
+                StoreMsg::StoreUnreachableBatch {
+                    to_store_id,
+                    region_ids,
+                } => self.fsm.store.on_store_unreachable_batch(
+                    self.store_ctx,
+                    to_store_id,
+                    region_ids,
+                ),
                 StoreMsg::AskCommitMerge(req) => {
                     self.fsm.store.on_ask_commit_merge(self.store_ctx, req)
                 }

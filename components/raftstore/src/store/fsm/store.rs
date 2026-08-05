@@ -143,6 +143,9 @@ const STORE_CHECK_PENDING_APPLY_DURATION: Duration = Duration::from_secs(5 * 60)
 // Only when the count of regions which finish applying logs exceed
 // the threshold, can the raftstore supply service.
 const STORE_CHECK_COMPLETE_APPLY_REGIONS_PERCENT: u64 = 99;
+// Keep each unreachable-store broadcast small enough to avoid monopolizing the
+// raftstore thread when a store has a large number of regions.
+const STORE_UNREACHABLE_REGION_BATCH_SIZE: usize = 1024;
 
 /// A trait that provide the meta information that can be accessed outside
 /// of raftstore.
@@ -476,10 +479,13 @@ where
         }
     }
 
-    fn report_unreachable(&self, store_id: u64) {
-        self.broadcast_normal(|| {
-            PeerMsg::SignificantMsg(Box::new(SignificantMsg::StoreUnreachable { store_id }))
-        });
+    fn report_unreachable(&self, store_id: u64, region_ids: Vec<u64>) {
+        for region_id in region_ids {
+            let _ = self.force_send(
+                region_id,
+                PeerMsg::SignificantMsg(Box::new(SignificantMsg::StoreUnreachable { store_id })),
+            );
+        }
     }
 
     fn report_status_update(&self) {
@@ -902,6 +908,7 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
     fn handle_msgs(&mut self, msgs: &mut Vec<StoreMsg<EK>>) {
         let timer = SlowTimer::from_millis(100);
         let count = msgs.len();
+        let mut region_ids = None;
         #[allow(const_evaluatable_unchecked)]
         let mut distribution = [0; StoreMsg::<EK>::COUNT];
 
@@ -935,7 +942,7 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     self.clear_region_size_in_range(&start_key, &end_key)
                 }
                 StoreMsg::StoreUnreachable { store_id } => {
-                    self.on_store_unreachable(store_id);
+                    self.on_store_unreachable(store_id, &mut region_ids);
                 }
                 StoreMsg::Start { store } => self.start(store),
                 StoreMsg::UpdateReplicationMode(status) => self.on_update_replication_mode(status),
@@ -988,6 +995,10 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 } => {
                     self.on_wake_up_regions(abnormal_stores, region_ids);
                 }
+                StoreMsg::StoreUnreachableBatch {
+                    store_id,
+                    region_ids,
+                } => self.ctx.router.report_unreachable(store_id, region_ids),
             }
         }
         slow_log!(
@@ -3359,7 +3370,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
         }
     }
 
-    fn on_store_unreachable(&mut self, store_id: u64) {
+    fn on_store_unreachable(&mut self, store_id: u64, region_ids: &mut Option<Vec<u64>>) {
         let now = Instant::now();
         let unreachable_backoff = self.ctx.cfg.unreachable_backoff.0;
         let new_messages = MESSAGE_RECV_BY_STORE
@@ -3391,10 +3402,16 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'_, EK, ER, T>
             "store_id" => self.fsm.store.id,
             "unreachable_store_id" => store_id,
         );
-        // It's possible to acquire the lock and only send notification to
-        // involved regions. However loop over all the regions can take a
-        // lot of time, which may block other operations.
-        self.ctx.router.report_unreachable(store_id);
+        let region_ids = region_ids.get_or_insert_with(|| self.ctx.router.normal_ids());
+        for region_ids in region_ids.chunks(STORE_UNREACHABLE_REGION_BATCH_SIZE) {
+            let _ = self
+                .ctx
+                .router
+                .force_send_control(StoreMsg::StoreUnreachableBatch {
+                    store_id,
+                    region_ids: region_ids.to_vec(),
+                });
+        }
     }
 
     fn on_update_replication_mode(&mut self, status: ReplicationStatus) {

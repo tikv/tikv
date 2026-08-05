@@ -69,11 +69,14 @@ use crate::{
     fsm::{PeerFsmDelegate, Store},
     operation::life::is_empty_split_message,
     raft::{Peer, Storage},
-    router::{PeerMsg, PeerTick},
+    router::{PeerMsg, PeerTick, StoreMsg},
     worker::tablet,
 };
 
 const PAUSE_FOR_REPLAY_GAP: u64 = 128;
+// Keep each unreachable-store broadcast small enough to avoid monopolizing the
+// raftstore thread when a store has a large number of regions.
+const STORE_UNREACHABLE_REGION_BATCH_SIZE: usize = 1024;
 
 pub struct ReplayWatch {
     normal_peers: AtomicUsize,
@@ -129,12 +132,36 @@ impl Store {
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
         to_store_id: u64,
+        region_ids: &mut Option<Vec<u64>>,
     ) where
         EK: KvEngine,
         ER: RaftEngine,
     {
-        ctx.router
-            .broadcast_normal(|| PeerMsg::StoreUnreachable { to_store_id });
+        let region_ids = region_ids.get_or_insert_with(|| ctx.router.normal_ids());
+        for region_ids in region_ids.chunks(STORE_UNREACHABLE_REGION_BATCH_SIZE) {
+            let _ = ctx
+                .router
+                .force_send_control(StoreMsg::StoreUnreachableBatch {
+                    to_store_id,
+                    region_ids: region_ids.to_vec(),
+                });
+        }
+    }
+
+    pub fn on_store_unreachable_batch<EK, ER, T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        to_store_id: u64,
+        region_ids: Vec<u64>,
+    ) where
+        EK: KvEngine,
+        ER: RaftEngine,
+    {
+        for region_id in region_ids {
+            let _ = ctx
+                .router
+                .force_send(region_id, PeerMsg::StoreUnreachable { to_store_id });
+        }
     }
 
     #[cfg(feature = "testexport")]

@@ -1016,6 +1016,11 @@ where
         region_ids: Vec<u64>,
     },
 
+    StoreUnreachableBatch {
+        store_id: u64,
+        region_ids: Vec<u64>,
+    },
+
     /// Message only used for test.
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
@@ -1051,6 +1056,7 @@ where
             }
             StoreMsg::GcSnapshotFinish => write!(fmt, "GcSnapshotFinish"),
             StoreMsg::AwakenRegions { .. } => write!(fmt, "AwakenRegions"),
+            StoreMsg::StoreUnreachableBatch { .. } => write!(fmt, "StoreUnreachableBatch"),
             #[cfg(any(test, feature = "testexport"))]
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
         }
@@ -1072,8 +1078,9 @@ impl<EK: KvEngine> StoreMsg<EK> {
             StoreMsg::UnsafeRecoveryCreatePeer { .. } => 9,
             StoreMsg::GcSnapshotFinish => 10,
             StoreMsg::AwakenRegions { .. } => 11,
+            StoreMsg::StoreUnreachableBatch { .. } => 12,
             #[cfg(any(test, feature = "testexport"))]
-            StoreMsg::Validate(_) => 12, // Please keep this always be the last one.
+            StoreMsg::Validate(_) => 13, // Please keep this always be the last one.
         }
     }
 }
@@ -1114,12 +1121,18 @@ mod tests {
 
         let gcsnap_msg: StoreMsg<RocksEngine> = StoreMsg::GcSnapshotFinish;
         distribution[gcsnap_msg.discriminant()] += 1;
+        let unreachable_batch_msg: StoreMsg<RocksEngine> = StoreMsg::StoreUnreachableBatch {
+            store_id: 4,
+            region_ids: vec![1, 2],
+        };
+        distribution[unreachable_batch_msg.discriminant()] += 1;
         let mut filter = StoreMsg::<RocksEngine>::VARIANTS
             .iter()
             .zip(distribution)
             .filter(|(_, c)| *c > 0);
         assert_eq!(*filter.next().unwrap().0, "StoreUnreachable");
         assert_eq!(*filter.next().unwrap().0, "GcSnapshotFinish");
+        assert_eq!(*filter.next().unwrap().0, "StoreUnreachableBatch");
         assert!(filter.next().is_none());
     }
 }

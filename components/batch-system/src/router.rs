@@ -262,6 +262,11 @@ where
         BROADCAST_NORMAL_DURATION.observe(timer.saturating_elapsed_secs());
     }
 
+    /// Returns the addresses of all registered normal FSMs.
+    pub fn normal_ids(&self) -> Vec<u64> {
+        self.normals.iter().map(|mailbox| *mailbox.key()).collect()
+    }
+
     /// Try to notify all FSMs that the cluster is being shutdown.
     pub fn broadcast_shutdown(&self) {
         info!("broadcasting shutdown");

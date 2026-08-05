@@ -380,6 +380,10 @@ pub enum StoreMsg {
     StoreUnreachable {
         to_store_id: u64,
     },
+    StoreUnreachableBatch {
+        to_store_id: u64,
+        region_ids: Vec<u64>,
+    },
     AskCommitMerge(RaftCmdRequest),
     /// A message that used to check if a flush is happened.
     #[cfg(feature = "testexport")]
