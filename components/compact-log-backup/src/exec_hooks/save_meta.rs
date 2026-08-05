@@ -1,28 +1,42 @@
-use std::{sync::Arc, time::Instant};
-
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
+use std::{
+    sync::{Arc, Mutex},
+    time::Instant,
+};
+
 use chrono::Local;
 pub use engine_traits::SstCompressionType;
-use external_storage::UnpinReader;
-use futures::{future::TryFutureExt, io::Cursor};
+use external_storage::{ExternalStorage, UnpinReader};
+use futures::{
+    future::TryFutureExt,
+    io::{AsyncReadExt, Cursor},
+    stream::{self, StreamExt, TryStreamExt},
+};
 use kvproto::brpb;
+use protobuf::Message;
 use tikv_util::{
     info,
     stream::{JustRetry, retry},
     warn,
 };
+use uuid::Uuid;
 
 use super::CollectStatistic;
 use crate::{
-    compaction::{META_OUT_REL, SST_OUT_REL, meta::CompactionRunInfoBuilder},
+    ErrorKind,
+    compaction::{Input, META_OUT_REL, SST_OUT_REL, Subcompaction, meta::CompactionRunInfoBuilder},
     errors::Result,
-    execute::hooking::{
-        AfterFinishCtx, BeforeStartCtx, CId, ExecHooks, SkipReason, SubcompactionFinishCtx,
-        SubcompactionSkippedCtx, SubcompactionStartCtx,
+    execute::{
+        ExecutionConfig,
+        hooking::{
+            AfterFinishCtx, BeforeStartCtx, CId, ExecHooks, SkipReason, SubcompactionFinishCtx,
+            SubcompactionSkippedCtx, SubcompactionStartCtx,
+        },
     },
-    statistic::CompactLogBackupStatistic,
-    util,
+    statistic::{CompactLogBackupConfig, CompactLogBackupShard, CompactLogBackupStatistic},
 };
+
+const CHECKPOINT_META_LOAD_CONCURRENCY: usize = 16;
 
 /// Save the metadata to external storage after every subcompaction. After
 /// everything done, it saves the whole compaction to a "migration" that can be
@@ -50,6 +64,9 @@ pub struct SaveMeta {
     collector: CompactionRunInfoBuilder,
     stats: CollectStatistic,
     begin: chrono::DateTime<Local>,
+    meta_writer: Option<MetaBatchWriter>,
+    batch_cfg: BatchConfig,
+    checkpointed_file_sizes: Option<CheckpointedFileSizes>,
 }
 
 impl Default for SaveMeta {
@@ -58,18 +75,303 @@ impl Default for SaveMeta {
             collector: Default::default(),
             stats: Default::default(),
             begin: Local::now(),
+            meta_writer: None,
+            batch_cfg: BatchConfig::default(),
+            checkpointed_file_sizes: None,
         }
     }
 }
 
+#[derive(Clone, Copy)]
+struct BatchConfig {
+    max_subcompactions_per_batch: usize,
+    target_bytes_per_batch: usize,
+}
+
+impl Default for BatchConfig {
+    fn default() -> Self {
+        Self {
+            max_subcompactions_per_batch: 128,
+            target_bytes_per_batch: 4 * 1024 * 1024,
+        }
+    }
+}
+
+struct MetaBatchWriter {
+    artifacts_dir: String,
+    run_id: String,
+    next_batch_seq: u64,
+    buffer: brpb::LogFileSubcompactions,
+    cfg: BatchConfig,
+    generated_cmeta_files_total_size: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct CheckpointInput {
+    pub path: String,
+    pub offset: u64,
+    pub length: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct CheckpointedSubcompaction {
+    pub inputs: Vec<CheckpointInput>,
+}
+
+#[derive(Default)]
+pub(crate) struct LoadedCheckpointedSubcompactions {
+    pub subcompactions: Vec<CheckpointedSubcompaction>,
+    pub cmeta_files_total_size: u64,
+    pub sst_files_total_size: u64,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct CheckpointedFileSizesSnapshot {
+    pub cmeta_files_total_size: u64,
+    pub sst_files_total_size: u64,
+}
+
+#[derive(Clone, Default)]
+pub struct CheckpointedFileSizes(Arc<Mutex<CheckpointedFileSizesSnapshot>>);
+
+impl CheckpointedFileSizes {
+    pub fn snapshot(&self) -> CheckpointedFileSizesSnapshot {
+        *self.0.lock().unwrap()
+    }
+
+    pub(crate) fn set(&self, loaded: &LoadedCheckpointedSubcompactions) {
+        *self.0.lock().unwrap() = CheckpointedFileSizesSnapshot {
+            cmeta_files_total_size: loaded.cmeta_files_total_size,
+            sst_files_total_size: loaded.sst_files_total_size,
+        };
+    }
+}
+
+impl CheckpointInput {
+    fn from_input(input: &Input) -> Self {
+        Self {
+            path: input.id.name.to_string(),
+            offset: input.id.offset,
+            length: input.id.length,
+        }
+    }
+}
+
+impl CheckpointedSubcompaction {
+    pub(crate) fn new(mut inputs: Vec<CheckpointInput>) -> Self {
+        inputs.sort_unstable();
+        Self { inputs }
+    }
+
+    pub(crate) fn from_subcompaction(subcompaction: &Subcompaction) -> Self {
+        Self::new(
+            subcompaction
+                .inputs
+                .iter()
+                .map(CheckpointInput::from_input)
+                .collect(),
+        )
+    }
+
+    fn from_meta(subcompaction: &brpb::LogFileSubcompaction) -> Self {
+        Self::new(
+            subcompaction
+                .get_meta()
+                .get_sources()
+                .iter()
+                .flat_map(|source| {
+                    source.get_spans().iter().map(move |span| CheckpointInput {
+                        path: source.get_path().to_owned(),
+                        offset: span.offset,
+                        length: span.length,
+                    })
+                })
+                .collect(),
+        )
+    }
+}
+
+fn final_artifacts_prefix(out_prefix: &str) -> String {
+    format!("{}/{}", out_prefix, META_OUT_REL)
+}
+
+async fn list_subcompaction_meta_keys(
+    storage: &dyn ExternalStorage,
+    artifacts_prefix: &str,
+) -> Result<Vec<String>> {
+    let mut stream = storage.iter_prefix(artifacts_prefix);
+    let mut keys = Vec::new();
+    while let Some(item) = stream.try_next().await? {
+        if item.key.ends_with(".cmeta") {
+            keys.push(item.key);
+        }
+    }
+    keys.sort();
+    Ok(keys)
+}
+
+async fn load_checkpointed_subcompaction_meta(
+    storage: &dyn ExternalStorage,
+    key: String,
+) -> Option<LoadedCheckpointedSubcompactions> {
+    let mut content = vec![];
+    match storage.read(&key).read_to_end(&mut content).await {
+        Ok(_) => match protobuf::parse_from_bytes::<brpb::LogFileSubcompactions>(&content) {
+            Ok(metas) => {
+                let mut loaded = LoadedCheckpointedSubcompactions {
+                    cmeta_files_total_size: content.len() as u64,
+                    ..Default::default()
+                };
+                loaded.sst_files_total_size = metas
+                    .subcompactions
+                    .iter()
+                    .flat_map(|subcompaction| subcompaction.get_sst_outputs())
+                    .map(|file| file.get_size())
+                    .sum::<u64>();
+                loaded.subcompactions.extend(
+                    metas
+                        .subcompactions
+                        .iter()
+                        .map(CheckpointedSubcompaction::from_meta),
+                );
+                Some(loaded)
+            }
+            Err(err) => {
+                warn!("SaveMeta: failed to load subcompaction meta batch, ignoring it.";
+                    "key" => %key,
+                    "err" => %err);
+                None
+            }
+        },
+        Err(err) => {
+            warn!("SaveMeta: failed to read subcompaction meta batch, ignoring it.";
+                "key" => %key,
+                "err" => %err);
+            None
+        }
+    }
+}
+
+pub(crate) async fn load_checkpointed_subcompactions(
+    storage: &dyn ExternalStorage,
+    artifacts_prefix: &str,
+) -> Result<LoadedCheckpointedSubcompactions> {
+    let mut loaded = LoadedCheckpointedSubcompactions::default();
+    let mut metas = stream::iter(list_subcompaction_meta_keys(storage, artifacts_prefix).await?)
+        .map(|key| load_checkpointed_subcompaction_meta(storage, key))
+        .buffer_unordered(CHECKPOINT_META_LOAD_CONCURRENCY);
+    while let Some(meta) = metas.next().await {
+        if let Some(meta) = meta {
+            loaded.cmeta_files_total_size += meta.cmeta_files_total_size;
+            loaded.sst_files_total_size += meta.sst_files_total_size;
+            loaded.subcompactions.extend(meta.subcompactions);
+        }
+    }
+    Ok(loaded)
+}
+
+impl MetaBatchWriter {
+    fn new(out_prefix: &str, cfg: BatchConfig) -> Self {
+        Self {
+            artifacts_dir: final_artifacts_prefix(out_prefix),
+            run_id: Uuid::new_v4().to_string(),
+            next_batch_seq: 0,
+            buffer: brpb::LogFileSubcompactions::new(),
+            cfg,
+            generated_cmeta_files_total_size: 0,
+        }
+    }
+
+    fn should_flush(&self, current_bytes: usize) -> bool {
+        self.buffer.subcompactions.len() >= self.cfg.max_subcompactions_per_batch
+            || current_bytes >= self.cfg.target_bytes_per_batch
+    }
+
+    async fn write_bytes(storage: &dyn ExternalStorage, key: &str, bytes: &[u8]) -> Result<()> {
+        retry(|| async {
+            let reader = UnpinReader(Box::new(Cursor::new(bytes)));
+            storage
+                .write(key, reader, bytes.len() as _)
+                .map_err(JustRetry)
+                .await
+        })
+        .await
+        .map_err(|err| err.0)?;
+        Ok(())
+    }
+
+    async fn append_and_flush_if_needed(
+        &mut self,
+        storage: &dyn ExternalStorage,
+        subcompaction_meta: brpb::LogFileSubcompaction,
+    ) -> Result<()> {
+        self.buffer.mut_subcompactions().push(subcompaction_meta);
+        let current_bytes = self.buffer.compute_size();
+        if self.should_flush(current_bytes as usize) {
+            self.flush(storage).await?;
+        }
+        Ok(())
+    }
+
+    async fn flush(&mut self, storage: &dyn ExternalStorage) -> Result<()> {
+        if self.buffer.subcompactions.is_empty() {
+            return Ok(());
+        }
+        let bytes = self.buffer.write_to_bytes()?;
+        self.flush_bytes(storage, &bytes).await
+    }
+
+    async fn flush_bytes(&mut self, storage: &dyn ExternalStorage, bytes: &[u8]) -> Result<()> {
+        let batch_id = format!("{}_{}", self.run_id, self.next_batch_seq);
+        let batch_file_name = format!("batch_{}.cmeta", batch_id);
+        let batch_key = format!("{}/{}", self.artifacts_dir, batch_file_name);
+        Self::write_bytes(storage, &batch_key, bytes).await?;
+
+        self.generated_cmeta_files_total_size += bytes.len() as u64;
+        self.next_batch_seq += 1;
+        self.buffer = brpb::LogFileSubcompactions::new();
+        Ok(())
+    }
+}
+
 impl SaveMeta {
-    fn comments(&self) -> String {
+    #[cfg(test)]
+    pub(crate) fn with_batch_limits(
+        mut self,
+        max_subcompactions_per_batch: usize,
+        target_bytes_per_batch: usize,
+    ) -> Self {
+        self.batch_cfg = BatchConfig {
+            max_subcompactions_per_batch: max_subcompactions_per_batch.max(1),
+            target_bytes_per_batch: target_bytes_per_batch.max(1),
+        };
+        self
+    }
+
+    pub fn with_checkpointed_file_sizes(mut self, file_sizes: CheckpointedFileSizes) -> Self {
+        self.checkpointed_file_sizes = Some(file_sizes);
+        self
+    }
+
+    fn comments(&self, cfg: &ExecutionConfig) -> String {
         let now = Local::now();
+        let config = CompactLogBackupConfig {
+            from_ts: cfg.from_ts,
+            until_ts: cfg.until_ts,
+            shift_ts: cfg.shift_ts,
+            cal_shift_ts: cfg.calculate_shift_ts,
+            minimal_compaction_size: cfg.minimal_compaction_size,
+            shard: cfg.shard.map(|shard| CompactLogBackupShard {
+                index: shard.index,
+                total: shard.total,
+            }),
+        };
         let stat = CompactLogBackupStatistic {
             start_time: self.begin,
-            end_time: Local::now(),
+            end_time: now,
             time_taken: (now - self.begin).to_std().unwrap_or_default(),
             exec_by: tikv_util::sys::hostname().unwrap_or_default(),
+            config,
 
             load_stat: self.stats.load_stat.clone(),
             subcompact_stat: self.stats.compact_stat.clone(),
@@ -79,25 +381,36 @@ impl SaveMeta {
         };
         serde_json::to_string(&stat).unwrap_or_else(|err| format!("ERR DURING MARSHALING: {}", err))
     }
+
+    fn generated_file_sizes(
+        &self,
+        new_cmeta_files_total_size: u64,
+    ) -> CheckpointedFileSizesSnapshot {
+        let checkpointed = self
+            .checkpointed_file_sizes
+            .as_ref()
+            .map(CheckpointedFileSizes::snapshot)
+            .unwrap_or_default();
+        CheckpointedFileSizesSnapshot {
+            cmeta_files_total_size: checkpointed.cmeta_files_total_size
+                + new_cmeta_files_total_size,
+            sst_files_total_size: checkpointed.sst_files_total_size
+                + self.stats.compact_stat.physical_bytes_out,
+        }
+    }
 }
 
 impl ExecHooks for SaveMeta {
     async fn before_execution_started(&mut self, cx: BeforeStartCtx<'_>) -> Result<()> {
         self.begin = Local::now();
-        let run_info = &mut self.collector;
-        run_info.mut_meta().set_name(cx.this.gen_name());
-        run_info
-            .mut_meta()
-            .set_compaction_from_ts(cx.this.cfg.from_ts);
-        run_info
-            .mut_meta()
-            .set_compaction_until_ts(cx.this.cfg.until_ts);
-        run_info
-            .mut_meta()
-            .set_artifacts(format!("{}/{}", cx.this.out_prefix, META_OUT_REL));
-        run_info
-            .mut_meta()
-            .set_generated_files(format!("{}/{}", cx.this.out_prefix, SST_OUT_REL));
+        self.meta_writer = Some(MetaBatchWriter::new(&cx.this.out_prefix, self.batch_cfg));
+
+        let meta = self.collector.mut_meta();
+        meta.set_name(cx.this.gen_name());
+        meta.set_compaction_from_ts(cx.this.cfg.from_ts);
+        meta.set_compaction_until_ts(cx.this.cfg.until_ts);
+        meta.set_artifacts(final_artifacts_prefix(&cx.this.out_prefix));
+        meta.set_generated_files(format!("{}/{}", cx.this.out_prefix, SST_OUT_REL));
         Ok(())
     }
 
@@ -118,59 +431,52 @@ impl ExecHooks for SaveMeta {
         _cid: CId,
         cx: SubcompactionFinishCtx<'_>,
     ) -> Result<()> {
-        use protobuf::Message;
-
         self.collector.add_subcompaction(cx.result);
         self.stats.update_subcompaction(cx.result);
 
-        let first_version = cx
-            .result
-            .meta
-            .region_meta_hints
-            .first()
-            .map(|h| {
-                format!(
-                    "_{}_{}",
-                    h.get_region_epoch().get_version(),
-                    h.get_region_epoch().get_conf_ver()
-                )
-            })
-            .unwrap_or_default();
-        let meta_name = format!(
-            "{}_{}_{}_{}{}.cmeta",
-            util::aligned_u64(cx.result.origin.input_min_ts),
-            util::aligned_u64(cx.result.origin.input_max_ts),
-            util::aligned_u64(cx.result.origin.crc64()),
-            cx.result.origin.region_id,
-            first_version
-        );
-        let meta_name = format!("{}/{}/{}", cx.this.out_prefix, META_OUT_REL, meta_name);
-        let mut metas = brpb::LogFileSubcompactions::new();
-        metas.mut_subcompactions().push(cx.result.meta.clone());
-        let meta_bytes = metas.write_to_bytes()?;
-        retry(|| async {
-            let reader = UnpinReader(Box::new(Cursor::new(&meta_bytes)));
-            cx.external_storage
-                .write(&meta_name, reader, meta_bytes.len() as _)
-                .map_err(JustRetry)
-                .await
-        })
-        .await
-        .map_err(|err| err.0)?;
+        let writer = self.meta_writer.as_mut().ok_or_else(|| {
+            crate::Error::from(ErrorKind::Other(
+                "SaveMeta: meta writer hasn't been initialized".to_owned(),
+            ))
+        })?;
+        writer
+            .append_and_flush_if_needed(cx.external_storage, cx.result.meta.clone())
+            .await?;
         Result::Ok(())
     }
 
     async fn after_execution_finished(&mut self, cx: AfterFinishCtx<'_>) -> Result<()> {
-        if self.collector.is_empty() {
-            warn!("Nothing to write, skipping saving meta.");
-            return Ok(());
+        let collector_is_empty = self.collector.is_empty();
+        if collector_is_empty {
+            if cx.this.cfg.shard.is_none() {
+                warn!("Nothing to write, skipping saving meta.");
+                return Ok(());
+            }
+            info!("No subcompactions matched shard; saving an empty migration.");
         }
-        let comments = self.comments();
-        self.collector.mut_meta().set_comments(comments);
+        let generated_cmeta_files_total_size = if let Some(writer) = self.meta_writer.as_mut() {
+            writer.flush(cx.storage.as_ref()).await?;
+            writer.generated_cmeta_files_total_size
+        } else {
+            0
+        };
+
+        let comments = self.comments(&cx.this.cfg);
+        let generated_file_sizes = self.generated_file_sizes(generated_cmeta_files_total_size);
+        let meta = self.collector.mut_meta();
+        meta.set_generated_cmeta_files_total_size(generated_file_sizes.cmeta_files_total_size);
+        meta.set_generated_sst_files_total_size(generated_file_sizes.sst_files_total_size);
+        meta.set_comments(comments);
         let begin = Instant::now();
-        self.collector
-            .write_migration(Arc::clone(cx.storage))
-            .await?;
+        if collector_is_empty {
+            self.collector
+                .write_empty_migration(cx.storage.as_ref())
+                .await?;
+        } else {
+            self.collector
+                .write_migration(Arc::clone(cx.storage), cx.this.cfg.shard)
+                .await?;
+        }
         info!("Migration written."; "duration" => ?begin.elapsed());
         Ok(())
     }

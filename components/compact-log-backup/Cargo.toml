@@ -9,6 +9,7 @@ failpoints = ["fail/failpoints"]
 
 [dependencies]
 async-compression = { version = "0.4.12", features = ["tokio", "futures-io", "zstd"] }
+backup-stream = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 cloud = { workspace = true }
@@ -29,11 +30,12 @@ keys = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.4"
 log_wrappers = { workspace = true }
+parking_lot = "0.12"
 pin-project = "1.0"
 prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
 protobuf = { version = "2.8", features = ["bytes"] }
 rand = "0.8"
-serde = "1.0"
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 slog = { workspace = true }
 slog-global ={ workspace = true }
