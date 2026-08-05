@@ -123,9 +123,15 @@ fn test_node_merge_rollback() {
 fn test_node_merge_restart() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster.cfg);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // This test explicitly controls all merge and peer-removal operators. If the
+    // default operator is enabled, it may restore the removed peer on store 3
+    // during restart before stale data is cleaned up, making the final checks
+    // race with the newly added replica.
+    pd_client.disable_default_operator();
+
     cluster.run();
 
-    let pd_client = Arc::clone(&cluster.pd_client);
     let region = pd_client.get_region(b"k1").unwrap();
     cluster.must_split(&region, b"k2");
     let left = pd_client.get_region(b"k1").unwrap();
