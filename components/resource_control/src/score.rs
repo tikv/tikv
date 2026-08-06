@@ -31,6 +31,12 @@ use tikv_util::{
 #[cfg(test)]
 pub(crate) const TARGET_CPU: f64 = 90.0;
 
+/// Shortest interval [`ThreadGroupCpuTracker::measure_cpu_cores`] will measure
+/// over; below this the tick count is too small to be meaningful and the cached
+/// value is returned instead. Mirrors
+/// `ReadPoolCpuTimeTracker::get_unified_read_pool_cpu`.
+const MIN_MEASURE_INTERVAL: Duration = Duration::from_millis(500);
+
 /// Maps `score` onto a `[0, 1]` pressure fraction: `0` at `start`, `1` at
 /// `end`, linear in between, clamped.
 pub(crate) fn pressure_fraction(score: f64, start: f64, end: f64) -> f64 {
@@ -125,9 +131,7 @@ impl ThreadGroupCpuTracker {
     pub fn measure_cpu_cores(&mut self) -> f64 {
         let check_time = Instant::now_coarse();
         let duration = check_time.saturating_duration_since(self.prev_check_time);
-        // Minimum duration check to avoid noise - if too soon, return the
-        // cached value (mirrors ReadPoolCpuTimeTracker::get_unified_read_pool_cpu).
-        if duration < Duration::from_millis(500) {
+        if duration < MIN_MEASURE_INTERVAL {
             return self.prev_cpu_cores;
         }
 

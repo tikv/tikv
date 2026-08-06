@@ -93,7 +93,7 @@ const MAX_HISTORICAL_WINDOW_MINS: u64 = 60;
 fn validate_cpu_pct(name: &str, value: f64) -> Result<(), Box<dyn Error>> {
     // `!is_finite()` also rejects NaN, which would otherwise compare false
     // against every threshold and silently disable the consumer.
-    if !value.is_finite() || value < MIN_CPU_PCT || value > MAX_CPU_PCT {
+    if !value.is_finite() || !(MIN_CPU_PCT..=MAX_CPU_PCT).contains(&value) {
         return Err(format!(
             "resource-control.{} must be a finite percentage in [{}, {}], but got {}",
             name, MIN_CPU_PCT, MAX_CPU_PCT, value
@@ -138,8 +138,8 @@ impl Config {
             .into());
         }
 
-        if self.historical_usage_window_mins < MIN_HISTORICAL_WINDOW_MINS
-            || self.historical_usage_window_mins > MAX_HISTORICAL_WINDOW_MINS
+        if !(MIN_HISTORICAL_WINDOW_MINS..=MAX_HISTORICAL_WINDOW_MINS)
+            .contains(&self.historical_usage_window_mins)
         {
             return Err(format!(
                 "resource-control.historical-usage-window-mins must be in [{}, {}], but got {}",

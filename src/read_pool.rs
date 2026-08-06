@@ -814,26 +814,19 @@ impl ReadPoolConfigRunner {
     // Adjust pool size using based on thread utilization or cpu utilization.
     fn adjust_pool_size(&mut self) {
         let resource_manager = match &self.handle {
+            // The runner only exists for the unified (Yatp) pool; see
+            // running_tasks(). `resource_manager` is None only when
+            // resource-control.enabled is false, which is startup-only.
             ReadPoolHandle::Yatp {
                 resource_manager, ..
             } => resource_manager.clone(),
-            _ => None,
+            _ => unreachable!(),
         };
-        // Only fold the ResourceGroupManager into this ladder when two-phase
-        // scheduling is actually enabled — otherwise it has no opinion worth
-        // consulting and the pool behaves exactly as it does without one.
-        let scheduling_rm = resource_manager
-            .as_ref()
-            .filter(|rm| rm.get_config().value().enable_fair_scheduling);
 
-        // Fair scheduling drives group phases off the pool's scale-in/recovery
-        // cycle, so it must keep ticking even with auto-adjust off — which is
-        // the default. Only the thread-utilization ladder below is gated on it.
-        if !self.auto_adjust && scheduling_rm.is_none() {
-            // Clear stale phase flags so they don't go live on re-enable.
-            if let Some(rm) = resource_manager.as_ref() {
-                rm.reset_group_priorities();
-            }
+        // Without auto-adjustment or a resource manager nothing can move the
+        // pool. Whether fair scheduling is on is the manager's own business:
+        // its read-pool entry points below are no-ops while it is off.
+        if !self.auto_adjust && resource_manager.is_none() {
             return;
         }
 
@@ -847,16 +840,29 @@ impl ReadPoolConfigRunner {
                 return;
             }
         };
-        let mut target_cpu_cores = if self.cpu_threshold > 0.0 {
-            self.cpu_threshold * SysQuota::cpu_cores_quota()
+
+        // With auto-adjustment off the pool is pinned at core_thread_count: the
+        // thread ladder below can recover up to it but never shrink past it,
+        // leaving fair scheduling's CPU ladder as the only way the pool moves.
+        let (mut target_cpu_cores, min_thread_count, max_thread_count) = if self.auto_adjust {
+            let target = if self.cpu_threshold > 0.0 {
+                self.cpu_threshold * SysQuota::cpu_cores_quota()
+            } else {
+                SysQuota::cpu_cores_quota()
+            };
+            (target, self.min_thread_count, self.max_thread_count)
         } else {
-            SysQuota::cpu_cores_quota()
+            (
+                SysQuota::cpu_cores_quota(),
+                self.core_thread_count,
+                self.core_thread_count,
+            )
         };
 
-        // With scheduling enabled, fold the ResourceGroupManager's own
-        // foreground-pressure-driven CPU target into the local ceiling —
-        // whichever is tighter wins.
-        if let Some(rm) = scheduling_rm {
+        // Fold the ResourceGroupManager's foreground-pressure-driven target
+        // into the local ceiling — whichever is tighter wins. It returns no
+        // ceiling when fair scheduling is off.
+        if let Some(rm) = resource_manager.as_ref() {
             let rm_target_cpu =
                 rm.compute_read_pool_target_cpu(read_pool_cpu, self.interval.as_secs_f64());
             target_cpu_cores = target_cpu_cores.min(rm_target_cpu);
@@ -867,34 +873,30 @@ impl ReadPoolConfigRunner {
 
         // Scaling out is otherwise a purely local decision (process CPU,
         // thread usage, task queue depth, or read_pool_cpu vs
-        // target_cpu_cores). With scheduling enabled, additionally defer to
-        // the ResourceGroupManager's own idle signal so the pool doesn't
-        // grow while it's still trying to protect foreground latency.
-        let scale_out_allowed = match scheduling_rm {
+        // target_cpu_cores). Additionally defer to the ResourceGroupManager's
+        // idle signal so the pool doesn't grow while it's still trying to
+        // protect foreground latency; it always allows scale-out when fair
+        // scheduling is off.
+        let scale_out_allowed = match resource_manager.as_ref() {
             Some(rm) => rm.read_pool_scale_up_allowed(),
             None => true,
         };
 
-        // Auto-adjustment ladder (process CPU, thread usage, queue depth): the
-        // only path that grows past core_thread_count, so it stays gated.
-        let busy_thread_scale_out = self.auto_adjust
-            && self.cur_thread_count < self.max_thread_count
+        // Thread-utilization ladder (process CPU, thread usage, queue depth),
+        // bounded by the effective range computed above.
+        let busy_thread_scale_out = self.cur_thread_count < max_thread_count
             && scale_out_allowed
             && process_cpu * (self.cur_thread_count as f64 + 1.0) / (self.cur_thread_count as f64)
                 < target_cpu_cores
             && thread_usage > self.cur_thread_count as f64 * READ_POOL_THREAD_HIGH_THRESHOLD
             && running_tasks > self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD;
 
-        let busy_thread_scale_in = self.auto_adjust
-            && self.cur_thread_count > self.min_thread_count
+        let busy_thread_scale_in = self.cur_thread_count > min_thread_count
             && thread_usage < (self.cur_thread_count - 1) as f64 * READ_POOL_THREAD_LOW_THRESHOLD
             && running_tasks < self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD;
 
         let leeway = 0.1;
-        let has_cpu_ceiling =
-            self.cpu_threshold > 0.0 || target_cpu_cores < SysQuota::cpu_cores_quota();
-        let busy_cpu_scale_in =
-            has_cpu_ceiling && read_pool_cpu > (leeway + 1.0) * target_cpu_cores;
+        let busy_cpu_scale_in = read_pool_cpu > (leeway + 1.0) * target_cpu_cores;
         let busy_cpu_scale_out = read_pool_cpu < (1.0 - leeway) * target_cpu_cores
             && self.cur_thread_count < self.core_thread_count
             && scale_out_allowed;
@@ -926,21 +928,14 @@ impl ReadPoolConfigRunner {
         }
 
         // While we haven't scaled back up to core_thread_count, keep noisy
-        // resource groups deprioritized. Once recovered, release everyone.
-        match scheduling_rm {
-            Some(rm) => {
-                if self.cur_thread_count < self.core_thread_count {
-                    rm.deprioritize_over_quota_groups();
-                } else {
-                    rm.reset_group_priorities();
-                }
-            }
-            // Fair scheduling off: phase flags are ignored, but clear them so
-            // re-enabling starts from a clean slate.
-            None => {
-                if let Some(rm) = resource_manager.as_ref() {
-                    rm.reset_group_priorities();
-                }
+        // resource groups deprioritized. Once recovered, release everyone —
+        // which also clears any flags left over from when fair scheduling was
+        // last enabled, since deprioritizing is a no-op while it is off.
+        if let Some(rm) = resource_manager.as_ref() {
+            if self.cur_thread_count < self.core_thread_count {
+                rm.deprioritize_over_quota_groups();
+            } else {
+                rm.reset_group_priorities();
             }
         }
     }
@@ -1692,6 +1687,38 @@ mod tests {
         assert_eq!(
             runner.cur_thread_count, before,
             "pool must not scale when both fair scheduling and auto-adjust are off"
+        );
+
+        worker.stop();
+    }
+
+    #[test]
+    fn test_auto_adjust_off_pins_thread_count_with_fair_scheduling_on() {
+        // The thread ladder is bounded (min == max == core_thread_count) rather
+        // than gated on auto_adjust, so an idle pool must not drift. Without
+        // that bound the idle thread usage here trips busy_thread_scale_in.
+        let rm_config = resource_control::config::Config {
+            enable_fair_scheduling: true,
+            ..Default::default()
+        };
+        let resource_manager = Arc::new(ResourceGroupManager::new(rm_config));
+        let (mut runner, worker) = runner_with_auto_adjust_off(Some(resource_manager));
+        // A wider configured range than core: only the effective bound stops
+        // the ladder from using it.
+        runner.min_thread_count = 1;
+        runner.max_thread_count = 16;
+
+        // No foreground pressure, so there is no CPU ceiling and the thread
+        // ladder is the only thing that could move the pool.
+        let before = runner.cur_thread_count;
+        for _ in 0..5 {
+            runner.adjust_pool_size();
+        }
+
+        assert_eq!(
+            runner.cur_thread_count, before,
+            "auto-adjust off must pin the pool at core_thread_count, got {}",
+            runner.cur_thread_count
         );
 
         worker.stop();

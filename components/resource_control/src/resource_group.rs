@@ -829,6 +829,9 @@ impl ResourceGroupManager {
     /// elevated usage, and comparing against it again here would silently
     /// (and wrongly) release the group early.
     pub fn deprioritize_over_quota_groups(&self) {
+        if !self.config.value().enable_fair_scheduling {
+            return;
+        }
         let now = RuTracker::now_secs();
         let burst_factor = 1.0 + self.config.value().baseline_burst_pct / 100.0;
         for entry in &self.ru_trackers {
@@ -881,7 +884,10 @@ impl ResourceGroupManager {
             .with_label_values(&["current"])
             .set(read_pool_cpu * 100.0);
 
-        if self.read_pool_cpu_pressure() > 0.0 {
+        // The floor and metrics above are kept current either way, so
+        // re-enabling fair scheduling doesn't start from a stale floor; only
+        // the ceiling itself is gated.
+        if self.config.value().enable_fair_scheduling && self.read_pool_cpu_pressure() > 0.0 {
             (read_pool_cpu * THROTTLE_DECREASE_FACTOR).max(floor_cpu)
         } else {
             f64::INFINITY
@@ -892,7 +898,9 @@ impl ResourceGroupManager {
     /// leeway threshold) on the last `adjust_group_scheduling` tick, i.e. the
     /// unified read pool may scale its thread count up toward its max.
     pub fn read_pool_scale_up_allowed(&self) -> bool {
-        self.read_pool_scale_up_allowed.load(Ordering::Relaxed)
+        // Without fair scheduling there is nothing holding the pool back.
+        !self.config.value().enable_fair_scheduling
+            || self.read_pool_scale_up_allowed.load(Ordering::Relaxed)
     }
 
     /// Returns the token-bucket debt delay for `group`, or `None` if no
@@ -2216,7 +2224,10 @@ pub(crate) mod tests {
         // A group over its own quota stays deprioritized until the caller
         // explicitly calls reset_group_priorities — e.g. once the unified
         // read pool has scaled back up to core_thread_count.
-        let mgr = ResourceGroupManager::default();
+        // deprioritize/target-cpu are gated on fair scheduling.
+        let mut cfg = Config::default();
+        cfg.enable_fair_scheduling = true;
+        let mgr = ResourceGroupManager::new(cfg);
 
         let spike = new_resource_group_ru("spike".into(), 1000, MEDIUM_PRIORITY);
         mgr.add_resource_group(spike);
@@ -2281,7 +2292,10 @@ pub(crate) mod tests {
         // `cached_historical_rate` has drifted up to absorb its elevated
         // usage (current no longer exceeds hist * burst_factor) — only
         // reset_group_priorities is allowed to release it.
-        let mgr = ResourceGroupManager::default();
+        // deprioritize/target-cpu are gated on fair scheduling.
+        let mut cfg = Config::default();
+        cfg.enable_fair_scheduling = true;
+        let mgr = ResourceGroupManager::new(cfg);
 
         let spike = new_resource_group_ru("spike".into(), 1000, MEDIUM_PRIORITY);
         mgr.add_resource_group(spike);
@@ -2375,7 +2389,10 @@ pub(crate) mod tests {
 
     #[test]
     fn test_compute_read_pool_target_cpu_holds_in_leeway_zone() {
-        let mgr = ResourceGroupManager::default();
+        // deprioritize/target-cpu are gated on fair scheduling.
+        let mut cfg = Config::default();
+        cfg.enable_fair_scheduling = true;
+        let mgr = ResourceGroupManager::new(cfg);
         // cpu_score in the leeway zone: not engaged (bg not at floor), and
         // above leeway_threshold, so neither scale-down nor scale-up fires.
         mgr.online_adjust_resource_quota(65.0);
@@ -2391,8 +2408,76 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_compute_read_pool_target_cpu_scales_down_with_pressure() {
+    fn test_read_pool_entry_points_are_inert_without_fair_scheduling() {
+        // The read pool consults the manager unconditionally and relies on it
+        // to be a no-op while fair scheduling is off, so that gate lives here
+        // rather than at the call site.
         let mgr = ResourceGroupManager::default();
+        assert!(!mgr.get_config().value().enable_fair_scheduling);
+
+        // Pressure is still tracked (adjust_group_scheduling is not gated)...
+        mgr.set_bg_cpu_at_floor(true);
+        mgr.online_adjust_resource_quota(TARGET_CPU);
+        assert_eq!(mgr.read_pool_cpu_pressure(), 1.0);
+
+        // ...but it must not turn into a ceiling, or hold back scale-out.
+        assert_eq!(
+            mgr.compute_read_pool_target_cpu(4.0, 10.0),
+            f64::INFINITY,
+            "no ceiling should be imposed while fair scheduling is off"
+        );
+        assert!(
+            mgr.read_pool_scale_up_allowed(),
+            "scale-out must not be blocked while fair scheduling is off"
+        );
+
+        // And a group that genuinely is over quota — so that dropping the gate
+        // really would deprioritize it — must be left alone.
+        let spike = new_resource_group_ru("spike".into(), 1000, MEDIUM_PRIORITY);
+        mgr.add_resource_group(spike);
+        let ctl = mgr.derive_controller("read".into(), true);
+        let t0 = RuTracker::now_secs();
+        {
+            let e = mgr
+                .ru_trackers
+                .entry("spike".to_owned())
+                .or_insert_with(|| {
+                    Mutex::new((
+                        RuTracker::new(t0, 30),
+                        Arc::new(ResourceLimiter::new(
+                            "".into(),
+                            f64::INFINITY,
+                            f64::INFINITY,
+                            0,
+                            false,
+                        )),
+                    ))
+                });
+            let mut tr = e.lock().unwrap();
+            tr.0.record_at(3000, t0 + 30);
+            tr.0.record_at(0, t0 + 60); // close bucket: 3000µs baseline
+            tr.0.record_at(12000, t0 + 90); // open bucket: 12000µs spike
+        }
+        // Refresh cached_historical_rate, as resource_control's own tick would.
+        mgr.online_adjust_resource_quota(0.0);
+        mgr.deprioritize_over_quota_groups();
+        assert!(
+            !ctl.resource_consumptions
+                .read()
+                .get(b"spike".as_ref())
+                .unwrap()
+                .is_over_baseline
+                .load(Ordering::Relaxed),
+            "deprioritize must be a no-op while fair scheduling is off"
+        );
+    }
+
+    #[test]
+    fn test_compute_read_pool_target_cpu_scales_down_with_pressure() {
+        // deprioritize/target-cpu are gated on fair scheduling.
+        let mut cfg = Config::default();
+        cfg.enable_fair_scheduling = true;
+        let mgr = ResourceGroupManager::new(cfg);
         // Seed a historical floor of 0 cores (cold tracker), then engage
         // pressure (cpu_score == TARGET_CPU).
         mgr.set_bg_cpu_at_floor(true);
