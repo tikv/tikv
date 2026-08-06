@@ -293,12 +293,13 @@ impl MemComparableByteCodec {
     ///
     /// When there is an error, `dest` may contain partially written data.
     pub fn try_decode_first_in_place(buffer: &mut [u8]) -> Result<(usize, usize)> {
-        Self::try_decode_first_internal::<Ascending>(
-            buffer.as_ptr(),
-            buffer.len(),
-            buffer.as_mut_ptr(),
-            buffer.len(),
-        )
+        // Derive both pointers from the same unique mutable reborrow so that
+        // Stacked/Tree Borrows provenance stays valid when src and dest alias
+        // (in-place decode). Calling as_ptr() then as_mut_ptr() invalidates the
+        // shared-derived pointer under Stacked Borrows; using it later is UB.
+        let ptr = buffer.as_mut_ptr();
+        let len = buffer.len();
+        Self::try_decode_first_internal::<Ascending>(ptr, len, ptr, len)
     }
 
     /// Decodes bytes in descending memory-comparable format in place, i.e.
@@ -321,12 +322,11 @@ impl MemComparableByteCodec {
     ///
     /// When there is an error, `dest` may contain partially written data.
     pub fn try_decode_first_in_place_desc(buffer: &mut [u8]) -> Result<(usize, usize)> {
-        let (read_bytes, written_bytes) = Self::try_decode_first_internal::<Descending>(
-            buffer.as_ptr(),
-            buffer.len(),
-            buffer.as_mut_ptr(),
-            buffer.len(),
-        )?;
+        // Same provenance fix as try_decode_first_in_place (see comment there).
+        let ptr = buffer.as_mut_ptr();
+        let len = buffer.len();
+        let (read_bytes, written_bytes) =
+            Self::try_decode_first_internal::<Descending>(ptr, len, ptr, len)?;
         Self::flip_bytes_in_place(buffer, written_bytes);
         Ok((read_bytes, written_bytes))
     }
@@ -1168,6 +1168,76 @@ mod tests {
                 let mut dest = vec![0; src.len()];
                 MemComparableByteCodec::try_decode_first(src.as_slice(), dest.as_mut_slice())
                     .unwrap();
+            }
+        }
+    }
+
+    /// Miri soundness regression for in-place decode aliasing UB.
+    ///
+    /// # Unsoundness (pre-fix)
+    ///
+    /// `try_decode_first_in_place` / `_desc` are **safe** APIs. Pre-fix they did:
+    ///
+    /// ```ignore
+    /// try_decode_first_internal(buffer.as_ptr(), len, buffer.as_mut_ptr(), len)
+    /// ```
+    ///
+    /// Under Stacked Borrows, `as_mut_ptr()` invalidates the SharedReadOnly tag from
+    /// `as_ptr()`. The internal `ptr::copy` then reads via the invalidated pointer → UB.
+    /// Any safe caller of this public API could trigger it (library unsoundness).
+    ///
+    /// # How this test proves it
+    ///
+    /// Under Miri with the pre-fix code this test fails with:
+    /// `Undefined Behavior: ... tag does not exist in the borrow stack`
+    /// pointing at `ptr::copy` in `try_decode_first_internal`, with help tags created
+    /// at `as_ptr()` and invalidated at `as_mut_ptr()`.
+    ///
+    /// With the fix (both pointers from one `as_mut_ptr()`), Miri accepts the test.
+    ///
+    /// Run: `cargo +nightly miri test -p codec -- miri_soundness_try_decode_first_in_place`
+    #[test]
+    fn miri_soundness_try_decode_first_in_place() {
+        // Cover empty, partial group, full group(s), multi-group — all in-place.
+        let payloads: &[&[u8]] = &[
+            b"",
+            b"\x00",
+            b"abc",
+            b"\x01\x02\x03\x04\x05\x06\x07",
+            b"\x00\x00\x00\x00\x00\x00\x00\x00", // exactly one group of data
+            b"\x01\x02\x03\x04\x05\x06\x07\x08",
+            b"\x01\x02\x03\x04\x05\x06\x07\x08\x09",
+            &[0xA5; 64],
+            &[0x3C; 100],
+        ];
+
+        for &payload in payloads {
+            // ascending in-place
+            {
+                let mut encoded = vec![0; MemComparableByteCodec::encoded_len(payload.len())];
+                let n = MemComparableByteCodec::encode_all(payload, encoded.as_mut_slice());
+                assert_eq!(n, encoded.len());
+
+                let mut buf = encoded.clone();
+                let (read, written) =
+                    MemComparableByteCodec::try_decode_first_in_place(buf.as_mut_slice()).unwrap();
+                assert_eq!(read, encoded.len());
+                assert_eq!(written, payload.len());
+                assert_eq!(&buf[..written], payload);
+            }
+            // descending in-place
+            {
+                let mut encoded = vec![0; MemComparableByteCodec::encoded_len(payload.len())];
+                let n = MemComparableByteCodec::encode_all_desc(payload, encoded.as_mut_slice());
+                assert_eq!(n, encoded.len());
+
+                let mut buf = encoded.clone();
+                let (read, written) =
+                    MemComparableByteCodec::try_decode_first_in_place_desc(buf.as_mut_slice())
+                        .unwrap();
+                assert_eq!(read, encoded.len());
+                assert_eq!(written, payload.len());
+                assert_eq!(&buf[..written], payload);
             }
         }
     }
