@@ -1246,7 +1246,11 @@ mod benches {
             let src_ptr_end = src_ptr.add(src.len());
             let dest_ptr_end = dest_ptr.add(dest.len());
 
-            while src_ptr <= src_ptr_end {
+            // Process groups until the final (possibly empty) padded group, then
+            // stop. Unconditionally advancing src by MEMCMP_GROUP_SIZE after that
+            // group creates a pointer past one-past-the-end of the allocation,
+            // which is UB under Rust's pointer rules (same class as tikv#7751).
+            loop {
                 // We needs to write GROUP_SIZE + 1 bytes then, so we assert a bound.
                 assert!(
                     dest_ptr.add(super::MEMCMP_GROUP_SIZE + 1) <= dest_ptr_end,
@@ -1266,12 +1270,17 @@ mod benches {
                         padding_size,
                     );
                 }
-                src_ptr = src_ptr.add(super::MEMCMP_GROUP_SIZE);
                 dest_ptr = dest_ptr.add(super::MEMCMP_GROUP_SIZE);
 
                 let padding_marker = !(padding_size as u8);
                 dest_ptr.write(padding_marker);
                 dest_ptr = dest_ptr.add(1);
+
+                // Final group (remaining data <= one group, including empty src).
+                if remaining_size <= super::MEMCMP_GROUP_SIZE {
+                    break;
+                }
+                src_ptr = src_ptr.add(super::MEMCMP_GROUP_SIZE);
             }
 
             dest_ptr.offset_from(dest.as_mut_ptr()) as usize
