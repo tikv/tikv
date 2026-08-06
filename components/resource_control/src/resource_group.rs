@@ -854,11 +854,8 @@ impl ResourceGroupManager {
     /// scaled back up to `core_thread_count`, releasing any groups that
     /// [`Self::deprioritize_over_quota_groups`] had deprioritized.
     pub fn reset_group_priorities(&self) {
-        for entry in &self.ru_trackers {
-            let group_bytes = entry.key().as_bytes();
-            for controller in self.registry.read().iter() {
-                controller.set_group_phase(group_bytes, false);
-            }
+        for controller in self.registry.read().iter() {
+            controller.reset_all_group_phases();
         }
     }
 
@@ -1191,6 +1188,8 @@ pub struct ResourceController {
     customized: AtomicBool,
     // Shared config. Read on the hot path to check enable_fair_scheduling.
     config: Arc<VersionTrack<Config>>,
+    // Whether any group is in phase 1, so a reset can skip the sweep.
+    any_group_deprioritized: AtomicBool,
 }
 
 // we are ensure to visit the `last_rest_vt_time` by only 1 thread so it's
@@ -1209,6 +1208,7 @@ impl ResourceController {
             last_rest_vt_time: Cell::new(Instant::now_coarse()),
             customized: AtomicBool::new(false),
             config,
+            any_group_deprioritized: AtomicBool::new(false),
         }
     }
 
@@ -1350,6 +1350,19 @@ impl ResourceController {
             tracker
                 .is_over_baseline
                 .store(over_baseline, Ordering::Relaxed);
+            if over_baseline {
+                self.any_group_deprioritized.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Clears every group's phase-1 flag, or does nothing if none is set.
+    pub fn reset_all_group_phases(&self) {
+        if !self.any_group_deprioritized.swap(false, Ordering::Relaxed) {
+            return;
+        }
+        for tracker in self.resource_consumptions.read().values() {
+            tracker.is_over_baseline.store(false, Ordering::Relaxed);
         }
     }
 
