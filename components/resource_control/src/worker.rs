@@ -137,6 +137,8 @@ pub struct GroupQuotaAdjustWorker<R> {
     // ResourceType::Io. 0 means IO rate limiting isn't configured at all, in
     // which case there's nothing to fetch stats for or throttle.
     io_bandwidth: f64,
+    // Last measured IO utilization, reused when a fetch fails.
+    prev_io_util: f64,
 }
 
 impl GroupQuotaAdjustWorker<SysQuotaGetter> {
@@ -185,6 +187,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
                 grpc_concurrency: grpc_concurrency as f64,
             },
             io_bandwidth,
+            prev_io_util: 0.0,
         }
     }
 
@@ -258,17 +261,24 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         if !self.resource_ctl.has_background_groups() || self.io_bandwidth <= 0.0 {
             return 0.0;
         }
-        // A fetch failure only disables IO scoring/adjustment for this tick,
-        // not the whole tick.
         match self
             .resource_quota_getter
             .get_current_stats(ResourceType::Io)
         {
-            Ok(s) if s.total_quota > f64::EPSILON => s.current_used / s.total_quota * 100.0,
+            Ok(s) if s.total_quota > f64::EPSILON => {
+                let util = s.current_used / s.total_quota * 100.0;
+                self.prev_io_util = util;
+                util
+            }
+            // Unlimited IO quota: a real zero, not a failure.
             Ok(_) => 0.0,
             Err(e) => {
-                warn!("get io stats failed; skip io adjustment."; "err" => ?e);
-                0.0
+                warn!(
+                    "get io stats failed; reusing previous io utilization.";
+                    "prev_io_util" => self.prev_io_util,
+                    "err" => ?e,
+                );
+                self.prev_io_util
             }
         }
     }
@@ -754,6 +764,7 @@ mod tests {
         cpu_used: f64,
         io_total: f64,
         io_used: f64,
+        io_fails: bool,
     }
 
     impl TestResourceStatsProvider {
@@ -763,6 +774,7 @@ mod tests {
                 cpu_used: 0.0,
                 io_total,
                 io_used: 0.0,
+                io_fails: false,
             }
         }
     }
@@ -774,6 +786,7 @@ mod tests {
                     total_quota: self.cpu_total * MICROS_PER_SEC,
                     current_used: self.cpu_used * MICROS_PER_SEC,
                 }),
+                ResourceType::Io if self.io_fails => Err(std::io::Error::other("injected")),
                 ResourceType::Io => Ok(ResourceUsageStats {
                     total_quota: self.io_total,
                     current_used: self.io_used,
@@ -1138,6 +1151,33 @@ mod tests {
             (rate - MICROS_PER_SEC).abs() < MICROS_PER_SEC * 0.01,
             "grpc-driven cpu_score should throttle background CPU to the floor, got {rate}"
         );
+    }
+
+    #[test]
+    fn test_fetch_io_util_reuses_previous_on_failure() {
+        let resource_ctl = Arc::new(ResourceGroupManager::default());
+        let bg = new_background_resource_group_ru("bg_worker".into(), 5000, 8, vec!["br".into()]);
+        resource_ctl.add_resource_group(bg);
+
+        let mut worker = GroupQuotaAdjustWorker::with_quota_getter(
+            resource_ctl,
+            TestResourceStatsProvider::new(8.0, 1000.0),
+            Arc::new(AtomicU32::new(0)),
+            8,
+            1000.0,
+        );
+
+        worker.resource_quota_getter.io_used = 600.0;
+        assert_eq!(worker.fetch_io_util(), 60.0);
+
+        // A failed fetch must not read as an idle disk.
+        worker.resource_quota_getter.io_fails = true;
+        assert_eq!(worker.fetch_io_util(), 60.0);
+
+        // Recovers to the fresh value once the fetch works again.
+        worker.resource_quota_getter.io_fails = false;
+        worker.resource_quota_getter.io_used = 300.0;
+        assert_eq!(worker.fetch_io_util(), 30.0);
     }
 
     #[test]
