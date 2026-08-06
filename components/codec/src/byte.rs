@@ -128,8 +128,13 @@ impl MemComparableByteCodec {
         let padding_marker = !(padding_size as u8);
 
         unsafe {
-            let mut src_ptr = src.as_ptr().add(src_len - last_group_size);
-            let mut dest_ptr = src.as_mut_ptr().add(dest_len - (MEMCMP_GROUP_SIZE + 1));
+            // Derive both pointers from the same unique mutable reborrow so that
+            // Stacked/Tree Borrows provenance stays valid when src and dest alias
+            // (in-place encode). Calling as_ptr() then as_mut_ptr() invalidates the
+            // shared-derived pointer under Stacked Borrows; using it later is UB.
+            let base = src.as_mut_ptr();
+            let mut src_ptr = base.add(src_len - last_group_size);
+            let mut dest_ptr = base.add(dest_len - (MEMCMP_GROUP_SIZE + 1));
 
             std::ptr::copy(src_ptr, dest_ptr, last_group_size);
             std::ptr::write_bytes(dest_ptr.add(last_group_size), MEMCMP_PAD_BYTE, padding_size);
