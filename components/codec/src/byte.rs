@@ -979,22 +979,25 @@ mod tests {
     /// std::ptr::copy(src_ptr, dest_ptr, ...);
     /// ```
     ///
-    /// Under Stacked Borrows, `as_mut_ptr()` invalidates the SharedReadOnly tag from
-    /// `as_ptr()`. The following `ptr::copy` reads via the invalidated pointer → UB.
-    /// Any safe caller with a valid buffer can trigger it (library unsoundness).
-    /// `encode_all_in_place_desc` is affected transitively.
+    /// Under Stacked Borrows, `as_mut_ptr()` invalidates the SharedReadOnly tag
+    /// from `as_ptr()`. The following `ptr::copy` reads via the invalidated
+    /// pointer → UB. Any safe caller with a valid buffer can trigger it
+    /// (library unsoundness). `encode_all_in_place_desc` is affected
+    /// transitively.
     ///
     /// # How this test proves it
     ///
     /// Under Miri with the pre-fix code this test fails with:
     /// `Undefined Behavior: ... tag does not exist in the borrow stack`
-    /// at `ptr::copy` in `encode_all_in_place`, with help tags created at `as_ptr()`
-    /// and invalidated at `as_mut_ptr()`.
+    /// at `ptr::copy` in `encode_all_in_place`, with help tags created at
+    /// `as_ptr()` and invalidated at `as_mut_ptr()`.
     ///
-    /// With the fix (both pointers from one `as_mut_ptr()` base), Miri accepts the
-    /// test and we assert bitwise equality with non-in-place `encode_all`.
+    /// With the fix (both pointers from one `as_mut_ptr()` base), Miri accepts
+    /// the test and we assert bitwise equality with non-in-place
+    /// `encode_all`.
     ///
-    /// Run: `cargo +nightly miri test -p codec -- miri_soundness_encode_all_in_place`
+    /// Run: `cargo +nightly miri test -p codec --
+    /// miri_soundness_encode_all_in_place`
     #[test]
     fn miri_soundness_encode_all_in_place() {
         let payloads: &[&[u8]] = &[
@@ -1020,7 +1023,8 @@ mod tests {
 
                 let mut buf = vec![0; enc_len];
                 buf[..payload.len()].copy_from_slice(payload);
-                let n = MemComparableByteCodec::encode_all_in_place(buf.as_mut_slice(), payload.len());
+                let n =
+                    MemComparableByteCodec::encode_all_in_place(buf.as_mut_slice(), payload.len());
                 assert_eq!(n, enc_len);
                 assert_eq!(&buf[..n], &expected[..n_exp]);
             }
