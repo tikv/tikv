@@ -1176,26 +1176,30 @@ mod tests {
     ///
     /// # Unsoundness (pre-fix)
     ///
-    /// `try_decode_first_in_place` / `_desc` are **safe** APIs. Pre-fix they did:
+    /// `try_decode_first_in_place` / `_desc` are **safe** APIs. Pre-fix they
+    /// did:
     ///
     /// ```ignore
     /// try_decode_first_internal(buffer.as_ptr(), len, buffer.as_mut_ptr(), len)
     /// ```
     ///
-    /// Under Stacked Borrows, `as_mut_ptr()` invalidates the SharedReadOnly tag from
-    /// `as_ptr()`. The internal `ptr::copy` then reads via the invalidated pointer → UB.
-    /// Any safe caller of this public API could trigger it (library unsoundness).
+    /// Under Stacked Borrows, `as_mut_ptr()` invalidates the SharedReadOnly tag
+    /// from `as_ptr()`. The internal `ptr::copy` then reads via the
+    /// invalidated pointer → UB. Any safe caller of this public API could
+    /// trigger it (library unsoundness).
     ///
     /// # How this test proves it
     ///
     /// Under Miri with the pre-fix code this test fails with:
     /// `Undefined Behavior: ... tag does not exist in the borrow stack`
-    /// pointing at `ptr::copy` in `try_decode_first_internal`, with help tags created
-    /// at `as_ptr()` and invalidated at `as_mut_ptr()`.
+    /// pointing at `ptr::copy` in `try_decode_first_internal`, with help tags
+    /// created at `as_ptr()` and invalidated at `as_mut_ptr()`.
     ///
-    /// With the fix (both pointers from one `as_mut_ptr()`), Miri accepts the test.
+    /// With the fix (both pointers from one `as_mut_ptr()`), Miri accepts the
+    /// test.
     ///
-    /// Run: `cargo +nightly miri test -p codec -- miri_soundness_try_decode_first_in_place`
+    /// Run: `cargo +nightly miri test -p codec --
+    /// miri_soundness_try_decode_first_in_place`
     #[test]
     fn miri_soundness_try_decode_first_in_place() {
         // Cover empty, partial group, full group(s), multi-group — all in-place.
