@@ -635,21 +635,22 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         let request_start_key = start_key.as_deref();
         let request_end_key = end_key.as_deref();
         let start_key = if is_key_range {
-            // This key is usually from a request, which should be encoded first.
-            keys::data_key(
-                Key::from_raw(request_start_key.unwrap())
-                    .as_encoded()
-                    .as_slice(),
-            )
+            match request_start_key.unwrap() {
+                // Empty start bound means unbounded start and should fall back
+                // to region start key.
+                [] => keys::enc_start_key(region),
+                key => keys::data_key(Key::from_raw(key).as_encoded().as_slice()),
+            }
         } else {
             keys::enc_start_key(region)
         };
         let end_key = if is_key_range {
-            keys::data_end_key(
-                Key::from_raw(request_end_key.unwrap())
-                    .as_encoded()
-                    .as_slice(),
-            )
+            match request_end_key.unwrap() {
+                // Empty end bound means unbounded end and should fall back to
+                // region end key.
+                [] => keys::enc_end_key(region),
+                key => keys::data_end_key(Key::from_raw(key).as_encoded().as_slice()),
+            }
         } else {
             keys::enc_end_key(region)
         };
