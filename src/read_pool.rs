@@ -774,12 +774,6 @@ impl Runnable for ReadPoolConfigRunner {
             }
             Task::AutoAdjust(s) => {
                 self.auto_adjust = s;
-                // when auto adjust is disabled, reset to the config pool size.
-                if !s && self.cur_thread_count != self.core_thread_count {
-                    self.handle.scale_pool_size(self.core_thread_count);
-                    self.cur_thread_count = self.core_thread_count;
-                    self.notify_pool_size_change(self.cur_thread_count);
-                }
             }
             Task::MaxTasksPerWorker(s) => {
                 self.handle.set_max_tasks_per_worker(s);
@@ -827,6 +821,9 @@ impl ReadPoolConfigRunner {
         // pool. Whether fair scheduling is on is the manager's own business:
         // its read-pool entry points below are no-ops while it is off.
         if !self.auto_adjust && resource_manager.is_none() {
+            // Nothing else will size the pool on this path, so put it back to
+            // the configured size.
+            self.reset_thread_count();
             return;
         }
 
@@ -921,11 +918,7 @@ impl ReadPoolConfigRunner {
             self.cur_thread_count
         };
 
-        if new_thread_count != self.cur_thread_count {
-            self.handle.scale_pool_size(new_thread_count);
-            self.notify_pool_size_change(new_thread_count);
-            self.cur_thread_count = new_thread_count;
-        }
+        self.set_thread_count(new_thread_count);
 
         // While we haven't scaled back up to core_thread_count, keep noisy
         // resource groups deprioritized. Once recovered, release everyone —
@@ -938,6 +931,21 @@ impl ReadPoolConfigRunner {
                 rm.reset_group_priorities();
             }
         }
+    }
+
+    /// Resizes the pool, no-op if it is already at `new_thread_count`.
+    fn set_thread_count(&mut self, new_thread_count: usize) {
+        if new_thread_count != self.cur_thread_count {
+            self.handle.scale_pool_size(new_thread_count);
+            self.notify_pool_size_change(new_thread_count);
+            self.cur_thread_count = new_thread_count;
+        }
+    }
+
+    /// Restores the pool to its configured size, used when auto-adjustment is
+    /// turned off and the ladder is no longer allowed to move it.
+    fn reset_thread_count(&mut self) {
+        self.set_thread_count(self.core_thread_count);
     }
 
     fn notify_pool_size_change(&self, new_thread_count: usize) {
@@ -2121,6 +2129,18 @@ mod tests {
 
         runner.cur_thread_count = 5;
         runner.run(Task::AutoAdjust(false));
+
+        // The config change only records the flag now; sizing the pool belongs
+        // to adjust_pool_size.
+        assert_eq!(runner.cur_thread_count, 5);
+        assert!(
+            rx.try_recv().is_err(),
+            "disabling auto-adjust should not resize the pool by itself"
+        );
+
+        // With no resource manager this takes the early-return path, which
+        // restores the configured size.
+        runner.adjust_pool_size();
 
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(size) => assert_eq!(size, core_thread_count),

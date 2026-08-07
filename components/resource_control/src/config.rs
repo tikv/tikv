@@ -227,13 +227,8 @@ impl ResourceContrlCfgMgr {
 impl ConfigManager for ResourceContrlCfgMgr {
     fn dispatch(&mut self, change: online_config::ConfigChange) -> online_config::Result<()> {
         let cfg_str = format!("{:?}", change);
-        // Validate a copy first: `VersionTrack::update` mutates in place, so
-        // applying the change and validating afterwards would leave the live
-        // config already modified when validation fails.
-        let mut candidate = self.config.value().clone();
-        candidate.update(change.clone())?;
-        candidate.validate()?;
-
+        // `ConfigController::update` already validated the whole TikvConfig,
+        // including this submodule, before dispatching.
         let res = self.config.update(|c| c.update(change));
         if res.is_ok() {
             tikv_util::info!("update resource control config"; "change" => cfg_str);
@@ -333,30 +328,6 @@ mod tests {
             cfg.historical_usage_window_mins = good;
             cfg.validate().unwrap();
         }
-    }
-
-    #[test]
-    fn test_config_manager_rejects_invalid_update_and_keeps_old_value() {
-        let tracker = Arc::new(VersionTrack::new(Config::default()));
-        let mut mgr = ResourceContrlCfgMgr::new(tracker.clone());
-
-        let mut change = ConfigChange::new();
-        change.insert(
-            "fg_cpu_throttle_threshold".to_owned(),
-            ConfigValue::F64(10.0),
-        );
-        assert!(mgr.dispatch(change).is_err());
-
-        // The live config must be untouched, not left holding the rejected
-        // value with only the version bump skipped.
-        assert_eq!(
-            tracker.value().fg_cpu_throttle_threshold,
-            Config::default().fg_cpu_throttle_threshold
-        );
-        assert_eq!(
-            tracker.value().bg_cpu_throttle_threshold,
-            Config::default().bg_cpu_throttle_threshold
-        );
     }
 
     #[test]
