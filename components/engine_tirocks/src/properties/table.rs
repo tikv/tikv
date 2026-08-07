@@ -4,11 +4,12 @@ use std::mem;
 
 use engine_traits::{Range, Result};
 use tirocks::properties::table::{
-    builtin::OwnedTablePropertiesCollection, user::UserCollectedProperties,
+    builtin::{OwnedTablePropertiesCollection, TableProperties},
+    user::UserCollectedProperties,
 };
 
-use super::range::RangeProperties;
-use crate::{r2e, RocksEngine};
+use super::{mvcc::decode_mvcc, range::RangeProperties};
+use crate::{RocksEngine, r2e};
 
 #[repr(transparent)]
 pub struct RocksUserCollectedProperties(UserCollectedProperties);
@@ -32,22 +33,47 @@ impl engine_traits::UserCollectedProperties for RocksUserCollectedProperties {
         let x = rp.get_approximate_distance_in_range(start, end);
         Some((x.0 as usize, x.1 as usize))
     }
+
+    fn get_mvcc_properties(&self) -> Option<engine_traits::MvccProperties> {
+        decode_mvcc(&self.0).ok()
+    }
+}
+
+#[repr(transparent)]
+pub struct RocksTableProperties(TableProperties);
+
+impl RocksTableProperties {
+    #[inline]
+    fn from_rocks(v: &TableProperties) -> &Self {
+        unsafe { mem::transmute(v) }
+    }
+}
+
+impl engine_traits::TableProperties for RocksTableProperties {
+    type UserCollectedProperties = RocksUserCollectedProperties;
+
+    fn get_user_collected_properties(&self) -> &Self::UserCollectedProperties {
+        RocksUserCollectedProperties::from_rocks(self.0.user_collected_properties())
+    }
+
+    fn get_num_entries(&self) -> u64 {
+        self.0.num_entries()
+    }
 }
 
 #[repr(transparent)]
 pub struct RocksTablePropertiesCollection(OwnedTablePropertiesCollection);
 
 impl engine_traits::TablePropertiesCollection for RocksTablePropertiesCollection {
-    type UserCollectedProperties = RocksUserCollectedProperties;
+    type TableProperties = RocksTableProperties;
 
     #[inline]
-    fn iter_user_collected_properties<F>(&self, mut f: F)
+    fn iter_table_properties<F>(&self, mut f: F)
     where
-        F: FnMut(&Self::UserCollectedProperties) -> bool,
+        F: FnMut(&Self::TableProperties) -> bool,
     {
         for (_, props) in &*self.0 {
-            let props = props.user_collected_properties();
-            if !f(RocksUserCollectedProperties::from_rocks(props)) {
+            if !f(RocksTableProperties::from_rocks(props)) {
                 break;
             }
         }

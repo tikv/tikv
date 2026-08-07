@@ -2,16 +2,40 @@
 
 use std::sync::Arc;
 
-use engine_traits::Result;
+use engine_traits::{IterMetricsCollector, MetricsExt, Result};
 use tikv_util::codec::number;
 use tirocks::{
-    option::ReadOptions, properties::table::builtin::TableProperties, table_filter::TableFilter,
-    Db, Iterator, Snapshot,
+    Db, Iterator, Snapshot, option::ReadOptions, perf_context::PerfContext,
+    properties::table::builtin::TableProperties, table_filter::TableFilter,
 };
 
 use crate::r2e;
 
 pub struct RocksIterator<'a, D>(Iterator<'a, D>);
+
+pub struct RocksIterMetricsCollector;
+
+impl IterMetricsCollector for RocksIterMetricsCollector {
+    fn internal_delete_skipped_count(&self) -> u64 {
+        PerfContext::get().internal_delete_skipped_count()
+    }
+
+    fn internal_key_skipped_count(&self) -> u64 {
+        PerfContext::get().internal_key_skipped_count()
+    }
+
+    fn block_read_count(&self) -> u64 {
+        PerfContext::get().block_read_count()
+    }
+}
+
+impl<D> MetricsExt for RocksIterator<'_, D> {
+    type Collector = RocksIterMetricsCollector;
+
+    fn metrics_collector(&self) -> Self::Collector {
+        RocksIterMetricsCollector
+    }
+}
 
 impl<'a, D> RocksIterator<'a, D> {
     pub fn from_raw(iter: Iterator<'a, D>) -> Self {

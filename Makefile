@@ -173,7 +173,7 @@ CARGO_SORT_VERSION ?= 1.0.9
 # Almost all the rules in this Makefile are PHONY
 # Declaring a rule as PHONY could improve correctness
 # But probably instead just improves performance by a little bit
-.PHONY: audit clippy format pre-format pre-clippy pre-audit unset-override
+.PHONY: audit check-tirocks clippy format pre-format pre-clippy pre-audit unset-override
 .PHONY: all build clean dev check-udeps doc error-code fuzz run test
 .PHONY: docker docker-tag docker-tag-with-git-hash docker-tag-with-git-tag
 .PHONY: ctl dist_artifacts dist_tarballs x-build-dist
