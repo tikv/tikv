@@ -746,23 +746,28 @@ pub fn snapshot<E: Engine>(
 ) -> impl std::future::Future<Output = Result<E::Snap>> {
     let begin = Instant::now();
 
-    // Determine the timeout before `ctx` is consumed by `async_snapshot` below.
-    // Without this, a snapshot request whose completion callback is never
-    // invoked (e.g. due to a stuck propose queue or lost leadership) would
-    // hang indefinitely with no way for the caller to recover.
+    // Mirror Storage::get_deadline's existing semantics: use the caller's
+    // configured execution duration limit if set, otherwise fall back to the
+    // same long-lived default used elsewhere in the codebase, rather than
+    // inventing a new fixed timeout window. Without this, a snapshot request
+    // whose completion callback is never invoked (e.g. due to a stuck
+    // propose queue or lost leadership) would hang indefinitely with no way
+    // for the caller to recover.
     let max_execution_duration_ms = ctx.pb_ctx.max_execution_duration_ms;
-    let timeout_duration = if max_execution_duration_ms == 0 {
-        DEFAULT_TIMEOUT
+    let execution_duration_limit = if max_execution_duration_ms == 0 {
+        tikv_util::deadline::DEFAULT_EXECUTION_DURATION_LIMIT
     } else {
         std::time::Duration::from_millis(max_execution_duration_ms)
     };
+    let deadline = tikv_util::deadline::Deadline::from_now(execution_duration_limit);
 
     let val = engine.async_snapshot(ctx);
     // make engine not cross yield point
     async move {
-        let result = match tokio::time::timeout(timeout_duration, val).await {
+        let remaining = deadline.remaining_duration();
+        let result = match tikv_util::future::async_timeout(val, remaining).await {
             Ok(result) => result,
-            Err(_) => Err(Error::from(ErrorInner::Timeout(timeout_duration))),
+            Err(_) => Err(Error::from(ErrorInner::Timeout(remaining))),
         };
         with_tls_tracker(|tracker| {
             tracker.metrics.get_snapshot_nanos += begin.elapsed().as_nanos() as u64;
@@ -1515,8 +1520,7 @@ mod unit_tests {
 
 #[cfg(test)]
 mod snapshot_timeout_tests {
-    use std::time::Duration;
-
+    
     use kvproto::kvrpcpb::Context;
 
     use super::*;
@@ -1573,8 +1577,8 @@ mod snapshot_timeout_tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_snapshot_times_out_instead_of_hanging() {
+    #[test]
+    fn test_snapshot_times_out_instead_of_hanging() {
         let mut engine = HangingEngine::new();
         let mut pb_ctx = Context::default();
         pb_ctx.set_max_execution_duration_ms(50);
@@ -1584,20 +1588,19 @@ mod snapshot_timeout_tests {
             ..Default::default()
         };
 
-        let outcome = tokio::time::timeout(Duration::from_secs(2), snapshot(&mut engine, ctx))
-            .await
-            .expect("snapshot() hung past the outer safety timeout — fix did not apply");
+        // Run under `block_on`, not a Tokio runtime, to prove the fix works
+        // under the same executor-agnostic conditions real callers use
+        // (YATP read pools, `block_on` in GC), not just under Tokio.
+        let outcome = futures::executor::block_on(snapshot(&mut engine, ctx));
 
         match outcome {
-            Err(e) => {
-                let msg = format!("{:?}", e);
-                assert!(
-                    msg.contains("Timeout"),
-                    "expected a Timeout error, got: {}",
-                    msg
-                );
-            }
+            Err(e) => match *e.0 {
+                ErrorInner::Timeout(_) => {}
+                other => panic!("expected ErrorInner::Timeout, got: {:?}", other),
+            },
             Ok(_) => panic!("expected snapshot() to time out, but it returned Ok"),
         }
     }
+
+
 }
