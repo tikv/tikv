@@ -4,9 +4,6 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 
-[features]
-nortcheck = []
-
 [dependencies]
 api_version = { workspace = true }
 codec = { workspace = true }
@@ -23,7 +20,7 @@ slog-global = { workspace = true }
 slog_derive = "0.2"
 tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
-tirocks = { git = "https://github.com/busyjay/tirocks.git", rev = "56203cd60a1762ec91268446fa39ac88aafcd08c" }
+tirocks = { git = "https://github.com/busyjay/tirocks.git", branch = "dev" }
 tracker = { workspace = true }
 txn_types = { workspace = true }
 

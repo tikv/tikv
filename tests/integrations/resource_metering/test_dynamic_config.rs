@@ -3,7 +3,7 @@
 use std::{iter, thread::sleep, time::Duration};
 
 use rand::prelude::SliceRandom;
-use resource_metering::{ENABLE_DETAILED_IO_COLLECTION, ENABLE_NETWORK_IO_COLLECTION};
+use resource_metering::io_collection_config;
 use test_util::alloc_port;
 use tikv_util::config::ReadableDuration;
 use tokio::time::Instant;
@@ -207,16 +207,17 @@ pub fn test_enable_network_io_collection() {
     test_suite.cfg_enable_detailed_io_collection("true");
     test_suite.flush_receiver();
     let _res = test_suite.block_receive_one();
-    assert!(!ENABLE_DETAILED_IO_COLLECTION.load(std::sync::atomic::Ordering::Relaxed));
+    assert!(!io_collection_config().detailed_io_collection_enabled());
 
     test_suite.cfg_enable_network_io_collection("true");
     test_suite.flush_receiver();
     let _res = test_suite.block_receive_one();
-    assert!(ENABLE_NETWORK_IO_COLLECTION.load(std::sync::atomic::Ordering::Relaxed));
-    assert!(ENABLE_DETAILED_IO_COLLECTION.load(std::sync::atomic::Ordering::Relaxed));
+    let config = io_collection_config();
+    assert!(config.network_io_collection_enabled());
+    assert!(config.detailed_io_collection_enabled());
 
     test_suite.cfg_enable_network_io_collection("false");
     test_suite.flush_receiver();
     let _res = test_suite.block_receive_one();
-    assert!(!ENABLE_DETAILED_IO_COLLECTION.load(std::sync::atomic::Ordering::Relaxed));
+    assert!(!io_collection_config().detailed_io_collection_enabled());
 }

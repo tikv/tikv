@@ -17,18 +17,14 @@ const PROP_MAX_EXPIRE_TS: &str = "tikv.max_expire_ts";
 const PROP_MIN_EXPIRE_TS: &str = "tikv.min_expire_ts";
 
 fn encode_ttl(ttl_props: &TtlProperties, props: &mut impl EncodeProperties) {
-    if let Some(max_expire_ts) = ttl_props.max_expire_ts {
-        props.encode_u64(PROP_MAX_EXPIRE_TS, max_expire_ts);
-    }
-    if let Some(min_expire_ts) = ttl_props.min_expire_ts {
-        props.encode_u64(PROP_MIN_EXPIRE_TS, min_expire_ts);
-    }
+    props.encode_u64(PROP_MAX_EXPIRE_TS, ttl_props.max_expire_ts);
+    props.encode_u64(PROP_MIN_EXPIRE_TS, ttl_props.min_expire_ts);
 }
 
 pub(super) fn decode_ttl(props: &impl DecodeProperties) -> codec::Result<TtlProperties> {
     let res = TtlProperties {
-        max_expire_ts: props.decode_u64(PROP_MAX_EXPIRE_TS).ok(),
-        min_expire_ts: props.decode_u64(PROP_MIN_EXPIRE_TS).ok(),
+        max_expire_ts: props.decode_u64(PROP_MAX_EXPIRE_TS)?,
+        min_expire_ts: props.decode_u64(PROP_MIN_EXPIRE_TS)?,
     };
     Ok(res)
 }
@@ -51,9 +47,7 @@ impl TtlPropertiesExt for RocksEngine {
                 Ok(v) => v,
                 Err(_) => continue,
             };
-            if prop.is_some() {
-                res.push((std::str::from_utf8(file_name).unwrap().to_string(), prop));
-            }
+            res.push((std::str::from_utf8(file_name).unwrap().to_string(), prop));
         }
         Ok(res)
     }
@@ -67,7 +61,7 @@ pub struct TtlPropertiesCollector<F: KvFormat> {
 
 impl<F: KvFormat> TtlPropertiesCollector<F> {
     fn finish(&mut self, properties: &mut impl EncodeProperties) {
-        if !self.prop.is_some() {
+        if self.prop.max_expire_ts == 0 && self.prop.min_expire_ts == 0 {
             return;
         }
         encode_ttl(&self.prop, properties);
@@ -104,7 +98,12 @@ impl<F: KvFormat> TablePropertiesCollector for TtlPropertiesCollector<F> {
                 expire_ts: Some(expire_ts),
                 ..
             }) => {
-                self.prop.add(expire_ts);
+                self.prop.max_expire_ts = std::cmp::max(self.prop.max_expire_ts, expire_ts);
+                if self.prop.min_expire_ts == 0 {
+                    self.prop.min_expire_ts = expire_ts;
+                } else {
+                    self.prop.min_expire_ts = std::cmp::min(self.prop.min_expire_ts, expire_ts);
+                }
             }
             Err(err) => {
                 error!(
@@ -204,28 +203,23 @@ mod tests {
             ("zr\0e", 0),
         ];
         let props = get_properties(&case1).unwrap();
-        assert_eq!(props.max_expire_ts, Some(u64::MAX));
+        assert_eq!(props.max_expire_ts, u64::MAX);
         match F::TAG {
             ApiVersion::V1 => unreachable!(),
-            ApiVersion::V1ttl => assert_eq!(props.min_expire_ts, Some(1)),
+            ApiVersion::V1ttl => assert_eq!(props.min_expire_ts, 1),
             // expire_ts = 0 is no longer a special case in API V2
-            ApiVersion::V2 => assert_eq!(props.min_expire_ts, Some(0)),
+            ApiVersion::V2 => assert_eq!(props.min_expire_ts, 0),
         }
 
         let case2 = [("zr\0a", 0)];
-        let props = get_properties(&case2).unwrap();
-        match F::TAG {
-            ApiVersion::V1 => unreachable!(),
-            ApiVersion::V1ttl => assert!(!props.is_some()),
-            ApiVersion::V2 => assert_eq!(props.min_expire_ts, Some(0)),
-        }
+        get_properties(&case2).unwrap_err();
 
         let case3 = [];
-        assert!(!get_properties(&case3).unwrap().is_some());
+        get_properties(&case3).unwrap_err();
 
         let case4 = [("zr\0a", 1)];
         let props = get_properties(&case4).unwrap();
-        assert_eq!(props.max_expire_ts, Some(1));
-        assert_eq!(props.min_expire_ts, Some(1));
+        assert_eq!(props.max_expire_ts, 1);
+        assert_eq!(props.min_expire_ts, 1);
     }
 }

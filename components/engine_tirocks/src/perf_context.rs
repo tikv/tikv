@@ -319,6 +319,9 @@ impl PerfContextStatistics {
             }
             engine_traits::PerfContextKind::Storage(_)
             | engine_traits::PerfContextKind::Coprocessor(_) => {
+                if self.perf_level == engine_traits::PerfLevel::Disable {
+                    return engine_traits::PerfContextReport::default();
+                }
                 let perf_context = ReadPerfContext::capture();
                 let block_read_count = perf_context.block_read_count;
                 for token in trackers {

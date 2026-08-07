@@ -15,9 +15,7 @@ use std::{
 };
 
 pub use collector::Collector;
-pub use config::{
-    Config, ConfigManager, ENABLE_DETAILED_IO_COLLECTION, ENABLE_NETWORK_IO_COLLECTION,
-};
+pub use config::{Config, ConfigManager, IoCollectionConfigSnapshot, io_collection_config};
 pub use model::*;
 pub use recorder::{
     CollectorGuard, CollectorId, CollectorRegHandle,
@@ -128,16 +126,14 @@ pub(crate) static IO_COLLECTION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mut
 
 #[cfg(test)]
 pub(crate) struct IoCollectionConfigGuard {
-    network: bool,
-    detailed: bool,
+    config: IoCollectionConfigSnapshot,
 }
 
 #[cfg(test)]
 impl IoCollectionConfigGuard {
     pub(crate) fn set(network: bool, detailed: bool) -> Self {
         let guard = Self {
-            network: ENABLE_NETWORK_IO_COLLECTION.load(Relaxed),
-            detailed: ENABLE_DETAILED_IO_COLLECTION.load(Relaxed),
+            config: io_collection_config(),
         };
         config::set_io_collection_config(network, detailed);
         guard
@@ -147,8 +143,10 @@ impl IoCollectionConfigGuard {
 #[cfg(test)]
 impl Drop for IoCollectionConfigGuard {
     fn drop(&mut self) {
-        ENABLE_NETWORK_IO_COLLECTION.store(self.network, Relaxed);
-        ENABLE_DETAILED_IO_COLLECTION.store(self.detailed, Relaxed);
+        config::set_io_collection_config(
+            self.config.network_io_collection_enabled(),
+            self.config.detailed_io_collection_enabled(),
+        );
     }
 }
 
