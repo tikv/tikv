@@ -735,6 +735,14 @@ pub use flush_channel::{FlushChannel, FlushSubscriber};
 #[cfg(test)]
 mod tests {
 
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering as AtomicOrdering},
+        },
+        thread,
+    };
+
     use futures::{StreamExt, executor::block_on};
 
     use super::*;
@@ -833,5 +841,54 @@ mod tests {
         ));
         drop(chan);
         assert!(block_on(stream.next()).is_none());
+    }
+
+    /// Miri regression: concurrent `set_result` + sync `take_result` /
+    /// `has_result`.
+    ///
+    /// # Unsoundness (pre-fix)
+    ///
+    /// Production loaded `event` with `Ordering::Relaxed` then touched the
+    /// `UnsafeCell` payload. Concurrent with `set_result` (write payload,
+    /// then `fetch_or` AcqRel), that is a data race. Miri reports:
+    /// `Undefined Behavior: Data race ... UnsafeCell` under preemption.
+    ///
+    /// # How this test proves it
+    ///
+    /// Under Miri with **Relaxed** loads this concurrent loop fails. With
+    /// **Acquire** loads (this PR) Miri accepts it. Native tests pass either
+    /// way.
+    ///
+    /// ```text
+    /// cargo +nightly miri test -p raftstore-v2 --lib \
+    ///   router::response_channel::tests::miri_soundness_event_core_concurrent_set_take
+    /// ```
+    #[test]
+    fn miri_soundness_event_core_concurrent_set_take() {
+        let iterations = if cfg!(miri) { 16 } else { 64 };
+        let done = Arc::new(AtomicUsize::new(0));
+        for i in 0..iterations {
+            let (chan, sub) = QueryResChannel::pair();
+            let expected = QueryResult::Read(ReadResponse::new(i as u64));
+            let expected2 = expected.clone();
+            let done2 = done.clone();
+            let t = thread::spawn(move || {
+                loop {
+                    if sub.has_result() {
+                        let got = sub.take_result();
+                        assert_eq!(got.as_ref(), Some(&expected2));
+                        done2.fetch_add(1, AtomicOrdering::SeqCst);
+                        break;
+                    }
+                    thread::yield_now();
+                }
+            });
+            if i % 2 == 0 {
+                thread::yield_now();
+            }
+            chan.set_result(expected);
+            t.join().unwrap();
+        }
+        assert_eq!(done.load(AtomicOrdering::SeqCst), iterations);
     }
 }
