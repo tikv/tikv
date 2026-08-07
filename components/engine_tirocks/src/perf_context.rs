@@ -161,7 +161,7 @@ impl engine_traits::PerfContext for RocksPerfContext {
         self.stats.start()
     }
 
-    fn report_metrics(&mut self, trackers: &[TrackerToken]) {
+    fn report_metrics(&mut self, trackers: &[TrackerToken]) -> engine_traits::PerfContextReport {
         self.stats.report(trackers)
     }
 }
@@ -291,7 +291,7 @@ impl PerfContextStatistics {
         self.apply_perf_settings();
     }
 
-    pub fn report(&mut self, trackers: &[TrackerToken]) {
+    pub fn report(&mut self, trackers: &[TrackerToken]) -> engine_traits::PerfContextReport {
         match self.kind {
             engine_traits::PerfContextKind::RaftstoreApply => {
                 report_write_perf_context!(self, APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC);
@@ -303,6 +303,7 @@ impl PerfContextStatistics {
                         t.metrics.apply_write_memtable_nanos = self.write.write_memtable_time;
                     });
                 }
+                engine_traits::PerfContextReport::default()
             }
             engine_traits::PerfContextKind::RaftstoreStore => {
                 report_write_perf_context!(self, STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC);
@@ -314,15 +315,18 @@ impl PerfContextStatistics {
                         t.metrics.store_write_memtable_nanos = self.write.write_memtable_time;
                     });
                 }
+                engine_traits::PerfContextReport::default()
             }
             engine_traits::PerfContextKind::Storage(_)
             | engine_traits::PerfContextKind::Coprocessor(_) => {
                 let perf_context = ReadPerfContext::capture();
+                let block_read_count = perf_context.block_read_count;
                 for token in trackers {
                     GLOBAL_TRACKERS.with_tracker(*token, |t| perf_context.report_to_tracker(t));
                 }
                 self.read += perf_context;
                 self.maybe_flush_read_metrics();
+                engine_traits::PerfContextReport { block_read_count }
             }
         }
     }

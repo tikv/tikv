@@ -11,7 +11,7 @@ impl engine_traits::PerfContext for RaftEnginePerfContext {
         raft_engine::set_perf_context(Default::default());
     }
 
-    fn report_metrics(&mut self, trackers: &[TrackerToken]) {
+    fn report_metrics(&mut self, trackers: &[TrackerToken]) -> engine_traits::PerfContextReport {
         let perf_context = get_perf_context();
         for token in trackers {
             GLOBAL_TRACKERS.with_tracker(*token, |t| {
@@ -25,5 +25,6 @@ impl engine_traits::PerfContext for RaftEnginePerfContext {
                     perf_context.apply_duration.as_nanos() as u64;
             });
         }
+        engine_traits::PerfContextReport::default()
     }
 }
