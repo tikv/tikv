@@ -5,18 +5,19 @@
 #![allow(internal_features)]
 #![feature(core_intrinsics)]
 
+#[cfg(test)]
+use std::sync::atomic::Ordering::Relaxed;
 use std::{
     intrinsics::unlikely,
     pin::Pin,
-    sync::{
-        Arc,
-        atomic::Ordering::{Relaxed, SeqCst},
-    },
+    sync::{Arc, atomic::Ordering::SeqCst},
     task::{Context, Poll},
 };
 
 pub use collector::Collector;
-pub use config::{Config, ConfigManager, ENABLE_NETWORK_IO_COLLECTION};
+pub use config::{
+    Config, ConfigManager, ENABLE_DETAILED_IO_COLLECTION, ENABLE_NETWORK_IO_COLLECTION,
+};
 pub use model::*;
 pub use recorder::{
     CollectorGuard, CollectorId, CollectorRegHandle,
@@ -123,22 +124,31 @@ pub struct Guard;
 const MAX_SUMMARY_RECORDS_LEN: usize = 1000;
 
 #[cfg(test)]
-pub(crate) static NETWORK_IO_COLLECTION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) static IO_COLLECTION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
-pub(crate) struct NetworkIoCollectionConfigGuard(bool);
+pub(crate) struct IoCollectionConfigGuard {
+    network: bool,
+    detailed: bool,
+}
 
 #[cfg(test)]
-impl NetworkIoCollectionConfigGuard {
-    pub(crate) fn set(enabled: bool) -> Self {
-        Self(ENABLE_NETWORK_IO_COLLECTION.swap(enabled, Relaxed))
+impl IoCollectionConfigGuard {
+    pub(crate) fn set(network: bool, detailed: bool) -> Self {
+        let guard = Self {
+            network: ENABLE_NETWORK_IO_COLLECTION.load(Relaxed),
+            detailed: ENABLE_DETAILED_IO_COLLECTION.load(Relaxed),
+        };
+        config::set_io_collection_config(network, detailed);
+        guard
     }
 }
 
 #[cfg(test)]
-impl Drop for NetworkIoCollectionConfigGuard {
+impl Drop for IoCollectionConfigGuard {
     fn drop(&mut self) {
-        ENABLE_NETWORK_IO_COLLECTION.store(self.0, Relaxed);
+        ENABLE_NETWORK_IO_COLLECTION.store(self.network, Relaxed);
+        ENABLE_DETAILED_IO_COLLECTION.store(self.detailed, Relaxed);
     }
 }
 
@@ -398,8 +408,8 @@ mod tests {
 
     #[test]
     fn test_guard_keeps_block_read_only_record() {
-        let _test_guard = NETWORK_IO_COLLECTION_TEST_LOCK.lock().unwrap();
-        let _config_guard = NetworkIoCollectionConfigGuard::set(true);
+        let _test_guard = IO_COLLECTION_TEST_LOCK.lock().unwrap();
+        let _config_guard = IoCollectionConfigGuard::set(true, true);
         std::thread::spawn(|| {
             let resource_tag_factory = ResourceTagFactory::new_for_test();
             let tag = ResourceMeteringTag {

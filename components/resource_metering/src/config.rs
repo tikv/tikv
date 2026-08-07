@@ -16,9 +16,36 @@ const MAX_PRECISION: ReadableDuration = ReadableDuration::hours(1);
 const MAX_MAX_RESOURCE_GROUPS: usize = 5_000;
 const MIN_REPORT_RECEIVER_INTERVAL: ReadableDuration = ReadableDuration::millis(500);
 const DEFAULT_ENABLE_NETWORK_IO_COLLECTION: bool = false;
+const DEFAULT_ENABLE_DETAILED_IO_COLLECTION: bool = false;
 
 pub static ENABLE_NETWORK_IO_COLLECTION: AtomicBool =
     AtomicBool::new(DEFAULT_ENABLE_NETWORK_IO_COLLECTION);
+
+/// Whether detailed IO collection is effective at runtime.
+///
+/// The configured detailed IO switch is subordinate to network IO collection,
+/// so this value is true only when both switches are enabled.
+pub static ENABLE_DETAILED_IO_COLLECTION: AtomicBool =
+    AtomicBool::new(DEFAULT_ENABLE_DETAILED_IO_COLLECTION);
+
+pub(crate) fn set_io_collection_config(
+    enable_network_io_collection: bool,
+    enable_detailed_io_collection: bool,
+) {
+    use std::sync::atomic::Ordering::Relaxed;
+
+    let detailed_io_collection_enabled =
+        enable_network_io_collection && enable_detailed_io_collection;
+    if detailed_io_collection_enabled {
+        ENABLE_NETWORK_IO_COLLECTION.store(true, Relaxed);
+        ENABLE_DETAILED_IO_COLLECTION.store(true, Relaxed);
+    } else {
+        // Keep the runtime invariant that detailed IO implies network IO even
+        // while recorders observe a dynamic configuration update.
+        ENABLE_DETAILED_IO_COLLECTION.store(false, Relaxed);
+        ENABLE_NETWORK_IO_COLLECTION.store(enable_network_io_collection, Relaxed);
+    }
+}
 
 /// Public configuration of resource metering module.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
@@ -34,9 +61,11 @@ pub struct Config {
     /// The maximum number of candidate groups by [ResourceMeteringTag] for
     /// each resource dimension.
     ///
-    /// When network IO collection is enabled, the reported groups are the
-    /// union of candidates selected by CPU, network IO, logical read, logical
-    /// write, and RocksDB block read count. The union can exceed this value.
+    /// With network IO collection enabled, the reported groups are the union of
+    /// candidates selected by CPU, network IO, and logical IO. When detailed IO
+    /// collection is also enabled, logical IO is split into logical read and
+    /// logical write, and RocksDB block read count is added as a fifth
+    /// dimension. The union can exceed this value.
     ///
     /// [ResourceMeteringTag]: crate::ResourceMeteringTag
     pub max_resource_groups: usize,
@@ -44,8 +73,15 @@ pub struct Config {
     /// Sampling window. (only for cpu module)
     pub precision: ReadableDuration,
 
-    /// Whether to collect network traffic, logical IO and RocksDB block read
+    /// Whether to collect network traffic and logical IO.
     pub enable_network_io_collection: bool,
+
+    /// Whether to collect and attribute detailed IO for `read_iops` analysis.
+    ///
+    /// This controls RocksDB block read count collection and separate TopN
+    /// selection for logical reads, logical writes, and RocksDB block reads. It
+    /// is effective only when `enable_network_io_collection` is also enabled.
+    pub enable_detailed_io_collection: bool,
 }
 
 impl Default for Config {
@@ -56,11 +92,17 @@ impl Default for Config {
             max_resource_groups: 100,
             precision: ReadableDuration::secs(1),
             enable_network_io_collection: DEFAULT_ENABLE_NETWORK_IO_COLLECTION,
+            enable_detailed_io_collection: DEFAULT_ENABLE_DETAILED_IO_COLLECTION,
         }
     }
 }
 
 impl Config {
+    /// Returns whether detailed IO collection is effective for this config.
+    pub fn detailed_io_collection_enabled(&self) -> bool {
+        self.enable_network_io_collection && self.enable_detailed_io_collection
+    }
+
     /// Check whether the configuration is legal.
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
         if !self.receiver_address.is_empty() {
@@ -153,6 +195,7 @@ mod tests {
             max_resource_groups: 2000,
             precision: ReadableDuration::secs(1),
             enable_network_io_collection: false,
+            enable_detailed_io_collection: false,
         };
         cfg.validate().unwrap();
         let cfg = Config {
@@ -161,6 +204,7 @@ mod tests {
             max_resource_groups: 2000,
             precision: ReadableDuration::secs(1),
             enable_network_io_collection: false,
+            enable_detailed_io_collection: false,
         };
         cfg.validate().unwrap_err();
         let cfg = Config {
@@ -169,6 +213,7 @@ mod tests {
             max_resource_groups: usize::MAX, // invalid
             precision: ReadableDuration::secs(1),
             enable_network_io_collection: false,
+            enable_detailed_io_collection: false,
         };
         cfg.validate().unwrap_err();
         let cfg = Config {
@@ -177,7 +222,25 @@ mod tests {
             max_resource_groups: 2000,
             precision: ReadableDuration::days(999), // invalid
             enable_network_io_collection: false,
+            enable_detailed_io_collection: false,
         };
         cfg.validate().unwrap_err();
+    }
+
+    #[test]
+    fn test_detailed_io_collection_enabled() {
+        for (network, detailed, expected) in [
+            (false, false, false),
+            (false, true, false),
+            (true, false, false),
+            (true, true, true),
+        ] {
+            let cfg = Config {
+                enable_network_io_collection: network,
+                enable_detailed_io_collection: detailed,
+                ..Default::default()
+            };
+            assert_eq!(cfg.detailed_io_collection_enabled(), expected);
+        }
     }
 }

@@ -26,10 +26,12 @@ numeric_enum_serializing_mod! {perf_level_serde PerfLevel {
 /// Lightweight, engine-agnostic report of the PerfContext delta captured
 /// during the current observation window.
 ///
-/// Currently only `block_read_count` is reported, which approximates
-/// physical read IO triggered by foreground SQL requests.
+/// Currently only `block_read_count` is reported. Resource metering exposes it
+/// as `rocksdb_block_read_count` for the downstream `read_iops` dimension and
+/// uses it for relative attribution; it is not a device-level IOPS measurement.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PerfContextReport {
+    /// RocksDB block read delta used for the downstream `read_iops` dimension.
     pub block_read_count: u64,
 }
 

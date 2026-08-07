@@ -3,7 +3,7 @@
 use std::{iter, thread::sleep, time::Duration};
 
 use rand::prelude::SliceRandom;
-use resource_metering::ENABLE_NETWORK_IO_COLLECTION;
+use resource_metering::{ENABLE_DETAILED_IO_COLLECTION, ENABLE_NETWORK_IO_COLLECTION};
 use test_util::alloc_port;
 use tikv_util::config::ReadableDuration;
 use tokio::time::Instant;
@@ -18,6 +18,7 @@ pub fn test_enable() {
         max_resource_groups: 5000,
         precision: ReadableDuration::secs(1),
         enable_network_io_collection: false,
+        enable_detailed_io_collection: false,
     });
 
     let port = alloc_port();
@@ -63,6 +64,7 @@ pub fn test_report_interval() {
         max_resource_groups: 5000,
         precision: ReadableDuration::secs(1),
         enable_network_io_collection: false,
+        enable_detailed_io_collection: false,
     });
     test_suite.start_receiver_at(port);
 
@@ -104,6 +106,7 @@ pub fn test_max_resource_groups() {
         max_resource_groups: 5000,
         precision: ReadableDuration::secs(2),
         enable_network_io_collection: false,
+        enable_detailed_io_collection: false,
     });
     test_suite.start_receiver_at(port);
 
@@ -147,6 +150,7 @@ pub fn test_precision() {
         max_resource_groups: 5000,
         precision: ReadableDuration::secs(1),
         enable_network_io_collection: false,
+        enable_detailed_io_collection: false,
     });
     test_suite.start_receiver_at(port);
 
@@ -193,14 +197,26 @@ pub fn test_enable_network_io_collection() {
         max_resource_groups: 5000,
         precision: ReadableDuration::secs(1),
         enable_network_io_collection: false,
+        enable_detailed_io_collection: false,
     });
     test_suite.start_receiver_at(port);
     // Workload
     // [req-1]
     test_suite.setup_workload(vec!["req-1"]);
 
+    test_suite.cfg_enable_detailed_io_collection("true");
+    test_suite.flush_receiver();
+    let _res = test_suite.block_receive_one();
+    assert!(!ENABLE_DETAILED_IO_COLLECTION.load(std::sync::atomic::Ordering::Relaxed));
+
     test_suite.cfg_enable_network_io_collection("true");
     test_suite.flush_receiver();
     let _res = test_suite.block_receive_one();
     assert!(ENABLE_NETWORK_IO_COLLECTION.load(std::sync::atomic::Ordering::Relaxed));
+    assert!(ENABLE_DETAILED_IO_COLLECTION.load(std::sync::atomic::Ordering::Relaxed));
+
+    test_suite.cfg_enable_network_io_collection("false");
+    test_suite.flush_receiver();
+    let _res = test_suite.block_receive_one();
+    assert!(!ENABLE_DETAILED_IO_COLLECTION.load(std::sync::atomic::Ordering::Relaxed));
 }

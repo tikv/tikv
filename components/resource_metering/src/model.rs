@@ -21,15 +21,47 @@ use crate::TagInfos;
 thread_local! {
     static STATIC_CPU_BUF: Cell<Vec<u32>> = const {Cell::new(vec![])};
     static STATIC_NETWORK_BUF: Cell<Vec<u64>> = const {Cell::new(vec![])};
+    static STATIC_LOGICAL_IO_BUF: Cell<Vec<u64>> = const {Cell::new(vec![])};
     static STATIC_LOGICAL_READ_BUF: Cell<Vec<u64>> = const {Cell::new(vec![])};
     static STATIC_LOGICAL_WRITE_BUF: Cell<Vec<u64>> = const {Cell::new(vec![])};
     static STATIC_ROCKSDB_BLOCK_READ_BUF: Cell<Vec<u64>> = const {Cell::new(vec![])};
 }
 
 /// Find the kth values in the iterator, returns (kth_cpu_time,
-/// kth_network_traffic, kth_logical_read, kth_logical_write,
-/// kth_rocksdb_block_read)
+/// kth_network_traffic, kth_logical_io).
 pub fn find_kth_values<'a, T: 'a>(
+    iter: impl Iterator<Item = (&'a T, &'a RawRecord)>,
+    k: usize,
+) -> (u32, u64, u64) {
+    let mut cpu_buf = STATIC_CPU_BUF.with(|b| b.take());
+    let mut network_buf = STATIC_NETWORK_BUF.with(|b| b.take());
+    let mut logical_io_buf = STATIC_LOGICAL_IO_BUF.with(|b| b.take());
+    cpu_buf.clear();
+    network_buf.clear();
+    logical_io_buf.clear();
+    for (_, record) in iter {
+        cpu_buf.push(record.cpu_time);
+        network_buf.push(record.network_in_bytes + record.network_out_bytes);
+        logical_io_buf.push(record.logical_read_bytes + record.logical_write_bytes);
+    }
+    pdqselect::select_by(&mut cpu_buf, k, |a, b| b.cmp(a));
+    let kth_cpu = cpu_buf[k];
+    STATIC_CPU_BUF.with(move |b| b.set(cpu_buf));
+
+    pdqselect::select_by(&mut network_buf, k, |a, b| b.cmp(a));
+    let kth_network = network_buf[k];
+    STATIC_NETWORK_BUF.with(move |b| b.set(network_buf));
+
+    pdqselect::select_by(&mut logical_io_buf, k, |a, b| b.cmp(a));
+    let kth_logical_io = logical_io_buf[k];
+    STATIC_LOGICAL_IO_BUF.with(move |b| b.set(logical_io_buf));
+
+    (kth_cpu, kth_network, kth_logical_io)
+}
+
+/// Find the kth values for detailed IO selection, returning CPU, network,
+/// logical read, logical write, and RocksDB block read thresholds.
+pub fn find_kth_detailed_io_values<'a, T: 'a>(
     iter: impl Iterator<Item = (&'a T, &'a RawRecord)>,
     k: usize,
 ) -> (u32, u64, u64, u64, u64) {
@@ -111,12 +143,33 @@ pub fn get_iter_for_cpu_time<'a, T: 'a>(
 }
 
 /// Get two iterators, first is the one whose cpu_time > kth_cpu or network_io >
-/// kth_network or logical_read > kth_logical_read or logical_write >
-/// kth_logical_write or rocksdb_block_read_count > kth_rocksdb_block_read,
-/// second is the one whose cpu_time <= kth_cpu and network_io <= kth_network
-/// and logical_read <= kth_logical_read and logical_write <= kth_logical_write
-/// and rocksdb_block_read_count <= kth_rocksdb_block_read.
+/// kth_network or logical_io > kth_logical_io, second is the one whose cpu_time
+/// <= kth_cpu and network_io <= kth_network and logical_io <= kth_logical_io.
 pub fn get_iter_for_cpu_network_io<'a, T: 'a>(
+    records: &'a HashMap<T, RawRecord>,
+    kth_cpu: u32,
+    kth_network: u64,
+    kth_logical_io: u64,
+) -> (
+    impl Iterator<Item = (&'a T, &'a RawRecord)>,
+    impl Iterator<Item = (&'a T, &'a RawRecord)>,
+) {
+    (
+        records.iter().filter(move |(_, v)| {
+            v.cpu_time > kth_cpu
+                || v.network_in_bytes + v.network_out_bytes > kth_network
+                || v.logical_read_bytes + v.logical_write_bytes > kth_logical_io
+        }),
+        records.iter().filter(move |(_, v)| {
+            v.cpu_time <= kth_cpu
+                && v.network_in_bytes + v.network_out_bytes <= kth_network
+                && v.logical_read_bytes + v.logical_write_bytes <= kth_logical_io
+        }),
+    )
+}
+
+/// Get picked and unpicked iterators for detailed IO TopN selection.
+pub fn get_iter_for_detailed_io<'a, T: 'a>(
     records: &'a HashMap<T, RawRecord>,
     kth_cpu: u32,
     kth_network: u64,
@@ -204,14 +257,12 @@ where
     }
 }
 
-/// Pick top n candidate raw records per resource dimension, then append their
-/// union and merge unpicked records to others. If network IO collection is
-/// enabled, candidates are selected by CPU time, network IO, logical read,
-/// logical write, and RocksDB block read count; otherwise, they are selected
-/// by CPU time only.
+/// Pick top n candidate raw records per effective resource dimension, append
+/// their union, and merge unpicked records into others.
 pub fn handle_records_impl<'a, K, T>(
     records: &'a mut T,
     enable_network_io_collection: bool,
+    enable_detailed_io_collection: bool,
     agg_map: &'a HashMap<K, crate::RawRecord>,
     ts: u64,
     n: usize,
@@ -223,10 +274,10 @@ pub fn handle_records_impl<'a, K, T>(
         records.append(ts, agg_map.iter());
         return;
     }
-    if enable_network_io_collection {
+    if enable_network_io_collection && enable_detailed_io_collection {
         let (kth_cpu, kth_network, kth_logical_read, kth_logical_write, kth_rocksdb_block_read) =
-            find_kth_values(agg_map.iter(), n);
-        let (picked_iter, unpicked_iter) = get_iter_for_cpu_network_io(
+            find_kth_detailed_io_values(agg_map.iter(), n);
+        let (picked_iter, unpicked_iter) = get_iter_for_detailed_io(
             agg_map,
             kth_cpu,
             kth_network,
@@ -234,6 +285,12 @@ pub fn handle_records_impl<'a, K, T>(
             kth_logical_write,
             kth_rocksdb_block_read,
         );
+        records.append(ts, picked_iter);
+        records.merge_other(ts, unpicked_iter);
+    } else if enable_network_io_collection {
+        let (kth_cpu, kth_network, kth_logical_io) = find_kth_values(agg_map.iter(), n);
+        let (picked_iter, unpicked_iter) =
+            get_iter_for_cpu_network_io(agg_map, kth_cpu, kth_network, kth_logical_io);
         records.append(ts, picked_iter);
         records.merge_other(ts, unpicked_iter);
     } else {
@@ -295,6 +352,8 @@ pub struct RawRecord {
     pub logical_write_bytes: u64,
     pub network_in_bytes: u64,
     pub network_out_bytes: u64,
+    /// RocksDB block reads used for the downstream `read_iops` dimension. This
+    /// is a relative attribution signal, not device-level IOPS.
     pub rocksdb_block_read_count: u64,
 }
 
@@ -793,7 +852,8 @@ pub struct SummaryRecord {
     /// Network output bytes.
     pub network_out_bytes: AtomicU64,
 
-    /// RocksDB block read count (physical read IO approximation).
+    /// RocksDB block reads used for the downstream `read_iops` dimension. This
+    /// is a relative attribution signal, not device-level IOPS.
     pub rocksdb_block_read_count: AtomicU64,
 }
 
@@ -872,6 +932,8 @@ impl SummaryRecord {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::Ordering::Relaxed;
+
+    use collections::HashSet;
 
     use super::*;
     use crate::TagInfos;
@@ -1134,9 +1196,9 @@ mod tests {
         }
 
         let (kth_cpu, kth_network, kth_logical_read, kth_logical_write, kth_rocksdb_block_read) =
-            find_kth_values(records.iter(), 2);
+            find_kth_detailed_io_values(records.iter(), 2);
         assert_eq!(kth_rocksdb_block_read, 5);
-        let (picked, evicted) = get_iter_for_cpu_network_io(
+        let (picked, evicted) = get_iter_for_detailed_io(
             &records,
             kth_cpu,
             kth_network,
@@ -1178,8 +1240,8 @@ mod tests {
         );
 
         let (kth_cpu, kth_network, kth_logical_read, kth_logical_write, kth_rocksdb_block_read) =
-            find_kth_values(records.iter(), 1);
-        let (picked, _) = get_iter_for_cpu_network_io(
+            find_kth_detailed_io_values(records.iter(), 1);
+        let (picked, _) = get_iter_for_detailed_io(
             &records,
             kth_cpu,
             kth_network,
@@ -1191,6 +1253,61 @@ mod tests {
         assert_eq!(picked.len(), 2);
         assert!(picked.contains_key(&Arc::new(b"read".to_vec())));
         assert!(picked.contains_key(&Arc::new(b"write".to_vec())));
+    }
+
+    #[test]
+    fn test_handle_records_respects_detailed_io_scope() {
+        let mut raw = HashMap::default();
+        raw.insert(
+            Arc::new(b"read".to_vec()),
+            RawRecord {
+                logical_read_bytes: 100,
+                ..Default::default()
+            },
+        );
+        raw.insert(
+            Arc::new(b"write".to_vec()),
+            RawRecord {
+                logical_write_bytes: 90,
+                ..Default::default()
+            },
+        );
+        raw.insert(
+            Arc::new(b"combined".to_vec()),
+            RawRecord {
+                logical_read_bytes: 60,
+                logical_write_bytes: 60,
+                ..Default::default()
+            },
+        );
+        raw.insert(
+            Arc::new(b"block".to_vec()),
+            RawRecord {
+                rocksdb_block_read_count: 1_000,
+                ..Default::default()
+            },
+        );
+
+        let picked = |network, detailed| {
+            let mut records = Records::default();
+            handle_records_impl(&mut records, network, detailed, &raw, 1, 1);
+            records.records.keys().cloned().collect::<HashSet<_>>()
+        };
+
+        assert!(picked(false, false).is_empty());
+        assert!(picked(false, true).is_empty());
+        let legacy = [Arc::new(b"combined".to_vec())]
+            .into_iter()
+            .collect::<HashSet<_>>();
+        assert_eq!(picked(true, false), legacy);
+        let detailed = [
+            Arc::new(b"read".to_vec()),
+            Arc::new(b"write".to_vec()),
+            Arc::new(b"block".to_vec()),
+        ]
+        .into_iter()
+        .collect::<HashSet<_>>();
+        assert_eq!(picked(true, true), detailed);
     }
 
     #[test]
@@ -1808,16 +1925,9 @@ mod tests {
         };
 
         let agg_map = rs.aggregate_by_extra_tag();
-        let (kth_cpu, kth_network, kth_logical_read, kth_logical_write, kth_rocksdb_block_read) =
-            find_kth_values(agg_map.iter(), 2);
-        let (top, evicted) = get_iter_for_cpu_network_io(
-            &agg_map,
-            kth_cpu,
-            kth_network,
-            kth_logical_read,
-            kth_logical_write,
-            kth_rocksdb_block_read,
-        );
+        let (kth_cpu, kth_network, kth_logical_io) = find_kth_values(agg_map.iter(), 2);
+        let (top, evicted) =
+            get_iter_for_cpu_network_io(&agg_map, kth_cpu, kth_network, kth_logical_io);
         let others = evicted
             .map(|(_, v)| v)
             .fold(RawRecord::default(), |mut others, r| {
@@ -1877,16 +1987,9 @@ mod tests {
             records,
         };
         let agg_map = rs.aggregate_by_extra_tag();
-        let (kth_cpu, kth_network, kth_logical_read, kth_logical_write, kth_rocksdb_block_read) =
-            find_kth_values(agg_map.iter(), 2);
-        let (top, evicted) = get_iter_for_cpu_network_io(
-            &agg_map,
-            kth_cpu,
-            kth_network,
-            kth_logical_read,
-            kth_logical_write,
-            kth_rocksdb_block_read,
-        );
+        let (kth_cpu, kth_network, kth_logical_io) = find_kth_values(agg_map.iter(), 2);
+        let (top, evicted) =
+            get_iter_for_cpu_network_io(&agg_map, kth_cpu, kth_network, kth_logical_io);
         let others = evicted
             .map(|(_, v)| v)
             .fold(RawRecord::default(), |mut others, r| {
