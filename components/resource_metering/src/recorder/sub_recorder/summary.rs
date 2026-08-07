@@ -6,7 +6,7 @@ use collections::HashMap;
 use tikv_util::sys::thread::Pid;
 
 use crate::{
-    ENABLE_DETAILED_IO_COLLECTION, ENABLE_NETWORK_IO_COLLECTION, RawRecords,
+    RawRecords, io_collection_config,
     recorder::{
         SubRecorder,
         localstorage::{LocalStorage, STORAGE},
@@ -35,7 +35,8 @@ pub fn record_write_keys(count: u32) {
 
 /// Records how many bytes have been received in the current context.
 pub fn record_network_in_bytes(bytes: u64) {
-    if !ENABLE_NETWORK_IO_COLLECTION.load(Relaxed) {
+    let config = io_collection_config();
+    if !config.network_io_collection_enabled() {
         return;
     }
     STORAGE.with(|s| {
@@ -48,7 +49,8 @@ pub fn record_network_in_bytes(bytes: u64) {
 
 /// Records how many bytes have been sent in the current context.
 pub fn record_network_out_bytes(bytes: u64) {
-    if !ENABLE_NETWORK_IO_COLLECTION.load(Relaxed) {
+    let config = io_collection_config();
+    if !config.network_io_collection_enabled() {
         return;
     }
     STORAGE.with(|s| {
@@ -61,7 +63,8 @@ pub fn record_network_out_bytes(bytes: u64) {
 
 /// Records how many bytes have been read in the current context.
 pub fn record_logical_read_bytes(bytes: u64) {
-    if !ENABLE_NETWORK_IO_COLLECTION.load(Relaxed) {
+    let config = io_collection_config();
+    if !config.network_io_collection_enabled() {
         return;
     }
     STORAGE.with(|s| {
@@ -74,7 +77,8 @@ pub fn record_logical_read_bytes(bytes: u64) {
 
 /// Records how many bytes have been written in the current context.
 pub fn record_logical_write_bytes(bytes: u64) {
-    if !ENABLE_NETWORK_IO_COLLECTION.load(Relaxed) {
+    let config = io_collection_config();
+    if !config.network_io_collection_enabled() {
         return;
     }
     STORAGE.with(|s| {
@@ -90,7 +94,11 @@ pub fn record_logical_write_bytes(bytes: u64) {
 /// This is a relative attribution signal for Top SQL, not a device-level IOPS
 /// measurement.
 pub fn record_rocksdb_block_read_count(count: u64) {
-    if count == 0 || !ENABLE_DETAILED_IO_COLLECTION.load(Relaxed) {
+    if count == 0 {
+        return;
+    }
+    let config = io_collection_config();
+    if !config.detailed_io_collection_enabled() {
         return;
     }
     STORAGE.with(|s| {

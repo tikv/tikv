@@ -5,10 +5,10 @@ use std::{
     sync::Arc,
 };
 
-use engine_traits::{CfNamesExt, Result, SnapshotMiscExt};
-use tirocks::{Db, Iterator, Snapshot, db::RawCfHandle, option::ReadOptions};
+use engine_traits::Result;
+use tirocks::{db::RawCfHandle, option::ReadOptions, Db, Iterator, Snapshot};
 
-use crate::{RocksSnapIterator, db_vector::RocksPinSlice, engine_iterator, r2e, util};
+use crate::{db_vector::RocksPinSlice, engine_iterator, r2e, util, RocksSnapIterator};
 
 pub struct RocksSnapshot(Arc<Snapshot<'static, Arc<Db>>>);
 
@@ -80,21 +80,5 @@ impl engine_traits::Peekable for RocksSnapshot {
     ) -> Result<Option<Self::DbVector>> {
         let handle = util::cf_handle(self.0.db(), cf)?;
         self.get(opts, handle, key)
-    }
-}
-
-impl CfNamesExt for RocksSnapshot {
-    fn cf_names(&self) -> Vec<&str> {
-        self.0
-            .db()
-            .cfs()
-            .filter_map(|handle| handle.name().ok())
-            .collect()
-    }
-}
-
-impl SnapshotMiscExt for RocksSnapshot {
-    fn sequence_number(&self) -> u64 {
-        self.0.sequence_number()
     }
 }

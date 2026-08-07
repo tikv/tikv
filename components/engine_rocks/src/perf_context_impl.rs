@@ -232,6 +232,9 @@ impl PerfContextStatistics {
                 PerfContextReport::default()
             }
             PerfContextKind::Storage(_) | PerfContextKind::Coprocessor(_) => {
+                if self.perf_level == PerfLevel::Disable {
+                    return PerfContextReport::default();
+                }
                 let perf_context = ReadPerfContext::capture();
                 let block_read_count = perf_context.block_read_count;
                 for token in trackers {

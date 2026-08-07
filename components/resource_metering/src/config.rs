@@ -1,6 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{error::Error, sync::atomic::AtomicBool};
+use std::{
+    error::Error,
+    sync::atomic::{AtomicU8, Ordering::Relaxed},
+};
 
 use online_config::{ConfigChange, OnlineConfig};
 use serde_derive::{Deserialize, Serialize};
@@ -17,34 +20,57 @@ const MAX_MAX_RESOURCE_GROUPS: usize = 5_000;
 const MIN_REPORT_RECEIVER_INTERVAL: ReadableDuration = ReadableDuration::millis(500);
 const DEFAULT_ENABLE_NETWORK_IO_COLLECTION: bool = false;
 const DEFAULT_ENABLE_DETAILED_IO_COLLECTION: bool = false;
+const NETWORK_IO_COLLECTION_ENABLED: u8 = 1 << 0;
+const DETAILED_IO_COLLECTION_ENABLED: u8 = 1 << 1;
 
-pub static ENABLE_NETWORK_IO_COLLECTION: AtomicBool =
-    AtomicBool::new(DEFAULT_ENABLE_NETWORK_IO_COLLECTION);
+/// An atomically published snapshot of the runtime I/O collection switches.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IoCollectionConfigSnapshot(u8);
 
-/// Whether detailed IO collection is effective at runtime.
-///
-/// The configured detailed IO switch is subordinate to network IO collection,
-/// so this value is true only when both switches are enabled.
-pub static ENABLE_DETAILED_IO_COLLECTION: AtomicBool =
-    AtomicBool::new(DEFAULT_ENABLE_DETAILED_IO_COLLECTION);
+impl IoCollectionConfigSnapshot {
+    const fn new(enable_network_io_collection: bool, enable_detailed_io_collection: bool) -> Self {
+        let mut state = 0;
+        if enable_network_io_collection {
+            state |= NETWORK_IO_COLLECTION_ENABLED;
+            if enable_detailed_io_collection {
+                state |= DETAILED_IO_COLLECTION_ENABLED;
+            }
+        }
+        Self(state)
+    }
+
+    pub fn network_io_collection_enabled(self) -> bool {
+        self.0 & NETWORK_IO_COLLECTION_ENABLED != 0
+    }
+
+    pub fn detailed_io_collection_enabled(self) -> bool {
+        self.0 & DETAILED_IO_COLLECTION_ENABLED != 0
+    }
+}
+
+static IO_COLLECTION_CONFIG: AtomicU8 = AtomicU8::new(
+    IoCollectionConfigSnapshot::new(
+        DEFAULT_ENABLE_NETWORK_IO_COLLECTION,
+        DEFAULT_ENABLE_DETAILED_IO_COLLECTION,
+    )
+    .0,
+);
+
+/// Loads both runtime I/O collection switches from one atomic snapshot.
+#[inline]
+pub fn io_collection_config() -> IoCollectionConfigSnapshot {
+    IoCollectionConfigSnapshot(IO_COLLECTION_CONFIG.load(Relaxed))
+}
 
 pub(crate) fn set_io_collection_config(
     enable_network_io_collection: bool,
     enable_detailed_io_collection: bool,
 ) {
-    use std::sync::atomic::Ordering::Relaxed;
-
-    let detailed_io_collection_enabled =
-        enable_network_io_collection && enable_detailed_io_collection;
-    if detailed_io_collection_enabled {
-        ENABLE_NETWORK_IO_COLLECTION.store(true, Relaxed);
-        ENABLE_DETAILED_IO_COLLECTION.store(true, Relaxed);
-    } else {
-        // Keep the runtime invariant that detailed IO implies network IO even
-        // while recorders observe a dynamic configuration update.
-        ENABLE_DETAILED_IO_COLLECTION.store(false, Relaxed);
-        ENABLE_NETWORK_IO_COLLECTION.store(enable_network_io_collection, Relaxed);
-    }
+    let config = IoCollectionConfigSnapshot::new(
+        enable_network_io_collection,
+        enable_detailed_io_collection,
+    );
+    IO_COLLECTION_CONFIG.store(config.0, Relaxed);
 }
 
 /// Public configuration of resource metering module.
@@ -241,6 +267,10 @@ mod tests {
                 ..Default::default()
             };
             assert_eq!(cfg.detailed_io_collection_enabled(), expected);
+
+            let snapshot = IoCollectionConfigSnapshot::new(network, detailed);
+            assert_eq!(snapshot.network_io_collection_enabled(), network);
+            assert_eq!(snapshot.detailed_io_collection_enabled(), expected);
         }
     }
 }
