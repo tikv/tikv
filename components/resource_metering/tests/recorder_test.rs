@@ -179,7 +179,8 @@ mod tests {
 
     #[test]
     fn test_cpu_recorder_heavy_single_thread() {
-        let (_, collector_reg_handle, resource_tag_factory, worker) = init_recorder(1000, false);
+        let (_, collector_reg_handle, resource_tag_factory, worker) =
+            init_recorder(1000, false, false);
 
         let collector = DummyCollector::default();
         let _handle = collector_reg_handle.register(Box::new(collector.clone()), false);
@@ -198,7 +199,8 @@ mod tests {
 
     #[test]
     fn test_cpu_recorder_sleep_single_thread() {
-        let (_, collector_reg_handle, resource_tag_factory, worker) = init_recorder(1000, false);
+        let (_, collector_reg_handle, resource_tag_factory, worker) =
+            init_recorder(1000, false, false);
 
         let collector = DummyCollector::default();
         let _handle = collector_reg_handle.register(Box::new(collector.clone()), false);
@@ -217,7 +219,8 @@ mod tests {
 
     #[test]
     fn test_cpu_recorder_hybrid_single_thread() {
-        let (_, collector_reg_handle, resource_tag_factory, worker) = init_recorder(1000, false);
+        let (_, collector_reg_handle, resource_tag_factory, worker) =
+            init_recorder(1000, false, false);
 
         // Hybrid workload with 1 thread
         let collector = DummyCollector::default();
@@ -245,7 +248,8 @@ mod tests {
 
     #[test]
     fn test_cpu_recorder_heavy_multiple_threads() {
-        let (_, collector_reg_handle, resource_tag_factory, worker) = init_recorder(1000, false);
+        let (_, collector_reg_handle, resource_tag_factory, worker) =
+            init_recorder(1000, false, false);
 
         // Heavy CPU with 3 threads
         let collector = DummyCollector::default();
@@ -277,7 +281,8 @@ mod tests {
 
     #[test]
     fn test_cpu_recorder_hybrid_multiple_threads() {
-        let (_, collector_reg_handle, resource_tag_factory, worker) = init_recorder(1000, false);
+        let (_, collector_reg_handle, resource_tag_factory, worker) =
+            init_recorder(1000, false, false);
 
         // Hybrid workload with 3 threads
         let collector = DummyCollector::default();

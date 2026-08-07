@@ -627,7 +627,7 @@ where
                 .flat_map(|(cb, _)| cb.write_trackers())
                 .flat_map(|trackers| trackers.as_tracker_token())
                 .collect();
-            self.perf_context.report_metrics(&trackers);
+            let _ = self.perf_context.report_metrics(&trackers);
             self.sync_log_hint = false;
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
