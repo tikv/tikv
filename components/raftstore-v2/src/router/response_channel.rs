@@ -104,8 +104,9 @@ impl<Res> EventCore<Res> {
             }
             *self.res.get() = Some(result);
         }
-        // FIXME: this is not safe. previous line can be reordered after this unless
-        // with a global barrier.
+        // The write to `res` is sequenced-before this release store on the
+        // same thread. Subscribers must load with Acquire (see take_result /
+        // WaitResult) so the payload write is visible and not a data race.
         let previous = self.event.fetch_or(
             fired_bit_of(PAYLOAD_EVENT) | fired_bit_of(CANCEL_EVENT),
             Ordering::AcqRel,
@@ -159,7 +160,7 @@ impl<Res> Future for WaitEvent<'_, Res> {
     #[inline]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let event = &self.core.event;
-        let mut e = event.load(Ordering::Relaxed);
+        let mut e = event.load(Ordering::Acquire);
         let fired_bit = fired_bit_of(self.event);
         if let Some(b) = check_bit(e, fired_bit) {
             return Poll::Ready(b);
@@ -194,7 +195,8 @@ impl<Res> Future for WaitResult<'_, Res> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let event = &self.sub.core.event;
         let fired_bit = fired_bit_of(PAYLOAD_EVENT);
-        let mut e = event.load(Ordering::Relaxed);
+        // Acquire: synchronize with set_result's AcqRel before touching res.
+        let mut e = event.load(Ordering::Acquire);
         if check_bit(e, fired_bit).is_some() {
             unsafe {
                 return Poll::Ready((*self.sub.core.res.get()).take());
@@ -213,6 +215,8 @@ impl<Res> Future for WaitResult<'_, Res> {
                 Err(v) => e = v,
             };
             if check_bit(e, fired_bit).is_some() {
+                // Re-load Acquire so payload write is ordered before take.
+                let _ = event.load(Ordering::Acquire);
                 unsafe {
                     return Poll::Ready((*self.sub.core.res.get()).take());
                 }
@@ -236,7 +240,8 @@ impl<Res> BaseSubscriber<Res> {
     /// Test if the result is ready without any polling.
     #[inline]
     pub fn has_result(&self) -> bool {
-        let e = self.core.event.load(Ordering::Relaxed);
+        // Acquire before any subsequent try_result / take_result on res.
+        let e = self.core.event.load(Ordering::Acquire);
         check_bit(e, fired_bit_of(PAYLOAD_EVENT)).is_some()
     }
 
@@ -244,7 +249,8 @@ impl<Res> BaseSubscriber<Res> {
     /// another `try_result`, `take_result` or `result`.
     #[inline]
     pub fn take_result(&self) -> Option<Res> {
-        let e = self.core.event.load(Ordering::Relaxed);
+        // Acquire: pair with set_result's AcqRel; Relaxed races on UnsafeCell.
+        let e = self.core.event.load(Ordering::Acquire);
         if check_bit(e, fired_bit_of(PAYLOAD_EVENT)).is_some() {
             let r = unsafe { (*self.core.res.get()).take() };
             assert!(r.is_some());
