@@ -1,7 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    assert_matches::assert_matches,
     collections::{
         BTreeMap,
         Bound::{self, Excluded, Unbounded},
@@ -239,8 +238,8 @@ impl CacheRegionMeta {
         on_evict_finished: Option<OnEvictFinishedCallback>,
     ) {
         use RegionState::*;
-        assert_matches!(self.state, Loading | Active | LoadingCanceled);
-        assert_matches!(state, PendingEvict | Evicting);
+        assert!(matches!(self.state, Loading | Active | LoadingCanceled));
+        assert!(matches!(state, PendingEvict | Evicting));
         self.set_state(state);
         self.evict_info = Some(EvictInfo {
             start: Instant::now_coarse(),

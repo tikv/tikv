@@ -41,8 +41,10 @@ impl Store {
         for (region_id, keys) in region_keys {
             if let Err(TrySendError::Disconnected(msg)) =
                 ctx.router.send(region_id, PeerMsg::SnapGc(keys.into()))
-                && !ctx.router.is_shutdown()
             {
+                if ctx.router.is_shutdown() {
+                    continue;
+                }
                 let PeerMsg::SnapGc(keys) = msg else {
                     unreachable!()
                 };

@@ -1362,9 +1362,10 @@ impl<T: Simulator> Cluster<T> {
                     &keys::region_state_key(region_id),
                 )
                 .unwrap()
-                && state.get_state() == peer_state
             {
-                return;
+                if state.get_state() == peer_state {
+                    return;
+                }
             }
             sleep_ms(10);
         }

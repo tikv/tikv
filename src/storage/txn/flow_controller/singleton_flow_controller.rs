@@ -734,10 +734,10 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
             // pending bytes sample update it, so a less pressured CF does not
             // overwrite the ratio chosen by the current bottleneck.
             for checker in self.cf_checkers.values() {
-                if let Some(long_term_pending_bytes) = checker.long_term_pending_bytes.as_ref()
-                    && recent_pending_compaction_bytes_log2 < long_term_pending_bytes.get_recent()
-                {
-                    return;
+                if let Some(long_term_pending_bytes) = checker.long_term_pending_bytes.as_ref() {
+                    if recent_pending_compaction_bytes_log2 < long_term_pending_bytes.get_recent() {
+                        return;
+                    }
                 }
             }
 

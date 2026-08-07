@@ -37,7 +37,8 @@ deny = [
     # Ban trait crates from RustCrypto.
     { name = "aead" },
     { name = "cipher" },
-    { name = "digest", wrappers = ["sha2", "md-5", "sha1", "hmac"] },
+    # aws-smithy-checksums reaches digest through crc-fast in newer releases.
+    { name = "digest", wrappers = ["sha2", "md-5", "sha1", "hmac", "crc-fast"] },
     { name = "password-hash" },
     { name = "signature" },
 ]
@@ -48,17 +49,6 @@ version = 2
 yanked = "deny"
 unmaintained = 'workspace'
 ignore = [
-    # Ignore RUSTSEC-2023-0072 as we ban the unsound `X509StoreRef::objects`.
-    #
-    # NB: Upgrading rust-openssl the latest version do fix the issue but it
-    # also upgrade the OpenSSL to v3.x which causes performance degradation.
-    # See https://github.com/openssl/openssl/issues/17064
-    "RUSTSEC-2023-0072",
-    # Ignore RUSTSEC-2024-0357 as there is no `MemBio::get_buf` in TiKV, also
-    # we ban all openssl (Rust) APIs that call `MemBio::get_buf`.
-    #
-    # See https://github.com/sfackler/rust-openssl/pull/2266
-    "RUSTSEC-2024-0357",
     # Ignore RUSTSEC-2021-0145 (unsound issue of "atty" crate) as it only
     # affects Windows plaform which is not supported offically by TiKV, and 2)
     # we have disabled the clap feature "color" so that the "atty" crate is not
@@ -75,20 +65,6 @@ ignore = [
     #
     # TODO: Upgrade shlex@0.1.1 to v1.3.x.
     "RUSTSEC-2024-0006",
-    # Ignore RUSTSEC-2025-0004, as it will trigger a recursive upgrade of OpenSSL
-    # to version 3.x.
-    #
-    # NB: Upgrading openssl the version >= 0.10.70 do fix the issue but it
-    # also upgrade the OpenSSL to v3.x which causes performance degradation.
-    # See https://github.com/openssl/openssl/issues/17064
-    "RUSTSEC-2025-0004",
-    # Ignore RUSTSEC-2025-0022, as it will trigger a recursive upgrade of OpenSSL
-    # to version 3.x.
-    #
-    # NB: Upgrading openssl the version >= 0.10.72 do fix the issue but it
-    # also upgrade the OpenSSL to v3.x which causes performance degradation.
-    # See https://github.com/openssl/openssl/issues/17064
-    "RUSTSEC-2025-0022",
     # Ignore following warnings/errors temporarily. We are evaluating alternatives
     # to replace them. Currently, these packages are stable and there are no known
     # exploitable vulnerabilities affecting our use case.
@@ -97,16 +73,6 @@ ignore = [
     "RUSTSEC-2023-0081",
     "RUSTSEC-2024-0388",
     "RUSTSEC-2024-0436",
-    # aws-sdk-s3 transitively depends on lru 0.12.x, which triggers
-    # RUSTSEC-2026-0002 (Stacked Borrows UB). Upstream dependency
-    # constraints prevent upgrading at the moment.
-    "RUSTSEC-2026-0002",
-    # Ignore RUSTSEC-2026-0009 temporarily. This advisory comes from the
-    # transitive cloud SDK dependency chain pulling in time 0.3.47. The fixed
-    # time release requires serde 1.0.220 through serde_core, but the current
-    # raft-engine revision in this workspace still hard-pins serde = 1.0.228,
-    # so this cannot be resolved with a lockfile-only update.
-    "RUSTSEC-2026-0009",
     # Ignore RUSTSEC-2026-0186 temporarily. memmap2 is pulled in transitively by
     # raft-engine and symbolic-common, so release-8.5 cannot resolve it with a
     # local code change in this PR.

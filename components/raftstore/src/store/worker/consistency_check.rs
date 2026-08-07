@@ -114,7 +114,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{assert_matches::assert_matches, sync::mpsc, time::Duration};
+    use std::{sync::mpsc, time::Duration};
 
     use byteorder::{BigEndian, WriteBytesExt};
     use engine_test::kv::{KvTestEngine, new_engine};
@@ -168,8 +168,10 @@ mod tests {
         checksum_bytes.write_u32::<BigEndian>(sum).unwrap();
 
         let res = rx.recv_timeout(Duration::from_secs(3)).unwrap();
-        assert_matches!(res, SchedTask::UpdateComputeHashResult { region_id, index, hash, context} if
-            region_id == region.get_id() && index == 10 && context == vec![0] && hash == checksum_bytes
+        assert!(
+            matches!(res, SchedTask::UpdateComputeHashResult { region_id, index, hash, context} if
+                region_id == region.get_id() && index == 10 && context == vec![0] && hash == checksum_bytes
+            )
         );
     }
 }

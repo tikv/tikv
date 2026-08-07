@@ -311,18 +311,17 @@ impl RegionCacheWriteBatch {
         if self.memory_controller.memory_checking() {
             return;
         }
-        if !self.memory_controller.set_memory_checking(true) {
-            if let Err(e) = self
+        if !self.memory_controller.set_memory_checking(true)
+            && let Err(e) = self
                 .engine
                 .bg_worker_manager()
                 .schedule_task(BackgroundTask::MemoryCheckAndEvict)
-            {
-                error!(
-                    "ime schedule memory check failed";
-                    "err" => ?e,
-                );
-                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
-            }
+        {
+            error!(
+                "ime schedule memory check failed";
+                "err" => ?e,
+            );
+            assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
         }
     }
 

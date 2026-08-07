@@ -77,21 +77,16 @@ impl<S: Snapshot> BackwardKvScanner<S> {
     /// Get the next key-value pair, in backward order.
     pub fn read_next(&mut self) -> Result<Option<(Key, ValueEntry)>> {
         if !self.is_started {
-            if self.cfg.upper_bound.is_some() {
+            if let Some(upper_bound) = &self.cfg.upper_bound {
                 // TODO: `seek_to_last` is better, however it has performance issues currently.
                 // TODO: We have no guarantee about whether or not the upper_bound has a
                 // timestamp suffix, so currently it is not safe to change write_cursor's
                 // reverse_seek to seek_for_prev. However in future, once we have different
                 // types for them, this can be done safely.
-                self.write_cursor.reverse_seek(
-                    self.cfg.upper_bound.as_ref().unwrap(),
-                    &mut self.statistics.write,
-                )?;
+                self.write_cursor
+                    .reverse_seek(upper_bound, &mut self.statistics.write)?;
                 if let Some(lock_cursor) = self.lock_cursor.as_mut() {
-                    lock_cursor.reverse_seek(
-                        self.cfg.upper_bound.as_ref().unwrap(),
-                        &mut self.statistics.lock,
-                    )?;
+                    lock_cursor.reverse_seek(upper_bound, &mut self.statistics.lock)?;
                 }
             } else {
                 self.write_cursor.seek_to_last(&mut self.statistics.write);

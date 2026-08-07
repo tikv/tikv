@@ -250,9 +250,7 @@
 //!   Likewise `engine_rocks` can temporarily call code from inside `engine`.
 #![cfg_attr(test, feature(test))]
 #![feature(min_specialization)]
-#![feature(assert_matches)]
 #![feature(linked_list_cursors)]
-#![feature(let_chains)]
 #![feature(str_split_remainder)]
 
 #[macro_use(fail_point)]
